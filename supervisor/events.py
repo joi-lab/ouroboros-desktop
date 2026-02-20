@@ -390,6 +390,19 @@ def _handle_send_photo(evt: Dict[str, Any], ctx: Any) -> None:
         )
 
 
+def _handle_self_audit_trigger(evt: Dict[str, Any], ctx: Any) -> None:
+    """Notify background consciousness to run Self-Audit after a task completes."""
+    try:
+        if hasattr(ctx, 'consciousness') and ctx.consciousness is not None:
+            task_type = str(evt.get("task_type") or "unknown")
+            ctx.consciousness.inject_observation(
+                f"Self-Audit trigger: задача '{task_type}' завершена. "
+                f"Проверь последний ответ на антипаттерны."
+            )
+    except Exception:
+        log.debug("Failed to inject self-audit observation", exc_info=True)
+
+
 def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
     """Log owner_message_injected to events.jsonl for health invariant #5 (duplicate processing)."""
     from ouroboros.utils import utc_now_iso
@@ -423,6 +436,7 @@ EVENT_HANDLERS = {
     "toggle_evolution": _handle_toggle_evolution,
     "toggle_consciousness": _handle_toggle_consciousness,
     "owner_message_injected": _handle_owner_message_injected,
+    "self_audit_trigger": _handle_self_audit_trigger,
 }
 
 

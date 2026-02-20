@@ -441,6 +441,18 @@ class OuroborosAgent:
 
             # Emit events for supervisor
             self._emit_task_results(task, text, usage, llm_trace, start_time, drive_logs)
+
+            # Trigger Self-Audit in consciousness after task completion
+            try:
+                task_type_label = task.get("type", "unknown")
+                self._pending_events.append({
+                    "type": "self_audit_trigger",
+                    "task_type": task_type_label,
+                    "ts": utc_now_iso(),
+                })
+            except Exception:
+                log.debug("Failed to append self-audit trigger event", exc_info=True)
+
             return list(self._pending_events)
 
         finally:
