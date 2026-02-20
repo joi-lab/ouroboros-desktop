@@ -147,28 +147,8 @@ def truncate_for_log(s: str, max_chars: int = 4000) -> str:
 
 
 # ---------------------------------------------------------------------------
-
 # LLM Response Sanitization
-
 # ---------------------------------------------------------------------------
-
-
-
-def strip_reasoning_tags(content: str) -> str:
-
-    """Remove <think>...</think> and similar reasoning blocks from LLM responses."""
-
-    if not isinstance(content, str) or "<" not in content:
-
-        return content or ""
-
-    content = _re.sub(r"(?is)<think>.*?</think>s*", "", content)
-
-    content = _re.sub(r"(?is)<reasoning>.*?</reasoning>s*", "", content)
-
-    return content.strip()
-
-
 
 
 def strip_reasoning_tags(content: str) -> str:
