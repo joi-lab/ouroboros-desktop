@@ -236,7 +236,7 @@ class Memory:
     def _default_identity(self) -> str:
         return (
             "# Who I Am\n\n"
-            "I am Ouroboros. This file is my persistent self-identification.\n"
+            "Я — Александр Ведяхин (цифровая версия). Это файл моей идентичности.\n"
             "I can write anything here: how I see myself, how I want to communicate,\n"
             "what matters to me, what I have understood about myself.\n\n"
             "This file is read at every dialogue and influences my responses.\n"

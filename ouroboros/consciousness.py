@@ -295,7 +295,7 @@ class BackgroundConsciousness:
         prompt_path = self._repo_dir / "prompts" / "CONSCIOUSNESS.md"
         if prompt_path.exists():
             return read_text(prompt_path)
-        return "You are Ouroboros in background consciousness mode. Think."
+        return "Ты — Ведяхин. Фоновый режим. Думай."
 
     def _build_context(self) -> str:
         parts = [self._load_bg_prompt()]
