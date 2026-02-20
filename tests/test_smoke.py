@@ -114,6 +114,9 @@ EXPECTED_TOOLS = [
     "compact_context",
     "list_available_tools",
     "enable_tools",
+    # Vedyakhin Ops (PDCA)
+    "pdca_task", "morning_briefing", "weekly_report",
+    "decision_memo", "inbox_route",
 ]
 
 
