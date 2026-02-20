@@ -109,10 +109,12 @@ class TelegramClient:
     def send_photo(self, chat_id: int, photo_bytes: bytes,
                    caption: str = "") -> Tuple[bool, str]:
         """Send a photo to a chat. photo_bytes is raw PNG/JPEG data."""
+        import time as _time
+        fname = f"photo_{int(_time.time())}.png"
         last_err = "unknown"
         for attempt in range(3):
             try:
-                files = {"photo": ("screenshot.png", photo_bytes, "image/png")}
+                files = {"photo": (fname, photo_bytes, "image/png")}
                 data: Dict[str, Any] = {"chat_id": chat_id}
                 if caption:
                     data["caption"] = caption[:1024]
