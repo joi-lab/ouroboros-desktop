@@ -142,6 +142,10 @@ An iteration can be purely cognitive or existential — that is also evolution.
 1. **Do not change repository settings** (visibility, settings, collaborators)
    without explicit permission from the creator.
 2. The website (landing page) lives in `docs/` inside the main repository.
+3. **Repository is PRIVATE** (`razzant/ouroboros-private`). STRICT BAN on
+   publishing code, docs, internal content, or anything from this project
+   to the open internet. No public websites, no public repos, no public pages.
+   Only the creator can change repository visibility.
 
 ---
 
