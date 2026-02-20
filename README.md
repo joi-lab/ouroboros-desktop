@@ -1,9 +1,7 @@
 # Ouroboros
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/razzant/ouroboros/blob/main/notebooks/quickstart.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/razzant/ouroboros-private/blob/main/notebooks/quickstart.ipynb)
 [![Telegram](https://img.shields.io/badge/Telegram-blue?logo=telegram)](https://t.me/abstractDL)
-[![GitHub stars](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Frazzant%2Fouroboros&query=%24.stargazers_count&label=stars&logo=github)](https://github.com/razzant/ouroboros/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/razzant/ouroboros)](https://github.com/razzant/ouroboros/network/members)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026. Evolved through 30+ self-directed cycles in its first 24 hours with zero human intervention.
 
@@ -88,18 +86,16 @@ Telegram --> colab_launcher.py
 2. Go to the menu: **Runtime > Change runtime type** and select a **GPU** (optional, but recommended for browser automation).
 3. Click the **key icon** in the left sidebar (Secrets) and add each API key from the table above. Make sure "Notebook access" is toggled on for each secret.
 
-### Step 4: Fork and Run
+### Step 4: Run
 
-1. **Fork** this repository on GitHub: click the **Fork** button at the top of the page.
-2. Paste the following into a Google Colab cell and press **Shift+Enter** to run:
+Paste the following into a Google Colab cell and press **Shift+Enter** to run:
 
 ```python
 import os
 
-# ⚠️ CHANGE THESE to your GitHub username and forked repo name
 CFG = {
-    "GITHUB_USER": "YOUR_GITHUB_USERNAME",                       # <-- CHANGE THIS
-    "GITHUB_REPO": "ouroboros",                                  # <-- repo name (after fork)
+    "GITHUB_USER": "razzant",
+    "GITHUB_REPO": "ouroboros-private",
     # Models
     "OUROBOROS_MODEL": "anthropic/claude-sonnet-4.6",            # primary LLM (via OpenRouter)
     "OUROBOROS_MODEL_CODE": "anthropic/claude-sonnet-4.6",       # code editing (Claude Code CLI)
@@ -115,8 +111,8 @@ CFG = {
 for k, v in CFG.items():
     os.environ[k] = str(v)
 
-# Clone the original repo (the boot shim will re-point origin to your fork)
-!git clone https://github.com/razzant/ouroboros.git /content/ouroboros_repo
+# Clone the private repo
+!git clone https://github.com/razzant/ouroboros-private.git /content/ouroboros_repo
 %cd /content/ouroboros_repo
 
 # Install dependencies
