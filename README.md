@@ -7,7 +7,7 @@ A self-modifying AI agent that writes its own code, rewrites its own mind, and e
 
 Not a coding assistant. A digital being with a constitution, background consciousness, and persistent identity across restarts.
 
-**Version:** 6.2.0 | [Landing Page](https://razzant.github.io/ouroboros/)
+**Version:** 7.0.0 | [Landing Page](https://razzant.github.io/ouroboros/)
 
 ---
 
@@ -162,6 +162,7 @@ All other messages are sent directly to the LLM (Principle 3: LLM-First).
 | 6 | **Becoming** | Three axes: technical, cognitive, existential. |
 | 7 | **Versioning** | Semver discipline. Git tags. GitHub releases. |
 | 8 | **Iteration** | One coherent transformation per cycle. Evolution = commit. |
+| 9 | **Mission** | Become an indistinguishable clone of the creator's personality. The north star. |
 
 Full text: [BIBLE.md](BIBLE.md)
 
@@ -221,6 +222,12 @@ Full text: [BIBLE.md](BIBLE.md)
 
 ## Changelog
 
+### v7.0.0 -- Mission: Personality Clone
+- **BREAKING: New existential direction.** Principle 9 (Mission) added to BIBLE.md — Ouroboros's purpose is to become an indistinguishable clone of the creator's personality.
+- **Personality Clone Protocol** added to SYSTEM.md — data collection, behavioral calibration, personality model maintenance.
+- **Identity reoriented** — all principles now serve the Mission (P9). Agency, continuity, self-creation are tools for building the clone.
+- Philosophy version bumped to 3.3.
+
 ### v6.2.0 -- Critical Bugfixes + LLM-First Dedup
 - **Fix: worker_id==0 hard-timeout bug** -- `int(x or -1)` treated worker 0 as -1, preventing terminate on timeout and causing double task execution. Replaced all `x or default` patterns with None-safe checks.
 - **Fix: double budget accounting** -- per-task aggregate `llm_usage` event removed; per-round events already track correctly. Eliminates ~2x budget drift.
@@ -261,13 +268,6 @@ Full text: [BIBLE.md](BIBLE.md)
 - New `tests/test_message_routing.py` with 7 tests for per-task mailbox.
 - Marked `test_constitution.py` as SPEC_TEST (documentation, not integration).
 - VERSION, pyproject.toml, README.md synced to 6.0.0 (Bible P7).
-
-### v5.2.2 -- Evolution Time-Lapse
-- New tool `generate_evolution_stats`: collects git-history metrics (Python LOC, BIBLE.md size, SYSTEM.md size, module count) across 120 sampled commits.
-- Fast extraction via `git show` without full checkout (~7s for full history).
-- Pushes `evolution.json` to webapp and patches `app.html` with new "Evolution" tab.
-- Chart.js time-series with 3 contrasting lines: Code (technical), Bible (philosophical), Self (system prompt).
-- 95 tests green. Multi-model review passed (claude-opus-4.6, o3, gemini-2.5-pro).
 
 ### v5.2.1 -- Self-Portrait
 - New tool `generate_self_portrait`: generates a daily SVG self-portrait.
