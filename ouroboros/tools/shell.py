@@ -79,6 +79,8 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
         prefix = f"exit_code={res.returncode}\n"
         return prefix + out
     except subprocess.TimeoutExpired:
+        return "⚠️ CLAUDE_CODE_TIMEOUT: exceeded 600s. Stop retrying this exact prompt blindly!"
+        return "⚠️ CLAUDE_CODE_TIMEOUT: exceeded 600s. Stop retrying this exact prompt blindly!"
         return "⚠️ TIMEOUT: command exceeded 120s."
     except Exception as e:
         return f"⚠️ SHELL_ERROR: {e}"
@@ -229,6 +231,8 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
             stdout += warning
 
     except subprocess.TimeoutExpired:
+        return "⚠️ CLAUDE_CODE_TIMEOUT: exceeded 600s. Stop retrying this exact prompt blindly!"
+        return "⚠️ CLAUDE_CODE_TIMEOUT: exceeded 600s. Stop retrying this exact prompt blindly!"
         return "⚠️ CLAUDE_CODE_TIMEOUT: exceeded 600s."
     except Exception as e:
         return f"⚠️ CLAUDE_CODE_FAILED: {type(e).__name__}: {e}"
