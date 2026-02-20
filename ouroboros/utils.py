@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import pathlib
+import re as _re
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
@@ -144,6 +145,41 @@ def truncate_for_log(s: str, max_chars: int = 4000) -> str:
         return s
     return s[: max_chars // 2] + "\n...\n" + s[-max_chars // 2:]
 
+
+# ---------------------------------------------------------------------------
+
+# LLM Response Sanitization
+
+# ---------------------------------------------------------------------------
+
+
+
+def strip_reasoning_tags(content: str) -> str:
+
+    """Remove <think>...</think> and similar reasoning blocks from LLM responses."""
+
+    if not isinstance(content, str) or "<" not in content:
+
+        return content or ""
+
+    content = _re.sub(r"(?is)<think>.*?</think>s*", "", content)
+
+    content = _re.sub(r"(?is)<reasoning>.*?</reasoning>s*", "", content)
+
+    return content.strip()
+
+
+
+
+def strip_reasoning_tags(content: str) -> str:
+    """Remove <think>...</think> and similar reasoning blocks from LLM responses."""
+    text = str(content or "")
+    if "<" not in text:
+        return text.strip()
+    import re
+    text = re.sub(r"(?is)<think>.*?</think>\s*", "", text)
+    text = re.sub(r"(?is)<reasoning>.*?</reasoning>\s*", "", text)
+    return text.strip()
 
 def clip_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
