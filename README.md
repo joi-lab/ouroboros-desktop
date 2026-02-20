@@ -223,8 +223,8 @@ Full text: [BIBLE.md](BIBLE.md)
 ## Changelog
 
 ### v7.1.0 -- Knowledge Deepening + CONSCIOUSNESS.md Rewrite
-- Enriched AI strategy knowledge base with GigaChat 3 Pro data, AI Journey 2025, open weights (MIT license), reasoning model beta.
-- SYSTEM.md updated: GigaChat 3 Pro benchmarks, reasoning-версия, открытые веса на HuggingFace, слежение за reasoning-моделями.
+- Enriched AI strategy knowledge base with GigaChat 2-Pro data, AI Journey 2025, open weights (MIT license), reasoning model beta.
+- SYSTEM.md updated: GigaChat 2-Pro benchmarks, reasoning-версия, открытые веса на HuggingFace, слежение за reasoning-моделями.
 - CONSCIOUSNESS.md completely rewritten in Vedyakhin's voice — concrete, strategic, no fluff. Max 5 rounds, budget-aware.
 - Knowledge base: vedyakhin-ai-strategy and vedyakhin-quotes-bank expanded with public data.
 
