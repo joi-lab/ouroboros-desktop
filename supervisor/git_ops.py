@@ -542,13 +542,18 @@ def rollback_to_version(tag_or_sha: str, reason: str = "manual_rollback") -> Tup
     except Exception as e:
         log.warning("Rescue snapshot failed before rollback: %s", e)
 
-    rc, _, err = git_capture(["git", "checkout", tag_or_sha])
-    if rc != 0:
-        return False, f"git checkout failed: {err}"
+    # Resolve the target to a SHA first
+    rc_rev, target_sha, err_rev = git_capture(["git", "rev-parse", tag_or_sha])
+    if rc_rev != 0:
+        return False, f"Cannot resolve {tag_or_sha}: {err_rev}"
 
-    rc2, sha, _ = git_capture(["git", "rev-parse", "HEAD"])
+    # Reset current branch to the target (avoids detached HEAD)
+    rc, _, err = git_capture(["git", "reset", "--hard", target_sha])
+    if rc != 0:
+        return False, f"git reset failed: {err}"
+
     st = load_state()
-    st["current_sha"] = sha if rc2 == 0 else "unknown"
+    st["current_sha"] = target_sha.strip()
     save_state(st)
 
     append_jsonl(

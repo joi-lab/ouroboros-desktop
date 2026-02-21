@@ -61,24 +61,27 @@ def create_version_panel(page: ft.Page, settings: dict, repo_dir):
     list_view = ft.ListView(spacing=2, padding=8, height=280)
     status_text = ft.Text("", size=12, color=ft.Colors.WHITE54)
 
-    def _do_rollback_confirmed(target: str):
+    def _do_rollback_bg(target: str):
         try:
             from supervisor.git_ops import rollback_to_version
             ok, msg = rollback_to_version(target, reason="manual_ui_rollback")
             if ok:
-                page.open(ft.SnackBar(ft.Text(f"Rollback OK: {msg}"), duration=4000))
                 load_versions()
+                page.open(ft.SnackBar(ft.Text(f"Rollback OK: {msg}"), duration=4000))
             else:
                 page.open(ft.SnackBar(ft.Text(f"Rollback failed: {msg}"), duration=4000))
         except Exception as exc:
             page.open(ft.SnackBar(ft.Text(f"Rollback error: {exc}"), duration=4000))
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def _on_rollback(target: str):
         def _close(_e2): dlg.open = False; page.update()
         def _confirm(_e2):
             dlg.open = False; page.update()
-            threading.Thread(target=_do_rollback_confirmed, args=(target,), daemon=True).start()
+            threading.Thread(target=_do_rollback_bg, args=(target,), daemon=True).start()
         short = target[:12] if len(target) > 12 else target
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text("Confirm Rollback"),
@@ -131,20 +134,21 @@ def create_version_panel(page: ft.Page, settings: dict, repo_dir):
                 token = settings.get("GITHUB_TOKEN", "")
                 slug = settings.get("GITHUB_REPO", "")
                 if not token or not slug:
-                    page.open(ft.SnackBar(
-                        ft.Text("Configure GitHub token and repo in Settings first."),
-                        duration=4000))
-                    page.update(); return
-                ok_r, msg_r = configure_remote(slug, token)
-                if not ok_r:
-                    page.open(ft.SnackBar(ft.Text(f"Remote failed: {msg_r}"), duration=4000))
-                    page.update(); return
-                ok_p, msg_p = push_to_remote()
-                snack = f"Push OK: {msg_p}" if ok_p else f"Push failed: {msg_p}"
-                page.open(ft.SnackBar(ft.Text(snack), duration=3000))
+                    page.open(ft.SnackBar(ft.Text("Configure GitHub token and repo in Settings first."), duration=4000))
+                else:
+                    ok_r, msg_r = configure_remote(slug, token)
+                    if not ok_r:
+                        page.open(ft.SnackBar(ft.Text(f"Remote failed: {msg_r}"), duration=4000))
+                    else:
+                        ok_p, msg_p = push_to_remote()
+                        snack = f"Push OK: {msg_p}" if ok_p else f"Push failed: {msg_p}"
+                        page.open(ft.SnackBar(ft.Text(snack), duration=3000))
             except Exception as exc:
                 page.open(ft.SnackBar(ft.Text(f"Push error: {exc}"), duration=4000))
-            page.update()
+            try:
+                page.update()
+            except Exception:
+                pass
         threading.Thread(target=_do, daemon=True).start()
 
     load_versions()

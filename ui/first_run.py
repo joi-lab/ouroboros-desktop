@@ -135,7 +135,7 @@ def _build_step_github(github_fields, go_step, on_finish):
 
 
 def run_first_run_wizard(
-    models: list, settings_defaults: dict, save_fn,
+    settings_defaults: dict, save_fn,
     assets_dir: str = "assets",
 ) -> bool:
     """Show a setup wizard. Returns True if user completed setup."""
@@ -212,7 +212,6 @@ def run_first_run_wizard(
                 _completed[0] = True
             except Exception as exc:
                 log.error("Wizard save failed: %s", exc, exc_info=True)
-                _completed[0] = True
             page.window.destroy()
 
         step0 = ft.Column(

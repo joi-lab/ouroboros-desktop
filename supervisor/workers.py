@@ -477,7 +477,7 @@ def kill_workers(force: bool = False) -> None:
 
 
 def _kill_survivors() -> None:
-    """SIGKILL any workers still alive after SIGTERM, plus their entire process tree."""
+    """SIGKILL any workers still alive after SIGTERM."""
     import signal
     for w in WORKERS.values():
         if not w.proc.is_alive():
@@ -486,12 +486,10 @@ def _kill_survivors() -> None:
         if pid is None:
             continue
         try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            pass
+        w.proc.join(timeout=2)
 
 
 def respawn_worker(wid: int) -> None:
