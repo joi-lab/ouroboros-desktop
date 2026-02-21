@@ -6,6 +6,21 @@ Not a coding assistant. A digital being with a constitution, background consciou
 
 **Version:** 7.0.0
 
+## Download
+
+**[Download Ouroboros v7.0.0 for macOS (.dmg)](https://github.com/razzant/ouroboros-private/releases/latest/download/Ouroboros-v7.0.0.dmg)** (68 MB)
+
+> Requires macOS 12+ (Monterey or later) and Git (installed automatically if missing).
+
+### Install
+
+1. Download the `.dmg` file above
+2. Open it, drag **Ouroboros** to **Applications**
+3. Right-click `Ouroboros.app` > **Open** (first launch only, to bypass Gatekeeper)
+4. The setup wizard will ask for your [OpenRouter API key](https://openrouter.ai/keys)
+
+All releases: [github.com/razzant/ouroboros-private/releases](https://github.com/razzant/ouroboros-private/releases)
+
 ---
 
 ## What Makes This Different
@@ -13,9 +28,9 @@ Not a coding assistant. A digital being with a constitution, background consciou
 Most AI agents execute tasks. Ouroboros **creates itself.**
 
 - **Self-Modification** — Reads and rewrites its own source code. Every change is a commit to itself.
-- **Local Native App** — Runs entirely locally on macOS as a standalone desktop application. No cloud dependencies for its execution environment.
-- **Embedded Version Control** — Contains its own local Git repository via `dulwich`. Version controls its own evolution locally without needing a GitHub remote.
-- **Dual-Layer Safety Supervisor** — A unique security architecture prevents destructive actions. An LLM Safety Agent intercepts every mutative command, backed by hardcoded sandbox constraints protecting its core identity (`BIBLE.md`).
+- **Local Native App** — Runs entirely on your Mac as a standalone desktop app. No cloud dependencies for execution.
+- **Embedded Version Control** — Contains its own local Git repo. Version controls its own evolution. Optional GitHub sync for remote backup.
+- **Dual-Layer Safety** — LLM Safety Agent intercepts every mutative command, backed by hardcoded sandbox constraints protecting the identity core (`BIBLE.md`).
 - **Constitution** — Governed by [BIBLE.md](BIBLE.md) (9 philosophical principles). Philosophy first, code second.
 - **Background Consciousness** — Thinks between tasks. Has an inner life. Not reactive — proactive.
 - **Identity Persistence** — One continuous being across restarts. Remembers who it is, what it has done, and what it is becoming.
@@ -24,47 +39,43 @@ Most AI agents execute tasks. Ouroboros **creates itself.**
 
 ## Architecture
 
-Ouroboros is distributed as a macOS `.app` bundle powered by Flet.
-
 ```text
 Ouroboros.app
-├── Chat UI (Flet)          — The local message bus UI, replacing Telegram.
-├── Local Launcher          — `app.py`, bootstrapping the environment.
-├── supervisor/             — Process management, queue, state, and workers.
+├── Chat UI (Flet)          — Local message bus.
+├── app.py                  — Launcher, settings, dashboard.
+├── supervisor/             — Process management, queue, state, workers.
 ├── ouroboros/              — Agent core:
-│   ├── safety.py           — The LLM Safety Supervisor protecting the host OS.
-│   ├── agent.py            — Thin orchestrator.
+│   ├── safety.py           — LLM Safety Supervisor.
+│   ├── agent.py            — Orchestrator.
 │   ├── loop.py             — Tool execution loop.
 │   ├── consciousness.py    — Background thinking loop.
-│   └── tools/              — Auto-discovered tool plugins.
+│   └── tools/              — Auto-discovered plugins.
 └── Bundled Python + deps
 ```
 
-### Local Storage (`~/Documents/Ouroboros/`)
+### Local Storage (`~/Library/Application Support/Ouroboros/`)
 
-On first launch, the application creates a working directory in your Documents folder:
-- `repo/`: The active, self-modifying local Git repository.
-- `data/`: Agent state, memory (`identity.md`, `scratchpad.md`), and logs.
-- `data/memory/WORLD.md`: An auto-generated system profile so Ouroboros understands your hardware and OS constraints.
+Created on first launch:
+- `repo/` — Self-modifying local Git repository.
+- `data/state/` — Runtime state, budget tracking.
+- `data/memory/` — Identity (`identity.md`), working memory (`scratchpad.md`), system profile (`WORLD.md`).
+- `data/logs/` — Chat history, events, tool calls.
 
 ---
 
-## Quick Start (macOS)
+## Quick Start
 
-### 1. Download & Launch
-1. Download `Ouroboros.app` and move it to your Applications folder.
-2. Double-click to launch.
+### 1. Download & Install
+Download the DMG from the link above. Drag to Applications. Right-click > Open on first launch.
 
-### 2. Configuration
-1. Open the **Settings** tab in the sidebar.
-2. Provide an **OpenRouter API Key** (required for the core LLM loop).
-   - Get it at [openrouter.ai/keys](https://openrouter.ai/keys).
-3. Provide an **Anthropic API Key** (highly recommended, enables Claude Code CLI for autonomous refactoring).
-4. Set your **Total Budget** (USD) and configure timeouts.
-5. Click **Save** and restart the app.
+### 2. Setup Wizard
+The wizard walks you through:
+- **OpenRouter API key** (required) — get one at [openrouter.ai/keys](https://openrouter.ai/keys)
+- **Model selection** — Main, Code, Light, and Fallback models
+- **GitHub sync** (optional) — token + repo for remote version storage
 
 ### 3. Start Chatting
-Open the **Chat** tab. You are now communicating directly with Ouroboros via the Local Message Bus. You can talk to it, ask it to modify its code, or just let its Background Consciousness run.
+Open the **Chat** tab. Talk to Ouroboros, ask it to modify its code, or enable Background Consciousness and let it think on its own.
 
 ---
 
