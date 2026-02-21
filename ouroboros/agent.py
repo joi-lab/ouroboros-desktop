@@ -285,6 +285,10 @@ class OuroborosAgent:
         - Uncommitted changes (auto-rescue commit & push)
         - VERSION file sync with git tags
         - Budget remaining (warning thresholds)
+        - identity.md exists and is non-empty
+        - scratchpad.md exists
+        - WORLD.md exists
+        - Current model matches env vars
         """
         checks = {}
         issues = 0
@@ -301,6 +305,37 @@ class OuroborosAgent:
         # 3. Budget check
         checks["budget"], issue_count = self._check_budget()
         issues += issue_count
+
+        # 4. Identity + memory checks (Bible P1: continuity)
+        memory_dir = self.env.drive_path("memory")
+        identity_path = memory_dir / "identity.md"
+        scratchpad_path = memory_dir / "scratchpad.md"
+        world_path = memory_dir / "WORLD.md"
+
+        identity_ok = identity_path.exists() and identity_path.stat().st_size > 0
+        scratchpad_ok = scratchpad_path.exists()
+        world_ok = world_path.exists()
+
+        checks["identity"] = {"exists": identity_path.exists(), "non_empty": identity_ok}
+        checks["scratchpad"] = {"exists": scratchpad_ok}
+        checks["world_profile"] = {"exists": world_ok}
+
+        if not identity_ok:
+            issues += 1
+            log.warning("identity.md missing or empty — continuity at risk (Bible P1)")
+        if not scratchpad_ok:
+            issues += 1
+            log.warning("scratchpad.md missing — working memory not available (Bible P1)")
+        if not world_ok:
+            issues += 1
+            log.warning("WORLD.md missing — environment profile not available")
+
+        # 5. Model verification
+        import os as _os
+        configured_model = _os.environ.get("OUROBOROS_MODEL", "")
+        checks["model"] = {"configured": configured_model or "(not set)"}
+        if not configured_model:
+            issues += 1
 
         # Log verification result
         event = {

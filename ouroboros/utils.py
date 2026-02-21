@@ -15,9 +15,19 @@ import os
 import pathlib
 import subprocess
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Realtime log sink (set by app.py to stream events to the UI)
+# ---------------------------------------------------------------------------
+_log_sink: Optional[Callable[[Dict[str, Any]], None]] = None
+
+
+def set_log_sink(fn: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+    global _log_sink
+    _log_sink = fn
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +75,7 @@ def append_jsonl(path: pathlib.Path, obj: Dict[str, Any]) -> None:
     lock_path = path.parent / f".append_jsonl_{path_hash}.lock"
     lock_fd = None
     lock_acquired = False
+    _written = False
 
     try:
         start = time.time()
@@ -94,6 +105,7 @@ def append_jsonl(path: pathlib.Path, obj: Dict[str, Any]) -> None:
                     os.write(fd, data)
                 finally:
                     os.close(fd)
+                _written = True
                 return
             except Exception:
                 if attempt < write_retries - 1:
@@ -103,6 +115,7 @@ def append_jsonl(path: pathlib.Path, obj: Dict[str, Any]) -> None:
             try:
                 with path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
+                _written = True
                 return
             except Exception:
                 if attempt < write_retries - 1:
@@ -121,6 +134,11 @@ def append_jsonl(path: pathlib.Path, obj: Dict[str, Any]) -> None:
                 lock_path.unlink()
             except Exception:
                 log.debug("Failed to unlink lock file after jsonl append", exc_info=True)
+                pass
+        if _written and _log_sink is not None:
+            try:
+                _log_sink(obj)
+            except Exception:
                 pass
 
 

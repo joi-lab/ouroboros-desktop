@@ -1,8 +1,7 @@
 
-openai>=1.0.0
+openai>=1.66.0
 requests
 playwright
 playwright-stealth
 flet
 dulwich
-duckduckgo-search

@@ -43,6 +43,11 @@ def _ensure_playwright_installed():
     try:
         import playwright  # noqa: F401
     except ImportError:
+        if getattr(sys, 'frozen', False):
+            raise RuntimeError(
+                "Browser tools require Playwright, which is not bundled. "
+                "Install manually: pip3 install playwright && python3 -m playwright install chromium"
+            )
         log.info("Playwright not found, installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
 
@@ -52,6 +57,11 @@ def _ensure_playwright_installed():
             pw.chromium.executable_path
         log.info("Playwright chromium binary found")
     except Exception:
+        if getattr(sys, 'frozen', False):
+            raise RuntimeError(
+                "Playwright chromium binary not found. "
+                "Install manually: python3 -m playwright install chromium"
+            )
         log.info("Installing Playwright chromium binary...")
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
         subprocess.check_call([sys.executable, "-m", "playwright", "install-deps", "chromium"])

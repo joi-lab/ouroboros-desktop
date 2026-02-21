@@ -101,9 +101,8 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
         cost = float(evt.get("cost_usd") or 0)
         rounds = int(evt.get("total_rounds") or 0)
 
-        # Heuristic: if cost > $0.10 and rounds >= 1, consider it successful
-        # Empty responses typically cost < $0.01 and have 0-1 rounds
-        if cost > 0.10 and rounds >= 1:
+        evo_cost_threshold = float(os.environ.get("OUROBOROS_EVO_COST_THRESHOLD", "0.10"))
+        if cost > evo_cost_threshold and rounds >= 1:
             # Success: reset failure counter
             st["evolution_consecutive_failures"] = 0
             ctx.save_state(st)
@@ -194,36 +193,50 @@ def _handle_restart_request(evt: Dict[str, Any], ctx: Any) -> None:
     st2["tg_offset"] = int(st2.get("tg_offset") or st.get("tg_offset") or 0)
     ctx.save_state(st2)
     ctx.persist_queue_snapshot(reason="pre_restart_exit")
-    # Replace current process with fresh Python — loads all modules from scratch
-    launcher = os.path.join(os.getcwd(), "colab_launcher.py")
-    os.execv(sys.executable, [sys.executable, launcher])
+    # Replace current process — loads all modules from scratch
+    if getattr(sys, 'frozen', False):
+        os.execv(sys.executable, [sys.executable])
+    else:
+        os.execv(sys.executable, [sys.executable, os.path.join(os.getcwd(), "app.py")])
 
 
 def _handle_promote_to_stable(evt: Dict[str, Any], ctx: Any) -> None:
     import subprocess as sp
+    # Local branch promotion (always works)
     try:
-        sp.run(["git", "fetch", "origin"], cwd=str(ctx.REPO_DIR), check=True)
+        sp.run(
+            ["git", "branch", "-f", ctx.BRANCH_STABLE, ctx.BRANCH_DEV],
+            cwd=str(ctx.REPO_DIR), check=True,
+        )
+        new_sha = sp.run(
+            ["git", "rev-parse", ctx.BRANCH_STABLE],
+            cwd=str(ctx.REPO_DIR), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except Exception as e:
+        st = ctx.load_state()
+        if st.get("owner_chat_id"):
+            ctx.send_with_budget(int(st["owner_chat_id"]), f"❌ Failed to promote to stable: {e}")
+        return
+
+    # Optional remote push (silently skip if no remote configured)
+    remote_status = ""
+    try:
+        sp.run(["git", "remote", "get-url", "origin"], cwd=str(ctx.REPO_DIR),
+               capture_output=True, check=True)
         sp.run(
             ["git", "push", "origin", f"{ctx.BRANCH_DEV}:{ctx.BRANCH_STABLE}"],
             cwd=str(ctx.REPO_DIR), check=True,
         )
-        new_sha = sp.run(
-            ["git", "rev-parse", f"origin/{ctx.BRANCH_STABLE}"],
-            cwd=str(ctx.REPO_DIR), capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        st = ctx.load_state()
-        if st.get("owner_chat_id"):
-            ctx.send_with_budget(
-                int(st["owner_chat_id"]),
-                f"✅ Promoted: {ctx.BRANCH_DEV} → {ctx.BRANCH_STABLE} ({new_sha[:8]})",
-            )
-    except Exception as e:
-        st = ctx.load_state()
-        if st.get("owner_chat_id"):
-            ctx.send_with_budget(
-                int(st["owner_chat_id"]),
-                f"❌ Failed to promote to stable: {e}",
-            )
+        remote_status = " (pushed to origin)"
+    except Exception:
+        log.debug("No remote or push failed — local-only promote")
+
+    st = ctx.load_state()
+    if st.get("owner_chat_id"):
+        ctx.send_with_budget(
+            int(st["owner_chat_id"]),
+            f"✅ Promoted: {ctx.BRANCH_DEV} → {ctx.BRANCH_STABLE} ({new_sha[:8]}){remote_status}",
+        )
 
 
 def _find_duplicate_task(desc: str, pending: list, running: dict) -> Optional[str]:

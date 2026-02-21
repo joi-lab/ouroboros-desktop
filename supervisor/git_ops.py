@@ -369,6 +369,10 @@ def checkout_and_reset(branch: str, reason: str = "unspecified",
 # ---------------------------------------------------------------------------
 
 def sync_runtime_dependencies(reason: str) -> Tuple[bool, str]:
+    if getattr(sys, 'frozen', False):
+        log.info("Skipping pip install in frozen (PyInstaller) mode — deps are bundled.")
+        return True, "frozen:bundled"
+
     req_path = REPO_DIR / "requirements.txt"
     cmd: List[str] = [sys.executable, "-m", "pip", "install", "-q"]
     source = ""
@@ -401,6 +405,10 @@ def sync_runtime_dependencies(reason: str) -> Tuple[bool, str]:
 
 
 def import_test() -> Dict[str, Any]:
+    if getattr(sys, 'frozen', False):
+        log.info("Skipping import_test in frozen (PyInstaller) mode — modules are bundled.")
+        return {"ok": True, "skipped": "frozen"}
+
     r = subprocess.run(
         ["python3", "-c", "import ouroboros, ouroboros.agent; print('import_ok')"],
         cwd=str(REPO_DIR),

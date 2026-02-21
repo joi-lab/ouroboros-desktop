@@ -51,6 +51,7 @@ class LocalChatBridge:
     def __init__(self, token: str = "local"):
         self._inbox = queue.Queue()   # user -> agent
         self._outbox = queue.Queue()  # agent -> UI
+        self._log_queue: queue.Queue = queue.Queue(maxsize=1000)
         self._update_counter = 0
 
     def get_updates(self, offset: int, timeout: int = 10) -> List[Dict[str, Any]]:
@@ -106,6 +107,31 @@ class LocalChatBridge:
         """Local app doesn't currently support file uploads from UI to agent."""
         return None, ""
         
+    # Log streaming
+    def push_log(self, event: dict):
+        """Called by append_jsonl hook to stream log events to the UI."""
+        try:
+            self._log_queue.put_nowait(event)
+        except queue.Full:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._log_queue.put_nowait(event)
+            except queue.Full:
+                pass
+
+    def ui_poll_logs(self) -> list:
+        """Called by the Flet UI to drain pending log events."""
+        batch = []
+        for _ in range(50):
+            try:
+                batch.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+        return batch
+
     # UI hooks
     def ui_send(self, text: str):
         """Called by the Flet UI to send a message to the agent."""

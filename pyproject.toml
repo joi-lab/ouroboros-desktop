@@ -4,11 +4,10 @@ version = "6.2.0"
 description = "Self-creating agent"
 requires-python = ">=3.10"
 dependencies = [
-    "openai>=1.0.0",
+    "openai>=1.66.0",
     "requests",
     "flet",
     "dulwich",
-    "duckduckgo-search"
 ]
 
 [tool.pytest.ini_options]

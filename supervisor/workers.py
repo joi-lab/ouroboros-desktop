@@ -44,10 +44,10 @@ _CTX = None
 _LAST_SPAWN_TIME: float = 0.0  # grace period: don't count dead workers right after spawn
 _SPAWN_GRACE_SEC: float = 90.0  # workers need up to ~60s to init (spawn + pip)
 
-# On Linux, "spawn" re-imports __main__ in child processes.
-# Since the launcher has top-level side effects, this causes worker child crashes (exitcode=1).
-# Use "fork" by default on Linux; allow override via env.
-_DEFAULT_WORKER_START_METHOD = "fork" if sys.platform.startswith("linux") else "spawn"
+# "spawn" re-imports __main__ in child processes, which in PyInstaller frozen apps
+# causes fork bombs (each child re-runs the full app). Use "fork" by default on
+# Linux and macOS. Workers don't touch GUI, so fork is safe.
+_DEFAULT_WORKER_START_METHOD = "fork"
 _WORKER_START_METHOD = str(os.environ.get("OUROBOROS_WORKER_START_METHOD", _DEFAULT_WORKER_START_METHOD) or _DEFAULT_WORKER_START_METHOD).strip().lower()
 if _WORKER_START_METHOD not in {"fork", "spawn", "forkserver"}:
     _WORKER_START_METHOD = _DEFAULT_WORKER_START_METHOD
@@ -129,7 +129,8 @@ _chat_agent = None
 def _get_chat_agent():
     global _chat_agent
     if _chat_agent is None:
-        sys.path.insert(0, str(REPO_DIR))
+        if not getattr(sys, 'frozen', False):
+            sys.path.insert(0, str(REPO_DIR))
         from ouroboros.agent import make_agent
         _chat_agent = make_agent(
             repo_dir=str(REPO_DIR),
@@ -287,7 +288,8 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str)
     import sys as _sys
     import traceback as _tb
     import pathlib as _pathlib
-    _sys.path.insert(0, repo_dir)
+    if not getattr(_sys, 'frozen', False):
+        _sys.path.insert(0, repo_dir)
     _drive = _pathlib.Path(drive_root)
     try:
         from ouroboros.agent import make_agent

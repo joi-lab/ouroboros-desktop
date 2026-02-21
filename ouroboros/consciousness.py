@@ -39,8 +39,6 @@ log = logging.getLogger(__name__)
 class BackgroundConsciousness:
     """Persistent background thinking loop for Ouroboros."""
 
-    _MAX_BG_ROUNDS = 5
-
     def __init__(
         self,
         drive_root: pathlib.Path,
@@ -52,6 +50,10 @@ class BackgroundConsciousness:
         self._repo_dir = repo_dir
         self._event_queue = event_queue
         self._owner_chat_id_fn = owner_chat_id_fn
+
+        self._max_bg_rounds = int(os.environ.get("OUROBOROS_BG_MAX_ROUNDS", "5"))
+        self._wakeup_min = int(os.environ.get("OUROBOROS_BG_WAKEUP_MIN", "30"))
+        self._wakeup_max = int(os.environ.get("OUROBOROS_BG_WAKEUP_MAX", "7200"))
 
         self._llm = LLMClient()
         self._registry = self._build_registry()
@@ -140,7 +142,7 @@ class BackgroundConsciousness:
 
             # Budget check
             if not self._check_budget():
-                self._next_wakeup_sec = 3600  # Sleep long if over budget
+                self._next_wakeup_sec = self._wakeup_max
                 continue
 
             try:
@@ -153,7 +155,7 @@ class BackgroundConsciousness:
                     "traceback": traceback.format_exc()[:1500],
                 })
                 self._next_wakeup_sec = min(
-                    self._next_wakeup_sec * 2, 1800
+                    self._next_wakeup_sec * 2, self._wakeup_max
                 )
 
     def _check_budget(self) -> bool:
@@ -189,7 +191,7 @@ class BackgroundConsciousness:
         all_pending_events = []  # Accumulate events across all tool calls
 
         try:
-            for round_idx in range(1, self._MAX_BG_ROUNDS + 1):
+            for round_idx in range(1, self._max_bg_rounds + 1):
                 if self._paused:
                     break
                 msg, usage = self._llm.chat(
@@ -386,7 +388,7 @@ class BackgroundConsciousness:
 
         # Register consciousness-specific tool (modifies self._next_wakeup_sec)
         def _set_next_wakeup(ctx: Any, seconds: int = 300) -> str:
-            self._next_wakeup_sec = max(60, min(3600, int(seconds)))
+            self._next_wakeup_sec = max(self._wakeup_min, min(self._wakeup_max, int(seconds)))
             return f"OK: next wakeup in {self._next_wakeup_sec}s"
 
         registry.register(ToolEntry("set_next_wakeup", {

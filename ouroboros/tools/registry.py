@@ -103,21 +103,35 @@ class ToolRegistry:
         self._ctx = ToolContext(repo_dir=repo_dir, drive_root=drive_root)
         self._load_modules()
 
+    _FROZEN_TOOL_MODULES = [
+        "browser", "compact_context", "control", "core", "evolution_stats",
+        "git", "github", "health", "knowledge", "review", "search",
+        "shell", "tool_discovery", "vision",
+    ]
+
     def _load_modules(self) -> None:
         """Auto-discover tool modules in ouroboros/tools/ that export get_tools()."""
         import importlib
-        import pkgutil
-        import ouroboros.tools as tools_pkg
-        for _importer, modname, _ispkg in pkgutil.iter_modules(tools_pkg.__path__):
-            if modname.startswith("_") or modname == "registry":
-                continue
+        import logging
+        import sys
+
+        if getattr(sys, 'frozen', False):
+            module_names = self._FROZEN_TOOL_MODULES
+        else:
+            import pkgutil
+            import ouroboros.tools as tools_pkg
+            module_names = [
+                m for _, m, _ in pkgutil.iter_modules(tools_pkg.__path__)
+                if not m.startswith("_") and m != "registry"
+            ]
+
+        for modname in module_names:
             try:
                 mod = importlib.import_module(f"ouroboros.tools.{modname}")
                 if hasattr(mod, "get_tools"):
                     for entry in mod.get_tools():
                         self._entries[entry.name] = entry
             except Exception:
-                import logging
                 logging.getLogger(__name__).warning(
                     "Failed to load tool module %s", modname, exc_info=True)
 
