@@ -58,6 +58,7 @@ a = Analysis(
         'ui.log_format',
         'ui.notifications',
         'ui.first_run',
+        'ui.version_panel',
         # Third-party that PyInstaller may miss
         'dulwich',
         'dulwich.repo',
