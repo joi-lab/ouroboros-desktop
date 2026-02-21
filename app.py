@@ -57,16 +57,15 @@ APP_ROOT = HOME / "Library" / "Application Support" / "Ouroboros"
 REPO_DIR = APP_ROOT / "repo"
 DATA_DIR = APP_ROOT / "data"
 SETTINGS_PATH = DATA_DIR / "settings.json"
+PID_FILE = APP_ROOT / "ouroboros.pid"
 
 MODELS = [
+    "anthropic/claude-opus-4.6",
     "anthropic/claude-sonnet-4.6",
-    "anthropic/claude-sonnet-4.5",
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-opus-4",
-    "google/gemini-2.5-pro-preview",
+    "google/gemini-3.1-pro-preview",
+    "openai/gpt-5.2",
+    "google/gemini-3-flash-preview",
     "google/gemini-2.5-flash",
-    "openai/o3",
-    "openai/o3-mini",
 ]
 
 _SETTINGS_LOCK = pathlib.Path(str(SETTINGS_PATH) + ".lock")
@@ -77,6 +76,7 @@ _SETTINGS_DEFAULTS = {
     "OUROBOROS_MODEL": "anthropic/claude-sonnet-4.6",
     "OUROBOROS_MODEL_CODE": "anthropic/claude-sonnet-4.6",
     "OUROBOROS_MODEL_LIGHT": "google/gemini-2.5-flash",
+    "OUROBOROS_MODEL_FALLBACK": "google/gemini-2.5-flash",
     "OUROBOROS_MAX_WORKERS": 5,
     "TOTAL_BUDGET": 10.0,
     "OUROBOROS_SOFT_TIMEOUT_SEC": 600,
@@ -86,6 +86,8 @@ _SETTINGS_DEFAULTS = {
     "OUROBOROS_BG_WAKEUP_MAX": 7200,
     "OUROBOROS_EVO_COST_THRESHOLD": 0.10,
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5",
+    "GITHUB_TOKEN": "",
+    "GITHUB_REPO": "",
 }
 
 
@@ -147,6 +149,29 @@ def save_settings(settings: dict):
         _release_settings_lock(fd)
 
 
+def acquire_pid_lock() -> bool:
+    """Try to acquire single-instance PID lock. Returns True if acquired."""
+    APP_ROOT.mkdir(parents=True, exist_ok=True)
+    if PID_FILE.exists():
+        try:
+            existing_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            os.kill(existing_pid, 0)
+            return False  # process alive — another instance running
+        except (ProcessLookupError, PermissionError, ValueError, OSError):
+            PID_FILE.unlink(missing_ok=True)
+    PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def release_pid_lock() -> None:
+    """Remove PID file on clean shutdown."""
+    try:
+        if PID_FILE.exists() and PID_FILE.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def bootstrap_repo():
     """Copy the bundled codebase to the local repo directory on first run."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -202,7 +227,12 @@ def run_supervisor(settings: dict):
     os.environ["OUROBOROS_MODEL"] = str(settings.get("OUROBOROS_MODEL", "anthropic/claude-sonnet-4.6"))
     os.environ["OUROBOROS_MODEL_CODE"] = str(settings.get("OUROBOROS_MODEL_CODE", "anthropic/claude-sonnet-4.6"))
     os.environ["OUROBOROS_MODEL_LIGHT"] = str(settings.get("OUROBOROS_MODEL_LIGHT", "google/gemini-2.5-flash"))
+    os.environ["OUROBOROS_MODEL_FALLBACK"] = str(settings.get("OUROBOROS_MODEL_FALLBACK", "google/gemini-2.5-flash"))
     os.environ["TOTAL_BUDGET"] = str(settings.get("TOTAL_BUDGET", 10.0))
+    if settings.get("GITHUB_TOKEN"):
+        os.environ["GITHUB_TOKEN"] = str(settings["GITHUB_TOKEN"])
+    if settings.get("GITHUB_REPO"):
+        os.environ["GITHUB_REPO"] = str(settings["GITHUB_REPO"])
     for _env_k in ("OUROBOROS_BG_MAX_ROUNDS", "OUROBOROS_BG_WAKEUP_MIN",
                     "OUROBOROS_BG_WAKEUP_MAX", "OUROBOROS_EVO_COST_THRESHOLD",
                     "OUROBOROS_WEBSEARCH_MODEL"):
@@ -358,8 +388,13 @@ def run_supervisor(settings: dict):
                 lowered = text.strip().lower()
                 if lowered.startswith("/panic"):
                     send_with_budget(chat_id, "\U0001f6d1 PANIC: stopping everything now.")
-                    kill_workers()
-                    os._exit(1)
+                    kill_workers(force=True)
+                    release_pid_lock()
+                    try:
+                        import signal
+                        os.killpg(os.getpgid(os.getpid()), signal.SIGKILL)
+                    except Exception:
+                        os._exit(1)
                 elif lowered.startswith("/restart"):
                     send_with_budget(chat_id, "\u267b\ufe0f Restarting (soft).")
                     ok, restart_msg = safe_restart(reason="owner_restart", unsynced_policy="rescue_and_reset")
@@ -567,6 +602,10 @@ def main(page: ft.Page):
                                 actions=[ft.TextButton("Cancel", on_click=_close), ft.TextButton("PANIC", on_click=_confirm, style=ft.ButtonStyle(color=ft.Colors.RED_400))])
         page.open(dialog); page.update()
 
+    # --- Version Management Panel ---
+    from ui.version_panel import create_version_panel
+    version_panel, _refresh_versions = create_version_panel(page, settings, REPO_DIR)
+
     dashboard_page = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, controls=[
         ft.Container(bgcolor=ft.Colors.with_opacity(0.03, ft.Colors.WHITE), padding=ft.padding.symmetric(horizontal=20, vertical=12),
                      content=ft.Row([ft.Icon(ft.Icons.DASHBOARD_OUTLINED, color=ft.Colors.TEAL_200), ft.Text("Dashboard", size=16, weight=ft.FontWeight.BOLD), ft.Container(expand=True)])),
@@ -586,6 +625,8 @@ def main(page: ft.Page):
                 ft.ElevatedButton("Restart Agent", icon=ft.Icons.REFRESH, on_click=on_restart_click),
                 ft.ElevatedButton("Panic Stop", icon=ft.Icons.DANGEROUS_OUTLINED, color=ft.Colors.RED_300, on_click=on_panic_click),
             ], wrap=True),
+            ft.Divider(height=1, color=ft.Colors.WHITE10),
+            version_panel,
         ])),
     ])
 
@@ -593,10 +634,13 @@ def main(page: ft.Page):
     api_key_field = ft.TextField(label="OpenRouter API Key", value=settings.get("OPENROUTER_API_KEY", ""), password=True, can_reveal_password=True, width=500)
     openai_key_field = ft.TextField(label="OpenAI API Key (optional)", value=settings.get("OPENAI_API_KEY", ""), password=True, can_reveal_password=True, width=500)
     anthropic_key_field = ft.TextField(label="Anthropic API Key (optional)", value=settings.get("ANTHROPIC_API_KEY", ""), password=True, can_reveal_password=True, width=500)
-    model_main = ft.TextField(label="Main Model", value=settings.get("OUROBOROS_MODEL", ""), width=350)
-    model_code = ft.TextField(label="Code Model", value=settings.get("OUROBOROS_MODEL_CODE", ""), width=350)
-    model_light = ft.TextField(label="Light Model", value=settings.get("OUROBOROS_MODEL_LIGHT", ""), width=350)
-    model_websearch = ft.TextField(label="Web Search Model (OpenAI)", value=settings.get("OUROBOROS_WEBSEARCH_MODEL", "gpt-5"), width=350, hint_text="gpt-5, gpt-4o, gpt-4o-mini")
+    model_main = ft.TextField(label="Main Model", value=settings.get("OUROBOROS_MODEL", ""), width=300)
+    model_code = ft.TextField(label="Code Model", value=settings.get("OUROBOROS_MODEL_CODE", ""), width=300)
+    model_light = ft.TextField(label="Light Model", value=settings.get("OUROBOROS_MODEL_LIGHT", ""), width=300)
+    model_fallback = ft.TextField(label="Fallback Model", value=settings.get("OUROBOROS_MODEL_FALLBACK", "google/gemini-2.5-flash"), width=300, hint_text="Single model for when others fail")
+    model_websearch = ft.TextField(label="Web Search Model (OpenAI)", value=settings.get("OUROBOROS_WEBSEARCH_MODEL", "gpt-5"), width=300, hint_text="gpt-5, gpt-4o, gpt-4o-mini")
+    github_token_field = ft.TextField(label="GitHub Token", value=settings.get("GITHUB_TOKEN", ""), password=True, can_reveal_password=True, width=500, hint_text="ghp_... or github_pat_...")
+    github_repo_field = ft.TextField(label="GitHub Repo", value=settings.get("GITHUB_REPO", ""), width=500, hint_text="owner/repo-name")
     workers_slider = ft.Slider(min=1, max=10, value=int(settings.get("OUROBOROS_MAX_WORKERS", 5)), divisions=9, label="{value}", width=350)
     budget_field = ft.TextField(label="Total Budget ($)", value=str(settings.get("TOTAL_BUDGET", 10.0)), width=200)
     soft_timeout_slider = ft.Slider(min=60, max=3600, value=int(settings.get("OUROBOROS_SOFT_TIMEOUT_SEC", 600)), divisions=59, label="{value}s", width=350)
@@ -627,7 +671,10 @@ def main(page: ft.Page):
             "OPENROUTER_API_KEY": api_key_field.value, "OPENAI_API_KEY": openai_key_field.value,
             "ANTHROPIC_API_KEY": anthropic_key_field.value, "OUROBOROS_MODEL": model_main.value,
             "OUROBOROS_MODEL_CODE": model_code.value, "OUROBOROS_MODEL_LIGHT": model_light.value,
+            "OUROBOROS_MODEL_FALLBACK": model_fallback.value,
             "OUROBOROS_WEBSEARCH_MODEL": model_websearch.value,
+            "GITHUB_TOKEN": github_token_field.value.strip(),
+            "GITHUB_REPO": github_repo_field.value.strip(),
             "OUROBOROS_MAX_WORKERS": int(workers_slider.value), "TOTAL_BUDGET": float(budget_field.value),
             "OUROBOROS_SOFT_TIMEOUT_SEC": int(soft_timeout_slider.value), "OUROBOROS_HARD_TIMEOUT_SEC": int(hard_timeout_slider.value),
             "OUROBOROS_BG_MAX_ROUNDS": int(bg_max_rounds_slider.value), "OUROBOROS_BG_WAKEUP_MIN": int(bg_wakeup_min_field.value),
@@ -635,8 +682,12 @@ def main(page: ft.Page):
         })
         save_settings(settings)
         for k in ("OUROBOROS_BG_MAX_ROUNDS", "OUROBOROS_BG_WAKEUP_MIN", "OUROBOROS_BG_WAKEUP_MAX",
-                   "OUROBOROS_EVO_COST_THRESHOLD", "OUROBOROS_WEBSEARCH_MODEL"):
+                   "OUROBOROS_EVO_COST_THRESHOLD", "OUROBOROS_WEBSEARCH_MODEL", "OUROBOROS_MODEL_FALLBACK"):
             os.environ[k] = str(settings[k])
+        if settings.get("GITHUB_TOKEN"):
+            os.environ["GITHUB_TOKEN"] = settings["GITHUB_TOKEN"]
+        if settings.get("GITHUB_REPO"):
+            os.environ["GITHUB_REPO"] = settings["GITHUB_REPO"]
         if CHAT_BRIDGE is None and settings.get("OPENROUTER_API_KEY"):
             started = start_supervisor_if_configured()
             if started:
@@ -658,7 +709,12 @@ def main(page: ft.Page):
             api_key_field, openai_key_field, anthropic_key_field,
             ft.Divider(height=1, color=ft.Colors.WHITE10),
             ft.Text("Models", size=18, weight=ft.FontWeight.BOLD),
-            ft.Row([model_main, model_code, model_light, model_websearch], wrap=True, spacing=16),
+            ft.Row([model_main, model_code, model_light], wrap=True, spacing=12),
+            ft.Row([model_fallback, model_websearch], wrap=True, spacing=12),
+            ft.Divider(height=1, color=ft.Colors.WHITE10),
+            ft.Text("GitHub", size=18, weight=ft.FontWeight.BOLD),
+            ft.Text("Connect a GitHub repo to push Ouroboros versions remotely.", size=12, color=ft.Colors.WHITE38),
+            github_token_field, github_repo_field,
             ft.Divider(height=1, color=ft.Colors.WHITE10),
             ft.Text("Runtime", size=18, weight=ft.FontWeight.BOLD),
             ft.Row([
@@ -804,6 +860,7 @@ def main(page: ft.Page):
             try:
                 from supervisor.workers import kill_workers as _kw; _kw()
             except Exception: pass
+            release_pid_lock()
             for h in logging.getLogger().handlers: h.flush()
             page.window.destroy()
 
@@ -893,6 +950,28 @@ if __name__ == "__main__":
                 os.environ["PATH"] = _shell_path
         except Exception:
             pass
+
+    # Single-instance guard
+    if not acquire_pid_lock():
+        log.error("Another Ouroboros instance is already running. Exiting.")
+
+        def _already_running(page: ft.Page):
+            page.title = "Ouroboros"
+            page.theme_mode = ft.ThemeMode.DARK
+            page.window.width = 420
+            page.window.height = 200
+            page.padding = 30
+            page.add(ft.Column(spacing=16, horizontal_alignment=ft.CrossAxisAlignment.CENTER, controls=[
+                ft.Text("Ouroboros is already running", size=18, weight=ft.FontWeight.BOLD),
+                ft.Text("Only one instance can run at a time.", size=13, color=ft.Colors.WHITE70),
+                ft.FilledButton("OK", on_click=lambda _: page.window.destroy()),
+            ]))
+
+        ft.app(target=_already_running)
+        sys.exit(0)
+
+    import atexit
+    atexit.register(release_pid_lock)
 
     check_prerequisites()
     bootstrap_repo()

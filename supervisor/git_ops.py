@@ -485,3 +485,119 @@ def safe_restart(
 
     # Both branches failed
     return False, f"Both branches failed import (dev and stable)"
+
+
+# ---------------------------------------------------------------------------
+# Version listing (for UI version panel)
+# ---------------------------------------------------------------------------
+
+def list_versions(max_count: int = 50) -> List[Dict[str, Any]]:
+    """Return list of annotated git tags sorted newest-first."""
+    rc, raw, _ = git_capture([
+        "git", "tag", "-l", "--sort=-creatordate",
+        "--format=%(refname:short)\t%(creatordate:iso-strict)\t%(subject)",
+    ])
+    if rc != 0 or not raw.strip():
+        return []
+    versions: List[Dict[str, Any]] = []
+    for line in raw.splitlines()[:max_count]:
+        parts = line.split("\t", 2)
+        if len(parts) >= 1:
+            versions.append({
+                "tag": parts[0],
+                "date": parts[1] if len(parts) > 1 else "",
+                "message": parts[2] if len(parts) > 2 else "",
+            })
+    return versions
+
+
+def list_commits(max_count: int = 30) -> List[Dict[str, Any]]:
+    """Return recent commits on current branch."""
+    rc, raw, _ = git_capture([
+        "git", "log", f"--max-count={max_count}",
+        "--format=%H\t%h\t%ai\t%s",
+    ])
+    if rc != 0 or not raw.strip():
+        return []
+    commits: List[Dict[str, Any]] = []
+    for line in raw.splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) >= 4:
+            commits.append({
+                "sha": parts[0], "short_sha": parts[1],
+                "date": parts[2], "message": parts[3],
+            })
+    return commits
+
+
+def rollback_to_version(tag_or_sha: str, reason: str = "manual_rollback") -> Tuple[bool, str]:
+    """Rollback to a specific tag or commit SHA with rescue snapshot."""
+    repo_state = _collect_repo_sync_state()
+    try:
+        _create_rescue_snapshot(
+            branch=repo_state.get("current_branch", "unknown"),
+            reason=reason,
+            repo_state=repo_state,
+        )
+    except Exception as e:
+        log.warning("Rescue snapshot failed before rollback: %s", e)
+
+    rc, _, err = git_capture(["git", "checkout", tag_or_sha])
+    if rc != 0:
+        return False, f"git checkout failed: {err}"
+
+    rc2, sha, _ = git_capture(["git", "rev-parse", "HEAD"])
+    st = load_state()
+    st["current_sha"] = sha if rc2 == 0 else "unknown"
+    save_state(st)
+
+    append_jsonl(
+        DRIVE_ROOT / "logs" / "supervisor.jsonl",
+        {
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "type": "manual_rollback",
+            "target": tag_or_sha,
+            "reason": reason,
+            "new_sha": st["current_sha"],
+        },
+    )
+    return True, f"Rolled back to {tag_or_sha} ({st['current_sha'][:8]})"
+
+
+# ---------------------------------------------------------------------------
+# GitHub remote sync
+# ---------------------------------------------------------------------------
+
+def configure_remote(repo_slug: str, token: str) -> Tuple[bool, str]:
+    """Set up or update the 'origin' remote with authenticated GitHub URL."""
+    if not repo_slug or not token:
+        return False, "Missing repo slug or token"
+    url = f"https://x-access-token:{token}@github.com/{repo_slug}.git"
+
+    if _has_remote():
+        rc, _, err = git_capture(["git", "remote", "set-url", "origin", url])
+    else:
+        rc, _, err = git_capture(["git", "remote", "add", "origin", url])
+    if rc != 0:
+        return False, f"Failed to configure remote: {err}"
+    return True, "ok"
+
+
+def push_to_remote(branch: Optional[str] = None, push_tags: bool = True) -> Tuple[bool, str]:
+    """Push current branch (and optionally tags) to origin."""
+    if not _has_remote():
+        return False, "No remote configured"
+
+    target = branch or BRANCH_DEV
+    rc, out, err = git_capture(["git", "push", "-u", "origin", target])
+    if rc != 0:
+        return False, f"git push failed: {err}"
+
+    result = f"Pushed {target} to origin"
+    if push_tags:
+        rc_t, _, err_t = git_capture(["git", "push", "origin", "--tags"])
+        if rc_t != 0:
+            result += f" (tags push failed: {err_t})"
+        else:
+            result += " + tags"
+    return True, result

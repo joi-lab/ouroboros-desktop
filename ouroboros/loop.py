@@ -39,7 +39,9 @@ _MODEL_PRICING_STATIC = {
     "openai/gpt-5.2": (1.75, 0.175, 14.0),
     "openai/gpt-5.2-codex": (1.75, 0.175, 14.0),
     "google/gemini-2.5-pro-preview": (1.25, 0.125, 10.0),
+    "google/gemini-3.1-pro-preview": (2.0, 0.20, 12.0),
     "google/gemini-3-pro-preview": (2.0, 0.20, 12.0),
+    "google/gemini-3-flash-preview": (0.15, 0.015, 0.60),
     "x-ai/grok-3-mini": (0.30, 0.03, 0.50),
     "qwen/qwen3.5-plus-02-15": (0.40, 0.04, 2.40),
 }
@@ -702,44 +704,29 @@ def run_llm_loop(
                 max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type
             )
 
-            # Fallback to another model if primary model returns empty responses
+            # Single fallback model (Bible P3: configurable, not hardcoded)
             if msg is None:
-                # Configurable fallback priority list (Bible P3: no hardcoded behavior)
-                fallback_list_raw = os.environ.get(
-                    "OUROBOROS_MODEL_FALLBACK_LIST",
-                    "google/gemini-2.5-pro-preview,openai/o3,anthropic/claude-sonnet-4.6"
-                )
-                fallback_candidates = [m.strip() for m in fallback_list_raw.split(",") if m.strip()]
-                fallback_model = None
-                for candidate in fallback_candidates:
-                    if candidate != active_model:
-                        fallback_model = candidate
-                        break
-                if fallback_model is None:
+                fallback_model = os.environ.get("OUROBOROS_MODEL_FALLBACK", "").strip()
+                if not fallback_model or fallback_model == active_model:
                     return (
                         f"⚠️ Failed to get a response from model {active_model} after {max_retries} attempts. "
-                        f"All fallback models match the active one. Try rephrasing your request."
+                        f"No viable fallback model configured. "
+                        f"If background consciousness is running, it will retry when the provider recovers."
                     ), accumulated_usage, llm_trace
 
-                # Emit progress message so user sees fallback happening
-                fallback_progress = f"⚡ Fallback: {active_model} → {fallback_model} after empty response"
-                emit_progress(fallback_progress)
+                emit_progress(f"⚡ Fallback: {active_model} → {fallback_model} after empty response")
 
-                # Try fallback model (don't increment round_idx — this is still same logical round)
                 msg, fallback_cost = _call_llm_with_retry(
                     llm, messages, fallback_model, tool_schemas, active_effort,
                     max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type
                 )
 
-                # If fallback also fails, give up
                 if msg is None:
                     return (
-                        f"⚠️ Failed to get a response from the model after {max_retries} attempts. "
-                        f"Fallback model ({fallback_model}) also returned no response."
+                        f"⚠️ All models are down. Primary ({active_model}) and fallback ({fallback_model}) "
+                        f"both returned no response. Stopping. "
+                        f"Background consciousness will attempt recovery when the provider is back."
                     ), accumulated_usage, llm_trace
-
-                # Fallback succeeded — continue processing with this msg
-                # (don't return — fall through to tool_calls processing below)
 
             tool_calls = msg.get("tool_calls") or []
             content = msg.get("content")

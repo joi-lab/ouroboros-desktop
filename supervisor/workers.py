@@ -451,7 +451,7 @@ def spawn_workers(n: int = 0) -> None:
     threading.Thread(target=_verify_worker_sha_after_spawn, args=(events_offset,), daemon=True).start()
 
 
-def kill_workers() -> None:
+def kill_workers(force: bool = False) -> None:
     from supervisor import queue
     with _queue_lock:
         cleared_running = len(RUNNING)
@@ -459,7 +459,9 @@ def kill_workers() -> None:
             if w.proc.is_alive():
                 w.proc.terminate()
         for w in WORKERS.values():
-            w.proc.join(timeout=5)
+            w.proc.join(timeout=3)
+        if force:
+            _kill_survivors()
         WORKERS.clear()
         RUNNING.clear()
     queue.persist_queue_snapshot(reason="kill_workers")
@@ -469,8 +471,27 @@ def kill_workers() -> None:
             {
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "running_cleared_on_kill", "count": cleared_running,
+                "force": force,
             },
         )
+
+
+def _kill_survivors() -> None:
+    """SIGKILL any workers still alive after SIGTERM, plus their entire process tree."""
+    import signal
+    for w in WORKERS.values():
+        if not w.proc.is_alive():
+            continue
+        pid = w.proc.pid
+        if pid is None:
+            continue
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
 
 
 def respawn_worker(wid: int) -> None:
