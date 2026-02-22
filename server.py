@@ -569,6 +569,52 @@ async def api_command(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+async def api_git_log(request: Request) -> JSONResponse:
+    """Return recent commits, tags, and current branch/sha."""
+    try:
+        from supervisor.git_ops import list_commits, list_versions, git_capture
+        commits = list_commits(max_count=30)
+        tags = list_versions(max_count=20)
+        rc, branch, _ = git_capture(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        rc2, sha, _ = git_capture(["git", "rev-parse", "--short", "HEAD"])
+        return JSONResponse({
+            "commits": commits,
+            "tags": tags,
+            "branch": branch.strip() if rc == 0 else "unknown",
+            "sha": sha.strip() if rc2 == 0 else "",
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_git_rollback(request: Request) -> JSONResponse:
+    """Roll back to a specific commit or tag, then restart."""
+    try:
+        body = await request.json()
+        target = body.get("target", "").strip()
+        if not target:
+            return JSONResponse({"error": "missing target"}, status_code=400)
+        from supervisor.git_ops import rollback_to_version
+        ok, msg = rollback_to_version(target, reason="ui_rollback")
+        if not ok:
+            return JSONResponse({"error": msg}, status_code=400)
+        _request_restart_exit()
+        return JSONResponse({"status": "ok", "message": msg})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_git_promote(request: Request) -> JSONResponse:
+    """Promote current ouroboros branch to ouroboros-stable."""
+    try:
+        import subprocess as sp
+        sp.run(["git", "branch", "-f", "ouroboros-stable", "ouroboros"],
+               cwd=str(REPO_DIR), check=True, capture_output=True)
+        return JSONResponse({"status": "ok", "message": "ouroboros-stable updated to match ouroboros"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def index_page(request: Request) -> FileResponse:
     index = REPO_DIR / "web" / "index.html"
     if index.exists():
@@ -597,6 +643,9 @@ routes = [
     Route("/api/settings", endpoint=api_settings_post, methods=["POST"]),
     Route("/api/command", endpoint=api_command, methods=["POST"]),
     Route("/api/reset", endpoint=api_reset, methods=["POST"]),
+    Route("/api/git/log", endpoint=api_git_log),
+    Route("/api/git/rollback", endpoint=api_git_rollback, methods=["POST"]),
+    Route("/api/git/promote", endpoint=api_git_promote, methods=["POST"]),
     WebSocketRoute("/ws", endpoint=ws_endpoint),
     Mount("/static", app=StaticFiles(directory=str(web_dir)), name="static"),
 ]

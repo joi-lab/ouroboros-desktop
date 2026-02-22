@@ -179,7 +179,7 @@ def _execute_single_tool(
 
     # Log tool execution (sanitize secrets from result before persisting)
     append_jsonl(drive_logs / "tools.jsonl", {
-        "ts": utc_now_iso(), "tool": fn_name, "task_id": task_id,
+        "ts": utc_now_iso(), "type": "tool_call", "tool": fn_name, "task_id": task_id,
         "args": args_for_log,
         "result_preview": sanitize_tool_result_for_log(truncate_for_log(result, 2000)),
     })
@@ -265,7 +265,7 @@ def _make_timeout_result(
         "timeout_sec": timeout_sec,
     })
     append_jsonl(drive_logs / "tools.jsonl", {
-        "ts": utc_now_iso(), "tool": fn_name,
+        "ts": utc_now_iso(), "type": "tool_call", "tool": fn_name,
         "args": args_for_log, "result_preview": result,
     })
 
