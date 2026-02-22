@@ -1,122 +1,87 @@
 # -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec for Ouroboros.app (macOS).
 
-import pathlib
-_version = pathlib.Path('VERSION').read_text(encoding='utf-8').strip()
+Bundles launcher.py as the entry point. The agent code (server.py, ouroboros/,
+supervisor/, web/) is included as data and copied to ~/Ouroboros/repo/ on first run.
+The embedded python-standalone interpreter runs the agent as a subprocess.
+"""
+
+import os
+import sys
+
+block_cipher = None
 
 a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
+        ('VERSION', '.'),
+        ('BIBLE.md', '.'),
+        ('README.md', '.'),
+        ('requirements.txt', '.'),
+        ('requirements-launcher.txt', '.'),
+        ('pyproject.toml', '.'),
+        ('Makefile', '.'),
+        ('server.py', '.'),
         ('ouroboros', 'ouroboros'),
         ('supervisor', 'supervisor'),
         ('prompts', 'prompts'),
-        ('assets', 'assets'),
         ('web', 'web'),
-        ('server.py', '.'),
-        ('BIBLE.md', '.'),
-        ('VERSION', '.'),
-        ('README.md', '.'),
-        ('pyproject.toml', '.'),
-        ('requirements.txt', '.'),
-        ('requirements-launcher.txt', '.'),
+        ('tests', 'tests'),
+        ('assets/logo.jpg', 'assets'),
         ('python-standalone', 'python-standalone'),
     ],
     hiddenimports=[
-        # Launcher UI
         'webview',
-        # Tool modules (bundled for agent subprocess bootstrap)
-        'ouroboros.tools.browser',
-        'ouroboros.tools.compact_context',
-        'ouroboros.tools.control',
-        'ouroboros.tools.core',
-        'ouroboros.tools.evolution_stats',
-        'ouroboros.tools.git',
-        'ouroboros.tools.github',
-        'ouroboros.tools.health',
-        'ouroboros.tools.knowledge',
-        'ouroboros.tools.review',
-        'ouroboros.tools.search',
-        'ouroboros.tools.shell',
-        'ouroboros.tools.tool_discovery',
-        'ouroboros.tools.vision',
-        # Core modules
-        'ouroboros.agent',
-        'ouroboros.consciousness',
-        'ouroboros.context',
-        'ouroboros.llm',
-        'ouroboros.loop',
-        'ouroboros.memory',
-        'ouroboros.review',
-        'ouroboros.safety',
-        'ouroboros.owner_inject',
-        'ouroboros.apply_patch',
-        'ouroboros.world_profiler',
-        # Supervisor modules
-        'supervisor.events',
-        'supervisor.git_ops',
-        'supervisor.queue',
-        'supervisor.state',
-        'supervisor.telegram',
-        'supervisor.workers',
-        # Third-party that PyInstaller may miss
-        'dulwich',
-        'dulwich.repo',
-        'dulwich.objects',
-        'dulwich.pack',
+        'ouroboros.config',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        'playwright',
-        'playwright_stealth',
-        'colab_launcher',
-        'colab_bootstrap_shim',
-        'flet',
-        'tkinter',
-        'matplotlib',
-        'numpy',
-        'scipy',
-        'pandas',
-        'IPython',
-        'notebook',
-        'jupyter',
-    ],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
     noarchive=False,
-    optimize=0,
 )
 
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='Ouroboros',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='Ouroboros',
 )
 
 app = BUNDLE(
-    exe,
+    coll,
     name='Ouroboros.app',
     icon='assets/icon.icns',
     bundle_identifier='com.ouroboros.agent',
     info_plist={
-        'CFBundleShortVersionString': _version,
+        'CFBundleShortVersionString': open('VERSION').read().strip(),
+        'CFBundleVersion': open('VERSION').read().strip(),
         'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '12.0',
     },
 )

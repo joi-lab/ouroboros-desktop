@@ -58,11 +58,11 @@ body {
     padding: 8px 0 16px;
 }
 
-.logo-circle {
+.logo-img {
     width: 36px;
     height: 36px;
     border-radius: 8px;
-    background: linear-gradient(135deg, var(--accent), var(--blue));
+    object-fit: cover;
 }
 
 #nav-version {
