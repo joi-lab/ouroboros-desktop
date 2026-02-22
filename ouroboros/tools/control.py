@@ -171,7 +171,20 @@ def _switch_model(ctx: ToolContext, model: str = "", effort: str = "") -> str:
         if model not in available:
             return f"⚠️ Unknown model: {model}. Available: {', '.join(available)}"
         ctx.active_model_override = model
-        changes.append(f"model={model}")
+        
+        import os
+        use_local = False
+        if model == os.environ.get("OUROBOROS_MODEL") and os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1"):
+            use_local = True
+        elif model == os.environ.get("OUROBOROS_MODEL_CODE") and os.environ.get("USE_LOCAL_CODE", "").lower() in ("true", "1"):
+            use_local = True
+        elif model == os.environ.get("OUROBOROS_MODEL_LIGHT") and os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1"):
+            use_local = True
+        elif model == os.environ.get("OUROBOROS_MODEL_FALLBACK") and os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1"):
+            use_local = True
+            
+        ctx.active_use_local_override = use_local
+        changes.append(f"model={model}{' (local)' if use_local else ''}")
 
     if effort:
         normalized = normalize_reasoning_effort(effort, default="medium")

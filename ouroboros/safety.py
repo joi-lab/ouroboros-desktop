@@ -105,15 +105,17 @@ def check_safety(
     # ── Layer 1: Fast check (light model) ──
     fast_status = None
     fast_reason = None
+    _use_local_light = os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1")
     try:
         light_model = os.environ.get("OUROBOROS_MODEL_LIGHT", DEFAULT_LIGHT_MODEL)
-        log.info(f"Running fast safety check on {tool_name} using {light_model}")
+        log.info(f"Running fast safety check on {tool_name} using {light_model} (local={_use_local_light})")
         msg, usage = client.chat(
             messages=[
                 {"role": "system", "content": _get_safety_prompt()},
                 {"role": "user", "content": prompt},
             ],
             model=light_model,
+            use_local=_use_local_light,
         )
         if usage:
             update_budget_from_usage(usage)
@@ -133,12 +135,13 @@ def check_safety(
         fast_reason = str(e)
 
     # ── Layer 2: Deep check (heavy model, with nudge to reduce false positives) ──
+    _use_local_code = os.environ.get("USE_LOCAL_CODE", "").lower() in ("true", "1")
     try:
         heavy_model = os.environ.get(
             "OUROBOROS_MODEL_CODE",
             os.environ.get("OUROBOROS_MODEL", "anthropic/claude-sonnet-4.6"),
         )
-        log.info(f"Running deep safety check on {tool_name} using {heavy_model}")
+        log.info(f"Running deep safety check on {tool_name} using {heavy_model} (local={_use_local_code})")
         deep_system = (
             _get_safety_prompt()
             + "\nThink carefully. Is this actually malicious, or just a normal development command? "
@@ -150,6 +153,7 @@ def check_safety(
                 {"role": "user", "content": prompt},
             ],
             model=heavy_model,
+            use_local=_use_local_code,
         )
         if usage:
             update_budget_from_usage(usage)

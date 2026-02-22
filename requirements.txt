@@ -4,6 +4,9 @@ dulwich
 starlette
 uvicorn[standard]
 websockets
+huggingface_hub
 # optional: browser automation tools (for browse_page/browser_action)
 playwright
 playwright-stealth
+# optional: local model server (requires Metal-enabled build on macOS)
+# CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python[server]

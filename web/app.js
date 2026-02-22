@@ -143,7 +143,12 @@ function initChat() {
             <div class="sender">${sender}</div>
             <div class="message">${rendered}</div>
         `;
-        messagesDiv.appendChild(bubble);
+        const typing = document.getElementById('typing-indicator');
+        if (typing && typing.parentNode === messagesDiv) {
+            messagesDiv.insertBefore(bubble, typing);
+        } else {
+            messagesDiv.appendChild(bubble);
+        }
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
@@ -318,14 +323,44 @@ function initSettings() {
             </div>
             <div class="divider"></div>
             <div class="form-section">
-                <h3>Models</h3>
+                <h3>Local Model</h3>
                 <div class="form-row">
-                    <div class="form-field"><label>Main Model</label><input id="s-model" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
-                    <div class="form-field"><label>Code Model</label><input id="s-model-code" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
+                    <div class="form-field"><label>Model Source</label><input id="s-local-source" placeholder="bartowski/Llama-3.3-70B-Instruct-GGUF or /path/to/model.gguf" style="width:400px"></div>
                 </div>
                 <div class="form-row">
+                    <div class="form-field"><label>GGUF Filename (for HF repos)</label><input id="s-local-filename" placeholder="Llama-3.3-70B-Instruct-Q4_K_M.gguf" style="width:400px"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field"><label>Port</label><input id="s-local-port" type="number" value="8766" style="width:100px"></div>
+                    <div class="form-field"><label>GPU Layers (-1 = all)</label><input id="s-local-gpu-layers" type="number" value="-1" style="width:100px"></div>
+                    <div class="form-field"><label>Chat Format</label><input id="s-local-chat-format" value="chatml-function-calling" style="width:200px"></div>
+                </div>
+                <div class="form-row" style="align-items:center;gap:8px">
+                    <button class="btn btn-primary" id="btn-local-start">Start</button>
+                    <button class="btn btn-primary" id="btn-local-stop" style="opacity:0.5">Stop</button>
+                    <button class="btn btn-primary" id="btn-local-test" style="opacity:0.5">Test Tool Calling</button>
+                </div>
+                <div id="local-model-status" style="margin-top:8px;font-size:13px;color:var(--text-secondary)">Status: Offline</div>
+                <div id="local-model-test-result" style="margin-top:4px;font-size:12px;color:var(--text-muted);display:none"></div>
+            </div>
+            <div class="divider"></div>
+            <div class="form-section">
+                <h3>Models</h3>
+                <div class="form-row" style="align-items:flex-end">
+                    <div class="form-field"><label>Main Model</label><input id="s-model" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-main" disabled> Local</label>
+                </div>
+                <div class="form-row" style="align-items:flex-end">
+                    <div class="form-field"><label>Code Model</label><input id="s-model-code" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-code" disabled> Local</label>
+                </div>
+                <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Light Model</label><input id="s-model-light" value="google/gemini-3-flash-preview" style="width:250px"></div>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-light" disabled> Local</label>
+                </div>
+                <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Fallback Model</label><input id="s-model-fallback" value="google/gemini-3-flash-preview" style="width:250px"></div>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-fallback" disabled> Local</label>
                 </div>
                 <div class="form-row">
                     <div class="form-field"><label>Claude Code Model</label><input id="s-claude-code-model" value="sonnet" placeholder="sonnet, opus, or full name" style="width:250px"></div>
@@ -379,7 +414,82 @@ function initSettings() {
         if (s.OUROBOROS_HARD_TIMEOUT_SEC) document.getElementById('s-hard-timeout').value = s.OUROBOROS_HARD_TIMEOUT_SEC;
         if (s.GITHUB_TOKEN) document.getElementById('s-gh-token').value = s.GITHUB_TOKEN;
         if (s.GITHUB_REPO) document.getElementById('s-gh-repo').value = s.GITHUB_REPO;
+        if (s.LOCAL_MODEL_SOURCE) document.getElementById('s-local-source').value = s.LOCAL_MODEL_SOURCE;
+        if (s.LOCAL_MODEL_FILENAME) document.getElementById('s-local-filename').value = s.LOCAL_MODEL_FILENAME;
+        if (s.LOCAL_MODEL_PORT) document.getElementById('s-local-port').value = s.LOCAL_MODEL_PORT;
+        if (s.LOCAL_MODEL_N_GPU_LAYERS != null) document.getElementById('s-local-gpu-layers').value = s.LOCAL_MODEL_N_GPU_LAYERS;
+        if (s.LOCAL_MODEL_CHAT_FORMAT) document.getElementById('s-local-chat-format').value = s.LOCAL_MODEL_CHAT_FORMAT;
+        document.getElementById('s-local-main').checked = s.USE_LOCAL_MAIN === true || s.USE_LOCAL_MAIN === 'True';
+        document.getElementById('s-local-code').checked = s.USE_LOCAL_CODE === true || s.USE_LOCAL_CODE === 'True';
+        document.getElementById('s-local-light').checked = s.USE_LOCAL_LIGHT === true || s.USE_LOCAL_LIGHT === 'True';
+        document.getElementById('s-local-fallback').checked = s.USE_LOCAL_FALLBACK === true || s.USE_LOCAL_FALLBACK === 'True';
     }).catch(() => {});
+
+    let localStatusInterval = null;
+    function updateLocalStatus() {
+        if (state.activePage !== 'settings') return; // Don't poll if page is hidden
+        fetch('/api/local-model/status').then(r => r.json()).then(d => {
+            const el = document.getElementById('local-model-status');
+            const isReady = d.status === 'ready';
+            let text = 'Status: ' + (d.status || 'offline').charAt(0).toUpperCase() + (d.status || 'offline').slice(1);
+            if (d.status === 'ready' && d.context_length) text += ` (ctx: ${d.context_length})`;
+            if (d.status === 'downloading' && d.download_progress) text += ` ${Math.round(d.download_progress * 100)}%`;
+            if (d.error) text += ' — ' + d.error;
+            el.textContent = text;
+            el.style.color = isReady ? 'var(--green)' : d.status === 'error' ? 'var(--red)' : 'var(--text-secondary)';
+            document.getElementById('btn-local-stop').style.opacity = isReady ? '1' : '0.5';
+            document.getElementById('btn-local-test').style.opacity = isReady ? '1' : '0.5';
+            ['s-local-main', 's-local-code', 's-local-light', 's-local-fallback'].forEach(id => {
+                document.getElementById(id).disabled = !isReady;
+            });
+        }).catch(() => {});
+    }
+    updateLocalStatus();
+    localStatusInterval = setInterval(updateLocalStatus, 3000);
+
+    document.getElementById('btn-local-start').addEventListener('click', async () => {
+        const source = document.getElementById('s-local-source').value.trim();
+        if (!source) { alert('Enter a model source (HuggingFace repo ID or local path)'); return; }
+        const body = {
+            source,
+            filename: document.getElementById('s-local-filename').value.trim(),
+            port: parseInt(document.getElementById('s-local-port').value) || 8766,
+            n_gpu_layers: parseInt(document.getElementById('s-local-gpu-layers').value),
+            chat_format: document.getElementById('s-local-chat-format').value.trim(),
+        };
+        try {
+            const resp = await fetch('/api/local-model/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const data = await resp.json();
+            if (data.error) alert('Error: ' + data.error);
+            else updateLocalStatus();
+        } catch (e) { alert('Failed: ' + e.message); }
+    });
+
+    document.getElementById('btn-local-stop').addEventListener('click', async () => {
+        try {
+            await fetch('/api/local-model/stop', { method: 'POST' });
+            updateLocalStatus();
+        } catch (e) { alert('Failed: ' + e.message); }
+    });
+
+    document.getElementById('btn-local-test').addEventListener('click', async () => {
+        const el = document.getElementById('local-model-test-result');
+        el.style.display = 'block';
+        el.textContent = 'Running tests...';
+        el.style.color = 'var(--text-muted)';
+        try {
+            const resp = await fetch('/api/local-model/test', { method: 'POST' });
+            const r = await resp.json();
+            if (r.error) { el.textContent = 'Error: ' + r.error; el.style.color = 'var(--red)'; return; }
+            let lines = [];
+            lines.push((r.chat_ok ? '\u2713' : '\u2717') + ' Basic chat' + (r.tokens_per_sec ? ` (${r.tokens_per_sec} tok/s)` : ''));
+            lines.push((r.tool_call_ok ? '\u2713' : '\u2717') + ' Tool calling');
+            if (r.details && !r.success) lines.push(r.details);
+            el.textContent = lines.join('\n');
+            el.style.whiteSpace = 'pre-wrap';
+            el.style.color = r.success ? 'var(--green)' : 'var(--amber)';
+        } catch (e) { el.textContent = 'Test failed: ' + e.message; el.style.color = 'var(--red)'; }
+    });
 
     document.getElementById('btn-save-settings').addEventListener('click', async () => {
         const body = {
@@ -393,6 +503,15 @@ function initSettings() {
             OUROBOROS_SOFT_TIMEOUT_SEC: parseInt(document.getElementById('s-soft-timeout').value) || 600,
             OUROBOROS_HARD_TIMEOUT_SEC: parseInt(document.getElementById('s-hard-timeout').value) || 1800,
             GITHUB_REPO: document.getElementById('s-gh-repo').value,
+            LOCAL_MODEL_SOURCE: document.getElementById('s-local-source').value,
+            LOCAL_MODEL_FILENAME: document.getElementById('s-local-filename').value,
+            LOCAL_MODEL_PORT: parseInt(document.getElementById('s-local-port').value) || 8766,
+            LOCAL_MODEL_N_GPU_LAYERS: parseInt(document.getElementById('s-local-gpu-layers').value),
+            LOCAL_MODEL_CHAT_FORMAT: document.getElementById('s-local-chat-format').value,
+            USE_LOCAL_MAIN: document.getElementById('s-local-main').checked,
+            USE_LOCAL_CODE: document.getElementById('s-local-code').checked,
+            USE_LOCAL_LIGHT: document.getElementById('s-local-light').checked,
+            USE_LOCAL_FALLBACK: document.getElementById('s-local-fallback').checked,
         };
         const orKey = document.getElementById('s-openrouter').value;
         if (orKey && !orKey.includes('...')) body.OPENROUTER_API_KEY = orKey;
@@ -428,6 +547,16 @@ function initSettings() {
             alert('Reset failed: ' + e.message);
         }
     });
+
+    // Cleanup interval when changing pages
+    const origShowPage = window.showPage;
+    window.showPage = function(name) {
+        if (name !== 'settings' && localStatusInterval) {
+            clearInterval(localStatusInterval);
+            localStatusInterval = null;
+        }
+        if (origShowPage) origShowPage(name);
+    };
 }
 
 // ---------------------------------------------------------------------------

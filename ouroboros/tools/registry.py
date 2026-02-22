@@ -41,6 +41,7 @@ class ToolContext:
     # LLM-driven model/effort switch (set by switch_model tool, read by loop.py)
     active_model_override: Optional[str] = None
     active_effort_override: Optional[str] = None
+    active_use_local_override: Optional[bool] = None
 
     # Per-task browser state
     browser_state: BrowserState = field(default_factory=BrowserState)

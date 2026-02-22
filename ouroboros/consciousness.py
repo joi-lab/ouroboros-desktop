@@ -194,12 +194,14 @@ class BackgroundConsciousness:
             for round_idx in range(1, self._max_bg_rounds + 1):
                 if self._paused:
                     break
+                _use_local_light = os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1")
                 msg, usage = self._llm.chat(
                     messages=messages,
                     model=model,
                     tools=tools,
                     reasoning_effort="low",
                     max_tokens=2048,
+                    use_local=_use_local_light,
                 )
                 cost = float(usage.get("cost") or 0)
                 total_cost += cost

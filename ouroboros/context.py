@@ -282,6 +282,7 @@ def build_llm_messages(
     memory: Memory,
     task: Dict[str, Any],
     review_context_builder: Optional[Any] = None,
+    soft_cap_tokens: int = 200_000,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Build the full LLM message context for a task.
@@ -389,7 +390,7 @@ def build_llm_messages(
     ]
 
     # --- Soft-cap token trimming ---
-    messages, cap_info = apply_message_token_soft_cap(messages, 200000)
+    messages, cap_info = apply_message_token_soft_cap(messages, soft_cap_tokens)
 
     return messages, cap_info
 
@@ -648,11 +649,13 @@ def compact_tool_history_llm(messages: list, keep_recent: int = 6) -> list:
         from ouroboros.llm import LLMClient, DEFAULT_LIGHT_MODEL
         light_model = os.environ.get("OUROBOROS_MODEL_LIGHT") or DEFAULT_LIGHT_MODEL
         client = LLMClient()
+        _use_local_light = os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1")
         resp_msg, _usage = client.chat(
             messages=[{"role": "user", "content": prompt}],
             model=light_model,
             reasoning_effort="low",
             max_tokens=1024,
+            use_local=_use_local_light,
         )
         summary_text = resp_msg.get("content") or ""
         if not summary_text.strip():

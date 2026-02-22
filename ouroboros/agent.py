@@ -378,11 +378,23 @@ class OuroborosAgent:
         self._emit_typing_start()
 
         # --- Build context (delegated to context.py) ---
+        _use_local = os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1")
+        _soft_cap = 200_000
+        if _use_local:
+            _local_ctx = int(os.environ.get("LOCAL_MODEL_CONTEXT_LENGTH", "0"))
+            if _local_ctx <= 0:
+                try:
+                    from ouroboros.local_model import get_manager
+                    _local_ctx = get_manager().get_context_length()
+                except Exception:
+                    _local_ctx = 4096
+            _soft_cap = max(2048, _local_ctx - 4096)
         messages, cap_info = build_llm_messages(
             env=self.env,
             memory=self.memory,
             task=task,
             review_context_builder=self._build_review_context,
+            soft_cap_tokens=_soft_cap,
         )
 
         if cap_info.get("trimmed_sections"):

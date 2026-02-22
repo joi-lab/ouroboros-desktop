@@ -81,11 +81,13 @@ class LocalChatBridge:
         return True, "ok"
 
     def send_chat_action(self, chat_id: int, action: str = "typing") -> bool:
-        """Send typing indicator to UI."""
+        """Send typing indicator to UI via WebSocket broadcast."""
         self._outbox.put({
             "type": "action",
             "content": action
         })
+        if self._broadcast_fn:
+            self._broadcast_fn({"type": "typing", "action": action})
         return True
 
     def send_photo(self, chat_id: int, photo_bytes: bytes,

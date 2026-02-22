@@ -55,6 +55,17 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5",
     "GITHUB_TOKEN": "",
     "GITHUB_REPO": "",
+    # Local model (llama-cpp-python server)
+    "LOCAL_MODEL_SOURCE": "",
+    "LOCAL_MODEL_FILENAME": "",
+    "LOCAL_MODEL_PORT": 8766,
+    "LOCAL_MODEL_N_GPU_LAYERS": -1,
+    "LOCAL_MODEL_CONTEXT_LENGTH": 0,
+    "LOCAL_MODEL_CHAT_FORMAT": "chatml-function-calling",
+    "USE_LOCAL_MAIN": False,
+    "USE_LOCAL_CODE": False,
+    "USE_LOCAL_LIGHT": False,
+    "USE_LOCAL_FALLBACK": False,
 }
 
 
@@ -148,13 +159,17 @@ def apply_settings_to_env(settings: dict) -> None:
         "TOTAL_BUDGET", "GITHUB_TOKEN", "GITHUB_REPO",
         "OUROBOROS_BG_MAX_ROUNDS", "OUROBOROS_BG_WAKEUP_MIN", "OUROBOROS_BG_WAKEUP_MAX",
         "OUROBOROS_EVO_COST_THRESHOLD", "OUROBOROS_WEBSEARCH_MODEL",
+        "LOCAL_MODEL_SOURCE", "LOCAL_MODEL_FILENAME",
+        "LOCAL_MODEL_PORT", "LOCAL_MODEL_N_GPU_LAYERS", "LOCAL_MODEL_CONTEXT_LENGTH",
+        "LOCAL_MODEL_CHAT_FORMAT",
+        "USE_LOCAL_MAIN", "USE_LOCAL_CODE", "USE_LOCAL_LIGHT", "USE_LOCAL_FALLBACK",
     ]
     for k in env_keys:
         val = settings.get(k)
-        if val is not None and str(val):
-            os.environ[k] = str(val)
-        elif k in os.environ and not val:
+        if val is None or val == "":
             os.environ.pop(k, None)
+        else:
+            os.environ[k] = str(val)
 
 
 # ---------------------------------------------------------------------------

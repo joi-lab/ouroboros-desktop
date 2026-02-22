@@ -421,6 +421,13 @@ def _execute_panic_stop(consciousness, kill_workers_fn) -> None:
     except Exception:
         pass
 
+    # Kill local model server if running
+    try:
+        from ouroboros.local_model import get_manager
+        get_manager().stop_server()
+    except Exception:
+        pass
+
     # Kill all tracked subprocess process groups (claude CLI, shell, etc.)
     try:
         from ouroboros.tools.shell import kill_all_tracked_subprocesses
@@ -706,6 +713,68 @@ async def api_cost_breakdown(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Local model API endpoints
+# ---------------------------------------------------------------------------
+
+async def api_local_model_start(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        source = body.get("source", "").strip()
+        filename = body.get("filename", "").strip()
+        port = int(body.get("port", 8766))
+        n_gpu_layers = int(body.get("n_gpu_layers", -1))
+        n_ctx = int(body.get("n_ctx", 0))
+        chat_format = body.get("chat_format", "chatml-function-calling").strip()
+
+        if not source:
+            return JSONResponse({"error": "source is required"}, status_code=400)
+
+        from ouroboros.local_model import get_manager
+        mgr = get_manager()
+
+        if mgr.is_running:
+            return JSONResponse({"error": "Local model server is already running"}, status_code=409)
+
+        # Download can be slow, run in thread to not block the async event loop
+        import asyncio
+        model_path = await asyncio.to_thread(mgr.download_model, source, filename)
+        
+        mgr.start_server(model_path, port=port, n_gpu_layers=n_gpu_layers, n_ctx=n_ctx, chat_format=chat_format)
+        return JSONResponse({"status": "starting", "model_path": model_path})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_local_model_stop(request: Request) -> JSONResponse:
+    try:
+        from ouroboros.local_model import get_manager
+        get_manager().stop_server()
+        return JSONResponse({"status": "stopped"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_local_model_status(request: Request) -> JSONResponse:
+    try:
+        from ouroboros.local_model import get_manager
+        return JSONResponse(get_manager().status_dict())
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)})
+
+
+async def api_local_model_test(request: Request) -> JSONResponse:
+    try:
+        from ouroboros.local_model import get_manager
+        mgr = get_manager()
+        if not mgr.is_running:
+            return JSONResponse({"error": "Local model server is not running"}, status_code=400)
+        result = mgr.test_tool_calling()
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 web_dir = REPO_DIR / "web"
@@ -723,6 +792,10 @@ routes = [
     Route("/api/git/rollback", endpoint=api_git_rollback, methods=["POST"]),
     Route("/api/git/promote", endpoint=api_git_promote, methods=["POST"]),
     Route("/api/cost-breakdown", endpoint=api_cost_breakdown),
+    Route("/api/local-model/start", endpoint=api_local_model_start, methods=["POST"]),
+    Route("/api/local-model/stop", endpoint=api_local_model_stop, methods=["POST"]),
+    Route("/api/local-model/status", endpoint=api_local_model_status),
+    Route("/api/local-model/test", endpoint=api_local_model_test, methods=["POST"]),
     WebSocketRoute("/ws", endpoint=ws_endpoint),
     Mount("/static", app=StaticFiles(directory=str(web_dir)), name="static"),
 ]
@@ -745,6 +818,11 @@ async def lifespan(app):
     yield
 
     log.info("Server shutting down...")
+    try:
+        from ouroboros.local_model import get_manager
+        get_manager().stop_server()
+    except Exception:
+        pass
     try:
         from ouroboros.tools.shell import kill_all_tracked_subprocesses
         kill_all_tracked_subprocesses()

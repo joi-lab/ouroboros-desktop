@@ -680,6 +680,9 @@ def run_llm_loop(
             if ctx.active_model_override:
                 active_model = ctx.active_model_override
                 ctx.active_model_override = None
+            if getattr(ctx, "active_use_local_override", None) is not None:
+                use_local_main = ctx.active_use_local_override
+                ctx.active_use_local_override = None
             if ctx.active_effort_override:
                 active_effort = normalize_reasoning_effort(ctx.active_effort_override, default=active_effort)
                 ctx.active_effort_override = None

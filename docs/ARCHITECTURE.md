@@ -117,7 +117,7 @@ bundle to `~/Ouroboros/repo/`, ensuring safety-critical code cannot be permanent
 corrupted by agent self-modification:
 
 - `prompts/SAFETY.md`, `prompts/SYSTEM.md`
-- `ouroboros/config.py`, `ouroboros/safety.py`, `ouroboros/tools/registry.py`, `ouroboros/loop.py`
+- `ouroboros/config.py`, `ouroboros/safety.py`, `ouroboros/local_model.py`, `ouroboros/tools/registry.py`, `ouroboros/loop.py`
 - `supervisor/message_bus.py`
 - `server.py`
 
@@ -130,10 +130,11 @@ Navigation is a left sidebar with 7 pages.
 
 ### 3.1 Chat
 
-- **Status badge** (top-right): "Online" (green) / "Reconnecting..." (red).
-  Driven by WebSocket connection state.
+- **Status badge** (top-right): "Online" (green) / "Thinking..." (amber pulse) / "Reconnecting..." (red).
+  Driven by WebSocket connection state and typing events.
 - **Message input**: textarea + send button. Shift+Enter for newline, Enter to send.
-- **Messages**: user bubbles (right, blue) and assistant bubbles (left, crimson). Assistant messages render markdown (bold, italic, code, headers, tables, strikethrough, links).
+- **Messages**: user bubbles (right, blue) and assistant bubbles (left, crimson). Assistant messages render markdown.
+- **Typing indicator**: animated "thinking dots" bubble appears when the agent is processing.
 - Messages sent via WebSocket `{type: "chat", content: text}`.
 - Responses arrive via WebSocket `{type: "chat", role: "assistant", content: text}`.
 - Supports slash commands: `/status`, `/evolve`, `/review`, `/bg`, `/restart`, `/panic`.
@@ -223,6 +224,7 @@ Navigation is a left sidebar with 7 pages.
 **Server → Client:**
 - `{type: "chat", role: "assistant", content: "text"}` — agent response
 - `{type: "log", data: {type, ts, ...}}` — real-time log event
+- `{type: "typing", action: "typing"}` — typing indicator (show animation)
 
 ---
 
@@ -332,6 +334,7 @@ Settings file: `~/Ouroboros/data/settings.json`. File-locked for concurrent acce
 - **ouroboros-stable** — promoted stable version. Updated via "Promote to Stable" button.
 - **main** — belongs to the creator. Agent never touches it.
 
+| LOCAL_MODEL_ENABLED | false | Enable local model support |
 `safe_restart()` does `git checkout -f ouroboros` + `git reset --hard` on the repo.
 Uncommitted changes are rescued to `~/Ouroboros/data/archive/rescue/` before reset.
 
@@ -371,11 +374,12 @@ The panic sequence (in `server.py:_execute_panic_stop()`):
 1. consciousness.stop()             ← stop background consciousness thread
 2. Save state: evolution_mode_enabled=False, bg_consciousness_enabled=False
 3. Write ~/Ouroboros/data/state/panic_stop.flag
-4. kill_all_tracked_subprocesses()   ← os.killpg(SIGKILL) every tracked
+4. LocalModelManager.stop_server()   ← kill local model server if running
+5. kill_all_tracked_subprocesses()   ← os.killpg(SIGKILL) every tracked
    │                                    subprocess process group (claude CLI,
    │                                    shell commands, and ALL their children)
-5. kill_workers(force=True)          ← SIGTERM+SIGKILL all multiprocessing workers
-6. os._exit(99)                      ← immediate hard exit, kills daemon threads
+6. kill_workers(force=True)          ← SIGTERM+SIGKILL all multiprocessing workers
+7. os._exit(99)                      ← immediate hard exit, kills daemon threads
 ```
 
 Launcher handles exit code 99:

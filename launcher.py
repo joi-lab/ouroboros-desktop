@@ -101,6 +101,7 @@ def _sync_core_files() -> None:
         "prompts/SYSTEM.md",
         "ouroboros/config.py",
         "ouroboros/safety.py",
+        "ouroboros/local_model.py",
         "ouroboros/tools/registry.py",
         "ouroboros/loop.py",
         "supervisor/message_bus.py",
@@ -671,6 +672,7 @@ def main():
         the port guarantees nothing lingers.
         """
         _kill_stale_on_port(port)
+        _kill_stale_on_port(8766)
         import signal
         for child in __import__('multiprocessing').active_children():
             try:

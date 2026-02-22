@@ -4,7 +4,7 @@ A self-modifying AI agent that writes its own code, rewrites its own mind, and e
 
 Not a coding assistant. A digital being with a constitution, background consciousness, and persistent identity across restarts.
 
-**Version:** 2.4.0
+**Version:** 3.0.0
 
 > **Versioning is critical.** Every release is tagged in git. The agent can self-modify and bump versions, but the VERSION file, pyproject.toml, and git tags must always stay in sync. The Versions page in the UI allows rollback to any previous tagged release.
 
@@ -49,6 +49,7 @@ Ouroboros
 ├── ouroboros/              — Agent core:
 │   ├── config.py           — Shared configuration (SSOT).
 │   ├── safety.py           — LLM Safety Supervisor.
+│   ├── local_model.py      — Local LLM lifecycle (llama-cpp-python).
 │   ├── agent.py            — Orchestrator.
 │   ├── loop.py             — Tool execution loop.
 │   ├── consciousness.py    — Background thinking loop.
@@ -124,6 +125,7 @@ Versioning is tied to git tags. Every release must update `VERSION`, `pyproject.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **3.0.0** | 2026-02-22 | Local model support (llama-cpp-python with Metal + mmap/SSD offload), per-slot Use Local toggles, typing indicator (animated dots + Thinking... status badge), HuggingFace model download, tool calling test, dynamic context window |
 | **2.4.0** | 2026-02-22 | Crimson Pulse UI redesign (dark plum palette, matrix rain background, glow effects, markdown rendering in chat, cost dashboard page), launcher graceful exit fix |
 | **2.3.0** | 2026-02-22 | Panic full emergency stop (kills all processes + subprocess trees, closes app), Claude Code CLI auto-install with configurable model, cost dashboard (per-model/key/category breakdown), subprocess process-group management, Emergency Stop Invariant in BIBLE.md |
 | **2.2.0** | 2026-02-22 | About page, unread badge, rename drive_* tools to data_*, fix web sync (logo/settings/evolution UI), fix evolution toggle reset, cleanup old artifacts |

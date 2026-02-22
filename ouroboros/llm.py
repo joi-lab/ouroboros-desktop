@@ -1,7 +1,7 @@
 """
 Ouroboros — LLM client.
 
-The only module that communicates with the LLM API (OpenRouter).
+The only module that communicates with LLM APIs (OpenRouter + optional local).
 Contract: chat(), default_model(), available_models(), add_usage().
 """
 
@@ -103,7 +103,7 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, float, float]]:
 
 
 class LLMClient:
-    """OpenRouter API wrapper. All LLM calls go through this class."""
+    """LLM API wrapper. Routes calls to OpenRouter or a local llama-cpp-python server."""
 
     def __init__(
         self,
@@ -113,6 +113,8 @@ class LLMClient:
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self._base_url = base_url
         self._client = None
+        self._local_client = None
+        self._local_port: Optional[int] = None
 
     def _get_client(self):
         if self._client is None:
@@ -126,6 +128,30 @@ class LLMClient:
                 },
             )
         return self._client
+
+    def _get_local_client(self):
+        port = int(os.environ.get("LOCAL_MODEL_PORT", "8766"))
+        if self._local_client is None or self._local_port != port:
+            from openai import OpenAI
+            self._local_client = OpenAI(
+                base_url=f"http://127.0.0.1:{port}/v1",
+                api_key="local",
+            )
+            self._local_port = port
+        return self._local_client
+
+    @staticmethod
+    def _strip_cache_control(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Strip cache_control from message content blocks (OpenRouter/Anthropic-only)."""
+        import copy
+        cleaned = copy.deepcopy(messages)
+        for msg in cleaned:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
+        return cleaned
 
     def _fetch_generation_cost(self, generation_id: str) -> Optional[float]:
         """Fetch cost from OpenRouter Generation API as fallback."""
@@ -159,8 +185,65 @@ class LLMClient:
         reasoning_effort: str = "medium",
         max_tokens: int = 16384,
         tool_choice: str = "auto",
+        use_local: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Single LLM call. Returns: (response_message_dict, usage_dict with cost)."""
+        """Single LLM call. Returns: (response_message_dict, usage_dict with cost).
+
+        When use_local=True, routes to the local llama-cpp-python server
+        and strips OpenRouter-specific parameters (reasoning, provider, cache_control).
+        """
+        if use_local:
+            return self._chat_local(messages, tools, max_tokens, tool_choice)
+
+        return self._chat_openrouter(messages, model, tools, reasoning_effort, max_tokens, tool_choice)
+
+    def _chat_local(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        max_tokens: int,
+        tool_choice: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Send a chat request to the local llama-cpp-python server."""
+        client = self._get_local_client()
+
+        clean_messages = self._strip_cache_control(messages)
+
+        clean_tools = None
+        if tools:
+            clean_tools = [
+                {k: v for k, v in t.items() if k != "cache_control"}
+                for t in tools
+            ]
+
+        kwargs: Dict[str, Any] = {
+            "model": "local-model",
+            "messages": clean_messages,
+            "max_tokens": max_tokens,
+        }
+        if clean_tools:
+            kwargs["tools"] = clean_tools
+            kwargs["tool_choice"] = tool_choice
+
+        resp = client.chat.completions.create(**kwargs)
+        resp_dict = resp.model_dump()
+        usage = resp_dict.get("usage") or {}
+        choices = resp_dict.get("choices") or [{}]
+        msg = (choices[0] if choices else {}).get("message") or {}
+
+        usage["cost"] = 0.0
+        return msg, usage
+
+    def _chat_openrouter(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        tools: Optional[List[Dict[str, Any]]],
+        reasoning_effort: str,
+        max_tokens: int,
+        tool_choice: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Send a chat request to OpenRouter."""
         client = self._get_client()
         effort = normalize_reasoning_effort(reasoning_effort)
 
@@ -183,8 +266,6 @@ class LLMClient:
             "extra_body": extra_body,
         }
         if tools:
-            # Add cache_control to last tool for Anthropic prompt caching
-            # This caches all tool schemas (they never change between calls)
             tools_with_cache = [t for t in tools]  # shallow copy
             if tools_with_cache:
                 last_tool = {**tools_with_cache[-1]}  # copy last tool
@@ -199,15 +280,11 @@ class LLMClient:
         choices = resp_dict.get("choices") or [{}]
         msg = (choices[0] if choices else {}).get("message") or {}
 
-        # Extract cached_tokens from prompt_tokens_details if available
         if not usage.get("cached_tokens"):
             prompt_details = usage.get("prompt_tokens_details") or {}
             if isinstance(prompt_details, dict) and prompt_details.get("cached_tokens"):
                 usage["cached_tokens"] = int(prompt_details["cached_tokens"])
 
-        # Extract cache_write_tokens from prompt_tokens_details if available
-        # OpenRouter: "cache_write_tokens"
-        # Native Anthropic: "cache_creation_tokens" or "cache_creation_input_tokens"
         if not usage.get("cache_write_tokens"):
             prompt_details_for_write = usage.get("prompt_tokens_details") or {}
             if isinstance(prompt_details_for_write, dict):
@@ -217,7 +294,6 @@ class LLMClient:
                 if cache_write:
                     usage["cache_write_tokens"] = int(cache_write)
 
-        # Ensure cost is present in usage (OpenRouter includes it, but fallback if missing)
         if not usage.get("cost"):
             gen_id = resp_dict.get("id") or ""
             if gen_id:
