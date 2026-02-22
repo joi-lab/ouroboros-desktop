@@ -26,10 +26,10 @@ BUDGET_REPORT_EVERY_MESSAGES: int = 10
 _TG: Optional["LocalChatBridge"] = None
 
 
-def init(data_dir, total_budget_limit: float, budget_report_every: int,
+def init(drive_root, total_budget_limit: float, budget_report_every: int,
          tg_client: "LocalChatBridge") -> None:
     global DATA_DIR, TOTAL_BUDGET_LIMIT, BUDGET_REPORT_EVERY_MESSAGES, _TG
-    DATA_DIR = data_dir
+    DATA_DIR = drive_root
     TOTAL_BUDGET_LIMIT = total_budget_limit
     BUDGET_REPORT_EVERY_MESSAGES = budget_report_every
     _TG = tg_client

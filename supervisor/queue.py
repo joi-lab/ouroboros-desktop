@@ -20,7 +20,7 @@ from supervisor.state import (
     QUEUE_SNAPSHOT_PATH, budget_pct, TOTAL_BUDGET_LIMIT,
     budget_remaining, EVOLUTION_BUDGET_RESERVE,
 )
-from supervisor.telegram import send_with_budget
+from supervisor.message_bus import send_with_budget
 
 log = logging.getLogger(__name__)
 

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from supervisor.state import load_state, append_jsonl
 from supervisor import git_ops
-from supervisor.telegram import send_with_budget
+from supervisor.message_bus import send_with_budget
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def handle_chat_direct(chat_id: int, text: str, image_data: Optional[Union[Tuple
     from supervisor.state import budget_remaining, load_state
     if budget_remaining(load_state()) <= 0:
         try:
-            from supervisor.telegram import get_tg
+            from supervisor.message_bus import get_tg
             get_tg().send_message(chat_id, "🚫 Budget exhausted. Task rejected. Please increase TOTAL_BUDGET in settings.")
         except Exception:
             pass
@@ -187,7 +187,7 @@ def handle_chat_direct(chat_id: int, text: str, image_data: Optional[Union[Tuple
             },
         )
         try:
-            from supervisor.telegram import get_tg
+            from supervisor.message_bus import get_tg
             get_tg().send_message(chat_id, err_msg)
         except Exception:
             log.debug("Suppressed exception", exc_info=True)

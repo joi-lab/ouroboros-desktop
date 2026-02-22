@@ -126,8 +126,8 @@ def _run_supervisor(settings: dict) -> None:
     _apply_settings_to_env(settings)
 
     try:
-        from supervisor.telegram import init as telegram_init
-        from supervisor.telegram import LocalChatBridge
+        from supervisor.message_bus import init as telegram_init
+        from supervisor.message_bus import LocalChatBridge
 
         bridge = LocalChatBridge(token="local")
         bridge._broadcast_fn = broadcast_ws_sync
@@ -136,7 +136,7 @@ def _run_supervisor(settings: dict) -> None:
         set_log_sink(bridge.push_log)
 
         telegram_init(
-            data_dir=DATA_DIR,
+            drive_root=DATA_DIR,
             total_budget_limit=float(settings.get("TOTAL_BUDGET", 10.0)),
             budget_report_every=10,
             tg_client=bridge,
@@ -149,7 +149,7 @@ def _run_supervisor(settings: dict) -> None:
 
         from supervisor.git_ops import init as git_ops_init, ensure_repo_present, safe_restart
         git_ops_init(
-            repo_dir=REPO_DIR, data_dir=DATA_DIR, remote_url="",
+            repo_dir=REPO_DIR, drive_root=DATA_DIR, remote_url="",
             branch_dev="ouroboros", branch_stable="ouroboros-stable",
         )
         ensure_repo_present()
@@ -173,14 +173,14 @@ def _run_supervisor(settings: dict) -> None:
         hard_timeout = int(settings.get("OUROBOROS_HARD_TIMEOUT_SEC", 1800))
 
         workers_init(
-            repo_dir=REPO_DIR, data_dir=DATA_DIR, max_workers=max_workers,
+            repo_dir=REPO_DIR, drive_root=DATA_DIR, max_workers=max_workers,
             soft_timeout=soft_timeout, hard_timeout=hard_timeout,
             total_budget_limit=float(settings.get("TOTAL_BUDGET", 10.0)),
             branch_dev="ouroboros", branch_stable="ouroboros-stable",
         )
 
         from supervisor.events import dispatch_event
-        from supervisor.telegram import send_with_budget
+        from supervisor.message_bus import send_with_budget
         from ouroboros.consciousness import BackgroundConsciousness
         import types
         import queue as _queue_mod
@@ -207,12 +207,12 @@ def _run_supervisor(settings: dict) -> None:
                 return None
 
         _consciousness = BackgroundConsciousness(
-            data_dir=DATA_DIR, repo_dir=REPO_DIR,
+            drive_root=DATA_DIR, repo_dir=REPO_DIR,
             event_queue=get_event_q(), owner_chat_id_fn=_get_owner_chat_id,
         )
 
         _event_ctx = types.SimpleNamespace(
-            DATA_DIR=DATA_DIR, REPO_DIR=REPO_DIR,
+            DRIVE_ROOT=DATA_DIR, REPO_DIR=REPO_DIR,
             BRANCH_DEV="ouroboros", BRANCH_STABLE="ouroboros-stable",
             TG=bridge, WORKERS=WORKERS, PENDING=PENDING, RUNNING=RUNNING,
             MAX_WORKERS=max_workers,
@@ -275,7 +275,7 @@ def _run_supervisor(settings: dict) -> None:
                     st["owner_id"] = user_id
                     st["owner_chat_id"] = chat_id
 
-                from supervisor.telegram import log_chat
+                from supervisor.message_bus import log_chat
                 log_chat("in", chat_id, user_id, text)
                 st["last_owner_message_at"] = now_iso
                 save_state(st)
@@ -406,13 +406,13 @@ async def ws_endpoint(websocket: WebSocket) -> None:
             if msg_type == "chat":
                 text = msg.get("content", "")
                 if text:
-                    from supervisor.telegram import get_tg
+                    from supervisor.message_bus import get_tg
                     tg = get_tg()
                     tg.ui_send(text)
             elif msg_type == "command":
                 cmd = msg.get("cmd", "")
                 if cmd:
-                    from supervisor.telegram import get_tg
+                    from supervisor.message_bus import get_tg
                     tg = get_tg()
                     tg.ui_send(cmd)
     except WebSocketDisconnect:
@@ -510,7 +510,7 @@ async def api_command(request: Request) -> JSONResponse:
         body = await request.json()
         cmd = body.get("cmd", "")
         if cmd:
-            from supervisor.telegram import get_tg
+            from supervisor.message_bus import get_tg
             tg = get_tg()
             tg.ui_send(cmd)
         return JSONResponse({"status": "ok"})
