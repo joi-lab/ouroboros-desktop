@@ -29,7 +29,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 from ouroboros.config import (
     HOME, APP_ROOT, REPO_DIR, DATA_DIR, SETTINGS_PATH, PID_FILE, PORT_FILE,
-    RESTART_EXIT_CODE, AGENT_SERVER_PORT,
+    RESTART_EXIT_CODE, PANIC_EXIT_CODE, AGENT_SERVER_PORT,
     read_version, load_settings, save_settings, acquire_pid_lock, release_pid_lock,
 )
 MAX_CRASH_RESTARTS = 5
@@ -415,6 +415,24 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
         if _shutdown_event.is_set():
             break
 
+        # Panic stop: kill everything, close app, no restart
+        if exit_code == PANIC_EXIT_CODE:
+            log.info("Panic stop (exit code %d) — shutting down completely.", PANIC_EXIT_CODE)
+            _shutdown_event.set()
+            _kill_stale_on_port(port)
+            import multiprocessing as _mp
+            for child in _mp.active_children():
+                try:
+                    os.kill(child.pid, 9)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            if _webview_window:
+                try:
+                    _webview_window.destroy()
+                except Exception:
+                    pass
+            break
+
         # Wait for port to fully release after process exit
         time.sleep(2)
 
@@ -633,7 +651,7 @@ def main():
         width=1100,
         height=750,
         min_size=(800, 500),
-        background_color="#0f0f1a",
+        background_color="#0d0b0f",
         text_select=True,
     )
 
@@ -643,6 +661,7 @@ def main():
         stop_agent()
         _kill_orphaned_children()
         release_pid_lock()
+        os._exit(0)
 
     def _kill_orphaned_children():
         """Final safety net: kill any processes still on the server port.

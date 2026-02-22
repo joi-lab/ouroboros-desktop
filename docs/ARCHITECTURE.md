@@ -126,14 +126,14 @@ corrupted by agent self-modification:
 ## 3. Web UI Pages & Buttons
 
 The web UI is a single-page app (`web/index.html` + `web/app.js` + `web/style.css`).
-Navigation is a left sidebar with 5 pages.
+Navigation is a left sidebar with 7 pages.
 
 ### 3.1 Chat
 
 - **Status badge** (top-right): "Online" (green) / "Reconnecting..." (red).
   Driven by WebSocket connection state.
 - **Message input**: textarea + send button. Shift+Enter for newline, Enter to send.
-- **Messages**: user bubbles (right, blue) and assistant bubbles (left, dark).
+- **Messages**: user bubbles (right, blue) and assistant bubbles (left, crimson). Assistant messages render markdown (bold, italic, code, headers, tables, strikethrough, links).
 - Messages sent via WebSocket `{type: "chat", content: text}`.
 - Responses arrive via WebSocket `{type: "chat", role: "assistant", content: text}`.
 - Supports slash commands: `/status`, `/evolve`, `/review`, `/bg`, `/restart`, `/panic`.
@@ -318,6 +318,7 @@ Settings file: `~/Ouroboros/data/settings.json`. File-locked for concurrent acce
 | OUROBOROS_MODEL_CODE | anthropic/claude-sonnet-4.6 | Code editing model |
 | OUROBOROS_MODEL_LIGHT | google/gemini-3-flash-preview | Fast/cheap model (safety, consciousness) |
 | OUROBOROS_MODEL_FALLBACK | google/gemini-3-flash-preview | Fallback when primary fails |
+| CLAUDE_CODE_MODEL | sonnet | Anthropic model for Claude Code CLI (sonnet, opus, or full name) |
 | OUROBOROS_MAX_WORKERS | 5 | Worker process pool size |
 | TOTAL_BUDGET | 10.0 | Total budget in USD |
 | OUROBOROS_SOFT_TIMEOUT_SEC | 600 | Soft timeout warning (10 min) |
@@ -341,7 +342,7 @@ Uncommitted changes are rescued to `~/Ouroboros/data/archive/rescue/` before res
 **Requirement: closing the window (X button or Cmd+Q) MUST leave zero orphan
 processes. No zombies, no workers lingering in background.**
 
-Shutdown sequence (`launcher.py:_on_closing`):
+### 9.1 Normal Shutdown (window close)
 
 ```
 1. _shutdown_event.set()           ← signal lifecycle loop to exit
@@ -360,6 +361,54 @@ Shutdown sequence (`launcher.py:_on_closing`):
 This three-layer approach (graceful → force-kill server → sweep port/children)
 guarantees no orphans even if the server hangs or workers resist SIGTERM.
 
+### 9.2 Panic Stop (`/panic` command or Panic Stop button)
+
+**Panic is a full emergency stop. Not a restart — a complete shutdown.**
+
+The panic sequence (in `server.py:_execute_panic_stop()`):
+
+```
+1. consciousness.stop()             ← stop background consciousness thread
+2. Save state: evolution_mode_enabled=False, bg_consciousness_enabled=False
+3. Write ~/Ouroboros/data/state/panic_stop.flag
+4. kill_all_tracked_subprocesses()   ← os.killpg(SIGKILL) every tracked
+   │                                    subprocess process group (claude CLI,
+   │                                    shell commands, and ALL their children)
+5. kill_workers(force=True)          ← SIGTERM+SIGKILL all multiprocessing workers
+6. os._exit(99)                      ← immediate hard exit, kills daemon threads
+```
+
+Launcher handles exit code 99:
+
+```
+7. Launcher detects exit_code == PANIC_EXIT_CODE (99)
+8. _shutdown_event.set()
+9. Kill orphaned children (port sweep + multiprocessing sweep)
+10. _webview_window.destroy()        ← closes PyWebView, app exits
+```
+
+On next manual launch:
+
+```
+11. auto_resume_after_restart() checks for panic_stop.flag
+12. Flag found → skip auto-resume, delete flag
+13. Agent waits for owner interaction (no automatic work)
+```
+
+### 9.3 Subprocess Process Group Management
+
+All subprocesses spawned by agent tools (`run_shell`, `claude_code_edit`)
+use `start_new_session=True` (via `_tracked_subprocess_run()` in
+`ouroboros/tools/shell.py`). This creates a separate process group for each
+subprocess and all its children.
+
+On panic or timeout, the entire process tree is killed via
+`os.killpg(pgid, SIGKILL)` — no orphans possible, even for deeply nested
+subprocess trees (e.g., Claude CLI spawning node processes).
+
+Active subprocesses are tracked in a thread-safe global set and cleaned up
+automatically on completion or via `kill_all_tracked_subprocesses()` on panic.
+
 ---
 
 ## 10. Key Invariants
@@ -369,6 +418,9 @@ guarantees no orphans even if the server hangs or workers resist SIGTERM.
 3. **Config SSOT**: all settings defaults and paths live in `ouroboros/config.py`
 4. **Message bus SSOT**: all messaging goes through `supervisor/message_bus.py`
 5. **State locking**: `state.json` uses file locks for concurrent read-modify-write
-6. **Budget tracking**: per-LLM-call cost events + periodic OpenRouter ground truth check
+6. **Budget tracking**: per-LLM-call cost events with model/key/category breakdown
 7. **Core file sync**: safety-critical files are overwritten from bundle on every launch
 8. **Zero orphans on close**: shutdown MUST kill all child processes (see Section 9)
+9. **Panic MUST kill everything**: all processes (workers, subprocesses, subprocess
+   trees, consciousness, evolution) are killed and the application exits completely.
+   No agent code may prevent or delay panic. See BIBLE.md Emergency Stop Invariant.

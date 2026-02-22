@@ -205,6 +205,13 @@ def auto_resume_after_restart() -> None:
     needed immediately after a restart so the agent doesn't go silent.
     """
     try:
+        # Panic flag: skip auto-resume after emergency stop (consumed on check)
+        panic_flag = DRIVE_ROOT / "state" / "panic_stop.flag"
+        if panic_flag.exists():
+            panic_flag.unlink(missing_ok=True)
+            log.info("Panic flag detected — skipping auto-resume.")
+            return
+
         st = load_state()
         chat_id = st.get("owner_chat_id")
         if not chat_id:

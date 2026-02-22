@@ -6,19 +6,74 @@ import json
 import logging
 import os
 import pathlib
+import platform
 import shlex
 import shutil
+import signal
 import subprocess
-from typing import Any, Dict, List
+import threading
+from subprocess import Popen, CompletedProcess
+from typing import Any, Dict, List, Optional
 
 from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.utils import utc_now_iso, run_cmd, append_jsonl, truncate_for_log
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Subprocess process-group registry (for panic kill)
+# ---------------------------------------------------------------------------
+_active_subprocesses: set = set()
+_subprocess_lock = threading.Lock()
 
+
+def _tracked_subprocess_run(cmd, **kwargs):
+    """subprocess.run() replacement with process group tracking.
+
+    Each subprocess gets its own session (start_new_session=True) so the
+    entire process tree can be killed via os.killpg() on panic.
+    """
+    timeout = kwargs.pop("timeout", None)
+    kwargs["start_new_session"] = True
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    proc = Popen(cmd, **kwargs)
+    with _subprocess_lock:
+        _active_subprocesses.add(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        proc.wait(timeout=5)
+        raise
+    finally:
+        with _subprocess_lock:
+            _active_subprocesses.discard(proc)
+
+
+def _kill_process_group(proc):
+    """Kill a subprocess and its entire process tree via PGID."""
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def kill_all_tracked_subprocesses():
+    """Kill all tracked subprocess trees. Called on panic."""
+    with _subprocess_lock:
+        procs = list(_active_subprocesses)
+    for proc in procs:
+        _kill_process_group(proc)
+    with _subprocess_lock:
+        _active_subprocesses.clear()
+
+
+# ---------------------------------------------------------------------------
+# run_shell
+# ---------------------------------------------------------------------------
 def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
-    # Recover from LLM sending cmd as JSON string instead of list
     if isinstance(cmd, str):
         raw_cmd = cmd
         warning = "run_shell_cmd_string"
@@ -69,9 +124,10 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
             work_dir = candidate
 
     try:
-        res = subprocess.run(
+        res = _tracked_subprocess_run(
             cmd, cwd=str(work_dir),
-            capture_output=True, text=True, timeout=120,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=120,
         )
         out = res.stdout + ("\n--- STDERR ---\n" + res.stderr if res.stderr else "")
         if len(out) > 50000:
@@ -84,7 +140,124 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
         return f"⚠️ SHELL_ERROR: {e}"
 
 
-def _run_claude_cli(work_dir: str, prompt: str, env: dict) -> subprocess.CompletedProcess:
+# ---------------------------------------------------------------------------
+# Claude Code CLI: auto-install
+# ---------------------------------------------------------------------------
+_NODE_DIR = pathlib.Path.home() / "Ouroboros" / "node"
+_NODE_BIN = _NODE_DIR / "bin"
+_install_lock = threading.Lock()
+_path_initialized = False
+
+
+def _ensure_claude_cli(ctx: ToolContext) -> Optional[str]:
+    """Ensure claude CLI is available. Auto-install if needed.
+
+    Returns error string or None on success.
+    """
+    _ensure_path()
+    if shutil.which("claude"):
+        return None
+
+    if platform.system() != "Darwin":
+        return "⚠️ Claude Code CLI auto-install is only supported on macOS."
+
+    with _install_lock:
+        _ensure_path()
+        if shutil.which("claude"):
+            return None
+
+        ctx.emit_progress_fn("Claude CLI not found. Installing Node.js + Claude Code...")
+
+        if not (_NODE_BIN / "node").exists():
+            err = _install_node()
+            if err:
+                return err
+            _ensure_path()
+
+        npm = str(_NODE_BIN / "npm")
+        if not pathlib.Path(npm).exists():
+            return "⚠️ npm not found after Node.js install."
+
+        try:
+            _tracked_subprocess_run(
+                [npm, "install", "-g", "@anthropic-ai/claude-code"],
+                env={**os.environ, "PATH": _build_augmented_path()},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=180,
+            )
+        except Exception as e:
+            return f"⚠️ npm install failed: {e}"
+
+        _ensure_path()
+        if shutil.which("claude"):
+            ctx.emit_progress_fn("Claude Code CLI installed successfully.")
+            return None
+        return "⚠️ Claude Code CLI binary not found in PATH after auto-install."
+
+
+def _install_node() -> Optional[str]:
+    """Download and extract Node.js LTS binary. Returns error string or None."""
+    import tarfile
+    import urllib.request
+
+    arch = "arm64" if platform.machine() == "arm64" else "x64"
+    node_version = "v22.14.0"
+    url = f"https://nodejs.org/dist/{node_version}/node-{node_version}-darwin-{arch}.tar.gz"
+
+    _NODE_DIR.mkdir(parents=True, exist_ok=True)
+    tar_path = _NODE_DIR / "node.tar.gz"
+    try:
+        urllib.request.urlretrieve(url, tar_path)
+        with tarfile.open(tar_path) as tf:
+            tf.extractall(_NODE_DIR, filter="data")
+        extracted = _NODE_DIR / f"node-{node_version}-darwin-{arch}"
+        if extracted.exists():
+            for item in extracted.iterdir():
+                dest = _NODE_DIR / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+            extracted.rmdir()
+        tar_path.unlink(missing_ok=True)
+        return None
+    except Exception as e:
+        tar_path.unlink(missing_ok=True)
+        return f"⚠️ Node.js download/install failed: {e}"
+
+
+def _build_augmented_path() -> str:
+    """Build a PATH string with node/local dirs prepended. Pure function, no side effects."""
+    current = os.environ.get("PATH", "")
+    parts = []
+    for d in [
+        str(_NODE_BIN),
+        str(_NODE_DIR / "lib" / "node_modules" / ".bin"),
+        str(pathlib.Path.home() / ".local" / "bin"),
+    ]:
+        if d not in current and (d == str(_NODE_BIN) or pathlib.Path(d).exists()):
+            parts.append(d)
+    if parts:
+        return ":".join(parts) + ":" + current
+    return current
+
+
+def _ensure_path():
+    """Set PATH once with node/local dirs. Idempotent — only mutates env on first call."""
+    global _path_initialized
+    if _path_initialized:
+        return
+    os.environ["PATH"] = _build_augmented_path()
+    _path_initialized = True
+
+
+# ---------------------------------------------------------------------------
+# Claude Code CLI: run + parse
+# ---------------------------------------------------------------------------
+def _run_claude_cli(work_dir: str, prompt: str, env: dict,
+                    model: str = "", budget: Optional[float] = None) -> CompletedProcess:
     """Run Claude CLI with permission-mode fallback."""
     claude_bin = shutil.which("claude")
     cmd = [
@@ -92,16 +265,21 @@ def _run_claude_cli(work_dir: str, prompt: str, env: dict) -> subprocess.Complet
         "--output-format", "json",
         "--max-turns", "12",
         "--tools", "Read,Edit,Grep,Glob",
+        "--no-session-persistence",
     ]
+    if model:
+        cmd += ["--model", model]
+    if budget is not None:
+        cmd += ["--max-budget-usd", str(budget)]
 
-    # Try --permission-mode first, fallback to --dangerously-skip-permissions
     perm_mode = os.environ.get("OUROBOROS_CLAUDE_CODE_PERMISSION_MODE", "bypassPermissions").strip()
     primary_cmd = cmd + ["--permission-mode", perm_mode]
     legacy_cmd = cmd + ["--dangerously-skip-permissions"]
 
-    res = subprocess.run(
+    res = _tracked_subprocess_run(
         primary_cmd, cwd=work_dir,
-        capture_output=True, text=True, timeout=300, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, timeout=300, env=env,
     )
 
     if res.returncode != 0:
@@ -109,9 +287,10 @@ def _run_claude_cli(work_dir: str, prompt: str, env: dict) -> subprocess.Complet
         if "--permission-mode" in combined and any(
             m in combined for m in ("unknown option", "unknown argument", "unrecognized option", "unexpected argument")
         ):
-            res = subprocess.run(
+            res = _tracked_subprocess_run(
                 legacy_cmd, cwd=work_dir,
-                capture_output=True, text=True, timeout=300, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=300, env=env,
             )
 
     return res
@@ -158,7 +337,11 @@ def _parse_claude_output(stdout: str, ctx: ToolContext) -> str:
             ctx.pending_events.append({
                 "type": "llm_usage",
                 "provider": "claude_code_cli",
+                "model": os.environ.get("CLAUDE_CODE_MODEL", "sonnet"),
+                "api_key_type": "anthropic",
+                "model_category": "claude_code",
                 "usage": {"cost": float(payload["total_cost_usd"])},
+                "cost": float(payload["total_cost_usd"]),
                 "source": "claude_code_edit",
                 "ts": utc_now_iso(),
                 "category": "task",
@@ -169,7 +352,8 @@ def _parse_claude_output(stdout: str, ctx: ToolContext) -> str:
         return stdout
 
 
-def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
+def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "",
+                      budget: float = 1.0) -> str:
     """Delegate code edits to Claude Code CLI."""
     from ouroboros.tools.git import _acquire_git_lock, _release_git_lock
 
@@ -183,11 +367,13 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
         if candidate.exists():
             work_dir = str(candidate)
 
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        return "⚠️ Claude CLI not found. Ensure ANTHROPIC_API_KEY is set."
+    install_err = _ensure_claude_cli(ctx)
+    if install_err:
+        return install_err
 
     ctx.emit_progress_fn("Delegating to Claude Code CLI...")
+
+    model = os.environ.get("CLAUDE_CODE_MODEL", "sonnet").strip()
 
     lock = _acquire_git_lock(ctx)
     try:
@@ -210,11 +396,12 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
         except Exception:
             log.debug("Failed to check geteuid for sandbox detection", exc_info=True)
             pass
-        local_bin = str(pathlib.Path.home() / ".local" / "bin")
-        if local_bin not in env.get("PATH", ""):
-            env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
 
-        res = _run_claude_cli(work_dir, full_prompt, env)
+        _ensure_path()
+        env["PATH"] = os.environ["PATH"]
+
+        res = _run_claude_cli(work_dir, full_prompt, env,
+                              model=model, budget=budget)
 
         stdout = (res.stdout or "").strip()
         stderr = (res.stderr or "").strip()
@@ -223,7 +410,6 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
         if not stdout:
             stdout = "OK: Claude Code completed with empty output."
 
-        # Check for uncommitted changes and append warning BEFORE finally block
         warning = _check_uncommitted_changes(ctx.repo_dir)
         if warning:
             stdout += warning
@@ -235,7 +421,6 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "") -> str:
     finally:
         _release_git_lock(lock)
 
-    # Parse JSON output and account cost
     return _parse_claude_output(stdout, ctx)
 
 
@@ -255,6 +440,8 @@ def get_tools() -> List[ToolEntry]:
             "parameters": {"type": "object", "properties": {
                 "prompt": {"type": "string"},
                 "cwd": {"type": "string", "default": ""},
+                "budget": {"type": "number",
+                           "description": "Max USD for this Claude Code call. Default: 1.0"},
             }, "required": ["prompt"]},
         }, _claude_code_edit, is_code_tool=True, timeout_sec=300),
     ]

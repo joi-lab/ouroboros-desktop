@@ -774,6 +774,29 @@ def run_llm_loop(
                 log.debug("Failed to cleanup task mailbox", exc_info=True)
 
 
+def _infer_api_key_type(model: str) -> str:
+    """Infer which API key is used based on model name."""
+    if model.startswith(("anthropic/", "google/", "openai/", "x-ai/", "qwen/")):
+        return "openrouter"
+    if "claude" in model.lower():
+        return "anthropic"
+    return "openrouter"
+
+
+def _infer_model_category(model: str) -> str:
+    """Infer model category by comparing against configured model env vars."""
+    configured = {
+        "main": os.environ.get("OUROBOROS_MODEL", ""),
+        "code": os.environ.get("OUROBOROS_MODEL_CODE", ""),
+        "light": os.environ.get("OUROBOROS_MODEL_LIGHT", ""),
+        "fallback": os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
+    }
+    for cat, val in configured.items():
+        if val and model == val:
+            return cat
+    return "other"
+
+
 def _emit_llm_usage_event(
     event_queue: Optional[queue.Queue],
     task_id: str,
@@ -801,6 +824,8 @@ def _emit_llm_usage_event(
             "ts": utc_now_iso(),
             "task_id": task_id,
             "model": model,
+            "api_key_type": _infer_api_key_type(model),
+            "model_category": _infer_model_category(model),
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cached_tokens": int(usage.get("cached_tokens") or 0),

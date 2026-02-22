@@ -138,9 +138,10 @@ function initChat() {
         const bubble = document.createElement('div');
         bubble.className = `chat-bubble ${role}`;
         const sender = role === 'user' ? 'You' : 'Ouroboros';
+        const rendered = role === 'assistant' ? renderMarkdown(text) : escapeHtml(text);
         bubble.innerHTML = `
             <div class="sender">${sender}</div>
-            <div class="message">${escapeHtml(text)}</div>
+            <div class="message">${rendered}</div>
         `;
         messagesDiv.appendChild(bubble);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -326,6 +327,9 @@ function initSettings() {
                     <div class="form-field"><label>Light Model</label><input id="s-model-light" value="google/gemini-3-flash-preview" style="width:250px"></div>
                     <div class="form-field"><label>Fallback Model</label><input id="s-model-fallback" value="google/gemini-3-flash-preview" style="width:250px"></div>
                 </div>
+                <div class="form-row">
+                    <div class="form-field"><label>Claude Code Model</label><input id="s-claude-code-model" value="sonnet" placeholder="sonnet, opus, or full name" style="width:250px"></div>
+                </div>
             </div>
             <div class="divider"></div>
             <div class="form-section">
@@ -347,9 +351,9 @@ function initSettings() {
             </div>
             <div class="divider"></div>
             <div class="form-row">
-                <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+                <button class="btn btn-save" id="btn-save-settings">Save Settings</button>
             </div>
-            <div id="settings-status" style="margin-top:8px;font-size:13px;color:var(--accent);display:none"></div>
+            <div id="settings-status" style="margin-top:8px;font-size:13px;color:var(--green);display:none"></div>
             <div class="divider"></div>
             <div class="form-section">
                 <h3 style="color:var(--red)">Danger Zone</h3>
@@ -368,6 +372,7 @@ function initSettings() {
         if (s.OUROBOROS_MODEL_CODE) document.getElementById('s-model-code').value = s.OUROBOROS_MODEL_CODE;
         if (s.OUROBOROS_MODEL_LIGHT) document.getElementById('s-model-light').value = s.OUROBOROS_MODEL_LIGHT;
         if (s.OUROBOROS_MODEL_FALLBACK) document.getElementById('s-model-fallback').value = s.OUROBOROS_MODEL_FALLBACK;
+        if (s.CLAUDE_CODE_MODEL) document.getElementById('s-claude-code-model').value = s.CLAUDE_CODE_MODEL;
         if (s.OUROBOROS_MAX_WORKERS) document.getElementById('s-workers').value = s.OUROBOROS_MAX_WORKERS;
         if (s.TOTAL_BUDGET) document.getElementById('s-budget').value = s.TOTAL_BUDGET;
         if (s.OUROBOROS_SOFT_TIMEOUT_SEC) document.getElementById('s-soft-timeout').value = s.OUROBOROS_SOFT_TIMEOUT_SEC;
@@ -382,6 +387,7 @@ function initSettings() {
             OUROBOROS_MODEL_CODE: document.getElementById('s-model-code').value,
             OUROBOROS_MODEL_LIGHT: document.getElementById('s-model-light').value,
             OUROBOROS_MODEL_FALLBACK: document.getElementById('s-model-fallback').value,
+            CLAUDE_CODE_MODEL: document.getElementById('s-claude-code-model').value || 'sonnet',
             OUROBOROS_MAX_WORKERS: parseInt(document.getElementById('s-workers').value) || 5,
             TOTAL_BUDGET: parseFloat(document.getElementById('s-budget').value) || 10,
             OUROBOROS_SOFT_TIMEOUT_SEC: parseInt(document.getElementById('s-soft-timeout').value) || 600,
@@ -682,6 +688,45 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function renderMarkdown(text) {
+    let html = escapeHtml(text);
+    // Code blocks (``` ... ```)
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    // Strikethrough
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    // Headers (order matters: ### before ## before #)
+    html = html.replace(/^### (.+)$/gm, '<strong style="font-size:13px;color:var(--text-primary);display:block;margin:8px 0 4px">$1</strong>');
+    html = html.replace(/^## (.+)$/gm, '<strong style="font-size:14px;color:var(--text-primary);display:block;margin:10px 0 4px">$1</strong>');
+    html = html.replace(/^# (.+)$/gm, '<strong style="font-size:16px;color:var(--text-primary);display:block;margin:12px 0 6px">$1</strong>');
+    // Unordered lists
+    html = html.replace(/^- (.+)$/gm, '<span style="display:block;padding-left:12px">• $1</span>');
+    // Links
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
+    // Tables: detect header row + separator + data rows
+    html = html.replace(/((?:^\|.+\|$\n?)+)/gm, function(block) {
+        const rows = block.trim().split('\n').filter(r => r.trim());
+        if (rows.length < 2) return block;
+        const isSep = r => /^\|[\s\-:|]+\|$/.test(r.trim());
+        let headIdx = -1;
+        for (let i = 0; i < rows.length; i++) { if (isSep(rows[i])) { headIdx = i; break; } }
+        if (headIdx < 1) return block;
+        const parseRow = (r, tag) => '<tr>' + r.trim().replace(/^\||\|$/g, '').split('|').map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+        let t = '<table class="md-table">';
+        for (let i = 0; i < headIdx; i++) t += '<thead>' + parseRow(rows[i], 'th') + '</thead>';
+        t += '<tbody>';
+        for (let i = headIdx + 1; i < rows.length; i++) t += parseRow(rows[i], 'td');
+        t += '</tbody></table>';
+        return t;
+    });
+    return html;
+}
+
 // ---------------------------------------------------------------------------
 // Version display
 // ---------------------------------------------------------------------------
@@ -735,6 +780,93 @@ function initAbout() {
 }
 
 // ---------------------------------------------------------------------------
+// Costs Page
+// ---------------------------------------------------------------------------
+function initCosts() {
+    const page = document.createElement('div');
+    page.id = 'page-costs';
+    page.className = 'page';
+    page.innerHTML = `
+        <div class="page-header">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            <h2>Costs</h2>
+            <div class="spacer"></div>
+            <button class="btn btn-default btn-sm" id="btn-refresh-costs">Refresh</button>
+        </div>
+        <div class="costs-scroll" style="overflow-y:auto;flex:1;padding:16px 20px">
+            <div class="stat-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px">
+                <div class="stat-card"><div class="stat-label">Total Spent</div><div class="stat-value" id="cost-total">$0.00</div></div>
+                <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="cost-calls">0</div></div>
+                <div class="stat-card"><div class="stat-label">Top Model</div><div class="stat-value" id="cost-top-model" style="font-size:12px">-</div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+                <div>
+                    <h3 style="font-size:14px;color:var(--text-secondary);margin:0 0 8px">By Model</h3>
+                    <table class="cost-table" id="cost-by-model"><thead><tr><th>Model</th><th>Calls</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
+                </div>
+                <div>
+                    <h3 style="font-size:14px;color:var(--text-secondary);margin:0 0 8px">By API Key</h3>
+                    <table class="cost-table" id="cost-by-key"><thead><tr><th>Key</th><th>Calls</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
+                </div>
+                <div>
+                    <h3 style="font-size:14px;color:var(--text-secondary);margin:0 0 8px">By Model Category</h3>
+                    <table class="cost-table" id="cost-by-model-cat"><thead><tr><th>Category</th><th>Calls</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
+                </div>
+                <div>
+                    <h3 style="font-size:14px;color:var(--text-secondary);margin:0 0 8px">By Task Category</h3>
+                    <table class="cost-table" id="cost-by-task-cat"><thead><tr><th>Category</th><th>Calls</th><th>Cost</th><th></th></tr></thead><tbody></tbody></table>
+                </div>
+            </div>
+        </div>
+    `;
+    document.getElementById('content').appendChild(page);
+
+    function renderBreakdownTable(tableId, data, totalCost) {
+        const tbody = document.querySelector('#' + tableId + ' tbody');
+        tbody.innerHTML = '';
+        for (const [name, info] of Object.entries(data)) {
+            const pct = totalCost > 0 ? (info.cost / totalCost * 100) : 0;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${name}">${name}</td>
+                <td style="text-align:right">${info.calls}</td>
+                <td style="text-align:right">$${info.cost.toFixed(3)}</td>
+                <td style="width:60px"><div style="background:var(--accent);height:6px;border-radius:3px;width:${Math.min(100,pct)}%;opacity:0.7"></div></td>
+            `;
+            tbody.appendChild(tr);
+        }
+        if (Object.keys(data).length === 0) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td colspan="4" style="color:var(--text-muted);text-align:center">No data</td>';
+            tbody.appendChild(tr);
+        }
+    }
+
+    async function loadCosts() {
+        try {
+            const resp = await fetch('/api/cost-breakdown');
+            const d = await resp.json();
+            document.getElementById('cost-total').textContent = '$' + (d.total_cost || 0).toFixed(2);
+            document.getElementById('cost-calls').textContent = d.total_calls || 0;
+            const models = Object.entries(d.by_model || {});
+            document.getElementById('cost-top-model').textContent = models.length > 0 ? models[0][0] : '-';
+            renderBreakdownTable('cost-by-model', d.by_model || {}, d.total_cost);
+            renderBreakdownTable('cost-by-key', d.by_api_key || {}, d.total_cost);
+            renderBreakdownTable('cost-by-model-cat', d.by_model_category || {}, d.total_cost);
+            renderBreakdownTable('cost-by-task-cat', d.by_task_category || {}, d.total_cost);
+        } catch {}
+    }
+
+    document.getElementById('btn-refresh-costs').addEventListener('click', loadCosts);
+
+    const obs = new MutationObserver(() => {
+        if (page.classList.contains('active')) loadCosts();
+    });
+    obs.observe(page, { attributes: true, attributeFilter: ['class'] });
+}
+
+
+// ---------------------------------------------------------------------------
 // Reconnect overlay
 // ---------------------------------------------------------------------------
 const overlay = document.createElement('div');
@@ -746,13 +878,58 @@ overlay.innerHTML = `
 document.body.appendChild(overlay);
 
 // ---------------------------------------------------------------------------
+// Matrix Rain
+// ---------------------------------------------------------------------------
+function initMatrixRain() {
+    const canvas = document.createElement('canvas');
+    canvas.id = 'matrix-rain';
+    document.getElementById('app').prepend(canvas);
+
+    const ctx = canvas.getContext('2d');
+    const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ΨΩΦΔΛΞΣΘабвгдежзиклмнопрстуфхцчшщэюя'.split('');
+    const fontSize = 14;
+    let columns = [];
+    let w = 0, h = 0;
+
+    function resize() {
+        w = canvas.width = window.innerWidth - 80;
+        h = canvas.height = window.innerHeight;
+        const colCount = Math.floor(w / fontSize);
+        while (columns.length < colCount) columns.push(Math.random() * h / fontSize | 0);
+        columns.length = colCount;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function draw() {
+        ctx.fillStyle = 'rgba(13, 11, 15, 0.06)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#ee3344';
+        ctx.font = fontSize + 'px monospace';
+
+        for (let i = 0; i < columns.length; i++) {
+            const ch = chars[Math.random() * chars.length | 0];
+            ctx.fillText(ch, i * fontSize, columns[i] * fontSize);
+            if (columns[i] * fontSize > h && Math.random() > 0.975) {
+                columns[i] = 0;
+            }
+            columns[i]++;
+        }
+    }
+
+    setInterval(draw, 66);
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+initMatrixRain();
 initChat();
 initDashboard();
 initSettings();
 initLogs();
 initVersions();
+initCosts();
 initAbout();
 loadVersion();
 showPage('chat');

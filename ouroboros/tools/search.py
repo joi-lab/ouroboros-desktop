@@ -3,14 +3,39 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Dict, List
 
 from ouroboros.tools.registry import ToolContext, ToolEntry
+from ouroboros.utils import utc_now_iso
+
+log = logging.getLogger(__name__)
 
 DEFAULT_SEARCH_MODEL = "gpt-5.2"
 DEFAULT_SEARCH_CONTEXT_SIZE = "medium"
 DEFAULT_REASONING_EFFORT = "high"
+
+_OPENAI_PRICING = {
+    "gpt-5.2": (1.75, 14.0),
+    "gpt-4.1": (2.0, 8.0),
+    "o3": (2.0, 8.0),
+    "o4-mini": (1.10, 4.40),
+}
+
+
+def _estimate_openai_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate cost from token counts. Returns 0 if model pricing unknown."""
+    pricing = _OPENAI_PRICING.get(model)
+    if not pricing:
+        for key, val in _OPENAI_PRICING.items():
+            if key in model:
+                pricing = val
+                break
+    if not pricing:
+        pricing = (2.0, 10.0)
+    input_price, output_price = pricing
+    return round(input_tokens * input_price / 1_000_000 + output_tokens * output_price / 1_000_000, 6)
 
 
 def _web_search(
@@ -50,6 +75,31 @@ def _web_search(
                 for block in item.get("content", []) or []:
                     if block.get("type") in ("output_text", "text"):
                         text += block.get("text", "")
+
+        # Track web search cost (estimate from tokens — OpenAI usage has no total_cost)
+        usage = d.get("usage") or {}
+        if usage and hasattr(ctx, "pending_events"):
+            input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+            cost = _estimate_openai_cost(active_model, input_tokens, output_tokens)
+            try:
+                ctx.pending_events.append({
+                    "type": "llm_usage",
+                    "provider": "openai_websearch",
+                    "model": active_model,
+                    "api_key_type": "openai",
+                    "model_category": "websearch",
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                    "usage": usage,
+                    "cost": cost,
+                    "source": "web_search",
+                    "ts": utc_now_iso(),
+                    "category": "task",
+                })
+            except Exception:
+                log.debug("Failed to emit web_search cost event", exc_info=True)
+
         return json.dumps({"answer": text or "(no answer)"}, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({"error": f"OpenAI web search failed: {repr(e)}"}, ensure_ascii=False)

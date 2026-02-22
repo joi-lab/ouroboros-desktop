@@ -57,6 +57,7 @@ log = logging.getLogger("server")
 # Restart signal
 # ---------------------------------------------------------------------------
 RESTART_EXIT_CODE = 42
+PANIC_EXIT_CODE = 99
 _restart_requested = threading.Event()
 
 # ---------------------------------------------------------------------------
@@ -290,9 +291,8 @@ def _run_supervisor(settings: dict) -> None:
 
                 lowered = text.strip().lower()
                 if lowered.startswith("/panic"):
-                    send_with_budget(chat_id, "🛑 PANIC: stopping everything now.")
-                    kill_workers(force=True)
-                    _request_restart_exit()
+                    send_with_budget(chat_id, "🛑 PANIC: killing everything. App will close.")
+                    _execute_panic_stop(_consciousness, kill_workers)
                 elif lowered.startswith("/restart"):
                     send_with_budget(chat_id, "♻️ Restarting (soft).")
                     ok, restart_msg = safe_restart(reason="owner_restart", unsynced_policy="rescue_and_reset")
@@ -390,6 +390,51 @@ def _handle_restart_in_supervisor(evt: Dict[str, Any], ctx: Any) -> None:
 def _request_restart_exit() -> None:
     """Signal the server to shut down with restart exit code."""
     _restart_requested.set()
+
+
+def _execute_panic_stop(consciousness, kill_workers_fn) -> None:
+    """Full emergency stop: kill everything, write panic flag, hard-exit.
+
+    This is intentionally harsh — os._exit() bypasses atexit handlers.
+    All critical cleanup is done manually before the exit call.
+    """
+    log.critical("PANIC STOP initiated.")
+    try:
+        consciousness.stop()
+    except Exception:
+        pass
+
+    try:
+        from supervisor.state import load_state, save_state
+        st = load_state()
+        st["evolution_mode_enabled"] = False
+        st["bg_consciousness_enabled"] = False
+        save_state(st)
+    except Exception:
+        pass
+
+    # Write panic flag to prevent auto-resume on next manual launch
+    try:
+        panic_flag = DATA_DIR / "state" / "panic_stop.flag"
+        panic_flag.parent.mkdir(parents=True, exist_ok=True)
+        panic_flag.write_text("panic", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Kill all tracked subprocess process groups (claude CLI, shell, etc.)
+    try:
+        from ouroboros.tools.shell import kill_all_tracked_subprocesses
+        kill_all_tracked_subprocesses()
+    except Exception:
+        pass
+
+    try:
+        kill_workers_fn(force=True)
+    except Exception:
+        pass
+
+    log.critical("PANIC STOP complete — hard exit with code %d.", PANIC_EXIT_CODE)
+    os._exit(PANIC_EXIT_CODE)
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +637,74 @@ async def index_page(request: Request) -> FileResponse:
 from ouroboros.config import read_version as _read_version
 
 
+async def api_cost_breakdown(request: Request) -> JSONResponse:
+    """Aggregate llm_usage events from events.jsonl into cost breakdowns."""
+    events_path = DATA_DIR / "logs" / "events.jsonl"
+    by_model: Dict[str, Dict[str, Any]] = {}
+    by_api_key: Dict[str, Dict[str, Any]] = {}
+    by_model_category: Dict[str, Dict[str, Any]] = {}
+    by_task_category: Dict[str, Dict[str, Any]] = {}
+    total_cost = 0.0
+    total_calls = 0
+
+    def _acc(d, key):
+        if key not in d:
+            d[key] = {"cost": 0.0, "calls": 0}
+        return d[key]
+
+    try:
+        if events_path.exists():
+            with events_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        evt = json.loads(line)
+                    except Exception:
+                        continue
+                    if evt.get("type") != "llm_usage":
+                        continue
+                    cost = float(evt.get("cost") or 0)
+                    model = str(evt.get("model") or "unknown")
+                    api_key_type = str(evt.get("api_key_type") or evt.get("provider") or "openrouter")
+                    model_cat = str(evt.get("model_category") or "other")
+                    task_cat = str(evt.get("category") or "task")
+
+                    total_cost += cost
+                    total_calls += 1
+
+                    e = _acc(by_model, model)
+                    e["cost"] += cost
+                    e["calls"] += 1
+
+                    e = _acc(by_api_key, api_key_type)
+                    e["cost"] += cost
+                    e["calls"] += 1
+
+                    e = _acc(by_model_category, model_cat)
+                    e["cost"] += cost
+                    e["calls"] += 1
+
+                    e = _acc(by_task_category, task_cat)
+                    e["cost"] += cost
+                    e["calls"] += 1
+    except Exception:
+        pass
+
+    def _sorted(d):
+        return dict(sorted(d.items(), key=lambda x: x[1]["cost"], reverse=True))
+
+    return JSONResponse({
+        "total_cost": round(total_cost, 4),
+        "total_calls": total_calls,
+        "by_model": _sorted(by_model),
+        "by_api_key": _sorted(by_api_key),
+        "by_model_category": _sorted(by_model_category),
+        "by_task_category": _sorted(by_task_category),
+    })
+
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -609,6 +722,7 @@ routes = [
     Route("/api/git/log", endpoint=api_git_log),
     Route("/api/git/rollback", endpoint=api_git_rollback, methods=["POST"]),
     Route("/api/git/promote", endpoint=api_git_promote, methods=["POST"]),
+    Route("/api/cost-breakdown", endpoint=api_cost_breakdown),
     WebSocketRoute("/ws", endpoint=ws_endpoint),
     Mount("/static", app=StaticFiles(directory=str(web_dir)), name="static"),
 ]
@@ -631,6 +745,11 @@ async def lifespan(app):
     yield
 
     log.info("Server shutting down...")
+    try:
+        from ouroboros.tools.shell import kill_all_tracked_subprocesses
+        kill_all_tracked_subprocesses()
+    except Exception:
+        pass
     try:
         from supervisor.workers import kill_workers
         kill_workers(force=True)
@@ -699,13 +818,16 @@ if __name__ == "__main__":
 
     if _restart_requested.is_set():
         log.info("Exiting with code %d (restart signal).", RESTART_EXIT_CODE)
-        # Force-kill any remaining worker processes before exit
+        try:
+            from ouroboros.tools.shell import kill_all_tracked_subprocesses
+            kill_all_tracked_subprocesses()
+        except Exception:
+            pass
         try:
             from supervisor.workers import kill_workers
             kill_workers(force=True)
         except Exception:
             pass
-        # Kill any remaining multiprocessing children
         import multiprocessing, signal
         for child in multiprocessing.active_children():
             try:
