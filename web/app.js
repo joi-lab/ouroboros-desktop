@@ -336,7 +336,6 @@ function initSettings() {
         if (s.OPENROUTER_API_KEY) document.getElementById('s-openrouter').value = s.OPENROUTER_API_KEY;
         if (s.OPENAI_API_KEY) document.getElementById('s-openai').value = s.OPENAI_API_KEY;
         if (s.ANTHROPIC_API_KEY) document.getElementById('s-anthropic').value = s.ANTHROPIC_API_KEY;
-        if (s.GITHUB_TOKEN) document.getElementById('s-gh-token').value = s.GITHUB_TOKEN;
         if (s.OUROBOROS_MODEL) document.getElementById('s-model').value = s.OUROBOROS_MODEL;
         if (s.OUROBOROS_MODEL_CODE) document.getElementById('s-model-code').value = s.OUROBOROS_MODEL_CODE;
         if (s.OUROBOROS_MODEL_LIGHT) document.getElementById('s-model-light').value = s.OUROBOROS_MODEL_LIGHT;
@@ -345,6 +344,7 @@ function initSettings() {
         if (s.TOTAL_BUDGET) document.getElementById('s-budget').value = s.TOTAL_BUDGET;
         if (s.OUROBOROS_SOFT_TIMEOUT_SEC) document.getElementById('s-soft-timeout').value = s.OUROBOROS_SOFT_TIMEOUT_SEC;
         if (s.OUROBOROS_HARD_TIMEOUT_SEC) document.getElementById('s-hard-timeout').value = s.OUROBOROS_HARD_TIMEOUT_SEC;
+        if (s.GITHUB_TOKEN) document.getElementById('s-gh-token').value = s.GITHUB_TOKEN;
         if (s.GITHUB_REPO) document.getElementById('s-gh-repo').value = s.GITHUB_REPO;
     }).catch(() => {});
 
@@ -381,13 +381,12 @@ function initSettings() {
     });
 
     document.getElementById('btn-reset').addEventListener('click', async () => {
-        if (!confirm('This will delete ALL data: repo, memory, logs, state. Settings (API keys) will be kept. The server will restart.\n\nAre you sure?')) return;
+        if (!confirm('This will delete all runtime data (state, memory, logs, settings) and restart.\nThe repo (agent code) will be preserved.\nYou will need to re-enter your API key.\n\nContinue?')) return;
         try {
             const res = await fetch('/api/reset', { method: 'POST' });
             const data = await res.json();
             if (data.status === 'ok') {
-                alert('Reset complete. Deleted: ' + (data.deleted.join(', ') || 'nothing'));
-                setTimeout(() => location.reload(), 3000);
+                alert('Deleted: ' + (data.deleted.join(', ') || 'nothing') + '\nRestarting...');
             } else {
                 alert('Error: ' + (data.error || 'unknown'));
             }

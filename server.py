@@ -491,29 +491,24 @@ async def api_settings_post(request: Request) -> JSONResponse:
 
 
 async def api_reset(request: Request) -> JSONResponse:
-    """Full reset: kill workers, delete repo, memory, state, logs. Keeps settings.json."""
+    """Reset all runtime data (state, memory, logs, settings) but keep repo.
+
+    After reset the launcher will show the onboarding wizard on next start.
+    """
     import shutil
     try:
-        try:
-            from supervisor.workers import kill_workers
-            kill_workers(force=True)
-        except Exception:
-            pass
-
         deleted = []
-        for subdir in ("logs", "memory", "state", "locks", "archive", "task_results", "index"):
+        for subdir in ("state", "memory", "logs", "archive", "locks", "task_results"):
             p = DATA_DIR / subdir
             if p.exists():
                 shutil.rmtree(p, ignore_errors=True)
                 deleted.append(subdir)
-
-        repo_dir = REPO_DIR
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir, ignore_errors=True)
-            deleted.append("repo")
-
+        settings_file = DATA_DIR / "settings.json"
+        if settings_file.exists():
+            settings_file.unlink()
+            deleted.append("settings.json")
         _request_restart_exit()
-        return JSONResponse({"status": "ok", "deleted": deleted, "message": "Full reset. Server will restart."})
+        return JSONResponse({"status": "ok", "deleted": deleted, "restarting": True})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
