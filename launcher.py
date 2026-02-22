@@ -364,6 +364,26 @@ def _read_port_file() -> int:
     return AGENT_SERVER_PORT
 
 
+def _kill_stale_on_port(port: int) -> None:
+    """Kill any process listening on the given port (cleanup from previous runs)."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = result.stdout.strip().split()
+        for pid_str in pids:
+            try:
+                pid = int(pid_str)
+                if pid != os.getpid():
+                    os.kill(pid, 9)
+                    log.info("Killed stale process %d on port %d", pid, port)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+    except Exception:
+        pass
+
+
 def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
     """Wait for the agent HTTP server to become responsive."""
     import urllib.request
@@ -380,25 +400,44 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
+def _poll_port_file(timeout: float = 30.0) -> int:
+    """Poll port file until it's freshly written (mtime within last 10s)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if PORT_FILE.exists():
+                age = time.time() - PORT_FILE.stat().st_mtime
+                if age < 10:
+                    return int(PORT_FILE.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            pass
+        time.sleep(0.5)
+    return _read_port_file()
+
+
 _webview_window = None  # set by main(), used by lifecycle loop
 
 
 def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
     """Main loop: start agent, monitor, restart on exit code 42 or crash."""
     crash_times: list = []
-    current_port = port
+
+    # Kill anything left over from a previous launcher session
+    _kill_stale_on_port(port)
 
     while not _shutdown_event.is_set():
+        # Delete stale port file so _poll_port_file waits for a fresh write
+        try:
+            PORT_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         proc = start_agent(port)
 
-        # Read the actual port the server chose (may differ from requested)
-        time.sleep(1)
-        actual = _read_port_file()
-        if actual != current_port:
-            current_port = actual
-
-        if not _wait_for_server(current_port, timeout=60):
-            log.warning("Agent server did not become responsive within 60s")
+        # Wait for the server to write a fresh port file, then check health
+        actual_port = _poll_port_file(timeout=30)
+        if not _wait_for_server(actual_port, timeout=45):
+            log.warning("Agent server did not become responsive within 45s (port %d)", actual_port)
 
         proc.wait()
         exit_code = proc.returncode
@@ -410,10 +449,14 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
         if _shutdown_event.is_set():
             break
 
+        # Wait for port to fully release after process exit
+        time.sleep(2)
+
         if exit_code == RESTART_EXIT_CODE:
             log.info("Agent requested restart (exit code 42). Restarting...")
             _sync_core_files()
             _install_deps()
+            _kill_stale_on_port(port)
             continue
 
         # Crash detection
@@ -425,6 +468,7 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
             break
 
         log.info("Agent crashed. Restarting in 3s...")
+        _kill_stale_on_port(port)
         time.sleep(3)
 
 

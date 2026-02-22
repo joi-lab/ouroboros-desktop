@@ -448,6 +448,41 @@ function initLogs() {
 
     const LOG_PREVIEW_LEN = 200;
 
+    function buildLogMessage(evt) {
+        const t = evt.type || evt.event || '';
+        let parts = [];
+        if (evt.task_id) parts.push(`[${evt.task_id}]`);
+
+        if (t === 'llm_round' || t === 'llm_usage') {
+            if (evt.model) parts.push(evt.model);
+            if (evt.round) parts.push(`r${evt.round}`);
+            if (evt.prompt_tokens) parts.push(`${evt.prompt_tokens}→${evt.completion_tokens || 0}tok`);
+            if (evt.cost_usd) parts.push(`$${Number(evt.cost_usd).toFixed(4)}`);
+            else if (evt.cost) parts.push(`$${Number(evt.cost).toFixed(4)}`);
+        } else if (t === 'task_eval' || t === 'task_done') {
+            if (evt.task_type) parts.push(evt.task_type);
+            if (evt.duration_sec) parts.push(`${evt.duration_sec.toFixed(1)}s`);
+            if (evt.tool_calls != null) parts.push(`${evt.tool_calls} tools`);
+            if (evt.cost_usd) parts.push(`$${Number(evt.cost_usd).toFixed(4)}`);
+            if (evt.total_rounds) parts.push(`${evt.total_rounds} rounds`);
+            if (evt.response_len) parts.push(`${evt.response_len} chars`);
+        } else if (t === 'task_received') {
+            const task = evt.task || {};
+            if (task.type) parts.push(task.type);
+            if (task.text) parts.push(task.text.slice(0, 100));
+        } else if (t.includes('error') || t.includes('crash') || t.includes('fail')) {
+            if (evt.error) parts.push(evt.error);
+            if (evt.tool) parts.push(`tool=${evt.tool}`);
+        } else {
+            if (evt.model) parts.push(evt.model);
+            if (evt.cost) parts.push(`$${Number(evt.cost).toFixed(4)}`);
+            if (evt.cost_usd) parts.push(`$${Number(evt.cost_usd).toFixed(4)}`);
+            if (evt.error) parts.push(evt.error);
+        }
+        if (evt.text) parts.push(evt.text.slice(0, 2000));
+        return parts.join(' ');
+    }
+
     function addLogEntry(evt) {
         const cat = categorizeEvent(evt);
         if (!state.activeFilters[cat]) return;
@@ -456,12 +491,7 @@ function initLogs() {
         entry.className = 'log-entry';
         const ts = (evt.ts || '').slice(11, 19);
         const type = evt.type || evt.event || 'unknown';
-        let msg = '';
-        if (evt.task_id) msg += `[${evt.task_id}] `;
-        if (evt.model) msg += `${evt.model} `;
-        if (evt.cost) msg += `$${Number(evt.cost).toFixed(4)} `;
-        if (evt.error) msg += evt.error;
-        if (evt.text) msg += evt.text.slice(0, 2000);
+        let msg = buildLogMessage(evt);
 
         const isLong = msg.length > LOG_PREVIEW_LEN;
         const preview = isLong ? msg.slice(0, LOG_PREVIEW_LEN) + '...' : msg;
