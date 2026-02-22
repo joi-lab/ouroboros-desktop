@@ -28,7 +28,7 @@ from typing import Optional
 # Paths
 # ---------------------------------------------------------------------------
 HOME = pathlib.Path.home()
-APP_ROOT = HOME / "Ouroboros"
+APP_ROOT = HOME / "Documents" / "Ouroboros"
 REPO_DIR = APP_ROOT / "repo"
 DATA_DIR = APP_ROOT / "data"
 SETTINGS_PATH = DATA_DIR / "settings.json"
@@ -37,7 +37,7 @@ PORT_FILE = DATA_DIR / "state" / "server_port"
 
 _OLD_LOCATIONS = [
     HOME / "Library" / "Application Support" / "Ouroboros",
-    HOME / "Documents" / "Ouroboros",
+    HOME / "Ouroboros",
 ]
 
 RESTART_EXIT_CODE = 42
@@ -160,7 +160,7 @@ def _sync_core_files() -> None:
 
 
 def _migrate_from_old_location() -> None:
-    """Move data from any old location to ~/Ouroboros/."""
+    """Move data from any old location to ~/Documents/Ouroboros/."""
     if APP_ROOT.exists():
         return
     for old in _OLD_LOCATIONS:

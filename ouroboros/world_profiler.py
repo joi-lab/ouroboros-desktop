@@ -56,7 +56,7 @@ The following binaries are available in my PATH:
 `{', '.join(tools)}`
 
 ## File System Rules
-I live inside `~/Ouroboros/`. 
+I live inside `~/Documents/Ouroboros/`. 
 - `repo/` contains my codebase.
 - `data/` contains my memory, state, and logs.
 I should generally confine my writes to these directories, though I have read access to the rest of the filesystem if needed for exploration.

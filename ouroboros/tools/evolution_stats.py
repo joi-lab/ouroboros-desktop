@@ -25,7 +25,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _VERSION_RE = re.compile(r"v(\d+\.\d+\.\d+)")
-_REPO_DIR = Path(os.environ.get("OUROBOROS_REPO_DIR", str(Path.home() / "Ouroboros" / "repo")))
+_REPO_DIR = Path(os.environ.get("OUROBOROS_REPO_DIR", str(Path.home() / "Documents" / "Ouroboros" / "repo")))
 
 # How many data-points to generate (sampled across full history)
 MAX_POINTS = 100

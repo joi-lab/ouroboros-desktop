@@ -22,7 +22,7 @@ import flet as ft
 from logging.handlers import RotatingFileHandler
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_log_dir = pathlib.Path.home() / "Ouroboros" / "data" / "logs"
+_log_dir = pathlib.Path.home() / "Documents" / "Ouroboros" / "data" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
 _file_handler = RotatingFileHandler(
     _log_dir / "app.log", maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
@@ -54,7 +54,7 @@ ASSETS_DIR = str(pathlib.Path(sys._MEIPASS) / "assets") if getattr(sys, 'frozen'
 # Paths and Bootstrapping
 # ---------------------------------------------------------------------------
 HOME = pathlib.Path.home()
-APP_ROOT = HOME / "Ouroboros"
+APP_ROOT = HOME / "Documents" / "Ouroboros"
 REPO_DIR = APP_ROOT / "repo"
 DATA_DIR = APP_ROOT / "data"
 SETTINGS_PATH = DATA_DIR / "settings.json"

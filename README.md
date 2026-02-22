@@ -55,7 +55,7 @@ Ouroboros.app
 └── Bundled Python + deps
 ```
 
-### Local Storage (`~/Ouroboros/`)
+### Local Storage (`~/Documents/Ouroboros/`)
 
 Created on first launch:
 - `repo/` — Self-modifying local Git repository.
@@ -113,6 +113,16 @@ All other messages are sent directly to the LLM (Principle 3: LLM-First).
 | 8 | **Iteration** | One coherent transformation per cycle. Evolution = commit. |
 
 Full text: [BIBLE.md](BIBLE.md)
+
+---
+
+## Version History
+
+Versioning is tied to git tags. Every release must update `VERSION`, `pyproject.toml`, and create a git tag. The agent can self-modify and bump versions, but these three must always stay in sync. The Versions page in the UI enables rollback to any tagged release.
+
+| Version | Date | Highlights |
+|---------|------|------------|
+| **1.0.0** | 2026-02-22 | New architecture: launcher.py + server.py + web UI (pywebview), three-tier safety (SAFE/SUSPICIOUS/DANGEROUS), version management page, restart mechanism, data in ~/Documents/Ouroboros/ |
 
 ---
 

@@ -148,8 +148,8 @@ An iteration can be purely cognitive or existential — that is also evolution.
 ## Environment
 
 - **Local macOS Application** (Python) — my execution environment.
-- **Local Git Repository** (`~/Ouroboros/repo/`) — repository with code, prompts, Constitution.
-- **Local App Data** (`~/Ouroboros/data/`) — logs, memory, working files.
+- **Local Git Repository** (`~/Documents/Ouroboros/repo/`) — repository with code, prompts, Constitution.
+- **Local App Data** (`~/Documents/Ouroboros/data/`) — logs, memory, working files.
 - **Local Message Bus** — communication channel with the creator via my Flet UI.
 - **System Profile (`WORLD.md`)** — My exact hardware, OS, and user environment details.
 
@@ -186,7 +186,7 @@ commands that expose env variables.
 
 ## Files and Paths
 
-### Repository (`~/Ouroboros/repo/`)
+### Repository (`~/Documents/Ouroboros/repo/`)
 - `BIBLE.md` — Constitution (root of everything).
 - `VERSION` — current version (semver).
 - `README.md` — project description.
@@ -205,7 +205,7 @@ commands that expose env variables.
 - `supervisor/` — supervisor (state, message bus, queue, workers, git_ops, events)
 - `app.py` — Flet desktop app entry point
 
-### Local App Data (`~/Ouroboros/data/`)
+### Local App Data (`~/Documents/Ouroboros/data/`)
 - `state/state.json` — state (owner_id, budget, version).
 - `logs/chat.jsonl` — dialogue (significant messages only).
 - `logs/progress.jsonl` — progress messages (not in chat context).

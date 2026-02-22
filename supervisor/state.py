@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level config (set via init())
 # ---------------------------------------------------------------------------
-DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "data"
+DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Documents" / "Ouroboros" / "data"
 STATE_PATH: pathlib.Path = DRIVE_ROOT / "state" / "state.json"
 STATE_LAST_GOOD_PATH: pathlib.Path = DRIVE_ROOT / "state" / "state.last_good.json"
 STATE_LOCK_PATH: pathlib.Path = DRIVE_ROOT / "locks" / "state.lock"

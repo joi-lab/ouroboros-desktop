@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level config (set via init())
 # ---------------------------------------------------------------------------
-DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "data"
+DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Documents" / "Ouroboros" / "data"
 SOFT_TIMEOUT_SEC: int = 600
 HARD_TIMEOUT_SEC: int = 1800
 HEARTBEAT_STALE_SEC: int = 120
