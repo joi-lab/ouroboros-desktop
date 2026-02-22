@@ -486,7 +486,7 @@ async def api_health(request: Request) -> JSONResponse:
 
 async def api_state(request: Request) -> JSONResponse:
     try:
-        from supervisor.state import load_state, budget_remaining, budget_pct, get_budget_limit
+        from supervisor.state import load_state, budget_remaining, budget_pct, TOTAL_BUDGET_LIMIT
         from supervisor.workers import WORKERS, PENDING, RUNNING
         st = load_state()
         alive = 0
@@ -497,7 +497,7 @@ async def api_state(request: Request) -> JSONResponse:
         except Exception:
             pass
         spent = float(st.get("spent_usd") or 0.0)
-        limit = get_budget_limit()
+        limit = float(TOTAL_BUDGET_LIMIT or 10.0)
         return JSONResponse({
             "uptime": int(time.time() - APP_START),
             "workers_alive": alive,
