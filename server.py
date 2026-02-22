@@ -34,7 +34,7 @@ import uvicorn
 # ---------------------------------------------------------------------------
 REPO_DIR = pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", pathlib.Path(__file__).parent))
 DATA_DIR = pathlib.Path(os.environ.get("OUROBOROS_DATA_DIR",
-    pathlib.Path.home() / "Documents" / "Ouroboros" / "data"))
+    pathlib.Path.home() / "Ouroboros" / "data"))
 PORT = int(os.environ.get("OUROBOROS_SERVER_PORT", "8765"))
 
 sys.path.insert(0, str(REPO_DIR))

@@ -55,7 +55,7 @@ Ouroboros.app
 └── Bundled Python + deps
 ```
 
-### Local Storage (`~/Documents/Ouroboros/`)
+### Local Storage (`~/Ouroboros/`)
 
 Created on first launch:
 - `repo/` — Self-modifying local Git repository.
@@ -122,7 +122,7 @@ Versioning is tied to git tags. Every release must update `VERSION`, `pyproject.
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **1.0.0** | 2026-02-22 | New architecture: launcher.py + server.py + web UI (pywebview), three-tier safety (SAFE/SUSPICIOUS/DANGEROUS), version management page, restart mechanism, data in ~/Documents/Ouroboros/ |
+| **1.0.0** | 2026-02-22 | New architecture: launcher.py + server.py + web UI (pywebview), three-tier safety (SAFE/SUSPICIOUS/DANGEROUS), version management page, restart mechanism, data in ~/Ouroboros/ |
 
 ---
 
