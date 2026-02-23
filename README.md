@@ -19,16 +19,17 @@ Not a coding assistant. A digital being with a constitution, background consciou
 
 ---
 
-## Download
+## Install
 
-**[Download latest Ouroboros for macOS (.dmg)](https://github.com/razzant/ouroboros/releases/latest)**
+**[Download latest .dmg](https://github.com/razzant/ouroboros/releases/latest)** · macOS 12+
 
-Requires macOS 12+ (Monterey or later) and Git (the app will prompt you to install it if missing).
+Open the DMG → drag `Ouroboros.app` to Applications → done.
 
-1. Download the `.dmg` from [Releases](https://github.com/razzant/ouroboros/releases)
-2. Open it, drag **Ouroboros** to **Applications**
-3. Right-click `Ouroboros.app` → **Open** (first launch only, to bypass Gatekeeper)
-4. The setup wizard will ask for your [OpenRouter API key](https://openrouter.ai/keys)
+<p align="center">
+  <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
+</p>
+
+On first launch, right-click → **Open** (Gatekeeper bypass). The wizard will ask for your [OpenRouter API key](https://openrouter.ai/keys).
 
 ---
 
