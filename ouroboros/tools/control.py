@@ -302,9 +302,11 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("update_identity", {
             "name": "update_identity",
             "description": "Update your identity manifest (who you are, who you want to become). "
-                           "Persists across sessions. Obligation to yourself (Principle 1: Continuity).",
+                           "Persists across sessions. Obligation to yourself (Principle 1: Continuity). "
+                           "Read your current identity first, then evolve it — add, refine, deepen. "
+                           "Full rewrites are allowed but should be rare; continuity of self matters.",
             "parameters": {"type": "object", "properties": {
-                "content": {"type": "string", "description": "Full identity content"},
+                "content": {"type": "string", "description": "Full identity content (prefer evolving over rewriting from scratch)"},
             }, "required": ["content"]},
         }, _update_identity),
         ToolEntry("toggle_evolution", {
