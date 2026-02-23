@@ -716,15 +716,17 @@ def run_llm_loop(
             if msg is None:
                 fallback_model = os.environ.get("OUROBOROS_MODEL_FALLBACK", "").strip()
                 if not fallback_model or fallback_model == active_model:
+                    local_tag = " (local)" if active_use_local else ""
                     return (
-                        f"⚠️ Failed to get a response from model {active_model} after {max_retries} attempts. "
+                        f"⚠️ Failed to get a response from model {active_model}{local_tag} after {max_retries} attempts. "
                         f"No viable fallback model configured. "
                         f"If background consciousness is running, it will retry when the provider recovers."
                     ), accumulated_usage, llm_trace
 
-                emit_progress(f"⚡ Fallback: {active_model} → {fallback_model} after empty response")
-
                 fallback_use_local = os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
+                primary_tag = " (local)" if active_use_local else ""
+                fallback_tag = " (local)" if fallback_use_local else ""
+                emit_progress(f"⚡ Fallback: {active_model}{primary_tag} → {fallback_model}{fallback_tag} after empty response")
                 msg, fallback_cost = _call_llm_with_retry(
                     llm, messages, fallback_model, tool_schemas, active_effort,
                     max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
@@ -733,7 +735,7 @@ def run_llm_loop(
 
                 if msg is None:
                     return (
-                        f"⚠️ All models are down. Primary ({active_model}) and fallback ({fallback_model}) "
+                        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback ({fallback_model}{fallback_tag}) "
                         f"both returned no response. Stopping. "
                         f"Background consciousness will attempt recovery when the provider is back."
                     ), accumulated_usage, llm_trace
