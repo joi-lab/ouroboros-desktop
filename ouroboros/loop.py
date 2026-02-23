@@ -724,10 +724,11 @@ def run_llm_loop(
 
                 emit_progress(f"⚡ Fallback: {active_model} → {fallback_model} after empty response")
 
+                fallback_use_local = os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
                 msg, fallback_cost = _call_llm_with_retry(
                     llm, messages, fallback_model, tool_schemas, active_effort,
                     max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
-                    use_local=False,
+                    use_local=fallback_use_local,
                 )
 
                 if msg is None:

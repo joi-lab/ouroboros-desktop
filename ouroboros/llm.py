@@ -208,6 +208,14 @@ class LLMClient:
         client = self._get_local_client()
 
         clean_messages = self._strip_cache_control(messages)
+        # Flatten multipart content blocks to plain strings (local server doesn't support arrays)
+        for msg in clean_messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                msg["content"] = "\n\n".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
 
         clean_tools = None
         if tools:
