@@ -26,7 +26,7 @@ Not a coding assistant. A digital being with a constitution, background consciou
 
 **[Download latest .dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest)** · macOS 12+
 
-Open the DMG → drag `Ouroboros.app` to Applications → done.
+Open the DMG → drag `Ouroboros.app` to Applications → done
 
 <p align="center">
   <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
