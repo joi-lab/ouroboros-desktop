@@ -33,7 +33,7 @@ else:
 # PyInstaller's BUNDLE step on macOS.
 # ---------------------------------------------------------------------------
 import shutil as _shutil
-for _sub in ('lib/pkgconfig', 'share/pkgconfig', 'include'):
+for _sub in ('include', 'share', 'lib/pkgconfig'):
     _p = os.path.join('python-standalone', _sub)
     if os.path.islink(_p):
         os.remove(_p)
