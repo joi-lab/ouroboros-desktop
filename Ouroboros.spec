@@ -88,7 +88,7 @@ a = Analysis(
     ] + _extra_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['scripts/pyi_rth_pythonnet.py'] if _is_windows else [],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
