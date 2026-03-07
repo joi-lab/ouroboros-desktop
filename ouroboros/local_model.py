@@ -2,19 +2,20 @@
 Ouroboros — Local model lifecycle manager.
 
 Manages downloading, starting, stopping, and health-checking a local
-llama-cpp-python server for on-device LLM inference with Metal + mmap.
+llama-cpp-python server for on-device LLM inference.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import sys
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
+
+from ouroboros.compat import IS_MACOS, terminate_process_tree, kill_process_tree
 
 log = logging.getLogger(__name__)
 
@@ -188,10 +189,11 @@ class LocalModelManager:
                 )
             except FileNotFoundError:
                 self._status = "error"
-                self._error = (
-                    "llama-cpp-python not found. Install with:\n"
-                    'CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python[server]'
-                )
+                if IS_MACOS:
+                    hint = 'CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python[server]'
+                else:
+                    hint = "pip install llama-cpp-python[server]"
+                self._error = f"llama-cpp-python not found. Install with:\n{hint}"
                 raise RuntimeError(self._error)
 
         # Wait for server to become healthy in a background thread
@@ -241,21 +243,13 @@ class LocalModelManager:
             return
 
         log.info("Stopping local model server (pid=%s)...", proc.pid)
-        try:
-            pgid = os.getpgid(proc.pid)
-            os.killpg(pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        terminate_process_tree(proc)
 
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            log.warning("Local model server did not exit, sending SIGKILL")
-            try:
-                pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            log.warning("Local model server did not exit, force-killing")
+            kill_process_tree(proc)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:

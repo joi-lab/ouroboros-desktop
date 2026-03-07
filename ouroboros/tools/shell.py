@@ -9,12 +9,12 @@ import pathlib
 import platform
 import shlex
 import shutil
-import signal
 import subprocess
 import threading
 from subprocess import Popen, CompletedProcess
 from typing import Any, Dict, List, Optional
 
+from ouroboros.compat import IS_WINDOWS, PATH_SEP, kill_process_tree, node_download_info
 from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.utils import utc_now_iso, run_cmd, append_jsonl, truncate_for_log
 
@@ -52,12 +52,8 @@ def _tracked_subprocess_run(cmd, **kwargs):
 
 
 def _kill_process_group(proc):
-    """Kill a subprocess and its entire process tree via PGID."""
-    try:
-        pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+    """Kill a subprocess and its entire process tree."""
+    kill_process_tree(proc)
 
 
 def kill_all_tracked_subprocesses():
@@ -144,7 +140,7 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
 # Claude Code CLI: auto-install
 # ---------------------------------------------------------------------------
 _NODE_DIR = pathlib.Path.home() / "Ouroboros" / "node"
-_NODE_BIN = _NODE_DIR / "bin"
+_NODE_BIN = _NODE_DIR if IS_WINDOWS else _NODE_DIR / "bin"
 _install_lock = threading.Lock()
 _path_initialized = False
 
@@ -158,9 +154,6 @@ def _ensure_claude_cli(ctx: ToolContext) -> Optional[str]:
     if shutil.which("claude"):
         return None
 
-    if platform.system() != "Darwin":
-        return "⚠️ Claude Code CLI auto-install is only supported on macOS."
-
     with _install_lock:
         _ensure_path()
         if shutil.which("claude"):
@@ -168,13 +161,15 @@ def _ensure_claude_cli(ctx: ToolContext) -> Optional[str]:
 
         ctx.emit_progress_fn("Claude CLI not found. Installing Node.js + Claude Code...")
 
-        if not (_NODE_BIN / "node").exists():
+        node_bin = _NODE_BIN / ("node.exe" if IS_WINDOWS else "node")
+        if not node_bin.exists():
             err = _install_node()
             if err:
                 return err
             _ensure_path()
 
-        npm = str(_NODE_BIN / "npm")
+        npm_name = "npm.cmd" if IS_WINDOWS else "npm"
+        npm = str(_NODE_BIN / npm_name)
         if not pathlib.Path(npm).exists():
             return "⚠️ npm not found after Node.js install."
 
@@ -197,20 +192,26 @@ def _ensure_claude_cli(ctx: ToolContext) -> Optional[str]:
 
 def _install_node() -> Optional[str]:
     """Download and extract Node.js LTS binary. Returns error string or None."""
-    import tarfile
     import urllib.request
 
-    arch = "arm64" if platform.machine() == "arm64" else "x64"
     node_version = "v22.14.0"
-    url = f"https://nodejs.org/dist/{node_version}/node-{node_version}-darwin-{arch}.tar.gz"
+    url, dir_name, archive_type = node_download_info(node_version)
 
     _NODE_DIR.mkdir(parents=True, exist_ok=True)
-    tar_path = _NODE_DIR / "node.tar.gz"
+    archive_path = _NODE_DIR / ("node.zip" if archive_type == "zip" else "node.tar.gz")
     try:
-        urllib.request.urlretrieve(url, tar_path)
-        with tarfile.open(tar_path) as tf:
-            tf.extractall(_NODE_DIR, filter="data")
-        extracted = _NODE_DIR / f"node-{node_version}-darwin-{arch}"
+        urllib.request.urlretrieve(url, archive_path)
+
+        if archive_type == "zip":
+            import zipfile
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(_NODE_DIR)
+        else:
+            import tarfile
+            with tarfile.open(archive_path) as tf:
+                tf.extractall(_NODE_DIR, filter="data")
+
+        extracted = _NODE_DIR / dir_name
         if extracted.exists():
             for item in extracted.iterdir():
                 dest = _NODE_DIR / item.name
@@ -221,10 +222,10 @@ def _install_node() -> Optional[str]:
                         dest.unlink()
                 shutil.move(str(item), str(dest))
             extracted.rmdir()
-        tar_path.unlink(missing_ok=True)
+        archive_path.unlink(missing_ok=True)
         return None
     except Exception as e:
-        tar_path.unlink(missing_ok=True)
+        archive_path.unlink(missing_ok=True)
         return f"⚠️ Node.js download/install failed: {e}"
 
 
@@ -240,7 +241,7 @@ def _build_augmented_path() -> str:
         if d not in current and (d == str(_NODE_BIN) or pathlib.Path(d).exists()):
             parts.append(d)
     if parts:
-        return ":".join(parts) + ":" + current
+        return PATH_SEP.join(parts) + PATH_SEP + current
     return current
 
 

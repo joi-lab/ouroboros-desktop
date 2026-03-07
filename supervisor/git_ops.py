@@ -439,7 +439,7 @@ def import_test() -> Dict[str, Any]:
         return {"ok": True, "skipped": "frozen"}
 
     r = subprocess.run(
-        ["python3", "-c", "import ouroboros, ouroboros.agent; print('import_ok')"],
+        [sys.executable, "-c", "import ouroboros, ouroboros.agent; print('import_ok')"],
         cwd=str(REPO_DIR),
         capture_output=True, text=True,
     )

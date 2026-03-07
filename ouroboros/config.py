@@ -2,18 +2,20 @@
 Ouroboros — Shared configuration (single source of truth).
 
 Paths, settings defaults, load/save with file locking.
-Does not import anything from ouroboros.* (zero dependency level).
+Only imports ouroboros.compat (platform abstraction, no circular deps).
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import pathlib
 import sys
 import time
 from typing import Optional
+
+from ouroboros.compat import pid_lock_acquire as _compat_pid_lock_acquire
+from ouroboros.compat import pid_lock_release as _compat_pid_lock_release
 
 
 # ---------------------------------------------------------------------------
@@ -173,36 +175,16 @@ def apply_settings_to_env(settings: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PID lock (single instance) — uses fcntl.flock for crash-proof locking.
-# The OS releases flock automatically when the process dies (even SIGKILL),
-# so stale lock files can never block future launches.
+# PID lock (single instance) — crash-proof locking via ouroboros.compat.
+# On Unix the OS releases flock automatically when the process dies
+# (even SIGKILL), so stale lock files can never block future launches.
+# On Windows msvcrt.locking provides equivalent semantics.
 # ---------------------------------------------------------------------------
-_lock_fd = None
-
 
 def acquire_pid_lock() -> bool:
-    global _lock_fd
     APP_ROOT.mkdir(parents=True, exist_ok=True)
-    try:
-        _lock_fd = open(str(PID_FILE), "w")
-        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _lock_fd.write(str(os.getpid()))
-        _lock_fd.flush()
-        return True
-    except (IOError, OSError):
-        return False
+    return _compat_pid_lock_acquire(str(PID_FILE))
 
 
 def release_pid_lock() -> None:
-    global _lock_fd
-    if _lock_fd is not None:
-        try:
-            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
-            _lock_fd.close()
-        except Exception:
-            pass
-        _lock_fd = None
-    try:
-        PID_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
+    _compat_pid_lock_release(str(PID_FILE))

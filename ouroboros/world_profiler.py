@@ -1,34 +1,18 @@
 import os
 import platform
-import subprocess
 import shutil
+
+from ouroboros.compat import get_system_memory, get_cpu_info
 
 def generate_world_profile(output_path: str):
     """Generates a WORLD.md file containing the system profile and hardware details."""
     
-    # Get basic OS info
     os_name = platform.system()
     os_release = platform.release()
     arch = platform.machine()
     
-    # Get memory
-    mem_total = "Unknown"
-    try:
-        if os_name == "Darwin":
-            mem_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip())
-            mem_total = f"{mem_bytes / (1024**3):.1f} GB"
-        elif os_name == "Linux":
-            mem_total = subprocess.check_output(["awk", "/MemTotal/ {print $2/1024/1024 \" GB\"}", "/proc/meminfo"]).strip().decode()
-    except Exception:
-        pass
-        
-    # Get CPU
-    cpu_info = platform.processor()
-    try:
-        if os_name == "Darwin":
-            cpu_info = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).strip().decode()
-    except Exception:
-        pass
+    mem_total = get_system_memory()
+    cpu_info = get_cpu_info()
         
     # User and paths
     user = os.environ.get("USER", "unknown")

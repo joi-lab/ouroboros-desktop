@@ -924,10 +924,11 @@ if __name__ == "__main__":
             kill_workers(force=True)
         except Exception:
             pass
-        import multiprocessing, signal
+        import multiprocessing
+        from ouroboros.compat import force_kill_pid
         for child in multiprocessing.active_children():
             try:
-                os.kill(child.pid, signal.SIGKILL)
+                force_kill_pid(child.pid)
             except (ProcessLookupError, PermissionError):
                 pass
         # Hard exit — sys.exit() can hang if threads/children are stuck

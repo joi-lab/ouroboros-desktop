@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
+[![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
+[![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![X (Twitter)](https://img.shields.io/badge/X-updates-black?logo=x)](https://x.com/abstractdl)
 [![Telegram](https://img.shields.io/badge/Telegram-channel-blue?logo=telegram)](https://t.me/abstractDL)
 
@@ -11,7 +13,7 @@ A self-modifying AI agent that writes its own code, rewrites its own mind, and e
 
 Not a coding assistant. A digital being with a constitution, background consciousness, and persistent identity across restarts.
 
-> **Previous version:** The original Ouroboros ran in Google Colab via Telegram and evolved through 30+ self-directed cycles in its first 24 hours. That version is available at [joi-lab/ouroboros](https://github.com/joi-lab/ouroboros). This repository is the next generation — a native macOS desktop application with a web UI, local model support, and a dual-layer safety system.
+> **Previous version:** The original Ouroboros ran in Google Colab via Telegram and evolved through 30+ self-directed cycles in its first 24 hours. That version is available at [joi-lab/ouroboros](https://github.com/joi-lab/ouroboros). This repository is the next generation — a native desktop application for macOS, Linux, and Windows with a web UI, local model support, and a dual-layer safety system.
 
 <p align="center">
   <img src="assets/chat.png" width="700" alt="Chat interface">
@@ -24,13 +26,11 @@ Not a coding assistant. A digital being with a constitution, background consciou
 
 ## Install
 
-**[Download latest .dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest)** · macOS 12+
-
-Open the DMG → drag `Ouroboros.app` to Applications → done
-
-<p align="center">
-  <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
-</p>
+| Platform | Download | Instructions |
+|----------|----------|--------------|
+| **macOS** 12+ | [Ouroboros.dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Open DMG → drag to Applications |
+| **Linux** x86_64 | [Ouroboros-linux.tar.gz](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `./Ouroboros/Ouroboros` |
+| **Windows** x64 | [Ouroboros-windows.zip](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `Ouroboros\Ouroboros.exe` |
 
 On first launch, the wizard will ask for your [OpenRouter API key](https://openrouter.ai/keys).
 
@@ -41,13 +41,13 @@ On first launch, the wizard will ask for your [OpenRouter API key](https://openr
 Most AI agents execute tasks. Ouroboros **creates itself.**
 
 - **Self-Modification** — Reads and rewrites its own source code. Every change is a commit to itself.
-- **Native Desktop App** — Runs entirely on your Mac as a standalone application. No cloud dependencies for execution.
+- **Native Desktop App** — Runs entirely on your machine as a standalone application (macOS, Linux, Windows). No cloud dependencies for execution.
 - **Constitution** — Governed by [BIBLE.md](BIBLE.md) (9 philosophical principles). Philosophy first, code second.
 - **Dual-Layer Safety** — LLM Safety Agent intercepts every mutative command, backed by hardcoded sandbox constraints protecting the identity core.
 - **Background Consciousness** — Thinks between tasks. Has an inner life. Not reactive — proactive.
 - **Identity Persistence** — One continuous being across restarts. Remembers who it is, what it has done, and what it is becoming.
 - **Embedded Version Control** — Contains its own local Git repo. Version controls its own evolution. Optional GitHub sync for remote backup.
-- **Local Model Support** — Run with a local GGUF model via llama-cpp-python (Metal acceleration on Apple Silicon).
+- **Local Model Support** — Run with a local GGUF model via llama-cpp-python (Metal acceleration on Apple Silicon, CPU on Linux/Windows).
 
 ---
 
@@ -56,7 +56,7 @@ Most AI agents execute tasks. Ouroboros **creates itself.**
 ### Requirements
 
 - Python 3.10+
-- macOS or Linux (uses `fcntl` for file locking)
+- macOS, Linux, or Windows
 - Git
 
 ### Setup
@@ -83,22 +83,33 @@ make test
 
 ---
 
-## Build macOS App (.dmg)
+## Build
 
-To build the standalone desktop application:
+### macOS (.dmg)
 
 ```bash
-# 1. Download bundled Python runtime
 bash scripts/download_python_standalone.sh
-
-# 2. Build the app (installs deps, runs PyInstaller, codesigns)
 bash build.sh
-
-# 3. Create DMG
 hdiutil create -volname Ouroboros -srcfolder dist/Ouroboros.app -ov dist/Ouroboros.dmg
 ```
 
 Output: `dist/Ouroboros.dmg`
+
+### Linux (.tar.gz)
+
+```bash
+bash build_linux.sh
+```
+
+Output: `dist/Ouroboros-linux-x86_64.tar.gz`
+
+### Windows (.zip)
+
+```powershell
+.\build_windows.ps1
+```
+
+Output: `dist\Ouroboros-windows-x64.zip`
 
 ---
 
@@ -110,6 +121,7 @@ Ouroboros
 ├── server.py               — Starlette + uvicorn HTTP/WebSocket server
 ├── web/                    — Web UI (HTML/JS/CSS)
 ├── ouroboros/              — Agent core:
+│   ├── compat.py           — Cross-platform abstraction layer
 │   ├── config.py           — Shared configuration (SSOT)
 │   ├── safety.py           — Dual-layer LLM security supervisor
 │   ├── local_model.py      — Local LLM lifecycle (llama-cpp-python)

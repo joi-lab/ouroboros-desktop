@@ -24,6 +24,12 @@ import threading
 import time
 from typing import Optional
 
+from ouroboros.compat import (
+    IS_WINDOWS, IS_MACOS,
+    embedded_python_candidates, kill_process_on_port, force_kill_pid,
+    git_install_hint,
+)
+
 # ---------------------------------------------------------------------------
 # Paths (single source of truth: ouroboros.config)
 # ---------------------------------------------------------------------------
@@ -64,16 +70,10 @@ APP_VERSION = read_version()
 def _find_embedded_python() -> str:
     """Locate the embedded python-build-standalone interpreter."""
     if getattr(sys, "frozen", False):
-        candidates = [
-            pathlib.Path(sys._MEIPASS) / "python-standalone" / "bin" / "python3",
-            pathlib.Path(sys._MEIPASS) / "python-standalone" / "bin" / "python",
-        ]
+        base = pathlib.Path(sys._MEIPASS)
     else:
-        candidates = [
-            pathlib.Path(__file__).parent / "python-standalone" / "bin" / "python3",
-            pathlib.Path(__file__).parent / "python-standalone" / "bin" / "python",
-        ]
-    for p in candidates:
+        base = pathlib.Path(__file__).parent
+    for p in embedded_python_candidates(base):
         if p.exists():
             return str(p)
     return sys.executable
@@ -86,7 +86,18 @@ EMBEDDED_PYTHON = _find_embedded_python()
 # Bootstrap
 # ---------------------------------------------------------------------------
 def check_git() -> bool:
-    return shutil.which("git") is not None
+    if shutil.which("git") is not None:
+        return True
+    if IS_WINDOWS:
+        for _candidate in (
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "cmd", "git.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "cmd", "git.exe"),
+        ):
+            if os.path.isfile(_candidate):
+                git_dir = os.path.dirname(_candidate)
+                os.environ["PATH"] = git_dir + ";" + os.environ.get("PATH", "")
+                return True
+    return False
 
 
 def _sync_core_files() -> None:
@@ -219,7 +230,7 @@ def bootstrap_repo() -> None:
         try:
             subprocess.run(["git", "init"], cwd=str(REPO_DIR), check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Ouroboros"], cwd=str(REPO_DIR), check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "ouroboros@local.mac"], cwd=str(REPO_DIR), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "ouroboros@localhost"], cwd=str(REPO_DIR), check=True, capture_output=True)
             subprocess.run(["git", "add", "-A"], cwd=str(REPO_DIR), check=True, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial commit from app bundle"], cwd=str(REPO_DIR), check=False, capture_output=True)
             subprocess.run(["git", "branch", "-M", "ouroboros"], cwd=str(REPO_DIR), check=False, capture_output=True)
@@ -395,22 +406,7 @@ def _read_port_file() -> int:
 
 def _kill_stale_on_port(port: int) -> None:
     """Kill any process listening on the given port (cleanup from previous runs)."""
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f"tcp:{port}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        pids = result.stdout.strip().split()
-        for pid_str in pids:
-            try:
-                pid = int(pid_str)
-                if pid != os.getpid():
-                    os.kill(pid, 9)
-                    log.info("Killed stale process %d on port %d", pid, port)
-            except (ValueError, ProcessLookupError, PermissionError):
-                pass
-    except Exception:
-        pass
+    kill_process_on_port(port)
 
 
 def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
@@ -485,10 +481,7 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
             _kill_stale_on_port(port)
             import multiprocessing as _mp
             for child in _mp.active_children():
-                try:
-                    os.kill(child.pid, 9)
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
+                force_kill_pid(child.pid)
             if _webview_window:
                 try:
                     _webview_window.destroy()
@@ -714,18 +707,30 @@ def main():
     if not check_git():
         log.warning("Git not found.")
         _result = {"installed": False}
+        _hint = git_install_hint()
 
         def _git_page(window):
             window.evaluate_js("""
                 document.getElementById('install-btn').onclick = function() {
-                    document.getElementById('status').textContent = 'Installing... A system dialog may appear.';
+                    document.getElementById('status').textContent = 'Installing... Please wait.';
                     window.pywebview.api.install_git();
                 };
             """)
 
         class GitApi:
             def install_git(self):
-                subprocess.Popen(["xcode-select", "--install"])
+                if IS_MACOS:
+                    subprocess.Popen(["xcode-select", "--install"])
+                elif IS_WINDOWS:
+                    subprocess.Popen(["winget", "install", "Git.Git", "--source", "winget", "--accept-source-agreements"])
+                else:
+                    for cmd in [["sudo", "apt", "install", "-y", "git"],
+                                ["sudo", "dnf", "install", "-y", "git"]]:
+                        try:
+                            subprocess.Popen(cmd)
+                            break
+                        except FileNotFoundError:
+                            continue
                 for _ in range(300):
                     time.sleep(3)
                     if shutil.which("git"):
@@ -735,12 +740,13 @@ def main():
 
         git_window = webview.create_window(
             "Ouroboros — Setup Required",
-            html="""<html><body style="background:#1a1a2e;color:white;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+            html=f"""<html><body style="background:#1a1a2e;color:white;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
             <div style="text-align:center">
                 <h2>Git is required</h2>
                 <p>Ouroboros needs Git to manage its local repository.</p>
-                <button id="install-btn" style="padding:10px 24px;border-radius:8px;border:none;background:#0ea5e9;color:white;cursor:pointer;font-size:14px">
-                    Install Git (Xcode CLI Tools)
+                <p style="color:#94a3b8;font-size:13px;margin-top:8px">{_hint}</p>
+                <button id="install-btn" style="padding:10px 24px;border-radius:8px;border:none;background:#0ea5e9;color:white;cursor:pointer;font-size:14px;margin-top:12px">
+                    Install Git
                 </button>
                 <p id="status" style="color:#fbbf24;margin-top:12px"></p>
             </div></body></html>""",
@@ -796,19 +802,14 @@ def main():
     def _kill_orphaned_children():
         """Final safety net: kill any processes still on the server port.
 
-        After stop_agent() sends SIGTERM/SIGKILL to server.py, worker
-        grandchildren may survive as orphans (fork on macOS).  Sweeping
-        the port guarantees nothing lingers.
+        After stop_agent() terminates server.py, worker grandchildren may
+        survive as orphans.  Sweeping the port guarantees nothing lingers.
         """
         _kill_stale_on_port(port)
         _kill_stale_on_port(8766)
-        import signal
         for child in __import__('multiprocessing').active_children():
-            try:
-                os.kill(child.pid, signal.SIGKILL)
-                log.info("Killed orphaned child pid=%d", child.pid)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            force_kill_pid(child.pid)
+            log.info("Killed orphaned child pid=%d", child.pid)
 
     window.events.closing += _on_closing
     _webview_window = window
