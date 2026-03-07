@@ -722,7 +722,7 @@ def main():
                 if IS_MACOS:
                     subprocess.Popen(["xcode-select", "--install"])
                 elif IS_WINDOWS:
-                    subprocess.Popen(["winget", "install", "Git.Git", "--accept-source-agreements"])
+                    subprocess.Popen(["winget", "install", "Git.Git", "--source", "winget", "--accept-source-agreements"])
                 else:
                     for cmd in [["sudo", "apt", "install", "-y", "git"],
                                 ["sudo", "dnf", "install", "-y", "git"]]:
