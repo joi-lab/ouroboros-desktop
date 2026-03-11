@@ -33,6 +33,15 @@ Write-Host "=== Installing agent dependencies ==="
 & "${Dest}\python.exe" -m pip install --quiet -r requirements.txt
 
 Write-Host ""
+Write-Host "=== Installing optional: local model support ==="
+try {
+    & "${Dest}\python.exe" -m pip install --quiet "llama-cpp-python[server]" 2>&1
+    Write-Host "llama-cpp-python installed successfully"
+} catch {
+    Write-Warning "llama-cpp-python install failed - local model support will not be available"
+}
+
+Write-Host ""
 Write-Host "=== Done ==="
 Write-Host "Python: ${Dest}\python.exe"
 & "${Dest}\python.exe" --version

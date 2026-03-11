@@ -54,6 +54,19 @@ echo "=== Installing agent dependencies ==="
 "${DEST}/bin/pip3" install --quiet -r requirements.txt
 
 echo ""
+echo "=== Installing optional: local model support ==="
+if [ "$OS" = "Darwin" ]; then
+    "${DEST}/bin/pip3" install --quiet 'llama-cpp-python[server]' \
+        --prefer-binary \
+        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
+        2>&1 \
+        || echo "WARNING: llama-cpp-python install failed — local model support will not be available"
+else
+    "${DEST}/bin/pip3" install --quiet 'llama-cpp-python[server]' --prefer-binary 2>&1 \
+        || echo "WARNING: llama-cpp-python install failed — local model support will not be available"
+fi
+
+echo ""
 echo "=== Done ==="
 echo "Python: ${DEST}/bin/python3"
 "${DEST}/bin/python3" --version
