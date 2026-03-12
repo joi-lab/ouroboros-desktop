@@ -9,7 +9,6 @@ Triggered after each task completion. Uses a lightweight LLM call
 (Gemini Flash) to summarize.
 """
 
-import fcntl
 import json
 import logging
 import os
@@ -17,7 +16,29 @@ import pathlib
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import sys
+
 from ouroboros.utils import utc_now_iso, read_text, write_text, append_jsonl
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock_nb(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+    def _unlock(fd: int) -> None:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+
+    def _lock_nb(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +93,7 @@ def consolidate(
     try:
         lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_nb(lock_fd)
         except (OSError, BlockingIOError):
             log.info("Consolidation already running (lock held), skipping")
             return None
@@ -83,7 +104,7 @@ def consolidate(
     finally:
         if lock_fd is not None:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _unlock(lock_fd)
                 os.close(lock_fd)
             except OSError:
                 pass
@@ -429,7 +450,7 @@ def consolidate_scratchpad(
     try:
         lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_nb(lock_fd)
         except (OSError, BlockingIOError):
             log.info("Scratchpad consolidation already running (lock held), skipping")
             return None
@@ -443,7 +464,7 @@ def consolidate_scratchpad(
     finally:
         if lock_fd is not None:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _unlock(lock_fd)
                 os.close(lock_fd)
             except OSError:
                 pass

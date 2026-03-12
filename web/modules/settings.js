@@ -27,7 +27,7 @@ export function initSettings({ ws, state }) {
                     <div class="form-field"><label>Port</label><input id="s-local-port" type="number" value="8766" style="width:100px"></div>
                     <div class="form-field"><label>GPU Layers (-1 = all)</label><input id="s-local-gpu-layers" type="number" value="-1" style="width:100px"></div>
                     <div class="form-field"><label>Context Length</label><input id="s-local-ctx" type="number" value="16384" style="width:120px" placeholder="16384"></div>
-                    <div class="form-field"><label>Chat Format</label><input id="s-local-chat-format" value="chatml-function-calling" style="width:200px"></div>
+                    <div class="form-field"><label>Chat Format</label><input id="s-local-chat-format" value="" placeholder="auto-detect" style="width:200px"></div>
                 </div>
                 <div class="form-row" style="align-items:center;gap:8px">
                     <button class="btn btn-primary" id="btn-local-start">Start</button>
@@ -40,21 +40,25 @@ export function initSettings({ ws, state }) {
             <div class="divider"></div>
             <div class="form-section">
                 <h3>Models</h3>
+                <div style="margin:0 0 8px 0;font-size:12px;color:var(--text-secondary)">
+                    These fields are cloud model IDs. Enable <code>Local</code> to route that lane
+                    through the GGUF server configured above.
+                </div>
                 <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Main Model</label><input id="s-model" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
-                    <label class="local-toggle"><input type="checkbox" id="s-local-main" disabled> Local</label>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-main"> Local</label>
                 </div>
                 <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Code Model</label><input id="s-model-code" value="anthropic/claude-sonnet-4.6" style="width:250px"></div>
-                    <label class="local-toggle"><input type="checkbox" id="s-local-code" disabled> Local</label>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-code"> Local</label>
                 </div>
                 <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Light Model</label><input id="s-model-light" value="google/gemini-3-flash-preview" style="width:250px"></div>
-                    <label class="local-toggle"><input type="checkbox" id="s-local-light" disabled> Local</label>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-light"> Local</label>
                 </div>
                 <div class="form-row" style="align-items:flex-end">
                     <div class="form-field"><label>Fallback Model</label><input id="s-model-fallback" value="google/gemini-3-flash-preview" style="width:250px"></div>
-                    <label class="local-toggle"><input type="checkbox" id="s-local-fallback" disabled> Local</label>
+                    <label class="local-toggle"><input type="checkbox" id="s-local-fallback"> Local</label>
                 </div>
                 <div class="form-row">
                     <div class="form-field"><label>Claude Code Model</label><input id="s-claude-code-model" value="sonnet" placeholder="sonnet, opus, or full name" style="width:250px"></div>
@@ -95,8 +99,15 @@ export function initSettings({ ws, state }) {
     `;
     document.getElementById('content').appendChild(page);
 
-    // Load current settings
-    fetch('/api/settings').then(r => r.json()).then(s => {
+    const secretInputIds = ['s-openrouter', 's-openai', 's-anthropic', 's-gh-token'];
+    secretInputIds.forEach((id) => {
+        const input = document.getElementById(id);
+        input.addEventListener('focus', () => {
+            if (input.value.includes('...')) input.value = '';
+        });
+    });
+
+    function applySettings(s) {
         if (s.OPENROUTER_API_KEY) document.getElementById('s-openrouter').value = s.OPENROUTER_API_KEY;
         if (s.OPENAI_API_KEY) document.getElementById('s-openai').value = s.OPENAI_API_KEY;
         if (s.ANTHROPIC_API_KEY) document.getElementById('s-anthropic').value = s.ANTHROPIC_API_KEY;
@@ -122,7 +133,16 @@ export function initSettings({ ws, state }) {
         document.getElementById('s-local-code').checked = s.USE_LOCAL_CODE === true || s.USE_LOCAL_CODE === 'True';
         document.getElementById('s-local-light').checked = s.USE_LOCAL_LIGHT === true || s.USE_LOCAL_LIGHT === 'True';
         document.getElementById('s-local-fallback').checked = s.USE_LOCAL_FALLBACK === true || s.USE_LOCAL_FALLBACK === 'True';
-    }).catch(() => {});
+    }
+
+    async function loadSettings() {
+        const resp = await fetch('/api/settings');
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        applySettings(data);
+    }
+
+    loadSettings().catch(() => {});
 
     let localStatusInterval = null;
     function updateLocalStatus() {
@@ -138,9 +158,6 @@ export function initSettings({ ws, state }) {
             el.style.color = isReady ? 'var(--green)' : d.status === 'error' ? 'var(--red)' : 'var(--text-secondary)';
             document.getElementById('btn-local-stop').style.opacity = isReady ? '1' : '0.5';
             document.getElementById('btn-local-test').style.opacity = isReady ? '1' : '0.5';
-            ['s-local-main', 's-local-code', 's-local-light', 's-local-fallback'].forEach(id => {
-                document.getElementById(id).disabled = !isReady;
-            });
         }).catch(() => {});
     }
     updateLocalStatus();
@@ -225,9 +242,19 @@ export function initSettings({ ws, state }) {
         if (ghToken && !ghToken.includes('...')) body.GITHUB_TOKEN = ghToken;
 
         try {
-            await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const resp = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            await loadSettings();
             const status = document.getElementById('settings-status');
-            status.textContent = 'Settings saved. Budget changes take effect immediately.';
+            status.textContent = data.warnings && data.warnings.length
+                ? ('Settings saved with warnings: ' + data.warnings.join(' | '))
+                : 'Settings saved. Budget changes take effect immediately.';
+            status.style.color = data.warnings && data.warnings.length ? 'var(--amber)' : 'var(--green)';
             status.style.display = 'block';
             setTimeout(() => status.style.display = 'none', 4000);
         } catch (e) {

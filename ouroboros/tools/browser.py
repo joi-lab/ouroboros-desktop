@@ -46,7 +46,7 @@ def _ensure_playwright_installed():
         if getattr(sys, 'frozen', False):
             raise RuntimeError(
                 "Browser tools require Playwright, which is not bundled. "
-                "Install manually: pip3 install playwright && python3 -m playwright install chromium"
+                "Install manually: pip install playwright && python -m playwright install chromium"
             )
         log.info("Playwright not found, installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
@@ -60,7 +60,7 @@ def _ensure_playwright_installed():
         if getattr(sys, 'frozen', False):
             raise RuntimeError(
                 "Playwright chromium binary not found. "
-                "Install manually: python3 -m playwright install chromium"
+                "Install manually: python -m playwright install chromium"
             )
         log.info("Installing Playwright chromium binary...")
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
@@ -81,10 +81,12 @@ def _reset_playwright_greenlet():
 
     # Kill any lingering chromium processes
     try:
-        subprocess.run(["pkill", "-9", "-f", "chromium"], capture_output=True, timeout=5)
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "chromium.exe"], capture_output=True, timeout=5)
+        else:
+            subprocess.run(["pkill", "-9", "-f", "chromium"], capture_output=True, timeout=5)
     except Exception:
         log.debug("Failed to kill chromium processes during reset", exc_info=True)
-        pass
 
     # Purge all playwright modules from sys.modules to reset greenlet state
     mods_to_remove = [k for k in sys.modules.keys() if k.startswith('playwright')]

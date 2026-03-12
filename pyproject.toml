@@ -37,8 +37,8 @@ Issues = "https://github.com/joi-lab/ouroboros-desktop/issues"
 
 [project.optional-dependencies]
 browser = ["playwright", "playwright-stealth"]
-local-model = ["llama-cpp-python"]
-all = ["playwright", "playwright-stealth", "llama-cpp-python", "huggingface_hub"]
+local-model = ["llama-cpp-python[server]"]
+all = ["playwright", "playwright-stealth", "llama-cpp-python[server]", "huggingface_hub"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

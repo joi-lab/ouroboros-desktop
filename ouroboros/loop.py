@@ -782,7 +782,11 @@ def _call_llm_with_retry(
 
             # Calculate cost and emit event for EVERY attempt (including retries)
             cost = float(usage.get("cost") or 0)
-            if not cost:
+            display_model = model
+            if use_local:
+                cost = 0.0
+                display_model = f"{model} (local)"
+            elif cost == 0.0:
                 cost = estimate_cost(
                     model,
                     int(usage.get("prompt_tokens") or 0),
@@ -793,7 +797,7 @@ def _call_llm_with_retry(
 
             # Emit real-time usage event with category based on task_type
             category = task_type if task_type in ("evolution", "consciousness", "review", "summarize") else "task"
-            emit_llm_usage_event(event_queue, task_id, model, usage, cost, category)
+            emit_llm_usage_event(event_queue, task_id, display_model, usage, cost, category)
 
             # Empty response = retry-worthy (model sometimes returns empty content with no tool_calls)
             tool_calls = msg.get("tool_calls") or []
@@ -825,7 +829,7 @@ def _call_llm_with_retry(
             _round_event = {
                 "ts": utc_now_iso(), "type": "llm_round",
                 "task_id": task_id,
-                "round": round_idx, "model": model,
+                "round": round_idx, "model": display_model,
                 "reasoning_effort": effort,
                 "prompt_tokens": int(usage.get("prompt_tokens") or 0),
                 "completion_tokens": int(usage.get("completion_tokens") or 0),

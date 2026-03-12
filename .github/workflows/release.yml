@@ -1,0 +1,115 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macOS
+          - os: ubuntu-latest
+            platform: Linux
+          - os: windows-latest
+            platform: Windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      # ── System deps (Linux only) ──────────────────────────────────
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgirepository1.0-dev gcc libcairo2-dev \
+            pkg-config python3-dev \
+            gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+
+      # ── Download python-build-standalone ──────────────────────────
+      - name: Download python-standalone (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/download_python_standalone.sh
+
+      - name: Download python-standalone (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\download_python_standalone.ps1
+
+      # ── Build tools ───────────────────────────────────────────────
+      - name: Install build dependencies
+        run: pip install -r requirements-launcher.txt pyinstaller
+
+      # ── Platform builds ───────────────────────────────────────────
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          python -m PyInstaller Ouroboros.spec --clean --noconfirm
+          sleep 3
+          hdiutil create -volname Ouroboros \
+            -srcfolder dist/Ouroboros.app -ov -format UDZO \
+            "dist/Ouroboros-${VERSION}-macos.dmg" \
+          || { sleep 10; hdiutil create -volname Ouroboros \
+            -srcfolder dist/Ouroboros.app -ov -format UDZO \
+            "dist/Ouroboros-${VERSION}-macos.dmg"; }
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          python -m PyInstaller Ouroboros.spec --clean --noconfirm
+          cd dist && tar -czf "Ouroboros-${VERSION}-linux-x86_64.tar.gz" Ouroboros/
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Version = (Get-Content VERSION).Trim()
+          python -m PyInstaller Ouroboros.spec --clean --noconfirm
+          Compress-Archive -Path dist\Ouroboros -DestinationPath "dist\Ouroboros-${Version}-windows-x64.zip" -Force
+
+      # ── Upload ────────────────────────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ouroboros-${{ matrix.platform }}
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
+            dist/*.zip
+
+  # ── GitHub Release ──────────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

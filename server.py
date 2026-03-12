@@ -137,6 +137,32 @@ def _setup_remote_if_configured(settings: dict) -> None:
         log.warning("Credential migration failed on startup: %s", mig_msg)
 
 
+def _auto_start_local_model(settings: dict) -> None:
+    """Download (if needed) and start the local model server in background."""
+    try:
+        from ouroboros.local_model import get_manager
+        mgr = get_manager()
+        if mgr.is_running:
+            return
+
+        source = str(settings.get("LOCAL_MODEL_SOURCE", "")).strip()
+        filename = str(settings.get("LOCAL_MODEL_FILENAME", "")).strip()
+        port = int(settings.get("LOCAL_MODEL_PORT", 8766))
+        n_gpu_layers = int(settings.get("LOCAL_MODEL_N_GPU_LAYERS", 0))
+        n_ctx = int(settings.get("LOCAL_MODEL_CONTEXT_LENGTH", 16384))
+        chat_format = str(settings.get("LOCAL_MODEL_CHAT_FORMAT", "")).strip()
+
+        log.info("Auto-starting local model: %s / %s", source, filename)
+        model_path = mgr.download_model(source, filename)
+        mgr.start_server(
+            model_path, port=port, n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx, chat_format=chat_format,
+        )
+        log.info("Local model auto-started successfully")
+    except Exception as exc:
+        log.warning("Local model auto-start failed: %s", exc)
+
+
 def _run_supervisor(settings: dict) -> None:
     """Initialize and run the supervisor loop. Called in a background thread."""
     global _supervisor_error
@@ -482,22 +508,23 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 continue
 
             msg_type = msg.get("type", "")
-            if msg_type == "chat":
-                text = msg.get("content", "")
-                if text:
+            payload = msg.get("content", "") if msg_type == "chat" else msg.get("cmd", "")
+            if msg_type in ("chat", "command") and payload:
+                try:
                     from supervisor.message_bus import get_bridge
                     bridge = get_bridge()
-                    bridge.ui_send(text)
-            elif msg_type == "command":
-                cmd = msg.get("cmd", "")
-                if cmd:
-                    from supervisor.message_bus import get_bridge
-                    bridge = get_bridge()
-                    bridge.ui_send(cmd)
+                    bridge.ui_send(payload)
+                except Exception:
+                    ts = datetime.now(timezone.utc).isoformat()
+                    await websocket.send_text(json.dumps({
+                        "type": "chat", "role": "assistant",
+                        "content": "⚠️ System is still initializing. Please wait a moment and try again.",
+                        "ts": ts,
+                    }))
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        log.debug("WebSocket error: %s", e)
+        log.warning("WebSocket error: %s", e)
     finally:
         with _ws_lock:
             try:
@@ -900,11 +927,23 @@ async def lifespan(app):
     _event_loop = asyncio.get_running_loop()
 
     settings = load_settings()
-    if settings.get("OPENROUTER_API_KEY"):
+    has_api_key = bool(settings.get("OPENROUTER_API_KEY"))
+    has_local = any(
+        str(settings.get(k)).lower() in ("true", "1", "yes")
+        for k in ("USE_LOCAL_MAIN", "USE_LOCAL_CODE", "USE_LOCAL_LIGHT", "USE_LOCAL_FALLBACK")
+    )
+
+    if has_api_key or has_local:
         threading.Thread(target=_run_supervisor, args=(settings,), daemon=True).start()
     else:
         _supervisor_ready.set()
-        log.info("No API key configured. Supervisor not started.")
+        log.info("No API key or local model configured. Supervisor not started.")
+
+    if has_local and settings.get("LOCAL_MODEL_SOURCE"):
+        threading.Thread(
+            target=_auto_start_local_model, args=(settings,),
+            daemon=True, name="local-model-autostart",
+        ).start()
 
     yield
 
@@ -1020,10 +1059,11 @@ if __name__ == "__main__":
             kill_workers(force=True)
         except Exception:
             pass
-        import multiprocessing, signal
+        import multiprocessing
+        from ouroboros.compat import force_kill_pid
         for child in multiprocessing.active_children():
             try:
-                os.kill(child.pid, signal.SIGKILL)
+                force_kill_pid(child.pid)
             except (ProcessLookupError, PermissionError):
                 pass
         # Hard exit — sys.exit() can hang if threads/children are stuck

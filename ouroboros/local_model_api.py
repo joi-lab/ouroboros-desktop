@@ -12,7 +12,7 @@ async def api_local_model_start(request: Request) -> JSONResponse:
         port = int(body.get("port", 8766))
         n_gpu_layers = int(body.get("n_gpu_layers", -1))
         n_ctx = int(body.get("n_ctx", 0))
-        chat_format = body.get("chat_format", "chatml-function-calling").strip()
+        chat_format = body.get("chat_format", "").strip()
 
         if not source:
             return JSONResponse({"error": "source is required"}, status_code=400)

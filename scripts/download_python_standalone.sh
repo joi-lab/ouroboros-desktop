@@ -1,20 +1,36 @@
 #!/bin/bash
 set -e
 
-# Downloads python-build-standalone for macOS (arm64 + x86_64)
+# Downloads python-build-standalone for macOS or Linux
 # Run from repo root: bash scripts/download_python_standalone.sh
 
 RELEASE="20260211"
 PY_VERSION="3.10.19"
 DEST="python-standalone"
 
+OS=$(uname -s)
 ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    PLATFORM="aarch64-apple-darwin"
-elif [ "$ARCH" = "x86_64" ]; then
-    PLATFORM="x86_64-apple-darwin"
+
+if [ "$OS" = "Darwin" ]; then
+    if [ "$ARCH" = "arm64" ]; then
+        PLATFORM="aarch64-apple-darwin"
+    elif [ "$ARCH" = "x86_64" ]; then
+        PLATFORM="x86_64-apple-darwin"
+    else
+        echo "Unsupported macOS architecture: $ARCH"
+        exit 1
+    fi
+elif [ "$OS" = "Linux" ]; then
+    if [ "$ARCH" = "x86_64" ]; then
+        PLATFORM="x86_64-unknown-linux-gnu"
+    elif [ "$ARCH" = "aarch64" ]; then
+        PLATFORM="aarch64-unknown-linux-gnu"
+    else
+        echo "Unsupported Linux architecture: $ARCH"
+        exit 1
+    fi
 else
-    echo "Unsupported architecture: $ARCH"
+    echo "Unsupported OS: $OS (use download_python_standalone.ps1 for Windows)"
     exit 1
 fi
 
@@ -36,6 +52,19 @@ rm -rf _python_tmp
 echo ""
 echo "=== Installing agent dependencies ==="
 "${DEST}/bin/pip3" install --quiet -r requirements.txt
+
+echo ""
+echo "=== Installing optional: local model support ==="
+if [ "$OS" = "Darwin" ]; then
+    "${DEST}/bin/pip3" install --quiet 'llama-cpp-python[server]' \
+        --prefer-binary \
+        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal \
+        2>&1 \
+        || echo "WARNING: llama-cpp-python install failed — local model support will not be available"
+else
+    "${DEST}/bin/pip3" install --quiet 'llama-cpp-python[server]' --prefer-binary 2>&1 \
+        || echo "WARNING: llama-cpp-python install failed — local model support will not be available"
+fi
 
 echo ""
 echo "=== Done ==="

@@ -7,10 +7,12 @@ Contract: chat(), default_model(), available_models(), add_usage().
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -110,24 +112,32 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: str = "https://openrouter.ai/api/v1",
     ):
+        self._api_key_override = api_key
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self._base_url = base_url
         self._client = None
+        self._client_api_key: Optional[str] = None
         self._local_client = None
         self._local_port: Optional[int] = None
 
     def _get_client(self):
-        if self._client is None:
+        current_api_key = self._api_key_override
+        if current_api_key is None:
+            current_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+
+        if self._client is None or self._client_api_key != current_api_key:
             from openai import OpenAI
             self._client = OpenAI(
                 base_url=self._base_url,
-                api_key=self._api_key,
+                api_key=current_api_key,
                 max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://ouroboros.local/",
                     "X-Title": "Ouroboros",
                 },
             )
+            self._client_api_key = current_api_key
+            self._api_key = current_api_key
         return self._client
 
     def _get_local_client(self):
@@ -228,6 +238,7 @@ class LLMClient:
 
         # Cap max_tokens to fit within the model's context window
         local_max = min(max_tokens, 2048)
+        ctx_len = 0
         try:
             from ouroboros.local_model import get_manager
             ctx_len = get_manager().get_context_length()
@@ -235,6 +246,9 @@ class LLMClient:
                 local_max = min(max_tokens, max(256, ctx_len // 4))
         except Exception:
             pass
+
+        if ctx_len > 0:
+            self._truncate_messages_for_context(clean_messages, ctx_len, local_max)
 
         kwargs: Dict[str, Any] = {
             "model": "local-model",
@@ -245,14 +259,176 @@ class LLMClient:
             kwargs["tools"] = clean_tools
             kwargs["tool_choice"] = tool_choice
 
-        resp = client.chat.completions.create(**kwargs)
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(**kwargs)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                err = str(exc)
+                if "context_length_exceeded" in err and attempt < 2:
+                    log.warning("Context overflow (attempt %d), truncating: %s", attempt + 1, err)
+                    self._shrink_messages_from_error(clean_messages, err)
+                    continue
+                log.warning("Local model request failed: %s", exc)
+                raise
+        if last_exc is not None:
+            raise last_exc
+
         resp_dict = resp.model_dump()
         usage = resp_dict.get("usage") or {}
         choices = resp_dict.get("choices") or [{}]
         msg = (choices[0] if choices else {}).get("message") or {}
 
+        if not msg.get("tool_calls") and msg.get("content") and clean_tools:
+            allowed_tool_names = {
+                str(t.get("function", {}).get("name", "")).strip()
+                for t in clean_tools
+                if isinstance(t, dict)
+            }
+            msg = self._parse_tool_calls_from_content(msg, allowed_tool_names)
+
         usage["cost"] = 0.0
         return msg, usage
+
+    @staticmethod
+    def _parse_tool_calls_from_content(
+        msg: Dict[str, Any],
+        allowed_tool_names: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Parse <tool_call> XML tags from content into structured tool_calls.
+
+        Works around llama-cpp-python not parsing Qwen/Hermes-style tool calls
+        (https://github.com/abetlen/llama-cpp-python/issues/1784).
+        """
+        content = str(msg.get("content", "") or "")
+        stripped = content.strip()
+        if not stripped:
+            return msg
+
+        # Safety: only upgrade the response when it consists solely of
+        # one or more <tool_call> blocks. If the model mixed prose with
+        # examples or explanations, leave it as plain text.
+        full_pattern = re.compile(
+            r"^(?:\s*<tool_call>\s*\{.*?\}\s*</tool_call>\s*)+$",
+            re.DOTALL,
+        )
+        if not full_pattern.fullmatch(stripped):
+            return msg
+
+        matches = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", stripped, re.DOTALL)
+        if not matches:
+            return msg
+
+        allowed = {name for name in (allowed_tool_names or set()) if name}
+        tool_calls = []
+        for i, raw in enumerate(matches):
+            try:
+                raw_stripped = raw.strip()
+                try:
+                    obj = json.loads(raw_stripped)
+                except json.JSONDecodeError:
+                    if raw_stripped.startswith("{{") and raw_stripped.endswith("}}"):
+                        obj = json.loads(raw_stripped[1:-1])
+                    else:
+                        raise
+                if not isinstance(obj, dict):
+                    raise ValueError("tool_call payload must be an object")
+                name = str(obj.get("name", "")).strip()
+                args = obj.get("arguments", {})
+                if not name:
+                    raise ValueError("tool_call missing function name")
+                if allowed and name not in allowed:
+                    raise ValueError(f"unknown tool '{name}'")
+                if not isinstance(args, dict):
+                    raise ValueError("tool_call arguments must be an object")
+                tool_calls.append({
+                    "id": f"call_local_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args),
+                    },
+                })
+            except (json.JSONDecodeError, ValueError) as exc:
+                log.warning("Rejected local <tool_call> block: %s (%s)", raw[:200], exc)
+                return msg
+
+        if not tool_calls:
+            return msg
+
+        msg = dict(msg)
+        msg["tool_calls"] = tool_calls
+        msg["content"] = None
+        log.info("Parsed %d local tool call(s) from text output", len(tool_calls))
+        return msg
+
+    @staticmethod
+    def _truncate_messages_for_context(
+        messages: List[Dict[str, Any]], ctx_len: int, max_tokens: int,
+    ) -> None:
+        """Hard-truncate message content so total fits within the context window.
+
+        Uses a conservative 3-chars-per-token ratio to avoid underestimating.
+        """
+        available_tokens = ctx_len - max_tokens - 64
+        if available_tokens < 256:
+            available_tokens = 256
+        target_chars = available_tokens * 3
+
+        total_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        if total_chars <= target_chars:
+            return
+
+        for msg in messages:
+            if msg["role"] == "system" and isinstance(msg.get("content"), str):
+                content = msg["content"]
+                other_chars = total_chars - len(content)
+                allowed = max(512, target_chars - other_chars)
+                if len(content) > allowed:
+                    msg["content"] = content[:allowed] + "\n\n[Context truncated to fit model window]"
+                    log.info("Truncated system message from %d to %d chars for %d-token context",
+                             len(content), allowed, ctx_len)
+                return
+
+    @staticmethod
+    def _shrink_messages_from_error(
+        messages: List[Dict[str, Any]], error_text: str,
+    ) -> None:
+        """Parse a context_length_exceeded error and shrink the largest message."""
+        m = re.search(r"requested (\d+) tokens.*?(\d+) in the messages", error_text)
+        if not m:
+            for msg in messages:
+                if msg["role"] == "system" and isinstance(msg.get("content"), str):
+                    msg["content"] = msg["content"][:len(msg["content"]) // 2]
+                    return
+            return
+
+        requested = int(m.group(1))
+        msg_tokens = int(m.group(2))
+        # Find max context from "maximum context length is N tokens"
+        ctx_match = re.search(r"maximum context length is (\d+)", error_text)
+        ctx_max = int(ctx_match.group(1)) if ctx_match else 16384
+        comp_match = re.search(r"(\d+) in the completion", error_text)
+        comp_tokens = int(comp_match.group(1)) if comp_match else 2048
+
+        target_msg_tokens = ctx_max - comp_tokens - 64
+        if target_msg_tokens < 256:
+            target_msg_tokens = 256
+        ratio = target_msg_tokens / max(msg_tokens, 1)
+        if ratio >= 1.0:
+            ratio = 0.5
+
+        for msg in messages:
+            if msg["role"] == "system" and isinstance(msg.get("content"), str):
+                content = msg["content"]
+                new_len = max(512, int(len(content) * ratio))
+                if new_len < len(content):
+                    msg["content"] = content[:new_len] + "\n\n[Context truncated to fit model window]"
+                    log.info("Retry-truncated system message to %d chars (ratio=%.2f)", new_len, ratio)
+                return
 
     def _chat_openrouter(
         self,
