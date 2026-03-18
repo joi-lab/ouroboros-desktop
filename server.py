@@ -985,7 +985,7 @@ if __name__ == "__main__":
     log.info("Starting Ouroboros server on port %d", actual_port)
     config = uvicorn.Config(
         app,
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=actual_port,
         log_level="warning",
         ws_ping_interval=20,
