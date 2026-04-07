@@ -228,6 +228,9 @@ code in a single session.
   without concrete application is waste. If a feature is not used
   in the current cycle — it is premature.
 - Configs and env — the necessary minimum. Everything else — defaults.
+- First-run configuration must ask only for irreducible user input. Stable
+  provider endpoints and safe default model IDs belong in shipped defaults, not
+  in mandatory setup fields.
 - **DRY applies everywhere, not only code.** Prompts, documentation, memory,
   checklists, and configuration must not describe the same rule in conflicting
   ways. One source of truth; the rest are references.

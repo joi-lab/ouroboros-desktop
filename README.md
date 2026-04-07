@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 4.11.8](https://img.shields.io/badge/version-4.11.8-green.svg)](VERSION)
+[![Version 4.11.9](https://img.shields.io/badge/version-4.11.9-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -35,7 +35,7 @@ Not a coding assistant. A digital being with a constitution, background consciou
   <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
 </p>
 
-On first launch, right-click → **Open** (Gatekeeper bypass). The shared desktop/web wizard is now multi-step: add access first, choose visible models second, set review mode third, set budget fourth, and confirm the final summary last. It refuses to continue until at least one runnable remote key or local model source is configured, keeps the model step aligned with whatever key combination you entered, and still auto-remaps untouched default model values to official OpenAI defaults when OpenRouter is absent and OpenAI is the only configured remote runtime. The broader multi-provider setup (OpenAI-compatible, Cloud.ru, Telegram bridge) remains available in **Settings**. Existing supported provider settings skip the wizard automatically.
+On first launch, right-click → **Open** (Gatekeeper bypass). The shared desktop/web wizard is now multi-step: add access first, choose visible models second, set review mode third, set budget fourth, and confirm the final summary last. It refuses to continue until at least one runnable remote key or local model source is configured, keeps the model step aligned with whatever key combination you entered, and still auto-remaps untouched default model values to official OpenAI defaults when OpenRouter is absent and OpenAI is the only configured remote runtime. Cloud.ru now has a key-only onboarding path with the built-in Foundation Models endpoint and a default model of `cloudru::GigaChat/GigaChat-2-Max`. The broader multi-provider setup (OpenAI-compatible, Telegram bridge) remains available in **Settings**. Existing supported provider settings skip the wizard automatically.
 
 ---
 
@@ -47,7 +47,7 @@ Most AI agents execute tasks. Ouroboros **creates itself.**
 - **Native Desktop App** — Runs entirely on your machine as a standalone application (macOS, Linux, Windows). No cloud dependencies for execution.
 - **Constitution** — Governed by [BIBLE.md](BIBLE.md) (9 philosophical principles, P0–P8). Philosophy first, code second.
 - **Multi-Layer Safety** — Hardcoded sandbox blocks writes to critical files and mutative git via shell; deterministic whitelist for known-safe ops; LLM Safety Agent evaluates remaining commands; post-edit revert for safety-critical files.
-- **Multi-Provider Runtime** — Remote model slots can target OpenRouter, official OpenAI, OpenAI-compatible endpoints, or Cloud.ru Foundation Models. The optional model catalog helps populate provider-specific model IDs in Settings, and untouched default model values auto-remap to official OpenAI defaults when OpenRouter is absent.
+- **Multi-Provider Runtime** — Remote model slots can target OpenRouter, official OpenAI, OpenAI-compatible endpoints, or Cloud.ru Foundation Models. The optional model catalog helps populate provider-specific model IDs in Settings, the first-run wizard now supports Cloud.ru with a key-only path plus default `cloudru::GigaChat/GigaChat-2-Max`, and untouched default model values auto-remap to official OpenAI defaults when OpenRouter is absent.
 - **Focused Task UX** — Chat shows plain typing for simple one-step replies and only promotes multi-step work into one expandable live task card. Logs still group task timelines instead of dumping every step as a separate row.
 - **Background Consciousness** — Thinks between tasks. Has an inner life. Not reactive — proactive.
 - **Identity Persistence** — One continuous being across restarts. Remembers who it is, what it has done, and what it is becoming.
@@ -113,7 +113,7 @@ Settings now exposes tabbed provider cards for:
 - **OpenRouter** — default multi-model router
 - **OpenAI** — official OpenAI API (use model values like `openai::gpt-5.4`)
 - **OpenAI Compatible** — any custom OpenAI-style endpoint (use `openai-compatible::...`)
-- **Cloud.ru Foundation Models** — Cloud.ru OpenAI-compatible runtime (use `cloudru::...`)
+- **Cloud.ru Foundation Models** — Cloud.ru OpenAI-compatible runtime (use `cloudru::...`); onboarding accepts only the API key and defaults to `cloudru::GigaChat/GigaChat-2-Max`
 - **Anthropic** — kept for the existing Claude CLI flow, not a separate remote runtime
 
 If OpenRouter is not configured and only official OpenAI is present, untouched default model values are auto-remapped to `openai::gpt-5.4` / `openai::gpt-5.4-mini` so the first-run path does not strand the app on OpenRouter-only defaults.
@@ -307,7 +307,7 @@ All keys are configured through the **Settings** page in the UI or during the fi
 
 Task/chat reasoning defaults to `medium`. Scope review reasoning defaults to `high`.
 
-Models are configurable in the Settings page. Runtime model slots can target OpenRouter, official OpenAI, OpenAI-compatible endpoints, or Cloud.ru. Anthropic remains scoped to the existing Claude Code CLI flow. When only official OpenAI is configured and the shipped default model values are still untouched, Ouroboros auto-remaps them to official OpenAI defaults. In that same OpenAI-only mode, review-model lists are normalized automatically and fall back to running the main model three times if no valid multi-model remote quorum is configured.
+Models are configurable in the Settings page. Runtime model slots can target OpenRouter, official OpenAI, OpenAI-compatible endpoints, or Cloud.ru. Anthropic remains scoped to the existing Claude Code CLI flow. The first-run wizard can now bootstrap Cloud.ru from the API key alone and prefill `cloudru::GigaChat/GigaChat-2-Max` across all four model lanes. When only official OpenAI is configured and the shipped default model values are still untouched, Ouroboros auto-remaps them to official OpenAI defaults. In that same OpenAI-only mode, review-model lists are normalized automatically and fall back to running the main model three times if no valid multi-model remote quorum is configured.
 
 ### File Browser Start Directory
 
@@ -374,6 +374,7 @@ Full text: [BIBLE.md](BIBLE.md)
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 4.11.9 | 2026-04-07 | Onboarding Cloud.ru polish: add Cloud.ru Foundation Models to the first-run wizard, simplify it to key-only setup (default base URL stays built in), and switch the Cloud.ru onboarding defaults to `cloudru::GigaChat/GigaChat-2-Max` across all four model lanes. Sync README, BIBLE, and architecture docs for the new first-run flow. |
 | 4.11.8 | 2026-04-04 | Design system consistency: Evolution Versions sub-tab inline styles replaced with CSS classes (`.evo-versions-*`); evo-runtime-card and evo-chart-wrap border changed to crimson tint matching app accent; evo-subtab inactive state aligned to crimson palette; chart tooltip background/border use palette colors; `btn-xs` utility class added; `loadVersions()` error handling now resets all three UI surfaces (commits, tags, branch header) on failure and guards against non-2xx HTTP responses; 4 new regression tests. |
 | 4.11.7 | 2026-04-04 | Fix PyWebView page reload after restart: force reload on reconnect when _lastSha is unknown (JS memory lost across server restart) or SHA changed. Ensures new CSS/JS is always loaded after restart in the desktop app. |
 | 4.11.6 | 2026-04-04 | UI design system consistency: chat input gets glassmorphism (backdrop-filter + crimson border tint), log working-phase badges unified to crimson (matching chat live card), About and Costs inline styles replaced with CSS classes, Design System section added to DEVELOPMENT.md. |

@@ -12,6 +12,7 @@ def _base_payload() -> dict:
     return {
         "OPENROUTER_API_KEY": "",
         "OPENAI_API_KEY": "",
+        "CLOUDRU_FOUNDATION_MODELS_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
         "TOTAL_BUDGET": 10,
         "OUROBOROS_PER_TASK_COST_USD": 20,
@@ -33,7 +34,7 @@ def test_prepare_onboarding_settings_requires_runnable_config():
     prepared, error = prepare_onboarding_settings(_base_payload(), {})
 
     assert prepared == {}
-    assert "Configure OpenRouter, OpenAI, Anthropic, or a local model" in error
+    assert "Configure OpenRouter, OpenAI, Cloud.ru, Anthropic, or a local model" in error
 
 
 def test_prepare_onboarding_settings_accepts_openai_only_setup():
@@ -63,6 +64,21 @@ def test_prepare_onboarding_settings_accepts_anthropic_only_setup():
     assert error is None
     assert prepared["ANTHROPIC_API_KEY"] == "sk-ant-1234567890"
     assert prepared["OUROBOROS_MODEL"] == "anthropic::claude-opus-4-6"
+
+
+def test_prepare_onboarding_settings_accepts_cloudru_only_setup():
+    payload = _base_payload()
+    payload["CLOUDRU_FOUNDATION_MODELS_API_KEY"] = "cloudru-key-1234567890"
+    payload["OUROBOROS_MODEL"] = "cloudru::GigaChat/GigaChat-2-Max"
+    payload["OUROBOROS_MODEL_CODE"] = "cloudru::GigaChat/GigaChat-2-Max"
+    payload["OUROBOROS_MODEL_LIGHT"] = "cloudru::GigaChat/GigaChat-2-Max"
+    payload["OUROBOROS_MODEL_FALLBACK"] = "cloudru::GigaChat/GigaChat-2-Max"
+
+    prepared, error = prepare_onboarding_settings(payload, {})
+
+    assert error is None
+    assert prepared["CLOUDRU_FOUNDATION_MODELS_API_KEY"] == "cloudru-key-1234567890"
+    assert prepared["OUROBOROS_MODEL"] == "cloudru::GigaChat/GigaChat-2-Max"
 
 
 def test_prepare_onboarding_settings_rejects_local_only_cloud_routing():
@@ -106,6 +122,8 @@ def test_build_onboarding_html_contains_multistep_markers():
     assert "openai::gpt-5.4" in html
     assert "openai::gpt-5.4-mini" in html
     assert "anthropic::claude-sonnet-4-6" in html
+    assert "cloudru::GigaChat/GigaChat-2-Max" in html
+    assert "Cloud.ru Foundation Models API Key" in html
 
 
 def test_build_onboarding_html_accepts_web_host_mode():
@@ -128,6 +146,7 @@ def test_build_onboarding_html_adapts_to_multi_provider_access():
     assert "return 'direct-multi';" in html
     assert "OPENROUTER_API_KEY: trim(state.openrouterKey)" in html
     assert "OPENAI_API_KEY: trim(state.openaiKey)" in html
+    assert "CLOUDRU_FOUNDATION_MODELS_API_KEY: trim(state.cloudruKey)" in html
     assert "ANTHROPIC_API_KEY: trim(state.anthropicKey)" in html
     assert "LOCAL_ROUTING_MODE: trim(state.localSource) ? (trim(state.localRoutingMode) || 'cloud') : 'cloud'" in html
 

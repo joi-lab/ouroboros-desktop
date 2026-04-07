@@ -9,6 +9,13 @@ OPENAI_DIRECT_DEFAULTS = {
     "fallback": "openai::gpt-5.4-mini",
 }
 
+CLOUDRU_DIRECT_DEFAULTS = {
+    "main": "cloudru::GigaChat/GigaChat-2-Max",
+    "code": "cloudru::GigaChat/GigaChat-2-Max",
+    "light": "cloudru::GigaChat/GigaChat-2-Max",
+    "fallback": "cloudru::GigaChat/GigaChat-2-Max",
+}
+
 ANTHROPIC_DIRECT_DEFAULTS = {
     "main": "anthropic::claude-opus-4-6",
     "code": "anthropic::claude-opus-4-6",

@@ -1,4 +1,4 @@
-# Ouroboros v4.11.8 — Architecture & Reference
+# Ouroboros v4.11.9 — Architecture & Reference
 
 This document describes every component, page, button, API endpoint, and data flow.
 It is the single source of truth for how the system works. Keep it updated.
@@ -164,7 +164,8 @@ Shown when `settings.json` does not contain any supported remote provider key an
 - The wizard blocks progression if nothing runnable is configured.
 - When OpenRouter is absent and official OpenAI is the only configured remote runtime, untouched default model values are auto-remapped to `openai::gpt-5.4` / `openai::gpt-5.4-mini` so first-run startup does not strand the app on OpenRouter-only defaults.
 - `web_search` uses the official OpenAI Responses API only. It requires `OPENAI_API_KEY` and treats any non-empty `OPENAI_BASE_URL` as an incompatible custom runtime configuration rather than a fallback.
-- OpenAI-compatible and Cloud.ru remain explicit model-selection flows from the full Settings page because there is no single safe universal default model ID for those providers.
+- OpenAI-compatible remains an explicit model-selection flow from the full Settings page.
+- Cloud.ru is available directly in onboarding: the wizard asks only for the API key, relies on the built-in `https://foundation-models.api.cloud.ru/v1` base URL, and pre-fills `cloudru::GigaChat/GigaChat-2-Max` across all four model lanes for Cloud.ru-only first-run setups.
 - Closing the wizard without saving is non-fatal: the main app still launches and the user can finish configuration in Settings.
 
 ### Core file sync (`_sync_core_files`)

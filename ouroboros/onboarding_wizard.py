@@ -7,7 +7,11 @@ import pathlib
 from typing import Any, Dict, Tuple
 
 from ouroboros.config import SETTINGS_DEFAULTS
-from ouroboros.provider_models import ANTHROPIC_DIRECT_DEFAULTS, OPENAI_DIRECT_DEFAULTS
+from ouroboros.provider_models import (
+    ANTHROPIC_DIRECT_DEFAULTS,
+    CLOUDRU_DIRECT_DEFAULTS,
+    OPENAI_DIRECT_DEFAULTS,
+)
 
 _ASSET_ROOT = pathlib.Path(__file__).resolve().parents[1] / "web"
 _TEMPLATE_PATH = _ASSET_ROOT / "onboarding_template.html"
@@ -21,6 +25,7 @@ _OPENROUTER_MODEL_DEFAULTS = {
     "fallback": str(SETTINGS_DEFAULTS["OUROBOROS_MODEL_FALLBACK"]),
 }
 _OPENAI_MODEL_DEFAULTS = dict(OPENAI_DIRECT_DEFAULTS)
+_CLOUDRU_MODEL_DEFAULTS = dict(CLOUDRU_DIRECT_DEFAULTS)
 _ANTHROPIC_MODEL_DEFAULTS = dict(ANTHROPIC_DIRECT_DEFAULTS)
 _STEP_ORDER = ["providers", "models", "review_mode", "budget", "summary"]
 _LOCAL_PRESETS: Dict[str, Dict[str, Any]] = {
@@ -57,7 +62,7 @@ _MODEL_SUGGESTIONS = [
     "openai::gpt-5.4",
     "openai::gpt-5.4-mini",
     "openai-compatible::meta-llama/compatible",
-    "cloudru::giga-model",
+    "cloudru::GigaChat/GigaChat-2-Max",
 ]
 
 
@@ -104,15 +109,18 @@ def _derive_provider_profile(settings: dict) -> str:
     has_openrouter = bool(_string(settings.get("OPENROUTER_API_KEY")))
     has_openai = bool(_string(settings.get("OPENAI_API_KEY")))
     has_anthropic = bool(_string(settings.get("ANTHROPIC_API_KEY")))
+    has_cloudru = bool(_string(settings.get("CLOUDRU_FOUNDATION_MODELS_API_KEY")))
     has_local = bool(_string(settings.get("LOCAL_MODEL_SOURCE")))
     if has_openrouter:
         return "openrouter"
-    if has_openai and has_anthropic:
+    if sum([has_openai, has_anthropic, has_cloudru]) > 1:
         return "direct-multi"
     if has_openai:
         return "openai"
     if has_anthropic:
         return "anthropic"
+    if has_cloudru:
+        return "cloudru"
     if has_local:
         return "local"
     return "openrouter"
@@ -134,6 +142,8 @@ def _initial_models(settings: dict, provider_profile: str) -> dict:
     defaults = _OPENROUTER_MODEL_DEFAULTS
     if provider_profile == "openai":
         defaults = _OPENAI_MODEL_DEFAULTS
+    elif provider_profile == "cloudru":
+        defaults = _CLOUDRU_MODEL_DEFAULTS
     elif provider_profile == "anthropic":
         defaults = _ANTHROPIC_MODEL_DEFAULTS
     return {
@@ -167,6 +177,7 @@ def _build_bootstrap(settings: dict, host_mode: str) -> dict:
         "modelDefaults": {
             "openrouter": dict(_OPENROUTER_MODEL_DEFAULTS),
             "openai": dict(_OPENAI_MODEL_DEFAULTS),
+            "cloudru": dict(_CLOUDRU_MODEL_DEFAULTS),
             "anthropic": dict(_ANTHROPIC_MODEL_DEFAULTS),
             "local": dict(_OPENROUTER_MODEL_DEFAULTS),
         },
@@ -176,6 +187,7 @@ def _build_bootstrap(settings: dict, host_mode: str) -> dict:
             "providerProfile": provider_profile,
             "openrouterKey": _string(settings.get("OPENROUTER_API_KEY")),
             "openaiKey": _string(settings.get("OPENAI_API_KEY")),
+            "cloudruKey": _string(settings.get("CLOUDRU_FOUNDATION_MODELS_API_KEY")),
             "anthropicKey": _string(settings.get("ANTHROPIC_API_KEY")),
             "reviewEnforcement": _string(settings.get("OUROBOROS_REVIEW_ENFORCEMENT"))
             or str(SETTINGS_DEFAULTS["OUROBOROS_REVIEW_ENFORCEMENT"]),
@@ -222,6 +234,7 @@ def build_onboarding_html(settings: dict, host_mode: str = "desktop") -> str:
 def prepare_onboarding_settings(data: dict, current_settings: dict) -> Tuple[dict, str | None]:
     openrouter_key = _string(data.get("OPENROUTER_API_KEY"))
     openai_key = _string(data.get("OPENAI_API_KEY"))
+    cloudru_key = _string(data.get("CLOUDRU_FOUNDATION_MODELS_API_KEY"))
     anthropic_key = _string(data.get("ANTHROPIC_API_KEY"))
     local_source = _string(data.get("LOCAL_MODEL_SOURCE"))
     local_filename = _string(data.get("LOCAL_MODEL_FILENAME"))
@@ -233,12 +246,14 @@ def prepare_onboarding_settings(data: dict, current_settings: dict) -> Tuple[dic
         return {}, "OpenRouter API key looks too short."
     if openai_key and len(openai_key) < 10:
         return {}, "OpenAI API key looks too short."
+    if cloudru_key and len(cloudru_key) < 10:
+        return {}, "Cloud.ru Foundation Models API key looks too short."
     if anthropic_key and len(anthropic_key) < 10:
         return {}, "Anthropic API key looks too short."
 
     has_local = bool(local_source)
-    if not openrouter_key and not openai_key and not anthropic_key and not has_local:
-        return {}, "Configure OpenRouter, OpenAI, Anthropic, or a local model before continuing."
+    if not openrouter_key and not openai_key and not cloudru_key and not anthropic_key and not has_local:
+        return {}, "Configure OpenRouter, OpenAI, Cloud.ru, Anthropic, or a local model before continuing."
 
     if has_local and "/" in local_source and not local_source.startswith(("/", "~")) and not local_filename:
         return {}, "Local HuggingFace sources need a GGUF filename."
@@ -292,7 +307,7 @@ def prepare_onboarding_settings(data: dict, current_settings: dict) -> Tuple[dic
     }.get(local_routing_mode, (False, False, False, False))
     if not has_local:
         use_local = (False, False, False, False)
-    if has_local and not openrouter_key and not openai_key and not anthropic_key and not any(use_local):
+    if has_local and not openrouter_key and not openai_key and not cloudru_key and not anthropic_key and not any(use_local):
         return {}, "Local-only setups must route at least one model to the local runtime."
 
     prepared = dict(current_settings)
@@ -301,6 +316,7 @@ def prepare_onboarding_settings(data: dict, current_settings: dict) -> Tuple[dic
         {
             "OPENROUTER_API_KEY": openrouter_key,
             "OPENAI_API_KEY": openai_key,
+            "CLOUDRU_FOUNDATION_MODELS_API_KEY": cloudru_key,
             "ANTHROPIC_API_KEY": anthropic_key,
             "TOTAL_BUDGET": total_budget,
             "OUROBOROS_PER_TASK_COST_USD": per_task_cost,
