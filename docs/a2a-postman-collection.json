@@ -1,0 +1,274 @@
+{
+  "info": {
+    "name": "Ouroboros A2A Protocol",
+    "description": "Google Agent2Agent (A2A) protocol endpoints for Ouroboros Desktop.\n\nA2A server runs on port 18800 by default.\nAll JSON-RPC methods use POST to the root URL.\n\nProtocol version: 0.3.0\nSDK: a2a-sdk (Python)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:18800",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Discovery",
+      "description": "Agent Card discovery endpoints",
+      "item": [
+        {
+          "name": "Get Agent Card",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/.well-known/agent-card.json",
+              "host": ["{{base_url}}"],
+              "path": [".well-known", "agent-card.json"]
+            },
+            "description": "Fetch the agent's A2A Agent Card.\n\nReturns: name, description, version, skills, capabilities, supported input/output modes.\n\nThe Agent Card is built dynamically from:\n- Agent name/description from identity.md or settings\n- Skills from ToolRegistry\n- Version from ouroboros.get_version()"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"name\": \"Ouroboros\",\n  \"description\": \"Self-modifying AI agent\",\n  \"version\": \"4.18.3\",\n  \"url\": \"http://127.0.0.1:18800/\",\n  \"protocolVersion\": \"0.3.0\",\n  \"capabilities\": {\n    \"streaming\": true\n  },\n  \"defaultInputModes\": [\"text/plain\"],\n  \"defaultOutputModes\": [\"text/plain\"],\n  \"skills\": [\n    {\n      \"id\": \"general\",\n      \"name\": \"General Assistant\",\n      \"description\": \"Code editing, analysis, git operations, web search, file management\",\n      \"tags\": [\"general\"]\n    }\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "description": "Send messages to the agent",
+      "item": [
+        {
+          "name": "Send Message (new task)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-001\",\n  \"method\": \"message/send\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"msg-001\",\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"kind\": \"text\",\n          \"text\": \"What is 2 + 2?\"\n        }\n      ]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Send a new message to the agent. Creates a new task.\n\nThe agent will:\n1. Create a task with status 'working'\n2. Dispatch the message to the Ouroboros supervisor\n3. Return the completed task with artifacts containing the response\n\nFor long-running tasks, the response may return status 'working' — use tasks/get to poll."
+          },
+          "response": [
+            {
+              "name": "Completed task",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-001\",\n  \"result\": {\n    \"id\": \"task-abc123\",\n    \"contextId\": \"ctx-xyz789\",\n    \"status\": {\n      \"state\": \"completed\",\n      \"timestamp\": \"2026-04-10T12:00:00Z\"\n    },\n    \"artifacts\": [\n      {\n        \"artifactId\": \"art-001\",\n        \"parts\": [\n          { \"kind\": \"text\", \"text\": \"2 + 2 = 4\" }\n        ]\n      }\n    ]\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send Message (continue task)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-002\",\n  \"method\": \"message/send\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"msg-002\",\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"kind\": \"text\",\n          \"text\": \"Now multiply that by 10\"\n        }\n      ],\n      \"taskId\": \"REPLACE_WITH_TASK_ID\",\n      \"contextId\": \"REPLACE_WITH_CONTEXT_ID\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Continue an existing task by sending a follow-up message.\n\nReplace REPLACE_WITH_TASK_ID and REPLACE_WITH_CONTEXT_ID with values from the previous response.\n\nUseful when the task returned status 'input-required'."
+          },
+          "response": []
+        },
+        {
+          "name": "Send Message (streaming)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-003\",\n  \"method\": \"message/stream\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"msg-003\",\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"kind\": \"text\",\n          \"text\": \"Write a hello world function in Python\"\n        }\n      ]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Send a message with SSE streaming response.\n\nReturns a stream of Server-Sent Events (SSE):\n- TaskStatusUpdateEvent (state transitions: working -> completed)\n- TaskArtifactUpdateEvent (partial/full results)\n\nEach SSE 'data:' line contains a complete JSON-RPC response.\n\nNote: Postman shows SSE as raw text. Use curl or a dedicated SSE client for real-time streaming."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "description": "Query and manage tasks",
+      "item": [
+        {
+          "name": "Get Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-004\",\n  \"method\": \"tasks/get\",\n  \"params\": {\n    \"id\": \"REPLACE_WITH_TASK_ID\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Get the current state of a task by ID.\n\nReturns the full Task object with status, history, and artifacts.\n\nTask states:\n- submitted: created, not yet processing\n- working: actively being processed\n- input-required: agent needs more info\n- completed: done (terminal)\n- failed: error (terminal)\n- canceled: canceled by client (terminal)\n- rejected: refused by agent (terminal)"
+          },
+          "response": [
+            {
+              "name": "Task found",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-004\",\n  \"result\": {\n    \"id\": \"task-abc123\",\n    \"contextId\": \"ctx-xyz789\",\n    \"status\": {\n      \"state\": \"completed\",\n      \"timestamp\": \"2026-04-10T12:00:00Z\"\n    },\n    \"artifacts\": [\n      {\n        \"artifactId\": \"art-001\",\n        \"parts\": [\n          { \"kind\": \"text\", \"text\": \"Response text here\" }\n        ]\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "Task not found",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-004\",\n  \"error\": {\n    \"code\": -32001,\n    \"message\": \"Task not found\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Task (with history)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-005\",\n  \"method\": \"tasks/get\",\n  \"params\": {\n    \"id\": \"REPLACE_WITH_TASK_ID\",\n    \"historyLength\": 10\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Get task with message history included.\n\nhistoryLength controls how many recent messages to return in the history array."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-006\",\n  \"method\": \"tasks/cancel\",\n  \"params\": {\n    \"id\": \"REPLACE_WITH_TASK_ID\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Cancel a running task.\n\nOnly works for tasks in non-terminal states (submitted, working, input-required).\n\nReturns error -32002 if the task is already in a terminal state."
+          },
+          "response": [
+            {
+              "name": "Task canceled",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-006\",\n  \"result\": {\n    \"id\": \"task-abc123\",\n    \"status\": {\n      \"state\": \"canceled\",\n      \"timestamp\": \"2026-04-10T12:00:00Z\"\n    }\n  }\n}"
+            },
+            {
+              "name": "Task not cancelable",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-006\",\n  \"error\": {\n    \"code\": -32002,\n    \"message\": \"Task is not cancelable\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Resubscribe to Task (streaming)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"req-007\",\n  \"method\": \"tasks/resubscribe\",\n  \"params\": {\n    \"id\": \"REPLACE_WITH_TASK_ID\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Reconnect to an existing task's SSE stream.\n\nUse this to resume streaming after a connection drop.\nReturns SSE events for the task's remaining lifecycle."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Error Reference",
+      "description": "A2A-specific JSON-RPC error codes",
+      "item": [
+        {
+          "name": "Error codes reference (not a request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "// A2A Error Codes:\n//\n// -32001  TaskNotFoundError          Task ID unknown\n// -32002  TaskNotCancelableError     Task in a terminal state\n// -32003  PushNotificationNotSupported  Agent doesn't support push\n// -32004  UnsupportedOperationError  Method not implemented\n// -32005  ContentTypeNotSupported    Input MIME type not accepted\n// -32006  InvalidAgentResponseError  Agent produced invalid response\n//\n// Standard JSON-RPC errors:\n// -32700  Parse error\n// -32600  Invalid request\n// -32601  Method not found\n// -32602  Invalid params\n// -32603  Internal error\n//\n// This is a reference item, not a real request."
+            },
+            "url": {
+              "raw": "{{base_url}}/",
+              "host": ["{{base_url}}"],
+              "path": [""]
+            },
+            "description": "Reference: A2A-specific JSON-RPC error codes.\n\n| Code | Name | Meaning |\n|------|------|--------|\n| -32001 | TaskNotFoundError | Task ID unknown |\n| -32002 | TaskNotCancelableError | Task in a terminal state |\n| -32003 | PushNotificationNotSupported | Agent doesn't support push |\n| -32004 | UnsupportedOperationError | Method not implemented |\n| -32005 | ContentTypeNotSupported | Input MIME type not accepted |\n| -32006 | InvalidAgentResponseError | Agent produced invalid response |\n\nStandard JSON-RPC errors (-32700 parse, -32600 invalid request, -32601 method not found, -32602 invalid params, -32603 internal) also apply."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
