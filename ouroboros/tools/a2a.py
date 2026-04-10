@@ -17,7 +17,7 @@ def _a2a_discover(ctx: ToolContext, url: str) -> str:
     import httpx
 
     base = url.rstrip("/")
-    card_url = f"{base}/.well-known/agent.json"
+    card_url = f"{base}/.well-known/agent-card.json"
     try:
         with httpx.Client(timeout=10) as client:
             resp = client.get(card_url)

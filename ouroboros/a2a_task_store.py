@@ -34,7 +34,7 @@ class FileTaskStore(TaskStore):
         safe_id = task_id.replace("/", "_").replace("..", "_")
         return self._dir / f"{safe_id}.json"
 
-    async def get(self, task_id: str, **kwargs) -> Optional[Task]:
+    async def get(self, task_id: str, context=None) -> Optional[Task]:
         path = self._task_path(task_id)
         if not path.exists():
             return None
@@ -46,7 +46,7 @@ class FileTaskStore(TaskStore):
             log.warning("Failed to read task %s", task_id, exc_info=True)
             return None
 
-    async def save(self, task: Task, **kwargs) -> None:
+    async def save(self, task: Task, context=None) -> None:
         path = self._task_path(task.id)
         data = task.model_dump(mode="json", exclude_none=True)
         content = json.dumps(data, ensure_ascii=False, indent=2)
@@ -61,7 +61,7 @@ class FileTaskStore(TaskStore):
             os.close(fd)
         os.replace(str(tmp), str(path))
 
-    async def delete(self, task_id: str, **kwargs) -> None:
+    async def delete(self, task_id: str, context=None) -> None:
         path = self._task_path(task_id)
         try:
             path.unlink(missing_ok=True)
