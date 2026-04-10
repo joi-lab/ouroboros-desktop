@@ -198,6 +198,33 @@ class OuroborosA2AExecutor(AgentExecutor):
 
         sub_id = bridge.subscribe_response(chat_id, on_response)
         try:
+            # Broadcast incoming A2A message to the chat UI and log it
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).isoformat()
+            if bridge._broadcast_fn:
+                bridge._broadcast_fn({
+                    "type": "chat",
+                    "role": "user",
+                    "content": text,
+                    "ts": ts,
+                    "source": "a2a",
+                    "sender_label": f"A2A ({task_id[:8]})",
+                })
+            try:
+                from supervisor.message_bus import log_chat
+                log_chat(
+                    direction="in",
+                    chat_id=chat_id,
+                    user_id=0,
+                    text=text,
+                    ts=ts,
+                    source="a2a",
+                    sender_label=f"A2A ({task_id[:8]})",
+                    task_id=task_id,
+                )
+            except Exception:
+                pass
+
             # Run handle_chat_direct in a thread (it's blocking)
             await asyncio.to_thread(handle_chat_direct, chat_id, text, None)
 
