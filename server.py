@@ -1059,9 +1059,30 @@ async def lifespan(app):
             daemon=True, name="local-model-autostart",
         ).start()
 
+    # A2A server
+    a2a_server_task = None
+    if settings.get("A2A_ENABLED", True):
+        try:
+            from ouroboros.a2a_server import start_a2a_server
+            a2a_port = int(settings.get("A2A_PORT", 18800))
+            a2a_server_task = asyncio.create_task(
+                start_a2a_server(settings), name="a2a-server"
+            )
+            log.info("A2A server task created on port %d", a2a_port)
+        except Exception:
+            log.warning("Failed to start A2A server", exc_info=True)
+
     try:
         yield
     finally:
+        # Stop A2A server
+        if a2a_server_task:
+            try:
+                from ouroboros.a2a_server import stop_a2a_server
+                stop_a2a_server()
+                a2a_server_task.cancel()
+            except Exception:
+                pass
         ws_heartbeat_task.cancel()
         with suppress(asyncio.CancelledError):
             await ws_heartbeat_task
