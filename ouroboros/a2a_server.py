@@ -66,20 +66,30 @@ def _parse_identity(data_dir: pathlib.Path) -> tuple:
         content = identity_path.read_text(encoding="utf-8")
         lines = content.strip().splitlines()
         name = ""
+        heading_found = False
         desc_lines = []
-        for i, line in enumerate(lines):
-            if not name and line.startswith("# "):
-                # Parse "# I Am Ouroboros" -> "Ouroboros"
+        for line in lines:
+            if not heading_found and line.startswith("# "):
+                heading_found = True
+                # Try to extract name from heading: "# I Am Ouroboros" -> "Ouroboros"
                 raw = line.lstrip("# ").strip()
-                name = re.sub(r"^I\s+Am\s+", "", raw, flags=re.IGNORECASE).strip()
+                candidate = re.sub(r"^I\s+Am\s+", "", raw, flags=re.IGNORECASE).strip()
+                # If heading is generic (e.g. "Who I Am"), skip — look for name in body
+                if candidate.lower() not in ("who i am", "about me", "identity"):
+                    name = candidate
                 continue
-            if name and not desc_lines and not line.strip():
-                continue  # skip blank lines after heading
-            if name and line.startswith("---"):
-                break  # stop at first horizontal rule
-            if name and line.startswith("## "):
-                break  # stop at next heading
-            if name and line.strip():
+            if heading_found and not desc_lines and not line.strip():
+                continue
+            if heading_found and line.startswith("---"):
+                break
+            if heading_found and line.startswith("## "):
+                break
+            if heading_found and line.strip():
+                # Try to extract name from first line: "I'm Ouroboros." or "I am Ouroboros."
+                if not name:
+                    m = re.match(r"^I(?:'m|\s+am)\s+(\w+)", line.strip(), re.IGNORECASE)
+                    if m:
+                        name = m.group(1)
                 desc_lines.append(line.strip())
                 if len(desc_lines) >= 3:
                     break
