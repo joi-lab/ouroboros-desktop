@@ -94,6 +94,14 @@ SETTINGS_DEFAULTS = {
     "USE_LOCAL_LIGHT": False,
     "USE_LOCAL_FALLBACK": False,
     "OUROBOROS_FILE_BROWSER_DEFAULT": "",
+    # A2A (Agent-to-Agent) protocol
+    "A2A_ENABLED": True,
+    "A2A_PORT": 18800,
+    "A2A_HOST": "0.0.0.0",
+    "A2A_AGENT_NAME": "",
+    "A2A_AGENT_DESCRIPTION": "",
+    "A2A_MAX_CONCURRENT": 3,
+    "A2A_TASK_TTL_HOURS": 24,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")

@@ -7,6 +7,8 @@ uvicorn[standard]
 websockets
 huggingface_hub
 claude-agent-sdk>=0.1.50
+a2a-sdk[http-server]>=0.3.20
+httpx>=0.27.0
 # optional: browser automation tools (for browse_page/browser_action)
 playwright
 playwright-stealth
