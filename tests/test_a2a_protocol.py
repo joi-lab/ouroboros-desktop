@@ -284,6 +284,117 @@ class TestA2AExecutor:
         assert id1 < -1000
         assert id2 < id1  # decreasing sequence
 
+    def _make_context(self, text="hello", task_id="t1", context_id="c1"):
+        """Build a minimal RequestContext-like object for testing."""
+        from a2a.types import Message, Part, TextPart, Role
+        msg = Message(
+            messageId="m1",
+            role=Role.user,
+            parts=[Part(root=TextPart(text=text))] if text else [],
+        )
+
+        class FakeContext:
+            pass
+
+        ctx = FakeContext()
+        ctx.task_id = task_id
+        ctx.context_id = context_id
+        ctx.message = msg
+        return ctx
+
+    def _make_event_queue(self):
+        """A simple event collector implementing enqueue_event."""
+        events = []
+
+        class FakeEventQueue:
+            async def enqueue_event(self, event):
+                events.append(event)
+
+        return FakeEventQueue(), events
+
+    def test_execute_empty_message_fails(self):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=3)
+        ctx = self._make_context(text="")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.execute(ctx, eq))
+        assert len(events) == 1
+        assert events[0].status.state.value == "failed"
+
+    def test_execute_rejected_when_at_capacity(self):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=1)
+        executor._semaphore.acquire()  # exhaust capacity
+        ctx = self._make_context(text="hello")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.execute(ctx, eq))
+        assert len(events) == 1
+        assert events[0].status.state.value == "rejected"
+        executor._semaphore.release()
+
+    def test_execute_success_with_mocked_supervisor(self, monkeypatch):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=3)
+
+        async def fake_dispatch(self, text, eq, tid, cid):
+            return "mocked response"
+
+        monkeypatch.setattr(OuroborosA2AExecutor, "_dispatch_to_supervisor", fake_dispatch)
+
+        ctx = self._make_context(text="test question")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.execute(ctx, eq))
+
+        states = [e.status.state.value for e in events if hasattr(e, "status")]
+        assert "working" in states
+        assert "completed" in states
+        # Should have artifact
+        artifacts = [e for e in events if hasattr(e, "artifact")]
+        assert len(artifacts) == 1
+        assert artifacts[0].artifact.parts[0].root.text == "mocked response"
+
+    def test_execute_failure_with_mocked_supervisor(self, monkeypatch):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=3)
+
+        async def failing_dispatch(self, text, eq, tid, cid):
+            raise RuntimeError("LLM exploded")
+
+        monkeypatch.setattr(OuroborosA2AExecutor, "_dispatch_to_supervisor", failing_dispatch)
+
+        ctx = self._make_context(text="test")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.execute(ctx, eq))
+
+        states = [e.status.state.value for e in events if hasattr(e, "status")]
+        assert "working" in states
+        assert "failed" in states
+
+    def test_execute_releases_semaphore_on_failure(self, monkeypatch):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=1)
+
+        async def failing_dispatch(self, text, eq, tid, cid):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(OuroborosA2AExecutor, "_dispatch_to_supervisor", failing_dispatch)
+
+        ctx = self._make_context(text="test")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.execute(ctx, eq))
+        # Semaphore should be released — next acquire should succeed
+        assert executor._semaphore.acquire(blocking=False)
+        executor._semaphore.release()
+
+    def test_cancel(self):
+        from ouroboros.a2a_executor import OuroborosA2AExecutor
+        executor = OuroborosA2AExecutor(max_concurrent=3)
+        ctx = self._make_context(text="cancel me")
+        eq, events = self._make_event_queue()
+        asyncio.run(executor.cancel(ctx, eq))
+        assert len(events) == 1
+        assert events[0].status.state.value == "canceled"
+
 
 # ===========================================================================
 # 4. A2A Server — Agent Card
@@ -390,6 +501,68 @@ class TestAgentCard:
         card = _build_agent_card(settings, "127.0.0.1", 18800)
         assert card.name == "CustomName"
         assert card.description == "Custom description"
+
+    def test_build_agent_card_fallback_name(self, tmp_path, monkeypatch):
+        """When no identity.md and no settings, name defaults to 'Ouroboros'."""
+        from ouroboros.a2a_server import _build_agent_card
+        import ouroboros.config as config
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        settings = {"A2A_AGENT_NAME": "", "A2A_AGENT_DESCRIPTION": ""}
+        card = _build_agent_card(settings, "127.0.0.1", 18800)
+        assert card.name == "Ouroboros"
+        assert card.description == "Self-modifying AI agent"
+
+    def test_build_skills_fallback(self):
+        """When supervisor not ready, returns fallback skills."""
+        from ouroboros.a2a_server import _build_skills_from_registry
+        skills = _build_skills_from_registry()
+        assert len(skills) >= 1
+        assert skills[0].id == "general"
+
+    def test_setup_logging(self, tmp_path):
+        from ouroboros.a2a_server import _setup_logging
+        _setup_logging(tmp_path)
+        log_file = tmp_path / "logs" / "a2a.log"
+        assert log_file.parent.exists()
+
+    def test_stop_server_when_not_started(self):
+        """stop_a2a_server should not raise when server was never started."""
+        from ouroboros.a2a_server import stop_a2a_server
+        stop_a2a_server()  # should not raise
+
+    def test_task_cleanup_loop_runs(self, tmp_path):
+        """Verify cleanup loop calls store.cleanup_expired."""
+        from ouroboros.a2a_server import _task_cleanup_loop
+        from ouroboros.a2a_task_store import FileTaskStore
+        import os
+        import time as _time
+
+        store = FileTaskStore(_tmp_data_dir(tmp_path), ttl_hours=0)
+        # Create an expired task
+        from a2a.types import Task, TaskStatus
+        task = Task(
+            id="old-task",
+            contextId="ctx",
+            status=TaskStatus(state="completed", timestamp="2026-01-01T00:00:00Z"),
+        )
+        asyncio.run(store.save(task))
+        task_file = store._dir / "old-task.json"
+        old_time = _time.time() - 7200
+        os.utime(task_file, (old_time, old_time))
+
+        # Run cleanup with very short interval, cancel after first run
+        async def run_cleanup():
+            task = asyncio.create_task(_task_cleanup_loop(store, interval_sec=0))
+            await asyncio.sleep(0.1)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(run_cleanup())
+        assert asyncio.run(store.get("old-task")) is None
 
 
 # ===========================================================================
@@ -544,6 +717,126 @@ class TestClientTools:
         assert result["task_id"] == "task-xyz"
         assert result["status"] == "working"
         assert result["response"] is None
+
+    def test_send_with_json_rpc_error(self, tmp_path, monkeypatch):
+        """Handle JSON-RPC error response."""
+        import httpx
+        from ouroboros.tools.a2a import _a2a_send
+
+        fake_response = {
+            "jsonrpc": "2.0",
+            "id": "test",
+            "error": {"code": -32001, "message": "Task not found"},
+        }
+
+        class FakeResponse:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return fake_response
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", FakeClient)
+        result = json.loads(_a2a_send(
+            self._ctx(tmp_path), "http://remote:9000", "test"
+        ))
+        assert "error" in result
+
+    def test_send_with_direct_message_response(self, tmp_path, monkeypatch):
+        """Handle direct message response (no task, just parts)."""
+        import httpx
+        from ouroboros.tools.a2a import _a2a_send
+
+        fake_response = {
+            "jsonrpc": "2.0",
+            "id": "test",
+            "result": {
+                "parts": [{"text": "Direct reply"}],
+            },
+        }
+
+        class FakeResponse:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return fake_response
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", FakeClient)
+        result = json.loads(_a2a_send(
+            self._ctx(tmp_path), "http://remote:9000", "test"
+        ))
+        assert result["response"] == "Direct reply"
+
+    def test_status_with_status_message(self, tmp_path, monkeypatch):
+        """Parse status message from failed task."""
+        import httpx
+        from ouroboros.tools.a2a import _a2a_status
+
+        fake_response = {
+            "jsonrpc": "2.0",
+            "id": "test",
+            "result": {
+                "id": "task-fail",
+                "status": {
+                    "state": "failed",
+                    "message": {
+                        "parts": [{"text": "Budget exhausted"}],
+                    },
+                },
+                "artifacts": [],
+            },
+        }
+
+        class FakeResponse:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return fake_response
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def post(self, url, **kw): return FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", FakeClient)
+        result = json.loads(_a2a_status(
+            self._ctx(tmp_path), "http://remote:9000", "task-fail"
+        ))
+        assert result["status"] == "failed"
+        assert result["status_message"] == "Budget exhausted"
+
+    def test_discover_strips_trailing_slash(self, tmp_path, monkeypatch):
+        """URL normalization — trailing slash shouldn't cause double slash."""
+        import httpx
+        from ouroboros.tools.a2a import _a2a_discover
+
+        captured_urls = []
+
+        class FakeResponse:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {"name": "X", "skills": []}
+
+        class FakeClient:
+            def __init__(self, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def get(self, url):
+                captured_urls.append(url)
+                return FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", FakeClient)
+        _a2a_discover(self._ctx(tmp_path), "http://remote:9000/")
+        assert "//" not in captured_urls[0].replace("http://", "")
 
 
 # ===========================================================================
