@@ -13,7 +13,6 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -31,6 +30,12 @@ from a2a.types import (
 )
 
 log = logging.getLogger("a2a-server")
+
+
+def _now() -> str:
+    """ISO 8601 UTC timestamp string for TaskStatus."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 # Virtual chat_id range for A2A (negative, avoids collision with web=1, telegram=positive)
 _A2A_CHAT_ID_BASE = -1000
@@ -65,7 +70,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                     final=True,
                     status=TaskStatus(
                         state=TaskState.failed,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_now(),
                         message=Message(
                             messageId=uuid.uuid4().hex,
                             role=Role.agent,
@@ -85,7 +90,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                     final=True,
                     status=TaskStatus(
                         state=TaskState.rejected,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_now(),
                         message=Message(
                             messageId=uuid.uuid4().hex,
                             role=Role.agent,
@@ -105,7 +110,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                     final=False,
                     status=TaskStatus(
                         state=TaskState.working,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_now(),
                     ),
                 )
             )
@@ -132,7 +137,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                     final=True,
                     status=TaskStatus(
                         state=TaskState.completed,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_now(),
                     ),
                 )
             )
@@ -145,7 +150,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                     final=True,
                     status=TaskStatus(
                         state=TaskState.failed,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=_now(),
                         message=Message(
                             messageId=uuid.uuid4().hex,
                             role=Role.agent,
@@ -165,7 +170,7 @@ class OuroborosA2AExecutor(AgentExecutor):
                 final=True,
                 status=TaskStatus(
                     state=TaskState.canceled,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=_now(),
                 ),
             )
         )
