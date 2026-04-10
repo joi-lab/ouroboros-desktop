@@ -63,6 +63,9 @@ class LocalChatBridge:
         self._log_queue: queue.Queue = queue.Queue(maxsize=1000)
         self._update_counter = 0
         self._broadcast_fn = None  # set by server.py for WebSocket streaming
+        # A2A response subscriptions: {subscription_id: (chat_id, callback)}
+        self._response_subs: Dict[str, tuple] = {}
+        self._response_subs_lock = threading.Lock()
         self._telegram_bot_token = ""
         self._telegram_chat_id: int = 0
         self._telegram_active_chat_id: int = 0
@@ -130,6 +133,19 @@ class LocalChatBridge:
 
         if token_changed or chat_id_changed:
             self._restart_telegram_polling()
+
+    def subscribe_response(self, chat_id: int, callback) -> str:
+        """Subscribe to agent responses for a given chat_id. Returns subscription_id."""
+        import uuid as _uuid
+        sub_id = _uuid.uuid4().hex
+        with self._response_subs_lock:
+            self._response_subs[sub_id] = (chat_id, callback)
+        return sub_id
+
+    def unsubscribe_response(self, subscription_id: str) -> None:
+        """Remove a response subscription."""
+        with self._response_subs_lock:
+            self._response_subs.pop(subscription_id, None)
 
     def shutdown(self) -> None:
         self._stop_telegram_polling()
@@ -454,6 +470,15 @@ class LocalChatBridge:
             "task_id": str(task_id or ""),
         }
         self._outbox.put(msg)
+        # Notify A2A response subscribers
+        with self._response_subs_lock:
+            subs = [(sid, cb) for sid, (cid, cb) in self._response_subs.items()
+                    if cid == chat_id and not is_progress]
+        for sid, cb in subs:
+            try:
+                cb(clean_text)
+            except Exception:
+                log.debug("A2A response callback error for sub %s", sid, exc_info=True)
         if self._broadcast_fn:
             self._broadcast_fn({
                 "type": "chat",
