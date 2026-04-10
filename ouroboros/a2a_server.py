@@ -104,22 +104,21 @@ def _build_skills_from_registry() -> List[AgentSkill]:
     try:
         from supervisor.workers import _get_chat_agent
         agent = _get_chat_agent()
-        registry = agent.registry
+        registry = agent.tools  # OuroborosAgent.tools is a ToolRegistry
         skills = []
-        for entry_name in registry.available_tools():
-            schemas = registry.schemas()
-            for schema_item in schemas:
-                func = schema_item.get("function", {})
-                if func.get("name") == entry_name:
-                    # Derive tag from prefix
-                    prefix = entry_name.split("_")[0] if "_" in entry_name else "tool"
-                    skills.append(AgentSkill(
-                        id=entry_name,
-                        name=entry_name,
-                        description=func.get("description", ""),
-                        tags=[prefix],
-                    ))
-                    break
+        for schema_item in registry.schemas():
+            func = schema_item.get("function", {})
+            name = func.get("name", "")
+            desc = func.get("description", "")
+            if not name:
+                continue
+            prefix = name.split("_")[0] if "_" in name else "tool"
+            skills.append(AgentSkill(
+                id=name,
+                name=name,
+                description=desc[:200] if desc else "",
+                tags=[prefix],
+            ))
         return skills
     except Exception:
         log.debug("ToolRegistry not available yet, using fallback skills", exc_info=True)
@@ -202,6 +201,13 @@ async def start_a2a_server(settings: Dict[str, Any]) -> None:
     executor = OuroborosA2AExecutor(max_concurrent=max_concurrent)
     agent_card = _build_agent_card(settings, host, port)
 
+    def _refresh_skills(card: AgentCard) -> AgentCard:
+        """Update skills from ToolRegistry on each Agent Card request."""
+        live_skills = _build_skills_from_registry()
+        if live_skills and live_skills[0].id != "general":
+            card.skills = live_skills
+        return card
+
     handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,
@@ -210,6 +216,7 @@ async def start_a2a_server(settings: Dict[str, Any]) -> None:
     a2a_app = A2AStarletteApplication(
         agent_card=agent_card,
         http_handler=handler,
+        card_modifier=_refresh_skills,
     )
     starlette_app = a2a_app.build()
 

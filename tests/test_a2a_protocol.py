@@ -513,11 +513,22 @@ class TestAgentCard:
         assert card.name == "Ouroboros"
         assert card.description == "Self-modifying AI agent"
 
-    def test_build_skills_fallback(self):
-        """When supervisor not ready, returns fallback skills."""
+    def test_build_skills_from_registry(self):
+        """Returns skills from ToolRegistry or fallback."""
         from ouroboros.a2a_server import _build_skills_from_registry
         skills = _build_skills_from_registry()
         assert len(skills) >= 1
+        # Either real tools or fallback "general"
+        assert all(s.id for s in skills)
+        assert all(s.name for s in skills)
+
+    def test_build_skills_fallback_on_error(self, monkeypatch):
+        """When _get_chat_agent raises, returns fallback skills."""
+        import supervisor.workers as workers
+        monkeypatch.setattr(workers, "_get_chat_agent", lambda: (_ for _ in ()).throw(RuntimeError("no agent")))
+        from ouroboros.a2a_server import _build_skills_from_registry
+        skills = _build_skills_from_registry()
+        assert len(skills) == 1
         assert skills[0].id == "general"
 
     def test_setup_logging(self, tmp_path):
