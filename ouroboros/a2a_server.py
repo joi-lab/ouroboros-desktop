@@ -172,10 +172,17 @@ async def start_a2a_server(settings: Dict[str, Any]) -> None:
 
     from ouroboros.config import DATA_DIR
 
-    host = str(settings.get("A2A_HOST", "0.0.0.0")).strip()
+    host = str(settings.get("A2A_HOST", "127.0.0.1")).strip()
     port = int(settings.get("A2A_PORT", 18800))
     max_concurrent = int(settings.get("A2A_MAX_CONCURRENT", 3))
     ttl_hours = int(settings.get("A2A_TASK_TTL_HOURS", 24))
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        log.warning(
+            "A2A server binding to %s without authentication. "
+            "Set A2A_HOST=127.0.0.1 or configure auth for production use.",
+            host,
+        )
 
     _setup_logging(DATA_DIR)
     log.info("Starting A2A server on %s:%d", host, port)
