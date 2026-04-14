@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ouroboros"
-version = "4.19.0"
+version = "4.19.1"
 description = "Self-creating AI agent with constitution, background consciousness, and persistent identity"
 readme = "README.md"
 license = {text = "MIT"}
@@ -51,9 +51,11 @@ claude-sdk = ["claude-agent-sdk>=0.1.50"]
 browser = ["playwright", "playwright-stealth"]
 local-model = ["llama-cpp-python"]
 build = ["pyinstaller>=6.0"]
-dev = ["pytest"]
 desktop = ["pywebview==5.4", "pythonnet==3.0.5; platform_system=='Windows'", "clr_loader==0.2.7.post0; platform_system=='Windows'"]
 all = ["claude-agent-sdk>=0.1.50", "playwright", "playwright-stealth", "llama-cpp-python", "huggingface_hub"]
+
+[dependency-groups]
+dev = ["pytest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

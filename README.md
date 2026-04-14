@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 4.19.0](https://img.shields.io/badge/version-4.19.0-green.svg)](VERSION)
+[![Version 4.19.1](https://img.shields.io/badge/version-4.19.1-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -391,6 +391,7 @@ Full text: [BIBLE.md](BIBLE.md)
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 4.19.1 | 2026-04-14 | Fix CI: move `pytest` from `[project.optional-dependencies]` to `[dependency-groups]` so `uv sync --frozen` installs dev deps correctly. Remove stale `--extra dev` from CI workflow. Regenerate `uv.lock`. |
 | 4.19.0 | 2026-04-14 | Full transition to `uv` as project manager: remove `requirements.txt` and `requirements-launcher.txt`; `pyproject.toml` is the single dependency source. Added `uv.lock` for deterministic cross-platform builds. Desktop launcher deps (`pywebview`, `pythonnet`) moved to `[project.optional-dependencies] desktop`. Dev deps (`pytest`) in `[project.optional-dependencies] dev`. CI, Docker, and all three build scripts now use `uv`. CI and Docker use `uv sync --frozen` for lockfile-deterministic installs; build scripts use `-r pyproject.toml` for agent deps into embedded Python and `".[desktop,build]"` for launcher deps. Download scripts no longer install deps (build scripts handle that). `Makefile` uses `uv run pytest`. Runtime dep installers (`launcher.py`, `launcher_bootstrap.py`, `git_ops.py`) prefer `pyproject.toml` with `requirements.txt` fallback. `Ouroboros.spec` bundles `uv.lock` instead of requirements files. |
 | 4.18.10 | 2026-04-14 | Fix build scripts: add missing `--system` flag to all `uv pip install` calls in `build.sh`, `build_linux.sh`, and `build_windows.ps1` — uv requires `--system` when installing into non-venv Python (CI hosted runners). macOS and Linux builds failed; Windows happened to pass but is also fixed for consistency. |
 | 4.18.9 | 2026-04-14 | Fix Windows CI: replace `O_CREAT\|O_EXCL` file locking in `review_state.py` with cross-platform `flock`/`LockFileEx` via `platform_layer`, fixing `PermissionError` on Windows concurrent lock test. |

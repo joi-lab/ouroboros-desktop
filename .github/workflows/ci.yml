@@ -49,8 +49,7 @@ jobs:
           python-version: '3.10'
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: |
-          uv sync --frozen --extra dev
+        run: uv sync --frozen
       - name: Run tests
         run: uv run pytest tests/ -q --tb=short -m "not integration"
 
@@ -74,8 +73,7 @@ jobs:
           python-version: '3.10'
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: |
-          uv sync --frozen --extra dev
+        run: uv sync --frozen
       - name: Run tests
         run: uv run pytest tests/ -q --tb=short -m "not integration"
 
@@ -98,8 +96,7 @@ jobs:
           python-version: '3.10'
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: |
-          uv sync --frozen --extra dev
+        run: uv sync --frozen
       - name: Run provider integration tests
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
