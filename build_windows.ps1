@@ -20,10 +20,10 @@ if (-not (Test-Path "python-standalone\python.exe")) {
 }
 
 Write-Host "--- Installing launcher dependencies ---"
-uv pip install --system --python python -q -r requirements-launcher.txt
+uv pip install --system --python python -q ".[desktop,build]"
 
 Write-Host "--- Installing agent dependencies into python-standalone ---"
-uv pip install --system --python python-standalone\python.exe -q -r requirements.txt
+uv pip install --system --python python-standalone\python.exe -q -r pyproject.toml
 
 if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
 if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }

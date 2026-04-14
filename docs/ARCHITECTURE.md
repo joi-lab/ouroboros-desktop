@@ -1,4 +1,4 @@
-# Ouroboros v4.18.10 — Architecture & Reference
+# Ouroboros v4.19.0 — Architecture & Reference
 
 This document describes every component, page, button, API endpoint, and data flow.
 It is the single source of truth for how the system works. Keep it updated.
@@ -1047,7 +1047,7 @@ instead of `pip` for faster, more deterministic dependency installation.
 | Build | Tag `v*` (after full-test + integration-test pass) | Matrix: PyInstaller build → `.dmg` / `.tar.gz` / `.zip` + GitHub Release | ~15 min |
 
 Path filters for branch pushes: `ouroboros/**`, `supervisor/**`, `server.py`, `tests/**`,
-`web/**`, `requirements.txt`, `pyproject.toml`, `.github/workflows/**`, `build.sh`,
+`web/**`, `uv.lock`, `pyproject.toml`, `.github/workflows/**`, `build.sh`,
 `build_linux.sh`, `build_windows.ps1`, `Dockerfile`, `scripts/**`, `VERSION`, `README.md`.
 Tag pushes (`v*`) always fire regardless of paths.
 
@@ -1060,16 +1060,18 @@ Tag pushes (`v*`) always fire regardless of paths.
 | `build_windows.ps1` | Windows | `dist/Ouroboros-windows-x64.zip` |
 
 All three require `uv` (Astral) as the package installer and check for its presence
-before proceeding. Dependencies are installed via `uv pip install --system --python <interpreter>`
-(launcher deps target the build interpreter, agent deps target embedded Python). PyInstaller
-with `server.py` as entry point. Hidden imports cover starlette, uvicorn, websockets,
+before proceeding. Agent dependencies are installed via `uv pip install --system --python <interpreter> -r pyproject.toml`
+(reads `[project.dependencies]` from pyproject.toml into embedded Python). Launcher/build
+dependencies use `uv pip install --system --python <interpreter> ".[desktop,build]"` (installs
+desktop extras like pywebview + build extras like pyinstaller into the build interpreter).
+PyInstaller with `server.py` as entry point. Hidden imports cover starlette, uvicorn, websockets,
 dulwich, huggingface_hub. Data bundles include `ouroboros/`, `supervisor/`, `web/`,
-`prompts/`, `docs/`, `assets/`, `BIBLE.md`, `README.md`, `VERSION`, `pyproject.toml`.
+`prompts/`, `docs/`, `assets/`, `BIBLE.md`, `README.md`, `VERSION`, `pyproject.toml`, `uv.lock`.
 
 ### Docker (`Dockerfile`)
 
 ```
-python:3.10-slim + uv (COPY --from ghcr.io/astral-sh/uv) + git → uv pip install requirements → python server.py
+python:3.10-slim + uv (COPY --from ghcr.io/astral-sh/uv) + git → uv sync --frozen → uv run python server.py
 Binds 0.0.0.0:8765, sets OUROBOROS_FILE_BROWSER_DEFAULT=/app.
 ```
 

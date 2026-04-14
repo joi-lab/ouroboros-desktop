@@ -17,9 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV APP_HOME=/app
 WORKDIR ${APP_HOME}
 
-# Install Python dependencies via uv
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+# Install Python dependencies via uv (deterministic from lockfile)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application
 COPY . .
@@ -31,4 +31,4 @@ ENV OUROBOROS_SERVER_HOST=0.0.0.0 \
 
 EXPOSE 8765
 
-ENTRYPOINT ["python", "server.py"]
+ENTRYPOINT ["uv", "run", "python", "server.py"]

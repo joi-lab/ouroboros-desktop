@@ -24,10 +24,10 @@ if [ ! -f "python-standalone/bin/python3" ]; then
 fi
 
 echo "--- Installing launcher dependencies ---"
-uv pip install --system --python python3 -q -r requirements-launcher.txt
+uv pip install --system --python python3 -q ".[desktop,build]"
 
 echo "--- Installing agent dependencies into python-standalone ---"
-uv pip install --system --python python-standalone/bin/python3 -q -r requirements.txt
+uv pip install --system --python python-standalone/bin/python3 -q -r pyproject.toml
 
 echo "--- Normalizing python-standalone symlinks for PyInstaller ---"
 python3 - <<'PY'

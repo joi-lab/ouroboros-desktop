@@ -426,15 +426,18 @@ def _migrate_old_settings() -> None:
 
 def _install_deps() -> None:
     """Install Python dependencies for the agent."""
-    req_file = REPO_DIR / "requirements.txt"
-    if not req_file.exists():
+    pyproject = REPO_DIR / "pyproject.toml"
+    req_file = REPO_DIR / "requirements.txt"  # legacy fallback
+    if pyproject.exists():
+        log.info("Installing agent dependencies from pyproject.toml ...")
+        cmd = [EMBEDDED_PYTHON, "-m", "pip", "install", "-q", str(REPO_DIR)]
+    elif req_file.exists():
+        log.info("Installing agent dependencies from requirements.txt ...")
+        cmd = [EMBEDDED_PYTHON, "-m", "pip", "install", "-q", "-r", str(req_file)]
+    else:
         return
-    log.info("Installing agent dependencies...")
     try:
-        subprocess.run(
-            [EMBEDDED_PYTHON, "-m", "pip", "install", "-q", "-r", str(req_file)],
-            timeout=300, capture_output=True,
-        )
+        subprocess.run(cmd, timeout=300, capture_output=True)
     except Exception as e:
         log.warning("Dependency install failed: %s", e)
 

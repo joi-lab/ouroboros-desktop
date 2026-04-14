@@ -5,11 +5,11 @@
 
 # Run smoke tests (fast, no external deps needed at runtime)
 test:
-	python3 -m pytest tests/ -q --tb=short
+	uv run pytest tests/ -q --tb=short
 
 # Run smoke tests with verbose output
 test-v:
-	python3 -m pytest tests/ -v --tb=long
+	uv run pytest tests/ -v --tb=long
 
 # Run codebase health check (requires ouroboros importable)
 health:

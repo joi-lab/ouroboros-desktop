@@ -50,10 +50,6 @@ mv _python_tmp/python "$DEST"
 rm -rf _python_tmp
 
 echo ""
-echo "=== Installing agent dependencies ==="
-"${DEST}/bin/pip3" install --quiet -r requirements.txt
-
-echo ""
 echo "=== Done ==="
 echo "Python: ${DEST}/bin/python3"
 "${DEST}/bin/python3" --version

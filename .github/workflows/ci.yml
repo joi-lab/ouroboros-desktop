@@ -17,7 +17,7 @@ on:
       - 'server.py'
       - 'tests/**'
       - 'web/**'
-      - 'requirements.txt'
+      - 'uv.lock'
       - 'pyproject.toml'
       - '.github/workflows/**'
       - 'build.sh'
@@ -50,10 +50,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system pytest
+          uv sync --frozen --extra dev
       - name: Run tests
-        run: python -m pytest tests/ -q --tb=short -m "not integration"
+        run: uv run pytest tests/ -q --tb=short -m "not integration"
 
   # ──────────────────────────────────────────────────────────────────
   # Tier 2: Full matrix (stable branch, manual, or tag push)
@@ -76,10 +75,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system pytest
+          uv sync --frozen --extra dev
       - name: Run tests
-        run: python -m pytest tests/ -q --tb=short -m "not integration"
+        run: uv run pytest tests/ -q --tb=short -m "not integration"
 
   # ──────────────────────────────────────────────────────────────────
   # Tier 2.5: Provider integration tests (stable + manual + tag)
@@ -101,14 +99,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system pytest
+          uv sync --frozen --extra dev
       - name: Run provider integration tests
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m pytest tests/test_provider_integration.py -v --tb=short -m integration
+        run: uv run pytest tests/test_provider_integration.py -v --tb=short -m integration
 
   # ──────────────────────────────────────────────────────────────────
   # Tier 3: Build & Release (tag push only)
@@ -135,7 +132,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.txt
           uv pip install --system pyinstaller
 
       # —— Download embedded Python interpreter ——
