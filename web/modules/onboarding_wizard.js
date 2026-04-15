@@ -670,7 +670,7 @@
                     <div class="field-note">Fallback and resilience path.</div>
                 </div>
             </div>
-            <div class="wizard-inline-note">Direct providers use <code>openai::gpt-5.4</code>, <code>cloudru::GigaChat/GigaChat-2-Max</code>, and <code>anthropic::claude-sonnet-4-6</code>. Plain <code>openai/...</code> or <code>anthropic/...</code> stays router-style by design.</div>
+            <div class="wizard-inline-note">Direct providers use <code>openai::gpt-5.4</code>, <code>cloudru::zai-org/GLM-4.7</code>, and <code>anthropic::claude-sonnet-4-6</code>. Plain <code>openai/...</code> or <code>anthropic/...</code> stays router-style by design.</div>
             <datalist id="model-suggestions">${suggestionOptions}</datalist>
         `;
     }
