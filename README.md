@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 4.18.3](https://img.shields.io/badge/version-4.18.3-green.svg)](VERSION)
+[![Version 4.18.4](https://img.shields.io/badge/version-4.18.4-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -379,6 +379,7 @@ Full text: [BIBLE.md](BIBLE.md)
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 4.18.4 | 2026-04-15 | Cloud.ru direct-provider defaults now prefill `cloudru::zai-org/GLM-4.7` instead of `cloudru::GigaChat/GigaChat-2-Max` across onboarding suggestions, defaults, and regression coverage. |
 | 4.18.3 | 2026-04-10 | Post-merge release follow-up: remove the stale duplicate `ouroboros.compat` module, restore frozen packaged-tool parity for advisory/plan/rollback/CI tools, and unmask the safety/frozen-registry regression tests so future parity breaks fail loudly. |
 | 4.18.2 | 2026-04-10 | Merge PR #16 into the local `ouroboros` line: keep the local `rollback_to_target` recovery tool and land the fork's cross-platform CI/CD + build hardening (`run_ci_tests`, GitHub Actions workflow, Dockerfile, `platform_layer.py`, platform guard, Windows/Linux compatibility fixes). |
 | 4.18.1 | 2026-04-09 | Fix Windows build crash: `launcher.py` imported from deleted `ouroboros.compat` instead of `ouroboros.platform_layer`; fix stale `compat.py` reference in ARCHITECTURE.md section header. |

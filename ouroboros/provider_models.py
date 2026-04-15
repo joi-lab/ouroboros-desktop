@@ -10,10 +10,10 @@ OPENAI_DIRECT_DEFAULTS = {
 }
 
 CLOUDRU_DIRECT_DEFAULTS = {
-    "main": "cloudru::GigaChat/GigaChat-2-Max",
-    "code": "cloudru::GigaChat/GigaChat-2-Max",
-    "light": "cloudru::GigaChat/GigaChat-2-Max",
-    "fallback": "cloudru::GigaChat/GigaChat-2-Max",
+    "main": "cloudru::zai-org/GLM-4.7",
+    "code": "cloudru::zai-org/GLM-4.7",
+    "light": "cloudru::zai-org/GLM-4.7",
+    "fallback": "cloudru::zai-org/GLM-4.7",
 }
 
 ANTHROPIC_DIRECT_DEFAULTS = {

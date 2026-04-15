@@ -62,7 +62,7 @@ _MODEL_SUGGESTIONS = [
     "openai::gpt-5.4",
     "openai::gpt-5.4-mini",
     "openai-compatible::meta-llama/compatible",
-    "cloudru::GigaChat/GigaChat-2-Max",
+    "cloudru::zai-org/GLM-4.7",
 ]
 
 
