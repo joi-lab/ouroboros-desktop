@@ -190,6 +190,15 @@ export function renderSettingsPage() {
                     </div>
                     <div class="form-section compact">
                         <h3>Network Gate</h3>
+                        <div class="form-row">
+                            <div class="form-field">
+                                <label class="local-toggle settings-lan-toggle">
+                                    <input type="checkbox" id="s-lan-access"> Allow LAN Access
+                                </label>
+                                <div id="settings-lan-hint" class="form-hint settings-lan-hint"></div>
+                            </div>
+                        </div>
+                        <div class="settings-inline-note">When enabled, the server binds to <code>0.0.0.0</code> so other devices on your local network can reach this UI. A restart is required after changing this setting.</div>
                         <div class="form-row">${secretField({
                             id: 's-network-password',
                             settingKey: 'OUROBOROS_NETWORK_PASSWORD',

@@ -1700,6 +1700,20 @@ body {
     transition: color 0.2s;
 }
 
+/* LAN Access toggle and hint */
+.settings-lan-toggle {
+    justify-content: flex-start;
+    gap: 8px;
+}
+.settings-lan-hint {
+    margin-top: 6px;
+    display: none;
+}
+.settings-lan-link {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
 .form-field input[type="range"] {
     -webkit-appearance: none;
     height: 4px;

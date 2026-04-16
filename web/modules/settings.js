@@ -173,6 +173,11 @@ export function initSettings({ state }) {
         applyInputValue('s-cloudru-base-url', s.CLOUDRU_FOUNDATION_MODELS_BASE_URL);
         applyInputValue('s-anthropic', s.ANTHROPIC_API_KEY);
         applyInputValue('s-network-password', s.OUROBOROS_NETWORK_PASSWORD);
+        // LAN Access checkbox: checked when host is 0.0.0.0
+        const lanCheckbox = byId('s-lan-access');
+        if (lanCheckbox) {
+            lanCheckbox.checked = (s.OUROBOROS_SERVER_HOST === '0.0.0.0');
+        }
         applyInputValue('s-telegram-token', s.TELEGRAM_BOT_TOKEN);
         applyInputValue('s-telegram-chat-id', s.TELEGRAM_CHAT_ID);
 
@@ -275,6 +280,7 @@ export function initSettings({ state }) {
             OPENAI_COMPATIBLE_BASE_URL: byId('s-openai-compatible-base-url').value.trim(),
             CLOUDRU_FOUNDATION_MODELS_BASE_URL: byId('s-cloudru-base-url').value.trim(),
             TELEGRAM_CHAT_ID: byId('s-telegram-chat-id').value.trim(),
+            OUROBOROS_SERVER_HOST: byId('s-lan-access')?.checked ? '0.0.0.0' : '127.0.0.1',
         };
 
         collectSecretValue('s-openrouter', body);
@@ -289,8 +295,32 @@ export function initSettings({ state }) {
         return body;
     }
 
+    async function updateLanHint() {
+        const hint = byId('settings-lan-hint');
+        if (!hint) return;
+        const checked = byId('s-lan-access')?.checked;
+        if (!checked) { hint.style.display = 'none'; return; }
+        hint.style.display = 'block';
+        hint.textContent = 'Detecting LAN address…';
+        try {
+            const resp = await fetch('/api/network-info', { cache: 'no-store' });
+            const data = await resp.json();
+            const port = data.port || window.location.port || '8765';
+            if (data.ips && data.ips.length) {
+                hint.innerHTML = '📡 Access from other devices: ' +
+                    data.ips.map(ip => `<a href="http://${ip}:${port}" target="_blank" class="settings-lan-link">http://${ip}:${port}</a>`).join(', ');
+            } else {
+                hint.textContent = '⚠️ Could not detect LAN address.';
+            }
+        } catch {
+            hint.textContent = '⚠️ Could not detect LAN address.';
+        }
+    }
+
+    byId('s-lan-access')?.addEventListener('change', updateLanHint);
+
     loadSettings()
-        .then(() => refreshModelCatalog())
+        .then(() => { refreshModelCatalog(); updateLanHint(); })
         .catch(() => {});
 
     byId('s-anthropic')?.addEventListener('input', () => {

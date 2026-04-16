@@ -180,6 +180,7 @@ _RESTART_REQUIRED_KEYS = frozenset({
     "A2A_AGENT_DESCRIPTION",
     "A2A_MAX_CONCURRENT",
     "A2A_TASK_TTL_HOURS",
+    "OUROBOROS_SERVER_HOST",
 })
 
 
@@ -1105,6 +1106,39 @@ from ouroboros.chat_upload_api import api_chat_upload, api_chat_upload_delete
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Network info (LAN IP discovery for Settings hint)
+# ---------------------------------------------------------------------------
+async def api_network_info(request: Request) -> JSONResponse:
+    """Return the server's LAN IP addresses and current port for the UI hint."""
+    import socket as _sock
+    port = int(os.environ.get("OUROBOROS_SERVER_PORT", DEFAULT_PORT))
+    ips: list[str] = []
+    # Primary: UDP connect trick — finds the interface used for default route
+    try:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                ips.append(ip)
+        finally:
+            s.close()
+    except Exception:
+        pass
+    # Fallback: getaddrinfo on hostname
+    if not ips:
+        try:
+            hostname = _sock.gethostname()
+            for info in _sock.getaddrinfo(hostname, None, _sock.AF_INET):
+                addr = info[4][0]
+                if addr and not addr.startswith("127.") and not addr.startswith("169.254.") and addr not in ips:
+                    ips.append(addr)
+        except Exception:
+            pass
+    return JSONResponse({"ips": ips, "port": port})
+
+
 # App setup
 # ---------------------------------------------------------------------------
 web_dir = resolve_web_dir(REPO_DIR)
@@ -1137,6 +1171,7 @@ routes = [
     Route("/api/local-model/status", endpoint=api_local_model_status),
     Route("/api/local-model/test", endpoint=api_local_model_test, methods=["POST"]),
     Route("/api/local-model/install-runtime", endpoint=api_local_model_install_runtime, methods=["POST"]),
+    Route("/api/network-info", endpoint=api_network_info),
     WebSocketRoute("/ws", endpoint=ws_endpoint),
     Mount("/static", app=NoCacheStaticFiles(directory=str(web_dir)), name="static"),
 ]
@@ -1273,7 +1308,11 @@ def _emergency_process_cleanup() -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
-    args = parse_server_args(DEFAULT_HOST, DEFAULT_PORT)
+    # Load settings early so OUROBOROS_SERVER_HOST takes effect before binding.
+    _early_settings = load_settings()
+    _apply_settings_to_env(_early_settings)
+    effective_host = os.environ.get("OUROBOROS_SERVER_HOST", DEFAULT_HOST)
+    args = parse_server_args(effective_host, DEFAULT_PORT)
     auth_warning = get_network_auth_startup_warning(args.host)
     if auth_warning:
         log.warning(auth_warning)

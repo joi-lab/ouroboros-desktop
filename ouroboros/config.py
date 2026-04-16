@@ -102,6 +102,7 @@ SETTINGS_DEFAULTS = {
     "A2A_AGENT_DESCRIPTION": "",
     "A2A_MAX_CONCURRENT": 3,
     "A2A_TASK_TTL_HOURS": 24,
+    "OUROBOROS_SERVER_HOST": "127.0.0.1",
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -367,6 +368,7 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        "OUROBOROS_SERVER_HOST",
     ]
     for k in env_keys:
         val = settings.get(k)
