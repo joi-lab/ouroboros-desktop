@@ -1024,6 +1024,24 @@ export function initChat({ ws, state, updateUnreadBadge }) {
                     if (hasOngoingTask) showTyping();
                 }
 
+                // --- Fix: seed inputHistory from server-side chat history ---
+                // On first load, collect user messages (including Telegram, other
+                // sessions) into inputHistory so ArrowUp recalls them.
+                if (!historyLoaded) {
+                    const existingSet = new Set(inputHistory);
+                    for (const msg of messages) {
+                        if (msg.role !== 'user') continue;
+                        const text = (msg.text || '').trim();
+                        if (!text || existingSet.has(text)) continue;
+                        inputHistory.push(text);
+                        existingSet.add(text);
+                    }
+                    // Cap at 50 entries (keep most recent)
+                    while (inputHistory.length > 50) inputHistory.shift();
+                    saveInputHistory(inputHistory);
+                    inputHistoryIndex = inputHistory.length;
+                }
+
                 const wasFirstLoad = !historyLoaded;
                 historyLoaded = true;
                 // On first load (page open / restart), scroll to the latest
@@ -1267,6 +1285,16 @@ export function initChat({ ws, state, updateUnreadBadge }) {
                 clientMessageId,
                 taskId: msg.task_id || '',
             });
+            // --- Fix: append live inbound user messages to inputHistory ---
+            // Messages from Telegram or other browser sessions arrive here;
+            // add them to recall so ArrowUp picks them up.
+            const _recallText = (msg.content || '').trim();
+            if (_recallText && inputHistory[inputHistory.length - 1] !== _recallText) {
+                inputHistory.push(_recallText);
+                while (inputHistory.length > 50) inputHistory.shift();
+            }
+            saveInputHistory(inputHistory);
+            inputHistoryIndex = inputHistory.length;
             incrementUnreadIfNeeded();
             return;
         }
@@ -1327,6 +1355,33 @@ export function initChat({ ws, state, updateUnreadBadge }) {
         `;
         insertMessageNode(bubble);
         incrementUnreadIfNeeded();
+    });
+
+    
+    // --- Fix: re-sync live card layout and scroll on tab visibility change ---
+    // When the browser tab is hidden, layout calculations (getBoundingClientRect)
+    // return stale values and auto-scroll stops working. On return, re-sync all
+    // connected live cards and restore scroll position if the user was at the bottom.
+    let _wasNearBottomBeforeHide = true;
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            // Snapshot scroll position while layout values are still fresh
+            _wasNearBottomBeforeHide = isNearBottom();
+            return;
+        }
+        // Tab became visible — re-sync after the browser
+        // has had a chance to reflow (requestAnimationFrame)
+        requestAnimationFrame(() => {
+            for (const record of liveCardRecords.values()) {
+                if (record?.root?.isConnected && !record.finished) {
+                    syncLiveCardLayout(record);
+                }
+            }
+            updateMessagesPadding();
+            if (_wasNearBottomBeforeHide) {
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        });
     });
 
     let wsHasConnectedOnce = false;
