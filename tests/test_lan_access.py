@@ -1,8 +1,5 @@
 """Tests for LAN access toggle feature (OUROBOROS_SERVER_HOST)."""
-import importlib
-import json
 import os
-import types
 
 
 def test_server_host_in_settings_defaults():
@@ -32,7 +29,6 @@ def test_apply_settings_to_env_clears_empty_host(monkeypatch):
 
 def test_server_host_in_restart_required_keys():
     """Changing OUROBOROS_SERVER_HOST requires a restart."""
-    import importlib
     import server as srv_mod
     assert "OUROBOROS_SERVER_HOST" in srv_mod._RESTART_REQUIRED_KEYS
 
@@ -81,22 +77,126 @@ def test_main_reads_settings_before_bind(monkeypatch):
     assert load_idx < apply_idx < parse_idx
 
 
-def test_api_network_info_returns_ips(monkeypatch):
-    """api_network_info must return a JSON response with ips and port."""
+def test_discover_lan_ips_prefers_hostname_over_udp_trick(monkeypatch):
+    """
+    _discover_lan_ips must NOT invoke the UDP-connect fallback when
+    gethostbyname_ex already returns a non-loopback IP. This is the
+    critical fix for the VPN-interception bug: socket.connect('8.8.8.8')
+    picks up VPN tunnel IPs (e.g. 172.16.x.x) when a VPN captures the
+    default route, but the hostname resolver typically returns the real
+    LAN interface.
+    """
     import server as srv_mod
-    import asyncio
+    import socket as _sock
 
-    # Mock socket to return a known IP
-    class FakeSocket:
+    udp_called = {"n": 0}
+
+    def fake_gethostbyname_ex(hostname):
+        return (hostname, [], ["192.168.0.92"])
+
+    class _ShouldNotBeUsed:
+        def __init__(self, *a, **kw):
+            udp_called["n"] += 1
+
         def connect(self, addr):
-            pass
+            raise AssertionError("UDP fallback should not run when primary succeeded")
+
         def getsockname(self):
-            return ("192.168.1.42", 0)
+            return ("172.16.9.1", 0)
+
         def close(self):
             pass
 
-    import socket
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: FakeSocket())
+    monkeypatch.setattr(_sock, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(_sock, "gethostbyname_ex", fake_gethostbyname_ex)
+    monkeypatch.setattr(_sock, "getaddrinfo", lambda *a, **kw: [])
+    monkeypatch.setattr(_sock, "socket", _ShouldNotBeUsed)
+
+    ips = srv_mod._discover_lan_ips()
+
+    assert "192.168.0.92" in ips, f"Expected LAN IP in result, got {ips!r}"
+    assert "172.16.9.1" not in ips, "VPN IP must not leak in when primary path succeeds"
+    assert udp_called["n"] == 0, "UDP socket fallback should not have been instantiated"
+
+
+def test_discover_lan_ips_filters_loopback_and_link_local(monkeypatch):
+    """Loopback (127.*) and link-local (169.254.*) must never appear in results."""
+    import server as srv_mod
+    import socket as _sock
+
+    def fake_gethostbyname_ex(hostname):
+        return (hostname, [], ["127.0.0.1", "169.254.19.0", "192.168.0.92"])
+
+    monkeypatch.setattr(_sock, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(_sock, "gethostbyname_ex", fake_gethostbyname_ex)
+    monkeypatch.setattr(_sock, "getaddrinfo", lambda *a, **kw: [])
+
+    ips = srv_mod._discover_lan_ips()
+
+    assert ips == ["192.168.0.92"]
+
+
+def test_discover_lan_ips_deduplicates(monkeypatch):
+    """If the same IP is returned by multiple resolvers, it must appear only once."""
+    import server as srv_mod
+    import socket as _sock
+
+    def fake_gethostbyname_ex(hostname):
+        return (hostname, [], ["192.168.0.92"])
+
+    def fake_getaddrinfo(host, port, family):
+        # Duplicate of the primary result plus a new one
+        return [
+            (family, 0, 0, "", ("192.168.0.92", 0)),
+            (family, 0, 0, "", ("10.0.0.5", 0)),
+        ]
+
+    monkeypatch.setattr(_sock, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(_sock, "gethostbyname_ex", fake_gethostbyname_ex)
+    monkeypatch.setattr(_sock, "getaddrinfo", fake_getaddrinfo)
+
+    ips = srv_mod._discover_lan_ips()
+
+    assert ips.count("192.168.0.92") == 1, f"Duplicates slipped through: {ips!r}"
+    assert "10.0.0.5" in ips
+
+
+def test_discover_lan_ips_udp_fallback_only_when_hostname_empty(monkeypatch):
+    """When hostname resolution fails entirely, UDP-connect is the final fallback."""
+    import server as srv_mod
+    import socket as _sock
+
+    def fake_gethostbyname_ex(hostname):
+        raise OSError("name resolution failed")
+
+    class FakeSocket:
+        def __init__(self, *a, **kw):
+            self.closed = False
+
+        def connect(self, addr):
+            pass
+
+        def getsockname(self):
+            return ("10.99.0.7", 0)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(_sock, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(_sock, "gethostbyname_ex", fake_gethostbyname_ex)
+    monkeypatch.setattr(_sock, "getaddrinfo", lambda *a, **kw: [])
+    monkeypatch.setattr(_sock, "socket", FakeSocket)
+
+    ips = srv_mod._discover_lan_ips()
+
+    assert ips == ["10.99.0.7"]
+
+
+def test_api_network_info_returns_ips_and_port(monkeypatch):
+    """api_network_info must return JSON {ips, port} using _discover_lan_ips."""
+    import server as srv_mod
+
+    monkeypatch.setattr(srv_mod, "_discover_lan_ips", lambda: ["192.168.0.92"])
     monkeypatch.setenv("OUROBOROS_SERVER_PORT", "9999")
 
     from starlette.testclient import TestClient
@@ -108,29 +208,29 @@ def test_api_network_info_returns_ips(monkeypatch):
     resp = client.get("/api/network-info")
     assert resp.status_code == 200
     data = resp.json()
-    assert "ips" in data
-    assert "port" in data
     assert data["port"] == 9999
-    assert "192.168.1.42" in data["ips"]
+    assert data["ips"] == ["192.168.0.92"]
 
 
-def test_api_network_info_filters_link_local(monkeypatch):
-    """api_network_info must filter out 169.254.x.x link-local addresses."""
+def test_api_network_info_dispatches_to_thread(monkeypatch):
+    """The async endpoint must not call _discover_lan_ips synchronously on the event loop."""
     import server as srv_mod
+    import asyncio
 
-    class FakeSocket:
-        def connect(self, addr):
-            pass
-        def getsockname(self):
-            return ("169.254.19.0", 0)
-        def close(self):
-            pass
+    calls = {"direct": 0, "thread": 0}
 
-    import socket
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: FakeSocket())
-    # Also mock getaddrinfo to return nothing useful
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [])
-    monkeypatch.setattr(socket, "gethostname", lambda: "test-host")
+    def fake_discover():
+        calls["direct"] += 1
+        return ["192.168.0.92"]
+
+    real_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(fn, *a, **kw):
+        calls["thread"] += 1
+        return await real_to_thread(fn, *a, **kw)
+
+    monkeypatch.setattr(srv_mod, "_discover_lan_ips", fake_discover)
+    monkeypatch.setattr(asyncio, "to_thread", spy_to_thread)
 
     from starlette.testclient import TestClient
     from starlette.applications import Starlette
@@ -139,5 +239,6 @@ def test_api_network_info_filters_link_local(monkeypatch):
     test_app = Starlette(routes=[Route("/api/network-info", endpoint=srv_mod.api_network_info)])
     client = TestClient(test_app)
     resp = client.get("/api/network-info")
-    data = resp.json()
-    assert "169.254.19.0" not in data["ips"]
+    assert resp.status_code == 200
+    assert calls["thread"] == 1, "asyncio.to_thread should have been used to dispatch the blocking work"
+    assert calls["direct"] == 1, "_discover_lan_ips should have been executed exactly once"

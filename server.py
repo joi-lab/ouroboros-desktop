@@ -1109,33 +1109,83 @@ from ouroboros.chat_upload_api import api_chat_upload, api_chat_upload_delete
 # ---------------------------------------------------------------------------
 # Network info (LAN IP discovery for Settings hint)
 # ---------------------------------------------------------------------------
-async def api_network_info(request: Request) -> JSONResponse:
-    """Return the server's LAN IP addresses and current port for the UI hint."""
+def _discover_lan_ips() -> list[str]:
+    """Discover non-loopback, non-link-local IPv4 addresses of the host.
+
+    Strategy:
+      1. Primary: ``socket.gethostbyname_ex(hostname)`` — on macOS/Linux this
+         reliably returns the WiFi/Ethernet LAN address and typically excludes
+         active VPN tunnel interfaces (they rarely register in the hostname
+         resolver). This avoids the VPN-default-route trap where
+         ``socket.connect("8.8.8.8")`` returns the tunnel IP instead of the
+         real LAN IP.
+      2. Secondary: ``socket.getaddrinfo(hostname)`` to catch any IPv4 aliases
+         the primary path missed.
+      3. Fallback: UDP-connect trick — used only when hostname resolution
+         returned nothing useful, since it can pick up VPN interfaces.
+
+    All three paths filter out loopback (``127.*``) and link-local
+    (``169.254.*``) addresses, and deduplicate while preserving order.
+    """
     import socket as _sock
-    port = int(os.environ.get("OUROBOROS_SERVER_PORT", DEFAULT_PORT))
+
     ips: list[str] = []
-    # Primary: UDP connect trick — finds the interface used for default route
+
+    def _accept(addr: str) -> None:
+        if not addr:
+            return
+        if addr.startswith("127.") or addr.startswith("169.254."):
+            return
+        if addr in ips:
+            return
+        ips.append(addr)
+
+    # Primary: hostname resolver (ignores VPN tunnels on macOS/Linux)
     try:
-        s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
-                ips.append(ip)
-        finally:
-            s.close()
+        hostname = _sock.gethostname()
+        _, _, addrs = _sock.gethostbyname_ex(hostname)
+        for addr in addrs:
+            _accept(addr)
     except Exception:
         pass
-    # Fallback: getaddrinfo on hostname
+
+    # Secondary: getaddrinfo on hostname for IPv4 aliases
+    try:
+        hostname = _sock.gethostname()
+        for info in _sock.getaddrinfo(hostname, None, _sock.AF_INET):
+            _accept(info[4][0])
+    except Exception:
+        pass
+
+    # Fallback: UDP-connect trick when hostname resolution gave us nothing.
+    # This may return a VPN interface if one intercepts the default route, but
+    # we only reach this path when the hostname-based lookups failed entirely.
     if not ips:
+        s = None
         try:
-            hostname = _sock.gethostname()
-            for info in _sock.getaddrinfo(hostname, None, _sock.AF_INET):
-                addr = info[4][0]
-                if addr and not addr.startswith("127.") and not addr.startswith("169.254.") and addr not in ips:
-                    ips.append(addr)
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            _accept(s.getsockname()[0])
         except Exception:
             pass
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    return ips
+
+
+async def api_network_info(request: Request) -> JSONResponse:
+    """Return the server's LAN IP addresses and current port for the UI hint.
+
+    The blocking socket resolution is dispatched to a worker thread so the
+    Starlette event loop is not stalled if DNS/hostname lookups are slow.
+    """
+    port = int(os.environ.get("OUROBOROS_SERVER_PORT", DEFAULT_PORT))
+    ips = await asyncio.to_thread(_discover_lan_ips)
     return JSONResponse({"ips": ips, "port": port})
 
 
