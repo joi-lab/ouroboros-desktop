@@ -55,7 +55,24 @@ def _repo_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
 
 
 def _data_read(ctx: ToolContext, path: str) -> str:
-    return read_text(ctx.drive_path(path))
+    # Pattern Register #2 (Cold-start missing-artifact reads) — architectural fix.
+    # Memory artifacts like memory/knowledge/*.md, memory/identity.md, and
+    # memory/scratchpad.md are created lazily on first write. A cold-start
+    # read raised a bare FileNotFoundError, which bubbled as an opaque tool
+    # error and cost the agent several rounds rediscovering the empty state.
+    # Return a clear sentinel instead so the agent can branch on it.
+    # Non-FileNotFound I/O errors still raise naturally.
+    target = ctx.drive_path(path)
+    if not target.exists():
+        return (
+            f"⚠️ DATA_NOT_YET_CREATED: {path}\n\n"
+            "This file does not exist yet. Memory artifacts under "
+            "memory/knowledge/, memory/identity.md, memory/scratchpad.md, and "
+            "similar paths are created lazily on first write. Treat this as "
+            "an empty/absent state and proceed with initialization if that is "
+            "the task. Use data_list to confirm what currently exists."
+        )
+    return read_text(target)
 
 
 def _data_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:

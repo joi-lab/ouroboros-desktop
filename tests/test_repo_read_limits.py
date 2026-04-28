@@ -49,6 +49,61 @@ def test_data_read_memory_file_never_truncated():
     assert result == big
 
 
+def test_data_read_cold_start_returns_sentinel(tmp_path):
+    """Pattern Register #2 architectural fix: data_read on a non-existent path
+    returns a clear DATA_NOT_YET_CREATED sentinel instead of raising
+    FileNotFoundError.
+
+    Regression guard: cold-start reads of memory/knowledge/*.md previously
+    bubbled opaque OS errors and cost the agent several rounds to recover.
+    """
+    from unittest.mock import MagicMock
+    from ouroboros.tools.core import _data_read
+    from ouroboros.tools.registry import ToolContext
+
+    # Build a ctx pointing at tmp_path as drive_root; the target file is absent.
+    ctx = MagicMock(spec=ToolContext)
+    ctx.drive_root = tmp_path
+
+    def _drive_path(p):
+        import ouroboros.utils as u
+        return tmp_path / u.safe_relpath(p)
+    ctx.drive_path.side_effect = _drive_path
+
+    result = _data_read(ctx, "memory/knowledge/patterns.md")
+    assert "DATA_NOT_YET_CREATED" in result
+    assert "memory/knowledge/patterns.md" in result
+    # Sentinel must not raise; must identify the missing path.
+    assert "lazily on first write" in result
+
+
+def test_data_read_existing_file_still_read_verbatim(tmp_path):
+    """Regression guard: the cold-start sentinel must not mask real reads.
+
+    An existing file must be returned verbatim; only a genuinely missing
+    path triggers the DATA_NOT_YET_CREATED branch.
+    """
+    from unittest.mock import MagicMock
+    from ouroboros.tools.core import _data_read
+    from ouroboros.tools.registry import ToolContext
+
+    target = tmp_path / "memory" / "scratchpad.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("real scratchpad content\n", encoding="utf-8")
+
+    ctx = MagicMock(spec=ToolContext)
+    ctx.drive_root = tmp_path
+
+    def _drive_path(p):
+        import ouroboros.utils as u
+        return tmp_path / u.safe_relpath(p)
+    ctx.drive_path.side_effect = _drive_path
+
+    result = _data_read(ctx, "memory/scratchpad.md")
+    assert result == "real scratchpad content\n"
+    assert "DATA_NOT_YET_CREATED" not in result
+
+
 def test_repo_read_prompt_file_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "p" * 90000
