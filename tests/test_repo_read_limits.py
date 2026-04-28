@@ -153,6 +153,58 @@ def test_data_read_propagates_non_filenotfound_errors(tmp_path, monkeypatch):
         _data_read(ctx, "memory/knowledge/")
 
 
+def test_data_read_toctou_race_handled_by_sentinel(tmp_path, monkeypatch):
+    """v5.3.3 follow-up: regression guard for the ACTUAL TOCTOU case.
+
+    The pre-v5.3.2 `if not target.exists(): ... else read_text()` had a
+    time-of-check-to-time-of-use window: even when `exists()` returned
+    True, the file could disappear before `read_text()` ran, and the
+    old code would then propagate a bare FileNotFoundError. The post-
+    v5.3.2 `try: read_text() except FileNotFoundError: return sentinel`
+    approach handles this race uniformly — the file-exists-then-vanishes
+    case returns the same DATA_NOT_YET_CREATED sentinel as a genuinely
+    missing file.
+
+    This test creates a real file (so the old exists() check would have
+    returned True), monkeypatches read_text to raise FileNotFoundError
+    (simulating the race window), and asserts the sentinel path fires.
+
+    Complements test_data_read_propagates_non_filenotfound_errors — that
+    test covers PermissionError / IsADirectoryError propagation; this
+    one covers the race-window FileNotFoundError absorption.
+    """
+    from unittest.mock import MagicMock
+    from ouroboros.tools.core import _data_read
+    from ouroboros.tools.registry import ToolContext
+    import ouroboros.tools.core as core_mod
+
+    # Create the real file so the old `target.exists()` check would
+    # have returned True.
+    target = tmp_path / "memory" / "racy.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("content that is about to vanish\n", encoding="utf-8")
+
+    ctx = MagicMock(spec=ToolContext)
+    ctx.drive_root = tmp_path
+
+    def _drive_path(p):
+        import ouroboros.utils as u
+        return tmp_path / u.safe_relpath(p)
+    ctx.drive_path.side_effect = _drive_path
+
+    # Simulate the race: read_text is called but the file has vanished
+    # in the TOCTOU window between exists() and read.
+    def _raise_file_not_found(path):
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(core_mod, "read_text", _raise_file_not_found)
+
+    result = _data_read(ctx, "memory/racy.md")
+    assert "DATA_NOT_YET_CREATED" in result
+    assert "memory/racy.md" in result
+    assert "lazily on first write" in result
+
+
 def test_data_read_sentinel_narrower_for_non_memory_paths(tmp_path):
     """v5.3.2 wording fix: the cold-start sentinel should not overclaim
     lazy-creation semantics for paths outside memory/.
