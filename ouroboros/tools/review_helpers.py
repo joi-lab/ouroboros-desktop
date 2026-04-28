@@ -11,6 +11,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -1215,9 +1216,21 @@ def _run_review_preflight_tests(
     if not tests_dir.exists():
         return None
     MAX_OUTPUT = 8000
+    # Pattern #4 architectural fix: use the agent's own interpreter via
+    # sys.executable (falling back to OUROBOROS_AGENT_PYTHON env var for
+    # environments where sys.executable is stripped — e.g. some frozen
+    # bundles under PyInstaller's minimal runtime). Previously this called
+    # bare `pytest`, which (a) isn't on PATH in packaged app bundles, and
+    # (b) even when found, could resolve to a different interpreter than
+    # the one running Ouroboros (and therefore lack our dependencies).
+    #
+    # `sys.executable -m pytest` is the canonical form: it runs pytest
+    # from the SAME Python environment that has all agent dependencies
+    # installed (dulwich, starlette, openai, claude-agent-sdk, pytest).
+    agent_python = sys.executable or os.environ.get("OUROBOROS_AGENT_PYTHON") or "python3"
     try:
         result = subprocess.run(
-            ["pytest", "tests/", "-q", "--tb=line", "--no-header"],
+            [agent_python, "-m", "pytest", "tests/", "-q", "--tb=line", "--no-header"],
             cwd=str(repo_dir), capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode == 0:
@@ -1227,7 +1240,10 @@ def _run_review_preflight_tests(
     except subprocess.TimeoutExpired:
         return f"⚠️ Tests timed out after {timeout} seconds"
     except FileNotFoundError:
-        return "⚠️ pytest not found — install pytest or set OUROBOROS_PRE_PUSH_TESTS=0 to skip"
+        return (
+            f"⚠️ Python interpreter not found at {agent_python!r} — "
+            "this should not happen; set OUROBOROS_PRE_PUSH_TESTS=0 to skip preflight"
+        )
     except Exception as exc:
         logger.warning("_run_review_preflight_tests failed: %s", exc, exc_info=True)
         return f"⚠️ Unexpected error running tests: {exc}"

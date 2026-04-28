@@ -1,4 +1,4 @@
-# Ouroboros v5.3.3 — Architecture & Reference
+# Ouroboros v5.3.4 — Architecture & Reference
 
 This document describes every component, page, button, API endpoint, and data flow.
 It is the single source of truth for how the system works. Keep it updated.
@@ -1522,6 +1522,49 @@ Single source of truth for:
   `acquire_pid_lock()`, `release_pid_lock()`
 
 Settings file: `~/Ouroboros/data/settings.json`. File-locked for concurrent access.
+
+### Agent interpreter handle (`OUROBOROS_AGENT_PYTHON`)
+
+`server.py` sets `OUROBOROS_AGENT_PYTHON = sys.executable` at import time,
+right after `sys.path.insert(0, str(REPO_DIR))` and before any supervisor /
+worker / logging initialization. This guarantees every child process — workers
+forked by the supervisor, subprocesses spawned by `run_shell`, advisory test
+preflight, the A2A server, consolidation daemon threads — inherits a stable
+handle pointing at the same Python that started Ouroboros.
+
+Why this exists: before v5.3.4, tools like `run_shell ["pytest", ...]` and the
+advisory test preflight looked up `pytest` / `python3` on PATH. In packaged
+`.app` / `.tar.gz` / `.zip` bundles, PATH is the system PATH, not the bundle's,
+so the agent would either not find an interpreter at all or find one lacking
+agent dependencies (`dulwich`, `starlette`, `openai`, `claude-agent-sdk`,
+`pytest`). The fix exposes the agent's own interpreter path so subprocesses
+can be invoked as:
+
+```python
+subprocess.run([os.environ["OUROBOROS_AGENT_PYTHON"], "-m", "pytest", ...])
+```
+
+The authoritative runtime layer — `review_helpers._run_review_preflight_tests`
+— uses `sys.executable` directly (equivalent value, no env-var lookup needed).
+The env var exists specifically for subprocesses and agent shell calls that
+don't have Python-level access to `sys.executable`.
+
+**Resolution by environment:**
+- **Packaged builds**: `python-standalone/bin/python3` (mac/linux) or
+  `python-standalone\python.exe` (windows).
+- **Dev (`python server.py`)**: whatever interpreter the developer used
+  (typically a virtualenv / system Python with `requirements.txt` installed).
+- **Docker**: the container's `/usr/local/bin/python3` (from
+  `python:3.10-slim`), which has `requirements.txt` installed.
+
+**Override policy:** `server.py` only sets the var if it's not already present,
+preserving explicit overrides from tests / CI debugging. Source of truth is
+`sys.executable`; the env var is a transport mechanism.
+
+Related: `requirements.txt` pins `pytest>=7.0` so the bundled Python ships
+with pytest available for the advisory preflight. See Pattern Register #4
+(`data/memory/knowledge/patterns.md`) for the two-strike history and
+`tests/test_agent_python_env.py` for the regression guard.
 
 ### Default settings
 

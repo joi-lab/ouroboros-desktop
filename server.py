@@ -61,6 +61,32 @@ PORT_FILE = DATA_DIR / "state" / "server_port"
 sys.path.insert(0, str(REPO_DIR))
 
 # ---------------------------------------------------------------------------
+# Agent interpreter handle (Pattern #4 architectural fix)
+# ---------------------------------------------------------------------------
+# Expose the CURRENT interpreter (the Python running server.py, which has all
+# agent dependencies installed) as OUROBOROS_AGENT_PYTHON so the agent — and
+# every subprocess spawned by run_shell, advisory preflight, worker fork,
+# A2A server, etc. — can reliably invoke the SAME Python via
+#   [$OUROBOROS_AGENT_PYTHON, "-m", "pytest", ...]
+# instead of guessing PATH `python` / `python3` (which may not exist, or may
+# exist but lack pytest / dependencies).
+#
+# In packaged builds `sys.executable` resolves to the bundled
+# `python-standalone/bin/python3` (mac/linux) or `python-standalone\python.exe`
+# (win). In dev (`python server.py`) it resolves to whatever interpreter the
+# developer used. In Docker it resolves to the container's `/usr/local/bin/python3`.
+# All three get the same contract: "the Python that started me knows where its
+# dependencies live".
+#
+# We only SET the var if the caller didn't already set it — this preserves
+# explicit overrides (tests, CI debugging). We don't LOG the full path here to
+# avoid leaking long paths into server.log on every startup; it's observable
+# via `/api/state` runtime_env and via `os.environ["OUROBOROS_AGENT_PYTHON"]`
+# inside any child process.
+if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
+    os.environ["OUROBOROS_AGENT_PYTHON"] = sys.executable
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

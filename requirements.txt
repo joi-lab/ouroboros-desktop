@@ -9,6 +9,13 @@ websockets
 huggingface_hub
 PyYAML>=6.0
 claude-agent-sdk>=0.1.60
+# pytest ships with Ouroboros so that the advisory + commit-gate test preflight
+# (review_helpers._run_review_preflight_tests, invoked via `sys.executable -m
+# pytest`) works out-of-the-box in packaged builds. Without this, the bundled
+# Python has no pytest and the preflight silently falls back to skip_tests=True.
+# See Pattern Register #4 (Wrong interpreter / command-name assumption) and
+# docs/ARCHITECTURE.md "Agent interpreter handle" for the full contract.
+pytest>=7.0
 # optional: A2A (Agent-to-Agent) protocol — pip install 'ouroboros[a2a]'
 # a2a-sdk[http-server]>=0.3.20
 # optional: browser automation tools (for browse_page/browser_action)
