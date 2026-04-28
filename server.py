@@ -84,7 +84,14 @@ sys.path.insert(0, str(REPO_DIR))
 # via `/api/state` runtime_env and via `os.environ["OUROBOROS_AGENT_PYTHON"]`
 # inside any child process.
 if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
-    os.environ["OUROBOROS_AGENT_PYTHON"] = sys.executable
+    # Guard: sys.executable can be None or "" in exotic embedded interpreter
+    # scenarios. Assigning None to os.environ raises TypeError; an empty string
+    # would silently propagate a useless value to every child process. In both
+    # cases we skip the inject — child processes then fall back to their own
+    # `sys.executable` detection when they need it.
+    _agent_python = sys.executable
+    if isinstance(_agent_python, str) and _agent_python:
+        os.environ["OUROBOROS_AGENT_PYTHON"] = _agent_python
 
 # ---------------------------------------------------------------------------
 # Logging

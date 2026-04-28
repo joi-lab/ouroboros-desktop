@@ -12,6 +12,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -652,9 +653,10 @@ def _run_pre_push_tests(ctx: ToolContext) -> Optional[str]:
     tests_dir = pathlib.Path(ctx.repo_dir) / "tests"
     if not tests_dir.exists():
         return None
+    agent_python = sys.executable or os.environ.get("OUROBOROS_AGENT_PYTHON") or "python3"
     try:
         result = subprocess.run(
-            ["pytest", "tests/", "-q", "--tb=line", "--no-header"],
+            [agent_python, "-m", "pytest", "tests/", "-q", "--tb=line", "--no-header"],
             cwd=ctx.repo_dir, capture_output=True, text=True, timeout=180,
         )
         if result.returncode == 0:
@@ -666,7 +668,7 @@ def _run_pre_push_tests(ctx: ToolContext) -> Optional[str]:
     except subprocess.TimeoutExpired:
         return "⚠️ PRE_PUSH_TEST_ERROR: pytest timed out after 180 seconds"
     except FileNotFoundError:
-        return "⚠️ PRE_PUSH_TEST_ERROR: pytest not installed or not found in PATH"
+        return f"⚠️ PRE_PUSH_TEST_ERROR: interpreter not found at {agent_python!r}"
     except Exception as e:
         log.warning(f"Pre-push tests failed with exception: {e}", exc_info=True)
         return f"⚠️ PRE_PUSH_TEST_ERROR: Unexpected error running tests: {e}"

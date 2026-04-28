@@ -53,8 +53,20 @@ def test_server_py_injects_agent_python_env_var():
         "server.py must check OUROBOROS_AGENT_PYTHON before setting it "
         "(preserve explicit overrides from tests/CI)"
     )
-    assert 'os.environ["OUROBOROS_AGENT_PYTHON"] = sys.executable' in source, (
-        "server.py must set OUROBOROS_AGENT_PYTHON to sys.executable"
+    # The injection must (a) reference sys.executable as the source value,
+    # (b) assign into os.environ under the canonical key, and (c) handle
+    # the None/empty case (sys.executable can be None in exotic embedded
+    # scenarios; assigning None to os.environ raises TypeError).
+    assert 'os.environ["OUROBOROS_AGENT_PYTHON"]' in source, (
+        "server.py must assign into os.environ['OUROBOROS_AGENT_PYTHON']"
+    )
+    assert "sys.executable" in source, (
+        "server.py must reference sys.executable as the interpreter source"
+    )
+    # Guard against the None / empty-string case: assignment must be gated.
+    assert "isinstance" in source and "_agent_python" in source, (
+        "server.py must guard sys.executable being None/empty before "
+        "assigning to os.environ (would TypeError in exotic embed scenarios)"
     )
 
 
@@ -109,6 +121,45 @@ def test_preflight_test_runner_uses_sys_executable():
     )
     assert "sys.executable" in source, (
         "preflight must reference sys.executable for the interpreter choice"
+    )
+
+
+def test_git_pre_push_tests_uses_sys_executable():
+    """ouroboros/tools/git.py::_run_pre_push_tests must invoke
+    [sys.executable | OUROBOROS_AGENT_PYTHON | 'python3', '-m', 'pytest', ...]
+    — not bare ['pytest', ...]. Regression guard for v5.3.5 sibling fix.
+    """
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    source = (repo_root / "ouroboros" / "tools" / "git.py").read_text(encoding="utf-8")
+    assert '["pytest", "tests/"' not in source, (
+        "git.py::_run_pre_push_tests must not use bare ['pytest', ...] — "
+        "Pattern #4 regression"
+    )
+    assert "sys.executable" in source, (
+        "git.py must reference sys.executable for interpreter resolution"
+    )
+    assert "OUROBOROS_AGENT_PYTHON" in source, (
+        "git.py must reference OUROBOROS_AGENT_PYTHON env var as fallback"
+    )
+
+
+def test_shell_validation_uses_sys_executable():
+    """ouroboros/tools/shell.py::_run_validation must invoke
+    [sys.executable | OUROBOROS_AGENT_PYTHON | 'python3', '-m', 'pytest', ...]
+    — not bare ['python', '-m', 'pytest', ...]. Regression guard for v5.3.5.
+    """
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    source = (repo_root / "ouroboros" / "tools" / "shell.py").read_text(encoding="utf-8")
+    assert '["python", "-m", "pytest"' not in source, (
+        "shell.py::_run_validation must not use bare ['python', '-m', 'pytest', ...] — "
+        "Pattern #4 regression (note: 'python' without the '3' suffix is absent in "
+        "packaged bundles)"
+    )
+    assert "sys.executable" in source, (
+        "shell.py must reference sys.executable for interpreter resolution"
+    )
+    assert "OUROBOROS_AGENT_PYTHON" in source, (
+        "shell.py must reference OUROBOROS_AGENT_PYTHON env var as fallback"
     )
 
 
