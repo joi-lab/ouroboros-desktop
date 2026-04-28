@@ -1,4 +1,4 @@
-# Ouroboros v5.3.5 — Architecture & Reference
+# Ouroboros v5.3.6 — Architecture & Reference
 
 This document describes every component, page, button, API endpoint, and data flow.
 It is the single source of truth for how the system works. Keep it updated.
@@ -1527,27 +1527,47 @@ Settings file: `~/Ouroboros/data/settings.json`. File-locked for concurrent acce
 
 `server.py` sets `OUROBOROS_AGENT_PYTHON = sys.executable` at import time,
 right after `sys.path.insert(0, str(REPO_DIR))` and before any supervisor /
-worker / logging initialization. This guarantees every child process — workers
-forked by the supervisor, subprocesses spawned by `run_shell`, advisory test
-preflight, the A2A server, consolidation daemon threads — inherits a stable
-handle pointing at the same Python that started Ouroboros.
+worker / logging initialization. The assignment is **guarded since v5.3.5**:
+it runs only when `sys.executable` is a non-empty string (`isinstance(..., str)
+and value`) — in exotic embedded or frozen configurations where `sys.executable`
+can be `None` or `""`, the env var is deliberately left unset, so child processes
+fall back to their own `sys.executable` detection rather than inheriting a
+useless value or crashing the server at import with `TypeError`. When the
+guard accepts the value (the normal case on macOS/Linux/Windows/Docker), every
+child process — workers forked by the supervisor, subprocesses spawned by
+`run_shell`, advisory test preflight, the A2A server, consolidation daemon
+threads — inherits a stable handle pointing at the same Python that started
+Ouroboros.
 
 Why this exists: before v5.3.4, tools like `run_shell ["pytest", ...]` and the
 advisory test preflight looked up `pytest` / `python3` on PATH. In packaged
 `.app` / `.tar.gz` / `.zip` bundles, PATH is the system PATH, not the bundle's,
 so the agent would either not find an interpreter at all or find one lacking
 agent dependencies (`dulwich`, `starlette`, `openai`, `claude-agent-sdk`,
-`pytest`). The fix exposes the agent's own interpreter path so subprocesses
+`pytest`). v5.3.4 landed the fix at the primary call site (advisory
+preflight in `review_helpers._run_review_preflight_tests`); v5.3.5 extended
+it to the two remaining sibling call sites in the commit/validation gate
+(`ouroboros/tools/git.py::_run_pre_push_tests` and
+`ouroboros/tools/shell.py::_run_validation`) and added the None-guard
+above. The fix exposes the agent's own interpreter path so subprocesses
 can be invoked as:
 
 ```python
 subprocess.run([os.environ["OUROBOROS_AGENT_PYTHON"], "-m", "pytest", ...])
 ```
 
-The authoritative runtime layer — `review_helpers._run_review_preflight_tests`
-— uses `sys.executable` directly (equivalent value, no env-var lookup needed).
-The env var exists specifically for subprocesses and agent shell calls that
-don't have Python-level access to `sys.executable`.
+The three authoritative runtime layers that spawn pytest subprocesses —
+`review_helpers._run_review_preflight_tests` (advisory preflight),
+`git.py::_run_pre_push_tests` (pre-push test runner inside `repo_commit`),
+and `shell.py::_run_validation` (post-edit validator after
+`claude_code_edit` / `repo_write`) — use a unified fallback chain
+`agent_python = sys.executable or os.environ.get("OUROBOROS_AGENT_PYTHON") or "python3"`.
+Primary source is the live `sys.executable` of the worker process (always
+populated in normal Python invocations); fallback is the env var injected
+by server.py; last-resort is the literal `"python3"` for the rare
+embedded case where both are unavailable. The env var exists specifically
+for this fallback chain and for non-Python agent shell calls that don't
+have Python-level access to `sys.executable`.
 
 **Resolution by environment:**
 - **Packaged builds**: `python-standalone/bin/python3` (mac/linux) or
@@ -1557,14 +1577,21 @@ don't have Python-level access to `sys.executable`.
 - **Docker**: the container's `/usr/local/bin/python3` (from
   `python:3.10-slim`), which has `requirements.txt` installed.
 
-**Override policy:** `server.py` only sets the var if it's not already present,
-preserving explicit overrides from tests / CI debugging. Source of truth is
-`sys.executable`; the env var is a transport mechanism.
+**Override policy:** `server.py` only sets the var if it's not already present
+AND `sys.executable` passes the non-empty-string guard — so explicit overrides
+from tests / CI debugging are preserved, and a degraded embedded runtime
+doesn't clobber the expected behaviour. Source of truth is `sys.executable`;
+the env var is a transport mechanism.
 
 Related: `requirements.txt` pins `pytest>=7.0` so the bundled Python ships
 with pytest available for the advisory preflight. See Pattern Register #4
-(`data/memory/knowledge/patterns.md`) for the two-strike history and
-`tests/test_agent_python_env.py` for the regression guard.
+(`data/memory/knowledge/patterns.md`) for the two-strike history —
+architectural fix landed v5.3.4 at the primary call site, sibling call sites
+plus None-guard closed v5.3.5 — and `tests/test_agent_python_env.py` for the
+regression guards (`test_server_py_injects_agent_python_env_var`,
+`test_preflight_test_runner_uses_sys_executable`,
+`test_git_pre_push_tests_uses_sys_executable`,
+`test_shell_validation_uses_sys_executable`).
 
 ### Default settings
 
