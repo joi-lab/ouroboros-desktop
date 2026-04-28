@@ -104,6 +104,89 @@ def test_data_read_existing_file_still_read_verbatim(tmp_path):
     assert "DATA_NOT_YET_CREATED" not in result
 
 
+def test_data_read_propagates_non_filenotfound_errors(tmp_path, monkeypatch):
+    """v5.3.2 fix (TOCTOU + error-masking bug caught by triad review):
+    only FileNotFoundError triggers the sentinel. Other OS errors —
+    PermissionError, IsADirectoryError, general OSError — must propagate
+    naturally per the tool contract, not be silently swallowed into the
+    DATA_NOT_YET_CREATED sentinel branch.
+
+    The pre-v5.3.2 implementation used `if not target.exists(): return sentinel`
+    which (a) swallowed PermissionError as "missing" and (b) introduced a
+    TOCTOU race between exists() and read_text(). This test pins the correct
+    FileNotFoundError-specific behaviour.
+    """
+    import pytest
+    from unittest.mock import MagicMock
+    from ouroboros.tools.core import _data_read
+    from ouroboros.tools.registry import ToolContext
+    import ouroboros.tools.core as core_mod
+
+    ctx = MagicMock(spec=ToolContext)
+    ctx.drive_root = tmp_path
+
+    def _drive_path(p):
+        import ouroboros.utils as u
+        return tmp_path / u.safe_relpath(p)
+    ctx.drive_path.side_effect = _drive_path
+
+    # Simulate a read that raises PermissionError. This can happen on
+    # real filesystems when the file exists but the process lacks read
+    # permission (e.g. root-owned files after a permissions change).
+    def _raise_permission(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(core_mod, "read_text", _raise_permission)
+
+    with pytest.raises(PermissionError):
+        _data_read(ctx, "memory/scratchpad.md")
+
+    # IsADirectoryError also must propagate — calling data_read on a
+    # path that resolves to a directory is a caller bug, not a
+    # "file not created yet" condition.
+    def _raise_is_dir(path):
+        raise IsADirectoryError(21, "Is a directory", str(path))
+
+    monkeypatch.setattr(core_mod, "read_text", _raise_is_dir)
+
+    with pytest.raises(IsADirectoryError):
+        _data_read(ctx, "memory/knowledge/")
+
+
+def test_data_read_sentinel_narrower_for_non_memory_paths(tmp_path):
+    """v5.3.2 wording fix: the cold-start sentinel should not overclaim
+    lazy-creation semantics for paths outside memory/.
+
+    memory/knowledge/*.md, memory/identity.md, memory/scratchpad.md are
+    genuinely created lazily on first write. Paths like logs/nonexistent.jsonl
+    or state/nonexistent.json are not — they are simply missing, and an
+    agent that assumed lazy-creation for those would produce incorrect
+    behaviour.
+    """
+    from unittest.mock import MagicMock
+    from ouroboros.tools.core import _data_read
+    from ouroboros.tools.registry import ToolContext
+
+    ctx = MagicMock(spec=ToolContext)
+    ctx.drive_root = tmp_path
+
+    def _drive_path(p):
+        import ouroboros.utils as u
+        return tmp_path / u.safe_relpath(p)
+    ctx.drive_path.side_effect = _drive_path
+
+    # memory/ path: should mention lazy-creation.
+    mem_result = _data_read(ctx, "memory/knowledge/patterns.md")
+    assert "DATA_NOT_YET_CREATED" in mem_result
+    assert "lazily on first write" in mem_result
+
+    # Non-memory path: should NOT claim lazy-creation.
+    non_mem_result = _data_read(ctx, "logs/nonexistent.jsonl")
+    assert "DATA_NOT_YET_CREATED" in non_mem_result
+    assert "lazily on first write" not in non_mem_result
+    assert "not guaranteed" in non_mem_result
+
+
 def test_repo_read_prompt_file_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "p" * 90000

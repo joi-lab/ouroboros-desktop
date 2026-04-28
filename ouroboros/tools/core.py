@@ -56,23 +56,47 @@ def _repo_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
 
 def _data_read(ctx: ToolContext, path: str) -> str:
     # Pattern Register #2 (Cold-start missing-artifact reads) — architectural fix.
-    # Memory artifacts like memory/knowledge/*.md, memory/identity.md, and
-    # memory/scratchpad.md are created lazily on first write. A cold-start
-    # read raised a bare FileNotFoundError, which bubbled as an opaque tool
-    # error and cost the agent several rounds rediscovering the empty state.
-    # Return a clear sentinel instead so the agent can branch on it.
-    # Non-FileNotFound I/O errors still raise naturally.
+    # A cold-start read on a not-yet-created path raised a bare
+    # FileNotFoundError, which bubbled as an opaque tool error and cost
+    # the agent several rounds rediscovering the empty state. Return a
+    # clear sentinel instead so the agent can branch on it.
+    #
+    # Important: catch FileNotFoundError specifically, not Path.exists().
+    # Using exists()-then-read has two defects:
+    #   (a) TOCTOU window — file can disappear between exists() and read.
+    #   (b) exists() returns False for some stat/access errors, and
+    #       PermissionError / IsADirectoryError / general OSError would
+    #       then silently hit the sentinel branch, hiding real I/O faults.
+    # Only FileNotFoundError means "the file is genuinely not there" —
+    # everything else must still raise naturally per the tool contract.
+    #
+    # Sentinel wording: memory artifacts under memory/ are created lazily
+    # on first write, which is a genuine contract. For other paths (e.g.
+    # logs/, state/), we only know "not yet there" — not that lazy
+    # creation is guaranteed by the system. The sentinel branches on
+    # path prefix to avoid overclaiming lazy-creation semantics.
     target = ctx.drive_path(path)
-    if not target.exists():
+    try:
+        return read_text(target)
+    except FileNotFoundError:
+        if path.replace("\\", "/").startswith("memory/"):
+            explanation = (
+                "Memory artifacts under memory/knowledge/, memory/identity.md, "
+                "memory/scratchpad.md, and similar paths are created lazily "
+                "on first write. Treat this as an empty/absent state and "
+                "proceed with initialization if that is the task."
+            )
+        else:
+            explanation = (
+                "This path does not exist yet. Treat it as an empty/absent "
+                "state. Lazy-creation is not guaranteed for paths outside "
+                "memory/ — if this path was expected to exist, verify it "
+                "was written correctly."
+            )
         return (
             f"⚠️ DATA_NOT_YET_CREATED: {path}\n\n"
-            "This file does not exist yet. Memory artifacts under "
-            "memory/knowledge/, memory/identity.md, memory/scratchpad.md, and "
-            "similar paths are created lazily on first write. Treat this as "
-            "an empty/absent state and proceed with initialization if that is "
-            "the task. Use data_list to confirm what currently exists."
+            f"{explanation} Use data_list to confirm what currently exists."
         )
-    return read_text(target)
 
 
 def _data_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
