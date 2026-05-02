@@ -795,6 +795,30 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        # Local-LLM compatibility layer — Phase 1 master switch + profile
+        # selection. Without these, settings.json values never reach the
+        # agent's env and the compat layer stays dormant indefinitely.
+        "OUROBOROS_COMPAT_ENABLED", "OUROBOROS_COMPAT_PROFILE",
+        # Prompt-mode ladder (sparse/medium/dense) — agent.py reads this
+        # per-task; without env propagation the profile-driven default
+        # never engages.
+        "OUROBOROS_PROMPT_MODE",
+        # Resume-layer Phase 2 flag — auto-prepend task-checkpoint when
+        # the user signals a continuation in the prompt.
+        "OUROBOROS_RESUME_DETECTION",
+        # Productivity-aware wall-clock + dedup escalation knobs.
+        "OUROBOROS_WALL_BUDGET_SEC", "OUROBOROS_WALL_BUDGET_MAX_EXTENSIONS",
+        "OUROBOROS_ESCALATION_DISABLED",
+        # Phase-1 perf-audit telemetry + cache controls.
+        "OUROBOROS_DEBUG_PROMPT_HASH", "OUROBOROS_DISABLE_CONTEXT_CACHE",
+        # Bounded gate retries + checkpoint cadence overrides.
+        "OUROBOROS_TOOL_DEDUP_CAP", "OUROBOROS_GATE_RETRY_CAP",
+        "OUROBOROS_CHECKPOINT_INTERVAL",
+        # Diff-aware preflight kill-switch.
+        "OUROBOROS_PREFLIGHT_DIFF_AWARE",
+        # OpenAI-compatible context-length explicit override (auto-probe
+        # via /api/v0/models is the preferred path; this is the fallback).
+        "OPENAI_COMPATIBLE_CONTEXT_LENGTH",
     ]
     for k in env_keys:
         val = settings.get(k)
