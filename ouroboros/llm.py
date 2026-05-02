@@ -1147,31 +1147,35 @@ class LLMClient:
         available_tokens = max(256, available_tokens - tools_overhead_tokens)
         target_chars = available_tokens * 3
 
-        total_tokens_estimate = sum(_msg_tokens_estimate(m) for m in messages)
-        total_chars = sum(_msg_chars(m) for m in messages)
-
-        if total_chars <= target_chars and total_tokens_estimate <= available_tokens:
-            return
+        # Allocate a FIXED share of the budget to the system message so the
+        # truncation point doesn't shift each round as dialogue grows. This
+        # is what enables LM Studio's KV-cache prefix to stay stable across
+        # rounds. With variable allowed = target_chars - other_chars, every
+        # round produced different system bytes → 0% cache hits.
+        # SYSTEM_BUDGET_SHARE leaves 15% for dialogue; if dialogue grows
+        # past that, LM Studio's middle-truncation handles it without
+        # busting the system prefix.
+        SYSTEM_BUDGET_SHARE = 0.85
+        allowed = max(512, int(target_chars * SYSTEM_BUDGET_SHARE))
 
         for msg in messages:
             if msg.get("role") != "system":
                 continue
             content = msg.get("content")
             if isinstance(content, str):
-                other_chars = total_chars - len(content)
-                allowed = max(512, target_chars - other_chars)
-                if len(content) > allowed:
-                    msg["content"] = content[:allowed] + "\n\n[Context truncated to fit model window]"
-                    log.info("Truncated system message from %d to %d chars for %d-token context",
-                             len(content), allowed, ctx_len)
+                if len(content) <= allowed:
+                    return
+                msg["content"] = content[:allowed] + "\n\n[Context truncated to fit model window]"
+                log.info(
+                    "Truncated system message from %d to %d chars (fixed-share=%.2f, ctx=%d)",
+                    len(content), allowed, SYSTEM_BUDGET_SHARE, ctx_len,
+                )
                 return
             if isinstance(content, list):
                 system_chars = sum(
                     len(str(b.get("text", ""))) if isinstance(b, dict) else len(str(b))
                     for b in content
                 )
-                other_chars = total_chars - system_chars
-                allowed = max(512, target_chars - other_chars)
                 if system_chars <= allowed:
                     return
                 blocks = list(content)

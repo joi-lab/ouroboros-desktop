@@ -835,7 +835,66 @@ def build_llm_messages(
     ]
 
     messages, cap_info = apply_message_token_soft_cap(messages, soft_cap_tokens)
+
+    # Debug-only prompt-hash telemetry. Emits a single ``prompt_hash`` event
+    # per round with the SHA-256 of the assembled system message. Two
+    # consecutive identical hashes mean the prefix is byte-stable — the
+    # necessary condition for any KV-cache reuse the runtime might offer.
+    # Default on; disable via OUROBOROS_DEBUG_PROMPT_HASH=false. Cheap.
+    _hash_disabled = (
+        os.environ.get("OUROBOROS_DEBUG_PROMPT_HASH", "true") or "true"
+    ).strip().lower() in ("false", "0", "no", "off")
+    if not _hash_disabled:
+        try:
+            _emit_prompt_hash_event(env, task, messages, cap_info)
+        except Exception:
+            log.debug("Failed to emit prompt_hash event", exc_info=True)
+
     return messages, cap_info
+
+
+def _emit_prompt_hash_event(
+    env: Any,
+    task: Dict[str, Any],
+    messages: List[Dict[str, Any]],
+    cap_info: Dict[str, Any],
+) -> None:
+    """Hash the assembled system message and append a ``prompt_hash`` row.
+
+    Writes to a dedicated ``logs/prompt_hashes.jsonl`` rather than
+    ``events.jsonl`` because ``build_recent_sections`` reads events.jsonl
+    tail into the dynamic block — writing the hash event there would create
+    a self-invalidating cycle: the hash event would itself change the next
+    round's prompt and bust the prefix it was meant to verify.
+    """
+    import hashlib
+    from ouroboros.utils import append_jsonl
+
+    sys_msg = next((m for m in messages if m.get("role") == "system"), None)
+    if not sys_msg:
+        return
+    content = sys_msg.get("content")
+    if isinstance(content, list):
+        text = "".join(
+            (b.get("text", "") if isinstance(b, dict) else str(b))
+            for b in content
+        )
+    else:
+        text = str(content or "")
+    digest_full = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    payload = {
+        "ts": utc_now_iso(),
+        "type": "prompt_hash",
+        "task_id": str(task.get("id", "") or ""),
+        "task_type": str(task.get("type", "") or ""),
+        "system_msg_sha256": digest_full[:16],
+        "system_msg_chars": len(text),
+        "prompt_mode": cap_info.get("prompt_mode", ""),
+    }
+    try:
+        append_jsonl(env.drive_path("logs/prompt_hashes.jsonl"), payload)
+    except Exception:
+        log.debug("append_jsonl prompt_hash failed", exc_info=True)
 
 
 def apply_message_token_soft_cap(
