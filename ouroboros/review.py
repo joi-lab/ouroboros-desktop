@@ -74,7 +74,7 @@ MAX_FUNCTION_LINES = 300
 # larger than the pre-release scope; the ceiling bump stays consistent
 # with how MAX_TOTAL_FUNCTIONS has grown through v4.40→v4.47 as each
 # phase shipped.
-MAX_TOTAL_FUNCTIONS = 1693  # v5.7.0: skills/widget capability expansion (skill_preflight, runtime-info/settings-section APIs, module-widget bridge, deps lifecycle, dashboard/widget UI recovery, interpreter-aware shell scan) adds real helper surfaces; next broad UI/skills pass should pay this down via module consolidation.
+MAX_TOTAL_FUNCTIONS = 1696  # v5.7.0 (1693) + 3 local-LLM compat helpers (_normalize_openai_compatible_base_url, _probe_openai_compatible_context_length, _assert_response_well_formed). ProviderResponseError is a class so doesn't count.
 # v4.40.0 adds claude_advisory_review.py to the grandfathered set: the file
 # grew to 1731 lines across v4.37-v4.39 (plan_task quorum + direct-provider
 # fallback + convergence rule + syntax preflight + reflection decoupling).

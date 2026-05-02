@@ -23,8 +23,49 @@ log = logging.getLogger(__name__)
 DEFAULT_LIGHT_MODEL = "anthropic/claude-sonnet-4.6"
 
 
+_LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _normalize_openai_compatible_base_url(url: str) -> str:
+    """Append ``/v1`` to localhost OpenAI-compatible base URLs that lack a version.
+
+    LM Studio and most OpenAI-compatible local servers expose their endpoints
+    under ``/v1/...``; a base URL of ``http://127.0.0.1:1234`` reaches a 200-OK
+    "Unexpected endpoint" page that the OpenAI SDK silently parses as an empty
+    response. Cloud-hosted compatible URLs are left alone — they may use
+    different path prefixes (``/api``, ``/openai``, etc.).
+    """
+    if not url:
+        return url
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    host = (parsed.hostname or "").lower()
+    if host not in _LOCALHOST_HOSTS:
+        return url
+    path = (parsed.path or "").rstrip("/")
+    if path == "":
+        return urlunparse(parsed._replace(path="/v1"))
+    return url
+
+
 class LocalContextTooLargeError(RuntimeError):
     """Raised when a local model cannot fit context without silent truncation."""
+
+
+class ProviderResponseError(RuntimeError):
+    """Raised when an OpenAI-compatible provider returns a malformed response.
+
+    Some providers (notably LM Studio) reply with HTTP 200 plus an ``error``
+    body when called against the wrong endpoint — e.g. POST to ``/chat/completions``
+    instead of ``/v1/chat/completions``. The OpenAI SDK will happily parse those
+    responses; without this check the missing ``choices`` field surfaces as a
+    silent "empty response" downstream, masking the real (usually trivial)
+    misconfiguration. Raise loudly so the operator sees the provider's own
+    error message in the events log.
+    """
 
 
 def _estimate_message_chars(messages: List[Dict[str, Any]]) -> int:
@@ -234,6 +275,14 @@ class LLMClient:
     _SUPPORTED_PARAMS_CACHE: Dict[str, set] = {}
     _SUPPORTED_PARAMS_FETCHED: bool = False
 
+    # Per-process cache of LM Studio loaded context lengths, keyed by
+    # (base_url, resolved_model). Populated lazily by
+    # ``_probe_openai_compatible_context_length`` on the first request that
+    # resolves to an openai-compatible target without an explicit budget.
+    # ``-1`` means "we tried and couldn't determine it" so we don't probe
+    # again every call.
+    _OPENAI_COMPATIBLE_CTX_CACHE: Dict[Tuple[str, str], int] = {}
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -250,6 +299,74 @@ class LLMClient:
         self._local_port: Optional[int] = None
         self._remote_clients: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], Any] = {}
         self._async_remote_clients: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], Any] = {}
+
+    @classmethod
+    def _probe_openai_compatible_context_length(
+        cls,
+        base_url: str,
+        api_key: str,
+        resolved_model: str,
+    ) -> int:
+        """Ask an openai-compatible server for the loaded context length of a model.
+
+        Hits LM Studio's enhanced ``/api/v0/models`` endpoint, which exposes
+        ``loaded_context_length`` per model. Caches the result per
+        (base_url, model) for the lifetime of the process. Returns ``0`` when
+        the probe fails (older LM Studio, Ollama, generic OpenAI gateways);
+        the resolver then falls back to env-var configuration.
+
+        Cached value of ``-1`` is treated as "tried, gave up" so we don't
+        re-probe on every chat call.
+        """
+        key = (base_url, resolved_model)
+        cached = cls._OPENAI_COMPATIBLE_CTX_CACHE.get(key)
+        if cached is not None:
+            return cached if cached > 0 else 0
+        try:
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(base_url)
+            root = urlunparse(parsed._replace(path="/api/v0/models", query="", fragment=""))
+        except Exception as exc:
+            log.info(
+                "LM Studio context-probe URL parse failed for %r: %s",
+                base_url, exc,
+            )
+            cls._OPENAI_COMPATIBLE_CTX_CACHE[key] = -1
+            return 0
+        try:
+            import requests
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            resp = requests.get(root, headers=headers, timeout=3)
+            if resp.status_code != 200:
+                log.info(
+                    "LM Studio context-probe %s returned HTTP %d — caching "
+                    "as 'tried/gave-up'; falling back to env var if set",
+                    root, resp.status_code,
+                )
+                cls._OPENAI_COMPATIBLE_CTX_CACHE[key] = -1
+                return 0
+            payload = resp.json()
+        except Exception as exc:
+            log.info(
+                "LM Studio context-probe %s failed (%s: %s); falling back "
+                "to env var if set",
+                root, type(exc).__name__, exc,
+            )
+            cls._OPENAI_COMPATIBLE_CTX_CACHE[key] = -1
+            return 0
+        for entry in (payload.get("data") or []):
+            if entry.get("id") == resolved_model:
+                ctx = entry.get("loaded_context_length") or 0
+                try:
+                    ctx_int = max(0, int(ctx))
+                except (TypeError, ValueError):
+                    ctx_int = 0
+                cls._OPENAI_COMPATIBLE_CTX_CACHE[key] = ctx_int if ctx_int > 0 else -1
+                return ctx_int
+        cls._OPENAI_COMPATIBLE_CTX_CACHE[key] = -1
+        return 0
 
     @classmethod
     def _fetch_openrouter_capabilities(cls) -> None:
@@ -368,12 +485,41 @@ class LLMClient:
             compatible_base_url = (os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
             legacy_base_url = (os.environ.get("OPENAI_BASE_URL", "") or "").strip()
             legacy_key = (os.environ.get("OPENAI_API_KEY", "") or "").strip()
+            api_key = compatible_key or legacy_key
+            base_url = _normalize_openai_compatible_base_url(compatible_base_url or legacy_base_url)
+            # Local OpenAI-compatible servers (LM Studio, Ollama, …) reject prompts
+            # larger than the model's loaded context window with a 400 error.
+            # Resolution order:
+            #   1. Explicit env: OPENAI_COMPATIBLE_CONTEXT_LENGTH
+            #   2. Auto-probe LM Studio's /api/v0/models for the loaded context
+            #   3. Fallback env: LOCAL_MODEL_CONTEXT_LENGTH
+            # 0 / unset = no enforcement.
+            ctx_explicit = (os.environ.get("OPENAI_COMPATIBLE_CONTEXT_LENGTH", "") or "").strip()
+            ctx_fallback = (os.environ.get("LOCAL_MODEL_CONTEXT_LENGTH", "") or "").strip()
+            context_length = 0
+            if ctx_explicit:
+                try:
+                    context_length = max(0, int(ctx_explicit))
+                except (TypeError, ValueError):
+                    context_length = 0
+            if context_length == 0 and base_url and resolved_model:
+                probed = self._probe_openai_compatible_context_length(
+                    base_url, api_key, resolved_model,
+                )
+                if probed > 0:
+                    context_length = probed
+            if context_length == 0 and ctx_fallback:
+                try:
+                    context_length = max(0, int(ctx_fallback))
+                except (TypeError, ValueError):
+                    context_length = 0
             return {
                 "provider": provider,
                 "resolved_model": resolved_model,
                 "usage_model": usage_model,
-                "api_key": compatible_key or legacy_key,
-                "base_url": compatible_base_url or legacy_base_url,
+                "api_key": api_key,
+                "base_url": base_url,
+                "context_length": context_length,
                 "default_headers": {},
                 "supports_openrouter_extensions": False,
                 "supports_generation_cost": False,
@@ -740,6 +886,7 @@ class LLMClient:
             raise last_exc
 
         resp_dict = resp.model_dump()
+        self._assert_response_well_formed(resp_dict, {"provider": "local", "base_url": "llama-cpp-python"})
         usage = resp_dict.get("usage") or {}
         choices = resp_dict.get("choices") or [{}]
         msg = (choices[0] if choices else {}).get("message") or {}
@@ -754,6 +901,40 @@ class LLMClient:
 
         usage["cost"] = 0.0
         return msg, usage
+
+    @staticmethod
+    def _assert_response_well_formed(resp_dict: Dict[str, Any], target: Dict[str, Any]) -> None:
+        """Raise ``ProviderResponseError`` if the provider returned a malformed body.
+
+        Two failure shapes are detected:
+          1. ``resp_dict["error"]`` set — provider returned an error envelope at
+             HTTP 200 (LM Studio does this for wrong-endpoint requests).
+          2. ``resp_dict["choices"]`` missing or empty — the OpenAI SDK accepted
+             the response but it carries no completion. Almost always means the
+             call landed on the wrong base URL or the SDK silently dropped a
+             non-OpenAI-shaped payload.
+        """
+        if not isinstance(resp_dict, dict):
+            raise ProviderResponseError(
+                f"Provider response was not a JSON object (provider={target.get('provider')!r})"
+            )
+        err = resp_dict.get("error")
+        if err:
+            if isinstance(err, dict):
+                err_text = str(err.get("message") or err)
+            else:
+                err_text = str(err)
+            raise ProviderResponseError(
+                f"Provider {target.get('provider')!r} returned error: {err_text} "
+                f"(base_url={target.get('base_url')!r})"
+            )
+        choices = resp_dict.get("choices")
+        if not choices:
+            raise ProviderResponseError(
+                f"Provider {target.get('provider')!r} returned no choices "
+                f"(base_url={target.get('base_url')!r}); check that the base URL "
+                f"points at an OpenAI-compatible endpoint (LM Studio needs a /v1 suffix)"
+            )
 
     @staticmethod
     def _strip_reasoning_wrappers(text: str):
@@ -1419,6 +1600,7 @@ class LLMClient:
         the entire call chain free of SCDynamicStore / CFPreferences access.
         Cost is still estimated from token counts via the local pricing table.
         """
+        self._assert_response_well_formed(resp_dict, target)
         usage = resp_dict.get("usage") or {}
         choices = resp_dict.get("choices") or [{}]
         msg = (choices[0] if choices else {}).get("message") or {}
