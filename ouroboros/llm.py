@@ -1616,6 +1616,34 @@ class LLMClient:
             # Strip cache_control from message content blocks — non-OpenRouter providers
             # (OpenAI, openai-compatible, Cloud.ru) do not accept this field.
             clean_messages = self._strip_cache_control(messages)
+            sanitized_tools: Optional[List[Dict[str, Any]]] = None
+            tools_overhead_chars = 0
+            if tools:
+                sanitized_tools = [
+                    {k: v for k, v in t.items() if k != "cache_control"}
+                    for t in self._sanitize_chat_completion_tools(tools)
+                ]
+                if sanitized_tools:
+                    try:
+                        tools_overhead_chars = len(
+                            json.dumps(sanitized_tools, ensure_ascii=False)
+                        )
+                    except Exception:
+                        tools_overhead_chars = sum(
+                            len(str(t)) for t in sanitized_tools
+                        )
+
+            # Apply input-side truncation when the target advertises a context
+            # length. Local OpenAI-compatible servers (LM Studio, Ollama) return
+            # a 400 if the prompt exceeds the loaded context — proactive trim
+            # turns that crash into a graceful (and visible) truncation.
+            ctx_len = int(target.get("context_length") or 0)
+            if ctx_len > 0:
+                self._truncate_messages_for_context(
+                    clean_messages, ctx_len, max_tokens,
+                    tools_overhead_chars=tools_overhead_chars,
+                )
+
             kwargs: Dict[str, Any] = {
                 "model": resolved_model,
                 "messages": clean_messages,
@@ -1623,11 +1651,8 @@ class LLMClient:
             }
             if temperature is not None:
                 kwargs["temperature"] = temperature
-            if tools:
-                kwargs["tools"] = [
-                    {k: v for k, v in t.items() if k != "cache_control"}
-                    for t in self._sanitize_chat_completion_tools(tools)
-                ]
+            if sanitized_tools:
+                kwargs["tools"] = sanitized_tools
                 kwargs["tool_choice"] = tool_choice
             return kwargs
 
