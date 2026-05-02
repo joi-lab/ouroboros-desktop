@@ -24,12 +24,58 @@ from ouroboros.memory import Memory
 log = logging.getLogger(__name__)
 
 
-def build_user_content(task: Dict[str, Any]) -> Any:
-    """Build user message content. Supports text + optional image."""
+def _maybe_prepend_resume_hint(env: Any, task: Dict[str, Any], text: str) -> str:
+    """If ``OUROBOROS_RESUME_DETECTION=true`` and the user's text contains
+    a continuation signal AND a recent checkpoint exists for this chat,
+    prepend the checkpoint as a resume-hint block. Otherwise return text
+    unchanged. Behaviour is dormant by default — flag must be explicitly
+    enabled in settings.json or env."""
+    flag_raw = (os.environ.get("OUROBOROS_RESUME_DETECTION", "") or "").strip().lower()
+    if flag_raw not in ("true", "1", "yes", "on"):
+        return text
+    try:
+        from ouroboros.task_checkpoint import (
+            build_resume_hint_block,
+            detect_resume_signal,
+            latest_checkpoint_for_chat,
+        )
+    except Exception:
+        return text
+    if not detect_resume_signal(text):
+        return text
+    chat_id = task.get("chat_id")
+
+    class _DriveOnly:
+        def __init__(self, fn):
+            self.drive_path = fn
+    drive_path_fn = getattr(env, "drive_path", None)
+    if drive_path_fn is None:
+        return text
+    cp = latest_checkpoint_for_chat(_DriveOnly(drive_path_fn), chat_id=chat_id)
+    if cp is None:
+        return text
+    block = build_resume_hint_block(cp)
+    if not block:
+        return text
+    return block + text
+
+
+def build_user_content(task: Dict[str, Any], env: Any = None) -> Any:
+    """Build user message content. Supports text + optional image.
+
+    If ``env`` is provided AND ``OUROBOROS_RESUME_DETECTION=true`` AND the
+    text matches a continuation signal AND a recent checkpoint exists for
+    this chat, the checkpoint is prepended as a resume-hint. Otherwise no
+    behaviour change.
+    """
     text = task.get("text", "")
     image_b64 = task.get("image_base64")
     image_mime = task.get("image_mime", "image/jpeg")
     image_caption = task.get("image_caption", "")
+
+    # Resume-hint injection (Phase 2; flag-gated, dormant by default).
+    if env is not None:
+        text = _maybe_prepend_resume_hint(env, task, text)
 
     if not image_b64:
         # Return fallback text if both text and image are empty

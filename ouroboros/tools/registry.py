@@ -482,6 +482,21 @@ class ToolContext:
     _review_iteration_count: int = 0
     _review_history: list = field(default_factory=list)
 
+    # Compatibility profile (ouroboros/compat.py) — captured once per task in
+    # agent.py::run_task, read by loop.py / loop_tool_execution.py to gate
+    # local-LLM-friendly behaviour. ``None`` = legacy / dormant default.
+    compat_profile: Optional[Any] = None
+    # Per-task counters for tool-call dedup and gate-retry caps.
+    # Reset in agent.py::run_task at the top of each task.
+    _dedup_counts: Dict[str, int] = field(default_factory=dict)
+    _gate_failure_counts: Dict[Any, int] = field(default_factory=dict)
+    # Phase 8 escalation state (set by ouroboros/escalation.py).
+    _dedup_ping_counts: Dict[str, int] = field(default_factory=dict)
+    _wall_budget_breached: bool = False
+    _wall_budget_extensions: int = 0
+    # Resume-layer Phase 1 state — flag for at-most-once auto-snapshot per task.
+    _task_checkpoint_written: bool = False
+
     def repo_path(self, rel: str) -> pathlib.Path:
         resolved = (self.repo_dir / safe_relpath(rel)).resolve()
         try:
