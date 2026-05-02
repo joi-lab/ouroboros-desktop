@@ -739,11 +739,35 @@ def build_llm_messages(
     task: Dict[str, Any],
     review_context_builder: Optional[Any] = None,
     soft_cap_tokens: int = 200_000,
+    prompt_mode: str = "dense",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Build the full LLM message context for a task.
 
+    ``prompt_mode``:
+      ``"dense"`` (default): include every source — full project docs,
+      knowledge base index, patterns, deep review, recent JSONL tails. Use
+      with cloud models or local models with generous context windows.
+
+      ``"medium"``: drop the three heaviest sources only — README.md,
+      KB index dump, deep review. Keep DEVELOPMENT.md, CHECKLISTS.md,
+      patterns, backlog, review status, recent JSONL tails. Intended as
+      an escalation knob when ``"sparse"`` leaves the agent underfed but
+      ``"dense"`` overflows the loaded context window.
+
+      ``"sparse"``: keep only the constitutional core and live state — drops
+      DEVELOPMENT/README/CHECKLISTS, KB index dump, patterns, deep review,
+      backlog, review status, and recent JSONL tails. The agent can still
+      reach those via ``knowledge_*`` / ``data_read`` tools when needed.
+      Use with small-context local models (LM Studio loaded at 32k, etc.)
+      or as fallback after a context-overflow error.
+
     Returns (messages, cap_info) tuple.
     """
+    _mode = str(prompt_mode or "dense").lower()
+    if _mode not in ("dense", "medium", "sparse"):
+        _mode = "dense"
+    sparse = (_mode == "sparse")
+    medium = (_mode == "medium")
     task_type = str(task.get("type") or "user")
     base_prompt = safe_read(
         env.repo_path("prompts/SYSTEM.md"),
@@ -751,9 +775,11 @@ def build_llm_messages(
     )
     bible_md = safe_read(env.repo_path("BIBLE.md"))
     arch_md = safe_read(env.repo_path("docs/ARCHITECTURE.md"))
-    dev_guide_md = safe_read(env.repo_path("docs/DEVELOPMENT.md"))
-    readme_md = safe_read(env.repo_path("README.md"))
-    checklists_md = safe_read(env.repo_path("docs/CHECKLISTS.md"))
+    # medium drops only the three heaviest sources (README, KB, deep_review).
+    # Keep DEVELOPMENT and CHECKLISTS — they shape day-to-day judgment.
+    dev_guide_md = "" if sparse else safe_read(env.repo_path("docs/DEVELOPMENT.md"))
+    readme_md = "" if (sparse or medium) else safe_read(env.repo_path("README.md"))
+    checklists_md = "" if sparse else safe_read(env.repo_path("docs/CHECKLISTS.md"))
     state_json = safe_read(env.drive_path("state/state.json"), fallback="{}")
 
     memory.ensure_files()
@@ -770,41 +796,56 @@ def build_llm_messages(
         static_text += "\n\n## README.md\n\n" + readme_md
     if checklists_md.strip():
         static_text += "\n\n## CHECKLISTS.md\n\n" + checklists_md
+    if sparse:
+        static_text += (
+            "\n\n[Sparse prompt mode active — DEVELOPMENT.md, README.md, CHECKLISTS.md, "
+            "KB index, patterns, deep review, backlog, and recent JSONL tails are "
+            "omitted from this round. Use knowledge_list, knowledge_read, and "
+            "data_read to reach them on demand.]"
+        )
+    elif medium:
+        static_text += (
+            "\n\n[Medium prompt mode active — README.md, KB index, and deep review "
+            "are omitted from this round (DEVELOPMENT.md, CHECKLISTS.md, patterns "
+            "remain). Use knowledge_list, knowledge_read, and data_read to reach "
+            "the omitted material on demand.]"
+        )
 
     semi_stable_parts = []
     semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
 
-    kb_index_path = env.drive_path("memory/knowledge/index-full.md")
-    if kb_index_path.exists():
-        kb_index = kb_index_path.read_text(encoding="utf-8")
-        if kb_index.strip():
-            semi_stable_parts.append("## Knowledge base\n\n" + kb_index)
+    if not sparse:
+        # medium drops KB index + deep_review; only sparse drops patterns.
+        kb_index_path = env.drive_path("memory/knowledge/index-full.md")
+        if not medium and kb_index_path.exists():
+            kb_index = kb_index_path.read_text(encoding="utf-8")
+            if kb_index.strip():
+                semi_stable_parts.append("## Knowledge base\n\n" + kb_index)
 
-    patterns_path = env.drive_path("memory/knowledge/patterns.md")
-    try:
-        if patterns_path.exists():
-            patterns_text = patterns_path.read_text(encoding="utf-8")
-            if patterns_text.strip():
-                semi_stable_parts.append(
-                    "## Known error patterns (Pattern Register)\n\n" + patterns_text
-                )
-    except Exception:
-        pass
+        patterns_path = env.drive_path("memory/knowledge/patterns.md")
+        try:
+            if patterns_path.exists():
+                patterns_text = patterns_path.read_text(encoding="utf-8")
+                if patterns_text.strip():
+                    semi_stable_parts.append(
+                        "## Known error patterns (Pattern Register)\n\n" + patterns_text
+                    )
+        except Exception:
+            pass
 
-    # Last deep self-review (if available)
-    deep_review_path = env.drive_path("memory/deep_review.md")
-    try:
-        if deep_review_path.exists():
-            dr_text = deep_review_path.read_text(encoding="utf-8")
-            if dr_text.strip():
-                # Cap at 8K chars to avoid bloating context
-                if len(dr_text) > 8000:
-                    dr_text = dr_text[:8000] + "\n\n[... truncated — full report in memory/deep_review.md]"
-                semi_stable_parts.append(
-                    "## Last Deep Self-Review\n\n" + dr_text
-                )
-    except Exception:
-        pass
+        if not medium:
+            deep_review_path = env.drive_path("memory/deep_review.md")
+            try:
+                if deep_review_path.exists():
+                    dr_text = deep_review_path.read_text(encoding="utf-8")
+                    if dr_text.strip():
+                        if len(dr_text) > 8000:
+                            dr_text = dr_text[:8000] + "\n\n[... truncated — full report in memory/deep_review.md]"
+                        semi_stable_parts.append(
+                            "## Last Deep Self-Review\n\n" + dr_text
+                        )
+            except Exception:
+                pass
 
     semi_stable_text = "\n\n".join(semi_stable_parts)
 
@@ -822,38 +863,39 @@ def build_llm_messages(
         build_runtime_section(env, task),
     ])
 
-    try:
-        from ouroboros.improvement_backlog import format_backlog_digest
-
-        backlog_digest = format_backlog_digest(env.drive_root)
-        if backlog_digest:
-            dynamic_parts.append(backlog_digest)
-    except Exception:
-        log.debug("Failed to build improvement backlog digest", exc_info=True)
-
-    review_section = ""
-    if review_context_builder is not None:
+    if not sparse:
         try:
-            review_section = str(review_context_builder() or "").strip()
-        except Exception:
-            log.debug("Failed to build review continuity section", exc_info=True)
-    if review_section:
-        dynamic_parts.append(review_section)
-    else:
-        try:
-            from ouroboros.review_state import load_state, format_status_section
-            advisory_state = load_state(pathlib.Path(env.drive_root))
-            if advisory_state.runs or advisory_state.last_commit_attempt:
-                advisory_section = format_status_section(
-                    advisory_state,
-                    repo_dir=pathlib.Path(env.repo_dir),
-                )
-                if advisory_section:
-                    dynamic_parts.append(advisory_section)
-        except Exception:
-            log.debug("Failed to build advisory review status section", exc_info=True)
+            from ouroboros.improvement_backlog import format_backlog_digest
 
-    dynamic_parts.extend(build_recent_sections(memory, env, task_id=task.get("id", "")))
+            backlog_digest = format_backlog_digest(env.drive_root)
+            if backlog_digest:
+                dynamic_parts.append(backlog_digest)
+        except Exception:
+            log.debug("Failed to build improvement backlog digest", exc_info=True)
+
+        review_section = ""
+        if review_context_builder is not None:
+            try:
+                review_section = str(review_context_builder() or "").strip()
+            except Exception:
+                log.debug("Failed to build review continuity section", exc_info=True)
+        if review_section:
+            dynamic_parts.append(review_section)
+        else:
+            try:
+                from ouroboros.review_state import load_state, format_status_section
+                advisory_state = load_state(pathlib.Path(env.drive_root))
+                if advisory_state.runs or advisory_state.last_commit_attempt:
+                    advisory_section = format_status_section(
+                        advisory_state,
+                        repo_dir=pathlib.Path(env.repo_dir),
+                    )
+                    if advisory_section:
+                        dynamic_parts.append(advisory_section)
+            except Exception:
+                log.debug("Failed to build advisory review status section", exc_info=True)
+
+        dynamic_parts.extend(build_recent_sections(memory, env, task_id=task.get("id", "")))
 
     dynamic_text = "\n\n".join(dynamic_parts)
 
@@ -877,10 +919,11 @@ def build_llm_messages(
                 },
             ],
         },
-        {"role": "user", "content": build_user_content(task)},
+        {"role": "user", "content": build_user_content(task, env=env)},
     ]
 
     messages, cap_info = apply_message_token_soft_cap(messages, soft_cap_tokens)
+    cap_info["prompt_mode"] = _mode
     return messages, cap_info
 
 
