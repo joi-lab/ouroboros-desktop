@@ -74,7 +74,7 @@ MAX_FUNCTION_LINES = 300
 # larger than the pre-release scope; the ceiling bump stays consistent
 # with how MAX_TOTAL_FUNCTIONS has grown through v4.40→v4.47 as each
 # phase shipped.
-MAX_TOTAL_FUNCTIONS = 1720  # v5.7.0 (1693) + compat foundation modules (compat.py, prompt_schedule.py, task_checkpoint.py, escalation.py) + ToolContext fields
+MAX_TOTAL_FUNCTIONS = 1730  # v5.7.0 + compat foundation + KV-cache prefix helpers
 # v4.40.0 adds claude_advisory_review.py to the grandfathered set: the file
 # grew to 1731 lines across v4.37-v4.39 (plan_task quorum + direct-provider
 # fallback + convergence rule + syntax preflight + reflection decoupling).

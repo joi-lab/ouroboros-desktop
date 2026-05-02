@@ -127,9 +127,16 @@ def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
         pass
 
     # --- Runtime context JSON ---
+    # P0 (perf audit, 2026-05-01): the wall-clock timestamp used to live
+    # here. It changed on every prompt assembly call and was the single
+    # biggest cause of LM Studio KV-cache misses (every round = different
+    # prefix bytes = full-prompt reprocessing, ~110s/call). Removed.
+    # Tasks that genuinely need wall-clock time can request it via tools
+    # (run_shell ["date","-u","+%FT%TZ"] or a dedicated tool) — making it
+    # explicit when the model is reasoning about time. The runtime context
+    # is now stable across rounds for the duration of a task.
     _is_desktop = bool(os.environ.get("OUROBOROS_DESKTOP_MODE", ""))
     runtime_data = {
-        "utc_now": utc_now_iso(),
         "repo_dir": str(env.repo_dir),
         "drive_root": str(env.drive_root),
         "git_head": git_sha,
@@ -151,6 +158,93 @@ _SECTION_BUDGETS = {
     "identity": 80_000,
     "registry": 30_000,
 }
+
+
+# P3 + P4 (perf audit): per-process caches for file-backed prompt sections.
+# When a file's mtime is unchanged from the previous prompt assembly, reuse
+# the previous text block byte-for-byte. Foundation of LM Studio KV-cache
+# reuse — even the smallest byte difference in the prompt prefix busts the
+# cache and forces a full prompt-processing pass.
+#
+# Key on (str(path),) → (mtime_ns, cached_text). Process-scoped (not
+# task-scoped) so background-consciousness assemblies and cross-task
+# continuations also benefit.
+#
+# Cache is BEST-EFFORT — any failure (file missing, OS error) falls back to
+# direct read. Master kill-switch: OUROBOROS_DISABLE_CONTEXT_CACHE.
+_FILE_TEXT_CACHE: Dict[str, Tuple[int, str]] = {}
+_SECTION_TEXT_CACHE: Dict[str, Tuple[Tuple[Tuple[str, int], ...], str]] = {}
+
+
+def _context_cache_disabled() -> bool:
+    return (os.environ.get("OUROBOROS_DISABLE_CONTEXT_CACHE", "") or "").strip().lower() in (
+        "true", "1", "yes",
+    )
+
+
+def _read_with_cache(path: pathlib.Path) -> str:
+    """Read a file via the per-process mtime cache. Falls back to direct
+    read on any cache lookup error."""
+    if _context_cache_disabled():
+        try:
+            return path.read_text(encoding="utf-8") if path.exists() else ""
+        except Exception:
+            return ""
+    key = str(path)
+    try:
+        st = path.stat()
+        mtime_ns = st.st_mtime_ns
+    except Exception:
+        return ""
+    cached = _FILE_TEXT_CACHE.get(key)
+    if cached and cached[0] == mtime_ns:
+        return cached[1]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        text = ""
+    _FILE_TEXT_CACHE[key] = (mtime_ns, text)
+    return text
+
+
+def _section_cache_key(paths: List[pathlib.Path]) -> Tuple[Tuple[str, int], ...]:
+    """Build a cache key from a list of paths and their mtimes. Missing
+    files contribute (path, -1) so absence-vs-presence flips invalidate."""
+    out: List[Tuple[str, int]] = []
+    for p in paths:
+        try:
+            mt = p.stat().st_mtime_ns if p.exists() else -1
+        except Exception:
+            mt = -1
+        out.append((str(p), mt))
+    return tuple(out)
+
+
+def _cached_section(
+    cache_key: str,
+    paths: List[pathlib.Path],
+    builder,
+) -> str:
+    """Run ``builder()`` and cache its output keyed on the mtimes of
+    ``paths``. Subsequent calls with unchanged mtimes return the cached
+    text without re-running the builder.
+
+    The same byte-for-byte text every round is what enables LM Studio's
+    KV cache to actually hit.
+    """
+    if _context_cache_disabled():
+        return builder()
+    key = _section_cache_key(paths)
+    cached = _SECTION_TEXT_CACHE.get(cache_key)
+    if cached and cached[0] == key:
+        return cached[1]
+    try:
+        text = builder()
+    except Exception:
+        log.debug("Section builder %s failed", cache_key, exc_info=True)
+        text = ""
+    _SECTION_TEXT_CACHE[cache_key] = (key, text)
+    return text
 
 
 def _warn_if_over_budget(name: str, content: str) -> None:
@@ -824,37 +918,49 @@ def build_llm_messages(
     semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
 
     if not sparse:
-        # medium drops KB index + deep_review; only sparse drops patterns.
+        # P3 + P4 (perf audit): cache the KB / patterns / deep_review block
+        # text on file mtime so semi-stable contents are byte-identical
+        # round-to-round, enabling LM Studio KV-cache hits.
         kb_index_path = env.drive_path("memory/knowledge/index-full.md")
-        if not medium and kb_index_path.exists():
-            kb_index = kb_index_path.read_text(encoding="utf-8")
-            if kb_index.strip():
-                semi_stable_parts.append("## Knowledge base\n\n" + kb_index)
-
         patterns_path = env.drive_path("memory/knowledge/patterns.md")
-        try:
-            if patterns_path.exists():
-                patterns_text = patterns_path.read_text(encoding="utf-8")
-                if patterns_text.strip():
-                    semi_stable_parts.append(
-                        "## Known error patterns (Pattern Register)\n\n" + patterns_text
-                    )
-        except Exception:
-            pass
+        deep_review_path = env.drive_path("memory/deep_review.md")
 
+        def _build_kb_block() -> str:
+            if not kb_index_path.exists():
+                return ""
+            kb_index = _read_with_cache(kb_index_path)
+            return ("## Knowledge base\n\n" + kb_index) if kb_index.strip() else ""
+
+        def _build_patterns_block() -> str:
+            if not patterns_path.exists():
+                return ""
+            patterns_text = _read_with_cache(patterns_path)
+            if not patterns_text.strip():
+                return ""
+            return "## Known error patterns (Pattern Register)\n\n" + patterns_text
+
+        def _build_deep_review_block() -> str:
+            if not deep_review_path.exists():
+                return ""
+            dr_text = _read_with_cache(deep_review_path)
+            if not dr_text.strip():
+                return ""
+            if len(dr_text) > 8000:
+                dr_text = dr_text[:8000] + "\n\n[... truncated — full report in memory/deep_review.md]"
+            return "## Last Deep Self-Review\n\n" + dr_text
+
+        # medium drops KB index + deep_review (the two heaviest); patterns stays.
         if not medium:
-            deep_review_path = env.drive_path("memory/deep_review.md")
-            try:
-                if deep_review_path.exists():
-                    dr_text = deep_review_path.read_text(encoding="utf-8")
-                    if dr_text.strip():
-                        if len(dr_text) > 8000:
-                            dr_text = dr_text[:8000] + "\n\n[... truncated — full report in memory/deep_review.md]"
-                        semi_stable_parts.append(
-                            "## Last Deep Self-Review\n\n" + dr_text
-                        )
-            except Exception:
-                pass
+            kb_block = _cached_section("kb_index", [kb_index_path], _build_kb_block)
+            if kb_block:
+                semi_stable_parts.append(kb_block)
+        patterns_block = _cached_section("patterns", [patterns_path], _build_patterns_block)
+        if patterns_block:
+            semi_stable_parts.append(patterns_block)
+        if not medium:
+            deep_review_block = _cached_section("deep_review", [deep_review_path], _build_deep_review_block)
+            if deep_review_block:
+                semi_stable_parts.append(deep_review_block)
 
     semi_stable_text = "\n\n".join(semi_stable_parts)
 
