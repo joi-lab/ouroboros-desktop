@@ -1084,30 +1084,134 @@ class LLMClient:
 
     @staticmethod
     def _truncate_messages_for_context(
-        messages: List[Dict[str, Any]], ctx_len: int, max_tokens: int,
+        messages: List[Dict[str, Any]],
+        ctx_len: int,
+        max_tokens: int,
+        *,
+        tools_overhead_chars: int = 0,
     ) -> None:
         """Hard-truncate message content so total fits within the context window.
 
-        Uses a conservative 3-chars-per-token ratio to avoid underestimating.
+        Uses a content-aware chars-per-token ratio:
+          - prose (system/user/assistant text content) → 4 chars/token
+          - structured (tool calls, tool-results, JSON) → 2 chars/token
+        The overall target_chars is computed against a weighted average so we
+        don't overshoot on tool-heavy turns (which is what was happening when
+        a 32k-context model was receiving 62k+ token prompts).
+
+        ``tools_overhead_chars`` is the JSON-serialized cost of the ``tools``
+        array passed alongside. Tool schemas count against the model's context
+        window but aren't part of the messages list, so without this argument
+        the truncator silently overshot by ~10–18k tokens worth of schema
+        content.
+
+        Handles both legacy string content and the multipart-block content
+        shape produced by ``ouroboros.context.build_llm_messages`` (a list of
+        ``{"type": "text", "text": "...", ...}`` blocks). For multipart system
+        messages the blocks are trimmed from the back forward — i.e. the
+        dynamic block goes first, then semi-stable, then static — matching
+        the sparse-mode philosophy.
         """
         available_tokens = ctx_len - max_tokens - 64
         if available_tokens < 256:
             available_tokens = 256
+
+        def _is_structured(m: Dict[str, Any]) -> bool:
+            if m.get("role") == "tool":
+                return True
+            if m.get("tool_calls"):
+                return True
+            return False
+
+        def _msg_chars(m: Dict[str, Any]) -> int:
+            content = m.get("content")
+            if isinstance(content, str):
+                return len(content)
+            if isinstance(content, list):
+                return sum(
+                    len(str(b.get("text", ""))) if isinstance(b, dict) else len(str(b))
+                    for b in content
+                )
+            return len(str(content or ""))
+
+        def _msg_tokens_estimate(m: Dict[str, Any]) -> int:
+            chars = _msg_chars(m)
+            divisor = 2 if _is_structured(m) else 4
+            return chars // divisor
+
+        # Subtract the tool-schema overhead (in tokens) from the budget
+        # before computing per-message space. Tool schemas are roughly half
+        # JSON / half identifiers, so 2.5 chars/token is a fair conservative
+        # estimate; round down for safety.
+        tools_overhead_tokens = max(0, tools_overhead_chars // 2)
+        available_tokens = max(256, available_tokens - tools_overhead_tokens)
         target_chars = available_tokens * 3
 
-        total_chars = sum(len(str(m.get("content", ""))) for m in messages)
-        if total_chars <= target_chars:
+        total_tokens_estimate = sum(_msg_tokens_estimate(m) for m in messages)
+        total_chars = sum(_msg_chars(m) for m in messages)
+
+        if total_chars <= target_chars and total_tokens_estimate <= available_tokens:
             return
 
         for msg in messages:
-            if msg["role"] == "system" and isinstance(msg.get("content"), str):
-                content = msg["content"]
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
                 other_chars = total_chars - len(content)
                 allowed = max(512, target_chars - other_chars)
                 if len(content) > allowed:
                     msg["content"] = content[:allowed] + "\n\n[Context truncated to fit model window]"
                     log.info("Truncated system message from %d to %d chars for %d-token context",
                              len(content), allowed, ctx_len)
+                return
+            if isinstance(content, list):
+                system_chars = sum(
+                    len(str(b.get("text", ""))) if isinstance(b, dict) else len(str(b))
+                    for b in content
+                )
+                other_chars = total_chars - system_chars
+                allowed = max(512, target_chars - other_chars)
+                if system_chars <= allowed:
+                    return
+                blocks = list(content)
+                kept: List[Dict[str, Any]] = []
+                used = 0
+                for i, blk in enumerate(blocks):
+                    text = str(blk.get("text", "")) if isinstance(blk, dict) else str(blk)
+                    if i == 0:
+                        # Constitutional core: keep, possibly truncated.
+                        if len(text) > allowed:
+                            new_text = text[:allowed] + "\n\n[Context truncated to fit model window]"
+                            kept.append({**blk, "text": new_text} if isinstance(blk, dict) else new_text)
+                            used = len(new_text)
+                            log.info(
+                                "Truncated multipart system block 0 from %d to %d chars (ctx=%d)",
+                                len(text), len(new_text), ctx_len,
+                            )
+                        else:
+                            kept.append(blk)
+                            used = len(text)
+                        continue
+                    remaining = allowed - used
+                    if remaining <= 256:
+                        log.info(
+                            "Dropped multipart system block %d (%d chars) — no remaining budget under ctx=%d",
+                            i, len(text), ctx_len,
+                        )
+                        continue
+                    if len(text) <= remaining:
+                        kept.append(blk)
+                        used += len(text)
+                    else:
+                        new_text = text[:remaining] + "\n\n[Block truncated to fit context]"
+                        kept.append({**blk, "text": new_text} if isinstance(blk, dict) else new_text)
+                        used += len(new_text)
+                        log.info(
+                            "Truncated multipart system block %d from %d to %d chars (ctx=%d)",
+                            i, len(text), len(new_text), ctx_len,
+                        )
+                msg["content"] = kept
                 return
 
     @staticmethod
