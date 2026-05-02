@@ -450,13 +450,46 @@ def _build_check_prompt(
     return prompt
 
 
+_SAFETY_KEYWORD_MAP = {
+    "DANGEROUS":  {"status": "DANGEROUS",  "reason": "(parsed from non-JSON response)"},
+    "SUSPICIOUS": {"status": "SUSPICIOUS", "reason": "(parsed from non-JSON response)"},
+    "SAFE":       {"status": "SAFE",       "reason": "(parsed from non-JSON response)"},
+}
+
+
+def _safety_restrictive_winner(found: list) -> str:
+    """Most-restrictive verdict wins on ties: DANGEROUS > SUSPICIOUS > SAFE.
+
+    Without this, a weak model could bypass a block by mentioning ``SAFE``
+    in its reasoning alongside the actual ``DANGEROUS`` verdict.
+    """
+    if "DANGEROUS" in found:
+        return "DANGEROUS"
+    if "SUSPICIOUS" in found:
+        return "SUSPICIOUS"
+    return "SAFE"
+
+
 def _parse_safety_response(text: str) -> Optional[Dict[str, Any]]:
-    """Parse JSON from LLM response, handling markdown code fences."""
-    clean = text.replace("```json", "").replace("```", "").strip()
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        return None
+    """Parse a safety verdict from an LLM response.
+
+    Thin wrapper around :func:`ouroboros.structured_output.coerce_structured`
+    — three-layer parser (strict JSON → embedded JSON → keyword fallback)
+    extracted as a reusable helper. Preserves the original behaviour while
+    making the parser available to other call sites that prompt local
+    models for structured output.
+
+    Returns ``None`` only when no verdict word is recognized — the caller
+    treats that as DANGEROUS to fail closed.
+    """
+    from ouroboros.structured_output import coerce_structured, _default_reason_extractor
+
+    return coerce_structured(
+        text,
+        keyword_fallback_map=_SAFETY_KEYWORD_MAP,
+        restrictive_winner=_safety_restrictive_winner,
+        reason_extractor=lambda t, v: _default_reason_extractor(t, v, char_limit=200),
+    )
 
 
 _REMOTE_PROVIDER_KEYS = (
