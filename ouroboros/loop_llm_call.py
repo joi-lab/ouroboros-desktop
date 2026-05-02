@@ -9,6 +9,7 @@ Extracted from loop.py to keep the main loop orchestrator focused.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import queue
 import time
@@ -21,6 +22,61 @@ from ouroboros.pricing import emit_llm_usage_event, estimate_cost, infer_model_c
 from ouroboros.utils import utc_now_iso, append_jsonl
 
 log = logging.getLogger(__name__)
+
+
+def _is_context_overflow_error(text: str) -> bool:
+    """Detect provider responses that signal a model context overflow.
+
+    Covers the wordings used by LM Studio, OpenAI, OpenRouter, and generic
+    OpenAI-compatible servers.
+    """
+    if not text:
+        return False
+    t = text.lower()
+    markers = (
+        "context_length_exceeded",
+        "tokens to keep",
+        "greater than the context length",
+        "maximum context length",
+        "exceeds context",
+        "this model's maximum context",
+    )
+    return any(m in t for m in markers)
+
+
+def _shrink_system_message_progressively(messages: List[Dict[str, Any]]) -> bool:
+    """Shrink the system message in-place when a context overflow is detected.
+
+    Order mirrors the sparse-mode philosophy from
+    ``ouroboros.context.build_llm_messages``: drop the dynamic block first,
+    then the semi-stable block, then halve the static block. Each call
+    shrinks by one step. Returns ``True`` if shrinking happened, ``False``
+    if the message is already at the constitutional minimum.
+    """
+    for msg in messages:
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            blocks = [b for b in content if isinstance(b, dict)]
+            if len(blocks) >= 3:
+                msg["content"] = blocks[:2]
+                return True
+            if len(blocks) == 2:
+                msg["content"] = [blocks[0]]
+                return True
+            if len(blocks) == 1 and isinstance(blocks[0].get("text"), str):
+                t = blocks[0]["text"]
+                if len(t) > 8000:
+                    blocks[0]["text"] = t[: len(t) // 2] + "\n\n[Static context halved after overflow]"
+                    return True
+            return False
+        if isinstance(content, str):
+            if len(content) > 8000:
+                msg["content"] = content[: len(content) // 2] + "\n\n[System message halved after overflow]"
+                return True
+            return False
+    return False
 
 
 def _emit_live_log(event_queue: Optional[queue.Queue], payload: Dict[str, Any]) -> None:
@@ -68,8 +124,16 @@ def call_llm_with_retry(
     """
     msg = None
     last_error: Optional[Exception] = None
+    # Step C: shrink-retries are tracked separately from network-retries.
+    # Each successful shrink earns a free retry that does not consume the
+    # max_retries network-error budget — otherwise an oversize prompt
+    # against a small-context local model exhausts retries before we've
+    # shrunk enough to fit. Cap at 6 to prevent infinite loops.
+    shrink_attempts = 0
+    MAX_SHRINK_ATTEMPTS = 6
 
-    for attempt in range(max_retries):
+    attempt = 0
+    while attempt < max_retries:
         try:
             _emit_live_log(event_queue, {
                 "type": "llm_round_started",
@@ -227,7 +291,52 @@ def call_llm_with_retry(
                     "error": repr(e),
                 })
                 break
+
+            # Step C: detect remote-provider context overflow, shrink the
+            # system message in place, and latch sparse mode for the next
+            # task. Don't burn a network-retry slot — the request was
+            # rejected at validation, the smaller prompt is a different
+            # request, and we may need several shrink rounds to fit a
+            # small-context local model.
+            if _is_context_overflow_error(repr(e)):
+                shrunk = _shrink_system_message_progressively(messages)
+                os.environ["OUROBOROS_PROMPT_MODE"] = "sparse"
+                _emit_live_log(event_queue, {
+                    "type": "llm_context_overflow_recovery",
+                    "task_id": task_id,
+                    "round": round_idx,
+                    "attempt": attempt + 1,
+                    "shrink_attempt": shrink_attempts + 1,
+                    "model": model,
+                    "shrunk": shrunk,
+                })
+                append_jsonl(drive_logs / "events.jsonl", {
+                    "ts": utc_now_iso(),
+                    "type": "remote_context_overflow",
+                    "task_id": task_id,
+                    "round": round_idx,
+                    "attempt": attempt + 1,
+                    "shrink_attempt": shrink_attempts + 1,
+                    "model": model,
+                    "shrunk": shrunk,
+                    "prompt_mode_latched": "sparse",
+                })
+                if shrunk and shrink_attempts < MAX_SHRINK_ATTEMPTS:
+                    shrink_attempts += 1
+                    log.warning(
+                        "Context overflow (network attempt %d/%d, shrink %d/%d) "
+                        "— shrunk system message; retrying without consuming "
+                        "a network-retry slot",
+                        attempt + 1, max_retries, shrink_attempts, MAX_SHRINK_ATTEMPTS,
+                    )
+                    # Do NOT bump ``attempt`` — shrink retries are free.
+                    continue
+                # Already at constitutional minimum or shrink budget exhausted
+                # — bail so the caller can fall back to the next model.
+                break
+
             if attempt < max_retries - 1:
                 time.sleep(min(2 ** attempt * 2, 30))
+            attempt += 1
 
     return None, 0.0
