@@ -774,7 +774,13 @@ def build_llm_messages(
         fallback="You are Ouroboros. Your base prompt could not be loaded."
     )
     bible_md = safe_read(env.repo_path("BIBLE.md"))
-    arch_md = safe_read(env.repo_path("docs/ARCHITECTURE.md"))
+    # Sparse drops ARCHITECTURE.md too — at 172k chars it's the single
+    # heaviest source. Without dropping it, block-0 truncation eats into
+    # blocks 1+2, which contain identity / scratchpad / runtime_context
+    # — the constitutional core. Dropping ARCH from sparse keeps the core
+    # intact and lets the truncation budget cover the dynamic block.
+    # The agent can repo_read("docs/ARCHITECTURE.md") on demand if needed.
+    arch_md = "" if sparse else safe_read(env.repo_path("docs/ARCHITECTURE.md"))
     # medium drops only the three heaviest sources (README, KB, deep_review).
     # Keep DEVELOPMENT and CHECKLISTS — they shape day-to-day judgment.
     dev_guide_md = "" if sparse else safe_read(env.repo_path("docs/DEVELOPMENT.md"))
@@ -798,10 +804,13 @@ def build_llm_messages(
         static_text += "\n\n## CHECKLISTS.md\n\n" + checklists_md
     if sparse:
         static_text += (
-            "\n\n[Sparse prompt mode active — DEVELOPMENT.md, README.md, CHECKLISTS.md, "
-            "KB index, patterns, deep review, backlog, and recent JSONL tails are "
-            "omitted from this round. Use knowledge_list, knowledge_read, and "
-            "data_read to reach them on demand.]"
+            "\n\n[Sparse prompt mode active — ARCHITECTURE.md, DEVELOPMENT.md, "
+            "README.md, CHECKLISTS.md, KB index, patterns, deep review, backlog, "
+            "and recent JSONL tails are omitted from this round. Use repo_read "
+            "for ARCHITECTURE, knowledge_list / knowledge_read for KB topics, "
+            "and data_read for live state files. The runtime_context block in "
+            "the dynamic section above gives you the current repo_dir and "
+            "drive_root paths.]"
         )
     elif medium:
         static_text += (
