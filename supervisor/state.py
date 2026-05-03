@@ -255,6 +255,31 @@ def set_budget_limit(limit: float) -> None:
     TOTAL_BUDGET_LIMIT = limit
 
 
+# Boot-time module fingerprint — captured by ``server.py`` immediately after
+# the module watcher arms its baseline. Tool-error formatters read this via
+# ``get_boot_module_fingerprint()`` to detect "stale module" failure mode.
+_BOOT_MODULE_FINGERPRINT: str = ""
+_BOOT_MODULE_BASELINE: Dict[str, int] = {}
+
+
+def set_boot_module_fingerprint(fp: str, baseline: Optional[Dict[str, int]] = None) -> None:
+    """Stash the boot-time fingerprint + per-path baseline for later staleness
+    diagnosis. Called once at supervisor init."""
+    global _BOOT_MODULE_FINGERPRINT, _BOOT_MODULE_BASELINE
+    _BOOT_MODULE_FINGERPRINT = str(fp or "")
+    _BOOT_MODULE_BASELINE = dict(baseline or {})
+
+
+def get_boot_module_fingerprint() -> str:
+    """Return the boot-time fingerprint (empty string if unset)."""
+    return _BOOT_MODULE_FINGERPRINT
+
+
+def get_boot_module_baseline() -> Dict[str, int]:
+    """Return a copy of the boot-time per-path baseline (empty dict if unset)."""
+    return dict(_BOOT_MODULE_BASELINE)
+
+
 def refresh_budget_from_settings(settings: Dict[str, Any]) -> None:
     """Hot-reload total budget limit from a settings dict.
 

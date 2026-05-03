@@ -26,6 +26,7 @@ from ouroboros.runtime_mode_policy import (
     protected_write_block_message,
 )
 from ouroboros.tools.registry import ToolContext, ToolEntry
+from ouroboros.tools._stale_hint import maybe_append as _maybe_stale_hint
 from ouroboros.tools.commit_gate import (
     _check_advisory_freshness,
     _check_overlapping_review_attempt,
@@ -1073,7 +1074,10 @@ def _repo_write_commit(ctx: ToolContext, path: str, content: str,
             # (e.g. an ``ouroboros/`` directory next to the ``ouroboros`` branch).
             run_cmd(["git", "checkout", ctx.branch_dev, "--"], cwd=ctx.repo_dir)
         except Exception as e:
-            return _fail(f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}")
+            return _fail(_maybe_stale_hint(
+                f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}",
+                repo_dir=ctx.repo_dir,
+            ))
         try:
             write_text(ctx.repo_path(path), content)
         except Exception as e:
@@ -1119,7 +1123,10 @@ def _repo_write_commit(ctx: ToolContext, path: str, content: str,
         try:
             run_cmd(["git", "commit", "-m", commit_message], cwd=ctx.repo_dir)
         except Exception as e:
-            err_msg = f"⚠️ GIT_ERROR (commit): {_sanitize_git_error(str(e))}"
+            err_msg = _maybe_stale_hint(
+                f"⚠️ GIT_ERROR (commit): {_sanitize_git_error(str(e))}",
+                repo_dir=ctx.repo_dir,
+            )
             _record_commit_attempt(ctx, commit_message, "failed",
                                    block_reason="infra_failure", block_details=err_msg,
                                    duration_sec=time.time() - _commit_start,
@@ -1206,7 +1213,10 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
             # (e.g. an ``ouroboros/`` directory next to the ``ouroboros`` branch).
             run_cmd(["git", "checkout", ctx.branch_dev, "--"], cwd=ctx.repo_dir)
         except Exception as e:
-            return _fail(f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}")
+            return _fail(_maybe_stale_hint(
+                f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}",
+                repo_dir=ctx.repo_dir,
+            ))
         outcome = _run_reviewed_stage_cycle(
             ctx,
             commit_message,
@@ -1225,7 +1235,10 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
         try:
             run_cmd(["git", "commit", "-m", commit_message], cwd=ctx.repo_dir)
         except Exception as e:
-            err_msg = f"⚠️ GIT_ERROR (commit): {_sanitize_git_error(str(e))}"
+            err_msg = _maybe_stale_hint(
+                f"⚠️ GIT_ERROR (commit): {_sanitize_git_error(str(e))}",
+                repo_dir=ctx.repo_dir,
+            )
             _record_commit_attempt(ctx, commit_message, "failed",
                                    block_reason="infra_failure", block_details=err_msg,
                                    duration_sec=time.time() - _commit_start,

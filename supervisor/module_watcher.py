@@ -73,6 +73,104 @@ class ModuleDriftEvent:
         return f"{n} files changed: {head}{tail}"
 
 
+@dataclasses.dataclass(frozen=True)
+class StalenessReport:
+    """Result of comparing a boot-time fingerprint to the current source tree.
+
+    Used by tool-error formatters to distinguish "the agent's code is wrong"
+    from "the runtime is using stale modules whose on-disk version has been
+    patched." Emitted as a hint suffix on failure messages so the agent can
+    self-diagnose the cascade without escalating to OS-level workarounds.
+    """
+    changed_paths: Tuple[str, ...]
+    boot_fingerprint: str
+    current_fingerprint: str
+
+    @property
+    def is_stale(self) -> bool:
+        return self.boot_fingerprint != self.current_fingerprint
+
+    def hint_sentence(self, *, repo_dir: Optional[pathlib.Path] = None) -> str:
+        """One-line operator-readable hint suitable for appending to a tool
+        error message. Renders relative paths when ``repo_dir`` is provided."""
+        if not self.is_stale:
+            return ""
+        n = len(self.changed_paths)
+        paths = list(self.changed_paths)
+        if repo_dir is not None:
+            try:
+                repo = pathlib.Path(repo_dir).resolve()
+                paths = [
+                    str(pathlib.Path(p).resolve().relative_to(repo))
+                    if pathlib.Path(p).resolve().is_relative_to(repo)  # py>=3.9
+                    else p
+                    for p in paths
+                ]
+            except Exception:
+                pass
+        head = ", ".join(paths[:3])
+        tail = f" (+{n - 3} more)" if n > 3 else ""
+        return (
+            f"⚠️ STALE_MODULE_HINT: {n} file(s) changed on disk since this "
+            f"process started: {head}{tail}. The error above may reflect "
+            f"the OLD code in memory, not the current source. If "
+            f"OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE=true, a restart is "
+            f"queued; otherwise ask the operator to restart."
+        )
+
+
+def compute_fingerprint(roots: Iterable[pathlib.Path]) -> str:
+    """Stable SHA1 hash of the source-tree fingerprint.
+
+    Same input tree always produces the same hex digest regardless of OS
+    scandir order. Useful as a single string identifier to embed in
+    ``worker_boot`` events for cross-task drift comparison.
+    """
+    import hashlib
+    import json as _json
+    fp = fingerprint(roots)
+    blob = _json.dumps(fp, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()
+
+
+def diagnose_staleness(
+    boot_fingerprint: str,
+    roots: Iterable[pathlib.Path],
+    *,
+    boot_baseline: Optional[Dict[str, int]] = None,
+) -> StalenessReport:
+    """Compare a stored boot-time fingerprint against the current source tree.
+
+    Returns a ``StalenessReport``. ``is_stale`` is the canonical "should I
+    surface a hint?" predicate. ``changed_paths`` is empty when fresh; when
+    stale and ``boot_baseline`` is supplied (the original ``{path: mtime}``
+    dict from boot), per-path drift is computed; otherwise ``changed_paths``
+    is empty even on stale.
+    """
+    current = fingerprint(roots)
+    current_hash = compute_fingerprint(roots) if current else ""
+    if current_hash == boot_fingerprint:
+        return StalenessReport(
+            changed_paths=(),
+            boot_fingerprint=boot_fingerprint,
+            current_fingerprint=current_hash,
+        )
+    changed: List[str] = []
+    if boot_baseline is not None:
+        old_keys = set(boot_baseline.keys())
+        new_keys = set(current.keys())
+        changed.extend(new_keys - old_keys)
+        changed.extend(old_keys - new_keys)
+        for k in old_keys & new_keys:
+            if boot_baseline[k] != current[k]:
+                changed.append(k)
+    return StalenessReport(
+        changed_paths=tuple(sorted(changed)),
+        boot_fingerprint=boot_fingerprint,
+        current_fingerprint=current_hash,
+    )
+
+
 def default_watch_roots(repo_dir: pathlib.Path) -> List[pathlib.Path]:
     """Default set of source roots to watch.
 

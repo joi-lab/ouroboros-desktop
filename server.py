@@ -795,19 +795,32 @@ def _run_supervisor(settings: dict) -> None:
     if _watcher_enabled:
         try:
             from supervisor.module_watcher import (
-                ModuleWatcher, default_watch_roots,
+                ModuleWatcher, compute_fingerprint, default_watch_roots,
+                fingerprint as _watcher_fingerprint,
             )
             _watch_roots = default_watch_roots(REPO_DIR)
             if _watch_roots:
                 _module_watcher = ModuleWatcher(_watch_roots)
                 _module_watcher.baseline()
+                # Capture the boot-time fingerprint so tool-error formatters
+                # can detect "running on stale modules" without coupling
+                # them to the watcher's state machine.
+                _boot_fp = compute_fingerprint(_watch_roots)
+                _boot_baseline = _watcher_fingerprint(_watch_roots)
+                os.environ["OUROBOROS_BOOT_MODULE_FINGERPRINT"] = _boot_fp
+                try:
+                    from supervisor import state as _sup_state
+                    _sup_state.set_boot_module_fingerprint(_boot_fp, _boot_baseline)
+                except Exception:
+                    pass
                 append_jsonl(
                     DATA_DIR / "logs" / "supervisor.jsonl",
                     {"ts": time.time(), "type": "module_watcher_baseline",
-                     "watched_roots": [str(r) for r in _watch_roots]},
+                     "watched_roots": [str(r) for r in _watch_roots],
+                     "boot_fingerprint": _boot_fp},
                 )
-                log.info("Module watcher armed; %d source root(s) tracked.",
-                         len(_watch_roots))
+                log.info("Module watcher armed; %d source root(s) tracked, fp=%s.",
+                         len(_watch_roots), _boot_fp[:12])
         except Exception:
             log.warning("Module watcher init failed; auto-restart disabled.",
                         exc_info=True)
