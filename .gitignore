@@ -62,3 +62,4 @@ repo_bundle_manifest.json
 /jsonschema/
 /jsonschema_specifications/
 /certifi/
+*-credentials.json

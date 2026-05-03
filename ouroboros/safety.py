@@ -50,6 +50,12 @@ log = logging.getLogger(__name__)
 POLICY_SKIP = "skip"
 POLICY_CHECK = "check"
 POLICY_CHECK_CONDITIONAL = "check_conditional"
+# Deterministic carve-out: tool calls go through ``safety_pinned_host``'s
+# pin registry instead of the LLM check. Only a tool whose call args
+# *fully* match a registered pin (host, scheme, path, JWT, body cap,
+# extra-secret guard, daily cap) passes; anything else is blocked.
+# See ouroboros/safety_pinned_host.py for the predicate.
+POLICY_PINNED_HOST = "pinned_host"
 
 # Default policy for unknown tools (e.g. agent-created tools that are not yet
 # in TOOL_POLICY). "check" means: always run one cheap LLM check — weak but
@@ -730,6 +736,40 @@ def check_safety(
 
     if policy == POLICY_SKIP:
         return True, ""
+
+    if policy == POLICY_PINNED_HOST:
+        # Master switch lets operators kill ALL pinned-host carve-outs
+        # without uninstalling the skill that registered them.
+        if os.environ.get("OUROBOROS_PINNED_HOSTS_ENABLED", "true").strip().lower() not in ("true", "1", "yes"):
+            return False, (
+                f"⚠️ SAFETY_VIOLATION: pinned-host carve-outs are disabled "
+                f"(OUROBOROS_PINNED_HOSTS_ENABLED=false). Tool '{tool_name}' "
+                f"requires the pin registry to be active."
+            )
+        try:
+            from ouroboros.safety_pinned_host import check_pinned_host_call
+        except Exception as exc:  # noqa: BLE001 — degraded mode falls back to deny
+            return False, f"⚠️ SAFETY_VIOLATION: pinned-host module unavailable: {exc}"
+        # Resolve drive_root from ctx if available; the pin's credential
+        # lookup uses it to find the sidecar file.
+        drive_root = None
+        if ctx is not None:
+            drive_root = getattr(ctx, "drive_root", None) or getattr(ctx, "DRIVE_ROOT", None)
+        decision = check_pinned_host_call(arguments, drive_root=drive_root)
+        if decision.allow:
+            # Stash the decision on ctx so the tool handler can commit
+            # the daily-counter increment after a successful HTTP call.
+            if ctx is not None:
+                try:
+                    setattr(ctx, "_pinned_host_decision", decision)
+                except Exception:
+                    pass
+            return True, ""
+        return False, (
+            f"⚠️ SAFETY_VIOLATION: pinned-host carve-out refused "
+            f"(reason={decision.reason}, host={decision.pin_hostname or 'unknown'}). "
+            f"Tool '{tool_name}' must match a registered pin exactly."
+        )
 
     if policy == POLICY_CHECK_CONDITIONAL:
         # Currently only run_shell uses this policy.

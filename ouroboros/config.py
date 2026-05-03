@@ -116,6 +116,13 @@ SETTINGS_DEFAULTS = {
     "A2A_AGENT_DESCRIPTION": "",
     "A2A_MAX_CONCURRENT": 3,
     "A2A_TASK_TTL_HOURS": 24,
+    # Pinned-host safety carve-out master switch. When enabled, tools
+    # registered with ``POLICY_PINNED_HOST`` are evaluated against the
+    # ``ouroboros.safety_pinned_host`` registry instead of the LLM check.
+    # Skills register pins at install time; the operator opts in.
+    # Default ``True`` because the carve-out is itself default-deny —
+    # an unregistered host or unmatched call is always refused.
+    "OUROBOROS_PINNED_HOSTS_ENABLED": True,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -795,6 +802,8 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        # Pinned-host safety carve-out master switch.
+        "OUROBOROS_PINNED_HOSTS_ENABLED",
     ]
     for k in env_keys:
         val = settings.get(k)
