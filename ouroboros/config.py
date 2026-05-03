@@ -116,6 +116,12 @@ SETTINGS_DEFAULTS = {
     "A2A_AGENT_DESCRIPTION": "",
     "A2A_MAX_CONCURRENT": 3,
     "A2A_TASK_TTL_HOURS": 24,
+    # ARCHITECTURE-LITE injection in sparse mode. When ``True`` (default),
+    # ``docs/ARCHITECTURE-LITE.md`` is appended to the static block when
+    # prompt_mode=sparse — giving the agent a curated self-portrait
+    # without the full ~170K-char ARCHITECTURE.md. No effect under
+    # medium/dense modes (full ARCH is already in the prompt there).
+    "OUROBOROS_ARCH_LITE_ENABLED": True,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -795,6 +801,8 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        # ARCHITECTURE-LITE injection (sparse mode self-portrait).
+        "OUROBOROS_ARCH_LITE_ENABLED",
         # Local-LLM compatibility layer — Phase 1 master switch + profile
         # selection. Without these, settings.json values never reach the
         # agent's env and the compat layer stays dormant indefinitely.
