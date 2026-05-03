@@ -116,6 +116,11 @@ SETTINGS_DEFAULTS = {
     "A2A_AGENT_DESCRIPTION": "",
     "A2A_MAX_CONCURRENT": 3,
     "A2A_TASK_TTL_HOURS": 24,
+    # Module watcher — auto-restart workers when supervisor/agent source
+    # files change on disk. Default ``True`` since this prevents the kind of
+    # stale-module cascade documented on 2026-05-02. Flip to ``False`` only
+    # when actively patching the watcher itself.
+    "OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE": True,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -795,6 +800,15 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        # Identity-staleness threshold (hours). Previously hardcoded to 8h
+        # which fires after every workday and so loses signal. Default 168h
+        # (one week) matches a natural reflection cadence;
+        # ``OUROBOROS_IDENTITY_STALE_HOURS`` overrides per-deploy.
+        "OUROBOROS_IDENTITY_STALE_HOURS",
+        # Module watcher — auto-restart on supervisor/agent source change.
+        # Default ``true``; flip to ``false`` only when actively patching
+        # the watcher itself.
+        "OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE",
     ]
     for k in env_keys:
         val = settings.get(k)

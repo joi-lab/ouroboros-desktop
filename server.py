@@ -783,6 +783,36 @@ def _run_supervisor(settings: dict) -> None:
     _supervisor_ready.set()
     log.info("Supervisor ready.")
 
+    # Module watcher — auto-restart workers when supervisor/agent source
+    # files change on disk. See supervisor/module_watcher.py for rationale.
+    # Off by default behaviour preserved via ``OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE``;
+    # default ``true`` since this prevents the 2026-05-02 cascade.
+    _watcher_enabled = (
+        os.environ.get("OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE", "true")
+        .strip().lower() in ("true", "1", "yes")
+    )
+    _module_watcher = None
+    if _watcher_enabled:
+        try:
+            from supervisor.module_watcher import (
+                ModuleWatcher, default_watch_roots,
+            )
+            _watch_roots = default_watch_roots(REPO_DIR)
+            if _watch_roots:
+                _module_watcher = ModuleWatcher(_watch_roots)
+                _module_watcher.baseline()
+                append_jsonl(
+                    DATA_DIR / "logs" / "supervisor.jsonl",
+                    {"ts": time.time(), "type": "module_watcher_baseline",
+                     "watched_roots": [str(r) for r in _watch_roots]},
+                )
+                log.info("Module watcher armed; %d source root(s) tracked.",
+                         len(_watch_roots))
+        except Exception:
+            log.warning("Module watcher init failed; auto-restart disabled.",
+                        exc_info=True)
+            _module_watcher = None
+
     # Main supervisor loop
     offset = 0
     crash_count = 0
@@ -790,6 +820,29 @@ def _run_supervisor(settings: dict) -> None:
         try:
             rotate_chat_log_if_needed(DATA_DIR)
             ensure_workers_healthy()
+
+            # Source-tree drift check: if a supervisor/agent file has
+            # changed on disk, synthesize a restart_request so the
+            # existing event-channel handles process exit + relaunch.
+            if _module_watcher is not None:
+                try:
+                    _drift = _module_watcher.check()
+                except Exception:
+                    log.warning("Module watcher tick failed", exc_info=True)
+                    _drift = None
+                if _drift is not None:
+                    append_jsonl(
+                        DATA_DIR / "logs" / "supervisor.jsonl",
+                        {"ts": time.time(), "type": "module_drift_detected",
+                         "changed_paths": list(_drift.changed_paths),
+                         "summary": _drift.summary_sentence()},
+                    )
+                    log.warning("Source drift detected (%s) — queuing restart.",
+                                _drift.summary_sentence())
+                    get_event_q().put({
+                        "type": "restart_request",
+                        "reason": f"module_drift: {_drift.summary_sentence()}",
+                    })
 
             event_q = get_event_q()
             while True:
