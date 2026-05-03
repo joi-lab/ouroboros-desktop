@@ -615,3 +615,104 @@ class TestRuntimeEnvSection:
         section = build_runtime_section(env, {"id": "t2", "type": "task"})
         data = json.loads(section.split("## Runtime context\n\n", 1)[1])
         assert data["runtime_env"]["is_desktop"] is True
+
+
+class TestIdentityStaleThreshold:
+    """Verify the identity-staleness threshold is configurable and defaults to 168h."""
+
+    def _make_env(self, tmp_path):
+        class FakeEnv:
+            def drive_path(self, p):
+                return tmp_path / p
+
+            def repo_path(self, p):
+                return tmp_path / "repo" / p
+
+            @property
+            def repo_dir(self):
+                return tmp_path / "repo"
+
+            @property
+            def drive_root(self):
+                return tmp_path
+
+        (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "repo" / "docs").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "repo" / "VERSION").write_text("1.2.3", encoding="utf-8")
+        (tmp_path / "repo" / "pyproject.toml").write_text('version = "1.2.3"', encoding="utf-8")
+        (tmp_path / "repo" / "README.md").write_text('version-1.2.3', encoding="utf-8")
+        (tmp_path / "repo" / "docs" / "ARCHITECTURE.md").write_text('# Ouroboros v1.2.3', encoding="utf-8")
+        (tmp_path / "repo" / "docs" / "DEVELOPMENT.md").write_text('# Dev', encoding="utf-8")
+        (tmp_path / "state" / "state.json").write_text('{"spent_usd": 0}', encoding="utf-8")
+        (tmp_path / "memory" / "identity.md").write_text("x" * 300, encoding="utf-8")
+        (tmp_path / "memory" / "scratchpad.md").write_text("x" * 300, encoding="utf-8")
+        (tmp_path / "logs" / "events.jsonl").write_text("", encoding="utf-8")
+        return FakeEnv()
+
+    def test_default_threshold_is_168h(self):
+        from ouroboros.context import IDENTITY_STALE_HOURS_DEFAULT
+
+        assert IDENTITY_STALE_HOURS_DEFAULT == 168
+
+    def test_recent_identity_no_warning(self, tmp_path):
+        from ouroboros.context import build_health_invariants
+
+        env = self._make_env(tmp_path)
+        # mtime is "now" — no warning expected
+        result = build_health_invariants(env)
+        assert "STALE IDENTITY" not in result
+
+    def test_stale_identity_warning(self, tmp_path):
+        import os
+        import time
+
+        from ouroboros.context import build_health_invariants
+
+        env = self._make_env(tmp_path)
+        identity_file = tmp_path / "memory" / "identity.md"
+        # Set mtime to 200h ago (past default 168h threshold)
+        old_mtime = time.time() - 200 * 3600
+        os.utime(identity_file, (old_mtime, old_mtime))
+        result = build_health_invariants(env)
+        assert "STALE IDENTITY" in result
+
+    def test_env_override_threshold(self, tmp_path, monkeypatch):
+        import os
+        import time
+
+        from ouroboros.context import build_health_invariants
+
+        env = self._make_env(tmp_path)
+        identity_file = tmp_path / "memory" / "identity.md"
+        # Set mtime to 200h ago — past default (168h) but within override (300h)
+        old_mtime = time.time() - 200 * 3600
+        os.utime(identity_file, (old_mtime, old_mtime))
+
+        # Override threshold to 100h → should warn (200 > 100)
+        monkeypatch.setenv("OUROBOROS_IDENTITY_STALE_HOURS", "100")
+        result = build_health_invariants(env)
+        assert "STALE IDENTITY" in result
+
+        # Override threshold to 250h → should NOT warn (200 < 250)
+        monkeypatch.setenv("OUROBOROS_IDENTITY_STALE_HOURS", "250")
+        result = build_health_invariants(env)
+        assert "STALE IDENTITY" not in result
+
+    def test_invalid_env_value_falls_back_to_default(self, tmp_path, monkeypatch):
+        import os
+        import time
+
+        from ouroboros.context import build_health_invariants
+
+        env = self._make_env(tmp_path)
+        identity_file = tmp_path / "memory" / "identity.md"
+        # Set mtime to 200h ago — past default (168h)
+        old_mtime = time.time() - 200 * 3600
+        os.utime(identity_file, (old_mtime, old_mtime))
+
+        monkeypatch.setenv("OUROBOROS_IDENTITY_STALE_HOURS", "not-a-number")
+        result = build_health_invariants(env)
+        # Falls back to default 168h → should warn (200 > 168)
+        assert "STALE IDENTITY" in result

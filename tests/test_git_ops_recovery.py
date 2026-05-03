@@ -13,7 +13,7 @@ def test_git_capture_repairs_corrupt_index(monkeypatch, tmp_path):
 
     calls = {"status": 0, "rebuild": 0}
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         if cmd == ["git", "status", "--porcelain"]:
             calls["status"] += 1
             if calls["status"] == 1:
@@ -58,7 +58,7 @@ def test_checkout_and_reset_removes_stale_index_lock(monkeypatch, tmp_path):
 
     calls = {"checkout": 0}
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         if cmd[:3] == ["git", "rev-parse", "--verify"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         if cmd[:2] == ["git", "checkout"]:
@@ -110,7 +110,7 @@ def test_checkout_and_reset_continues_when_fetch_fails(monkeypatch, tmp_path):
 
     monkeypatch.setattr(git_ops, "git_capture", fake_git_capture)
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         if cmd[:3] == ["git", "rev-parse", "--verify"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         if cmd[:2] == ["git", "checkout"]:
@@ -162,7 +162,7 @@ def test_checkout_and_reset_blocks_when_rescue_snapshot_fails(monkeypatch, tmp_p
 
     reset_calls = []
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         if cmd[:2] == ["git", "reset"]:
             reset_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -212,7 +212,7 @@ def test_checkout_and_reset_blocks_when_untracked_rescue_is_truncated(monkeypatc
     monkeypatch.setattr(git_ops, "append_jsonl", lambda path, payload: events.append(payload))
     reset_calls = []
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         if cmd[:2] == ["git", "reset"]:
             reset_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -262,7 +262,7 @@ def test_checkout_and_reset_prefers_managed_remote_ref(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         calls.append(cmd)
         if cmd == ["git", "rev-parse", "--verify", "managed/ouroboros"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="remote-sha\n", stderr="")
@@ -280,7 +280,7 @@ def test_checkout_and_reset_prefers_managed_remote_ref(monkeypatch, tmp_path):
 
     assert ok
     assert message == "ok"
-    assert ["git", "checkout", "-B", "ouroboros", "managed/ouroboros"] in calls
+    assert ["git", "checkout", "-B", "ouroboros", "managed/ouroboros", "--"] in calls
     assert saved_state["current_branch"] == "ouroboros"
     assert saved_state["current_sha"] == "fedcba"
 
@@ -365,7 +365,7 @@ def test_checkout_and_reset_keeps_bundled_sha_on_first_managed_bootstrap(monkeyp
 
     calls = []
 
-    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+    def fake_run(cmd, cwd=None, capture_output=False, text=False, check=False, **kwargs):
         calls.append(cmd)
         if cmd == ["git", "rev-parse", "--verify", "ouroboros"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="bundle123\n", stderr="")

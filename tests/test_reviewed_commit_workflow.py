@@ -626,7 +626,7 @@ def test_repo_write_commit_preserves_blocked_review_findings(tmp_path):
 
     assert "REVIEW_BLOCKED: fix the docs first" in result
     assert mock_stage_cycle.call_args.kwargs["paths"] == ["foo.py"]
-    assert mock_run.call_args_list[0].args[0] == ["git", "checkout", ctx.branch_dev]
+    assert mock_run.call_args_list[0].args[0] == ["git", "checkout", ctx.branch_dev, "--"]
 
 
 def test_repo_commit_blocks_when_fingerprint_unavailable(tmp_path):

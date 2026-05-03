@@ -23,6 +23,21 @@ from ouroboros.memory import Memory
 
 log = logging.getLogger(__name__)
 
+# Configurable threshold (hours) for the "stale identity" health-invariant warning.
+# Override via OUROBOROS_IDENTITY_STALE_HOURS environment variable.
+IDENTITY_STALE_HOURS_DEFAULT = 168
+
+
+def _get_identity_stale_hours() -> int:
+    """Return the configured identity-staleness threshold in hours."""
+    raw = os.environ.get("OUROBOROS_IDENTITY_STALE_HOURS", "")
+    if raw.strip():
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return IDENTITY_STALE_HOURS_DEFAULT
+
 
 def build_user_content(task: Dict[str, Any]) -> Any:
     """Build user message content. Supports text + optional image."""
@@ -553,8 +568,9 @@ def build_health_invariants(env: Any) -> str:
         identity_path = env.drive_path("memory/identity.md")
         if identity_path.exists():
             age_hours = (_time.time() - identity_path.stat().st_mtime) / 3600
-            if age_hours > 8:
-                checks.append(f"WARNING: STALE IDENTITY — identity.md last updated {age_hours:.0f}h ago")
+            stale_threshold = _get_identity_stale_hours()
+            if age_hours > stale_threshold:
+                checks.append(f"WARNING: STALE IDENTITY — identity.md last updated {age_hours:.0f}h ago (threshold: {stale_threshold}h)")
             else:
                 checks.append("OK: identity.md recent")
     except Exception:

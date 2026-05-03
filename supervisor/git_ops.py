@@ -728,8 +728,18 @@ def checkout_and_reset(branch: str, reason: str = "unspecified",
             )
 
     def _run_git_resilient(cmd, **kwargs):
+        import os as _os
         import time
         check = bool(kwargs.pop("check", False))
+        # Force C locale for git so output stays English-parseable and ambiguous
+        # refs/paths produce predictable error messages. Caller-supplied env wins
+        # if explicitly provided.
+        if "env" not in kwargs:
+            _env = _os.environ.copy()
+            _env["LC_ALL"] = "C"
+            _env["LANG"] = "C"
+            _env["LANGUAGE"] = "C"
+            kwargs["env"] = _env
         for attempt in range(5):
             run_kwargs = dict(kwargs)
             run_kwargs.setdefault("capture_output", True)
@@ -764,7 +774,8 @@ def checkout_and_reset(branch: str, reason: str = "unspecified",
         if update_intent_target:
             _run_git_resilient(["git", "reset", "--hard", "HEAD"], cwd=str(REPO_DIR), check=True)
             _run_git_resilient(["git", "clean", "-fd"], cwd=str(REPO_DIR), check=True)
-        _run_git_resilient(["git", "checkout", "-B", branch, target_ref], cwd=str(REPO_DIR), check=True)
+        # Trailing "--" disambiguates branch from any same-named path (e.g. ouroboros/ dir vs ouroboros branch).
+        _run_git_resilient(["git", "checkout", "-B", branch, target_ref, "--"], cwd=str(REPO_DIR), check=True)
         if update_intent_target:
             _run_git_resilient(["git", "reset", "--hard", target_ref], cwd=str(REPO_DIR), check=True)
         _run_git_resilient(["git", "clean", "-fd"], cwd=str(REPO_DIR), check=True)
@@ -777,9 +788,10 @@ def checkout_and_reset(branch: str, reason: str = "unspecified",
         if rc_local != 0:
             _run_git_resilient(["git", "reset", "--hard", "HEAD"], cwd=str(REPO_DIR), check=True)
             _run_git_resilient(["git", "clean", "-fd"], cwd=str(REPO_DIR), check=True)
-            _run_git_resilient(["git", "checkout", "-b", branch], cwd=str(REPO_DIR), check=False)
+            _run_git_resilient(["git", "checkout", "-b", branch, "--"], cwd=str(REPO_DIR), check=False)
         else:
-            _run_git_resilient(["git", "checkout", branch], cwd=str(REPO_DIR), check=True)
+            # Trailing "--" disambiguates branch from any same-named path (e.g. ouroboros/ dir vs ouroboros branch).
+            _run_git_resilient(["git", "checkout", branch, "--"], cwd=str(REPO_DIR), check=True)
             _run_git_resilient(["git", "reset", "--hard", "HEAD"], cwd=str(REPO_DIR), check=True)
 
     # Clean __pycache__ to prevent stale bytecode (git checkout may not update mtime)

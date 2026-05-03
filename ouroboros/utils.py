@@ -204,7 +204,18 @@ def is_tool_success(result: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def run_cmd(cmd: List[str], cwd: Optional[pathlib.Path] = None) -> str:
-    res = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    # Force C locale for git/shell so output stays English-parseable and ambiguous
+    # refs/paths produce predictable error messages. Without this, e.g. a German
+    # system locale makes ``git checkout <branch>`` fail with German error text
+    # when a same-named path exists, and the ambiguity-resolution heuristic flips.
+    _env = os.environ.copy()
+    _env["LC_ALL"] = "C"
+    _env["LANG"] = "C"
+    _env["LANGUAGE"] = "C"
+    res = subprocess.run(
+        cmd, cwd=str(cwd) if cwd else None,
+        capture_output=True, text=True, env=_env,
+    )
     if res.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\n\nSTDOUT:\n{res.stdout}\n\nSTDERR:\n{res.stderr}"

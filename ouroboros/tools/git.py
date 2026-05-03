@@ -1069,7 +1069,9 @@ def _repo_write_commit(ctx: ToolContext, path: str, content: str,
         duration_sec=time.time() - _commit_start), msg)[1]
     try:
         try:
-            run_cmd(["git", "checkout", ctx.branch_dev], cwd=ctx.repo_dir)
+            # Trailing "--" disambiguates branch name from any same-named path
+            # (e.g. an ``ouroboros/`` directory next to the ``ouroboros`` branch).
+            run_cmd(["git", "checkout", ctx.branch_dev, "--"], cwd=ctx.repo_dir)
         except Exception as e:
             return _fail(f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}")
         try:
@@ -1200,7 +1202,9 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
         duration_sec=time.time() - _commit_start), msg)[1]
     try:
         try:
-            run_cmd(["git", "checkout", ctx.branch_dev], cwd=ctx.repo_dir)
+            # Trailing "--" disambiguates branch name from any same-named path
+            # (e.g. an ``ouroboros/`` directory next to the ``ouroboros`` branch).
+            run_cmd(["git", "checkout", ctx.branch_dev, "--"], cwd=ctx.repo_dir)
         except Exception as e:
             return _fail(f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}")
         outcome = _run_reviewed_stage_cycle(
