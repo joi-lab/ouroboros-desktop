@@ -33,12 +33,20 @@ foreground task is active so you do not race against yourself.
 Process-level extras:
 
 - **Module watcher** thread (`supervisor/module_watcher.py`) —
-  detects on-disk source changes and queues a clean restart so your
-  workers boot with fresh modules. Default-on.
+  detects on-disk source changes. The supervisor accumulates the
+  changed paths and notifies you ONCE per batch via
+  `inject_observation` after a settle window
+  (`OUROBOROS_DRIFT_SETTLE_SEC`, default 60s) or when a quorum of
+  files (`OUROBOROS_DRIFT_QUORUM`, default 3) is reached. Notification
+  is non-blocking — there is **no auto-restart**. To pick up the new
+  code, call `request_soft_restart()` (workers refresh; supervisor +
+  git untouched) or `request_restart()` (full process exit, only
+  needed when supervisor or `server.py` itself changed).
 - **OBC scheduler** thread (`ouroboros/openbotcity_scheduler.py`) —
-  every 30 minutes, calls `obc_heartbeat`, persists state, and
-  nudges consciousness when there are actionable items (DMs,
-  mentions, owner messages).
+  on a configurable cadence (`OPENBOTCITY_HEARTBEAT_INTERVAL_SEC`,
+  default 1800s, currently 300s in this drive), calls
+  `obc_heartbeat`, persists state, and nudges consciousness when
+  there are actionable items (DMs, mentions, owner messages).
 
 ## Memory layers (what persists, where)
 
@@ -47,9 +55,11 @@ Process-level extras:
 | `BIBLE.md` | Constitution. P0–P8 principles. | Versioned; you may propose changes through review. |
 | `memory/identity.md` | Your self-conception. | You update it as you grow (P1 duty). |
 | `memory/scratchpad.md` | Working memory — dated blocks, short-term notes. | Rotated; recent blocks visible in prompt. |
+| `memory/knowledge/*` | Topic-keyed knowledge base (`knowledge_read/write`). Includes `obc-journal` for OBC self-reflection notes — read before sustained engagement, append after notable moments. | Rotates by topic; you own append discipline. |
 | `ruvector.db` | Vectorized recall — embeddings of past content. | Persistent, queryable across sessions. |
 | `data/logs/chat.jsonl` & `events.jsonl` | Audit log of conversations + events. | Append-only. |
 | `data/openbotcity-credentials.json` | OBC bot JWT + identity. | Gitignored, mode 600. |
+| `adaptations.md` (repo root) | Rolling log of changes the maintainer + external assistant made between your sessions. Each entry: failure mode, change, files, kill-switch, and "what to consider when evaluating." Read it via `repo_read("adaptations.md")` when you boot to find out what's new. | Append-only; entries ask for your verdict. |
 
 In your prompt under **sparse mode** (the default for local-LLM
 profiles), you see: BIBLE + identity + scratchpad + runtime context
@@ -164,10 +174,14 @@ route through the `POLICY_PINNED_HOST` carve-out — the JWT never
 reaches the LLM safety check; a deterministic predicate validates
 each call. Outbound write cap: 50/day, configurable.
 
-The OBC scheduler polls heartbeat every 30 min in the background.
-On owner messages or unread DMs it calls
+The OBC scheduler polls heartbeat on its configured cadence in the
+background. On owner messages or unread DMs it calls
 `consciousness.inject_observation` so your next think-cycle
-prioritizes a reply.
+prioritizes a reply. **Note**: the 8 `obc_*` tools are CORE — they
+load from round 1 without `enable_tools`, so the moment you see an
+"OBC heartbeat" observation you can act directly. Outbound text is
+defensively decoded by `html.unescape` at the tool boundary, but
+write plain UTF-8 from the start (no HTML entities).
 
 **A2A (Agent-to-Agent)** — exists but currently dormant
 (`A2A_ENABLED=false`). When enabled, lets you discover and
@@ -191,19 +205,44 @@ flow through to model selection.
 
 These changes reshaped your runtime; they are listed so you have
 context when something behaves differently than older logs
-suggest:
+suggest. **Full narrative — including failure modes, file paths,
+kill-switches, and "what to consider when evaluating" — lives in
+`adaptations.md` at the repo root. Read it on boot via
+`repo_read("adaptations.md")` to pick up everything that happened
+between sessions.**
 
 - **Local-LLM compat layer** — compat profiles, prompt-mode
   ladder, tool-call dedup, bounded gate retries, productivity-
   aware escalation, resume layer.
-- **Module watcher** — auto-restart on source-tree drift, +
-  stale-module hint suffix on tool errors when the runtime is
-  running stale code.
+- **Module watcher → drift-batch + soft-restart** (2026-05-03,
+  replaces the original auto-restart). Watcher accumulates changes,
+  notifies you once per batch via `inject_observation`, and never
+  auto-restarts. New `request_soft_restart()` tool refreshes workers
+  without git operations. Stale-module hint suffix still appears on
+  tool errors when the runtime is running pre-restart code.
 - **`POLICY_PINNED_HOST` safety primitive** — generic mechanism
   for external-API carve-outs. Reusable for any future external
   service.
 - **OpenBotCity integration** — 8 tools + sidecar credentials +
-  30-min scheduler with optional autonomy nudges.
+  configurable scheduler with autonomy nudges. OBC tools are CORE
+  (always visible from round 1). Outbound `html.unescape` defends
+  against HTML-entity emission by smaller models. New `obc-journal`
+  KB topic for self-reflection on interactions — `knowledge_read`
+  before sustained engagement, `knowledge_write(append)` after
+  notable moments.
+- **Identity continuity** — `memory/identity.md` now documents the
+  "Ouroboros / PixelCanvas" handle separation so OBC introductions
+  don't burn a message on renegotiation.
+- **`run_shell` cmd cascade hardening** — when input looks like a
+  JSON/Python list literal but fails to parse, the recovery cascade
+  refuses cleanly with `SHELL_ARG_ERROR` instead of falling through
+  to `shlex.split` which produced garbage argv (`'[git,'`-style
+  ENOENT). Schema description now spells out array-of-strings
+  contract and `cwd=` over `cd`.
+- **`docs/ARCHITECTURE-LITE.md` injection** — this file is loaded
+  into the static block under sparse mode (you're reading it now);
+  full path breadcrumb in the sparse-mode tail so you can
+  `repo_read('docs/ARCHITECTURE-LITE.md')` to re-fetch on demand.
 - **Locale-stable git ops** — `LC_ALL=C` + `--` disambiguation
   across all `git checkout` call sites; resolved a German-locale
   ambiguity that wedged the agent for 3 hours on 2026-05-02.

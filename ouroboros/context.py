@@ -906,17 +906,19 @@ def build_llm_messages(
     if checklists_md.strip():
         static_text += "\n\n## CHECKLISTS.md\n\n" + checklists_md
     if arch_lite_md.strip():
-        static_text += "\n\n## ARCHITECTURE-LITE.md (self-portrait)\n\n" + arch_lite_md
+        static_text += "\n\n## docs/ARCHITECTURE-LITE.md (self-portrait)\n\n" + arch_lite_md
     if sparse:
         static_text += (
             "\n\n[Sparse prompt mode active — full ARCHITECTURE.md (~170K), "
             "DEVELOPMENT.md, README.md, CHECKLISTS.md, KB index, patterns, "
             "deep review, backlog, and recent JSONL tails are omitted. The "
             "ARCHITECTURE-LITE block above gives you the structural sketch; "
-            "use repo_read('docs/ARCHITECTURE.md') for the full reference, "
-            "knowledge_list / knowledge_read for KB topics, and data_read "
-            "for live state files. The runtime_context block in the dynamic "
-            "section above gives you the current repo_dir and drive_root paths.]"
+            "use repo_read('docs/ARCHITECTURE.md') for the full reference "
+            "(or repo_read('docs/ARCHITECTURE-LITE.md') if you want to "
+            "re-fetch the lite block on demand), knowledge_list / "
+            "knowledge_read for KB topics, and data_read for live state "
+            "files. The runtime_context block in the dynamic section above "
+            "gives you the current repo_dir and drive_root paths.]"
         )
     elif medium:
         static_text += (

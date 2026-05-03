@@ -125,5 +125,27 @@ def test_context_static_block_includes_lite_heading():
     src = (_REPO_ROOT / "ouroboros" / "context.py").read_text(encoding="utf-8")
     assert "ARCHITECTURE-LITE.md" in src and "self-portrait" in src.lower(), (
         "Static-block insertion must use a clear heading like "
-        "'## ARCHITECTURE-LITE.md (self-portrait)'."
+        "'## docs/ARCHITECTURE-LITE.md (self-portrait)'."
+    )
+
+
+def test_context_heading_carries_full_path():
+    """The heading MUST include the docs/ prefix so the agent can repo_read
+    the file without having to guess the path. Bare-basename heading led
+    to repeated ENOENT failures in production (2026-05-03)."""
+    src = (_REPO_ROOT / "ouroboros" / "context.py").read_text(encoding="utf-8")
+    assert "## docs/ARCHITECTURE-LITE.md" in src, (
+        "Heading must include 'docs/' prefix so repo_read targets the right "
+        "path. Without it the agent guesses the repo root and hits ENOENT."
+    )
+
+
+def test_sparse_tail_includes_arch_lite_path_breadcrumb():
+    """The sparse-mode explanatory tail must teach the path explicitly so
+    the agent can re-fetch the lite block on demand."""
+    src = (_REPO_ROOT / "ouroboros" / "context.py").read_text(encoding="utf-8")
+    assert "repo_read('docs/ARCHITECTURE-LITE.md')" in src, (
+        "Sparse-mode tail must include the breadcrumb "
+        "repo_read('docs/ARCHITECTURE-LITE.md') so the agent knows where "
+        "the file lives, parallel to the existing breadcrumb for full ARCH."
     )
