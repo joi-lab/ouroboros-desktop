@@ -113,6 +113,7 @@ TOOL_POLICY: Dict[str, str] = {
     "schedule_task": POLICY_SKIP,
     "cancel_task": POLICY_SKIP,
     "request_restart": POLICY_SKIP,
+    "request_soft_restart": POLICY_SKIP,
     "request_deep_self_review": POLICY_SKIP,
     "set_tool_timeout": POLICY_SKIP,
     "toggle_evolution": POLICY_SKIP,

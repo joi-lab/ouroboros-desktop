@@ -280,13 +280,18 @@ def emit_task_results(
     _store_task_result(env, task, text, usage, llm_trace, review_evidence=review_evidence)
     restart_reason = str(getattr(ctx, "pending_restart_reason", "") or "").strip()
     if restart_reason:
-        pending_events.append({
+        restart_policy = str(getattr(ctx, "pending_restart_policy", "") or "").strip()
+        evt = {
             "type": "restart_request",
             "reason": restart_reason,
             "ts": utc_now_iso(),
-        })
+        }
+        if restart_policy:
+            evt["policy"] = restart_policy
+        pending_events.append(evt)
         try:
             ctx.pending_restart_reason = None
+            ctx.pending_restart_policy = None
         except Exception:
             pass
 

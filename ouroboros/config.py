@@ -121,6 +121,16 @@ SETTINGS_DEFAULTS = {
     # stale-module cascade documented on 2026-05-02. Flip to ``False`` only
     # when actively patching the watcher itself.
     "OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE": True,
+    # Module-watcher drift batching. The supervisor watches ouroboros/
+    # source files for in-flight edits and notifies the agent rather than
+    # auto-restarting. ``SETTLE_SEC`` is the quiet window after the last
+    # edit before the agent is notified; ``QUORUM`` is the minimum number
+    # of distinct changed paths that triggers an immediate notification
+    # regardless of the settle window. Tune these together: a small
+    # quorum + small settle = fast, chatty notifications; a large quorum
+    # + large settle = batch big landings into a single message.
+    "OUROBOROS_DRIFT_SETTLE_SEC": 60,
+    "OUROBOROS_DRIFT_QUORUM": 3,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -809,6 +819,8 @@ def apply_settings_to_env(settings: dict) -> None:
         # Default ``true``; flip to ``false`` only when actively patching
         # the watcher itself.
         "OUROBOROS_AUTO_RESTART_ON_MODULE_CHANGE",
+        # Module-watcher drift batching (settle window + quorum).
+        "OUROBOROS_DRIFT_SETTLE_SEC", "OUROBOROS_DRIFT_QUORUM",
     ]
     for k in env_keys:
         val = settings.get(k)

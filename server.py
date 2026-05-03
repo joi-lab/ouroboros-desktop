@@ -826,6 +826,24 @@ def _run_supervisor(settings: dict) -> None:
                         exc_info=True)
             _module_watcher = None
 
+    # Drift accumulator — batches multiple file changes into one
+    # consent prompt instead of firing a restart per file. Settles
+    # after ``OUROBOROS_DRIFT_SETTLE_SEC`` seconds of no new changes,
+    # OR notifies immediately when ``OUROBOROS_DRIFT_QUORUM`` distinct
+    # files have accumulated.
+    try:
+        _drift_settle_sec = float(os.environ.get("OUROBOROS_DRIFT_SETTLE_SEC", "60"))
+    except ValueError:
+        _drift_settle_sec = 60.0
+    try:
+        _drift_quorum = int(os.environ.get("OUROBOROS_DRIFT_QUORUM", "3"))
+    except ValueError:
+        _drift_quorum = 3
+    _drift_state: Dict[str, Any] = {
+        "paths": set(), "first_seen": None,
+        "last_seen": None, "notified": False,
+    }
+
     # Main supervisor loop
     offset = 0
     crash_count = 0
@@ -834,28 +852,13 @@ def _run_supervisor(settings: dict) -> None:
             rotate_chat_log_if_needed(DATA_DIR)
             ensure_workers_healthy()
 
-            # Source-tree drift check: if a supervisor/agent file has
-            # changed on disk, synthesize a restart_request so the
-            # existing event-channel handles process exit + relaunch.
-            if _module_watcher is not None:
-                try:
-                    _drift = _module_watcher.check()
-                except Exception:
-                    log.warning("Module watcher tick failed", exc_info=True)
-                    _drift = None
-                if _drift is not None:
-                    append_jsonl(
-                        DATA_DIR / "logs" / "supervisor.jsonl",
-                        {"ts": time.time(), "type": "module_drift_detected",
-                         "changed_paths": list(_drift.changed_paths),
-                         "summary": _drift.summary_sentence()},
-                    )
-                    log.warning("Source drift detected (%s) — queuing restart.",
-                                _drift.summary_sentence())
-                    get_event_q().put({
-                        "type": "restart_request",
-                        "reason": f"module_drift: {_drift.summary_sentence()}",
-                    })
+            # Source-tree drift detection — accumulate → settle → notify
+            # Ouro → he chooses (via the request_soft_restart tool). No
+            # auto-restart, no chat spam. See _supervisor_check_module_drift.
+            _supervisor_check_module_drift(
+                _module_watcher, _drift_state,
+                _drift_settle_sec, _drift_quorum, _consciousness,
+            )
 
             event_q = get_event_q()
             while True:
@@ -864,6 +867,15 @@ def _run_supervisor(settings: dict) -> None:
                 except _queue_mod.Empty:
                     break
                 if evt.get("type") == "restart_request":
+                    # ``policy='soft'`` — refresh worker pool only (no
+                    # git, no exit). Anything else falls through to the
+                    # full graceful-shutdown + exit(42) path.
+                    if str(evt.get("policy", "")).lower() == "soft":
+                        _supervisor_handle_soft_restart(
+                            evt, _event_ctx, _module_watcher,
+                            _consciousness, _drift_state,
+                        )
+                        continue
                     _handle_restart_in_supervisor(evt, _event_ctx)
                     continue
                 dispatch_event(evt, _event_ctx)
@@ -886,6 +898,156 @@ def _run_supervisor(settings: dict) -> None:
                 return
             time.sleep(min(30, 2 ** crash_count))
     _supervisor_thread = None
+
+
+def _supervisor_check_module_drift(
+    module_watcher: Any,
+    drift_state: Dict[str, Any],
+    settle_sec: float,
+    quorum: int,
+    consciousness: Any,
+) -> None:
+    """One supervisor-tick of the drift accumulator.
+
+    Accumulates changed paths from the watcher into ``drift_state``. When
+    the batch reaches ``quorum`` distinct files OR has been quiet for
+    ``settle_sec`` seconds, fires ``_emit_drift_notification`` once and
+    sets ``drift_state['notified']=True``. Subsequent ticks remain silent
+    until a soft restart clears the state (see
+    ``_supervisor_handle_soft_restart``).
+
+    No auto-restart, no chat spam — Ouro is informed via
+    inject_observation and decides when to call ``request_soft_restart``.
+    """
+    from supervisor.state import append_jsonl
+    if module_watcher is None:
+        return
+    try:
+        drift = module_watcher.check()
+    except Exception:
+        log.warning("Module watcher tick failed", exc_info=True)
+        drift = None
+    if drift is not None:
+        for p in drift.changed_paths:
+            drift_state["paths"].add(p)
+        now = time.time()
+        if drift_state["first_seen"] is None:
+            drift_state["first_seen"] = now
+        drift_state["last_seen"] = now
+        drift_state["notified"] = False
+        append_jsonl(
+            DATA_DIR / "logs" / "supervisor.jsonl",
+            {"ts": now, "type": "module_drift_detected",
+             "changed_paths": list(drift.changed_paths),
+             "summary": drift.summary_sentence(),
+             "batch_size": len(drift_state["paths"])},
+        )
+    if not drift_state["paths"] or drift_state["notified"]:
+        return
+    now = time.time()
+    quorum_hit = len(drift_state["paths"]) >= quorum
+    settle_hit = (
+        drift_state["last_seen"] is not None
+        and (now - drift_state["last_seen"]) >= settle_sec
+    )
+    if not (quorum_hit or settle_hit):
+        return
+    in_dev_mode = not bool(
+        os.environ.get("OUROBOROS_MANAGED_BY_LAUNCHER", "").strip() == "1"
+    )
+    _emit_drift_notification(sorted(drift_state["paths"]), in_dev_mode, consciousness)
+    drift_state["notified"] = True
+
+
+def _emit_drift_notification(paths: List[str], in_dev_mode: bool, consciousness: Any) -> None:
+    """Notify the agent ONCE per drift batch via inject_observation.
+    No chat spam; no automatic restart. Ouro decides when to apply."""
+    from supervisor.state import append_jsonl
+    n = len(paths)
+    head = paths[:8]
+    tail = f"\n  ... +{n - 8} more" if n > 8 else ""
+    path_lines = "\n".join(f"  - {p}" for p in head) + tail
+    if in_dev_mode:
+        action = (
+            "To apply: ask Rob to restart, or call request_soft_restart "
+            "if it's just an ouroboros/ change (refreshes worker pool "
+            "without git operations). Until applied, your tool errors "
+            "may carry STALE_MODULE_HINT."
+        )
+    else:
+        action = (
+            "To apply: call request_soft_restart() to refresh the "
+            "worker pool with the new code. Until applied, your tool "
+            "errors may carry STALE_MODULE_HINT."
+        )
+    text = (
+        f"⚠️ Module drift settled — {n} file(s) changed on disk since "
+        f"this process started:\n{path_lines}\n\n{action}"
+    )
+    if consciousness is not None:
+        try:
+            consciousness.inject_observation(text)
+        except Exception:
+            log.debug("inject_observation failed", exc_info=True)
+    append_jsonl(
+        DATA_DIR / "logs" / "supervisor.jsonl",
+        {"ts": time.time(), "type": "module_drift_batch_settled",
+         "changed_paths": paths, "in_dev_mode": in_dev_mode,
+         "notified_via_observation": consciousness is not None},
+    )
+    log.warning("Module drift settled (%d files) — notified agent; "
+                "no auto-restart.", n)
+
+
+def _supervisor_handle_soft_restart(
+    evt: Dict[str, Any],
+    ctx: Any,
+    module_watcher: Any,
+    consciousness: Any,
+    drift_state: Dict[str, Any],
+) -> None:
+    """Handle ``restart_request`` events with ``policy='soft'``.
+
+    Refreshes the worker pool only — kill+respawn workers so they
+    re-import modules from disk, no git operations, supervisor process
+    untouched. Clears the drift accumulator and re-baselines the watcher
+    so the new on-disk state becomes the new no-drift reference.
+    """
+    from supervisor.state import append_jsonl
+    try:
+        ctx.kill_workers(force=True)
+        ctx.spawn_workers(ctx.MAX_WORKERS)
+        append_jsonl(
+            DATA_DIR / "logs" / "supervisor.jsonl",
+            {"ts": time.time(), "type": "soft_restart_completed",
+             "reason": evt.get("reason", ""),
+             "worker_count": ctx.MAX_WORKERS},
+        )
+        log.warning("Soft restart completed: refreshed %d worker(s).", ctx.MAX_WORKERS)
+        drift_state["paths"].clear()
+        drift_state["first_seen"] = None
+        drift_state["last_seen"] = None
+        drift_state["notified"] = False
+        if module_watcher is not None:
+            try:
+                module_watcher.baseline()
+            except Exception:
+                log.debug("watcher rebaseline failed", exc_info=True)
+        if consciousness is not None:
+            try:
+                consciousness.inject_observation(
+                    "✅ Soft restart complete. Worker pool refreshed; "
+                    "module drift cleared. New code is now in use."
+                )
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("Soft restart failed: %s", exc, exc_info=True)
+        append_jsonl(
+            DATA_DIR / "logs" / "supervisor.jsonl",
+            {"ts": time.time(), "type": "soft_restart_failed",
+             "error": repr(exc)},
+        )
 
 
 def _handle_restart_in_supervisor(evt: Dict[str, Any], ctx: Any) -> None:

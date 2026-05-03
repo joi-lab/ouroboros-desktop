@@ -48,6 +48,35 @@ def _request_restart(ctx: ToolContext, reason: str) -> str:
     return f"Restart requested: {reason}"
 
 
+def _request_soft_restart(ctx: ToolContext, reason: str = "") -> str:
+    """Refresh the worker pool to load on-disk module changes.
+
+    Soft restart = kill workers + respawn them. The supervisor process
+    keeps running; no git operations are performed. This is the right
+    response to a ``module_drift_batch_settled`` notification when the
+    changes are confined to ``ouroboros/`` (the agent's own modules).
+
+    Use this instead of ``request_restart`` when:
+      - You see "Module drift settled" in your context
+      - You want to pick up the new code without going through the
+        rescue_and_reset path
+      - The change is inside ``ouroboros/`` (worker module space)
+
+    Use ``request_restart`` instead when the supervisor itself or
+    ``server.py`` has changed — those require a full process restart
+    that this soft path cannot deliver.
+    """
+    ctx.pending_restart_reason = (
+        str(reason or "").strip() or "agent_requested_soft_restart"
+    )
+    ctx.pending_restart_policy = "soft"
+    return (
+        f"Soft restart queued (policy=soft): {ctx.pending_restart_reason}. "
+        "The worker pool will refresh after this task completes; "
+        "supervisor and git state are untouched."
+    )
+
+
 def _set_tool_timeout(ctx: ToolContext, seconds: int) -> str:
     """Persist and hot-apply the global tool timeout.
 
@@ -324,6 +353,11 @@ def get_tools() -> List[ToolEntry]:
             "description": "Ask supervisor to restart runtime (after successful push).",
             "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
         }, _request_restart),
+        ToolEntry("request_soft_restart", {
+            "name": "request_soft_restart",
+            "description": "Refresh the worker pool to load on-disk module changes. Kill+respawn workers; supervisor and git state untouched. Use after a 'Module drift settled' notification when changes are confined to ouroboros/. Use request_restart instead for supervisor or server.py changes.",
+            "parameters": {"type": "object", "properties": {"reason": {"type": "string", "description": "Why the soft restart is needed (e.g. 'pick up watcher fix')"}}, "required": []},
+        }, _request_soft_restart),
         ToolEntry("promote_to_stable", {
             "name": "promote_to_stable",
             "description": "Promote ouroboros -> ouroboros-stable. Call when you consider the code stable.",

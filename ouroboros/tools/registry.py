@@ -377,6 +377,11 @@ class ToolContext:
     current_chat_id: Optional[int] = None
     current_task_type: Optional[str] = None
     pending_restart_reason: Optional[str] = None
+    # When set to "soft", the supervisor will refresh worker pool only
+    # (kill+spawn workers; no git ops, no process exit). When None or
+    # any other value, the existing rescue_and_reset path runs.
+    # Used by request_soft_restart to apply module drift safely.
+    pending_restart_policy: Optional[str] = None
     last_push_succeeded: bool = False
     emit_progress_fn: Callable[[str], None] = field(default=lambda _: None)
 
@@ -449,7 +454,7 @@ CORE_TOOL_NAMES = {
     "update_scratchpad", "update_identity",
     "chat_history", "web_search",
     "send_user_message", "switch_model",
-    "request_restart", "promote_to_stable",
+    "request_restart", "request_soft_restart", "promote_to_stable",
     "knowledge_read", "knowledge_write", "knowledge_list",
     "browse_page", "browser_action", "analyze_screenshot",
 }
