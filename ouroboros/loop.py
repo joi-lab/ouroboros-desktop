@@ -525,6 +525,21 @@ def run_llm_loop(
     active_effort = initial_effort
     active_use_local = os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1")
 
+    # Phase 6 auto-routing (2026-05-04): when the agent issues tool calls
+    # with is_code_tool=True (repo_write, str_replace_editor, etc.), the
+    # next round should run on MODEL_CODE rather than MAIN. Default-on
+    # via OUROBOROS_AUTO_ROUTE_CODE; agent's switch_model overrides
+    # remain authoritative. Honors BIBLE P5 (LLM-first) by reading a
+    # signal the agent's tool calls already produce — agency over the
+    # default, not removal of it.
+    _auto_route_code = (
+        os.environ.get("OUROBOROS_AUTO_ROUTE_CODE", "true").strip().lower()
+        in ("true", "1", "yes")
+    )
+    _model_code = os.environ.get("OUROBOROS_MODEL_CODE", "").strip()
+    _model_main = os.environ.get("OUROBOROS_MODEL", "").strip()
+    _non_code_streak = 0  # rounds since the last code-tool call
+
     llm_trace: Dict[str, Any] = {"reasoning_notes": [], "tool_calls": []}
     accumulated_usage: Dict[str, Any] = {}
     max_retries = 3
@@ -703,6 +718,28 @@ def run_llm_loop(
                 tool_calls, tools, drive_logs, task_id, stateful_executor,
                 messages, llm_trace, emit_progress
             )
+
+            # Phase 6 auto-routing: inspect the round's tool calls; if any
+            # were is_code_tool=True, route the next round to MODEL_CODE.
+            # After OUROBOROS_AUTO_ROUTE_CODE_NON_CODE_STREAK consecutive
+            # non-code rounds (default 1), reset to MAIN.
+            if _auto_route_code and _model_code and _model_code != _model_main:
+                round_calls = llm_trace.get("tool_calls") or []
+                round_calls = round_calls[-len(tool_calls):] if tool_calls else []
+                _had_code_tool = any(
+                    bool(tc.get("is_code_tool")) for tc in round_calls
+                )
+                if _had_code_tool:
+                    _non_code_streak = 0
+                    if active_model != _model_code:
+                        tools._ctx.active_model_override = _model_code
+                else:
+                    _non_code_streak += 1
+                    _streak_cap = int(os.environ.get(
+                        "OUROBOROS_AUTO_ROUTE_CODE_NON_CODE_STREAK", "1"
+                    ) or "1")
+                    if _non_code_streak >= _streak_cap and active_model != _model_main:
+                        tools._ctx.active_model_override = _model_main
 
             budget_result = _check_budget_limits(
                 budget_remaining_usd, accumulated_usage, round_idx, messages,

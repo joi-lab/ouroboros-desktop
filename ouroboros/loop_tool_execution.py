@@ -634,6 +634,7 @@ def process_tool_results(
             "args": _safe_args(exec_result["args_for_log"]),
             "result": truncate_for_log(exec_result["result"], 700),
             "is_error": is_error,
+            "is_code_tool": exec_result.get("is_code_tool", False),
             **(exec_result.get("result_meta") or {}),
         })
 

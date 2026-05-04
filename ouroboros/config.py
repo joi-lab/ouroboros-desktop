@@ -116,6 +116,20 @@ SETTINGS_DEFAULTS = {
     "A2A_AGENT_DESCRIPTION": "",
     "A2A_MAX_CONCURRENT": 3,
     "A2A_TASK_TTL_HOURS": 24,
+    # Auto-routing — when an agent's tool calls include
+    # ``is_code_tool=True`` (repo_write, str_replace_editor, etc.), the
+    # next round runs on MODEL_CODE rather than MAIN. The agent's
+    # ``switch_model`` calls override both directions (BIBLE P5
+    # respected). Default ``True``. Setting ``False`` reverts to the
+    # original LLM-first-only behavior where every round defaults to
+    # MAIN unless the agent explicitly switches.
+    "OUROBOROS_AUTO_ROUTE_CODE": True,
+    # Number of consecutive non-code rounds before auto-routing reverts
+    # from MODEL_CODE back to MAIN. Default 1 (revert immediately on any
+    # round without code-tool usage). Higher values keep the agent on
+    # CODE longer; useful when code work is interleaved with brief
+    # reasoning rounds that you don't want to penalize.
+    "OUROBOROS_AUTO_ROUTE_CODE_NON_CODE_STREAK": 1,
 }
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
@@ -795,6 +809,9 @@ def apply_settings_to_env(settings: dict) -> None:
         "A2A_ENABLED", "A2A_PORT", "A2A_HOST",
         "A2A_AGENT_NAME", "A2A_AGENT_DESCRIPTION",
         "A2A_MAX_CONCURRENT", "A2A_TASK_TTL_HOURS",
+        # Auto-routing — code tools → MODEL_CODE.
+        "OUROBOROS_AUTO_ROUTE_CODE",
+        "OUROBOROS_AUTO_ROUTE_CODE_NON_CODE_STREAK",
     ]
     for k in env_keys:
         val = settings.get(k)
