@@ -78,6 +78,58 @@ _LIGHT_MUTATION_INDICATORS = (
 )
 
 
+def _format_handler_signature_hint(name: str, handler: Callable, err_msg: str) -> str:
+    """Render a teachable signature hint for TOOL_ARG_ERROR messages.
+
+    When a handler raises ``TypeError`` because the model called the tool
+    with bad kwargs (unexpected name, missing required, double-supplied
+    positional+keyword), the bare exception message tells the model what
+    *broke* but not what would have *worked*. Smaller local-LLM coders
+    (qwen3-coder-30b, qwen2.5-coder-14b) loop on the same malformation
+    because the surfaced error has no recovery signpost.
+
+    Observed 2026-05-04: a consolidation task called
+    ``data_write(path=..., content=..., force=True)`` and the runtime
+    surfaced "got an unexpected keyword argument 'force'" with no list of
+    valid kwargs. This helper appends a one-line signature reminder that
+    enumerates the handler's accepted arguments and their defaults, so
+    the model's next attempt can self-correct.
+
+    Returns an empty string when introspection fails or when ``err_msg``
+    doesn't match a known kwarg/arity TypeError shape (avoids noise on
+    unrelated TypeErrors raised inside the handler body).
+    """
+    triggers = (
+        "unexpected keyword argument",
+        "got an unexpected keyword",
+        "missing 1 required positional argument",
+        "missing required argument",
+        "got multiple values for",
+        "takes no keyword arguments",
+    )
+    if not any(t in err_msg for t in triggers):
+        return ""
+    try:
+        import inspect
+        sig = inspect.signature(handler)
+        params: List[str] = []
+        for pname, p in sig.parameters.items():
+            # ctx is the runtime-injected first arg; the model never sees it.
+            if pname == "ctx":
+                continue
+            if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            if p.default is inspect.Parameter.empty:
+                params.append(pname)
+            else:
+                params.append(f"{pname}={p.default!r}")
+        if not params:
+            return ""
+        return f"\n  Valid args for {name}: ({', '.join(params)})"
+    except Exception:
+        return ""
+
+
 def _detect_runtime_mode_elevation(text_lower: str) -> bool:
     """Return True when ``text_lower`` (a lowercased shell argv string OR
     a script file's lowercased content) matches the v5.1.2 elevation
@@ -1303,7 +1355,7 @@ class ToolRegistry:
         try:
             result = entry.handler(self._ctx, **args)
         except TypeError as e:
-            return f"⚠️ TOOL_ARG_ERROR ({name}): {e}"
+            return f"⚠️ TOOL_ARG_ERROR ({name}): {e}{_format_handler_signature_hint(name, entry.handler, str(e))}"
         except Exception as e:
             return f"⚠️ TOOL_ERROR ({name}): {e}"
         if name == "run_shell":
