@@ -83,6 +83,14 @@ SETTINGS_DEFAULTS = {
     # primary location since v4.50). Empty means "use only the data
     # plane". Ouroboros never clones or pulls this directory itself.
     "OUROBOROS_SKILLS_REPO_PATH": "",
+    # 2026-05-05: branch override for fork drives. Empty means
+    # "use upstream defaults (ouroboros / ouroboros-stable)" — the
+    # historical behavior. Forks on a different working branch
+    # (e.g. local-first-patches) set this so repo_commit and
+    # repo_write_commit don't try to checkout the upstream branch
+    # and fail on divergent history.
+    "OUROBOROS_BRANCH_DEV": "",
+    "OUROBOROS_BRANCH_STABLE": "",
     "OUROBOROS_CLAWHUB_REGISTRY_URL": "https://clawhub.ai/api/v1",
     "OUROBOROS_HUB_CATALOG_URL": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main/catalog.json",
     # Scope review: single-model blocking reviewer (runs after triad review)
@@ -782,6 +790,8 @@ def apply_settings_to_env(settings: dict) -> None:
         "OUROBOROS_SCOPE_REVIEW_MODEL",
         # Phase 2 runtime-mode + skills-repo plumbing (no runtime gating yet).
         "OUROBOROS_RUNTIME_MODE", "OUROBOROS_SKILLS_REPO_PATH",
+        # 2026-05-05: branch override for fork drives (see SETTINGS_DEFAULTS).
+        "OUROBOROS_BRANCH_DEV", "OUROBOROS_BRANCH_STABLE",
         # v4.50+ ClawHub marketplace registry URL.
         "OUROBOROS_CLAWHUB_REGISTRY_URL",
         "OUROBOROS_EFFORT_TASK", "OUROBOROS_EFFORT_EVOLUTION",

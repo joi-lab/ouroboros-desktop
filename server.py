@@ -644,14 +644,28 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
 
 
 def _runtime_branch_defaults() -> tuple[str, str]:
-    branch_dev = "ouroboros"
-    branch_stable = "ouroboros-stable"
+    # 2026-05-05: env override for fork drives. The default branch is
+    # "ouroboros" (the upstream development branch), but a forked drive
+    # working on a different branch (e.g. local-first-patches) would have
+    # every repo_commit / repo_write_commit fail at the
+    # ``git checkout <branch_dev> --`` step because checkout to the
+    # upstream branch hits divergent history. Respecting OUROBOROS_BRANCH_DEV
+    # (set in settings.json -> apply_settings_to_env) lets fork drives
+    # commit on their own branch without patching this every release.
+    env_dev = (os.environ.get("OUROBOROS_BRANCH_DEV") or "").strip()
+    env_stable = (os.environ.get("OUROBOROS_BRANCH_STABLE") or "").strip()
+    branch_dev = env_dev or "ouroboros"
+    branch_stable = env_stable or "ouroboros-stable"
     if not _LAUNCHER_MANAGED:
         return branch_dev, branch_stable
     try:
         from supervisor import git_ops as git_ops_module
         if hasattr(git_ops_module, "managed_branch_defaults"):
-            return git_ops_module.managed_branch_defaults(REPO_DIR)
+            managed_dev, managed_stable = git_ops_module.managed_branch_defaults(REPO_DIR)
+            # Env override wins over launcher-managed defaults so fork
+            # drives keep their explicit branch even when supervisor is
+            # active. Empty env values fall through to managed defaults.
+            return (env_dev or managed_dev, env_stable or managed_stable)
     except Exception:
         pass
     return branch_dev, branch_stable
