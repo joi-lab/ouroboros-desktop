@@ -192,6 +192,19 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     // Task ids that have been fully cleaned up (DOM removed, state freed).
     // Checked in syncHistory to prevent retired tasks from being recreated.
     const retiredTaskIds = new Set();
+    // 2026-05-04: caps to prevent unbounded growth on long-running sessions.
+    // record.items / its DOM mirror grow per activity event. The dedupe-on-
+    // last-only mitigation in applyLiveCardState fails on interleaved event
+    // patterns (e.g. alternating provider_incomplete_response + llm_usage
+    // during a stuck-round retry storm), so without these caps a single
+    // wedged task can accumulate hundreds of timeline rows. liveCardRecords
+    // also retains finished records intentionally (to keep cards expandable),
+    // so its size grows monotonically with completed tasks. Both bounds kick
+    // in well past where any user is interactively scrolling — finished
+    // cards beyond MAX_LIVE_CARD_RECORDS are reconstructed from progress.jsonl
+    // on page reload.
+    const MAX_LIVE_TIMELINE_ITEMS = 200;
+    const MAX_LIVE_CARD_RECORDS = 100;
     let activeLiveGroupId = '';
     let historySyncTimer = null;
     let pendingReconnectSync = false;  // Set when a fromReconnect sync arrives while one is already in-flight.
@@ -581,6 +594,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             renderLiveCardTimeline(record);
             syncLiveCardLayout(record);
         });
+        evictOldestFinishedRecordIfFull();
         liveCardRecords.set(normalizedGroupId, record);
         resetLiveCardRecord(record);
         return record;
@@ -730,6 +744,31 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         record.timelineEl.innerHTML = record.items.map((item) => buildTimelineItemHtml(item, record)).join('');
     }
 
+    // 2026-05-04: cap record.items + its DOM mirror per task. Called after
+    // any push to record.items to keep the timeline bounded.
+    function trimRecordItems(record) {
+        while (record.items.length > MAX_LIVE_TIMELINE_ITEMS) {
+            const removed = record.items.shift();
+            if (removed?.lineKey) record.expandedLineKeys.delete(removed.lineKey);
+            const firstEl = record.timelineEl.firstElementChild;
+            if (firstEl) firstEl.remove();
+        }
+    }
+
+    // 2026-05-04: cap liveCardRecords.size. When at or above the cap, evict
+    // the oldest finished record (Map iteration order is insertion order).
+    // We only evict finished cards — running cards stay regardless of cap.
+    function evictOldestFinishedRecordIfFull() {
+        if (liveCardRecords.size < MAX_LIVE_CARD_RECORDS) return;
+        for (const [tid, rec] of liveCardRecords) {
+            if (rec?.finished) {
+                if (rec.root && rec.root.parentNode) rec.root.remove();
+                liveCardRecords.delete(tid);
+                return;
+            }
+        }
+    }
+
     // Incremental: append a new item without touching existing DOM nodes.
     function appendTimelineItem(item, record) {
         const wrapper = document.createElement('div');
@@ -822,6 +861,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     dedupeKey: syntheticKey,
                     lineKey,
                 });
+                trimRecordItems(record);
                 timelineUpdate = 'append';
             }
         }

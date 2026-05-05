@@ -573,3 +573,102 @@ class TestRenderMarkdownLinkSanitization:
         assert "mailto:" in content, (
             "renderMarkdown should allowlist mailto: scheme in link sanitizer"
         )
+
+
+# ── Live-card memory leak guards (2026-05-04) ────────────────────────────────
+#
+# Three accumulation sites in chat.js made browser memory grow monotonically
+# over long sessions: record.items per task, the matching DOM nodes under
+# record.timelineEl, and finished-task records in the liveCardRecords Map.
+# The dedupe-against-last-only mitigation in applyLiveCardState fails on
+# interleaved retry storms (e.g. alternating provider_incomplete_response +
+# llm_usage during a stuck-round loop), so a single wedged task can push
+# hundreds of entries before recovery.
+#
+# These contract tests pin the caps + helpers so the guards can't be silently
+# removed in a refactor.
+
+def test_chat_js_declares_live_timeline_caps():
+    """MAX_LIVE_TIMELINE_ITEMS and MAX_LIVE_CARD_RECORDS constants must exist."""
+    src = _src()
+    assert "MAX_LIVE_TIMELINE_ITEMS" in src, (
+        "chat.js must declare MAX_LIVE_TIMELINE_ITEMS to bound record.items per task"
+    )
+    assert "MAX_LIVE_CARD_RECORDS" in src, (
+        "chat.js must declare MAX_LIVE_CARD_RECORDS to bound liveCardRecords.size"
+    )
+
+
+def test_chat_js_trim_record_items_helper_exists():
+    """trimRecordItems(record) must exist and shift items + DOM together."""
+    src = _src()
+    assert "function trimRecordItems(record)" in src, (
+        "chat.js must define trimRecordItems(record) to bound record.items"
+    )
+    # The helper must shift the array AND remove the matching first DOM child
+    # in lockstep. Without the DOM removal the timeline node count outgrows
+    # the array — same leak shape, different surface.
+    trim_start = src.index("function trimRecordItems(record)")
+    trim_end = src.index("\n    }", trim_start)
+    trim_body = src[trim_start:trim_end]
+    assert "record.items.shift()" in trim_body, (
+        "trimRecordItems must shift the oldest item off record.items"
+    )
+    assert "record.timelineEl.firstElementChild" in trim_body, (
+        "trimRecordItems must remove the matching first DOM child to keep "
+        "the timeline DOM bounded in lockstep with record.items"
+    )
+    assert "expandedLineKeys.delete" in trim_body, (
+        "trimRecordItems must delete the shifted item's lineKey from "
+        "record.expandedLineKeys to keep that Set bounded too"
+    )
+
+
+def test_chat_js_calls_trim_after_pushing_to_record_items():
+    """Every record.items.push site that can grow unboundedly must be paired
+    with a trimRecordItems(record) call. Today that's the append branch in
+    applyLiveCardState — when dedupe-against-last fails, a new item is pushed
+    and the cap must engage."""
+    src = _src()
+    # Exact call must appear after the push in the append branch.
+    push_idx = src.index("record.items.push({")
+    after_push = src[push_idx:push_idx + 800]
+    assert "trimRecordItems(record)" in after_push, (
+        "record.items.push must be followed by trimRecordItems(record) "
+        "to bound timeline growth on retry storms"
+    )
+
+
+def test_chat_js_evicts_finished_records_when_map_full():
+    """evictOldestFinishedRecordIfFull() must exist and be called from
+    createLiveCardRecord before the new record is set, so liveCardRecords.size
+    stays bounded at MAX_LIVE_CARD_RECORDS over long sessions."""
+    src = _src()
+    assert "function evictOldestFinishedRecordIfFull()" in src, (
+        "chat.js must define evictOldestFinishedRecordIfFull() to bound "
+        "liveCardRecords.size when finished records accumulate"
+    )
+    evict_start = src.index("function evictOldestFinishedRecordIfFull()")
+    evict_end = src.index("\n    }", evict_start)
+    evict_body = src[evict_start:evict_end]
+    # Only finished cards may be evicted — running cards must be untouched.
+    assert "rec?.finished" in evict_body or "rec.finished" in evict_body, (
+        "evictOldestFinishedRecordIfFull must only evict records where "
+        "rec.finished is true (running cards must be retained)"
+    )
+    assert "liveCardRecords.delete(" in evict_body, (
+        "evictOldestFinishedRecordIfFull must call liveCardRecords.delete()"
+    )
+    assert ".root.remove()" in evict_body or "root.remove()" in evict_body, (
+        "evictOldestFinishedRecordIfFull must remove the evicted record's "
+        "DOM node so it doesn't linger detached in memory"
+    )
+
+    # Must be invoked at the only insertion site: createLiveCardRecord.
+    create_start = src.index("function createLiveCardRecord(")
+    create_end = src.index("\n    function getLiveCardRecord(", create_start)
+    create_body = src[create_start:create_end]
+    assert "evictOldestFinishedRecordIfFull()" in create_body, (
+        "createLiveCardRecord must call evictOldestFinishedRecordIfFull() "
+        "before liveCardRecords.set() to enforce the cap"
+    )
