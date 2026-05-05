@@ -1170,7 +1170,29 @@ def _repo_write_commit(ctx: ToolContext, path: str, content: str,
         try:
             run_cmd(["git", "checkout", ctx.branch_dev], cwd=ctx.repo_dir)
         except Exception as e:
-            return _fail(f"⚠️ GIT_ERROR (checkout): {_sanitize_git_error(str(e))}")
+            # Mirror of the resilience block in ``_repo_commit_push`` (merged
+            # in #36): the original code aborted on ANY checkout failure —
+            # including the common case where the agent is already on
+            # ``branch_dev`` with a dirty tree because the dirty files ARE
+            # what they're trying to write+commit. When checkout fails,
+            # check whether we're already on the right branch. If so, the
+            # failure is incidental (typically a no-op-but-git-complained
+            # on a dirty tree) and we proceed to the write+stage. Only
+            # abort when on a different branch — where the checkout was
+            # actually needed.
+            err_msg = _sanitize_git_error(str(e))
+            already_on_target = False
+            try:
+                current_branch = run_cmd(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=ctx.repo_dir,
+                ).strip()
+                already_on_target = (current_branch == ctx.branch_dev)
+            except Exception:
+                pass
+            if not already_on_target:
+                return _fail(f"⚠️ GIT_ERROR (checkout): {err_msg}")
+            # else: already on branch_dev; proceed to write+stage.
         try:
             write_text(ctx.repo_path(path), content)
         except Exception as e:
