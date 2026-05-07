@@ -175,6 +175,19 @@ _GREP_REGEX_MODE_FLAGS = frozenset((
 ))
 _GREP_BACKSLASH_PIPE_PATTERN = re.compile(r'\\\|')
 
+# Detect tool-name-as-argv[0] malformation seen in production with smaller
+# coder models (qwen3-coder-30b in particular). The model emits:
+#   {"name": "run_shell", "arguments": {"cmd": ["run_shell", "cd /x && y"]}}
+# instead of the correct:
+#   {"name": "run_shell", "arguments": {"cmd": ["bash", "-c", "cd /x && y"]}}
+# subprocess returns ``ENOENT`` on the literal "run_shell"; the resulting
+# error message gives the model no signal to recover, so it loops on the
+# same shape. Surface a structured hint instead with a concrete fix.
+# Same shape as the merged ``SHELL_REGEX_HINT`` (#37) — boundary-level
+# defensive enrichment, not a behavior change.
+_TOOL_NAMES_AS_ARGV0 = frozenset(("run_shell", "shell"))
+_SHELL_META_HINTS = ("&&", "||", "|", ">", "<", ";", "$(", "`")
+
 
 def _grep_has_explicit_regex_mode(cmd: List[str]) -> bool:
     """Return True when grep argv explicitly chooses regex/string flavor."""
@@ -265,6 +278,34 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
     if not isinstance(cmd, list):
         return "⚠️ SHELL_ARG_ERROR: cmd must be a list of strings."
     cmd = [str(x) for x in cmd]
+
+    # Tool-name-as-argv[0] malformation guard — see _TOOL_NAMES_AS_ARGV0
+    # block at top of file for the production failure mode. Surface a
+    # teachable hint before subprocess returns an opaque ENOENT.
+    if cmd and cmd[0] in _TOOL_NAMES_AS_ARGV0:
+        bad = cmd[0]
+        rest = cmd[1:]
+        fix = ""
+        if len(rest) == 1 and any(m in rest[0] for m in _SHELL_META_HINTS):
+            fix = (
+                f'  Likely fix (shell metachars detected — wrap with bash -c):\n'
+                f'    run_shell(cmd=["bash", "-c", {rest[0]!r}])\n\n'
+            )
+        elif rest:
+            fix = (
+                f'  Likely fix (drop the tool name from argv):\n'
+                f'    run_shell(cmd={rest!r})\n\n'
+            )
+        return (
+            f'⚠️ SHELL_ARG_ERROR: cmd[0] is the tool name {bad!r}, not an executable. '
+            'argv[0] must be a real program (e.g. "git", "ls", "bash", "python").\n\n'
+            + fix +
+            '  Notes:\n'
+            '  - For pipelines / && / variable expansion: ["bash", "-c", "..."]\n'
+            '  - For changing directory: pass cwd="path", do not put "cd ..." in argv\n'
+            '  - For reading files: prefer repo_read / data_read\n'
+            '  - For searching code: prefer code_search'
+        )
 
     executable_name = pathlib.Path(cmd[0]).name.lower() if cmd else ""
     if executable_name not in _SHELL_INTERPRETERS:
