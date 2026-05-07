@@ -115,7 +115,7 @@ def test_explicit_truncate_sentinel_bypasses_guard(tmp_path):
     to acknowledge intentional destruction. Sentinel is stripped before
     write so it doesn't pollute the manifest."""
     _seed_identity(tmp_path, 12000)
-    new_content = "<<CONFIRMED_TRUNCATE>>\nNew minimal identity after major rewrite."
+    new_content = "<<CONFIRMED_TRUNCATE>>\nNew minimal identity after major rewrite. Compact but intentional."
     result = _update_identity(_ctx(tmp_path), content=new_content)
     assert "OK: identity updated" in result
     # Verify the sentinel was stripped from the persisted content.

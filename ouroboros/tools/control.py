@@ -194,10 +194,26 @@ def _update_identity(ctx: ToolContext, content: str) -> str:
     destructive calls — see the comment there for the corruption
     pattern that motivated it.
     """
-    if not content or not isinstance(content, str) or len(content.strip()) < 50:
+    if not content or not isinstance(content, str):
         return (
-            "⚠️ REJECTED: content is empty or too short "
-            f"(got {type(content).__name__}, len={len(content) if isinstance(content, str) else 'N/A'}). "
+            "⚠️ REJECTED: content is empty or wrong type "
+            f"(got {type(content).__name__}). "
+            "Identity must be a substantial text (50+ chars). "
+            "This likely means the tool call was malformed — check your arguments."
+        )
+    # Strip the truncation sentinel FIRST so the 50-char quality floor
+    # applies to the actual body being written, not the sentinel prefix.
+    # Bug: prior order ran len(content.strip()) < 50 on raw content —
+    # sentinel+28 chars passed the gate but wrote a sub-50-char body;
+    # sentinel+short text was wrongly rejected with "too short".
+    _confirm_marker = "<<CONFIRMED_TRUNCATE>>\n"
+    explicit_truncate = content.startswith(_confirm_marker)
+    if explicit_truncate:
+        content = content[len(_confirm_marker):]
+    if len(content.strip()) < 50:
+        return (
+            "⚠️ REJECTED: content is too short "
+            f"(got {len(content)} chars after sentinel strip). "
             "Identity must be a substantial text (50+ chars). "
             "This likely means the tool call was malformed — check your arguments."
         )
@@ -223,16 +239,8 @@ def _update_identity(ctx: ToolContext, content: str) -> str:
     # rewrite. Reject hard shrinkage so the destructive call surfaces
     # a teachable error instead of silent identity loss.
     #
-    # Bypass: if the agent legitimately wants to compact identity
-    # (rare; major rewrite), prefix content with the literal sentinel
-    # "<<CONFIRMED_TRUNCATE>>\n" to acknowledge the destruction. The
-    # sentinel is stripped before write so it doesn't pollute the
-    # manifest.
+    # Bypass: prefix content with "<<CONFIRMED_TRUNCATE>>\n" (stripped above).
     old_len = len(old_content)
-    _confirm_marker = "<<CONFIRMED_TRUNCATE>>\n"
-    explicit_truncate = content.startswith(_confirm_marker)
-    if explicit_truncate:
-        content = content[len(_confirm_marker):]
     new_len = len(content)
     if old_len > 1000 and new_len < old_len * 0.7 and not explicit_truncate:
         loss_pct = (1 - new_len / old_len) * 100
