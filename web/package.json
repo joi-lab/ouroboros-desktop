@@ -5,6 +5,6 @@
   "type": "module",
   "description": "Ouroboros browser UI package boundary",
   "scripts": {
-    "lint": "node --check app.js"
+    "lint": "node --check app.js && node --check sw.js && node --check modules/pwa.js"
   }
 }

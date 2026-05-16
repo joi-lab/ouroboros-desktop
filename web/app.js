@@ -24,6 +24,7 @@ import { initDashboard } from './modules/dashboard.js';
 import { hydrateNavIcons } from './modules/page_icons.js';
 
 import { initOnboardingOverlay } from './modules/onboarding_overlay.js';
+import { initPwa } from './modules/pwa.js';
 
 // ---------------------------------------------------------------------------
 // Shared State
@@ -143,6 +144,7 @@ initOnboardingOverlay();
 // ---------------------------------------------------------------------------
 initMatrixRain();
 loadVersion();
+initPwa();
 
 // Visual viewport height — keeps layout above soft keyboard on iOS/Android.
 // Updates a <style> tag (not element.style) to set --vvh without inline styles.

@@ -6,6 +6,7 @@ import importlib.util
 import pathlib
 
 from starlette.responses import HTMLResponse, FileResponse
+from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
 
@@ -52,3 +53,28 @@ def make_index_page(web_dir: pathlib.Path):
         return HTMLResponse("<html><body><h1>Ouroboros — web/ not found</h1></body></html>", status_code=404)
 
     return index_page
+
+
+def make_pwa_routes(web_dir: pathlib.Path) -> list[Route]:
+    """Serve manifest and service worker from site root (required PWA scope)."""
+
+    async def manifest(_request) -> FileResponse | HTMLResponse:
+        path = web_dir / "manifest.webmanifest"
+        if path.exists():
+            return FileResponse(str(path), media_type="application/manifest+json")
+        return HTMLResponse("manifest not found", status_code=404)
+
+    async def service_worker(_request) -> FileResponse | HTMLResponse:
+        path = web_dir / "sw.js"
+        if path.exists():
+            return FileResponse(
+                str(path),
+                media_type="application/javascript",
+                headers={"Service-Worker-Allowed": "/"},
+            )
+        return HTMLResponse("service worker not found", status_code=404)
+
+    return [
+        Route("/manifest.webmanifest", endpoint=manifest),
+        Route("/sw.js", endpoint=service_worker),
+    ]

@@ -22,6 +22,15 @@ AUTH_COOKIE_NAME = "ouroboros_auth"
 _PUBLIC_HTTP_PATHS = {"/api/health", "/auth/login", "/auth/logout"}
 
 
+def _is_public_pwa_asset(path: str, method: str) -> bool:
+    """Allow installable shell assets through the network gate without a session."""
+    if method.upper() != "GET":
+        return False
+    if path in {"/sw.js", "/manifest.webmanifest"}:
+        return True
+    return path.startswith("/static/")
+
+
 def get_configured_network_password() -> str:
     raw = (os.environ.get(NETWORK_PASSWORD_KEY, "") or "").strip()
     if raw:
@@ -265,6 +274,11 @@ class NetworkAuthGate:
             return
 
         if scope["type"] == "http" and path in _PUBLIC_HTTP_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method", "GET") or "GET")
+        if scope["type"] == "http" and _is_public_pwa_asset(path, method):
             await self.app(scope, receive, send)
             return
 
