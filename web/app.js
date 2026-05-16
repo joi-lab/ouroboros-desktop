@@ -22,6 +22,8 @@ import { initWidgets } from './modules/widgets.js';
 import { initUpdates } from './modules/updates.js';
 import { initDashboard } from './modules/dashboard.js';
 import { hydrateNavIcons } from './modules/page_icons.js';
+import { apiFetch } from './modules/api_client.js';
+import { escapeHtmlAttr, escapeHtmlText } from './modules/utils.js';
 
 import { initOnboardingOverlay } from './modules/onboarding_overlay.js';
 
@@ -47,6 +49,8 @@ const ws = createWS();
 const beforePageLeaveHandlers = [];
 let settingsControls = null;
 let dashboardControls = null;
+let navWidgetsLoaded = false;
+let activeSidebarWidgetKey = '';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -61,6 +65,10 @@ async function showPage(name) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`page-${name}`)?.classList.add('active');
     document.querySelector(`.nav-btn[data-page="${name}"]`)?.classList.add('active');
+    if (name !== 'widgets') {
+        activeSidebarWidgetKey = '';
+        document.querySelectorAll('.nav-widget-item.active').forEach((item) => item.classList.remove('active'));
+    }
     state.activePage = name;
     window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: name } }));
     if (name === 'chat') {
@@ -104,6 +112,85 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     });
 });
 hydrateNavIcons();
+
+function setSidebarCollapsed(collapsed) {
+    document.body.classList.toggle('nav-collapsed', collapsed);
+    const toggle = document.getElementById('nav-collapse-toggle');
+    if (toggle) {
+        toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        toggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+    }
+    try {
+        localStorage.setItem('ouro_nav_collapsed', collapsed ? '1' : '0');
+    } catch {}
+}
+
+function initSidebarChrome() {
+    const toggle = document.getElementById('nav-collapse-toggle');
+    let collapsed = false;
+    try {
+        collapsed = localStorage.getItem('ouro_nav_collapsed') === '1';
+    } catch {}
+    setSidebarCollapsed(collapsed);
+    toggle?.addEventListener('click', () => setSidebarCollapsed(!document.body.classList.contains('nav-collapsed')));
+}
+
+function widgetIconSrcForTitle(title = '') {
+    const value = String(title).toLowerCase();
+    if (value.includes('weather') || value.includes('погод')) return '/static/figma-icons/weather.svg';
+    if (value.includes('image') || value.includes('kandinsky') || value.includes('карт')) return '/static/figma-icons/image.svg';
+    if (value.includes('chart') || value.includes('graph') || value.includes('граф')) return '/static/figma-icons/evolution.svg';
+    if (value.includes('chat') || value.includes('чат')) return '/static/figma-icons/chat.svg';
+    return '/static/figma-icons/skills.svg';
+}
+
+async function refreshSidebarWidgets() {
+    const list = document.getElementById('nav-widget-list');
+    if (!list) return;
+    if (!navWidgetsLoaded) list.innerHTML = '<div class="nav-widget-empty">Loading…</div>';
+    try {
+        const resp = await apiFetch('/api/extensions', { cache: 'no-store' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        const tabs = Array.isArray(data.live?.ui_tabs) ? data.live.ui_tabs : [];
+        navWidgetsLoaded = true;
+        if (!tabs.length) {
+            list.innerHTML = '<div class="nav-widget-empty">No widgets</div>';
+            return;
+        }
+        list.innerHTML = tabs.map((tab) => {
+            const key = String(tab.key || `${tab.skill}:${tab.tab_id}`);
+            const title = String(tab.title || tab.tab_id || tab.skill || 'Widget');
+            const subtitle = tab.skill && tab.skill !== title ? String(tab.skill) : '';
+            const activeClass = key === activeSidebarWidgetKey ? ' active' : '';
+            return `
+                <button class="nav-widget-item${activeClass}" type="button" data-widget-key="${escapeHtmlAttr(key)}" title="${escapeHtmlAttr(title)}">
+                    <span class="nav-widget-icon" aria-hidden="true"><img src="${escapeHtmlAttr(widgetIconSrcForTitle(title))}" alt=""></span>
+                    <span class="nav-widget-copy">
+                        <span class="nav-widget-title">${escapeHtmlText(title)}</span>
+                        ${subtitle ? `<span class="nav-widget-subtitle">${escapeHtmlText(subtitle)}</span>` : ''}
+                    </span>
+                </button>
+            `;
+        }).join('');
+    } catch (error) {
+        list.innerHTML = `<div class="nav-widget-empty" title="${escapeHtmlAttr(String(error?.message || error || ''))}">Widgets unavailable</div>`;
+    }
+}
+
+document.getElementById('nav-widget-list')?.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-widget-key]');
+    if (!button) return;
+    activeSidebarWidgetKey = button.dataset.widgetKey || '';
+    document.querySelectorAll('.nav-widget-item.active').forEach((item) => item.classList.remove('active'));
+    button.classList.add('active');
+    await showPage('widgets');
+    window.dispatchEvent(new CustomEvent('ouro:widget-open', { detail: { key: button.dataset.widgetKey || '' } }));
+});
+
+initSidebarChrome();
+refreshSidebarWidgets();
+window.addEventListener('ouro:widgets-updated', refreshSidebarWidgets);
 
 // ---------------------------------------------------------------------------
 // Initialize All Pages (registers WS listeners before connection opens)

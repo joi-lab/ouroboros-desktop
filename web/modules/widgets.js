@@ -994,6 +994,7 @@ export function initWidgets(ctx = {}) {
     let renderGeneration = 0;
     let widgetsVisible = false;
     let widgetsMounted = false;
+    let pendingWidgetKey = '';
     // v5.7.0: cache of the most recent successful payload so revisiting
     // the Widgets page paints from cache immediately and only the
     // first-ever render shows "Loading…". The cache is also re-rendered
@@ -1007,10 +1008,27 @@ export function initWidgets(ctx = {}) {
         });
     }
 
+    function focusWidget(key = '') {
+        const targetKey = String(key || pendingWidgetKey || '').trim();
+        if (!targetKey) return false;
+        const card = list.querySelector(`[data-widget-key="${CSS.escape(targetKey)}"]`);
+        if (!card) return false;
+        list.querySelectorAll('.widgets-card.is-focused-from-sidebar').forEach((item) => {
+            item.classList.remove('is-focused-from-sidebar');
+        });
+        card.classList.add('is-focused-from-sidebar');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        pendingWidgetKey = '';
+        return true;
+    }
+
     async function render(force = false) {
         const generation = ++renderGeneration;
         widgetsVisible = true;
-        if (widgetsMounted && !force) return;
+        if (widgetsMounted && !force) {
+            focusWidget();
+            return;
+        }
         refreshBtn.disabled = true;
         refreshBtn.classList.add('is-loading');
         disposeMountedWidgets();
@@ -1026,6 +1044,7 @@ export function initWidgets(ctx = {}) {
             if (!widgetsVisible || generation !== renderGeneration) return;
             const tabs = Array.isArray(data.live?.ui_tabs) ? data.live.ui_tabs : [];
             lastTabs = tabs;
+            window.dispatchEvent(new CustomEvent('ouro:widgets-updated', { detail: { tabs } }));
             renderShell(list, tabs);
             applyMasonry(list);
             widgetsMounted = true;
@@ -1044,6 +1063,7 @@ export function initWidgets(ctx = {}) {
                 }
             }
             applyMasonry(list);
+            focusWidget();
         } catch (err) {
             if (!widgetsVisible || generation !== renderGeneration) return;
             // If we have a cached payload, keep showing it instead of
@@ -1073,5 +1093,10 @@ export function initWidgets(ctx = {}) {
             widgetsMounted = false;
             disposeMountedWidgets();
         }
+    });
+    window.addEventListener('ouro:widget-open', (event) => {
+        pendingWidgetKey = String(event.detail?.key || '');
+        widgetsVisible = true;
+        if (!focusWidget()) render();
     });
 }

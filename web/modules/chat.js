@@ -58,20 +58,19 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             variant: 'overlay',
             className: 'chat-page-header',
             actionsHtml: `
-                <div class="chat-header-actions" id="chat-header-actions">
-                    <button class="chat-header-btn" type="button" data-chat-command="evolve" title="Toggle evolution mode">Evolve</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="bg" title="Toggle background consciousness">Consciousness</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="review" title="Run review now">Review</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="restart" title="Restart agent">Restart</button>
-                    <button class="chat-header-btn danger" type="button" data-chat-command="panic" title="Stop all workers">Panic</button>
-                </div>
-                <button class="chat-budget-pill" id="chat-budget-pill" type="button" title="Open budget controls" aria-label="Open budget controls">
-                    <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
-                    <div class="chat-budget-bar">
-                        <div class="chat-budget-bar-fill" id="chat-budget-bar-fill"></div>
+                <div class="chat-action-menu" id="chat-action-menu">
+                    <span id="chat-status" class="status-badge offline">Connecting...</span>
+                    <button class="chat-action-trigger" id="chat-action-trigger" type="button" title="Chat actions" aria-label="Chat actions" aria-expanded="false" aria-haspopup="menu">
+                        <img class="chat-action-trigger-icon" src="/static/figma-icons/settings-cog.svg" alt="">
+                    </button>
+                    <div class="chat-header-actions chat-action-dropdown" id="chat-header-actions" role="menu">
+                        <button class="chat-header-btn" type="button" data-chat-command="evolve" role="menuitem" title="Toggle evolution mode"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/evolution.svg" alt=""></span><span>Эволюция</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="review" role="menuitem" title="Run review now"><span class="chat-action-switch" aria-hidden="true"></span><span>Ревью кода</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="bg" role="menuitem" title="Toggle background consciousness"><span class="chat-action-switch" aria-hidden="true"></span><span>Фоновое сознание</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="restart" role="menuitem" title="Restart agent"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/restart.svg" alt=""></span><span>Перезапустить чат</span></button>
+                        <button class="chat-header-btn danger" type="button" data-chat-command="panic" role="menuitem" title="Stop all workers"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/power.svg" alt=""></span><span>Экстренное отключение</span></button>
                     </div>
-                </button>
-                <span id="chat-status" class="status-badge offline">Connecting...</span>
+                </div>
             `,
         })}
         <div id="chat-messages"></div>
@@ -113,6 +112,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     const dropdownSend = document.getElementById('chat-dropdown-send');
     const dropdownPlan = document.getElementById('chat-dropdown-plan');
     const statusBadge = document.getElementById('chat-status');
+    const actionMenu = document.getElementById('chat-action-menu');
+    const actionTrigger = document.getElementById('chat-action-trigger');
     const headerActions = document.getElementById('chat-header-actions');
     const budgetPill = document.getElementById('chat-budget-pill');
     const attachBtn = document.getElementById('chat-attach');
@@ -360,8 +361,11 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const limit = data?.budget_limit || 10;
         const budgetText = document.getElementById('chat-budget-text');
         const budgetFill = document.getElementById('chat-budget-bar-fill');
+        const budgetPillEl = document.getElementById('chat-budget-pill');
+        const pct = Math.min(100, (spent / limit) * 100);
         if (budgetText) budgetText.textContent = `${formatUsdWhole(spent)} / ${formatUsdWhole(limit)}`;
-        if (budgetFill) budgetFill.style.width = `${Math.min(100, (spent / limit) * 100)}%`;
+        if (budgetFill) budgetFill.style.width = `${pct}%`;
+        if (budgetPillEl) budgetPillEl.style.setProperty('--budget-progress', `${pct}%`);
     }
 
     async function refreshHeaderControlState(force = false) {
@@ -1554,6 +1558,21 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         resizeChatInput({ preserveStickiness: false });
     });
 
+    function closeActionMenu() {
+        actionMenu?.classList.remove('open');
+        actionTrigger?.setAttribute('aria-expanded', 'false');
+    }
+
+    actionTrigger?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isOpen = actionMenu?.classList.contains('open');
+        if (isOpen) closeActionMenu();
+        else {
+            actionMenu?.classList.add('open');
+            actionTrigger.setAttribute('aria-expanded', 'true');
+        }
+    });
+
     headerActions?.addEventListener('click', (event) => {
         const button = event.target.closest('[data-chat-command]');
         if (!button) return;
@@ -1562,30 +1581,47 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             const next = !button.classList.contains('on');
             button.classList.toggle('on', next);
             ws.send({ type: 'command', cmd: `/evolve ${next ? 'start' : 'stop'}` });
+            closeActionMenu();
             return;
         }
         if (command === 'bg') {
             const next = !button.classList.contains('on');
             button.classList.toggle('on', next);
             ws.send({ type: 'command', cmd: `/bg ${next ? 'start' : 'stop'}` });
+            closeActionMenu();
             return;
         }
         if (command === 'review') {
             ws.send({ type: 'command', cmd: '/review' });
+            closeActionMenu();
             return;
         }
         if (command === 'restart') {
             ws.send({ type: 'command', cmd: '/restart' });
+            closeActionMenu();
             return;
         }
         if (command === 'panic' && confirm('Kill all workers immediately?')) {
             ws.send({ type: 'command', cmd: '/panic' });
         }
+        closeActionMenu();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (actionMenu && !actionMenu.contains(event.target)) closeActionMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeActionMenu();
     });
 
     budgetPill?.addEventListener('click', () => {
         if (typeof openDashboardTab === 'function') openDashboardTab('costs');
         else if (typeof openSettingsTab === 'function') openSettingsTab('costs');
+    });
+    budgetPill?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        budgetPill.click();
     });
 
     refreshHeaderControlState(true);

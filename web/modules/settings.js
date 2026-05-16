@@ -708,6 +708,16 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     syncSettingsLoadState();
     syncRuntimeModeBridgeState();
     syncAutoGrantBridgeState();
+    window.addEventListener('pywebviewready', () => {
+        syncRuntimeModeBridgeState();
+        syncAutoGrantBridgeState();
+    });
+    [250, 1000, 2500].forEach((delay) => {
+        setTimeout(() => {
+            syncRuntimeModeBridgeState();
+            syncAutoGrantBridgeState();
+        }, delay);
+    });
     reloadSettingsWithFeedback();
 
     if (typeof setBeforePageLeave === 'function') {

@@ -93,6 +93,7 @@ web = [
     "*.png",
     "*.jpg",
     "modules/*.js",
+    "figma-icons/*.svg",
     "providers/*.svg",
     "providers/*.png",
     "providers/*.ico",
