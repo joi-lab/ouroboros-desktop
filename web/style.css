@@ -80,9 +80,9 @@ body {
 }
 
 @media (display-mode: standalone) {
-    #nav-rail {
-        padding-top: env(safe-area-inset-top, 0px);
-    }
+  #nav-rail {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
 }
 
 #app {
@@ -2689,11 +2689,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(201, 53, 69, 0.2);
+  background: rgba(30, 49, 101, 0.2);
   border-radius: var(--radius-xs);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(201, 53, 69, 0.35);
+  background: rgba(30, 49, 101, 0.5);
 }
 
 /* Reconnecting overlay */
