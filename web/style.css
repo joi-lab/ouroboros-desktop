@@ -1186,6 +1186,8 @@ body {
   flex-direction: column;
   gap: 7px;
   text-align: left;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .skill-review-summary-button:hover {
@@ -1223,6 +1225,11 @@ body {
   padding: 0 14px 14px;
   color: rgba(255, 240, 210, 0.82);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 480px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .chat-bubble.pending {
@@ -6670,6 +6677,21 @@ body.nav-collapsed .nav-budget-pill {
   box-shadow:
     0 0 0 3px rgba(36, 56, 112, 0.1),
     var(--shadow-md);
+}
+
+/* Solo mode: show only the widget opened from the sidebar nav */
+.widgets-list.widgets-solo-mode {
+  height: auto !important;
+}
+
+.widgets-list.widgets-solo-mode .widgets-card:not(.is-focused-from-sidebar) {
+  display: none !important;
+}
+
+.widgets-list.widgets-solo-mode .widgets-card.is-focused-from-sidebar {
+  position: relative !important;
+  transform: none !important;
+  width: 100% !important;
 }
 
 .marketplace-checkbox,

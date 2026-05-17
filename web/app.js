@@ -198,6 +198,12 @@ document.getElementById('nav-widget-list')?.addEventListener('click', async (eve
 initSidebarChrome();
 refreshSidebarWidgets();
 window.addEventListener('ouro:widgets-updated', refreshSidebarWidgets);
+window.addEventListener('ouro:skill-lifecycle', (event) => {
+    const action = event.detail?.action;
+    if (['enable', 'disable', 'install', 'uninstall'].includes(action)) {
+        refreshSidebarWidgets();
+    }
+});
 
 // ---------------------------------------------------------------------------
 // Initialize All Pages (registers WS listeners before connection opens)
