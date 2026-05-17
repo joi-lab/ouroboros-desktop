@@ -3507,9 +3507,8 @@ body {
   align-self: flex-start;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(201, 53, 69, 0.24);
-  background: var(--accent-08);
-  color: rgba(255, 220, 226, 0.86);
+  background: var(--text-secondary);
+  color: #ffffff;
   font-size: 12px;
 }
 
@@ -3517,8 +3516,8 @@ body {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 220, 226, 0.24);
-  border-top-color: rgba(255, 220, 226, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-top-color: rgba(255, 255, 255, 0.9);
   animation: skills-review-spin 900ms linear infinite;
 }
 
@@ -3705,7 +3704,7 @@ body {
 }
 
 .skills-card-menu-trigger:hover {
-  border-color: rgba(232, 93, 111, 0.3);
+  border-color: var(--text-secondary);
   color: var(--text-primary);
 }
 
@@ -4466,6 +4465,17 @@ body {
 .skills-card-warnings ul {
   margin: 6px 0 4px 16px;
   padding: 0;
+}
+
+.skills-review-findings {
+  font-size: 13px;
+  padding: 6px 0 2px;
+  color: var(--text-secondary);
+}
+.skills-review-findings summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: revert;
 }
 
 .skills-review-findings ul {
