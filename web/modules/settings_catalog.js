@@ -31,7 +31,7 @@ function fillCatalogDatalist(items) {
 export async function refreshModelCatalog() {
     const refreshSeq = ++catalogRefreshSeq;
     const statusEl = document.getElementById('settings-model-catalog-status');
-    setCatalogStatus(statusEl, 'Refreshing model catalog...', 'muted');
+    setCatalogStatus(statusEl, 'Обновление каталога моделей...', 'muted');
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), MODEL_CATALOG_TIMEOUT_MS);
 
@@ -53,19 +53,19 @@ export async function refreshModelCatalog() {
         if (errors.length && items.length) {
             setCatalogStatus(
                 statusEl,
-                `Loaded ${items.length} models. Some providers failed: ${errors.map((e) => e.provider_id).join(', ')}`,
+                `Загружено ${items.length} моделей. Некоторые провайдеры недоступны: ${errors.map((e) => e.provider_id).join(', ')}`,
                 'warn',
             );
         } else if (errors.length) {
             setCatalogStatus(
                 statusEl,
-                `Model catalog unavailable right now: ${errors.map((e) => e.provider_id).join(', ')}`,
+                `Каталог моделей временно недоступен: ${errors.map((e) => e.provider_id).join(', ')}`,
                 'warn',
             );
         } else if (items.length) {
-            setCatalogStatus(statusEl, `Loaded ${items.length} models.`, 'ok');
+            setCatalogStatus(statusEl, `Загружено ${items.length} моделей.`, 'ok');
         } else {
-            setCatalogStatus(statusEl, 'No provider catalogs available yet. This is optional.', 'muted');
+            setCatalogStatus(statusEl, 'Каталоги провайдеров пока недоступны. Это необязательно.', 'muted');
         }
         return { items, errors };
     } catch (err) {
@@ -73,12 +73,12 @@ export async function refreshModelCatalog() {
             return { items: [], errors: [{ provider_id: 'catalog', error: 'stale refresh' }], stale: true };
         }
         const message = err?.name === 'AbortError'
-            ? `Timed out after ${Math.round(MODEL_CATALOG_TIMEOUT_MS / 1000)}s`
+            ? `Превышено время ожидания: ${Math.round(MODEL_CATALOG_TIMEOUT_MS / 1000)} с`
             : (err.message || err);
         fillCatalogDatalist([]);
         setCatalogStatus(
             statusEl,
-            `Model catalog failed: ${message}. This is optional.`,
+            `Ошибка загрузки каталога моделей: ${message}. Это необязательно.`,
             'warn',
         );
         return { items: [], errors: [{ provider_id: 'catalog', error: String(message) }] };

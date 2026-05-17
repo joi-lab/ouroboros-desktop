@@ -13,7 +13,7 @@ import {
 } from './utils.js';
 
 const SKILLS_TABS = [
-    { value: 'installed', label: 'My skills', pillId: 'skills-tab-pill-installed', pillClass: 'skills-tab-pill' },
+    { value: 'installed', label: 'Мои навыки', pillId: 'skills-tab-pill-installed', pillClass: 'skills-tab-pill' },
     { value: 'marketplace', label: 'ClawHub', pillId: 'skills-tab-pill-marketplace', pillClass: 'skills-tab-pill' },
     { value: 'ouroboroshub', label: 'OuroborosHub', pillId: 'skills-tab-pill-ouroboroshub', pillClass: 'skills-tab-pill' },
 ];
@@ -32,16 +32,16 @@ function skillsPageTemplate() {
     return `
         <section class="page app-page-glass" id="page-skills">
             ${renderPageHeader({
-                title: 'Skills',
+                title: 'Навыки',
                 icon: PAGE_ICONS.skills,
-                description: 'Skills extend Ouroboros with new tools, routes, and widgets. Each skill is reviewed for safety before you turn it on.',
-                actionsHtml: '<button id="skills-refresh" class="btn btn-default btn-sm">Refresh</button>',
+                description: 'Навыки расширяют Ouroboros новыми инструментами, маршрутами и виджетами. Каждый навык проходит проверку безопасности перед включением.',
+                actionsHtml: '<button id="skills-refresh" class="btn btn-default btn-sm">Обновить</button>',
                 tabsHtml: renderTabStrip({
                     items: SKILLS_TABS,
                     active: 'installed',
                     dataAttr: 'data-tab',
                     activeClass: 'is-active',
-                    ariaLabel: 'Skills views',
+                    ariaLabel: 'Просмотры навыков',
                     stripClass: 'skills-tabs',
                     tabClass: 'skills-tab',
                 }),
@@ -53,9 +53,9 @@ function skillsPageTemplate() {
                     <div id="skills-migration-banner" class="skills-migration-banner" hidden></div>
                     <div id="skills-list" class="skills-list"></div>
                     <div id="skills-empty" class="muted" hidden>
-                        No skills yet. Browse <b>ClawHub</b> or
-                        <b>OuroborosHub</b> to add one, or import a custom
-                        package from the Files tab.
+                        Навыков пока нет. Перейдите в <b>ClawHub</b> или
+                        <b>OuroborosHub</b>, чтобы добавить навык, или импортируйте
+                        пакет из вкладки «Файлы».
                     </div>
                 </div>
                 <div class="skills-tab-panel" id="skills-pane-marketplace" data-pane="marketplace" hidden></div>
@@ -156,30 +156,30 @@ function hasSkillUiTab(skill, live = {}) {
 // available under the Details disclosure for advanced operators.
 function skillStatusChip(skill, live = {}) {
     if (!grantReady(skill)) {
-        return { tone: 'warn', label: 'Needs access grant' };
+        return { tone: 'warn', label: 'Требует доступ' };
     }
     if (skill.lifecycle_virtual && isRateLimitError(skill.load_error)) {
-        return { tone: 'warn', label: 'Rate limited' };
+        return { tone: 'warn', label: 'Лимит запросов' };
     }
     if (skill.load_error) {
-        return { tone: 'danger', label: 'Failed to load' };
+        return { tone: 'danger', label: 'Ошибка загрузки' };
     }
     if (!reviewReady(skill)) {
-        return { tone: 'warn', label: 'Needs review' };
+        return { tone: 'warn', label: 'Нужна проверка' };
     }
     if (skill.enabled) {
         if (skill.type === 'extension') {
             if (skill.live_loaded && (skill.dispatch_live || hasSkillUiTab(skill, live))) {
-                return { tone: 'ok', label: 'Active' };
+                return { tone: 'ok', label: 'Активен' };
             }
             if (skill.live_loaded && !skill.dispatch_live && !hasSkillUiTab(skill, live)) {
-                return { tone: 'warn', label: 'Loaded — UI tab pending' };
+                return { tone: 'warn', label: 'Загружен — вкладка ожидает' };
             }
-            return { tone: 'warn', label: 'Enabled — not loaded' };
+            return { tone: 'warn', label: 'Включён — не загружен' };
         }
-        return { tone: 'ok', label: 'Enabled' };
+        return { tone: 'ok', label: 'Включён' };
     }
-    return { tone: 'muted', label: 'Off' };
+    return { tone: 'muted', label: 'Выкл' };
 }
 
 // v5.2.3 follow-up (review): surface a calm provenance label on the
@@ -214,7 +214,7 @@ function renderReviewFindings(skill) {
     }).join('');
     return `
         <details class="skills-review-findings">
-            <summary class="muted">${findings.length} review finding${findings.length === 1 ? '' : 's'}</summary>
+            <summary class="muted">${findings.length} ${findings.length === 1 ? 'замечание' : (findings.length < 5 ? 'замечания' : 'замечаний')} по проверке</summary>
             <ul>${rows}</ul>
         </details>
     `;
@@ -248,31 +248,31 @@ function renderGrantBlock(skill) {
     let statusLine;
     let statusTone;
     if (unsupported) {
-        statusLine = 'This skill type cannot receive core API keys.';
+        statusLine = 'Этот тип навыка не может получать ключи основного API.';
         statusTone = 'muted';
     } else if (!missing.length && !missingPermissions.length) {
-        statusLine = 'Access granted.';
+        statusLine = 'Доступ предоставлен.';
         statusTone = 'ok';
     } else if (reviewBlocked) {
-        statusLine = 'Run a security review first, then grant access.';
+        statusLine = 'Сначала выполните проверку безопасности, затем предоставьте доступ.';
         statusTone = 'warn';
     } else {
-        statusLine = 'This skill needs your permission to use the keys above.';
+        statusLine = 'Этот навык требует вашего разрешения для использования указанных ключей.';
         statusTone = 'warn';
     }
 
     const grantedRow = granted.length
-        ? `<div class="skills-access-row"><span class="skills-access-label">Granted</span> ${granted.map((k) => `<code>${escapeHtml(k)}</code>`).join(' ')}</div>`
+        ? `<div class="skills-access-row"><span class="skills-access-label">Предоставлено</span> ${granted.map((k) => `<code>${escapeHtml(k)}</code>`).join(' ')}</div>`
         : '';
 
     return `
         <div class="skills-access skills-access-${statusTone}">
             <div class="skills-access-row">
-                <span class="skills-access-label">Needs access</span>
+                <span class="skills-access-label">Требует доступ</span>
                 ${requestedKeysHtml} ${requestedPermsHtml}
             </div>
             ${grantedRow}
-            ${grantedPermissions.length ? `<div class="skills-access-row"><span class="skills-access-label">Granted permissions</span> ${grantedPermissions.map((k) => `<code>${escapeHtml(k)}</code>`).join(' ')}</div>` : ''}
+            ${grantedPermissions.length ? `<div class="skills-access-row"><span class="skills-access-label">Предоставленные разрешения</span> ${grantedPermissions.map((k) => `<code>${escapeHtml(k)}</code>`).join(' ')}</div>` : ''}
             <div class="skills-access-status">${escapeHtml(statusLine)}</div>
         </div>
     `;
@@ -335,7 +335,7 @@ function renderProvenanceBlock(prov) {
     const warnings = Array.isArray(prov.adapter_warnings) ? prov.adapter_warnings : [];
     const warningsBlock = warnings.length
         ? `<details class="skills-card-warnings">
-             <summary class="muted">${warnings.length} adapter warning${warnings.length === 1 ? '' : 's'}</summary>
+             <summary class="muted">${warnings.length} ${warnings.length === 1 ? 'предупреждение' : (warnings.length < 5 ? 'предупреждения' : 'предупреждений')} адаптера</summary>
              <ul>${warnings.map((msg) => `<li>${escapeHtml(msg)}</li>`).join('')}</ul>
            </details>`
         : '';
@@ -353,13 +353,13 @@ function installedAgo(skill) {
     const time = installTimestamp(skill);
     if (!time) return '';
     const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
-    if (seconds < 90) return 'Just installed';
+    if (seconds < 90) return 'Только что установлен';
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 90) return `${minutes}m ago`;
+    if (minutes < 90) return `${minutes} мин. назад`;
     const hours = Math.floor(minutes / 60);
-    if (hours < 48) return `${hours}h ago`;
+    if (hours < 48) return `${hours} ч. назад`;
     const days = Math.floor(hours / 24);
-    if (days < 45) return `${days}d ago`;
+    if (days < 45) return `${days} дн. назад`;
     const date = new Date(time);
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -391,46 +391,46 @@ function toggleLockReason(skill) {
 
 function skillNextAction(skill, reviewInProgress = false, repairInProgress = false, live = {}) {
     if (reviewInProgress) {
-        return { label: 'Reviewing...', className: '', disabled: true };
+        return { label: 'Проверяется...', className: '', disabled: true };
     }
     if (repairInProgress) {
-        return { label: 'Repairing...', className: '', disabled: true };
+        return { label: 'Восстанавливается...', className: '', disabled: true };
     }
     if (skill.lifecycle_virtual && skill.source === 'clawhub' && isRateLimitError(skill.load_error)) {
-        return { label: 'Retry install', className: 'skills-retry-install', disabled: false };
+        return { label: 'Повторить установку', className: 'skills-retry-install', disabled: false };
     }
     if ((skill.load_error && !isMissingGrantLoadError(skill)) || (skill.review_status === 'blockers' && !reviewReady(skill))) {
         if (healReady(skill)) {
-            return { label: 'Repair', className: 'skills-heal', disabled: false };
+            return { label: 'Восстановить', className: 'skills-heal', disabled: false };
         }
         return { label: '', className: '', disabled: true };
     }
     if (healReady(skill)) {
-        return { label: 'Repair', className: 'skills-heal', disabled: false };
+        return { label: 'Восстановить', className: 'skills-heal', disabled: false };
     }
     if (skill.enabled && skill.type === 'extension' && skill.live_loaded && hasSkillUiTab(skill, live)) {
-        return { label: 'Open widgets', className: 'skills-open-widgets', disabled: false };
+        return { label: 'Открыть виджеты', className: 'skills-open-widgets', disabled: false };
     }
     return { label: '', className: '', disabled: true };
 }
 
 function getSkillPrimaryAction(skill, reviewInProgress = false, repairInProgress = false, live = {}) {
     if (reviewInProgress) {
-        return { action: '', label: 'Reviewing...', disabled: true };
+        return { action: '', label: 'Проверяется...', disabled: true };
     }
     if (repairInProgress) {
-        return { action: '', label: 'Repairing...', disabled: true };
+        return { action: '', label: 'Восстанавливается...', disabled: true };
     }
     if ((skill.load_error && !isMissingGrantLoadError(skill)) || (skill.review_status === 'blockers' && !reviewReady(skill))) {
         if (healReady(skill)) {
-            return { action: 'repair', label: 'Repair', danger: true };
+            return { action: 'repair', label: 'Восстановить', danger: true };
         }
         return { action: '', label: '', disabled: true };
     }
     if (!reviewReady(skill)) {
         return {
             action: skill.review_stale ? 'rereview' : 'review',
-            label: skill.review_stale ? 'Re-review' : 'Review',
+            label: skill.review_stale ? 'Перепроверить' : 'Проверить',
         };
     }
     if (skill.is_self_authored && !skill.enabled) {
@@ -439,7 +439,7 @@ function getSkillPrimaryAction(skill, reviewInProgress = false, repairInProgress
         const permissions = Array.isArray(grants.missing_permissions)
             ? grants.missing_permissions
             : (grants.requested_permissions || []);
-        return { action: 'approve_enable', label: 'Approve & enable', keys: [...keys, ...permissions].join(',') };
+        return { action: 'approve_enable', label: 'Одобрить и включить', keys: [...keys, ...permissions].join(',') };
     }
     if (!grantReady(skill)) {
         const grants = skill.grants || {};
@@ -447,10 +447,10 @@ function getSkillPrimaryAction(skill, reviewInProgress = false, repairInProgress
         const permissions = Array.isArray(grants.missing_permissions)
             ? grants.missing_permissions
             : (grants.requested_permissions || []);
-        return { action: 'grant', label: 'Grant access', keys: [...keys, ...permissions].join(',') };
+        return { action: 'grant', label: 'Предоставить доступ', keys: [...keys, ...permissions].join(',') };
     }
     if (skill.enabled && skill.type === 'extension' && skill.live_loaded && hasSkillUiTab(skill, live)) {
-        return { action: 'open_widgets', label: 'Open widgets' };
+        return { action: 'open_widgets', label: 'Открыть виджеты' };
     }
     return { action: '', label: '' };
 }
@@ -487,7 +487,7 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
         ? `data-skill="${safeName}" data-skill-action="${escapeHtml(primaryAction.action)}"`
         : '';
     const toggleSwitch = skill.lifecycle_virtual ? '' : `
-        <label class="skills-switch ${toggleLocked ? 'is-locked' : ''}" ${toggleActionAttrs} title="${escapeHtml(toggleLocked ? `Locked: ${lockReason}` : (skill.enabled ? 'Turn skill off' : 'Turn skill on'))}">
+        <label class="skills-switch ${toggleLocked ? 'is-locked' : ''}" ${toggleActionAttrs} title="${escapeHtml(toggleLocked ? `Заблокировано: ${lockReason}` : (skill.enabled ? 'Выключить навык' : 'Включить навык'))}">
             <input type="checkbox"
                    class="skills-toggle"
                    role="switch"
@@ -503,13 +503,13 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
     `;
 
     const lockHint = toggleLocked
-        ? `<div class="skills-lock-hint ${primaryAction.action ? 'is-clickable' : ''}" title="${escapeHtml(lockReason)}" ${actionAttrs}>Locked: ${escapeHtml(lockReason)}</div>`
+        ? `<div class="skills-lock-hint ${primaryAction.action ? 'is-clickable' : ''}" title="${escapeHtml(lockReason)}" ${actionAttrs}>Заблокировано: ${escapeHtml(lockReason)}</div>`
         : '';
     const reviewProgress = reviewInProgress
         ? `
             <div class="skills-review-progress" role="status" aria-live="polite">
                 <span class="skills-review-spinner" aria-hidden="true"></span>
-                <span>Review in progress</span>
+                <span>Проверка выполняется</span>
             </div>
         `
         : '';
@@ -517,7 +517,7 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
         ? `
             <div class="skills-review-progress skills-repair-progress" role="status" aria-live="polite">
                 <span class="skills-review-spinner" aria-hidden="true"></span>
-                <span>Repair task is being queued</span>
+                <span>Задача восстановления ставится в очередь</span>
             </div>
         `
         : '';
@@ -539,18 +539,18 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
     const isMarketplaceManaged = source === 'clawhub' || source === 'ouroboroshub';
     const provenance = isMarketplaceManaged ? skill.provenance : null;
     const updateBtn = isMarketplaceManaged
-        ? `<button type="button" role="menuitem" class="skills-menu-item skills-update" data-skill="${safeName}" data-source="${escapeHtml(source)}">Update</button>`
+        ? `<button type="button" role="menuitem" class="skills-menu-item skills-update" data-skill="${safeName}" data-source="${escapeHtml(source)}">Обновить</button>`
         : '';
     const uninstallBtn = isMarketplaceManaged
-        ? `<button type="button" role="menuitem" class="skills-menu-item skills-uninstall" data-skill="${safeName}" data-source="${escapeHtml(source)}">Uninstall</button>`
+        ? `<button type="button" role="menuitem" class="skills-menu-item skills-uninstall" data-skill="${safeName}" data-source="${escapeHtml(source)}">Удалить</button>`
         : '';
     const healBtn = '';
     const reviewMenuBtn = !reviewInProgress
-        ? `<button type="button" role="menuitem" class="skills-menu-item skills-review" data-skill="${safeName}">${skill.review_status === 'pending' ? 'Review' : (skill.review_stale ? 'Re-review' : 'Review again')}</button>`
+        ? `<button type="button" role="menuitem" class="skills-menu-item skills-review" data-skill="${safeName}">${skill.review_status === 'pending' ? 'Проверить' : (skill.review_stale ? 'Перепроверить' : 'Проверить снова')}</button>`
         : '';
     const submitHub = submitHubReady(skill, Boolean(options.githubTokenConfigured));
     const submitHubBtn = submitHub.visible
-        ? `<button type="button" role="menuitem" class="skills-menu-item skills-submit-hub" data-skill="${safeName}" ${submitHub.disabled ? 'disabled' : ''} title="${escapeHtml(submitHub.reason)}">Submit to OuroborosHub</button>`
+        ? `<button type="button" role="menuitem" class="skills-menu-item skills-submit-hub" data-skill="${safeName}" ${submitHub.disabled ? 'disabled' : ''} title="${escapeHtml(submitHub.reason)}">Отправить в OuroborosHub</button>`
         : '';
     const next = skillNextAction(skill, reviewInProgress, repairInProgress, live);
     const nextAttrs = [
@@ -587,24 +587,24 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
         .join(' ');
     const provenanceVersion = provenance?.version || '';
     const versionDrift = (provenanceVersion && provenanceVersion !== installedVersion)
-        ? `<div class="skills-detail-row"><span class="skills-detail-label">Version drift</span> manifest ${escapeHtml(installedVersion)} vs registry ${escapeHtml(provenanceVersion)}</div>`
+        ? `<div class="skills-detail-row"><span class="skills-detail-label">Расхождение версий</span> манифест ${escapeHtml(installedVersion)} vs реестр ${escapeHtml(provenanceVersion)}</div>`
         : '';
     const liveLine = (skill.type === 'extension' && skill.live_loaded && hasSkillUiTab(skill, live))
-        ? `<div class="skills-detail-row"><span class="skills-detail-label">Visual widgets</span> available on the Widgets tab</div>`
+        ? `<div class="skills-detail-row"><span class="skills-detail-label">Визуальные виджеты</span> доступны на вкладке «Виджеты»</div>`
         : '';
     const provenanceBlock = renderProvenanceBlock(provenance);
     const detailsBody = `
         <div class="skills-detail-row">
-            <span class="skills-detail-label">Type</span>
-            <code>${escapeHtml(skill.type || 'skill')}</code> · version ${escapeHtml(installedVersion)} · source ${escapeHtml(sourceLabel)}
+            <span class="skills-detail-label">Тип</span>
+            <code>${escapeHtml(skill.type || 'skill')}</code> · версия ${escapeHtml(installedVersion)} · источник ${escapeHtml(sourceLabel)}
         </div>
         <div class="skills-detail-row">
-            <span class="skills-detail-label">Review</span>
+            <span class="skills-detail-label">Проверка</span>
             ${statusBadge(skill.review_status, skill.review_gate)}${skill.review_stale ? ' <span class="skills-badge skills-badge-warn">stale</span>' : ''}
         </div>
         <div class="skills-detail-row">
-            <span class="skills-detail-label">Permissions</span>
-            ${permissions || '<i class="muted">none</i>'}
+            <span class="skills-detail-label">Разрешения</span>
+            ${permissions || '<i class="muted">нет</i>'}
         </div>
         ${versionDrift}
         ${liveLine}
@@ -612,7 +612,7 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
     `;
     const details = `
         <details class="skills-details">
-            <summary>Show details</summary>
+            <summary>Подробнее</summary>
             ${detailsBody}
         </details>
     `;
@@ -627,7 +627,7 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
     const cardMenu = (updateBtn || uninstallBtn || reviewMenuBtn || submitHubBtn)
         ? `
                     <div class="skills-card-menu">
-                        <button type="button" class="skills-card-menu-trigger" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-skill-menu-trigger>⋮</button>
+                        <button type="button" class="skills-card-menu-trigger" aria-label="Дополнительные действия" aria-haspopup="menu" aria-expanded="false" data-skill-menu-trigger>⋮</button>
                         <dialog class="skills-card-menu-dialog" role="menu">
                             ${reviewMenuBtn}
                             ${submitHubBtn}
@@ -758,7 +758,7 @@ async function renderSkillsList(container, emptyEl, reviewingSkills = new Set(),
         live,
         { githubTokenConfigured },
     )).join('')
-        || '<div class="muted">No skills yet. Add one from <b>ClawHub</b> or <b>OuroborosHub</b>.</div>';
+        || '<div class="muted">Навыков пока нет. Добавьте из <b>ClawHub</b> или <b>OuroborosHub</b>.</div>';
     // v5: surface unread native-skill upgrade migrations so the
     // operator is told when the launcher silently rewrote an
     // installed skill (e.g. weather 0.1 script -> 0.2 extension).
@@ -796,11 +796,11 @@ async function renderMigrationBanner() {
         return `
             <div class="skills-migration-banner-item" data-migration-key="${safeKey}">
                 <div class="skills-migration-banner-text">
-                    <strong>Native skill upgrade:</strong> ${skill} ${oldV ? `(${oldV} → ${newV})` : `(→ ${newV})`}
+                    <strong>Обновление встроенного навыка:</strong> ${skill} ${oldV ? `(${oldV} → ${newV})` : `(→ ${newV})`}
                     <span class="muted"> · ${ts}</span>
                     <div class="muted">${summary}</div>
                 </div>
-                <button class="btn btn-default skills-migration-dismiss" data-key="${safeKey}">Got it</button>
+                <button class="btn btn-default skills-migration-dismiss" data-key="${safeKey}">Понятно</button>
             </div>
         `;
     }).join('');
@@ -891,9 +891,9 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
         const cleanKeys = (keys || []).map((k) => String(k || '').trim()).filter(Boolean);
         if (!cleanKeys.length) return;
         const ok = await openConfirmDialog({
-            title: `Grant access to ${name}`,
-            body: `Grant access to ${cleanKeys.join(', ')} for ${name}? Required keys are taken from your settings. The desktop launcher will request a second confirmation.`,
-            confirmLabel: 'Grant access',
+            title: `Предоставить доступ для ${name}`,
+            body: `Предоставить доступ к ${cleanKeys.join(', ')} для ${name}? Требуемые ключи берутся из настроек. Приложение запросит дополнительное подтверждение.`,
+            confirmLabel: 'Предоставить доступ',
         });
         if (!ok) throw new Error('Skill key grant cancelled.');
         const bridge = window.pywebview?.api?.request_skill_key_grant;
@@ -919,9 +919,9 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
 
         if (action === 'review' || action === 'rereview') {
             const ok = await openConfirmDialog({
-                title: action === 'rereview' ? `Re-review ${name}` : `Review ${name}`,
-                body: `Run security review for ${name}? It can take a few minutes and runs in the background.`,
-                confirmLabel: action === 'rereview' ? 'Re-review' : 'Run review',
+                title: action === 'rereview' ? `Перепроверить ${name}` : `Проверить ${name}`,
+                body: `Запустить проверку безопасности для ${name}? Это может занять несколько минут и выполняется в фоне.`,
+                confirmLabel: action === 'rereview' ? 'Перепроверить' : 'Запустить проверку',
             });
             if (!ok) return;
             await reviewSkillInBackground(name);
@@ -959,9 +959,9 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                 return;
             }
             const ok = await openConfirmDialog({
-                title: `Repair ${name}`,
-                body: `Send a repair task for ${name} to Ouroboros? The agent will work on the skill in chat.`,
-                confirmLabel: 'Start repair',
+                title: `Восстановить ${name}`,
+                body: `Отправить задачу восстановления для ${name} в Ouroboros? Агент займётся навыком в чате.`,
+                confirmLabel: 'Начать восстановление',
                 danger: true,
             });
             if (!ok) return;
@@ -991,9 +991,9 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
 
         if (action === 'submit_hub') {
             const ok = await openConfirmDialog({
-                title: `Submit ${name} to OuroborosHub`,
-                body: `Open a public GitHub pull request submitting ${name} to OuroborosHub? The PR will contain the reviewed skill payload and an updated catalog entry.`,
-                confirmLabel: 'Submit to OuroborosHub',
+                title: `Отправить ${name} в OuroborosHub`,
+                body: `Открыть публичный pull request на GitHub для отправки ${name} в OuroborosHub? PR будет содержать проверенный пакет навыка и обновлённую запись в каталоге.`,
+                confirmLabel: 'Отправить в OuroborosHub',
                 danger: true,
             });
             if (!ok) return;
@@ -1241,9 +1241,9 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
             } else if (target.classList.contains('skills-uninstall')) {
                 const source = target.dataset.source === 'ouroboroshub' ? 'ouroboroshub' : 'clawhub';
                 const ok = await openConfirmDialog({
-                    title: `Uninstall ${name}`,
-                    body: `Uninstall ${name}? This deletes data/skills/${source}/${name}/.`,
-                    confirmLabel: 'Uninstall',
+                    title: `Удалить ${name}`,
+                    body: `Удалить ${name}? Это удалит data/skills/${source}/${name}/.`,
+                    confirmLabel: 'Удалить',
                     danger: true,
                 });
                 if (!ok) {
@@ -1309,7 +1309,7 @@ async function renderMarketplacePane() {
         }
         return;
     }
-    pane.innerHTML = '<div class="muted">Loading marketplace…</div>';
+    pane.innerHTML = '<div class="muted">Загрузка маркетплейса…</div>';
     try {
         initMarketplace(pane, document.getElementById('skills-pane-marketplace-chrome'));
         pane.dataset.bootstrapped = 'true';
@@ -1330,7 +1330,7 @@ async function renderOuroborosHubPane() {
         }
         return;
     }
-    pane.innerHTML = '<div class="muted">Loading OuroborosHub…</div>';
+    pane.innerHTML = '<div class="muted">Загрузка OuroborosHub…</div>';
     try {
         initOuroborosHub(pane, document.getElementById('skills-pane-ouroboroshub-chrome'));
         pane.dataset.bootstrapped = 'true';
@@ -1356,8 +1356,8 @@ export function initSkills(ctx) {
     const renderFn = async () => {
         refreshBtn.disabled = true;
         refreshBtn.classList.add('is-loading');
-        const originalText = refreshBtn.textContent || 'Refresh';
-        refreshBtn.textContent = 'Refreshing';
+        const originalText = refreshBtn.textContent || 'Обновить';
+        refreshBtn.textContent = 'Обновление...';
         try {
             await Promise.all([
                 renderSkillsList(container, emptyEl, reviewingSkills, repairingSkills),
@@ -1369,7 +1369,7 @@ export function initSkills(ctx) {
         } finally {
             refreshBtn.disabled = false;
             refreshBtn.classList.remove('is-loading');
-            refreshBtn.textContent = originalText === 'Refreshing' ? 'Refresh' : originalText;
+            refreshBtn.textContent = originalText === 'Обновление...' ? 'Обновить' : originalText;
         }
     };
 

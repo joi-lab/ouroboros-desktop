@@ -19,38 +19,38 @@ function lifecycleFor(installed, pending) {
         if (pending.failed === true) {
             return {
                 tone: pending.tone || 'danger',
-                label: pending.label || 'Failed',
+                label: pending.label || 'Ошибка',
                 hint: pending.message || '',
-                button: pending.retry_label || 'Retry',
+                button: pending.retry_label || 'Повторить',
                 disabled: false,
             };
         }
         return {
             tone: pending.tone || 'warn',
-            label: pending.label || 'Working',
+            label: pending.label || 'Выполняется',
             hint: pending.message || '',
-            button: pending.label || 'Working…',
+            button: pending.label || 'Выполняется…',
             disabled: true,
         };
     }
     if (installed) {
-        const review = installed.review_status ? `Review ${installed.review_status}` : 'Installed';
+        const review = installed.review_status ? `Проверка ${installed.review_status}` : 'Установлен';
         const executable = installed.review_gate && typeof installed.review_gate.executable_review === 'boolean'
             ? installed.review_gate.executable_review
             : ['clean', 'warnings'].includes(installed.review_status);
         return {
             tone: executable && !installed.review_stale ? 'ok' : 'warn',
             label: review,
-            hint: installed.review_stale ? 'Review is stale; re-review from My skills before enabling.' : '',
-            button: 'Installed',
+            hint: installed.review_stale ? 'Проверка устарела; перепроверьте в разделе «Мои навыки» перед включением.' : '',
+            button: 'Установлен',
             disabled: true,
         };
     }
     return {
         tone: 'muted',
-        label: 'Not installed',
-        hint: 'Install starts security review automatically.',
-        button: 'Install',
+        label: 'Не установлен',
+        hint: 'Установка автоматически запускает проверку безопасности.',
+        button: 'Установить',
         disabled: false,
     };
 }
@@ -60,8 +60,8 @@ function controlsTemplate() {
     return `
         <div class="marketplace-controls">
             <input type="search" id="oh-query" class="marketplace-search"
-                   placeholder="Search official Ouroboros skills…" autocomplete="off">
-            <button class="btn btn-primary" data-oh-search>Search</button>
+                   placeholder="Поиск официальных навыков Ouroboros…" autocomplete="off">
+            <button class="btn btn-primary" data-oh-search>Поиск</button>
         </div>
     `;
 }
@@ -88,10 +88,10 @@ function card(item, installed) {
         ? `<div class="marketplace-card-state-hint">${escapeHtml(lifecycle.hint)}</div>`
         : '';
     const status = installed
-        ? `<span class="skills-status-chip skills-status-ok">Installed v${escapeHtml(installed.version || item.latest_version || '')}</span>`
-        : '<span class="skills-status-chip skills-status-muted">Not installed</span>';
+        ? `<span class="skills-status-chip skills-status-ok">Установлен v${escapeHtml(installed.version || item.latest_version || '')}</span>`
+        : '<span class="skills-status-chip skills-status-muted">Не установлен</span>';
     const primary = (installed && !pending)
-        ? '<button class="btn btn-default" disabled>Installed</button>'
+        ? '<button class="btn btn-default" disabled>Установлен</button>'
         : `<button class="btn ${pending?.failed ? 'btn-default' : 'btn-primary'}" data-oh-install="${escapeHtml(slug)}" ${lifecycle.disabled ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`;
     return `
         <article class="${cardClass}" data-slug="${escapeHtml(slug)}">
@@ -101,7 +101,7 @@ function card(item, installed) {
                     <span class="muted">${escapeHtml(slug)} · v${escapeHtml(item.latest_version || '—')}</span>
                 </div>
                 <div class="marketplace-card-badges">
-                    <span class="skills-badge skills-badge-ok">official</span>
+                    <span class="skills-badge skills-badge-ok">официальный</span>
                     ${status}
                 </div>
             </div>
@@ -113,7 +113,7 @@ function card(item, installed) {
             <div class="marketplace-card-actions">
                 <div class="marketplace-primary-action">${primary}</div>
                 <div class="marketplace-secondary-actions">
-                    <button class="btn btn-default" data-oh-preview="${escapeHtml(slug)}">Details</button>
+                    <button class="btn btn-default" data-oh-preview="${escapeHtml(slug)}">Подробнее</button>
                 </div>
             </div>
         </article>
@@ -139,7 +139,7 @@ export function initOuroborosHub(pane, controlsHost = null) {
 
     function renderCards() {
         results.innerHTML = state.results.map((item) => card(item, state.installed.get(item.slug))).join('')
-            || '<div class="muted">No official skills found.</div>';
+            || '<div class="muted">Официальные навыки не найдены.</div>';
     }
 
     async function loadInstalled() {
@@ -148,7 +148,7 @@ export function initOuroborosHub(pane, controlsHost = null) {
     }
 
     async function refresh() {
-        show('Loading OuroborosHub…', 'muted');
+        show('Загрузка OuroborosHub…', 'muted');
         try {
             await loadInstalled();
             const params = new URLSearchParams();
@@ -157,7 +157,7 @@ export function initOuroborosHub(pane, controlsHost = null) {
             state.results = data.results || [];
             state.installed.pendingBySlug = getPendingBySlug();
             renderCards();
-            show(`${state.results.length} official skill${state.results.length === 1 ? '' : 's'}`, 'muted');
+            show(`${state.results.length} официальных навык${state.results.length === 1 ? '' : (state.results.length < 5 ? 'а' : 'ов')}`, 'muted');
         } catch (err) {
             show(err.message || String(err), 'danger');
             results.innerHTML = `<div class="skills-load-error">${escapeHtml(err.message || err)}</div>`;
@@ -179,14 +179,14 @@ export function initOuroborosHub(pane, controlsHost = null) {
         const preview = event.target.closest('[data-oh-preview]');
         if (preview) {
             const slug = preview.dataset.ohPreview;
-            show(`${slug}: official skill details are shown in the catalog card.`, 'muted');
+            show(`${slug}: подробности официального навыка показаны в карточке каталога.`, 'muted');
             return;
         }
         if (!install) return;
         const slug = install.dataset.ohInstall;
         install.disabled = true;
-        setPending(slug, { label: 'Installing', tone: 'warn', message: 'Installing official skill…' });
-        show(`Installing ${slug}…`, 'muted');
+        setPending(slug, { label: 'Установка', tone: 'warn', message: 'Установка официального навыка…' });
+        show(`Установка ${slug}…`, 'muted');
         try {
             const data = await fetchJson('/api/marketplace/ouroboroshub/install', {
                 method: 'POST',
@@ -195,18 +195,18 @@ export function initOuroborosHub(pane, controlsHost = null) {
             });
             if (!data.ok) throw new Error(data.error || 'install failed');
             show(
-                data.review_status ? `${slug}: installed, review ${data.review_status}` : `${slug}: installed`,
+                data.review_status ? `${slug}: установлен, проверка ${data.review_status}` : `${slug}: установлен`,
                 data.ok ? 'ok' : 'warn',
             );
             emitSkillLifecycle('install', data.sanitized_name || slug, data);
             clearPending(slug);
         } catch (err) {
             setPending(slug, {
-                label: 'Failed',
+                label: 'Ошибка',
                 tone: 'danger',
                 message: err.message || String(err),
                 failed: true,
-                retry_label: 'Retry',
+                retry_label: 'Повторить',
             });
             show(`${slug}: ${err.message || err}`, 'danger');
         } finally {

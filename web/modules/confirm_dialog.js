@@ -6,8 +6,8 @@ let activeClose = null;
 export function openConfirmDialog({
     title,
     body,
-    confirmLabel = 'Continue',
-    cancelLabel = 'Cancel',
+    confirmLabel = 'Продолжить',
+    cancelLabel = 'Отмена',
     danger = false,
 } = {}) {
     if (activeClose) activeClose(false);
@@ -17,11 +17,11 @@ export function openConfirmDialog({
         backdrop.innerHTML = `
             <div class="marketplace-modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
                 <div class="marketplace-modal-head">
-                    <h3 id="confirm-dialog-title">${escapeHtml(title || 'Confirm action')}</h3>
-                    <button type="button" class="btn btn-default btn-sm" data-confirm-cancel aria-label="Close">Close</button>
+                    <h3 id="confirm-dialog-title">${escapeHtml(title || 'Подтвердите действие')}</h3>
+                    <button type="button" class="btn btn-default btn-sm" data-confirm-cancel aria-label="Закрыть">Закрыть</button>
                 </div>
                 <div class="marketplace-modal-body">
-                    <p>${escapeHtml(body || 'Continue?')}</p>
+                    <p>${escapeHtml(body || 'Продолжить?')}</p>
                 </div>
                 <div class="marketplace-modal-actions">
                     <button type="button" class="btn btn-default" data-confirm-cancel>${escapeHtml(cancelLabel)}</button>

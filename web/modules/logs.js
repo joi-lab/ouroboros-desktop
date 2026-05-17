@@ -41,10 +41,10 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
             <h2>Logs</h2>
             <div class="spacer"></div>
-            <button class="btn btn-default" id="btn-clear-logs">Clear</button>
+            <button class="btn btn-default" id="btn-clear-logs">Очистить</button>
         </div>`;
     const inlineClear = embedded
-        ? `<button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Clear</button>`
+        ? `<button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Очистить</button>`
         : '';
     page.innerHTML = `
         ${headerBlock}
@@ -119,7 +119,7 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
                 const isHidden = rawEl.hasAttribute('hidden');
                 if (isHidden) {
                     rawEl.removeAttribute('hidden');
-                    rawToggle.textContent = 'Hide raw';
+                    rawToggle.textContent = 'Скрыть raw';
                 } else {
                     rawEl.setAttribute('hidden', '');
                     rawToggle.textContent = 'Raw';
@@ -209,7 +209,7 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
             </div>
             <div class="log-task-summary" data-task-summary></div>
             <details class="log-task-details">
-                <summary>Timeline</summary>
+                <summary>Хронология</summary>
                 <div class="log-task-timeline" data-task-timeline></div>
             </details>
         `;

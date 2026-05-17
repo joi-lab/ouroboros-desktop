@@ -11,10 +11,10 @@ function pageTemplate() {
     return `
         <section class="page app-page-glass" id="page-widgets">
             ${renderPageHeader({
-                title: 'Widgets',
+                title: 'Виджеты',
                 icon: PAGE_ICONS.widgets,
-                description: 'Reviewed extension UI surfaces live here, separate from the skill catalogue.',
-                actionsHtml: '<button id="widgets-refresh" class="btn btn-default btn-sm">Refresh</button>',
+                description: 'Проверенные интерфейсы расширений отображаются здесь, отдельно от каталога навыков.',
+                actionsHtml: '<button id="widgets-refresh" class="btn btn-default btn-sm">Обновить</button>',
             })}
             <div class="widgets-scroll scroll-fade-y">
                 <div id="widgets-list" class="widgets-list"></div>
@@ -32,7 +32,7 @@ async function fetchExtensions() {
 
 function renderShell(host, tabs) {
     if (!tabs.length) {
-        host.innerHTML = '<div class="muted">No live widgets yet. Review and enable an extension that registers a UI tab.</div>';
+        host.innerHTML = '<div class="muted">Активных виджетов пока нет. Проверьте и включите расширение с вкладкой пользовательского интерфейса.</div>';
         return;
     }
     host.innerHTML = tabs.map((tab) => {
@@ -1041,7 +1041,7 @@ export function initWidgets(ctx = {}) {
             renderShell(list, lastTabs);
             applyWidgetsLayout(list);
         } else {
-            list.innerHTML = '<div class="muted">Loading widgets…</div>';
+            list.innerHTML = '<div class="muted">Загрузка виджетов…</div>';
         }
         try {
             const data = await fetchExtensions();

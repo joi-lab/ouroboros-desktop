@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#eff5fb">
     <meta name="color-scheme" content="light">
-    <meta name="description" content="Ouroboros — self-improving AI agent">
+    <meta name="description" content="Ouroboros — самосовершенствующийся ИИ-агент">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -27,42 +27,42 @@
     <div id="app">
         <nav id="nav-rail">
             <div id="nav-logo"></div>
-            <button id="nav-collapse-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
+            <button id="nav-collapse-toggle" type="button" aria-label="Свернуть боковую панель" aria-expanded="true">
                 <span class="nav-brand-left" aria-hidden="true">
                     <img class="nav-brand-mark" src="/static/icons/nav-avatar.png" alt="">
                 </span>
                 <img class="nav-collapse-icon" src="/static/icons/panel-arrow-left.svg" alt="">
             </button>
-            <button class="nav-btn active" data-page="chat" title="Chat">
+            <button class="nav-btn active" data-page="chat" title="Чат">
                 <img class="nav-icon" src="/static/icons/chat.svg" alt="">
-                <span>Chat</span>
+                <span>Чат</span>
             </button>
-            <button class="nav-btn" data-page="files" title="Files">
+            <button class="nav-btn" data-page="files" title="Файлы">
                 <img class="nav-icon" src="/static/icons/files.svg" alt="">
-                <span>Files</span>
+                <span>Файлы</span>
             </button>
 
-            <button class="nav-btn" data-page="skills" title="Skills">
+            <button class="nav-btn" data-page="skills" title="Навыки">
                 <img class="nav-icon" src="/static/icons/skills.svg" alt="">
-                <span>Skills</span>
+                <span>Навыки</span>
             </button>
-            <button class="nav-btn" data-page="dashboard" title="Dashboard">
+            <button class="nav-btn" data-page="dashboard" title="Дашборд">
                 <img class="nav-icon" src="/static/icons/logs.svg" alt="">
-                <span>Dashboard</span>
+                <span>Дашборд</span>
             </button>
-            <button class="nav-btn" data-page="settings" title="Settings">
+            <button class="nav-btn" data-page="settings" title="Настройки">
                 <img class="nav-icon" src="/static/icons/settings.svg" alt="">
-                <span>Settings</span>
+                <span>Настройки</span>
             </button>
             <div class="nav-section-divider"></div>
-            <section id="nav-widgets-section" class="nav-widgets-section" aria-label="Widgets">
-                <div class="nav-section-title">Widgets</div>
+            <section id="nav-widgets-section" class="nav-widgets-section" aria-label="Виджеты">
+                <div class="nav-section-title">Виджеты</div>
                 <div id="nav-widget-list" class="nav-widget-list">
-                    <div class="nav-widget-empty">No widgets</div>
+                    <div class="nav-widget-empty">Нет виджетов</div>
                 </div>
             </section>
             <div class="nav-spacer"></div>
-            <span class="chat-budget-pill nav-budget-pill" id="chat-budget-pill" role="button" tabindex="0" title="Open budget controls" aria-label="Open budget controls">
+            <span class="chat-budget-pill nav-budget-pill" id="chat-budget-pill" role="button" tabindex="0" title="Открыть управление бюджетом" aria-label="Открыть управление бюджетом">
                 <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
                 <span class="chat-budget-bar">
                     <span class="chat-budget-bar-fill" id="chat-budget-bar-fill"></span>
@@ -77,7 +77,7 @@
     </div>
     <div id="reconnect-overlay">
         <div class="spinner"></div>
-        <div>Reconnecting to Ouroboros...</div>
+        <div>Переподключение к Ouroboros...</div>
     </div>
     <script type="module" src="/static/app.js"></script>
 </body>
