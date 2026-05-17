@@ -383,23 +383,44 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     const NEAR_BOTTOM_THRESHOLD_PX = 160;
+    const REATTACH_STICKY_THRESHOLD_PX = 48;
+    let shouldAutoStickToBottom = true;
+    let lastMessagesScrollTop = 0;
+    let suppressStickyDetection = false;
 
     function isNearBottom(threshold = NEAR_BOTTOM_THRESHOLD_PX) {
         const remaining = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
         return remaining <= threshold;
     }
 
+    function setProgrammaticScrollTop(nextScrollTop) {
+        suppressStickyDetection = true;
+        messagesDiv.scrollTop = nextScrollTop;
+        requestAnimationFrame(() => {
+            suppressStickyDetection = false;
+            lastMessagesScrollTop = messagesDiv.scrollTop;
+        });
+    }
+
+    function setStickyByUserScroll() {
+        if (suppressStickyDetection) return;
+        const current = messagesDiv.scrollTop;
+        if (current < lastMessagesScrollTop - 2) shouldAutoStickToBottom = false;
+        else if (isNearBottom(REATTACH_STICKY_THRESHOLD_PX)) shouldAutoStickToBottom = true;
+        lastMessagesScrollTop = current;
+    }
+
     function insertMessageNode(node, options = {}) {
         if (!node) return;
-        const shouldStick = Boolean(options.forceStick) || isNearBottom();
+        const shouldStick = Boolean(options.forceStick) || (shouldAutoStickToBottom && isNearBottom());
         if (node.parentNode === messagesDiv) {
-            if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            if (shouldStick) setProgrammaticScrollTop(messagesDiv.scrollHeight);
             return;
         }
         const typing = document.getElementById('typing-indicator');
         if (typing && typing.parentNode === messagesDiv) messagesDiv.insertBefore(node, typing);
         else messagesDiv.appendChild(node);
-        if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        if (shouldStick) setProgrammaticScrollTop(messagesDiv.scrollHeight);
     }
 
     function shouldAlwaysShowTaskCard(taskId = '') {
@@ -1524,7 +1545,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     // "no separate fade layer" rule remains intact and CSS owns the actual
     // padding expression, including mobile safe-area.
     function scrollToBottom() {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        shouldAutoStickToBottom = true;
+        setProgrammaticScrollTop(messagesDiv.scrollHeight);
     }
 
     function scrollToBottomAfterLayout() {
@@ -1561,6 +1583,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     installChatResizeObservers();
+    messagesDiv.addEventListener('scroll', setStickyByUserScroll, { passive: true });
 
     input.addEventListener('input', () => {
         if (inputHistoryIndex === inputHistory.length) inputDraft = input.value;
@@ -1650,7 +1673,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     function showTyping() {
         if (!hasActiveLiveCard()) {
             typingEl.style.display = '';
-            if (isNearBottom()) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            if (shouldAutoStickToBottom && isNearBottom()) scrollToBottom();
         }
         setStatus('thinking', 'Думает...');
     }
