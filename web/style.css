@@ -6130,6 +6130,22 @@ body.nav-collapsed .nav-budget-pill {
   border-color: var(--divider);
 }
 
+.skill-review-summary-main {
+  color: #8a5a00;
+}
+
+.skill-review-summary-side {
+  color: rgba(138, 90, 0, 0.66);
+}
+
+.skill-review-toggle-label {
+  color: rgba(216, 138, 0, 0.95);
+}
+
+.skill-review-full {
+  color: rgba(138, 90, 0, 0.82);
+}
+
 .chat-live-phase,
 .chat-live-line-phase,
 .log-entry .log-phase,
