@@ -124,7 +124,6 @@ body {
   padding: 28px 0 16px;
   gap: 10px;
   background: transparent;
-  backdrop-filter: none;
   border-right: none;
   box-shadow: none;
   z-index: 10;
@@ -155,7 +154,6 @@ body {
   width: 64px;
   border: 1px solid var(--accent-08);
   background: var(--accent-04);
-  backdrop-filter: blur(8px);
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: var(--radius-lg);
@@ -539,7 +537,6 @@ body {
   align-items: center;
   justify-content: center;
   background: rgba(12, 14, 18, 0.72);
-  backdrop-filter: blur(3px);
   z-index: 5;
   pointer-events: none;
 }
@@ -605,7 +602,6 @@ body {
   position: absolute;
   inset: 0;
   background: rgba(6, 7, 10, 0.66);
-  backdrop-filter: blur(4px);
 }
 
 .files-modal-card {
@@ -662,7 +658,6 @@ body {
   padding: var(--page-header-padding-y) var(--page-header-padding-x)
     var(--page-header-padding-bottom);
   background: transparent;
-  backdrop-filter: none;
   flex-shrink: 0;
   border-bottom: none;
 }
@@ -828,8 +823,6 @@ body {
     rgba(13, 11, 15, 0.38) 80%,
     rgba(13, 11, 15, 0) 100%
   );
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   /* Soft-mask the blur to fall off in lockstep with the gradient,
        otherwise the glass effect creates its own visible hard edge. */
   -webkit-mask-image: linear-gradient(
@@ -858,7 +851,6 @@ body {
 .chat-header-btn {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(13, 11, 15, 0.55);
-  backdrop-filter: blur(8px);
   color: var(--text-secondary);
   border-radius: 999px;
   padding: 7px 14px;
@@ -905,7 +897,6 @@ body {
   border-radius: 999px;
   border: 1px solid rgba(245, 158, 11, 0.18);
   background: rgba(13, 11, 15, 0.55);
-  backdrop-filter: blur(8px);
   cursor: pointer;
   min-width: 100px;
   font: inherit;
@@ -957,8 +948,6 @@ body {
   font-size: 11px;
   font-weight: 500;
   background: rgba(26, 21, 32, 0.78);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 .status-badge.online {
   color: var(--green);
@@ -1036,7 +1025,6 @@ body {
   position: absolute;
   inset: 0;
   background: rgba(6, 7, 10, 0.78);
-  backdrop-filter: blur(10px);
 }
 
 .onboarding-frame {
@@ -1305,7 +1293,6 @@ body {
   border-radius: var(--radius-lg);
   border: 1px solid var(--accent-dim);
   background: var(--accent-04);
-  backdrop-filter: blur(12px);
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.18),
     inset 0 1px 0 rgba(255, 200, 210, 0.03);
@@ -1761,8 +1748,6 @@ body {
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     background: rgba(13, 11, 15, 0.88);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 
@@ -1931,8 +1916,6 @@ body {
   padding: 4px 8px 4px 6px;
   background: rgba(26, 21, 32, 0.78);
   border: 1px solid rgba(201, 53, 69, 0.35);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: rgba(226, 232, 240, 0.85);
@@ -1974,8 +1957,6 @@ body {
   border-radius: 24px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(26, 21, 32, 0.55);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   /* The textarea is the focal "glass" element. Its own dense blur
        (20px) together with a moderately translucent fill (0.55) is what
        makes message bubbles read THROUGH the input field as a frosted
@@ -2109,8 +2090,6 @@ body {
   right: 0;
   min-width: 120px;
   background: rgba(26, 21, 32, 0.92);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(201, 53, 69, 0.2);
   border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
@@ -2167,7 +2146,6 @@ body {
   border-radius: var(--radius);
   padding: 16px 20px;
   border: 1px solid var(--accent-08);
-  backdrop-filter: blur(14px);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   transition: border-color 0.3s;
 }
@@ -2825,7 +2803,6 @@ body {
     rgba(255, 255, 255, 0.02);
   border: 1px solid var(--accent-12);
   border-radius: var(--radius-lg);
-  backdrop-filter: blur(14px);
 }
 
 .evo-runtime-card {
@@ -3000,7 +2977,6 @@ body {
 }
 .costs-budget-card {
   background: rgba(26, 21, 32, 0.72);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--accent-18);
   border-radius: 18px;
   padding: 20px 24px;
@@ -3107,7 +3083,6 @@ body {
 
 .updates-card {
   background: rgba(26, 21, 32, 0.72);
-  backdrop-filter: blur(12px);
   border: 1px solid rgba(201, 53, 69, 0.14);
   border-radius: 18px;
   padding: 18px;
@@ -3830,8 +3805,6 @@ body {
   background: rgba(18, 20, 26, 0.94);
   color: var(--text-primary);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   font-size: 13px;
   line-height: 1.45;
   pointer-events: auto;
@@ -4596,7 +4569,6 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 18px;
   padding: 14px;
-  backdrop-filter: blur(12px);
 }
 
 .widgets-card-span-2 {
@@ -5206,7 +5178,6 @@ select {
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
-  backdrop-filter: none;
   box-shadow: none;
   transform: none;
 }
@@ -5496,8 +5467,6 @@ body.nav-collapsed .nav-budget-pill {
     rgba(239, 245, 251, 0.96),
     rgba(239, 245, 251, 0)
   );
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   -webkit-mask-image: none;
   mask-image: none;
 }
@@ -5586,8 +5555,6 @@ body.nav-collapsed .nav-budget-pill {
   background: transparent;
   color: var(--text-primary);
   box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .chat-budget-pill {
@@ -5612,8 +5579,6 @@ body.nav-collapsed .nav-budget-pill {
   background: transparent;
   color: var(--text-primary);
   box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   font-size: 14px;
   font-weight: 500;
   text-align: left;
@@ -5874,8 +5839,6 @@ body.nav-collapsed .nav-budget-pill {
   border-radius: 28px;
   background: #ffffff;
   box-shadow: 0 0 16px rgba(0, 13, 49, 0.1);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
 }
 
 #chat-input {
@@ -5898,8 +5861,6 @@ body.nav-collapsed .nav-budget-pill {
   overflow-y: auto;
   overflow-x: hidden;
   box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .chat-input-wrap:focus-within {
@@ -6237,7 +6198,6 @@ body.nav-collapsed .nav-budget-pill {
   background: #ffffff;
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: none;
 }
 
 .files-sidebar {
@@ -6664,8 +6624,6 @@ body.nav-collapsed .nav-budget-pill {
 .files-modal-backdrop,
 .marketplace-modal-backdrop {
   background: rgba(0, 13, 49, 0.28);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .widgets-frame,
@@ -6975,7 +6933,6 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-widgets-host .nav-widget-item.active {
     background: #000D31;
     color: #ffffff;
-    box-shadow: 0 10px 18px rgba(0, 13, 49, 0.24);
   }
 
   .mobile-left-navbtn.active img,
@@ -7045,8 +7002,6 @@ body.nav-collapsed .nav-budget-pill {
     inset: 0;
     z-index: 35;
     background: rgba(0, 13, 49, 0.2);
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
   }
 
   body.mobile-nav-open #mobile-drawer-backdrop {
@@ -7098,8 +7053,6 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-budget-mirror {
     flex-shrink: 0;
     cursor: default;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
     justify-content: center;
     width: 100px;
   }
