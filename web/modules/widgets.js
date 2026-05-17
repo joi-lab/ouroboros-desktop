@@ -59,6 +59,10 @@ function renderShell(host, tabs) {
     }).join('');
 }
 
+function applyWidgetsLayout(list) {
+    applyMasonry(list, { minColumnWidth: Number.MAX_SAFE_INTEGER });
+}
+
 function cleanWidgetRoute(value) {
     const route = String(value || '').trim().replace(/^\/+/, '');
     const parts = route.split('/').filter(Boolean);
@@ -1035,7 +1039,7 @@ export function initWidgets(ctx = {}) {
         if (lastTabs) {
             // Optimistic paint from cache while the fresh fetch is in flight.
             renderShell(list, lastTabs);
-            applyMasonry(list);
+            applyWidgetsLayout(list);
         } else {
             list.innerHTML = '<div class="muted">Loading widgets…</div>';
         }
@@ -1046,7 +1050,7 @@ export function initWidgets(ctx = {}) {
             lastTabs = tabs;
             window.dispatchEvent(new CustomEvent('ouro:widgets-updated', { detail: { tabs } }));
             renderShell(list, tabs);
-            applyMasonry(list);
+            applyWidgetsLayout(list);
             widgetsMounted = true;
             for (const tab of tabs) {
                 if (!widgetsVisible || generation !== renderGeneration) return;
@@ -1055,14 +1059,14 @@ export function initWidgets(ctx = {}) {
                 if (!card) continue;
                 try {
                     await mountTrackedTab(card, tab);
-                    applyMasonry(list);
+                    applyWidgetsLayout(list);
                 } catch (err) {
                     const mount = card.querySelector('[data-widget-mount]');
                     if (mount) mount.innerHTML = `<div class="skills-load-error">widget failed: ${escapeHtml(err.message || err)}</div>`;
-                    applyMasonry(list);
+                    applyWidgetsLayout(list);
                 }
             }
-            applyMasonry(list);
+            applyWidgetsLayout(list);
             focusWidget();
         } catch (err) {
             if (!widgetsVisible || generation !== renderGeneration) return;

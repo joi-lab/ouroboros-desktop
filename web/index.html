@@ -16,36 +16,31 @@
         <nav id="nav-rail">
             <div id="nav-logo"></div>
             <button id="nav-collapse-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true">
-                <span class="nav-brand-mark" aria-hidden="true"></span>
-                <span class="nav-brand-title">Уроборос</span>
-                <img class="nav-collapse-icon" src="/static/figma-icons/panel-collapse.svg" alt="">
+                <span class="nav-brand-left" aria-hidden="true">
+                    <img class="nav-brand-mark" src="/static/icons/nav-avatar.png" alt="">
+                </span>
+                <img class="nav-collapse-icon" src="/static/icons/panel-arrow-left.svg" alt="">
             </button>
             <button class="nav-btn active" data-page="chat" title="Chat">
-                <img class="nav-icon" src="/static/figma-icons/chat.svg" alt="">
+                <img class="nav-icon" src="/static/icons/chat.svg" alt="">
                 <span>Chat</span>
             </button>
             <button class="nav-btn" data-page="files" title="Files">
-                <img class="nav-icon" src="/static/figma-icons/files.svg" alt="">
+                <img class="nav-icon" src="/static/icons/files.svg" alt="">
                 <span>Files</span>
             </button>
 
             <button class="nav-btn" data-page="skills" title="Skills">
-                <img class="nav-icon" src="/static/figma-icons/skills.svg" alt="">
+                <img class="nav-icon" src="/static/icons/skills.svg" alt="">
                 <span>Skills</span>
             </button>
             <button class="nav-btn" data-page="dashboard" title="Dashboard">
-                <img class="nav-icon" src="/static/figma-icons/logs.svg" alt="">
+                <img class="nav-icon" src="/static/icons/logs.svg" alt="">
                 <span>Dashboard</span>
             </button>
             <button class="nav-btn" data-page="settings" title="Settings">
-                <img class="nav-icon" src="/static/figma-icons/settings.svg" alt="">
+                <img class="nav-icon" src="/static/icons/settings.svg" alt="">
                 <span>Settings</span>
-                <span class="chat-budget-pill nav-budget-pill" id="chat-budget-pill" role="button" tabindex="0" title="Open budget controls" aria-label="Open budget controls">
-                    <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
-                    <span class="chat-budget-bar">
-                        <span class="chat-budget-bar-fill" id="chat-budget-bar-fill"></span>
-                    </span>
-                </span>
             </button>
             <div class="nav-section-divider"></div>
             <section id="nav-widgets-section" class="nav-widgets-section" aria-label="Widgets">
@@ -55,6 +50,12 @@
                 </div>
             </section>
             <div class="nav-spacer"></div>
+            <span class="chat-budget-pill nav-budget-pill" id="chat-budget-pill" role="button" tabindex="0" title="Open budget controls" aria-label="Open budget controls">
+                <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
+                <span class="chat-budget-bar">
+                    <span class="chat-budget-bar-fill" id="chat-budget-bar-fill"></span>
+                </span>
+            </span>
             <span id="nav-version"></span>
         </nav>
         <div id="divider"></div>

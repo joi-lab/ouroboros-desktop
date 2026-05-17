@@ -61,14 +61,14 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 <div class="chat-action-menu" id="chat-action-menu">
                     <span id="chat-status" class="status-badge offline">Connecting...</span>
                     <button class="chat-action-trigger" id="chat-action-trigger" type="button" title="Chat actions" aria-label="Chat actions" aria-expanded="false" aria-haspopup="menu">
-                        <img class="chat-action-trigger-icon" src="/static/figma-icons/settings-cog.svg" alt="">
+                        <img class="chat-action-trigger-icon" src="/static/icons/settings-cog.svg" alt="">
                     </button>
                     <div class="chat-header-actions chat-action-dropdown" id="chat-header-actions" role="menu">
-                        <button class="chat-header-btn" type="button" data-chat-command="evolve" role="menuitem" title="Toggle evolution mode"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/evolution.svg" alt=""></span><span>Эволюция</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="evolve" role="menuitem" title="Toggle evolution mode"><span class="chat-action-icon" aria-hidden="true"><img src="/static/icons/evolution.svg" alt=""></span><span>Эволюция</span></button>
                         <button class="chat-header-btn" type="button" data-chat-command="review" role="menuitem" title="Run review now"><span class="chat-action-switch" aria-hidden="true"></span><span>Ревью кода</span></button>
                         <button class="chat-header-btn" type="button" data-chat-command="bg" role="menuitem" title="Toggle background consciousness"><span class="chat-action-switch" aria-hidden="true"></span><span>Фоновое сознание</span></button>
-                        <button class="chat-header-btn" type="button" data-chat-command="restart" role="menuitem" title="Restart agent"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/restart.svg" alt=""></span><span>Перезапустить чат</span></button>
-                        <button class="chat-header-btn danger" type="button" data-chat-command="panic" role="menuitem" title="Stop all workers"><span class="chat-action-icon" aria-hidden="true"><img src="/static/figma-icons/power.svg" alt=""></span><span>Экстренное отключение</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="restart" role="menuitem" title="Restart agent"><span class="chat-action-icon" aria-hidden="true"><img src="/static/icons/restart.svg" alt=""></span><span>Перезапустить чат</span></button>
+                        <button class="chat-header-btn danger" type="button" data-chat-command="panic" role="menuitem" title="Stop all workers"><span class="chat-action-icon" aria-hidden="true"><img src="/static/icons/power.svg" alt=""></span><span>Экстренное отключение</span></button>
                     </div>
                 </div>
             `,
@@ -361,11 +361,9 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const limit = data?.budget_limit || 10;
         const budgetText = document.getElementById('chat-budget-text');
         const budgetFill = document.getElementById('chat-budget-bar-fill');
-        const budgetPillEl = document.getElementById('chat-budget-pill');
         const pct = Math.min(100, (spent / limit) * 100);
         if (budgetText) budgetText.textContent = `${formatUsdWhole(spent)} / ${formatUsdWhole(limit)}`;
         if (budgetFill) budgetFill.style.width = `${pct}%`;
-        if (budgetPillEl) budgetPillEl.style.setProperty('--budget-progress', `${pct}%`);
     }
 
     async function refreshHeaderControlState(force = false) {

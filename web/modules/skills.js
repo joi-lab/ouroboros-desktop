@@ -50,14 +50,14 @@ function skillsPageTemplate() {
             <div class="skills-search-chrome" id="skills-pane-ouroboroshub-chrome" data-chrome-pane="ouroboroshub" hidden></div>
             <div class="skills-scroll scroll-fade-y">
                 <div class="skills-tab-panel" id="skills-pane-installed" data-pane="installed">
-                <div id="skills-migration-banner" class="skills-migration-banner" hidden></div>
-                <div id="skills-list" class="skills-list"></div>
-                <div id="skills-empty" class="muted" hidden>
-                    No skills yet. Browse <b>ClawHub</b> or
-                    <b>OuroborosHub</b> to add one, or import a custom
-                    package from the Files tab.
+                    <div id="skills-migration-banner" class="skills-migration-banner" hidden></div>
+                    <div id="skills-list" class="skills-list"></div>
+                    <div id="skills-empty" class="muted" hidden>
+                        No skills yet. Browse <b>ClawHub</b> or
+                        <b>OuroborosHub</b> to add one, or import a custom
+                        package from the Files tab.
+                    </div>
                 </div>
-            </div>
                 <div class="skills-tab-panel" id="skills-pane-marketplace" data-pane="marketplace" hidden></div>
                 <div class="skills-tab-panel" id="skills-pane-ouroboroshub" data-pane="ouroboroshub" hidden></div>
             </div>

@@ -21,7 +21,6 @@ import { initSkills } from './modules/skills.js';
 import { initWidgets } from './modules/widgets.js';
 import { initUpdates } from './modules/updates.js';
 import { initDashboard } from './modules/dashboard.js';
-import { hydrateNavIcons } from './modules/page_icons.js';
 import { apiFetch } from './modules/api_client.js';
 import { escapeHtmlAttr, escapeHtmlText } from './modules/utils.js';
 
@@ -111,7 +110,6 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         showPage(btn.dataset.page);
     });
 });
-hydrateNavIcons();
 
 function setSidebarCollapsed(collapsed) {
     document.body.classList.toggle('nav-collapsed', collapsed);
@@ -137,11 +135,11 @@ function initSidebarChrome() {
 
 function widgetIconSrcForTitle(title = '') {
     const value = String(title).toLowerCase();
-    if (value.includes('weather') || value.includes('погод')) return '/static/figma-icons/weather.svg';
-    if (value.includes('image') || value.includes('kandinsky') || value.includes('карт')) return '/static/figma-icons/image.svg';
-    if (value.includes('chart') || value.includes('graph') || value.includes('граф')) return '/static/figma-icons/evolution.svg';
-    if (value.includes('chat') || value.includes('чат')) return '/static/figma-icons/chat.svg';
-    return '/static/figma-icons/skills.svg';
+    if (value.includes('weather') || value.includes('погод')) return '/static/icons/weather.svg';
+    if (value.includes('image') || value.includes('kandinsky') || value.includes('карт')) return '/static/icons/image.svg';
+    if (value.includes('chart') || value.includes('graph') || value.includes('граф')) return '/static/icons/evolution.svg';
+    if (value.includes('chat') || value.includes('чат')) return '/static/icons/chat.svg';
+    return '/static/icons/skills.svg';
 }
 
 async function refreshSidebarWidgets() {
