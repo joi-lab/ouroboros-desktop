@@ -680,6 +680,11 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     function setLiveCardExpanded(record, expanded) {
         if (!record?.root) return;
         record.root.dataset.expanded = expanded ? '1' : '0';
+        // Re-apply timeline visibility explicitly so viewport switches
+        // (mobile -> desktop and back) cannot leave stale display state.
+        if (record.timelineEl) {
+            record.timelineEl.style.display = expanded ? 'flex' : 'none';
+        }
         syncLiveCardToggle(record);
         if (record.root.isConnected) {
             requestAnimationFrame(() => syncLiveCardLayout(record));
@@ -726,6 +731,15 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         if (event?.detail?.page !== 'chat') return;
         for (const record of liveCardRecords.values()) {
             if (record?.root?.isConnected) syncLiveCardLayout(record);
+        }
+    });
+    window.addEventListener('resize', () => {
+        if (state.activePage !== 'chat') return;
+        for (const record of liveCardRecords.values()) {
+            if (!record?.root?.isConnected) continue;
+            const expanded = record.root.dataset.expanded === '1';
+            if (record.timelineEl) record.timelineEl.style.display = expanded ? 'flex' : 'none';
+            syncLiveCardLayout(record);
         }
     });
     document.addEventListener('visibilitychange', () => {

@@ -1075,6 +1075,9 @@ body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
   padding: 20px;
   padding-top: 56px;
   padding-bottom: var(--chat-input-reserve, 108px);
@@ -6857,8 +6860,7 @@ body.nav-collapsed .nav-budget-pill {
     display: block;
   }
 
-  body.mobile-subpage #mobile-nav-open,
-  body.mobile-subpage #mobile-profile-open {
+  body.mobile-subpage #mobile-nav-open {
     display: none;
   }
 
@@ -6875,16 +6877,24 @@ body.nav-collapsed .nav-budget-pill {
     position: fixed;
     inset: 0;
     width: 100%;
-    background: var(--bg-secondary);
+    background: linear-gradient(180deg, #f3f7fc 0%, var(--bg-secondary) 100%);
     z-index: 45;
     transform: translateX(-100%);
     transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
     overflow-y: auto;
-    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    padding-top: 8px;
+    padding-bottom: max(32px, env(safe-area-inset-bottom, 0px));
   }
 
   body.mobile-nav-open #mobile-left-drawer {
     transform: translateX(0);
+  }
+
+  body.mobile-nav-open #content {
+    overflow: hidden;
   }
 
   /* Hide top bar while left drawer is open */
@@ -6895,27 +6905,38 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-left-head {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
-    padding: max(16px, env(safe-area-inset-top, 0px)) 12px 8px;
+    justify-content: space-between;
+    padding: max(16px, env(safe-area-inset-top, 0px)) 16px 10px;
     flex-shrink: 0;
+  }
+
+  .mobile-left-title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
   }
 
   /* White card container for widgets */
   .mobile-widgets-host {
-    margin: 0 16px;
+    margin: 0 16px 10px;
     background: var(--bg-primary);
-    border-radius: 20px;
+    border: 1px solid rgba(0, 13, 49, 0.08);
+    border-radius: 18px;
+    box-shadow: 0 8px 24px rgba(0, 13, 49, 0.06);
     padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
   }
 
   /* Чат — always shown as active (dark navy) item */
-  .mobile-left-navbtn {
+  .mobile-left-navbtn,
+  .mobile-profile-navbtn,
+  .mobile-widgets-host .nav-widget-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
     min-height: 48px;
     padding: 12px 14px;
@@ -6929,26 +6950,38 @@ body.nav-collapsed .nav-budget-pill {
     text-align: left;
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
   }
 
-  .mobile-left-navbtn img {
+  .mobile-left-navbtn img,
+  .mobile-profile-navbtn img,
+  .mobile-profile-navbtn > svg,
+  .mobile-widgets-host .nav-widget-icon img {
     width: 24px;
     height: 24px;
     flex-shrink: 0;
     filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
   }
 
-  .mobile-left-navbtn:active {
+  .mobile-left-navbtn:active,
+  .mobile-profile-navbtn:active,
+  .mobile-widgets-host .nav-widget-item:active {
     background: var(--bg-hover);
+    transform: translateY(1px);
   }
 
-  .mobile-left-navbtn.active {
+  .mobile-left-navbtn.active,
+  .mobile-profile-navbtn.active,
+  .mobile-widgets-host .nav-widget-item.active {
     background: #000D31;
     color: #ffffff;
+    box-shadow: 0 10px 18px rgba(0, 13, 49, 0.24);
   }
 
-  .mobile-left-navbtn.active img {
+  .mobile-left-navbtn.active img,
+  .mobile-profile-navbtn.active img,
+  .mobile-profile-navbtn.active > svg,
+  .mobile-widgets-host .nav-widget-item.active .nav-widget-icon img {
     opacity: 1;
     filter: brightness(0) invert(1);
   }
@@ -6960,32 +6993,6 @@ body.nav-collapsed .nav-budget-pill {
     gap: 2px;
   }
 
-  .mobile-widgets-host .nav-widget-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 48px;
-    padding: 12px 14px;
-    border: 0;
-    border-radius: 12px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-
-  .mobile-widgets-host .nav-widget-item:active {
-    background: var(--bg-hover);
-  }
-
-  .mobile-widgets-host .nav-widget-item.active {
-    background: #000D31;
-    color: #ffffff;
-  }
-
   .mobile-widgets-host .nav-widget-icon {
     width: 24px;
     height: 24px;
@@ -6993,17 +7000,6 @@ body.nav-collapsed .nav-budget-pill {
     display: flex;
     align-items: center;
     justify-content: center;
-  }
-
-  .mobile-widgets-host .nav-widget-icon img {
-    width: 24px;
-    height: 24px;
-    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
-  }
-
-  .mobile-widgets-host .nav-widget-item.active .nav-widget-icon img {
-    filter: brightness(0) invert(1);
-    filter: brightness(0) invert(1);
   }
 
   .mobile-widgets-host .nav-widget-copy {
@@ -7053,45 +7049,8 @@ body.nav-collapsed .nav-budget-pill {
     -webkit-backdrop-filter: blur(2px);
   }
 
-  body.mobile-profile-open #mobile-drawer-backdrop {
+  body.mobile-nav-open #mobile-drawer-backdrop {
     display: block;
-  }
-
-  /* ── Right profile drawer — mirrors left drawer exactly ── */
-  #mobile-profile-drawer {
-    display: flex;
-    flex-direction: column;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    padding: 0;
-    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
-    background: var(--bg-secondary);
-    border: none;
-    box-shadow: none;
-    transform: translateX(100%);
-    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 45;
-    overflow-y: auto;
-  }
-
-  body.mobile-profile-open #mobile-profile-drawer {
-    transform: translateX(0);
-  }
-
-  body.mobile-profile-open #mobile-top-bar {
-    display: none;
-  }
-
-  .mobile-profile-head {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: max(16px, env(safe-area-inset-top, 0px)) 12px 8px;
-    flex-shrink: 0;
   }
 
   .mobile-drawer-close {
@@ -7117,53 +7076,13 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-profile-host {
     margin: 0 16px;
     background: var(--bg-primary);
-    border-radius: 20px;
-    padding: 8px;
+    border: 1px solid rgba(0, 13, 49, 0.08);
+    border-radius: 18px;
+    box-shadow: 0 8px 24px rgba(0, 13, 49, 0.06);
+    padding: 8px 8px 14px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-  }
-
-  .mobile-profile-navbtn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 48px;
-    padding: 12px 14px;
-    border: 0;
-    border-radius: 12px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font: inherit;
-    font-size: 14px;
-    font-weight: 500;
-    text-align: left;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 0.15s ease;
-  }
-
-  .mobile-profile-navbtn img,
-  .mobile-profile-navbtn > svg {
-    width: 24px;
-    height: 24px;
-    flex-shrink: 0;
-    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
-  }
-
-  .mobile-profile-navbtn:active {
-    background: var(--bg-hover);
-  }
-
-  .mobile-profile-navbtn.active {
-    background: #000D31;
-    color: #ffffff;
-  }
-
-  .mobile-profile-navbtn.active img,
-  .mobile-profile-navbtn.active > svg {
-    filter: brightness(0) invert(1);
+    gap: 4px;
   }
 
   .mobile-profile-budget-row {
@@ -7188,7 +7107,7 @@ body.nav-collapsed .nav-budget-pill {
   /* ── Content: top padding clears the mobile bar, no bottom bar ── */
   #content,
   body.nav-collapsed #content {
-    padding: calc(44px + env(safe-area-inset-top, 0px)) 0 0;
+    padding: calc(52px + env(safe-area-inset-top, 0px)) 0 0;
     background: var(--bg-secondary);
   }
 

@@ -274,6 +274,12 @@ initPwa();
     // keyboard is open.
     function lockBoundaryTouch(e) {
         const touch = e.touches && e.touches.length ? e.touches[0] : null;
+        if (touch && keyboardTouchStartY === 0) {
+            // On some mobile browsers the first touchmove can fire before
+            // touchstart; seed baseline and let this frame pass through.
+            keyboardTouchStartY = touch.clientY;
+            return;
+        }
         const scrollable = findScrollableKeyboardNode(e.target);
         if (scrollable && touch) {
             const dy = touch.clientY - keyboardTouchStartY;
@@ -319,6 +325,7 @@ initPwa();
             if (!keyboardVisible && wasKeyboardOpen) {
                 document.removeEventListener('touchstart', lockTouchStart);
                 document.removeEventListener('touchmove', lockBoundaryTouch);
+                keyboardTouchStartY = 0;
             }
             document.documentElement.classList.toggle('keyboard-open', keyboardVisible);
             document.body.classList.toggle('keyboard-open', keyboardVisible);
@@ -327,6 +334,7 @@ initPwa();
             if (wasKeyboardOpen) {
                 document.removeEventListener('touchstart', lockTouchStart);
                 document.removeEventListener('touchmove', lockBoundaryTouch);
+                keyboardTouchStartY = 0;
             }
             document.documentElement.classList.remove('keyboard-open');
             document.body.classList.remove('keyboard-open');
@@ -357,9 +365,6 @@ ws.connect();
     const navOpenBtn = document.getElementById('mobile-nav-open');
     const leftDrawer = document.getElementById('mobile-left-drawer');
     const leftCloseBtn = document.getElementById('mobile-left-close');
-    const profileOpenBtn = document.getElementById('mobile-profile-open');
-    const profileCloseBtn = document.getElementById('mobile-profile-close');
-    const profileDrawer = document.getElementById('mobile-profile-drawer');
 
     // Widgets: moved between nav-rail and mobile drawer on open/close
     const widgetListSrc = document.getElementById('nav-widget-list');
@@ -384,37 +389,20 @@ ws.connect();
         }
     }
 
-    function openProfileDrawer() {
-        document.body.classList.add('mobile-profile-open');
-        profileOpenBtn?.setAttribute('aria-expanded', 'true');
-    }
-
-    function closeProfileDrawer() {
-        document.body.classList.remove('mobile-profile-open');
-        profileOpenBtn?.setAttribute('aria-expanded', 'false');
-    }
-
     function closeAll() {
         closeNavDrawer();
-        closeProfileDrawer();
     }
 
     navOpenBtn?.addEventListener('click', () => {
         if (document.body.classList.contains('mobile-nav-open')) closeNavDrawer();
-        else { closeProfileDrawer(); openNavDrawer(); }
-    });
-
-    profileOpenBtn?.addEventListener('click', () => {
-        if (document.body.classList.contains('mobile-profile-open')) closeProfileDrawer();
-        else { closeNavDrawer(); openProfileDrawer(); }
+        else openNavDrawer();
     });
 
     leftCloseBtn?.addEventListener('click', closeNavDrawer);
-    profileCloseBtn?.addEventListener('click', closeProfileDrawer);
     backdrop?.addEventListener('click', closeAll);
     document.getElementById('mobile-back-btn')?.addEventListener('click', () => showPage('chat'));
 
-    // Left drawer: chat shortcut + widget tap close
+    // Left drawer: pages + chat shortcut + widgets + budget.
     leftDrawer?.addEventListener('click', (e) => {
         const pageBtn = e.target.closest('[data-left-page]');
         if (pageBtn) {
@@ -422,26 +410,19 @@ ws.connect();
             closeNavDrawer();
             return;
         }
-        if (e.target.closest('[data-widget-key]')) {
-            setTimeout(closeNavDrawer, 100);
-        }
-    });
-
-    // Right profile drawer: nav links + command delegation
-    profileDrawer?.addEventListener('click', (e) => {
-        const pageBtn = e.target.closest('[data-profile-page]');
-        if (pageBtn) {
-            showPage(pageBtn.dataset.profilePage);
-            closeProfileDrawer();
+        const profilePageBtn = e.target.closest('[data-profile-page]');
+        if (profilePageBtn) {
+            showPage(profilePageBtn.dataset.profilePage);
+            closeNavDrawer();
             return;
         }
-        // Delegate chat commands to desktop buttons
-        const cmdBtn = e.target.closest('[data-mobile-cmd]');
-        if (cmdBtn) {
-            const cmd = cmdBtn.dataset.mobileCmd;
-            const desktop = document.querySelector(`#chat-header-actions [data-chat-command="${cmd}"]`);
-            if (desktop) desktop.click();
-            closeProfileDrawer();
+        if (e.target.closest('#mobile-budget-row-btn') || e.target.closest('#mobile-budget-pill-mirror')) {
+            closeNavDrawer();
+            openDashboardTab('costs');
+            return;
+        }
+        if (e.target.closest('[data-widget-key]')) {
+            setTimeout(closeNavDrawer, 100);
         }
     });
 
@@ -468,7 +449,7 @@ ws.connect();
 
     // Mobile budget button: open settings costs tab
     const mobileBudgetAction = () => {
-        closeProfileDrawer();
+        closeNavDrawer();
         openDashboardTab('costs');
     };
     document.getElementById('mobile-budget-row-btn')?.addEventListener('click', mobileBudgetAction);
@@ -502,7 +483,7 @@ ws.connect();
             }
         });
     }
-    // Re-sync toggle states when profile drawer opens
-    profileOpenBtn?.addEventListener('click', syncCommandToggleState);
+    // Re-sync toggle states when mobile drawer opens
+    navOpenBtn?.addEventListener('click', syncCommandToggleState);
     window.addEventListener('ouro:page-shown', syncCommandToggleState);
 }());
