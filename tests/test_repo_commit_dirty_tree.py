@@ -4,7 +4,7 @@ The original code unconditionally ran ``git checkout <branch_dev> --``
 before staging, which fails on dirty trees — including the very files
 the agent is trying to commit. Ouro hit this loop on 2026-05-04 while
 landing the OBC movement tools and burned 16+ rounds working around it
-via repo_write_commit before the gate retry cap stopped him.
+before the gate retry cap stopped him.
 
 The fix: when checkout fails, check whether we're already on the target
 branch. If so, the failure is incidental (no-op-but-git-complained) and

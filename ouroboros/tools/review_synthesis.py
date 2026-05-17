@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
+
+from ouroboros.triad_review import extract_json_array
+from ouroboros.tools.review_helpers import emit_review_usage
 
 log = logging.getLogger(__name__)
 
@@ -146,28 +148,7 @@ def _parse_synthesis_output(raw: str) -> Optional[List[Dict[str, Any]]]:
     """Parse the synthesizer's JSON array response. Returns None on failure."""
     if not raw:
         return None
-    text = raw.strip()
-    # Strip markdown fences if the model ignored the instruction
-    if text.startswith("```"):
-        lines = text.splitlines()
-        inner = []
-        in_fence = False
-        for line in lines:
-            if line.startswith("```"):
-                in_fence = not in_fence
-                continue
-            if in_fence:
-                inner.append(line)
-        text = "\n".join(inner).strip()
-    # Find the JSON array boundaries
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        parsed = json.loads(text[start: end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return None
+    parsed = extract_json_array(raw)
     if not isinstance(parsed, list):
         return None
     # Validate each entry has at minimum an "item" field
@@ -308,7 +289,16 @@ def _call_synthesis_llm(prompt: str, *, ctx: Any = None) -> Optional[str]:
         )
 
         # Emit budget event so synthesis spend reaches cost accounting.
-        _emit_synthesis_usage(ctx, model=model, usage=usage)
+        if _has_billable_usage(usage):
+            resolved_model = str((usage or {}).get("resolved_model") or "") or model
+            provider = str((usage or {}).get("provider") or "") if isinstance(usage, dict) else ""
+            emit_review_usage(
+                ctx,
+                model=resolved_model,
+                usage=usage,
+                source="review_synthesis",
+                provider=provider,
+            )
 
         if not msg:
             return None
@@ -331,59 +321,10 @@ def _call_synthesis_llm(prompt: str, *, ctx: Any = None) -> Optional[str]:
         return None
 
 
-def _emit_synthesis_usage(ctx: Any, *, model: str, usage: Any) -> None:
-    """Emit a ``llm_usage`` event for the synthesis LLM call.
-
-    Follows the same pattern as ``_emit_plan_review_usage`` in plan_review.py:
-    tries ``ctx.event_queue.put_nowait`` first, falls back to
-    ``ctx.pending_events.append``.  Fails silently on any error.
-    """
-    try:
-        if not usage:
-            return
-        from ouroboros.pricing import infer_api_key_type, infer_model_category, infer_provider_from_model
-        from ouroboros.utils import utc_now_iso
-        tokens_in = int(usage.get("prompt_tokens", 0) or 0) if isinstance(usage, dict) else 0
-        tokens_out = int(usage.get("completion_tokens", 0) or 0) if isinstance(usage, dict) else 0
-        cost = float(usage.get("cost", 0) or 0) if isinstance(usage, dict) else 0.0
-        if not tokens_in and not tokens_out and not cost:
-            return
-        # Prefer resolved routing metadata from usage dict (LLMClient fills
-        # `provider` and `resolved_model` for direct-provider / local routes);
-        # fall back to inferring from the configured model string only when absent.
-        resolved_model = (
-            str(usage.get("resolved_model") or "") if isinstance(usage, dict) else ""
-        ) or model
-        provider = (
-            str(usage.get("provider") or "") if isinstance(usage, dict) else ""
-        ) or infer_provider_from_model(resolved_model)
-        event = {
-            "type": "llm_usage",
-            "ts": utc_now_iso(),
-            "task_id": str(getattr(ctx, "task_id", "") or "") if ctx else "",
-            "model": resolved_model,
-            "api_key_type": infer_api_key_type(resolved_model, provider),
-            "model_category": infer_model_category(resolved_model),
-            "usage": {
-                "prompt_tokens": tokens_in,
-                "completion_tokens": tokens_out,
-                "cached_tokens": 0,
-                "cost": cost,
-            },
-            "provider": provider,
-            "source": "review_synthesis",
-            "category": "review",
-            "cost": cost,
-        }
-        eq = getattr(ctx, "event_queue", None) if ctx else None
-        if eq is not None:
-            try:
-                eq.put_nowait(event)
-                return
-            except Exception:
-                pass
-        pending = getattr(ctx, "pending_events", None) if ctx else None
-        if pending is not None:
-            pending.append(event)
-    except Exception:
-        log.debug("review_synthesis: _emit_synthesis_usage failed (non-critical)", exc_info=True)
+def _has_billable_usage(usage: Any) -> bool:
+    if not isinstance(usage, dict):
+        return False
+    return any(
+        usage.get(key)
+        for key in ("prompt_tokens", "input_tokens", "completion_tokens", "output_tokens", "cost", "total_cost")
+    )

@@ -179,9 +179,47 @@ def register(api: Any) -> None:
         "Weather widget",
         icon="cloud",
         render={
-            "kind": "inline_card",
-            "api_route": "forecast",
+            "kind": "declarative",
             "schema_version": 1,
+            "components": [
+                {
+                    "type": "form",
+                    "route": "forecast",
+                    "method": "GET",
+                    "target": "result",
+                    "submit_label": "Refresh",
+                    "fields": [
+                        {
+                            "name": "city",
+                            "label": "City",
+                            "type": "text",
+                            "default": "Moscow",
+                            "required": True,
+                        },
+                    ],
+                },
+                {
+                    "type": "status",
+                    "target": "result",
+                    "idle": "Enter a city and press Refresh.",
+                    "loading": "Loading...",
+                    "error": "Weather lookup failed.",
+                    "success": "Latest conditions",
+                },
+                {
+                    "type": "kv",
+                    "target": "result",
+                    "fields": [
+                        {"label": "City", "path": "resolved_to"},
+                        {"label": "Temperature", "path": "temp_c"},
+                        {"label": "Feels like", "path": "feels_like_c"},
+                        {"label": "Condition", "path": "condition"},
+                        {"label": "Humidity", "path": "humidity_pct"},
+                        {"label": "Wind speed", "path": "wind_kph"},
+                        {"label": "Wind direction", "path": "wind_dir"},
+                    ],
+                },
+            ],
         },
     )
     api.log("info", "weather: extension registered (route, tool, ui_tab)")

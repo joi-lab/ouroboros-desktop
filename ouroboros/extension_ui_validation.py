@@ -26,7 +26,7 @@ def _assert_ws_message_type(message_type: str) -> str:
         )
     return candidate
 
-_UI_RENDER_KINDS = {"", "iframe", "inline_card", "declarative", "module"}
+_UI_RENDER_KINDS = {"", "iframe", "declarative", "module"}
 _DECLARATIVE_WIDGET_COMPONENTS = {
     "action",
     "audio",

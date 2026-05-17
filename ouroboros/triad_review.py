@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ouroboros.utils import append_jsonl, utc_now_iso
 
@@ -58,7 +58,13 @@ class ParsedTriadReview:
         return [f"DEGRADED: {', '.join(reasons)} (quorum still met)"]
 
 
-def extract_json_array(raw: str, *, normalize: bool = False) -> Optional[List[Any]]:
+def extract_json_array(
+    raw: str,
+    *,
+    normalize: bool = False,
+    unwrap_result: bool = False,
+    validate_fn: Optional[Callable[[List[Any]], bool]] = None,
+) -> Optional[List[Any]]:
     """Best-effort extraction of a JSON array from model output."""
     text = str(raw or "").strip()
     if text.startswith("```"):
@@ -73,19 +79,51 @@ def extract_json_array(raw: str, *, normalize: bool = False) -> Optional[List[An
                 break
     try:
         obj = json.loads(text)
+        if unwrap_result and isinstance(obj, dict) and "result" in obj:
+            text = str(obj["result"]).strip()
+            obj = json.loads(text)
         if isinstance(obj, list):
-            return _normalize_items(obj) if normalize else obj
+            return _accepted_json_array(obj, normalize=normalize, validate_fn=validate_fn)
     except (json.JSONDecodeError, ValueError):
         pass
-    start, end = text.find("["), text.rfind("]")
-    if start != -1 and end > start:
-        try:
-            obj = json.loads(text[start:end + 1])
-            if isinstance(obj, list):
-                return _normalize_items(obj) if normalize else obj
-        except (json.JSONDecodeError, ValueError):
-            pass
+    ends: List[int] = []
+    search_from = 0
+    while True:
+        pos = text.find("]", search_from)
+        if pos == -1:
+            break
+        ends.append(pos)
+        search_from = pos + 1
+    for end in reversed(ends):
+        starts: List[int] = []
+        search_from = 0
+        while True:
+            pos = text.find("[", search_from)
+            if pos == -1 or pos > end:
+                break
+            starts.append(pos)
+            search_from = pos + 1
+        for start in reversed(starts):
+            try:
+                obj = json.loads(text[start:end + 1])
+                if isinstance(obj, list):
+                    accepted = _accepted_json_array(obj, normalize=normalize, validate_fn=validate_fn)
+                    if accepted is not None:
+                        return accepted
+            except (json.JSONDecodeError, ValueError):
+                continue
     return None
+
+
+def _accepted_json_array(
+    obj: List[Any],
+    *,
+    normalize: bool,
+    validate_fn: Optional[Callable[[List[Any]], bool]],
+) -> Optional[List[Any]]:
+    if validate_fn is not None and not validate_fn(obj):
+        return None
+    return _normalize_items(obj) if normalize else obj
 
 
 def _normalize_items(items: List[Any]) -> List[Any]:

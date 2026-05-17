@@ -48,6 +48,7 @@ repo_bundle_manifest.json
 # Test artifacts
 <MagicMock*
 .tmp-data-*/
+.refactor-log.md
 .review_phase_1.py
 .final_combined_review.py
 .review_*.py

@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, List, Optional
 import logging
 
 from ouroboros.config import load_settings
-from ouroboros.tool_aliases import adapt_tool_args, canonical_tool_name
 from ouroboros.tool_capabilities import (
     READ_ONLY_PARALLEL_TOOLS,
     REVIEWED_MUTATIVE_TOOLS,
@@ -206,7 +205,7 @@ def _execute_single_tool(
     Returns dict with: tool_call_id, fn_name, result, is_error, args_for_log, is_code_tool
     """
     requested_fn_name = tc["function"]["name"]
-    fn_name = canonical_tool_name(requested_fn_name)
+    fn_name = str(requested_fn_name or "").strip()
     tool_call_id = tc["id"]
     is_code_tool = fn_name in tools.CODE_TOOLS
 
@@ -225,8 +224,6 @@ def _execute_single_tool(
             "result_meta": _extract_result_metadata(fn_name, result, True),
         }
 
-    if isinstance(args, dict):
-        args = adapt_tool_args(requested_fn_name, args)
     args_for_log = sanitize_tool_args_for_log(fn_name, args if isinstance(args, dict) else {})
 
     tool_ok = True
@@ -347,7 +344,7 @@ def _execute_with_timeout(
 ) -> Dict[str, Any]:
     """Execute a tool call with a hard timeout."""
     requested_fn_name = tc["function"]["name"]
-    fn_name = canonical_tool_name(requested_fn_name)
+    fn_name = str(requested_fn_name or "").strip()
     tool_call_id = tc["id"]
     is_code_tool = fn_name in tools.CODE_TOOLS
     use_stateful = stateful_executor and fn_name in STATEFUL_BROWSER_TOOLS
@@ -355,8 +352,6 @@ def _execute_with_timeout(
     args_for_log = {}
     try:
         args = json.loads(tc["function"]["arguments"] or "{}")
-        if isinstance(args, dict):
-            args = adapt_tool_args(requested_fn_name, args)
         if isinstance(args, dict):
             args_for_log = sanitize_tool_args_for_log(fn_name, args)
     except Exception:
@@ -559,7 +554,7 @@ def handle_tool_calls(
     can_parallel = (
         len(tool_calls) > 1 and
         all(
-            canonical_tool_name(tc.get("function", {}).get("name")) in READ_ONLY_PARALLEL_TOOLS
+            str(tc.get("function", {}).get("name") or "").strip() in READ_ONLY_PARALLEL_TOOLS
             for tc in tool_calls
         )
     )
@@ -567,7 +562,7 @@ def handle_tool_calls(
     if not can_parallel:
         results = [
             _execute_with_timeout(tools, tc, drive_logs,
-                                  _get_tool_timeout(tools, canonical_tool_name(tc["function"]["name"])), task_id,
+                                  _get_tool_timeout(tools, str(tc["function"]["name"] or "").strip()), task_id,
                                   stateful_executor)
             for tc in tool_calls
         ]
@@ -578,7 +573,7 @@ def handle_tool_calls(
             future_to_index = {
                 executor.submit(
                     _execute_with_timeout, tools, tc, drive_logs,
-                    _get_tool_timeout(tools, canonical_tool_name(tc["function"]["name"])), task_id,
+                    _get_tool_timeout(tools, str(tc["function"]["name"] or "").strip()), task_id,
                     stateful_executor,
                 ): idx
                 for idx, tc in enumerate(tool_calls)
@@ -591,7 +586,7 @@ def handle_tool_calls(
                 except Exception as exc:
                     tc = tool_calls[idx]
                     requested_fn_name = tc.get("function", {}).get("name", "unknown")
-                    fn_name = canonical_tool_name(requested_fn_name)
+                    fn_name = str(requested_fn_name or "").strip()
                     results[idx] = {
                         "tool_call_id": tc.get("id", ""),
                         "fn_name": fn_name,

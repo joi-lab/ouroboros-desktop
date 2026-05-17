@@ -43,6 +43,10 @@ from ouroboros.contracts.skill_manifest import (
     SkillManifestError,
     parse_skill_manifest_text,
 )
+from ouroboros.marketplace.clawhub import (
+    _coerce_str_list,
+    _extract_metadata_openclaw as _extract_metadata_block,
+)
 from ouroboros.marketplace.install_specs import install_specs_hash, normalize_install_specs
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
@@ -147,18 +151,6 @@ def _manifest_frontmatter_dict(manifest: SkillManifest) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_metadata_block(front: Dict[str, Any]) -> Dict[str, Any]:
-    """Pick the ``metadata.openclaw`` (or ``clawdis`` / ``clawdbot``) block."""
-    metadata = front.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        return {}
-    for key in ("openclaw", "clawdis", "clawdbot"):
-        block = metadata.get(key)
-        if isinstance(block, dict) and block:
-            return block
-    return {}
-
-
 def _json_safe(value: Any) -> Any:
     """Return a JSON-serializable copy for provenance snapshots."""
 
@@ -178,22 +170,6 @@ def _openclaw_compat_snapshot(
     requires = metadata_block.get("requires") if isinstance(metadata_block, dict) else {}
     if not isinstance(requires, dict):
         requires = {}
-    unsupported_top_level = sorted(
-        key
-        for key in front.keys()
-        if key
-        not in {
-            "name",
-            "description",
-            "version",
-            "metadata",
-            "homepage",
-            "website",
-            "license",
-            "timeout_sec",
-            "when_to_use",
-        }
-    )
     command_fields = {
         key: front.get(key)
         for key in (
@@ -233,23 +209,7 @@ def _openclaw_compat_snapshot(
         "primary_env": str(metadata_block.get("primaryEnv") or "").strip(),
         "always": metadata_block.get("always") is True,
         "command_fields": _json_safe(command_fields),
-        "unsupported_top_level_fields": unsupported_top_level,
-        "lossy_mappings": [
-            "metadata.openclaw.requires.* is load-time gating in OpenClaw; Ouroboros preserves it and only maps selected fields into permissions/env allowlists.",
-            "allowed-tools is advisory compatibility metadata; Ouroboros maps a conservative subset into permissions and keeps the original manifest in SKILL.openclaw.md.",
-            "metadata.openclaw.install is normalized into review-first isolated dependency installs when possible; global host mutations become manual setup guidance.",
-        ],
     }
-
-
-def _coerce_str_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    return []
 
 
 def _normalise_os(value: Any) -> str:
@@ -450,76 +410,26 @@ def _translate_env_from_settings(
 
 
 def _render_frontmatter(front: Dict[str, Any]) -> str:
-    """Render the translated frontmatter as YAML in a stable key order.
+    """Render translated frontmatter as YAML in a stable key order."""
+    import yaml  # type: ignore
 
-    We deliberately use a hand-rolled renderer that matches the
-    reference ``weather/SKILL.md`` style instead of ``yaml.safe_dump``
-    so the resulting file looks idiomatic and the on-disk diff against
-    the canonical native skill is minimal.
-    """
     order = (
         "name", "description", "version", "type", "runtime",
         "timeout_sec", "when_to_use", "permissions", "env_from_settings",
         "os", "requires", "entry", "scripts",
     )
-    lines: List[str] = ["---"]
-    for key in order:
-        if key not in front or front[key] in ("", [], None):
-            continue
-        value = front[key]
-        if isinstance(value, list) and value:
-            if all(isinstance(v, dict) for v in value):
-                lines.append(f"{key}:")
-                for item in value:
-                    first_key = next(iter(item))
-                    lines.append(f"  - {first_key}: {_yaml_scalar(item[first_key])}")
-                    for nested_key, nested_val in item.items():
-                        if nested_key == first_key:
-                            continue
-                        lines.append(f"    {nested_key}: {_yaml_scalar(nested_val)}")
-                continue
-            lines.append(f"{key}: [{', '.join(_yaml_scalar(v) for v in value)}]")
-            continue
-        lines.append(f"{key}: {_yaml_scalar(value)}")
-    lines.append("---")
-    return "\n".join(lines)
-
-
-def _yaml_scalar(value: Any) -> str:
-    """Quote a scalar when needed so the rendered YAML stays valid.
-
-    Multi-line strings are a particular hazard: a raw newline inside a
-    bare scalar terminates the YAML node and the next line is parsed as
-    a sibling key. We treat any whitespace control character (``\\n``,
-    ``\\r``, ``\\t``) as a quote trigger and emit a properly-escaped
-    double-quoted string. This matches PyYAML's `default_style='"'`
-    handling and round-trips cleanly through ``yaml.safe_load``.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value)
-    if not text:
-        return '""'
-    needs_quote = (
-        any(ch in text for ch in ":#[]{},&*!|>%@`'\"")
-        or any(ch in text for ch in "\n\r\t")
-        or text.startswith(("- ", "? ", ": "))
-        or text.lower() in ("yes", "no", "true", "false", "null", "~")
-    )
-    if needs_quote:
-        # Escape every char that would terminate or corrupt a
-        # double-quoted scalar (\\, ", and the whitespace controls).
-        escaped = (
-            text.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        )
-        return f'"{escaped}"'
-    return text
+    ordered = {
+        key: front[key]
+        for key in order
+        if key in front and front[key] not in ("", [], None)
+    }
+    dumped = yaml.safe_dump(
+        ordered,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    ).strip()
+    return "---\n" + dumped + "\n---"
 
 
 def _render_skill_md(translated_front: Dict[str, Any], body: str) -> str:

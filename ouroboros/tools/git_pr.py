@@ -1,84 +1,21 @@
 """Git PR integration tools: fetch_pr_ref, create_integration_branch,
 cherry_pick_pr_commits, stage_adaptations, stage_pr_merge.
 
-Attribution design (CRITICAL):
-  cherry_pick_pr_commits uses `git cherry-pick --no-edit sha` (NOT --no-commit).
-  Each PR commit is replayed individually, preserving by default:
-    - author name / email  (original contributor — preserved by git)
-    - author date          (original timestamp  — preserved by git)
-    - committer name/email (repo-local configured identity, falling back to
-                            Ouroboros <ouroboros@local.mac> when local identity
-                            is missing — set explicitly via GIT_COMMITTER_*)
-  GitHub contribution counting uses author.email, so external contributors
-  receive full graph credit.
+Attribution invariant: `cherry_pick_pr_commits` replays each source commit with
+`git cherry-pick --no-edit`, preserving author identity/date while setting the
+committer explicitly from repo-local git config (fallback:
+`Ouroboros <ouroboros@local.mac>`). `override_author` may amend author
+name/email for placeholder-author PRs while preserving the original author date.
 
-  Optional override_author path (v4.35.0):
-    When override_author={"name": "...", "email": "..."} is supplied, a
-    second step `git commit --amend --author="Name <email>" --date=<orig>`
-    rewrites the author name+email on each cherry-picked commit. The
-    original author DATE is captured from the source commit BEFORE the
-    cherry-pick and passed to --date so timestamps are preserved. The
-    committer identity remains the repo-local configured identity (with
-    Ouroboros fallback), unchanged by --author.
+Reviewed merge invariant: adaptation edits are staged, not committed, then
+`stage_pr_merge` runs `git merge --no-ff --no-commit`; the final reviewed
+`repo_commit` creates the single merge commit on `ouroboros`. There is no
+reviewed commit path on the integration branch and no unreviewed commit path in
+this module.
 
-    Use case: external contributor ran Ouroboros locally with the default
-    `Ouroboros <ouroboros@local.mac>` identity (no git user.email set);
-    override_author restores their real GitHub identity so the contribution
-    graph credits them correctly. The override applies to the ENTIRE batch
-    of SHAs — intended for single-author placeholder commit sets.
-
-    If the amend step fails, the just-added commit is rolled back via
-    `git reset --hard HEAD~1` and the function returns an error with
-    context; earlier successfully-amended commits in the same batch are
-    kept (advisory invalidation still fires for them).
-
-  Co-authored-by is provided as a *hint* for the final merge commit only.
-  It is NOT the primary attribution mechanism.
-
-Ouroboros identity:
-  GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are read from the repo's git
-  config (user.name / user.email) and injected explicitly into every
-  git cherry-pick subprocess.  This guarantees Ouroboros is the committer
-  regardless of ambient shell environment, making attribution deterministic.
-
-Adaptation work (P3 review-gate compliant):
-  stage_adaptations() stages Ouroboros adaptation changes WITHOUT committing.
-  Staged adaptation changes are included in the MERGE COMMIT created by
-  stage_pr_merge → repo_commit.  Do NOT call advisory_pre_review + repo_commit
-  on the integration branch between stage_adaptations and stage_pr_merge:
-  repo_commit always checks out ctx.branch_dev (ouroboros) first, which
-  drops back off the integration branch and loses the staged state.
-
-  Correct full flow:
-    1. fetch_pr_ref(pr_number=N)
-    2. create_integration_branch(pr_number=N)
-    3. cherry_pick_pr_commits(shas=[...])      ← external author commits
-    4. [optionally make adaptation edits]
-    5. stage_adaptations()                     ← stage edits (NO commit yet)
-    6. stage_pr_merge(branch='integrate/pr-N') ← merges + staged adaptations
-    7. advisory_pre_review + repo_commit       ← single merge commit on ouroboros
-
-  Adaptation changes land in the merge commit (step 7) with Ouroboros as author.
-  There is no reviewed commit path on the integration branch itself.
-  There is no unreviewed git commit path in this module.
-
-Merge flow:
-  stage_pr_merge uses `git merge --no-ff --no-commit` which stages the
-  integration-branch diff and sets MERGE_HEAD so the resulting merge commit
-  carries both parents.  Finalize via advisory_pre_review + repo_commit.
-  Staged adaptation changes (from stage_adaptations) are preserved because
-  stage_pr_merge operates on the target branch (ouroboros) which has a clean
-  tree — it does NOT checkout the integration branch.
-
-Frozen-bundle note:
-  This module (git_pr.py) is auto-discovered by pkgutil in dev/source mode.
-  It is NOT listed in registry.py::_FROZEN_TOOL_MODULES (registry.py is
-  safety-critical and overwritten from the bundle on every launch).
-  The 5 tools from this module are unavailable in the packaged .app/.tar.gz
-  bundle until a new bundle is cut with an updated registry.py.
-
-  Note: github.py IS in _FROZEN_TOOL_MODULES, so list_github_prs,
-  get_github_pr, and comment_on_pr ARE available in frozen/packaged mode.
+Packaged-build note: `git_pr.py` is dev/source auto-discovered and not in
+`registry.py::_FROZEN_TOOL_MODULES`; `github.py` is frozen so PR inspection
+tools remain packaged.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Parallel review orchestration for the pre-commit pipeline.
 
-Extracted from git.py (P7 Minimalism) so both _repo_commit_push and
-_repo_write_commit can share one implementation without duplication.
+Extracted from git.py (P7 Minimalism) so the commit path can share one
+review orchestration implementation without duplication.
 
 Public API:
   run_parallel_review(ctx, commit_message, *, goal, scope, review_rebuttal)
@@ -21,6 +21,7 @@ import logging
 from typing import Optional
 
 from ouroboros.utils import run_cmd
+from ouroboros.tools.review_helpers import format_review_history_entry
 from ouroboros.tools.scope_review import run_scope_review, _get_scope_model
 
 log = logging.getLogger(__name__)
@@ -86,25 +87,6 @@ def _format_scope_advisory_msg(scope_result) -> str:
                      "\n".join(f"  • {f['item']}: {f.get('reason', '')}"
                                 for f in scope_result.advisory_findings))
     return "---\n" + "\n".join(parts) if parts else ""
-
-
-def _format_advisory_entry(entry) -> str:
-    if isinstance(entry, dict):
-        severity = str(entry.get("severity", "advisory") or "advisory").upper()
-        tags = []
-        if entry.get("tag"):
-            tags.append(str(entry.get("tag")))
-        if entry.get("model"):
-            tags.append(f"model={entry.get('model')}")
-        if entry.get("obligation_id"):
-            tags.append(f"obligation={entry.get('obligation_id')}")
-        label = str(entry.get("item") or entry.get("reason") or "?")
-        reason = str(entry.get("reason", "") or "")
-        tag_prefix = " ".join(f"[{tag}]" for tag in tags)
-        return f"[{severity}] {tag_prefix} {label}: {reason}".strip()
-    return str(entry)
-
-
 # ── Core parallel orchestration ──────────────────────────────────────────────
 
 def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebuttal=""):
@@ -286,7 +268,7 @@ def aggregate_review_verdict(review_err, scope_result, triad_block_reason, triad
 
     if triad_advisory and not review_err:
         adv_text = "\n".join(
-            f"  ⚠️ Advisory: {_format_advisory_entry(a)}"
+            f"  ⚠️ Advisory: {format_review_history_entry(a)}"
             for a in triad_advisory
         )
         combined_msg += f"\n\n---\nTriad advisory findings:\n{adv_text}"

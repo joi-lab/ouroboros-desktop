@@ -89,26 +89,17 @@ def _compact_markdown_sections(
     return "\n\n".join(p for p in parts if p).strip()
 
 
-def _compact_local_static_text(text: str) -> str:
-    return _compact_markdown_sections(
-        text,
-        preserve_titles={"BIBLE.md"},
-        reason="Use a larger-context model or read the source file directly if this section becomes necessary.",
-    )
-
-
-def _compact_local_semi_stable_text(text: str) -> str:
-    return _compact_markdown_sections(
-        text,
-        preserve_titles={"Identity"},
-        reason="Identity was preserved; non-core stable memory sections were compacted for local execution.",
-    )
-
-
-def _compact_local_dynamic_text(text: str) -> str:
-    return _compact_markdown_sections(
-        text,
-        preserve_titles={
+_LOCAL_COMPACTION_MODES = {
+    "static": (
+        {"BIBLE.md"},
+        "Use a larger-context model or read the source file directly if this section becomes necessary.",
+    ),
+    "semi_stable": (
+        {"Identity"},
+        "Identity was preserved; non-core stable memory sections were compacted for local execution.",
+    ),
+    "dynamic": (
+        {
             "Scratchpad",
             "Dialogue History",
             "Dialogue Summary",
@@ -117,14 +108,10 @@ def _compact_local_dynamic_text(text: str) -> str:
             "Runtime context",
             "Health Invariants",
         },
-        reason="Working-memory and runtime sections were preserved; non-core recent/history sections were compacted for local execution.",
-    )
-
-
-def _compact_local_system_text(text: str) -> str:
-    return _compact_markdown_sections(
-        text,
-        preserve_titles={
+        "Working-memory and runtime sections were preserved; non-core recent/history sections were compacted for local execution.",
+    ),
+    "system": (
+        {
             "BIBLE.md",
             "Scratchpad",
             "Identity",
@@ -134,8 +121,14 @@ def _compact_local_system_text(text: str) -> str:
             "Recent observations",
             "Background consciousness info",
         },
-        reason="Non-core sections were compacted for local execution.",
-    )
+        "Non-core sections were compacted for local execution.",
+    ),
+}
+
+
+def _compact_local_text(text: str, mode: str) -> str:
+    preserve_titles, reason = _LOCAL_COMPACTION_MODES[mode]
+    return _compact_markdown_sections(text, preserve_titles=preserve_titles, reason=reason)
 
 
 def normalize_reasoning_effort(value: str, default: str = "medium") -> str:
@@ -454,6 +447,50 @@ class LLMClient:
         return client
 
     @staticmethod
+    def _no_proxy_timeout():
+        import httpx
+
+        return httpx.Timeout(connect=30.0, read=3600.0, write=3600.0, pool=30.0)
+
+    @classmethod
+    def _make_no_proxy_client(cls, target: Dict[str, Any]):
+        import httpx
+        from openai import OpenAI
+
+        http_client = httpx.Client(
+            trust_env=False,
+            mounts={},
+            timeout=cls._no_proxy_timeout(),
+        )
+        oa_client = OpenAI(
+            api_key=str(target.get("api_key") or ""),
+            base_url=str(target.get("base_url") or ""),
+            default_headers=dict(target.get("default_headers") or {}),
+            http_client=http_client,
+            max_retries=0,
+        )
+        return oa_client, http_client
+
+    @classmethod
+    def _make_no_proxy_async_client(cls, target: Dict[str, Any]):
+        import httpx
+        from openai import AsyncOpenAI
+
+        http_client = httpx.AsyncClient(
+            trust_env=False,
+            mounts={},
+            timeout=cls._no_proxy_timeout(),
+        )
+        oa_client = AsyncOpenAI(
+            api_key=str(target.get("api_key") or ""),
+            base_url=str(target.get("base_url") or ""),
+            default_headers=dict(target.get("default_headers") or {}),
+            http_client=http_client,
+            max_retries=0,
+        )
+        return oa_client, http_client
+
+    @staticmethod
     def _strip_cache_control(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Strip cache_control from message content blocks (OpenRouter/Anthropic-only).
 
@@ -581,24 +618,7 @@ class LLMClient:
                 no_proxy,
             )
         if no_proxy:
-            import httpx
-            from openai import AsyncOpenAI
-
-            base_url = str(target.get("base_url") or "")
-            api_key = str(target.get("api_key") or "")
-            headers_dict = dict(target.get("default_headers") or {})
-            _http_client = httpx.AsyncClient(
-                trust_env=False,
-                mounts={},
-                timeout=httpx.Timeout(connect=30.0, read=3600.0, write=3600.0, pool=30.0),
-            )
-            _oa_client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                default_headers=headers_dict,
-                http_client=_http_client,
-                max_retries=0,
-            )
+            _oa_client, _http_client = self._make_no_proxy_async_client(target)
             try:
                 kwargs = self._build_remote_kwargs(
                     target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
@@ -640,13 +660,13 @@ class LLMClient:
                         continue
                     block_text = str(block.get("text", ""))
                     if idx == 0:
-                        block["text"] = _compact_local_static_text(block_text)
+                        block["text"] = _compact_local_text(block_text, "static")
                     elif idx == 1:
-                        block["text"] = _compact_local_semi_stable_text(block_text)
+                        block["text"] = _compact_local_text(block_text, "semi_stable")
                     else:
-                        block["text"] = _compact_local_dynamic_text(block_text)
+                        block["text"] = _compact_local_text(block_text, "dynamic")
             elif isinstance(content, str):
-                msg["content"] = _compact_local_system_text(content)
+                msg["content"] = _compact_local_text(content, "system")
             break
 
         compacted_chars = _estimate_message_chars(compacted)
@@ -1316,21 +1336,6 @@ class LLMClient:
                     kwargs.pop(sampling_param, None)
         return kwargs
 
-    def _build_openrouter_kwargs(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        tools: Optional[List[Dict[str, Any]]],
-        reasoning_effort: str,
-        max_tokens: int,
-        tool_choice: str,
-        temperature: Optional[float],
-    ) -> Dict[str, Any]:
-        target = self._resolve_remote_target(model)
-        return self._build_remote_kwargs(
-            target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
-        )
-
     def _normalize_remote_response(
         self,
         resp_dict: Dict[str, Any],
@@ -1429,28 +1434,7 @@ class LLMClient:
             )
 
         if no_proxy:
-            import httpx
-            from openai import OpenAI
-
-            base_url = str(target.get("base_url") or "")
-            api_key = str(target.get("api_key") or "")
-            headers_dict = dict(target.get("default_headers") or {})
-            # Build a one-shot httpx.Client that skips all proxy detection:
-            # - trust_env=False: ignore HTTP_PROXY / HTTPS_PROXY env vars
-            # - mounts={}: empty mount map prevents OS-level SCDynamicStore lookup
-            # - timeout: generous for large review packs
-            _http_client = httpx.Client(
-                trust_env=False,
-                mounts={},
-                timeout=httpx.Timeout(connect=30.0, read=3600.0, write=3600.0, pool=30.0),
-            )
-            _oa_client = OpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                default_headers=headers_dict,
-                http_client=_http_client,
-                max_retries=0,
-            )
+            _oa_client, _http_client = self._make_no_proxy_client(target)
             try:
                 kwargs = self._build_remote_kwargs(
                     target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools

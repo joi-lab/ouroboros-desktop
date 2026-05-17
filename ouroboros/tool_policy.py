@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Protocol
 import json
 import logging
 
-from ouroboros.tool_aliases import canonical_tool_name
 from ouroboros.tool_capabilities import CORE_TOOL_NAMES, META_TOOL_NAMES
 
 log = logging.getLogger(__name__)
@@ -31,8 +30,7 @@ class ToolSchemaProvider(Protocol):
 def is_initial_task_tool(name: str) -> bool:
     """Return True if the tool should be loaded before any enable_tools call."""
 
-    canonical = canonical_tool_name(name)
-    return canonical in CORE_TOOL_NAMES or canonical in META_TOOL_NAMES
+    return str(name or "").strip() in CORE_TOOL_NAMES or str(name or "").strip() in META_TOOL_NAMES
 
 
 def is_initial_extension_tool(name: str) -> bool:

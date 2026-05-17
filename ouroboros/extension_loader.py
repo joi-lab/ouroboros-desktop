@@ -547,7 +547,7 @@ class PluginAPIImpl:
         self._require("widget")
         clean_id = _assert_tool_name(section_id)
         key = f"{self._skill}:{clean_id}"
-        # Settings sections are declarative-only, never iframe/inline_card.
+        # Settings sections are declarative-only, never iframe/module.
         # They intentionally expose a narrower subset than Widgets: forms /
         # actions for saving configuration and markdown/json for explanation
         # or diagnostics. This keeps Settings predictable and avoids moving

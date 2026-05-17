@@ -475,7 +475,6 @@ def _git_repo(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.mark.parametrize("tool_name", [
     "repo_write",
-    "repo_write_commit",
     "repo_commit",
     "str_replace_editor",
     "claude_code_edit",
@@ -538,8 +537,8 @@ def test_advanced_mode_allows_non_critical_write_calls_through(tmp_path, monkeyp
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "repo_write_commit",
-        {"path": "docs/README.md", "content": "x", "commit_message": "test"},
+        "repo_write",
+        {"path": "docs/README.md", "content": "x"},
     )
     assert "CORE_PROTECTION_BLOCKED" not in result
     assert "LIGHT_MODE_BLOCKED" not in result
@@ -1117,7 +1116,7 @@ def test_light_mode_blocked_message_lists_three_paths(tmp_path, monkeypatch):
     agents do not silently fall back to less-idiomatic tools."""
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("repo_write_commit", {"path": "README.md", "content": "x"})
+    result = reg.execute("repo_write", {"path": "README.md", "content": "x"})
     assert "LIGHT_MODE_BLOCKED" in result, result[:200]
     assert "skill_repair" in result
     assert "data/skills/<bucket>" in result

@@ -647,7 +647,7 @@ def test_two_responded_plus_one_parse_failure_meets_quorum(tmp_path):
 
 def test_stale_actor_evidence_cleared_at_commit_start(tmp_path):
     """ctx._last_triad_raw_results, _last_scope_raw_result, _review_degraded_reasons
-    must be reset at the start of _repo_commit_push / _repo_write_commit so that
+    must be reset at the start of _repo_commit_push so that
     stale data from a prior attempt never bleeds into early-exit paths (e.g.
     fingerprint failure before run_parallel_review runs).
     """

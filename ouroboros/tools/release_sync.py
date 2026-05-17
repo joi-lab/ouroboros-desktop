@@ -177,6 +177,33 @@ def extract_architecture_header_version(arch_text: str) -> str:
     return str(match.group(2) or "").strip() if match else ""
 
 
+def version_carrier_desyncs(
+    version: str,
+    *,
+    pyproject_text: str = "",
+    readme_text: str = "",
+    arch_text: str = "",
+    detailed: bool = False,
+) -> List[str]:
+    """Return release-carrier mismatch labels for already-read file contents."""
+    version = str(version or "").strip()
+    if not is_release_version(version):
+        return []
+    desync: List[str] = []
+    if pyproject_text:
+        match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', pyproject_text, re.MULTILINE)
+        expected = _normalize_pep440(version)
+        if not match or match.group(1).strip() != expected:
+            desync.append(f'pyproject.toml (expected version = "{expected}")' if detailed else "pyproject.toml")
+    if readme_text:
+        badge_token = f"version-{_shields_escape(version)}-green"
+        if extract_readme_badge_version(readme_text) != version or badge_token not in readme_text:
+            desync.append(f"README.md badge (expected {version} / {badge_token})" if detailed else "README.md badge")
+    if arch_text and extract_architecture_header_version(arch_text) != version:
+        desync.append(f"docs/ARCHITECTURE.md header (expected # Ouroboros v{version})" if detailed else "ARCHITECTURE.md header")
+    return desync
+
+
 def sync_release_metadata(repo_dir: str) -> List[str]:
     """Sync VERSION → pyproject.toml → README badge → ARCHITECTURE.md header.
 

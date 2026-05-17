@@ -42,7 +42,8 @@ from ouroboros.llm import LLMClient
 from ouroboros.memory import Memory
 from ouroboros.context import (
     build_runtime_section, build_memory_sections,
-    build_recent_sections, build_health_invariants, safe_read,
+    build_recent_sections, build_health_invariants,
+    build_knowledge_sections, safe_read,
 )
 
 log = logging.getLogger(__name__)
@@ -483,33 +484,13 @@ class BackgroundConsciousness:
         # Memory sections: scratchpad, identity, dialogue summary (full size)
         parts.extend(build_memory_sections(memory))
 
-        # Knowledge base index — full content, no clip_text.
-        # If content grows very large, emit a warning rather than silently truncating.
-        kb_index_path = env.drive_path("memory/knowledge/index-full.md")
-        if kb_index_path.exists():
-            kb_index = kb_index_path.read_text(encoding="utf-8")
-            if kb_index.strip():
-                if len(kb_index) > _BG_SECTION_WARN_CHARS:
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "consciousness: knowledge index is large (%d chars) — "
-                        "consider grooming to keep consciousness context slim",
-                        len(kb_index),
-                    )
-                parts.append("## Knowledge base\n\n" + kb_index)
-
-        # Pattern register (P2 Meta-over-Patch) — full content, no clip_text.
-        patterns_path = env.drive_path("memory/knowledge/patterns.md")
-        if patterns_path.exists():
-            patterns_text = patterns_path.read_text(encoding="utf-8")
-            if patterns_text.strip():
-                if len(patterns_text) > _BG_SECTION_WARN_CHARS:
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "consciousness: patterns register is large (%d chars)",
-                        len(patterns_text),
-                    )
-                parts.append("## Pattern Register\n\n" + patterns_text)
+        parts.extend(
+            build_knowledge_sections(
+                env,
+                warn_large=True,
+                pattern_header="## Pattern Register",
+            )
+        )
 
         try:
             from ouroboros.improvement_backlog import format_backlog_digest

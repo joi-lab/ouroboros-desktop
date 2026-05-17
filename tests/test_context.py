@@ -856,8 +856,8 @@ def test_recent_sections_filter_process_logs_by_task_id(tmp_path):
     assert "out-of-scope" not in combined
 
 
-def test_should_consolidate_chat_blocks_alias(tmp_path):
-    from ouroboros.consolidator import should_consolidate_chat_blocks, BLOCK_SIZE
+def test_should_consolidate_chat_blocks(tmp_path):
+    from ouroboros.consolidator import should_consolidate, BLOCK_SIZE
     chat_path = tmp_path / 'chat.jsonl'
     meta_path = tmp_path / 'dialogue_meta.json'
     entries = [
@@ -865,12 +865,12 @@ def test_should_consolidate_chat_blocks_alias(tmp_path):
         for i in range(BLOCK_SIZE + 5)
     ]
     chat_path.write_text("\n".join(entries) + "\n", encoding='utf-8')
-    assert should_consolidate_chat_blocks(meta_path, chat_path) is True
+    assert should_consolidate(meta_path, chat_path) is True
 
 
-def test_consolidate_chat_alias_creates_block(tmp_path):
+def test_consolidate_chat_creates_block(tmp_path):
     from unittest.mock import MagicMock
-    from ouroboros.consolidator import consolidate_chat_blocks, _load_meta, _load_blocks, BLOCK_SIZE
+    from ouroboros.consolidator import consolidate, _load_meta, _load_blocks, BLOCK_SIZE
     chat_path = tmp_path / 'chat.jsonl'
     blocks_path = tmp_path / 'dialogue_blocks.json'
     meta_path = tmp_path / 'dialogue_meta.json'
@@ -884,7 +884,7 @@ def test_consolidate_chat_alias_creates_block(tmp_path):
         {"content": "### Block: test\n\nSummary."},
         {"prompt_tokens": 100, "completion_tokens": 50, "cost": 0.001},
     )
-    usage = consolidate_chat_blocks(chat_path, blocks_path, meta_path, mock_llm)
+    usage = consolidate(chat_path, blocks_path, meta_path, mock_llm)
     assert usage is not None
     meta = _load_meta(meta_path)
     assert meta["last_consolidated_offset"] == BLOCK_SIZE

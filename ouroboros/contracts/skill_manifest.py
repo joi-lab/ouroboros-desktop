@@ -25,12 +25,6 @@ The parser is intentionally tolerant for missing optional fields and
 unknown extras, but it FAILS CLOSED on structural contract damage:
 invalid JSON/YAML, malformed structured fields (for example ``ui_tab``),
 or an unsupported ``schema_version`` all raise ``SkillManifestError``.
-
-To avoid adding a PyYAML dependency at this stage, the YAML frontmatter
-parser is a *minimal* key: value reader that covers the subset we actually
-use (scalars, inline lists, nested ``ui_tab`` block). When a consumer needs
-richer YAML later, it can swap to ``yaml.safe_load`` without changing the
-dataclass shape.
 """
 
 from __future__ import annotations
@@ -39,7 +33,7 @@ import json
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 SKILL_MANIFEST_SCHEMA_VERSION = 1
@@ -211,18 +205,14 @@ def parse_skill_manifest_text(text: str) -> SkillManifest:
     match = _FRONTMATTER_RE.match(src)
     if match is not None:
         front, body = match.group(1), match.group(2) or ""
-        # Prefer real YAML when PyYAML is available (handles nested
-        # block mappings like ``metadata.openclaw.requires.env`` that
-        # OpenClaw/ClawHub skills use). Fall back to the minimal
-        # in-tree parser for environments without the dependency.
         try:
             import yaml  # type: ignore
+        except ImportError as exc:
+            raise SkillManifestError(
+                "PyYAML is required to parse SKILL.md frontmatter"
+            ) from exc
+        try:
             data: Any = yaml.safe_load(front) or {}
-        except ImportError:
-            try:
-                data = _parse_minimal_yaml(front)
-            except _MiniYamlError as exc:
-                raise SkillManifestError(f"invalid SKILL.md frontmatter: {exc}") from exc
         except yaml.YAMLError as exc:  # type: ignore[name-defined]
             raise SkillManifestError(f"invalid SKILL.md frontmatter: {exc}") from exc
         if not isinstance(data, dict):
@@ -395,244 +385,6 @@ def _derive_name_from_body(text: str) -> str:
         if stripped.startswith("#"):
             return stripped.lstrip("#").strip().lower().replace(" ", "_") or "unnamed"
     return "unnamed"
-
-
-# ---------------------------------------------------------------------------
-# Minimal YAML-ish frontmatter reader (no external dependency).
-# ---------------------------------------------------------------------------
-
-
-class _MiniYamlError(ValueError):
-    pass
-
-
-def _parse_minimal_yaml(text: str) -> Dict[str, Any]:
-    """Parse the strict subset of YAML we allow in SKILL.md frontmatter.
-
-    Supported:
-      - ``key: value`` scalars (string, bool, int).
-      - Inline sequences: ``key: [a, b, "c d"]``.
-      - Block sequences with ``- item`` lines (scalars only).
-      - Block sequences of mappings (``- name: foo\\n  description: bar``)
-        but only one level deep (enough for ``scripts``).
-      - A single nested mapping block for ``ui_tab: {…}`` via indentation.
-
-    Not supported (explicitly rejected with ``_MiniYamlError``): anchors,
-    tags, multiline scalars, complex nesting. If a manifest needs those,
-    it should use ``skill.json`` or wait for Phase 4's full parser.
-    """
-    result: Dict[str, Any] = {}
-    lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            i += 1
-            continue
-        if raw.startswith(" ") or raw.startswith("\t"):
-            raise _MiniYamlError(
-                f"top-level line must not start with whitespace: {raw!r}"
-            )
-        if ":" not in raw:
-            raise _MiniYamlError(f"expected 'key: value', got: {raw!r}")
-        key, _, rest = raw.partition(":")
-        key = key.strip()
-        rest = rest.strip()
-        if rest == "":
-            # Possible block value: either a block list (`- item`) or a
-            # nested mapping. Scan following indented lines.
-            block_lines, consumed = _collect_block(lines, i + 1)
-            i += 1 + consumed
-            if not block_lines:
-                result[key] = ""
-                continue
-            # A block is a sequence if its *first non-empty* logical entry
-            # starts with ``- ``. Indented continuation lines belonging to a
-            # sequence item are not themselves prefixed with ``- `` and must
-            # not demote the block to a plain mapping.
-            first_non_empty = next(
-                (ln for ln in block_lines if ln.strip()),
-                "",
-            )
-            first_stripped = first_non_empty.lstrip()
-            if first_stripped.startswith("- "):
-                result[key] = _parse_block_sequence(block_lines)
-            elif first_stripped.startswith("{") or first_stripped.startswith("["):
-                # YAML flow block following a bare key (common in
-                # OpenClaw-format manifests where ``metadata:`` opens a
-                # multi-line JSON object). The structured block must
-                # parse cleanly — otherwise the manifest is malformed.
-                blob = "\n".join(ln for ln in block_lines if ln.strip())
-                try:
-                    result[key] = json.loads(blob)
-                except Exception as exc:
-                    raise _MiniYamlError(
-                        f"invalid flow block for {key!r}: {exc}"
-                    ) from exc
-            else:
-                result[key] = _parse_block_mapping(block_lines)
-            continue
-        if rest.startswith("[") and rest.endswith("]"):
-            result[key] = _parse_inline_list(rest)
-        elif rest.startswith("{") or rest.startswith("["):
-            # YAML flow syntax (`{...}` / `[...]` possibly spanning
-            # multiple lines, as used by OpenClaw-format ``metadata``).
-            # We greedily consume subsequent lines until the bracket
-            # balance returns to zero and then try ``json.loads`` — if
-            # that fails the value stays as a raw string so the field
-            # still round-trips without breaking the whole manifest.
-            collected = [rest]
-            depth = _bracket_depth(rest)
-            j = i + 1
-            while depth > 0 and j < len(lines):
-                collected.append(lines[j])
-                depth += _bracket_depth(lines[j])
-                j += 1
-            blob = "\n".join(collected)
-            try:
-                result[key] = json.loads(blob)
-            except Exception as exc:
-                raise _MiniYamlError(
-                    f"invalid flow value for {key!r}: {exc}"
-                ) from exc
-            i = j
-            continue
-        else:
-            result[key] = _coerce_scalar(rest)
-        i += 1
-    return result
-
-
-def _bracket_depth(text: str) -> int:
-    """Rough bracket/brace depth change — ignoring strings is fine for
-    skill manifests since the YAML flow blocks in OpenClaw format
-    don't contain unescaped quotes that would mess up the count."""
-    depth = 0
-    for ch in text:
-        if ch in "{[":
-            depth += 1
-        elif ch in "}]":
-            depth -= 1
-    return depth
-
-
-def _collect_block(lines: List[str], start: int) -> Tuple[List[str], int]:
-    block: List[str] = []
-    consumed = 0
-    for line in lines[start:]:
-        if not line.strip():
-            block.append(line)
-            consumed += 1
-            continue
-        if not (line.startswith(" ") or line.startswith("\t")):
-            break
-        block.append(line)
-        consumed += 1
-    # Drop trailing empty lines.
-    while block and not block[-1].strip():
-        block.pop()
-    return block, consumed
-
-
-def _parse_block_sequence(block_lines: List[str]) -> List[Any]:
-    items: List[Any] = []
-    current: Dict[str, Any] | None = None
-    for line in block_lines:
-        stripped = line.lstrip()
-        # Blank / comment-only lines never contribute to the sequence.
-        # `_collect_block` intentionally preserves interior blank lines so
-        # any layout tool that visualises block YAML (e.g. dash between list
-        # items) still parses cleanly instead of raising or silently writing
-        # an empty ``""`` key into the current item.
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- "):
-            if current is not None:
-                items.append(current)
-                current = None
-            rest = stripped[2:].strip()
-            if ":" in rest and not rest.startswith("["):
-                key, _, val = rest.partition(":")
-                current = {key.strip(): _coerce_scalar(val.strip())}
-            elif rest.startswith("[") and rest.endswith("]"):
-                items.append(_parse_inline_list(rest))
-            else:
-                items.append(_coerce_scalar(rest))
-        else:
-            if current is None:
-                raise _MiniYamlError(
-                    f"indented line without a current list item: {line!r}"
-                )
-            if ":" not in stripped:
-                raise _MiniYamlError(
-                    f"expected 'key: value' in list item continuation, got: {line!r}"
-                )
-            key, _, val = stripped.partition(":")
-            val_stripped = val.strip()
-            if val_stripped == "":
-                raise _MiniYamlError(
-                    f"nested mappings deeper than one level are not supported: {line!r}"
-                )
-            current[key.strip()] = _coerce_scalar(val_stripped)
-    if current is not None:
-        items.append(current)
-    return items
-
-
-def _parse_block_mapping(block_lines: List[str]) -> Dict[str, Any]:
-    mapping: Dict[str, Any] = {}
-    for line in block_lines:
-        stripped = line.lstrip()
-        if not stripped:
-            continue
-        if ":" not in stripped:
-            raise _MiniYamlError(f"expected 'key: value', got: {stripped!r}")
-        key, _, val = stripped.partition(":")
-        val_stripped = val.strip()
-        if val_stripped == "":
-            raise _MiniYamlError(
-                f"nested mappings deeper than one level are not supported: {stripped!r}"
-            )
-        if val_stripped.startswith("[") and val_stripped.endswith("]"):
-            mapping[key.strip()] = _parse_inline_list(val_stripped)
-        else:
-            mapping[key.strip()] = _coerce_scalar(val_stripped)
-    return mapping
-
-
-_INLINE_LIST_SPLIT = re.compile(r",(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)")
-
-
-def _parse_inline_list(text: str) -> List[Any]:
-    inner = text.strip()
-    if inner.startswith("[") and inner.endswith("]"):
-        inner = inner[1:-1]
-    if not inner.strip():
-        return []
-    parts = [p.strip() for p in _INLINE_LIST_SPLIT.split(inner)]
-    return [_coerce_scalar(p) for p in parts if p != ""]
-
-
-def _coerce_scalar(text: str) -> Any:
-    s = text.strip()
-    if (s.startswith('"') and s.endswith('"')) or (
-        s.startswith("'") and s.endswith("'")
-    ):
-        return s[1:-1]
-    lower = s.lower()
-    if lower in ("true", "false"):
-        return lower == "true"
-    if lower in ("null", "~", ""):
-        return "" if s == "" else None
-    try:
-        return int(s)
-    except ValueError:
-        pass
-    try:
-        return float(s)
-    except ValueError:
-        pass
-    return s
 
 
 __all__ = [

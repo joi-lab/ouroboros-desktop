@@ -95,19 +95,18 @@ def test_tool_set_matches(registry):
 
 
 EXPECTED_TOOLS = [
-    "repo_read", "repo_write", "repo_write_commit", "repo_list", "repo_commit", "str_replace_editor",
-    "read_file", "write_file", "edit",
+    "repo_read", "repo_write", "repo_list", "repo_commit", "str_replace_editor",
     "data_read", "data_write", "data_list",
     "git_status", "git_diff",
     "pull_from_remote", "restore_to_head", "revert_commit", "rollback_to_target",
-    "run_shell", "exec", "bash", "shell", "run_command", "claude_code_edit",
-    "browse_page", "web_fetch", "fetch", "browser_action",
+    "run_shell", "claude_code_edit",
+    "browse_page", "browser_action",
     "web_search",
     "chat_history", "recent_tasks", "update_scratchpad", "update_identity",
     "set_tool_timeout", "request_restart", "promote_to_stable", "request_deep_self_review",
     "schedule_task", "cancel_task",
     "switch_model", "toggle_evolution", "toggle_consciousness",
-    "send_user_message", "message", "message_user", "notify_user", "send_photo",
+    "send_user_message", "send_photo",
     "codebase_digest", "codebase_health",
     "knowledge_read", "knowledge_write", "knowledge_list",
     # Memory registry

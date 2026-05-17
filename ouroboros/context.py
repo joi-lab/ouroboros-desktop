@@ -23,6 +23,7 @@ from ouroboros.utils import (
 from ouroboros.memory import Memory
 
 log = logging.getLogger(__name__)
+_LARGE_CONTEXT_SECTION_CHARS = 200_000
 
 
 def _chat_log_signature_matches(expected: Any, current: Dict[str, Any]) -> bool:
@@ -121,6 +122,27 @@ def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
         runtime_data["budget"] = budget_info
     runtime_ctx = json.dumps(runtime_data, ensure_ascii=False, indent=2)
     return "## Runtime context\n\n" + runtime_ctx
+
+
+def build_knowledge_sections(
+    env: Any,
+    *,
+    warn_large: bool = False,
+    pattern_header: str = "## Known error patterns (Pattern Register)",
+) -> List[str]:
+    """Build durable knowledge sections shared by task and consciousness context."""
+    sections: List[str] = []
+    for rel_path, header, label in (
+        ("memory/knowledge/index-full.md", "## Knowledge base", "knowledge index"),
+        ("memory/knowledge/patterns.md", pattern_header, "patterns register"),
+    ):
+        text = safe_read(env.drive_path(rel_path))
+        if not text.strip():
+            continue
+        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
+            log.warning("context: %s is large (%d chars)", label, len(text))
+        sections.append(f"{header}\n\n{text}")
+    return sections
 
 
 _SECTION_BUDGETS = {
@@ -845,23 +867,7 @@ def build_llm_messages(
 
     semi_stable_parts = []
     semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
-
-    kb_index_path = env.drive_path("memory/knowledge/index-full.md")
-    if kb_index_path.exists():
-        kb_index = kb_index_path.read_text(encoding="utf-8")
-        if kb_index.strip():
-            semi_stable_parts.append("## Knowledge base\n\n" + kb_index)
-
-    patterns_path = env.drive_path("memory/knowledge/patterns.md")
-    try:
-        if patterns_path.exists():
-            patterns_text = patterns_path.read_text(encoding="utf-8")
-            if patterns_text.strip():
-                semi_stable_parts.append(
-                    "## Known error patterns (Pattern Register)\n\n" + patterns_text
-                )
-    except Exception:
-        pass
+    semi_stable_parts.extend(build_knowledge_sections(env))
 
     # Last deep self-review (if available)
     deep_review_path = env.drive_path("memory/deep_review.md")
@@ -918,7 +924,7 @@ def build_llm_messages(
         try:
             from ouroboros.review_state import load_state, format_status_section
             advisory_state = load_state(pathlib.Path(env.drive_root))
-            if advisory_state.runs or advisory_state.last_commit_attempt:
+            if advisory_state.advisory_runs or advisory_state.latest_attempt():
                 advisory_section = format_status_section(
                     advisory_state,
                     repo_dir=pathlib.Path(env.repo_dir),

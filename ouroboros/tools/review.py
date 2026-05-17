@@ -15,16 +15,14 @@ import pathlib
 from typing import Any, List, Optional
 
 from ouroboros.llm import LLMClient
-from ouroboros.pricing import infer_api_key_type, infer_model_category
 from ouroboros.utils import (
-    utc_now_iso,
     run_cmd,
     append_jsonl,
     truncate_review_artifact,
 )
 from ouroboros import config as _cfg
 from ouroboros.tools.registry import ToolEntry, ToolContext
-from ouroboros.triad_review import extract_json_array
+from ouroboros.triad_review import extract_json_array, parse_model_review_results
 
 log = logging.getLogger(__name__)
 
@@ -93,12 +91,14 @@ from ouroboros.tools.review_helpers import (
     load_governance_doc,
     build_touched_file_pack,
     build_goal_section,
-    build_rebuttal_section as _shared_build_rebuttal_section,
+    build_rebuttal_section,
     CRITICAL_FINDING_CALIBRATION,
     normalize_reviewer_items,
-    build_obligations_block,
-    build_anti_thrashing_rules_section,
     build_self_verification_template,
+    build_review_history_section as _build_review_history_section,
+    emit_review_usage,
+    format_review_history_entry as _format_review_entry,
+    single_line as _single_line,
 )
 
 
@@ -113,34 +113,7 @@ _CHECKLISTS_PATH = _REPO_ROOT / "docs" / "CHECKLISTS.md"
 
 
 def _load_bible() -> str:
-    """Load ``BIBLE.md`` for the triad reviewer preamble.
-
-    Routes through the SSOT ``review_helpers.load_governance_doc`` so the
-    silent-empty-string fallback (which would have caused triad reviewers
-    to ignore constitutional context without warning, in violation of
-    DEVELOPMENT.md "No silent truncation") is replaced by an explicit
-    ``[⚠️ OMISSION: ...]`` marker. Walks the same candidate roots the
-    older inline implementation tried, in order of priority, so a
-    pytest-style ``Path.cwd()`` invocation still finds the constitution
-    when the repo-relative resolution misses.
-    """
-    for candidate_root in (
-        pathlib.Path(__file__).resolve().parent.parent.parent,
-        pathlib.Path.cwd(),
-        pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", "")),
-    ):
-        if not str(candidate_root):
-            continue
-        loaded = load_governance_doc(
-            candidate_root, "BIBLE.md", on_missing="silent", fallback="",
-        )
-        if loaded:
-            return loaded
-    return load_governance_doc(
-        pathlib.Path(__file__).resolve().parent.parent.parent,
-        "BIBLE.md",
-        on_missing="explicit",
-    )
+    return load_governance_doc(_REPO_ROOT, "BIBLE.md", on_missing="explicit")
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +243,19 @@ async def _multi_model_review_async(content: str, prompt: str,
     review_results = []
     for model, result, headers_dict in results:
         review_result = _parse_model_response(model, result, headers_dict)
-        _emit_usage_event(review_result, ctx)
+        emit_review_usage(
+            ctx,
+            model=review_result.get("model", ""),
+            provider=review_result.get("provider", "openrouter"),
+            usage={
+                "prompt_tokens": review_result.get("tokens_in", 0),
+                "completion_tokens": review_result.get("tokens_out", 0),
+                "cached_tokens": review_result.get("cached_tokens", 0),
+                "cache_write_tokens": review_result.get("cache_write_tokens", 0),
+                "cost": review_result.get("cost_estimate", 0.0),
+            },
+            source="review",
+        )
         review_results.append(review_result)
 
     return {
@@ -347,39 +332,6 @@ def _parse_model_response(model: str, result, headers_dict) -> dict:
         "cached_tokens": cached_tokens, "cache_write_tokens": cache_write_tokens,
         "cost_estimate": cost,
     }
-
-
-def _emit_usage_event(review_result: dict, ctx: ToolContext) -> None:
-    if ctx is None:
-        return
-    usage_event = {
-        "type": "llm_usage", "ts": utc_now_iso(),
-        "task_id": ctx.task_id if ctx.task_id else "",
-        "model": review_result.get("model", ""),
-        "api_key_type": infer_api_key_type(
-            review_result.get("model", ""),
-            review_result.get("provider", ""),
-        ),
-        "model_category": infer_model_category(review_result.get("model", "")),
-        "usage": {
-            "prompt_tokens": review_result["tokens_in"],
-            "completion_tokens": review_result["tokens_out"],
-            "cached_tokens": review_result.get("cached_tokens", 0),
-            "cache_write_tokens": review_result.get("cache_write_tokens", 0),
-            "cost": review_result["cost_estimate"],
-        },
-        "provider": review_result.get("provider", "openrouter"),
-        "source": "review",
-        "category": "review",
-    }
-    if ctx.event_queue is not None:
-        try:
-            ctx.event_queue.put_nowait(usage_event)
-        except Exception:
-            if hasattr(ctx, "pending_events"):
-                ctx.pending_events.append(usage_event)
-    elif hasattr(ctx, "pending_events"):
-        ctx.pending_events.append(usage_event)
 
 
 # ---------------------------------------------------------------------------
@@ -640,32 +592,21 @@ def _preflight_check(commit_message: str, staged_files: str,
     if version_staged:
         try:
             from ouroboros.tools.release_sync import (
-                _normalize_pep440,
-                _shields_escape,
-                extract_architecture_header_version,
-                extract_readme_badge_version,
                 is_release_version,
+                version_carrier_desyncs,
             )
             version_str = _git_show_staged(repo_dir, "VERSION").strip()
             if is_release_version(version_str):
-                desync = []
                 pyproject_text = _git_show_staged(repo_dir, "pyproject.toml")
-                pyproject_match = re.search(
-                    r'^version\s*=\s*["\']([^"\']+)["\']',
-                    pyproject_text,
-                    re.MULTILINE,
-                )
-                expected_pyproject = _normalize_pep440(version_str)
-                if not pyproject_match or pyproject_match.group(1).strip() != expected_pyproject:
-                    desync.append(f'pyproject.toml (expected version = "{expected_pyproject}")')
                 readme_text = _git_show_staged(repo_dir, "README.md")
-                readme_version = extract_readme_badge_version(readme_text)
-                badge_url_token = f"version-{_shields_escape(version_str)}-green"
-                if readme_version != version_str or badge_url_token not in readme_text:
-                    desync.append(f"README.md badge (expected {version_str} / {badge_url_token})")
                 arch_text = _git_show_staged(repo_dir, "docs/ARCHITECTURE.md")
-                if extract_architecture_header_version(arch_text) != version_str:
-                    desync.append(f"docs/ARCHITECTURE.md header (expected # Ouroboros v{version_str})")
+                desync = version_carrier_desyncs(
+                    version_str,
+                    pyproject_text=pyproject_text,
+                    readme_text=readme_text,
+                    arch_text=arch_text,
+                    detailed=True,
+                )
                 if desync:
                     return (
                         f"⚠️ PREFLIGHT_BLOCKED: VERSION file says {version_str} but "
@@ -753,55 +694,6 @@ def _preflight_check(commit_message: str, staged_files: str,
     return None
 
 
-def _build_review_history_section(history: list, open_obligations: list = None) -> str:
-    """Render the "## Previous review rounds" section of the reviewer prompt.
-
-    Commit-history shape is rendered locally (entry-specific ``commit_message``
-    line). The trailing obligations block and "IMPORTANT RULES" suffix are
-    rendered by the shared helpers in ``review_helpers`` so triad/scope/skill
-    reviewers cannot drift apart on anti-thrashing wording.
-
-    The convergence rule fires from the 3rd review attempt onward, keyed off
-    ``len(history) >= 2`` (in-memory ``ctx._review_history``). Worker-restart
-    survival is an explicit non-goal: restart resets the attempt counter,
-    which is consistent with `ctx._review_iteration_count` and the rest of
-    the review-context model. Durable-state scoping was tried in an earlier
-    iteration but produced false positives on unrelated commits (repo-wide
-    `blocking_history` bleeds across chains) and required function-signature
-    gymnastics that tripped DEVELOPMENT.md's 8-parameter limit.
-    """
-    if not history and not open_obligations:
-        return ""
-    lines = ["## Previous review rounds\n"]
-    if history:
-        for entry in history:
-            lines.append(f"### Round {entry['attempt']}")
-            lines.append(f"Commit message: \"{entry['commit_message']}\"")
-            if entry.get("critical"):
-                lines.append("CRITICAL findings:")
-                for f in entry["critical"]:
-                    lines.append(f"- {_format_review_entry(f, default_severity='critical')}")
-            if entry.get("advisory"):
-                lines.append("Advisory findings:")
-                for f in entry["advisory"]:
-                    lines.append(f"- {_format_review_entry(f)}")
-            lines.append("")
-
-    obligations_block = build_obligations_block(open_obligations)
-    if obligations_block:
-        lines.append(obligations_block)
-
-    lines.append(build_anti_thrashing_rules_section(
-        has_obligations=bool(open_obligations),
-        convergence_fires=bool(history and len(history) >= 2),
-    ))
-    return "\n".join(lines)
-
-
-def _single_line(text: str) -> str:
-    return " ".join(str(text or "").split())
-
-
 def _review_entry(
     *,
     severity: str,
@@ -824,23 +716,6 @@ def _review_entry(
     if obligation_id:
         entry["obligation_id"] = obligation_id
     return entry
-
-
-def _format_review_entry(entry: Any, *, default_severity: str = "advisory") -> str:
-    if isinstance(entry, dict):
-        severity = str(entry.get("severity", default_severity) or default_severity).upper()
-        tags = []
-        if entry.get("tag"):
-            tags.append(str(entry.get("tag")))
-        if entry.get("model"):
-            tags.append(f"model={entry.get('model')}")
-        if entry.get("obligation_id"):
-            tags.append(f"obligation={entry.get('obligation_id')}")
-        label = str(entry.get("item") or entry.get("reason") or "?")
-        reason = _single_line(str(entry.get("reason", "") or ""))
-        tag_prefix = " ".join(f"[{tag}]" for tag in tags)
-        return f"[{severity}] {tag_prefix} {label}: {reason}".strip()
-    return _single_line(str(entry))
 
 
 def _append_review_warning(ctx: ToolContext, text: Any) -> None:
@@ -867,10 +742,6 @@ def _handle_review_block_or_warning(
     return None
 
 
-def _build_rebuttal_section(review_rebuttal: str) -> str:
-    return _shared_build_rebuttal_section(review_rebuttal)
-
-
 def _load_dev_guide_text(repo_dir: pathlib.Path) -> str:
     """Load ``docs/DEVELOPMENT.md`` for the triad reviewer preamble.
 
@@ -888,145 +759,75 @@ def _load_architecture_text(repo_dir: pathlib.Path) -> str:
 
 
 def _collect_review_findings(ctx: ToolContext, model_results: list) -> tuple[list[str], list[str], list[str], list[dict]]:
+    parsed = parse_model_review_results({"results": model_results})
     critical_fails: List[str] = []
     advisory_warns: List[str] = []
-    errored_models: List[str] = []
-    # Structured critical findings for obligation tracking (list of dicts)
     structured_critical: List[dict] = []
     structured_advisory: List[dict] = []
-    # Per-model actor records for epistemic traceability
-    triad_raw_results: List[dict] = []
+    triad_raw_results = [record.to_dict() for record in parsed.actor_records]
+    errored_models = [record.model_id for record in parsed.actor_records if record.status == "error"]
 
-    for mr in model_results:
-        model_name = mr.get("model", "?")
-        raw_text = str(mr.get("text", ""))
-        verdict_upper = str(mr.get("verdict", "")).upper()
-        tokens_in = int(mr.get("tokens_in", 0) or 0)
-        tokens_out = int(mr.get("tokens_out", 0) or 0)
-        cost_usd = float(mr.get("cost_estimate", 0.0) or 0.0)
-
-        if verdict_upper == "ERROR":
-            errored_models.append(model_name)
+    for record in parsed.actor_records:
+        if record.status == "error":
             advisory_warns.append(
-                f"[{model_name}] Model unavailable this round (transport error). "
+                f"[{record.model_id}] Model unavailable this round (transport error). "
                 "Full raw response preserved in triad_raw_results (status='error')."
             )
             structured_advisory.append(_review_entry(
                 severity="advisory",
                 item="review_model_unavailable",
                 reason=(
-                    f"Model unavailable this round (transport error): {model_name}. "
+                    f"Model unavailable this round (transport error): {record.model_id}. "
                     "Full raw response preserved in triad_raw_results actor record."
                 ),
-                model=model_name,
+                model=record.model_id,
             ))
-            triad_raw_results.append({
-                "model_id": model_name,
-                "status": "error",
-                "raw_text": raw_text,
-                "parsed_items": [],
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "cost_usd": cost_usd,
-            })
             try:
                 append_jsonl(ctx.drive_logs() / "events.jsonl", {
-                    "ts": utc_now_iso(), "type": "review_model_error",
-                    "model": model_name,
-                    # full raw_text preserved in triad_raw_results actor record (status='error')
+                    "ts": utc_now_iso(),
+                    "type": "review_model_error",
+                    "model": record.model_id,
                     "error_note": "Full raw response preserved in triad_raw_results.",
                 })
             except Exception:
                 pass
             continue
-
-        items = _parse_review_json(raw_text)
-        if items is None:
-            # parse_failure is recorded via triad_raw_results (status="parse_failure") for
-            # durable epistemic tracking. The quorum check in _run_unified_review blocks the
-            # commit when fewer than 2 reviewers produced parseable output. When quorum is met
-            # (≥2 responded), a parse_failure is degraded-but-not-blocking — surface it as an
-            # advisory note only. Do NOT add to critical_fails here: that would cause a 2-
-            # responded + 1-parse_failure triad to block even though usable quorum is present.
+        if record.status == "parse_failure":
             advisory_warns.append(
-                f"[{model_name}] Could not parse structured review output (parse_failure). "
-                f"Full raw response preserved in triad_raw_results (status='parse_failure')."
+                f"[{record.model_id}] Could not parse structured review output (parse_failure). "
+                "Full raw response preserved in triad_raw_results (status='parse_failure')."
             )
             structured_advisory.append(_review_entry(
                 severity="advisory",
                 item="review_model_parse_failure",
                 reason=(
-                    f"Could not parse structured review output from {model_name}. "
+                    f"Could not parse structured review output from {record.model_id}. "
                     "Full raw response preserved in triad_raw_results actor record."
                 ),
-                model=model_name,
+                model=record.model_id,
             ))
-            triad_raw_results.append({
-                "model_id": model_name,
-                "status": "parse_failure",
-                "raw_text": raw_text,
-                "parsed_items": [],
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "cost_usd": cost_usd,
-            })
             continue
-
-        triad_raw_results.append({
-            "model_id": model_name,
-            "status": "responded",
-            "raw_text": raw_text,
-            "parsed_items": list(items),
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cost_usd": cost_usd,
-        })
-
-        for item in items:
-            if not isinstance(item, dict):
+        for item in record.parsed_items:
+            if str(item.get("verdict", "")).upper() != "FAIL":
                 continue
-            item_verdict = str(item.get("verdict", "")).upper()
-            severity = str(item.get("severity", "advisory")).lower()
-            item_name = item.get("item", "?")
-            reason = item.get("reason", "")
-            obligation_id = str(item.get("obligation_id", "") or "")
-            if item_verdict != "FAIL":
-                continue
-            desc = f"[{model_name}] {item_name}: {reason}"
-            if severity == "critical":
-                critical_fails.append(desc)
-                structured_critical.append(_review_entry(
-                    severity="critical",
-                    item=str(item_name),
-                    reason=str(reason),
-                    model=model_name,
-                    obligation_id=obligation_id,
-                ))
-            else:
-                advisory_warns.append(desc)
-                structured_advisory.append(_review_entry(
-                    severity="advisory",
-                    item=str(item_name),
-                    reason=str(reason),
-                    model=model_name,
-                    obligation_id=obligation_id,
-                ))
+            desc = f"[{record.model_id}] {item.get('item', '?')}: {item.get('reason', '')}"
+            target = structured_critical if item.get("severity") == "critical" else structured_advisory
+            target.append(_review_entry(
+                severity="critical" if target is structured_critical else "advisory",
+                item=str(item.get("item", "?")),
+                reason=str(item.get("reason", "")),
+                model=record.model_id,
+                obligation_id=str(item.get("obligation_id", "") or ""),
+            ))
+            (critical_fails if target is structured_critical else advisory_warns).append(desc)
 
-    # Store structured findings on ctx for obligation tracking
     ctx._last_review_critical_findings = structured_critical
     ctx._last_review_advisory_findings = structured_advisory
     ctx._last_triad_raw_results = triad_raw_results
-
-    # Record degraded participation when some models failed but quorum met
-    degraded = [r for r in triad_raw_results if r["status"] in ("error", "parse_failure")]
-    if degraded and len(triad_raw_results) - len(degraded) >= 2:
-        reasons = [f"{r['model_id']}={r['status']}" for r in degraded]
+    if parsed.degraded_reasons:
         if not hasattr(ctx, "_review_degraded_reasons"):
             ctx._review_degraded_reasons = []
-        ctx._review_degraded_reasons.extend(
-            [f"DEGRADED: {', '.join(reasons)} (quorum still met)"]
-        )
-
+        ctx._review_degraded_reasons.extend(parsed.degraded_reasons)
     return critical_fails, advisory_warns, errored_models, triad_raw_results
 
 
@@ -1155,7 +956,7 @@ def _run_unified_review(ctx: ToolContext, commit_message: str,
         if result is not None:
             return result
 
-    rebuttal_section = _build_rebuttal_section(review_rebuttal)
+    rebuttal_section = build_rebuttal_section(review_rebuttal)
 
     try:
         checklist_section = _load_checklist_section()

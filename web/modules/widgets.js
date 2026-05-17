@@ -803,50 +803,6 @@ async function mountTab(card, tab) {
         mount.innerHTML = `<iframe class="widgets-frame" sandbox="" src="/api/extensions/${encodeURIComponent(tab.skill)}/${route}"></iframe>`;
         return;
     }
-    if (render.kind === 'inline_card' && render.api_route) {
-        const apiRoute = cleanWidgetRoute(render.api_route);
-        if (!apiRoute) throw new Error('invalid widget api_route');
-        const persistenceKey = tab.key || `${tab.skill}:${tab.tab_id}`;
-        const saved = widgetSessionState.get(persistenceKey) || {};
-        const savedCity = escapeHtml(saved.city || 'Moscow');
-        const savedResult = saved.resultHtml || '<div class="muted">Press Refresh.</div>';
-        mount.innerHTML = `
-            <form class="skill-widget-weather-form" data-widget-form>
-                <input class="skill-widget-weather-city" value="${savedCity}" autocomplete="off" maxlength="80" aria-label="Widget query">
-                <button type="submit" class="btn btn-default btn-sm">Refresh</button>
-            </form>
-            <div class="skill-widget-weather-body" data-widget-result>${savedResult}</div>
-        `;
-        const form = mount.querySelector('[data-widget-form]');
-        const input = mount.querySelector('input');
-        const result = mount.querySelector('[data-widget-result]');
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const query = (input.value || '').trim();
-            result.innerHTML = '<div class="muted">Loading...</div>';
-            const resp = await apiFetch(`/api/extensions/${encodeURIComponent(tab.skill)}/${apiRoute}?city=${encodeURIComponent(query)}`);
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || data.error) {
-                result.innerHTML = `<div class="skills-load-error">${escapeHtml(data.error || `HTTP ${resp.status}`)}</div>`;
-                widgetSessionState.set(persistenceKey, { city: query, resultHtml: result.innerHTML });
-                return;
-            }
-            result.innerHTML = `
-                <div class="skill-widget-weather-card">
-                    <strong>${escapeHtml(data.resolved_to || data.city || query)}</strong>
-                    <div class="skill-widget-weather-temp">${escapeHtml(data.temp_c)}°C <span class="muted">feels like ${escapeHtml(data.feels_like_c)}°C</span></div>
-                    <div>${escapeHtml(data.condition || 'Unknown')}</div>
-                </div>
-            `;
-            widgetSessionState.set(persistenceKey, { city: query, resultHtml: result.innerHTML });
-        });
-        return () => {
-            widgetSessionState.set(persistenceKey, {
-                city: input.value || 'Moscow',
-                resultHtml: result.innerHTML || '<div class="muted">Press Refresh.</div>',
-            });
-        };
-    }
     if (render.kind === 'declarative') {
         return mountDeclarativeWidget(mount, tab, render);
     }

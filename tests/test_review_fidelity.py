@@ -169,7 +169,6 @@ class TestFormatStatusSection:
         state = AdvisoryReviewState.__new__(AdvisoryReviewState)
         state.advisory_runs = []
         state.attempts = []
-        state.blocking_history = []
         state.open_obligations = obs
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
@@ -177,11 +176,8 @@ class TestFormatStatusSection:
 
         ca = _make_commit_attempt(findings)
         ca.readiness_warnings = warnings
-        # Put the attempt in state.attempts so filter_attempts picks it up.
-        # Also set last_commit_attempt so format_status_section (repo_dir=None path)
-        # renders the critical_findings / readiness_warnings block.
+        # Put the attempt in state.attempts so format_status_section renders it.
         state.attempts = [ca]
-        state.last_commit_attempt = ca
 
         return state, findings, warnings, obs
 
@@ -223,12 +219,10 @@ class TestFormatStatusSection:
             for i in range(5)
         ]
         state.attempts = []
-        state.blocking_history = []
         state.open_obligations = []
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
         state.last_stale_repo_key = ""
-        state.last_commit_attempt = None
 
         output = format_status_section(state, repo_dir=None)
         for i in range(5):
@@ -254,14 +248,10 @@ class TestFormatStatusSection:
         state = AdvisoryReviewState.__new__(AdvisoryReviewState)
         state.advisory_runs = []
         state.attempts = attempts
-        state.blocking_history = []
         state.open_obligations = []
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
         state.last_stale_repo_key = ""
-        # last_commit_attempt must point to one attempt so the early-exit guard
-        # (not advisory_runs and last_attempt is None and not open_obs) is bypassed.
-        state.last_commit_attempt = attempts[-1]
 
         output = format_status_section(state, repo_dir=None)
         # All 5 attempts must appear (old cap was attempts[-3:])
@@ -534,12 +524,10 @@ class TestFormatStatusSectionNoFieldSlicing:
             )
         ]
         state.attempts = []
-        state.blocking_history = []
         state.open_obligations = []
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
         state.last_stale_repo_key = ""
-        state.last_commit_attempt = None
 
         output = format_status_section(state, repo_dir=None)
         assert full_ts in output, f"Full timestamp not found in output. Got: {output[:400]}"
@@ -563,12 +551,10 @@ class TestFormatStatusSectionNoFieldSlicing:
         state = AdvisoryReviewState.__new__(AdvisoryReviewState)
         state.advisory_runs = []
         state.attempts = [ca]
-        state.blocking_history = []
         state.open_obligations = []
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
         state.last_stale_repo_key = ""
-        state.last_commit_attempt = ca
 
         output = format_status_section(state, repo_dir=None)
         assert full_ts in output, f"Full timestamp not found in output. Got: {output[:400]}"
@@ -594,7 +580,6 @@ class TestHandleReviewStatusNotTruncated:
 
         state = AdvisoryReviewState()
         state.attempts = [ca]
-        state.last_commit_attempt = ca
 
         tmp = pathlib.Path(tempfile.mkdtemp())
         (tmp / "state").mkdir()
@@ -620,7 +605,6 @@ class TestHandleReviewStatusNotTruncated:
 
         state = AdvisoryReviewState()
         state.attempts = [ca]
-        state.last_commit_attempt = ca
 
         tmp = pathlib.Path(tempfile.mkdtemp())
         (tmp / "state").mkdir()
@@ -787,12 +771,10 @@ class TestPersistencePathNotTruncated:
         state = AdvisoryReviewState.__new__(AdvisoryReviewState)
         state.advisory_runs = []
         state.attempts = [ca]
-        state.blocking_history = []
         state.open_obligations = []
         state.last_stale_from_edit_ts = ""
         state.last_stale_reason = ""
         state.last_stale_repo_key = ""
-        state.last_commit_attempt = ca
 
         save_state(tmp, state)
         loaded = load_state(tmp)
@@ -956,9 +938,9 @@ class TestGitCommitFailureForensicMetadata:
     """_record_commit_attempt on git commit exception must preserve triad_models
     and scope_model so forensic metadata is not lost in infra_failure paths.
 
-    This is a regression test for obligation ab1cb5db88ac: the except blocks in
-    _repo_commit_push() and _repo_write_commit() must pass forensic fields through
-    to _record_commit_attempt even when the `git commit` subprocess raises.
+    This is a regression test for obligation ab1cb5db88ac: the except block in
+    _repo_commit_push() must pass forensic fields through to _record_commit_attempt
+    even when the `git commit` subprocess raises.
     """
 
     def _make_ctx(self, tmp_dir):

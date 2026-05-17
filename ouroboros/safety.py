@@ -39,7 +39,6 @@ from typing import Tuple, Dict, Any, List, Optional
 from ouroboros.config import get_light_model
 from ouroboros.llm import LLMClient
 from ouroboros.pricing import emit_llm_usage_event, estimate_cost, infer_provider_from_model
-from ouroboros.tool_aliases import adapt_tool_args, canonical_tool_name
 from supervisor.state import update_budget_from_usage
 
 log = logging.getLogger(__name__)
@@ -96,7 +95,6 @@ TOOL_POLICY: Dict[str, str] = {
 
     # --- Mutative, but guarded by hardcoded sandbox / revert / review gate ---
     "repo_write": POLICY_SKIP,
-    "repo_write_commit": POLICY_SKIP,
     "repo_commit": POLICY_SKIP,
     "str_replace_editor": POLICY_SKIP,
     "data_write": POLICY_SKIP,
@@ -724,9 +722,8 @@ def check_safety(
     """
     # Defensive: arguments can be None when the LLM serializes a tool call
     # with no parameters — ``.get()`` on that would AttributeError.
-    requested_tool_name = str(tool_name or "").strip()
-    tool_name = canonical_tool_name(requested_tool_name)
-    arguments = adapt_tool_args(requested_tool_name, arguments or {})
+    tool_name = str(tool_name or "").strip()
+    arguments = arguments or {}
     policy = TOOL_POLICY.get(tool_name, DEFAULT_POLICY)
 
     if policy == POLICY_SKIP:

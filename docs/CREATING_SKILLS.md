@@ -436,10 +436,8 @@ api.register_tool("search", handler=do_search, description=..., schema=...)
 
 ### `kind: "module"` widgets (v5.7.0+)
 
-For widget surfaces that the host's declarative components cannot
-express (Leaflet maps, custom charts, drag/drop editors), you can
-ship a `widget.js` that the host mounts inside a sandboxed
-`<iframe srcdoc>`:
+For surfaces the declarative components cannot express, ship a `widget.js`
+mounted inside a sandboxed `<iframe srcdoc>`:
 
 ```yaml
 ui_tab:
@@ -450,29 +448,17 @@ ui_tab:
     entry: widget.js
 ```
 
-The host fetches the reviewed `widget.js` text through
-`GET /api/extensions/<skill>/module/<entry>` and embeds it into a
-sandboxed `srcdoc` iframe. The iframe carries `sandbox="allow-scripts"`
-(no `allow-same-origin`) so the script runs as an opaque origin —
-`document.cookie` and `localStorage` of the SPA are unreachable. Since
-opaque-origin iframes cannot directly use normal same-origin `fetch`,
-the host injects a tiny `window.fetch` / `window.OuroborosWidget.fetch`
-bridge: calls to `/api/extensions/<skill>/...` are forwarded to the
-parent, executed by the parent, and returned as a `Response` object.
-The bridge rejects every path outside the owning skill's route prefix.
-The companion review item `widget_module_safety` enforces source-level
-discipline; do not rely on the iframe sandbox alone.
+The host fetches reviewed JS through `GET /api/extensions/<skill>/module/<entry>`,
+embeds it in an opaque-origin iframe (`sandbox="allow-scripts"`, no
+`allow-same-origin`), and injects a fetch bridge that forwards only
+`/api/extensions/<skill>/...` paths. The `widget_module_safety` review item still
+checks the source; do not rely on the sandbox alone.
 
-For everything else, prefer the existing declarative components
-(form / action / poll / subscription / stream / table / chart /
-markdown / json / kv / status / tabs / progress / gallery /
-image / audio / video / file / map / calendar / kanban). They
-handle XSS / CSRF / lifecycle automatically. A top-level
-`subscription` may include `render: [...]` passive display children
-(`progress`, `gallery`, `key_value`, `markdown`, etc.) that render the
-latest WebSocket payload for that subscription. Do not put interactive
-children such as `form`, `action`, `poll`, `stream`, nested
-`subscription`, or `tabs` inside `subscription.render`.
+For everything else, prefer declarative components (`form`, `action`, `poll`,
+`subscription`, `stream`, `table`, `chart`, `markdown`, `json`, `kv`, `status`,
+`tabs`, `progress`, media/file/gallery, map/calendar/kanban). They handle XSS,
+CSRF, and lifecycle automatically. `subscription.render` may contain passive
+display children only; never nest interactive components there.
 
 ### Widget composition rules
 
@@ -492,15 +478,11 @@ the host renderer does not own.
 
 ### Async job error contract
 
-Long-running widget actions should follow the declarative async job contract
-from `docs/DEVELOPMENT.md`: the start route returns `job_id`, the status route
-returns `queued`, `running`, `done`, or `error`, and the host resumes polling by
-`job_id` after tab switches. The Widgets host reads `status`, `error`,
-`message`, and `progress` from the status response.
-
-If you use `asyncio.gather(..., return_exceptions=True)`, convert exceptions
-into an explicit job failure (or a visible warning that the UI understands)
-instead of only logging them:
+Long-running widget actions follow the declarative async job contract: start
+route returns `job_id`; status route returns `queued`, `running`, `done`, or
+`error`; the host resumes polling by `job_id` after tab switches. If you use
+`asyncio.gather(..., return_exceptions=True)`, convert exceptions into an
+explicit job failure instead of only logging them:
 
 ```python
 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -526,7 +508,7 @@ or repair a skill instead of reading a paraphrase here. Review verdicts are
 The simplest reference for each type lives in `repo/skills/` and
 the OuroborosHub catalog:
 
-- `weather` — `type: extension`, declarative inline-card widget,
+- `weather` — `type: extension`, declarative form/key-value widget,
   reads no env keys.
 - `duckduckgo` — `type: extension`, declarative form widget, no
   env keys, declares the `ddgs` Python package as an isolated dependency.

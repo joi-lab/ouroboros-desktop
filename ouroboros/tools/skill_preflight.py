@@ -191,7 +191,7 @@ def _literal_widget_renders_from_plugin(plugin_path: pathlib.Path) -> List[Dict[
         if not isinstance(value, dict):
             continue
         kind = str(value.get("kind") or "").strip()
-        if kind not in {"declarative", "module", "iframe", "inline_card"}:
+        if kind not in {"declarative", "module", "iframe"}:
             continue
         targets = [
             target.id

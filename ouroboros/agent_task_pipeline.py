@@ -429,8 +429,8 @@ def _run_chat_consolidation(env, memory, llm, task, drive_logs):
     try:
         from ouroboros import consolidator as _c
 
-        should_consolidate = getattr(_c, "should_consolidate_chat_blocks", None) or getattr(_c, "should_consolidate")
-        consolidate = getattr(_c, "consolidate_chat_blocks", None) or getattr(_c, "consolidate")
+        should_consolidate = _c.should_consolidate
+        consolidate = _c.consolidate
         chat_path = drive_logs / "chat.jsonl"
         blocks_path = env.drive_path("memory") / "dialogue_blocks.json"
         meta_path = env.drive_path("memory") / "dialogue_meta.json"
@@ -463,8 +463,8 @@ def _run_scratchpad_consolidation(env: Any, memory: Any, llm: Any) -> None:
     try:
         from ouroboros import consolidator as _c
 
-        should_consolidate = getattr(_c, "should_consolidate_scratchpad_blocks", None) or getattr(_c, "should_consolidate_scratchpad")
-        consolidate = getattr(_c, "consolidate_scratchpad_blocks", None) or getattr(_c, "consolidate_scratchpad")
+        should_consolidate = _c.should_consolidate_scratchpad
+        consolidate = _c.consolidate_scratchpad
         if should_consolidate(memory):
             kb_dir = env.drive_path("memory/knowledge")
             _identity = memory.load_identity()
@@ -539,7 +539,7 @@ def build_review_context(env: Any) -> str:
         open_debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
         if (
             not state.advisory_runs
-            and not state.last_commit_attempt
+            and not state.latest_attempt()
             and not continuations
             and not corrupt
             and not open_obs

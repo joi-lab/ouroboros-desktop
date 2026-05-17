@@ -24,7 +24,7 @@ from __future__ import annotations
 
 CORE_TOOL_NAMES: frozenset[str] = frozenset({
     # File I/O
-    "repo_read", "repo_list", "repo_write", "repo_write_commit", "repo_commit",
+    "repo_read", "repo_list", "repo_write", "repo_commit",
     "str_replace_editor",
     "data_read", "data_list", "data_write",
     # Code search
@@ -94,7 +94,6 @@ STATEFUL_BROWSER_TOOLS: frozenset[str] = frozenset({
 # important — commit review verdicts, advisory findings, etc.)
 UNTRUNCATED_TOOL_RESULTS: frozenset[str] = frozenset({
     "repo_commit",
-    "repo_write_commit",
     "multi_model_review",
     "advisory_pre_review",
     "review_skill",
@@ -137,5 +136,4 @@ DEFAULT_TOOL_RESULT_LIMIT: int = 15_000
 # waits synchronously for the final result even if the soft timeout fires.
 REVIEWED_MUTATIVE_TOOLS: frozenset[str] = frozenset({
     "repo_commit",
-    "repo_write_commit",
 })

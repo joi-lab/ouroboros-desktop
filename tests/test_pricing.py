@@ -126,6 +126,10 @@ class TestInferModelCategory:
         with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3-flash-preview"}):
             assert infer_model_category("google/gemini-3-flash-preview") == "light"
 
+    def test_matches_local_usage_suffix(self):
+        with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3-flash-preview"}):
+            assert infer_model_category("google/gemini-3-flash-preview (local)") == "light"
+
     def test_matches_openai_double_colon_against_resolved_usage_name(self):
         with patch.dict(os.environ, {"OUROBOROS_MODEL": "openai::gpt-5.2"}):
             assert infer_model_category("openai/gpt-5.2") == "main"

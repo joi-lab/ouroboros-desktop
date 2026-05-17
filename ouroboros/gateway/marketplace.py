@@ -8,7 +8,7 @@ Endpoints:
 - ``POST /api/marketplace/clawhub/install``     ``{slug, version?, auto_review?, overwrite?}``
 - ``POST /api/marketplace/clawhub/update/{name}``   ``{version?}``
 - ``POST /api/marketplace/clawhub/uninstall/{name}``
-- ``GET  /api/marketplace/clawhub/preview/{slug}`` — staged adapter preview
+- ``GET  /api/marketplace/clawhub/preview/{slug}`` — lightweight registry preview
 
 Every mutating endpoint defers the heavy work to ``asyncio.to_thread``
 so the Starlette event loop stays responsive while the registry HTTP
@@ -21,22 +21,17 @@ import asyncio
 import json
 import logging
 import pathlib
-import shutil
-import tempfile
 from typing import Any, Dict, Optional
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from ouroboros.marketplace.adapter import adapt_openclaw_skill
 from ouroboros.marketplace.clawhub import (
     ClawHubClientError,
     ClawHubClientHostBlocked,
-    download as _registry_download,
     info as _registry_info,
     search as _registry_search,
 )
-from ouroboros.marketplace.fetcher import FetchError, stage as _stage_archive
 from ouroboros.marketplace.install import (
     _run_skill_review,
     install_skill,
@@ -152,81 +147,22 @@ async def api_marketplace_info(request: Request) -> JSONResponse:
 
 
 def _preview_pipeline(slug: str, version: Optional[str]) -> Dict[str, Any]:
-    """Synchronous helper for ``/preview``.
-
-    Downloads + stages + adapts the skill into a temporary directory
-    that we tear down before returning. The response carries enough
-    information for the UI to show a confirmation dialog (translated
-    manifest, blockers, warnings, file list, registry summary).
-    """
+    """Return registry details for the lightweight ClawHub preview route."""
     summary = _registry_info(slug)
-    archive = _registry_download(slug, version=version or summary.latest_version)
-    # Use a freshly-minted private staging directory per preview so a
-    # local attacker cannot pre-create or symlink a shared root.
-    # Cycle-2 GPT critic: wrap the entire stage+adapt path in a
-    # try/finally so a failure in ``_stage_archive`` does not leak
-    # the mkdtemp'd ``staging_root``.
-    staging_root = pathlib.Path(
-        tempfile.mkdtemp(prefix="ouroboros_marketplace_preview_")
-    )
-    try:
-        staged = _stage_archive(
-            archive.content,
-            slug=slug,
-            version=archive.version or summary.latest_version,
-            expected_sha256=archive.sha256,
-            staging_root=staging_root,
-        )
-    except Exception:
-        shutil.rmtree(staging_root, ignore_errors=True)
-        raise
-    try:
-        adapter = adapt_openclaw_skill(
-            staged.staging_dir,
-            slug=slug,
-            version=archive.version or summary.latest_version,
-            sha256=archive.sha256,
-            is_plugin=staged.has_plugin_manifest,
-        )
-        skill_md_path = staged.staging_dir / "SKILL.md"
-        original_md_path = staged.staging_dir / "SKILL.openclaw.md"
-        return {
-            "slug": slug,
-            "version": archive.version or summary.latest_version,
-            "summary": summary.to_dict(),
-            "archive": {
-                "sha256": archive.sha256,
-                "size_bytes": len(archive.content),
-            },
-            "staging": {
-                "file_count": staged.file_count,
-                "total_bytes": staged.total_bytes,
-                "files": staged.file_list,
-                "is_plugin": staged.has_plugin_manifest,
-            },
-            "adapter": {
-                "ok": adapter.ok,
-                "sanitized_name": adapter.sanitized_name,
-                "warnings": adapter.warnings,
-                "blockers": adapter.blockers,
-                "translated_manifest": adapter.translated_frontmatter,
-                "original_frontmatter": adapter.original_frontmatter,
-                "skill_md_text": (
-                    skill_md_path.read_text(encoding="utf-8")
-                    if skill_md_path.is_file() else ""
-                ),
-                "openclaw_md_text": (
-                    original_md_path.read_text(encoding="utf-8")
-                    if original_md_path.is_file() else ""
-                ),
-            },
-        }
-    finally:
-        # Clean both the inner staging dir AND the mkdtemp'd root so we
-        # leave no orphaned tmp directories behind (the inner dir is a
-        # child of staging_root since we passed staging_root explicitly).
-        shutil.rmtree(staged.staging_dir, ignore_errors=True)
-        shutil.rmtree(staging_root, ignore_errors=True)
+    return {
+        "slug": slug,
+        "version": version or summary.latest_version,
+        "summary": summary.to_dict(),
+        "adapter": {
+            "ok": not summary.is_plugin,
+            "warnings": [],
+            "blockers": (
+                ["OpenClaw Node/TypeScript plugins are not installable in Ouroboros."]
+                if summary.is_plugin else []
+            ),
+        },
+        "staging": {"is_plugin": summary.is_plugin},
+    }
 
 
 async def api_marketplace_preview(request: Request) -> JSONResponse:
@@ -236,8 +172,6 @@ async def api_marketplace_preview(request: Request) -> JSONResponse:
     version = (request.query_params.get("version") or "").strip() or None
     try:
         payload = await asyncio.to_thread(_preview_pipeline, slug, version)
-    except FetchError as exc:
-        return JSONResponse({"error": f"fetch: {exc}", "code": "FetchError"}, status_code=400)
     except ClawHubClientError as exc:
         return _client_error_response(exc)
     except Exception as exc:
@@ -417,6 +351,48 @@ def _validate_path_param_name(name: str) -> Optional[str]:
     return None
 
 
+def _installed_skill_payload(skill: Any, drive_root: pathlib.Path, *, provenance: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    from ouroboros.skill_loader import grant_status_for_skill, skill_review_gate
+
+    try:
+        rel_skill_dir = skill.skill_dir.resolve().relative_to(drive_root.resolve())
+        payload_root = rel_skill_dir.as_posix() if rel_skill_dir.parts[:1] == ("skills",) else ""
+    except Exception:
+        payload_root = ""
+    stale = skill.review.is_stale_for(skill.content_hash)
+    gate = skill_review_gate(skill.review.status, stale=stale)
+    payload = {
+        "name": skill.name,
+        "type": skill.manifest.type,
+        "version": skill.manifest.version,
+        "review_status": skill.review.status,
+        "review_stale": stale,
+        "review_gate": gate,
+        "executable_review": gate["executable_review"],
+        "review_findings": list(skill.review.findings or []),
+        "enabled": skill.enabled,
+        "load_error": skill.load_error,
+        "grants": grant_status_for_skill(drive_root, skill),
+        "payload_root": payload_root,
+    }
+    if provenance is not None:
+        payload["provenance"] = provenance
+    return payload
+
+
+def _installed_skills_for_source(drive_root: pathlib.Path, source: str) -> list[Dict[str, Any]]:
+    from ouroboros.config import get_skills_repo_path
+    from ouroboros.skill_loader import discover_skills
+
+    out: list[Dict[str, Any]] = []
+    for skill in discover_skills(drive_root, repo_path=get_skills_repo_path()):
+        if skill.source != source:
+            continue
+        provenance = read_provenance(drive_root, skill.name) or {} if source == "clawhub" else None
+        out.append(_installed_skill_payload(skill, drive_root, provenance=provenance))
+    return out
+
+
 async def api_marketplace_uninstall(request: Request) -> JSONResponse:
     sanitized = (request.path_params.get("name") or "").strip()
     err = _validate_path_param_name(sanitized)
@@ -463,45 +439,7 @@ async def api_marketplace_uninstall(request: Request) -> JSONResponse:
 async def api_marketplace_installed(request: Request) -> JSONResponse:
     """List ClawHub-installed skills + provenance for the UI."""
     drive_root = _request_drive_root(request)
-    from ouroboros.skill_loader import discover_skills, grant_status_for_skill, skill_review_gate
-    from ouroboros.config import get_skills_repo_path
-
-    skills = discover_skills(drive_root, repo_path=get_skills_repo_path())
-    out = []
-    for skill in skills:
-        if skill.source != "clawhub":
-            continue
-        prov = read_provenance(drive_root, skill.name) or {}
-        payload_root = ""
-        try:
-            rel_skill_dir = skill.skill_dir.resolve().relative_to(drive_root.resolve())
-            if rel_skill_dir.parts[:1] == ("skills",):
-                payload_root = rel_skill_dir.as_posix()
-        except Exception:
-            payload_root = ""
-        out.append(
-            {
-                "name": skill.name,
-                "type": skill.manifest.type,
-                "version": skill.manifest.version,
-                "review_status": skill.review.status,
-                "review_stale": skill.review.is_stale_for(skill.content_hash),
-                "review_gate": skill_review_gate(
-                    skill.review.status,
-                    stale=skill.review.is_stale_for(skill.content_hash),
-                ),
-                "executable_review": skill_review_gate(
-                    skill.review.status,
-                    stale=skill.review.is_stale_for(skill.content_hash),
-                )["executable_review"],
-                "review_findings": list(skill.review.findings or []),
-                "enabled": skill.enabled,
-                "load_error": skill.load_error,
-                "grants": grant_status_for_skill(drive_root, skill),
-                "payload_root": payload_root,
-                "provenance": prov,
-            }
-        )
+    out = _installed_skills_for_source(drive_root, "clawhub")
     return JSONResponse({"count": len(out), "skills": out})
 
 
@@ -724,41 +662,7 @@ async def api_ouroboroshub_update(request: Request) -> JSONResponse:
 
 async def api_ouroboroshub_installed(request: Request) -> JSONResponse:
     drive_root = _request_drive_root(request)
-    from ouroboros.config import get_skills_repo_path
-    from ouroboros.skill_loader import discover_skills, grant_status_for_skill, skill_review_gate
-
-    skills = discover_skills(drive_root, repo_path=get_skills_repo_path())
-    out = []
-    for skill in skills:
-        if skill.source != "ouroboroshub":
-            continue
-        payload_root = ""
-        try:
-            rel_skill_dir = skill.skill_dir.resolve().relative_to(drive_root.resolve())
-            if rel_skill_dir.parts[:1] == ("skills",):
-                payload_root = rel_skill_dir.as_posix()
-        except Exception:
-            payload_root = ""
-        out.append({
-            "name": skill.name,
-            "type": skill.manifest.type,
-            "version": skill.manifest.version,
-            "review_status": skill.review.status,
-            "review_stale": skill.review.is_stale_for(skill.content_hash),
-            "review_gate": skill_review_gate(
-                skill.review.status,
-                stale=skill.review.is_stale_for(skill.content_hash),
-            ),
-            "executable_review": skill_review_gate(
-                skill.review.status,
-                stale=skill.review.is_stale_for(skill.content_hash),
-            )["executable_review"],
-            "review_findings": list(skill.review.findings or []),
-            "enabled": skill.enabled,
-            "load_error": skill.load_error,
-            "grants": grant_status_for_skill(drive_root, skill),
-            "payload_root": payload_root,
-        })
+    out = _installed_skills_for_source(drive_root, "ouroboroshub")
     return JSONResponse({"count": len(out), "skills": out})
 
 

@@ -31,6 +31,7 @@ from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.tools.review_helpers import (
     build_full_repo_pack,
     build_head_snapshot_section,
+    emit_review_usage,
     load_governance_doc,
     load_checklist_section,
 )
@@ -262,50 +263,22 @@ async def _run_plan_review_async(
 # ------------------------------------------------------------------ #
 
 def _emit_plan_review_usage(ctx: "ToolContext", raw_results: list) -> None:
-    """Emit llm_usage events for each plan reviewer so costs reach the budget."""
-    try:
-        from ouroboros.pricing import infer_api_key_type, infer_model_category, infer_provider_from_model
-        from ouroboros.utils import utc_now_iso
-        for result in raw_results:
-            if result.get("error"):
-                continue
-            tokens_in = result.get("tokens_in", 0)
-            tokens_out = result.get("tokens_out", 0)
-            if not tokens_in and not tokens_out:
-                continue
-            model = result.get("model") or result.get("request_model") or ""
-            cost = float(result.get("cost", 0) or 0)
-            provider = infer_provider_from_model(model)
-            event = {
-                "type": "llm_usage",
-                "ts": utc_now_iso(),
-                "task_id": getattr(ctx, "task_id", "") or "",
-                "model": model,
-                "api_key_type": infer_api_key_type(model, provider),
-                "model_category": infer_model_category(model),
-                "usage": {
-                    "prompt_tokens": tokens_in,
-                    "completion_tokens": tokens_out,
-                    "cached_tokens": 0,
-                    "cost": cost,
-                },
-                "provider": provider,
-                "source": "plan_review",
-                "category": "review",
-                "cost": cost,
-            }
-            eq = getattr(ctx, "event_queue", None)
-            if eq is not None:
-                try:
-                    eq.put_nowait(event)
-                    continue
-                except Exception:
-                    pass
-            pending = getattr(ctx, "pending_events", None)
-            if pending is not None:
-                pending.append(event)
-    except Exception:
-        log.debug("_emit_plan_review_usage failed (non-critical)", exc_info=True)
+    for result in raw_results:
+        if result.get("error"):
+            continue
+        tokens_in = result.get("tokens_in", 0)
+        tokens_out = result.get("tokens_out", 0)
+        if not tokens_in and not tokens_out:
+            continue
+        model = result.get("model") or result.get("request_model") or ""
+        cost = float(result.get("cost", 0) or 0)
+        emit_review_usage(
+            ctx,
+            model=model,
+            usage={"prompt_tokens": tokens_in, "completion_tokens": tokens_out, "cost": cost},
+            source="plan_review",
+            extra={"cost": cost},
+        )
 
 
 async def _query_reviewer(

@@ -91,11 +91,6 @@ class TestRepoWriteRegistration:
         registry = _get_registry_module()
         assert "repo_write" in registry.CORE_TOOL_NAMES
 
-    def test_repo_write_commit_still_registered(self):
-        git_mod = _get_git_module()
-        names = [t.name for t in git_mod.get_tools()]
-        assert "repo_write_commit" in names
-
     def test_repo_write_schema_has_files_param(self):
         git_mod = _get_git_module()
         tools = git_mod.get_tools()
@@ -675,11 +670,9 @@ class TestReviewEnforcementModes:
 # --- Unified review wired into commit functions ---
 
 class TestReviewInCommitPipeline:
-    # ``test_repo_commit_calls_unified_review`` and
-    # ``test_repo_write_commit_calls_unified_review`` were removed in
-    # v5.8.3-rc.5 — both are strict subsets of
+    # ``test_repo_commit_calls_unified_review`` was removed in
+    # v5.8.3-rc.5 — it is a strict subset of
     # ``tests/test_scope_review.py::TestScopeReview::test_scope_review_wired_in_commit``
-    # and ``test_repo_write_commit_not_bypass_scope`` (lines 538-560 there)
     # which additionally verify ``run_scope_review`` is reached and the
     # ``ThreadPoolExecutor`` parallelism contract holds.
 

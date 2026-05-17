@@ -7,7 +7,10 @@ import { showToast } from './toast.js';
 import { apiFetch } from './api_client.js';
 import {
     boundedText,
+    emitSkillLifecycle,
     escapeHtmlAttr as escapeHtml,
+    grantReady,
+    isRateLimitError,
     renderSkillRepairPrompt,
     safeExternalHrefAttr as safeExternalUrl,
 } from './utils.js';
@@ -93,10 +96,6 @@ function reviewReady(skill) {
     return ['clean', 'warnings'].includes(skill.review_status) && !skill.review_stale;
 }
 
-function grantReady(skill) {
-    return !skill.grants || skill.grants.all_granted !== false;
-}
-
 function reviewToastTone(status, error = '') {
     if (error) return 'danger';
     if (status === 'clean') return 'ok';
@@ -129,17 +128,6 @@ function submitHubReady(skill, githubTokenConfigured = false) {
 
 function isMissingGrantLoadError(skill) {
     return !grantReady(skill) && String(skill.load_error || '').includes('missing owner grants');
-}
-
-function isRateLimitError(message) {
-    const text = String(message || '').toLowerCase();
-    return text.includes('rate limit') || text.includes('too many requests') || text.includes('http 429');
-}
-
-function emitSkillLifecycle(action, name, extra = {}) {
-    window.dispatchEvent(new CustomEvent('ouro:skill-lifecycle', {
-        detail: { action, name, ...extra },
-    }));
 }
 
 function hasSkillUiTab(skill, live = {}) {

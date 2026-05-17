@@ -107,24 +107,6 @@ def consolidate(
             except OSError:
                 pass
 
-
-
-
-def should_consolidate_chat_blocks(meta_path: pathlib.Path, chat_path: pathlib.Path) -> bool:
-    """Compatibility alias for block-based chat consolidation checks."""
-    return should_consolidate(meta_path, chat_path)
-
-
-def consolidate_chat_blocks(
-    chat_path: pathlib.Path,
-    blocks_path: pathlib.Path,
-    meta_path: pathlib.Path,
-    llm_client: Any,
-    identity_text: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Compatibility alias for block-based chat consolidation."""
-    return consolidate(chat_path, blocks_path, meta_path, llm_client, identity_text)
-
 # ---------------------------------------------------------------------------
 # Core block consolidation logic
 # ---------------------------------------------------------------------------
@@ -660,18 +642,3 @@ def _write_knowledge_entries(knowledge_dir: pathlib.Path, entries: List[Dict[str
             write_text(kb_path, existing.rstrip() + "\n\n" + kb_content)
         else:
             write_text(kb_path, f"# {topic}\n\n{kb_content}\n")
-
-
-def should_consolidate_scratchpad_blocks(memory: Any) -> bool:
-    """Compatibility alias for block-aware scratchpad consolidation checks."""
-    return should_consolidate_scratchpad(memory)
-
-
-def consolidate_scratchpad_blocks(
-    memory: Any,
-    knowledge_dir: pathlib.Path,
-    llm_client: Any,
-    identity_text: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Compatibility alias for block-aware scratchpad consolidation."""
-    return consolidate_scratchpad(memory, knowledge_dir, llm_client, identity_text)

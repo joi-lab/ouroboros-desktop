@@ -87,14 +87,15 @@ def test_build_openrouter_kwargs_for_anthropic_keeps_require_parameters_only():
     from ouroboros.llm import LLMClient
 
     client = LLMClient()
-    kwargs = client._build_openrouter_kwargs(
-        messages=[{"role": "user", "content": "hi"}],
-        model="anthropic/claude-opus-4.6",
-        tools=None,
-        reasoning_effort="medium",
-        max_tokens=1000,
-        tool_choice="auto",
-        temperature=None,
+    target = client._resolve_remote_target("anthropic/claude-opus-4.6")
+    kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "medium",
+        1000,
+        "auto",
+        None,
+        None,
     )
 
     assert kwargs["extra_body"]["provider"] == {"require_parameters": True}
@@ -107,17 +108,18 @@ def test_build_openrouter_kwargs_for_anthropic_marks_last_sorted_tool_for_cache(
     from ouroboros.llm import LLMClient
 
     client = LLMClient()
-    kwargs = client._build_openrouter_kwargs(
-        messages=[{"role": "user", "content": "hi"}],
-        model="anthropic/claude-opus-4.6",
-        tools=[
+    target = client._resolve_remote_target("anthropic/claude-opus-4.6")
+    kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "medium",
+        1000,
+        "auto",
+        None,
+        [
             {"type": "function", "function": {"name": "zeta_tool", "description": "z", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "alpha_tool", "description": "a", "parameters": {"type": "object", "properties": {}}}},
         ],
-        reasoning_effort="medium",
-        max_tokens=1000,
-        tool_choice="auto",
-        temperature=None,
     )
 
     assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["alpha_tool", "zeta_tool"]
@@ -130,14 +132,15 @@ def test_build_openrouter_kwargs_for_non_anthropic_has_no_provider_block():
     from ouroboros.llm import LLMClient
 
     client = LLMClient()
-    kwargs = client._build_openrouter_kwargs(
-        messages=[{"role": "user", "content": "hi"}],
-        model="openai/gpt-4.1",
-        tools=None,
-        reasoning_effort="medium",
-        max_tokens=1000,
-        tool_choice="auto",
-        temperature=None,
+    target = client._resolve_remote_target("openai/gpt-4.1")
+    kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "medium",
+        1000,
+        "auto",
+        None,
+        None,
     )
 
     assert "provider" not in kwargs["extra_body"]

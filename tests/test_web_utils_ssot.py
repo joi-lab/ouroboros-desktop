@@ -65,8 +65,8 @@ def test_render_markdown_safe_strips_dangerous_tags_and_attrs():
 def test_marketplace_does_not_redeclare_shared_helpers():
     """marketplace.js must import shared helpers, not redeclare them."""
     src = _read("marketplace.js")
-    # Imports from utils.js include the four shared helpers.
-    assert "renderMarkdownSafe as renderMarkdownSafeShared" in src
+    # Marketplace no longer renders package markdown after Details removal.
+    assert "renderMarkdownSafe" not in src
     assert "safeExternalHrefAttr" in src
     assert "boundedText" in src
     assert "fetchJson" in src

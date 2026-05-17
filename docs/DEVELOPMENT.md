@@ -158,7 +158,7 @@ engineering standards, you MUST:
 Reviewed commits now have an explicit **two-step gate**:
 
 1. **Advisory freshness gate**: finish all edits, then run `advisory_pre_review`.
-   Without a bypass, `repo_commit` / `repo_write_commit` require a fresh matching
+   Without a bypass, `repo_commit` requires a fresh matching
    advisory run, no open obligations from earlier blocked rounds, and no open
    commit-readiness debt. Any edit after advisory makes it stale and requires a
    re-run. When debt remains, `review_status` reports `repo_commit_ready=false`
@@ -477,9 +477,8 @@ and fix any hits.
 
 Extension widgets should prefer host-owned declarative render schemas.
 `web/modules/widgets.js` is the single host for `register_ui_tab`
-declarations: legacy `iframe` remains sandboxed with no relaxed tokens,
-legacy `inline_card` remains weather-shaped, and `kind: "declarative"` /
-`schema_version: 1` covers forms, actions, markdown, JSON, key/value
+declarations: `iframe` remains sandboxed with no relaxed tokens, and
+`kind: "declarative"` / `schema_version: 1` covers forms, actions, markdown, JSON, key/value
 summaries, tables, progress, files, galleries, image/audio/video media, and
 v5.7.0 map/calendar/kanban components. New common widget capabilities should
 extend that declarative schema and its tests.
@@ -601,15 +600,9 @@ token-safe and Docker-safe.
 
 ### GitHub Actions: secrets in step-level `if:` conditions
 
-GitHub Actions **rejects** `secrets.*` references inside step-level `if:`
-expressions with `Unrecognized named-value: 'secrets'`. The workflow file
-fails to parse and the job never runs. Step-level `env:` blocks **are also
-not visible to that step's own `if:`** — only job-level `env:` is.
-
-When a step needs to gate on whether a secret is configured, **map the
-secret into the build job's `env:` block, then reference `env.*` in the
-step `if:`**. The step itself can then either use the env var directly
-(it inherits from the job) or assume it is present.
+GitHub Actions rejects `secrets.*` inside step-level `if:` expressions, and a
+step's own `env:` block is not visible to that same step's `if:`. Map secrets at
+the job-level `env:` block, then gate steps with `env.*`.
 
 ```yaml
 jobs:
@@ -639,41 +632,17 @@ jobs:
     P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
 ```
 
-This pattern is enforced by `tests/test_build_scripts.py::TestMacOSSigning::
-test_ci_uses_env_context_for_condition`, which parses every `if:` block in
-`.github/workflows/ci.yml` (including multi-line continuations) and asserts
-no occurrence of `secrets.` ever appears inside one.
+`tests/test_build_scripts.py::TestMacOSSigning::test_ci_uses_env_context_for_condition`
+enforces this across every workflow `if:` block.
 
 ### Apple signing & notarization (macOS Build job)
 
-When `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `KEYCHAIN_PASSWORD`, and
-`APPLE_TEAM_ID` are configured as repository secrets, the macOS build job
-imports the Developer ID certificate into a temporary keychain and runs
-`bash build.sh` — `build.sh` then signs the `.app` and the `.dmg` using
-the env-overridable `SIGN_IDENTITY`. Each Apple secret is mapped at the
-build job's `env:` block with a `${{ matrix.os == 'macos-latest' && secrets.X || '' }}`
-guard so the Apple credentials reach the macOS matrix shard only; Linux
-and Windows sibling shards (running `build_linux.sh` / `build_windows.ps1`,
-neither of which needs Apple creds) receive empty strings. When `APPLE_ID` and
-`APPLE_APP_SPECIFIC_PASSWORD` are also present, `build.sh` runs
-`xcrun notarytool submit ... --wait` followed by `xcrun stapler staple` to
-attach the notarization ticket; otherwise the entire notarization block is
-skipped and the DMG ships **signed but not notarized** (users still need
-right-click → **Open** on first launch). The stapler call is wrapped in
-its own guard so a transient stapler failure after a successful notarytool
-submission becomes a soft warning rather than a hard build failure (the
-DMG is genuinely notarized — Gatekeeper just fetches the ticket online on
-first launch instead of from the embedded staple). The `notarytool submit`
-call is wrapped the same way: an Apple-side outage / wrong-credential typo
-prints a `WARNING` and lets the DMG ship signed-but-not-notarized, instead
-of aborting the build under `set -e` and silently dropping the macOS
-artifact from the release. A single `NOTARIZE_OUTCOME` enum (`success` /
-`staple_failed` / `submit_failed` / `unconfigured`) drives the build's
-final summary line so the WARN message and the summary always agree on
-the actual artifact state, plus a defensive `*)` arm so any future enum
-drift is loud. The `Cleanup keychain`
-step runs with `if: always() && matrix.os == 'macos-latest' && env.BUILD_CERTIFICATE_BASE64 != ''`
-— `always()` ensures cleanup fires on build failures too, the `matrix.os`
-gate keeps the bash-only `security` invocation off Linux/Windows shards,
-and the env guard skips when no keychain was created (no signing secrets).
-Signing material never persists across runs.
+When Apple signing secrets are configured, the macOS shard imports the Developer
+ID certificate into a temporary keychain and `build.sh` signs the `.app` and
+`.dmg` via `SIGN_IDENTITY`. Apple secrets are job-level env values guarded by
+`matrix.os == 'macos-latest'`, so Linux/Windows shards receive empty strings.
+If `APPLE_ID` and `APPLE_APP_SPECIFIC_PASSWORD` are present, notarization runs;
+otherwise the DMG ships signed but not notarized. Notary/stapler failures are
+soft warnings, recorded through `NOTARIZE_OUTCOME`, so transient Apple issues do
+not silently drop the macOS artifact. Cleanup uses `always()` plus macOS/env
+guards, and signing material never persists across runs.

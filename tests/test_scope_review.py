@@ -8,7 +8,7 @@ Verifies:
 - Broader repo pack excludes touched files
 - Path-aware freshness
 - Stale marking lifecycle
-- repo_write_commit doesn't bypass the new stack
+- repo_commit doesn't bypass the new stack
 - review_helpers imports cleanly (no circular deps)
 """
 
@@ -481,15 +481,15 @@ class TestPathAwareFreshness:
             status="fresh", ts="2026-01-01T00:00:00",
         )
         state.add_run(run1)
-        assert state.runs[0].status == "fresh"
+        assert state.advisory_runs[0].status == "fresh"
 
         run2 = rs.AdvisoryRunRecord(
             snapshot_hash="hash2", commit_message="m2",
             status="fresh", ts="2026-01-01T01:00:00",
         )
         state.add_run(run2)
-        assert state.runs[0].status == "stale"  # hash1 became stale
-        assert state.runs[1].status == "fresh"   # hash2 is fresh
+        assert state.advisory_runs[0].status == "stale"  # hash1 became stale
+        assert state.advisory_runs[1].status == "fresh"   # hash2 is fresh
 
 
 # ---------------------------------------------------------------------------
@@ -546,10 +546,10 @@ class TestGitWiring:
         # ThreadPoolExecutor must be used for parallel execution
         assert "ThreadPoolExecutor" in parallel_source
 
-    def test_repo_write_commit_not_bypass_scope(self):
-        """Legacy _repo_write_commit must reach scope review via the shared stage helper."""
+    def test_repo_commit_not_bypass_scope(self):
+        """repo_commit must reach scope review via the shared stage helper."""
         git = _get_module("ouroboros.tools.git")
-        source = inspect.getsource(git._repo_write_commit)
+        source = inspect.getsource(git._repo_commit_push)
         assert "_run_reviewed_stage_cycle" in source
         shared_source = inspect.getsource(git._run_reviewed_stage_cycle)
         assert "_check_advisory_freshness" in shared_source
@@ -1086,11 +1086,13 @@ class TestSharedLLMRouting:
         assert "httpx" not in source
 
     def test_triad_emits_llm_usage_events(self):
-        """_emit_usage_event must write to event_queue or pending_events."""
+        """Triad review must use the shared review usage emitter."""
         mod = _get_module("ouroboros.tools.review")
-        source = inspect.getsource(mod._emit_usage_event)
-        assert "event_queue" in source or "pending_events" in source
-        assert "llm_usage" in source
+        source = inspect.getsource(mod._multi_model_review_async)
+        assert "emit_review_usage" in source
+        helper = inspect.getsource(_get_module("ouroboros.tools.review_helpers").emit_review_usage)
+        assert "llm_usage" in helper
+        assert "emit_review_event" in helper
 
     def test_scope_review_uses_llm_client(self):
         """Scope review must use LLMClient for its model call.
@@ -1108,8 +1110,10 @@ class TestSharedLLMRouting:
         """Scope review must emit llm_usage event for cost tracking."""
         mod = _get_module("ouroboros.tools.scope_review")
         source = inspect.getsource(mod._emit_usage)
-        assert "llm_usage" in source
-        assert "event_queue" in source or "eq" in source
+        assert "emit_review_usage" in source
+        helper = inspect.getsource(_get_module("ouroboros.tools.review_helpers").emit_review_usage)
+        assert "llm_usage" in helper
+        assert "emit_review_event" in helper
 
 
 # ---------------------------------------------------------------------------

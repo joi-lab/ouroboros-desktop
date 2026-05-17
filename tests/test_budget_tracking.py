@@ -30,11 +30,22 @@ class _FakeCtx:
 # ---------------------------------------------------------------------------
 
 class TestAdvisoryUsageEmit:
-    """_emit_advisory_usage must route to pending_events when event_queue is None."""
+    """Advisory usage emission must route through the shared review helper."""
 
     def _get_fn(self):
         mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
-        return mod._emit_advisory_usage
+        def _emit(ctx, model, cost_usd, usage, source="advisory", provider="anthropic", session_id="", prompt_chars=0):
+            return mod.emit_review_usage(
+                ctx,
+                model=model,
+                provider=provider,
+                usage=usage,
+                source=source,
+                cost_usd=cost_usd,
+                session_id=session_id,
+                prompt_chars=prompt_chars,
+            )
+        return _emit
 
     def test_emit_routes_to_pending_events(self):
         fn = self._get_fn()
@@ -240,11 +251,22 @@ class TestScopeReviewProviderAttribution:
 
 
 class TestAdvisoryFallbackProviderAttribution:
-    """_emit_advisory_usage provider kwarg must reflect fallback model prefix."""
+    """Advisory fallback provider kwarg must reflect fallback model prefix."""
 
     def _get_fn(self):
         mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
-        return mod._emit_advisory_usage
+        def _emit(ctx, model, cost_usd, usage, source="advisory", provider="anthropic", session_id="", prompt_chars=0):
+            return mod.emit_review_usage(
+                ctx,
+                model=model,
+                provider=provider,
+                usage=usage,
+                source=source,
+                cost_usd=cost_usd,
+                session_id=session_id,
+                prompt_chars=prompt_chars,
+            )
+        return _emit
 
     @pytest.mark.parametrize("model,expected_provider", [
         ("anthropic::claude-3-5-sonnet", "anthropic"),
@@ -415,39 +437,51 @@ class TestSupervisorDedupCostTracking:
 
 
 class TestAdvisoryCallSiteCostTracking:
-    """_emit_advisory_usage is called with real cost from the SDK result."""
+    """emit_review_usage is called with real cost from the SDK result."""
 
     def test_emit_called_when_cost_nonzero(self):
-        """_emit_advisory_usage is called with cost_usd when cost_usd > 0."""
+        """emit_review_usage is called with cost_usd when cost_usd > 0."""
         mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
 
         # Directly verify the conditional gate: cost_usd > 0 triggers the emit call.
         ctx = _FakeCtx()
-        with patch.object(mod, "_emit_advisory_usage") as mock_emit:
+        with patch.object(mod, "emit_review_usage") as mock_emit:
             # Simulate the inline condition from _run_claude_advisory:
             #   if result.cost_usd > 0:
-            #       _emit_advisory_usage(ctx, model, result.cost_usd, result.usage, "advisory_sdk")
+            #       emit_review_usage(ctx, model=model, cost_usd=result.cost_usd, ...)
             cost_usd = 2.50
             usage = {"prompt_tokens": 500, "completion_tokens": 200}
             if cost_usd > 0:
-                mod._emit_advisory_usage(ctx, "model-x", cost_usd, usage, "advisory_sdk")
+                mod.emit_review_usage(
+                    ctx,
+                    model="model-x",
+                    cost_usd=cost_usd,
+                    usage=usage,
+                    source="advisory_sdk",
+                )
             mock_emit.assert_called_once()
-            call_args = mock_emit.call_args[0]
-            assert call_args[2] == 2.50
-            assert call_args[4] == "advisory_sdk"
+            call_kwargs = mock_emit.call_args.kwargs
+            assert call_kwargs["cost_usd"] == 2.50
+            assert call_kwargs["source"] == "advisory_sdk"
 
     def test_emit_not_called_when_cost_zero(self):
-        """_emit_advisory_usage is NOT called when SDK reports zero cost."""
+        """emit_review_usage is NOT called when SDK reports zero cost."""
         mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
         ctx = _FakeCtx()
-        with patch.object(mod, "_emit_advisory_usage") as mock_emit:
+        with patch.object(mod, "emit_review_usage") as mock_emit:
             cost_usd = 0.0
             if cost_usd > 0:
-                mod._emit_advisory_usage(ctx, "model-x", cost_usd, {}, "advisory_sdk")
+                mod.emit_review_usage(
+                    ctx,
+                    model="model-x",
+                    cost_usd=cost_usd,
+                    usage={},
+                    source="advisory_sdk",
+                )
             mock_emit.assert_not_called()
 
     def test_run_claude_advisory_emits_cost_via_patched_import(self, tmp_path):
-        """_run_claude_advisory calls _emit_advisory_usage when SDK result has cost_usd > 0.
+        """_run_claude_advisory calls emit_review_usage when SDK result has cost_usd > 0.
 
         claude_agent_sdk is not installed in the test environment, so we pre-register
         a stub in sys.modules before importing the gateway module.
@@ -498,11 +532,10 @@ class TestAdvisoryCallSiteCostTracking:
                               return_value=(["ouroboros/loop.py"], "pack text", [])), \
                  patch.object(mod, "_build_advisory_prompt", return_value="mock_prompt"), \
                  patch.object(mod, "check_worktree_readiness", return_value=[]), \
-                 patch.object(mod, "_emit_advisory_usage") as mock_emit:
+                 patch.object(mod, "emit_review_usage") as mock_emit:
                 mod._run_claude_advisory(pathlib.Path(tmp_path), "test commit", ctx)
                 mock_emit.assert_called()
-                call_args = mock_emit.call_args[0]
-                assert call_args[2] == 1.75  # cost_usd positional arg
+                assert mock_emit.call_args.kwargs["cost_usd"] == 1.75
         finally:
             if original_key:
                 os.environ["ANTHROPIC_API_KEY"] = original_key
@@ -533,7 +566,7 @@ class TestAdvisoryFallbackCostTracking:
         fake_usage = {"prompt_tokens": 100, "completion_tokens": 50, "cost": 0.05}
 
         with patch("ouroboros.llm.LLMClient") as mock_cls, \
-             patch.object(mod, "_emit_advisory_usage") as mock_emit:
+             patch.object(mod, "emit_review_usage") as mock_emit:
             inst = MagicMock()
             inst.chat.return_value = (
                 {"content": '[{"item":"code_quality","verdict":"PASS","reason":"ok"}]'},
@@ -542,15 +575,14 @@ class TestAdvisoryFallbackCostTracking:
             mock_cls.return_value = inst
             mod._llm_extract_advisory_items("narrative text with findings", ctx)
             mock_emit.assert_called_once()
-            call_args = mock_emit.call_args[0]
-            assert call_args[1] == mod._resolve_fallback_model()
+            assert mock_emit.call_args.kwargs["model"] == mod._resolve_fallback_model()
 
     def test_no_emit_when_ctx_not_toolcontext(self):
         """When ctx is not a ToolContext, emit must be skipped gracefully."""
         mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
 
         with patch("ouroboros.llm.LLMClient") as mock_cls, \
-             patch.object(mod, "_emit_advisory_usage") as mock_emit:
+             patch.object(mod, "emit_review_usage") as mock_emit:
             inst = MagicMock()
             inst.chat.return_value = (
                 {"content": '[{"item":"code_quality","verdict":"PASS","reason":"ok"}]'},

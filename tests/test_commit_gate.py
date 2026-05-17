@@ -4,7 +4,6 @@ Verifies (Phase 4):
 - New tools registered: pull_from_remote, restore_to_head, revert_commit
 - SAFETY_CRITICAL_PATHS blocks dangerous operations
 - Confirm gates prevent accidental destructive actions
-- also_stage parameter in repo_write_commit
 - Auto-tagging on version bump
 - Credential helper in git_ops (no token in remote URL)
 - New tools in CORE_TOOL_NAMES
@@ -142,12 +141,6 @@ def test_repo_commit_push_uses_shared_reviewed_stage_cycle():
     assert "_run_reviewed_stage_cycle" in source
 
 
-def test_repo_write_commit_uses_shared_reviewed_stage_cycle():
-    git_mod = _get_git_module()
-    source = inspect.getsource(git_mod._repo_write_commit)
-    assert "_run_reviewed_stage_cycle" in source
-
-
 # --- Protected-path checks ---
 
 def test_restore_to_head_blocks_protected_paths():
@@ -180,23 +173,6 @@ def test_restore_to_head_has_confirm_gate():
     assert "Call again with confirm=true" in source
 
 
-# --- also_stage ---
-
-def test_also_stage_in_repo_write_commit():
-    git_mod = _get_git_module()
-    sig = inspect.signature(git_mod._repo_write_commit)
-    assert "also_stage" in sig.parameters
-
-
-def test_also_stage_in_schema():
-    git_mod = _get_git_module()
-    tools = git_mod.get_tools()
-    rwc = next(t for t in tools if t.name == "repo_write_commit")
-    props = rwc.schema["parameters"]["properties"]
-    assert "also_stage" in props
-    assert props["also_stage"]["type"] == "array"
-
-
 # --- Auto-tagging ---
 # Removed in v5.15.x:
 #   test_auto_tag_function_exists (callable-existence check, no logic)
@@ -208,15 +184,14 @@ def test_also_stage_in_schema():
 def test_auto_tag_not_gated_by_test_warnings():
     """Auto-tagging must run unconditionally — not skipped when tests fail."""
     git_mod = _get_git_module()
-    for fn_name in ("_repo_write_commit", "_repo_commit_push"):
-        source = inspect.getsource(getattr(git_mod, fn_name))
-        # Find the line(s) that call _auto_tag_on_version_bump
-        for line in source.splitlines():
-            if "_auto_tag_on_version_bump" in line:
-                assert "if not test_warning" not in line, (
-                    f"{fn_name}: _auto_tag_on_version_bump must not be gated "
-                    f"by test_warning_ref — tags must always be created on VERSION bump"
-                )
+    source = inspect.getsource(git_mod._repo_commit_push)
+    # Find the line(s) that call _auto_tag_on_version_bump
+    for line in source.splitlines():
+        if "_auto_tag_on_version_bump" in line:
+            assert "if not test_warning" not in line, (
+                "_repo_commit_push: _auto_tag_on_version_bump must not be gated "
+                "by test_warning_ref — tags must always be created on VERSION bump"
+            )
 
 
 # --- Credential helper ---
@@ -297,15 +272,6 @@ def test_restore_to_head_blocks_safety_critical_full_restore():
     )
 
 
-def test_also_stage_blocks_safety_critical():
-    """also_stage must check protected paths before staging."""
-    git_mod = _get_git_module()
-    source = inspect.getsource(git_mod._repo_write_commit)
-    assert "protected_paths_in" in source, (
-        "repo_write_commit must check also_stage paths against the shared protected path policy"
-    )
-
-
 # --- Auto-push ---
 # test_auto_push_function_exists removed in v5.15.x — callable-existence
 # check superseded by the behavioral tests below that exercise _auto_push
@@ -314,11 +280,8 @@ def test_also_stage_blocks_safety_critical():
 
 def test_auto_push_called_in_commit_functions():
     git_mod = _get_git_module()
-    for fn_name in ("_repo_write_commit", "_repo_commit_push"):
-        source = inspect.getsource(getattr(git_mod, fn_name))
-        assert "_auto_push" in source, (
-            f"{fn_name} must call _auto_push after successful commit"
-        )
+    source = inspect.getsource(git_mod._repo_commit_push)
+    assert "_auto_push" in source, "_repo_commit_push must call _auto_push after successful commit"
 
 
 def test_auto_push_not_in_rollback_tools():
@@ -342,13 +305,10 @@ def test_auto_push_is_best_effort():
 def test_auto_push_outside_git_lock():
     """Auto-push call must happen AFTER _release_git_lock, not inside the try/finally."""
     git_mod = _get_git_module()
-    for fn_name in ("_repo_write_commit", "_repo_commit_push"):
-        source = inspect.getsource(getattr(git_mod, fn_name))
-        lock_release_pos = source.rfind("_release_git_lock")
-        push_pos = source.rfind("_auto_push")
-        assert lock_release_pos < push_pos, (
-            f"{fn_name}: _auto_push must come after _release_git_lock"
-        )
+    source = inspect.getsource(git_mod._repo_commit_push)
+    lock_release_pos = source.rfind("_release_git_lock")
+    push_pos = source.rfind("_auto_push")
+    assert lock_release_pos < push_pos, "_repo_commit_push: _auto_push must come after _release_git_lock"
 
 
 # --- Credential configuration (legacy token-in-URL migration retired) ---
@@ -429,7 +389,7 @@ def test_advisory_gate_in_repo_commit_push():
 
 
 def test_advisory_gate_lives_in_shared_reviewed_stage_cycle():
-    """Legacy repo_write_commit must inherit the advisory gate via the shared stage helper."""
+    """repo_commit must inherit the advisory gate via the shared stage helper."""
     git_mod = _get_git_module()
     source = inspect.getsource(git_mod._run_reviewed_stage_cycle)
     assert "_check_advisory_freshness" in source
@@ -919,11 +879,11 @@ def test_advisory_prompt_no_blocking_history_when_succeeded(tmp_path):
     subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True)
 
     state = rs_mod.AdvisoryReviewState()
-    state.last_commit_attempt = rs_mod.CommitAttemptRecord(
+    state.attempts = [rs_mod.CommitAttemptRecord(
         ts="2026-04-02T22:00:00",
         commit_message="test commit",
         status="succeeded",
-    )
+    )]
     rs_mod.save_state(drive_root, state)
 
     prompt = adv_mod._build_advisory_prompt(

@@ -145,7 +145,7 @@ def test_repo_commit_results_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "r" * 90000
     assert _truncate_tool_result(big, "repo_commit") == big
-    assert _truncate_tool_result(big, "repo_write_commit") == big
+    assert _truncate_tool_result(big, "repo_commit") == big
     assert _truncate_tool_result(big, "multi_model_review") == big
     assert _truncate_tool_result(big, "review_skill") == big
 

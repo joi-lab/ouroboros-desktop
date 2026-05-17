@@ -26,12 +26,6 @@ from ouroboros.runtime_mode_policy import (
     protected_paths_in,
     protected_write_block_message,
 )
-from ouroboros.tool_aliases import (
-    adapt_tool_args,
-    alias_schema,
-    aliases_for_canonical,
-    canonical_tool_name,
-)
 from ouroboros.tool_capabilities import CORE_TOOL_NAMES
 from ouroboros.utils import safe_relpath
 from ouroboros.contracts.task_constraint import TaskConstraint, normalize_task_constraint, resolve_payload_path
@@ -627,17 +621,11 @@ class ToolRegistry:
     def available_tools(self) -> List[str]:
         return [e.name for e in self._entries.values()]
 
-    def _schema_for_entry(self, entry: ToolEntry, *, alias: str = "") -> Dict[str, Any]:
-        schema = alias_schema(alias, entry.schema) if alias else entry.schema
-        return {"type": "function", "function": schema}
+    def _schema_for_entry(self, entry: ToolEntry) -> Dict[str, Any]:
+        return {"type": "function", "function": entry.schema}
 
     def _schemas_for_entry(self, entry: ToolEntry) -> List[Dict[str, Any]]:
-        schemas = [self._schema_for_entry(entry)]
-        schemas.extend(
-            self._schema_for_entry(entry, alias=alias)
-            for alias in aliases_for_canonical(entry.name)
-        )
-        return schemas
+        return [self._schema_for_entry(entry)]
 
     def schemas(self, core_only: bool = False) -> List[Dict[str, Any]]:
         built_in = [
@@ -706,11 +694,9 @@ class ToolRegistry:
     def get_schema_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Return the full schema for a specific tool."""
         requested = str(name or "").strip()
-        canonical = canonical_tool_name(requested)
-        entry = self._entries.get(canonical)
+        entry = self._entries.get(requested)
         if entry:
-            alias = requested if requested != canonical else ""
-            return self._schema_for_entry(entry, alias=alias)
+            return self._schema_for_entry(entry)
         try:
             from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
         except Exception:
@@ -755,7 +741,7 @@ class ToolRegistry:
 
     def get_timeout(self, name: str) -> int:
         """Return timeout_sec for the named tool (default 360)."""
-        entry = self._entries.get(canonical_tool_name(name))
+        entry = self._entries.get(str(name or "").strip())
         if entry is not None:
             return entry.timeout_sec
         # Phase 5: extension-registered tools carry their own timeout_sec
@@ -1031,7 +1017,7 @@ class ToolRegistry:
         if subcmd and subcmd.lower() not in _GIT_READONLY_SUBCOMMANDS:
             return (
                 f"⚠️ GIT_VIA_SHELL_BLOCKED: `git {subcmd}` must go through "
-                "repo_commit / repo_write_commit tools which enforce pre-commit "
+                "repo_commit which enforces pre-commit "
                 "checks. For read-only git: git_status, git_diff tools, or "
                 "run_shell with git log/show/diff/status."
             )
@@ -1120,9 +1106,8 @@ class ToolRegistry:
         return result
 
     def execute(self, name: str, args: Dict[str, Any]) -> str:
-        requested_name = str(name or "").strip()
-        name = canonical_tool_name(requested_name)
-        args = adapt_tool_args(requested_name, args)
+        name = str(name or "").strip()
+        args = dict(args or {})
         entry = self._entries.get(name)
         ext_tool = None
         try:
@@ -1223,7 +1208,6 @@ class ToolRegistry:
         _REPO_MUTATION_TOOLS = frozenset(
             {
                 "repo_write",
-                "repo_write_commit",
                 "repo_commit",
                 "str_replace_editor",
                 "claude_code_edit",
@@ -1335,8 +1319,8 @@ class ToolRegistry:
             )
 
         protected_write_paths = []
-        if name in ("repo_write_commit", "repo_write", "str_replace_editor"):
-            if name in ("repo_write_commit", "repo_write"):
+        if name in ("repo_write", "str_replace_editor"):
+            if name == "repo_write":
                 maybe_path = str(args.get("path", "") or "")
                 if maybe_path:
                     protected_write_paths.append(maybe_path)

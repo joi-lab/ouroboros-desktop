@@ -1,4 +1,4 @@
-"""Durable review/advisory state with typed attempt ledger and compatibility views.
+"""Durable review/advisory state with typed attempt ledger.
 
 State persists across task boundaries and restarts in
 ``~/Ouroboros/data/state/advisory_review.json``.
@@ -7,10 +7,6 @@ The modern state model is a ledger:
 - ``advisory_runs[]`` — advisory pre-review coverage for snapshots
 - ``attempts[]`` — reviewed mutative attempts with lifecycle/status metadata
 
-Compatibility views remain available for the current desktop workflow:
-- ``runs`` (alias of ``advisory_runs``)
-- ``last_commit_attempt``
-- ``blocking_history``
 - ``open_obligations``
 """
 
@@ -39,7 +35,6 @@ _LOCK_RELPATH = "locks/advisory_review.lock"
 _STATE_SCHEMA_VERSION = 3
 _MAX_RUN_HISTORY = 10
 _MAX_ATTEMPT_HISTORY = 50
-_MAX_BLOCKING_HISTORY = 10
 _MAX_COMMIT_READINESS_DEBTS = 50
 _DEFAULT_TOOL_NAME = "repo_commit"
 _DEFAULT_ADVISORY_TOOL_NAME = "advisory_pre_review"
@@ -228,8 +223,6 @@ class AdvisoryReviewState:
     state_version: int = _STATE_SCHEMA_VERSION
     advisory_runs: List[AdvisoryRunRecord] = field(default_factory=list)
     attempts: List[CommitAttemptRecord] = field(default_factory=list)
-    last_commit_attempt: Optional[CommitAttemptRecord] = field(default=None)
-    blocking_history: List[CommitAttemptRecord] = field(default_factory=list)
     open_obligations: List[ObligationItem] = field(default_factory=list)
     next_obligation_seq: int = 1
     commit_readiness_debts: List[CommitReadinessDebtItem] = field(default_factory=list)
@@ -238,20 +231,11 @@ class AdvisoryReviewState:
     last_stale_reason: str = ""
     last_stale_repo_key: str = ""
 
-    @property
-    def runs(self) -> List[AdvisoryRunRecord]:
-        """Backward-compatible alias used by existing callers/tests."""
-        return self.advisory_runs
-
-    @runs.setter
-    def runs(self, value: List[AdvisoryRunRecord]) -> None:
-        self.advisory_runs = list(value or [])
-
     def latest(self) -> Optional[AdvisoryRunRecord]:
         return self.advisory_runs[-1] if self.advisory_runs else None
 
     def latest_attempt(self) -> Optional[CommitAttemptRecord]:
-        return self.attempts[-1] if self.attempts else self.last_commit_attempt
+        return self.attempts[-1] if self.attempts else None
 
     def latest_attempt_for(
         self,
@@ -452,13 +436,11 @@ class AdvisoryReviewState:
             attempt.finished_ts = now
 
         merged = self._upsert_attempt(attempt)
-        self.last_commit_attempt = merged
 
         if merged.status == "blocked" or merged.blocked:
             merged.blocked = True
             merged.obligation_ids = self._update_obligations_from_attempt(merged)
             self._upsert_attempt(merged)
-            self._upsert_blocking_history(merged)
         elif merged.status == "succeeded":
             self.on_successful_commit(repo_key=merged.repo_key)
         self._sync_commit_readiness_debts(repo_key=merged.repo_key or None)
@@ -476,17 +458,6 @@ class AdvisoryReviewState:
         if len(self.attempts) > _MAX_ATTEMPT_HISTORY:
             self.attempts = self.attempts[-_MAX_ATTEMPT_HISTORY:]
         return attempt
-
-    def _upsert_blocking_history(self, attempt: CommitAttemptRecord) -> None:
-        key = _attempt_identity_tuple(attempt)
-        for idx, existing in enumerate(self.blocking_history):
-            if _attempt_identity_tuple(existing) == key:
-                self.blocking_history[idx] = attempt
-                break
-        else:
-            self.blocking_history.append(attempt)
-        if len(self.blocking_history) > _MAX_BLOCKING_HISTORY:
-            self.blocking_history = self.blocking_history[-_MAX_BLOCKING_HISTORY:]
 
     def _allocate_obligation_id(self) -> str:
         used = {
@@ -763,52 +734,6 @@ class AdvisoryReviewState:
 
         return list(observations.values())
 
-    def _synthesize_missing_debts_from_observations(self, *, repo_key: str | None = None) -> None:
-        """Append debt records for observations that have no matching durable debt yet.
-
-        Unlike the full `_sync_commit_readiness_debts`, this helper NEVER verifies
-        existing debt and NEVER bumps counters on matching debt. It only fills the
-        legacy-upgrade gap: a schema-v2 state loaded from disk has no
-        `commit_readiness_debts` field, but its attempts/history already imply that
-        debt should exist. Used by `_load_state_unlocked` to give upgraded repos a
-        correct `retry_anchor=commit_readiness_debt` on first read without
-        accidentally sweeping hand-injected or drive-replayed debt.
-        """
-        now = _utc_now()
-        debts = _commit_readiness_debts_view(self)
-        for debt in debts:
-            self._hydrate_commit_readiness_debt(debt)
-        existing_keys = {
-            (debt.repo_key, debt.fingerprint or debt.debt_id)
-            for debt in debts
-        }
-        for item in self._build_commit_readiness_debt_observations(repo_key=repo_key):
-            key = (
-                str(item.get("repo_key", "") or _LEGACY_CURRENT_REPO_KEY),
-                str(item.get("fingerprint", "") or ""),
-            )
-            if key in existing_keys:
-                continue
-            debts.append(CommitReadinessDebtItem(
-                debt_id=self._allocate_commit_readiness_debt_id(),
-                category=str(item.get("category", "") or ""),
-                summary=str(item.get("summary", "") or ""),
-                severity=str(item.get("severity", "warning") or "warning"),
-                status="detected",
-                repo_key=str(item.get("repo_key", "") or _LEGACY_CURRENT_REPO_KEY),
-                fingerprint=str(item.get("fingerprint", "") or ""),
-                title=str(item.get("title", "Commit readiness debt") or "Commit readiness debt"),
-                source=str(item.get("source", "review_state") or "review_state"),
-                source_obligation_ids=[str(x) for x in (item.get("source_obligation_ids") or [])],
-                evidence=[str(x) for x in (item.get("evidence") or [])][:5],
-                first_seen_at=now,
-                last_seen_at=now,
-                updated_at=now,
-                occurrence_count=1,
-                consecutive_observations=1,
-            ))
-            existing_keys.add(key)
-
     def _sync_commit_readiness_debts(self, *, repo_key: str | None = None) -> None:
         now = _utc_now()
         debts = _commit_readiness_debts_view(self)
@@ -1057,22 +982,10 @@ class AdvisoryReviewState:
             )
         ]
 
-    def get_blocking_history(self, repo_key: str | None = None) -> List[CommitAttemptRecord]:
-        exact_match_exists = _repo_scope_exact_match_exists(self.blocking_history, repo_key)
-        return [
-            attempt for attempt in self.blocking_history
-            if _repo_scope_matches(
-                attempt.repo_key,
-                repo_key,
-                exact_match_exists=exact_match_exists,
-            )
-        ]
-
     def on_successful_commit(self, repo_key: str | None = None) -> None:
         now = _utc_now()
         if repo_key is None:
             self.open_obligations = []
-            self.blocking_history = []
             self.last_stale_from_edit_ts = ""
             self.last_stale_reason = ""
             self.last_stale_repo_key = ""
@@ -1092,15 +1005,6 @@ class AdvisoryReviewState:
                 ob.repo_key,
                 repo_key,
                 exact_match_exists=exact_obligation_match,
-            )
-        ]
-        exact_history_match = _repo_scope_exact_match_exists(self.blocking_history, repo_key)
-        self.blocking_history = [
-            attempt for attempt in self.blocking_history
-            if not _repo_scope_matches(
-                attempt.repo_key,
-                repo_key,
-                exact_match_exists=exact_history_match,
             )
         ]
         if self.last_stale_repo_key in ("", repo_key):
@@ -1149,18 +1053,6 @@ class AdvisoryReviewState:
                 + ["Previous reviewed attempt auto-expired after exceeding TTL+grace."]
             )
             expired.append(item)
-
-        if expired and self.last_commit_attempt:
-            expired_keys = {_attempt_identity_tuple(item) for item in expired}
-            if _attempt_identity_tuple(self.last_commit_attempt) in expired_keys:
-                replacement = self.latest_attempt_for(
-                    repo_key=self.last_commit_attempt.repo_key,
-                    tool_name=self.last_commit_attempt.tool_name,
-                    task_id=self.last_commit_attempt.task_id,
-                    attempt=self.last_commit_attempt.attempt,
-                )
-                if replacement is not None:
-                    self.last_commit_attempt = replacement
 
         return expired
 
@@ -1281,9 +1173,7 @@ def _load_state_unlocked(drive_root: pathlib.Path) -> AdvisoryReviewState:
     if not isinstance(data, dict):
         return AdvisoryReviewState()
 
-    raw_runs = data.get("advisory_runs")
-    if raw_runs is None:
-        raw_runs = data.get("runs") or []
+    raw_runs = data.get("advisory_runs") or []
     advisory_runs = [_record_from_dict(r) for r in (raw_runs or []) if isinstance(r, dict)]
 
     attempts = [
@@ -1292,15 +1182,6 @@ def _load_state_unlocked(drive_root: pathlib.Path) -> AdvisoryReviewState:
         if isinstance(item, dict)
     ]
 
-    last_commit = None
-    if isinstance(data.get("last_commit_attempt"), dict):
-        last_commit = _commit_attempt_from_dict(data["last_commit_attempt"])
-
-    blocking_history = [
-        _commit_attempt_from_dict(item)
-        for item in (data.get("blocking_history") or [])
-        if isinstance(item, dict)
-    ]
     open_obligations = [
         _obligation_from_dict(item)
         for item in (data.get("open_obligations") or [])
@@ -1316,8 +1197,6 @@ def _load_state_unlocked(drive_root: pathlib.Path) -> AdvisoryReviewState:
         state_version=_coerce_int(data.get("state_version", data.get("schema_version", _STATE_SCHEMA_VERSION))),
         advisory_runs=advisory_runs,
         attempts=attempts,
-        last_commit_attempt=last_commit,
-        blocking_history=blocking_history,
         open_obligations=open_obligations,
         next_obligation_seq=_coerce_int(
             data.get("next_obligation_seq", _infer_next_prefixed_sequence(open_obligations, "obl-")),
@@ -1333,17 +1212,7 @@ def _load_state_unlocked(drive_root: pathlib.Path) -> AdvisoryReviewState:
         last_stale_repo_key=str(data.get("last_stale_repo_key", "")),
     )
 
-    if not state.attempts:
-        recovered: List[CommitAttemptRecord] = []
-        if state.last_commit_attempt:
-            recovered.append(state.last_commit_attempt)
-        for item in state.blocking_history:
-            if _attempt_identity_tuple(item) not in {_attempt_identity_tuple(x) for x in recovered}:
-                recovered.append(item)
-        state.attempts = recovered
-
-    if state.attempts and state.last_commit_attempt is None:
-        state.last_commit_attempt = state.attempts[-1]
+    state.attempts.sort(key=_attempt_order_key)
 
     state._coalesce_open_obligations()
     state.next_obligation_seq = max(
@@ -1356,22 +1225,6 @@ def _load_state_unlocked(drive_root: pathlib.Path) -> AdvisoryReviewState:
         int(state.next_commit_readiness_debt_seq or 1),
         _infer_next_prefixed_sequence(state.commit_readiness_debts, "crd-"),
     )
-
-    # Legacy-upgrade safety: a schema-v2 state file has no `commit_readiness_debts`
-    # field, but may already carry repeated `blocking_history` / `open_obligations`
-    # that SHOULD synthesize a debt record. Without this synthesis, `review_status`
-    # and `build_review_context` would report `retry_anchor=null` on first load after
-    # upgrade, even though durable state already proves repeated blockers.
-    #
-    # Use `_synthesize_missing_debts_from_observations` (ADD-only) rather than the
-    # full `_sync_commit_readiness_debts` sweep: load is not the right moment to
-    # verify/close existing durable debt (no fresh blocking/success signal has
-    # happened since the file was persisted), only to fill in legacy gaps.
-    try:
-        state._synthesize_missing_debts_from_observations()
-    except Exception:
-        log.debug("legacy-upgrade debt synthesis failed (non-fatal)", exc_info=True)
-
     return state
 
 
@@ -1388,15 +1241,12 @@ def load_state(drive_root: pathlib.Path) -> AdvisoryReviewState:
 def _save_state_unlocked(drive_root: pathlib.Path, state: AdvisoryReviewState) -> None:
     path = drive_root / _STATE_RELPATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    _sync_compat_views(state)
+    _prepare_state_for_persistence(state)
     data: Dict[str, Any] = {
         "state_version": _STATE_SCHEMA_VERSION,
         "schema_version": _STATE_SCHEMA_VERSION,
         "advisory_runs": [asdict(r) for r in state.advisory_runs],
-        "runs": [asdict(r) for r in state.advisory_runs],
         "attempts": [asdict(r) for r in state.attempts],
-        "last_commit_attempt": asdict(state.last_commit_attempt) if state.last_commit_attempt else None,
-        "blocking_history": [asdict(r) for r in state.blocking_history],
         "open_obligations": [asdict(o) for o in state.open_obligations],
         "next_obligation_seq": int(state.next_obligation_seq or 1),
         "commit_readiness_debts": [asdict(item) for item in state.commit_readiness_debts],
@@ -1588,7 +1438,7 @@ def format_status_section(state: AdvisoryReviewState,
     repo_key = make_repo_key(repo_dir) if repo_dir is not None else None
     advisory_runs = state.filter_advisory_runs(repo_key=repo_key) if repo_key is not None else list(state.advisory_runs)
     attempts = state.filter_attempts(repo_key=repo_key) if repo_key is not None else list(state.attempts)
-    last_attempt = state.latest_attempt_for(repo_key=repo_key) if repo_key is not None else state.last_commit_attempt
+    last_attempt = state.latest_attempt_for(repo_key=repo_key) if repo_key is not None else state.latest_attempt()
     open_obs = state.get_open_obligations(repo_key=repo_key)
     open_debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
 
@@ -1751,6 +1601,21 @@ def _attempt_identity_tuple(attempt: CommitAttemptRecord) -> tuple[str, str, str
     )
 
 
+def _attempt_order_key(attempt: CommitAttemptRecord) -> tuple[float, int, str]:
+    ts_value = (
+        str(getattr(attempt, "finished_ts", "") or "")
+        or str(getattr(attempt, "updated_ts", "") or "")
+        or str(getattr(attempt, "started_ts", "") or "")
+        or str(getattr(attempt, "ts", "") or "")
+    )
+    ts_epoch = _parse_iso_ts(ts_value)
+    return (
+        ts_epoch if ts_epoch is not None else 0.0,
+        int(getattr(attempt, "attempt", 0) or 0),
+        ts_value,
+    )
+
+
 def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -1861,8 +1726,8 @@ def _dedupe_strings(items: List[str]) -> List[str]:
     return deduped
 
 
-def _sync_compat_views(state: AdvisoryReviewState) -> None:
-    """Keep compatibility views and ledger in sync before persistence."""
+def _prepare_state_for_persistence(state: AdvisoryReviewState) -> None:
+    """Normalize ledgers and counters before persistence."""
     state._coalesce_open_obligations()
     debts = _commit_readiness_debts_view(state)
     for debt in debts:
@@ -1877,11 +1742,6 @@ def _sync_compat_views(state: AdvisoryReviewState) -> None:
         int(state.next_commit_readiness_debt_seq or 1),
         _infer_next_prefixed_sequence(debts, "crd-"),
     )
-    if state.last_commit_attempt is not None:
-        state._upsert_attempt(state.last_commit_attempt)
-    elif state.attempts:
-        state.last_commit_attempt = state.attempts[-1]
-
 
 def _resolve_mutation_repo_keys(
     mutation_root: pathlib.Path | None,

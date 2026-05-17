@@ -23,34 +23,16 @@ import {
     emitSkillLifecycle,
     escapeHtmlAttr as escapeHtml,
     fetchJson,
-    renderMarkdownSafe as renderMarkdownSafeShared,
+    grantReady,
+    isRateLimitError,
     renderSkillRepairPrompt,
     safeExternalHrefAttr,
 } from './utils.js';
-
-function isRateLimitError(message) {
-    const text = String(message || '').toLowerCase();
-    return text.includes('rate limit') || text.includes('too many requests') || text.includes('http 429');
-}
 
 function installErrorCopy(message) {
     return isRateLimitError(message)
         ? `${message} Click Install again later to retry.`
         : message;
-}
-
-// ``renderMarkdownSafe`` and ``safeExternalUrl`` previously had local
-// copies here.  They live in ``utils.js`` now (single source of truth for
-// publisher-supplied markdown + untrusted href validation across
-// marketplace.js, skills.js, widgets.js, and ouroboroshub.js). We keep
-// thin local aliases so the marketplace-specific defaults — empty-state
-// HTML and the ``marketplace-skillmd`` fallback ``<pre>`` class — stay
-// declared next to the call sites that depend on them.
-function renderMarkdownSafe(rawMd) {
-    return renderMarkdownSafeShared(rawMd, {
-        emptyHtml: '<div class="muted"><i>empty</i></div>',
-        preClass: 'marketplace-skillmd',
-    });
 }
 
 const safeExternalUrl = safeExternalHrefAttr;
@@ -94,7 +76,6 @@ function paneTemplate({ includeControls = true } = {}) {
             <div id="mp-results" class="marketplace-results"></div>
             <div id="mp-pagination" class="marketplace-pagination" hidden></div>
         </div>
-        <div id="mp-modal-host"></div>
     `;
 }
 
@@ -105,10 +86,6 @@ function statusBadgeForReview(status) {
         : status === 'blockers' ? 'danger'
         : 'muted';
     return `<span class="skills-badge skills-badge-${tone}">${escapeHtml(status || 'pending')}</span>`;
-}
-
-function grantReady(installed) {
-    return !installed?.grants || installed.grants.all_granted !== false;
 }
 
 function reviewReady(installed) {
@@ -307,12 +284,11 @@ function summaryCard(summary, installedMap, isPlugin) {
         ? ''
         : isInstalled
             ? `
-                <button class="btn btn-default" data-mp-preview="${escapeHtml(slug)}">Details</button>
                 ${updateAvailable ? `<button class="btn btn-default" data-mp-update="${escapeHtml(slug)}">Update</button>` : ''}
                 ${installed.enabled && installed.type === 'extension' ? `<button class="btn btn-default" data-mp-action="disable" data-slug="${escapeHtml(slug)}">Disable</button>` : ''}
                 <button class="btn btn-default" data-mp-uninstall="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || '')}">Uninstall</button>
             `
-            : `<button class="btn btn-default" data-mp-preview="${escapeHtml(slug)}">Details</button>`;
+            : '';
     const buttons = `
         <div class="marketplace-primary-action">${primaryButton}</div>
         <div class="marketplace-secondary-actions">${secondaryButtons}</div>
@@ -481,236 +457,6 @@ async function runSearch(state, { signal } = {}) {
 
 
 // ---------------------------------------------------------------------------
-// Detail modal
-// ---------------------------------------------------------------------------
-
-
-function modalTemplate(title) {
-    return `
-        <div class="marketplace-modal-backdrop" data-mp-modal>
-            <div class="marketplace-modal">
-                <div class="marketplace-modal-head">
-                    <strong>${escapeHtml(title)}</strong>
-                    <button class="btn btn-default" data-mp-modal-close>Close</button>
-                </div>
-                <div class="marketplace-modal-body" data-mp-modal-body>
-                    <div class="muted">Loading…</div>
-                </div>
-                <div class="marketplace-modal-actions" data-mp-modal-actions></div>
-            </div>
-        </div>
-    `;
-}
-
-
-function renderManifestTable(translated) {
-    if (!translated || typeof translated !== 'object') return '';
-    const rows = Object.entries(translated)
-        .filter(([, v]) => v !== '' && v !== null && (Array.isArray(v) ? v.length : true))
-        .map(([k, v]) => {
-            let value;
-            if (Array.isArray(v)) {
-                value = v.length
-                    ? `<ul>${v.map((item) => `<li><code>${escapeHtml(typeof item === 'string' ? item : JSON.stringify(item))}</code></li>`).join('')}</ul>`
-                    : '<i>—</i>';
-            } else if (typeof v === 'object') {
-                value = `<code>${escapeHtml(JSON.stringify(v))}</code>`;
-            } else {
-                value = `<code>${escapeHtml(String(v))}</code>`;
-            }
-            return `<tr><th>${escapeHtml(k)}</th><td>${value}</td></tr>`;
-        });
-    return `<table class="marketplace-manifest-table">${rows.join('')}</table>`;
-}
-
-
-function renderAdapterNotes(adapter) {
-    if (!adapter) return '';
-    const blockers = (adapter.blockers || [])
-        .map((msg) => `<li>${escapeHtml(msg)}</li>`)
-        .join('');
-    const warnings = (adapter.warnings || [])
-        .map((msg) => `<li>${escapeHtml(msg)}</li>`)
-        .join('');
-    const blockHtml = blockers
-        ? `<div class="marketplace-block-list"><h4>Blockers</h4><ul>${blockers}</ul></div>`
-        : '';
-    const warnHtml = warnings
-        ? `<div class="marketplace-warn-list"><h4>Warnings</h4><ul>${warnings}</ul></div>`
-        : '';
-    return blockHtml + warnHtml;
-}
-
-
-async function openDetailModal(host, slug, options) {
-    const existing = host.querySelector('[data-mp-modal]');
-    if (existing) existing.remove();
-    host.insertAdjacentHTML('beforeend', modalTemplate(slug));
-    const backdrop = host.querySelector('[data-mp-modal]');
-    const body = backdrop.querySelector('[data-mp-modal-body]');
-    const actions = backdrop.querySelector('[data-mp-modal-actions]');
-    backdrop.addEventListener('click', (event) => {
-        if (event.target === backdrop) backdrop.remove();
-    });
-    backdrop.querySelector('[data-mp-modal-close]').addEventListener('click', () => backdrop.remove());
-
-    const initialVersion = options?.preselectVersion || null;
-    let previewToken = 0;
-
-    async function runInfo() {
-        body.innerHTML = '<div class="muted">Loading details…</div>';
-        actions.innerHTML = '';
-        try {
-            const summary = await fetchJson(`/api/marketplace/clawhub/info/${encodeURIComponent(slug)}`);
-            const versions = Array.from(new Set([...(summary.versions || []), summary.latest_version].filter(Boolean)));
-            const versionOptions = versions
-                .map((v) => `<option value="${escapeHtml(v)}"${v === summary.latest_version ? ' selected' : ''}>${escapeHtml(v)}</option>`)
-                .join('');
-            const homepageHref = safeExternalUrl(summary.homepage);
-            body.innerHTML = `
-                <section>
-                    <h3>${escapeHtml(summary.display_name || summary.name || slug)}</h3>
-                    <div class="muted">${escapeHtml(summary.summary || summary.description || '')}</div>
-                    <div class="marketplace-modal-meta muted">
-                        <label class="marketplace-version-pin">
-                            Version:
-                            <select data-mp-modal-version-select>
-                                ${versionOptions || `<option value="${escapeHtml(summary.latest_version || '')}">${escapeHtml(summary.latest_version || '—')}</option>`}
-                            </select>
-                        </label>
-                        ${summary.license ? `<span>license: ${escapeHtml(summary.license)}</span>` : ''}
-                        ${homepageHref ? `<a href="${homepageHref}" target="_blank" rel="noopener noreferrer">homepage</a>` : ''}
-                    </div>
-                    <p class="muted">Use Inspect package to download and adapt the archive before installing.</p>
-                </section>
-            `;
-            const versionSelect = body.querySelector('[data-mp-modal-version-select]');
-            actions.innerHTML = `
-                <button class="btn btn-default" data-mp-inspect-package>Inspect package</button>
-                <button class="btn btn-primary" data-mp-modal-install="${escapeHtml(slug)}" data-version="${escapeHtml(versionSelect?.value || summary.latest_version || '')}">Install + auto-review</button>
-            `;
-            versionSelect?.addEventListener('change', () => {
-                const install = actions.querySelector('[data-mp-modal-install]');
-                if (install) install.dataset.version = versionSelect.value || '';
-            });
-            actions.querySelector('[data-mp-inspect-package]')?.addEventListener('click', () => {
-                runPreview(versionSelect?.value || initialVersion).catch((err) => console.warn('marketplace: preview failed', err));
-            });
-        } catch (err) {
-            body.innerHTML = `<div class="skills-load-error">Failed to load details: ${escapeHtml(err.message)}</div>`;
-        }
-    }
-
-    async function runPreview(version) {
-        const myToken = ++previewToken;
-        body.innerHTML = '<div class="muted">Loading…</div>';
-        actions.innerHTML = '';
-        let preview;
-        try {
-            const url = version
-                ? `/api/marketplace/clawhub/preview/${encodeURIComponent(slug)}?version=${encodeURIComponent(version)}`
-                : `/api/marketplace/clawhub/preview/${encodeURIComponent(slug)}`;
-            preview = await fetchJson(url);
-        } catch (err) {
-            if (myToken !== previewToken) return;
-            body.innerHTML = `
-                <div class="skills-load-error">Failed to load deep preview: ${escapeHtml(err.message)}</div>
-                <button class="btn btn-default" data-mp-retry-preview>Retry preview</button>
-            `;
-            body.querySelector('[data-mp-retry-preview]')?.addEventListener('click', () => runPreview(version));
-            return;
-        }
-        if (myToken !== previewToken) {
-            // A newer version was requested while we were waiting —
-            // discard this stale response.
-            return;
-        }
-        const summary = preview.summary || {};
-        const adapter = preview.adapter || {};
-        const archive = preview.archive || {};
-        const previewedVersion = preview.version || version || summary.latest_version || '';
-
-        const fileList = (preview.staging?.files || [])
-            .map((f) => `<li><code>${escapeHtml(f)}</code></li>`)
-            .join('');
-
-        // Version-pinning dropdown: ``summary.versions`` is the
-        // registry-supplied set; we always include the previewed
-        // version even if the registry omitted it from the list.
-        const allVersions = Array.from(new Set([
-            ...(summary.versions || []),
-            previewedVersion,
-        ].filter(Boolean)));
-        const versionOptions = allVersions
-            .map((v) => `<option value="${escapeHtml(v)}"${v === previewedVersion ? ' selected' : ''}>${escapeHtml(v)}</option>`)
-            .join('');
-        const homepageHref = safeExternalUrl(summary.homepage);
-
-        const skillMdRaw = adapter.openclaw_md_text || adapter.skill_md_text || '';
-        const skillMdHtml = renderMarkdownSafe(skillMdRaw);
-
-        body.innerHTML = `
-            <section>
-                <h3>${escapeHtml(summary.display_name || slug)}</h3>
-                <div class="muted">${escapeHtml(summary.summary || summary.description || '')}</div>
-                <div class="marketplace-modal-meta muted">
-                    <label class="marketplace-version-pin">
-                        Version:
-                        <select data-mp-modal-version-select>
-                            ${versionOptions || `<option value="${escapeHtml(previewedVersion)}">${escapeHtml(previewedVersion || '—')}</option>`}
-                        </select>
-                    </label>
-                    <span>sha256: <code>${escapeHtml((archive.sha256 || '').slice(0, 16))}…</code></span>
-                    <span>files: ${preview.staging?.file_count ?? 0}</span>
-                    <span>size: ${Number(archive.size_bytes || 0).toLocaleString()} bytes</span>
-                    ${summary.license ? `<span>license: ${escapeHtml(summary.license)}</span>` : ''}
-                    ${homepageHref ? `<a href="${homepageHref}" target="_blank" rel="noopener noreferrer">homepage</a>` : ''}
-                </div>
-            </section>
-            <section>
-                <h4>Translated manifest</h4>
-                ${renderManifestTable(adapter.translated_manifest)}
-            </section>
-            <section>
-                ${renderAdapterNotes(adapter)}
-            </section>
-            <section>
-                <h4>Files</h4>
-                <ul class="marketplace-file-list">${fileList || '<li><i>no files</i></li>'}</ul>
-            </section>
-            <section>
-                <h4>SKILL.md preview</h4>
-                <p class="muted">Original OpenClaw frontmatter preserved on disk as <code>SKILL.openclaw.md</code>; Ouroboros runs the adapter-translated copy.</p>
-                <div class="marketplace-skillmd-rendered">${skillMdHtml}</div>
-            </section>
-        `;
-
-        const versionSelect = body.querySelector('[data-mp-modal-version-select]');
-        if (versionSelect) {
-            versionSelect.addEventListener('change', () => {
-                runPreview(versionSelect.value).catch((err) => {
-                    console.warn('marketplace: version reselect failed', err);
-                });
-            });
-        }
-
-        const installable = preview.adapter?.ok && !preview.staging?.is_plugin;
-        actions.innerHTML = installable
-            ? `<button class="btn btn-primary"
-                       data-mp-modal-install="${escapeHtml(slug)}"
-                       data-version="${escapeHtml(previewedVersion)}">
-                 Install v${escapeHtml(previewedVersion)} + auto-review
-               </button>`
-            : `<div class="muted">${preview.staging?.is_plugin
-                ? 'This is an OpenClaw Node plugin and cannot be installed.'
-                : 'Install blocked by adapter — see Blockers above.'}</div>`;
-    }
-
-    await runInfo();
-}
-
-
-// ---------------------------------------------------------------------------
 // Public init
 // ---------------------------------------------------------------------------
 
@@ -740,7 +486,6 @@ export function initMarketplace(pane, controlsHost = null) {
     const searchBtn = controlsRoot.querySelector('[data-mp-search]');
     const resultsHost = pane.querySelector('#mp-results');
     const paginationHost = pane.querySelector('#mp-pagination');
-    const modalHost = pane.querySelector('#mp-modal-host');
 
     let debounceTimer = null;
     // v5.7.0: search race control. ``activeController`` is the AbortController
@@ -1013,15 +758,9 @@ export function initMarketplace(pane, controlsHost = null) {
     });
 
     resultsHost.addEventListener('click', async (event) => {
-        const previewBtn = event.target.closest('[data-mp-preview]');
         const actionBtn = event.target.closest('[data-mp-action]');
-        const installBtn = event.target.closest('[data-mp-install]');
         const updateBtn = event.target.closest('[data-mp-update]');
         const uninstallBtn = event.target.closest('[data-mp-uninstall]');
-        if (previewBtn) {
-            await openDetailModal(modalHost, previewBtn.dataset.mpPreview);
-            return;
-        }
         if (actionBtn) {
             const slug = actionBtn.dataset.slug;
             const action = actionBtn.dataset.mpAction;
@@ -1051,36 +790,6 @@ export function initMarketplace(pane, controlsHost = null) {
                 // action completions coalesce into one refresh, sharing
                 // the abort/token guards in refresh().
                 if (!failedMessage) scheduleRefresh(true);
-            }
-            return;
-        }
-        if (installBtn) {
-            installBtn.disabled = true;
-            const slug = installBtn.dataset.mpInstall;
-            showStatus(pane, `Installing ${slug}…`, 'muted');
-            try {
-                const result = await fetchJson('/api/marketplace/clawhub/install', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slug, auto_review: true }),
-                });
-                if (!result.ok) {
-                    showStatus(pane, `Install failed: ${installErrorCopy(result.error)}`, isRateLimitError(result.error) ? 'warn' : 'danger');
-                } else if (result.review_error) {
-                    showStatus(
-                        pane,
-                        `Installed ${slug}; review could not finish (${result.review_error}). The card will offer Review after refresh; Repair appears only for load errors or failed reviews.`,
-                        'warn',
-                    );
-                } else {
-                    showStatus(pane, `Installed ${slug} — review ${result.review_status}`, reviewStatusTone(result.review_status));
-                    emitSkillLifecycle('install', result.sanitized_name || slug, result);
-                }
-            } catch (err) {
-                showStatus(pane, `Install error: ${installErrorCopy(err.message)}`, isRateLimitError(err.message) ? 'warn' : 'danger');
-            } finally {
-                installBtn.disabled = false;
-                scheduleRefresh(true);
             }
             return;
         }
@@ -1174,45 +883,6 @@ export function initMarketplace(pane, controlsHost = null) {
                 uninstallBtn.disabled = false;
                 scheduleRefresh(true);
             }
-        }
-    });
-
-    modalHost.addEventListener('click', async (event) => {
-        const installBtn = event.target.closest('[data-mp-modal-install]');
-        if (!installBtn) return;
-        const slug = installBtn.dataset.mpModalInstall;
-        const pinnedVersion = installBtn.dataset.version || '';
-        installBtn.disabled = true;
-        try {
-            const body = pinnedVersion
-                ? { slug, version: pinnedVersion, auto_review: true }
-                : { slug, auto_review: true };
-            const result = await fetchJson('/api/marketplace/clawhub/install', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            if (!result.ok) {
-                showStatus(pane, `Install failed: ${installErrorCopy(result.error)}`, isRateLimitError(result.error) ? 'warn' : 'danger');
-            } else if (result.review_error) {
-                showStatus(
-                    pane,
-                    `Installed ${slug}; review could not finish (${result.review_error}). The card will offer Review after refresh; Repair appears only for load errors or failed reviews.`,
-                    'danger',
-                );
-                const backdrop = modalHost.querySelector('[data-mp-modal]');
-                if (backdrop) backdrop.remove();
-            } else {
-                showStatus(pane, `Installed ${slug} — review ${result.review_status}`, reviewStatusTone(result.review_status));
-                emitSkillLifecycle('install', result.sanitized_name || slug, result);
-                const backdrop = modalHost.querySelector('[data-mp-modal]');
-                if (backdrop) backdrop.remove();
-            }
-        } catch (err) {
-            showStatus(pane, `Install error: ${err.message}`, 'danger');
-        } finally {
-            installBtn.disabled = false;
-            scheduleRefresh(true);
         }
     });
 

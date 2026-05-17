@@ -113,23 +113,14 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
     return round(cost, 6)
 
 
-def _normalize_model_name(model: str) -> str:
-    text = str(model or "").strip()
-    if text.endswith(" (local)"):
-        return text[:-8]
-    return text
-
-
-def _normalize_model_identity(model: str) -> str:
-    return normalize_model_identity(_normalize_model_name(model))
-
-
 def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
     """Infer which API key is used based on model name."""
     provider_name = str(provider or "").strip().lower()
     if provider_name in {"local", "openrouter", "openai", "anthropic", "openai-compatible", "cloudru"}:
         return provider_name
-    raw_model = _normalize_model_name(model)
+    raw_model = str(model or "").strip()
+    if raw_model.endswith(" (local)"):
+        return "local"
     if raw_model.startswith("openai::"):
         return "openai"
     if raw_model.startswith("anthropic::"):
@@ -138,9 +129,7 @@ def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
         return "openai-compatible"
     if raw_model.startswith("cloudru::"):
         return "cloudru"
-    normalized = _normalize_model_identity(raw_model)
-    if str(model or "").endswith(" (local)"):
-        return "local"
+    normalized = normalize_model_identity(raw_model)
     if normalized.startswith("openai/"):
         return "openrouter"
     if normalized.startswith("openai-compatible/"):
@@ -167,7 +156,9 @@ def infer_provider_from_model(model: str) -> str:
     Used by review-pipeline emitters to ensure /api/cost-breakdown attribution
     is correct regardless of which provider the model actually routes through.
     """
-    raw = _normalize_model_name(str(model or ""))
+    raw = str(model or "").strip()
+    if raw.endswith(" (local)"):
+        raw = raw[:-8]
     if raw.startswith("anthropic::"):
         return "anthropic"
     if raw.startswith("openai::"):
@@ -181,7 +172,10 @@ def infer_provider_from_model(model: str) -> str:
 
 def infer_model_category(model: str) -> str:
     """Infer model category by comparing against configured model env vars."""
-    normalized = _normalize_model_identity(model)
+    model = str(model or "").strip()
+    if model.endswith(" (local)"):
+        model = model[:-8]
+    normalized = normalize_model_identity(model)
     configured = {
         "main": os.environ.get("OUROBOROS_MODEL", ""),
         "code": os.environ.get("OUROBOROS_MODEL_CODE", ""),
@@ -189,7 +183,7 @@ def infer_model_category(model: str) -> str:
         "fallback": os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
     }
     for cat, val in configured.items():
-        if val and normalized == _normalize_model_identity(val):
+        if val and normalized == normalize_model_identity(val):
             return cat
     return "other"
 

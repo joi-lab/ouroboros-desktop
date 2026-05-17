@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from ouroboros.utils import (
     sanitize_tool_result_for_log,
     truncate_review_artifact as _truncate_review_artifact,
+    utc_now_iso,
 )
 
 if TYPE_CHECKING:
@@ -49,6 +50,77 @@ SKILL_HOST_CONTEXT_FILES = (
     ("ouroboros/contracts/plugin_api.py", "python"),
     ("ouroboros/extension_ui_validation.py", "python"),
 )
+
+
+def emit_review_event(ctx: Any, event: dict) -> None:
+    """Emit a review event through event_queue with pending_events fallback."""
+    try:
+        payload = {"ts": utc_now_iso(), **dict(event or {})}
+        eq = getattr(ctx, "event_queue", None)
+        if eq is not None:
+            try:
+                eq.put_nowait(payload)
+                return
+            except Exception:
+                pass
+        pending = getattr(ctx, "pending_events", None)
+        if pending is not None:
+            pending.append(payload)
+    except Exception:
+        logger.debug("emit_review_event failed (non-critical)", exc_info=True)
+
+
+def emit_review_usage(
+    ctx: Any,
+    *,
+    model: str,
+    usage: dict | None,
+    source: str,
+    provider: str = "",
+    cost_usd: float | None = None,
+    session_id: str = "",
+    prompt_chars: int = 0,
+    extra: dict | None = None,
+) -> None:
+    """Emit a normalized llm_usage event for every review surface."""
+    try:
+        from ouroboros.pricing import infer_api_key_type, infer_model_category, infer_provider_from_model
+
+        usage_data = dict(usage or {})
+        prompt_tokens = int(usage_data.get("prompt_tokens", usage_data.get("input_tokens", 0)) or 0)
+        completion_tokens = int(usage_data.get("completion_tokens", usage_data.get("output_tokens", 0)) or 0)
+        cached_tokens = int(usage_data.get("cached_tokens", usage_data.get("cache_read_input_tokens", 0)) or 0)
+        cache_write_tokens = int(
+            usage_data.get("cache_write_tokens", usage_data.get("cache_creation_input_tokens", 0)) or 0
+        )
+        routed_provider = provider or infer_provider_from_model(model)
+        cost = cost_usd if cost_usd is not None else usage_data.get("cost", usage_data.get("total_cost", 0))
+        event = {
+            "type": "llm_usage",
+            "task_id": getattr(ctx, "task_id", "") or "",
+            "model": model,
+            "api_key_type": infer_api_key_type(model, routed_provider),
+            "model_category": infer_model_category(model),
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_tokens": cached_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "cost": cost or 0,
+            },
+            "provider": routed_provider,
+            "source": source,
+            "category": "review",
+        }
+        if session_id:
+            event["session_id"] = session_id
+        if prompt_chars:
+            event["prompt_chars"] = int(prompt_chars)
+        if extra:
+            event.update(dict(extra))
+        emit_review_event(ctx, event)
+    except Exception:
+        logger.debug("emit_review_usage failed (non-critical)", exc_info=True)
 
 
 def build_skill_host_context(repo_dir: Path | None = None) -> str:
@@ -225,6 +297,61 @@ _HISTORY_VERIFICATION_ONLY_RULE = (
     "Do NOT manufacture a new FAIL from historical text alone. Any new FAIL must be "
     "grounded in the CURRENT diff or CURRENT repository artifacts shown in this prompt."
 )
+
+
+def single_line(text: object) -> str:
+    return " ".join(str(text or "").split())
+
+
+def format_review_history_entry(entry: object, *, default_severity: str = "advisory") -> str:
+    if isinstance(entry, dict):
+        severity = str(entry.get("severity", default_severity) or default_severity).upper()
+        tags = [str(entry["tag"])] if entry.get("tag") else []
+        tags += [f"model={entry['model']}"] if entry.get("model") else []
+        tags += [f"obligation={entry['obligation_id']}"] if entry.get("obligation_id") else []
+        label = str(entry.get("item") or entry.get("reason") or "?")
+        reason = single_line(entry.get("reason", ""))
+        tag_prefix = " ".join(f"[{tag}]" for tag in tags)
+        return f"[{severity}] {tag_prefix} {label}: {reason}".strip()
+    return single_line(entry)
+
+
+def build_review_history_section(
+    history: list,
+    open_obligations: list | None = None,
+    *,
+    title: str = "## Previous review rounds",
+    include_commit_message: bool = True,
+    compact_labels: bool = False,
+) -> str:
+    if not history and not open_obligations:
+        return ""
+    lines = [f"{title}\n"]
+    for entry in history or []:
+        lines.append(f"### Round {entry.get('attempt', '?')}")
+        if include_commit_message and entry.get("commit_message"):
+            lines.append(f"Commit message: \"{entry['commit_message']}\"")
+        for key, label, default in (("critical", "CRITICAL", "critical"), ("advisory", "Advisory", "advisory")):
+            findings = entry.get(key) or []
+            if not findings:
+                continue
+            if not compact_labels:
+                lines.append(f"{label} findings:")
+            prefix = f"- {label}: " if compact_labels else "- "
+            lines.extend(
+                f"{prefix}{format_review_history_entry(finding, default_severity=default)}"
+                for finding in findings
+            )
+        lines.append("")
+
+    obligations_block = build_obligations_block(open_obligations)
+    if obligations_block:
+        lines.append(obligations_block)
+    lines.append(build_anti_thrashing_rules_section(
+        has_obligations=bool(open_obligations),
+        convergence_fires=bool(history and len(history) >= 2),
+    ))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -687,33 +814,26 @@ def build_blocking_findings_json_section(
         text, _ = redact_prompt_secrets(str(value or ""))
         return text
 
-    payload = {
-        "open_obligations": [],
-        "recent_blocking_attempts": [],
-    }
-    for ob in open_obligations:
-        payload["open_obligations"].append({
+    payload = {"open_obligations": [
+        {
             "obligation_id": getattr(ob, "obligation_id", ""),
             "item": getattr(ob, "item", ""),
             "severity": getattr(ob, "severity", ""),
             "reason": _sanitize_text(getattr(ob, "reason", "")),
             "source_attempt_ts": getattr(ob, "source_attempt_ts", ""),
             "source_attempt_msg": _sanitize_text(getattr(ob, "source_attempt_msg", ""), limit=200),
-        })
+        }
+        for ob in open_obligations
+    ], "recent_blocking_attempts": []}
 
     # Include ALL blocking attempts — no history_limit cap — so no finding is lost.
     for attempt in reversed(list(blocking_history or [])):
-        critical_findings = []
         # Include ALL critical findings per attempt — no [:6] cap.
-        for finding in list(getattr(attempt, "critical_findings", []) or []):
-            if isinstance(finding, dict):
-                sanitized = {}
-                for key, value in finding.items():
-                    if isinstance(value, str):
-                        sanitized[key] = _sanitize_text(value)
-                    else:
-                        sanitized[key] = value
-                critical_findings.append(sanitized)
+        critical_findings = [
+            {key: _sanitize_text(value) if isinstance(value, str) else value for key, value in finding.items()}
+            for finding in list(getattr(attempt, "critical_findings", []) or [])
+            if isinstance(finding, dict)
+        ]
         payload["recent_blocking_attempts"].append({
             "ts": getattr(attempt, "ts", ""),
             "tool_name": getattr(attempt, "tool_name", ""),
@@ -755,27 +875,27 @@ def _is_probably_binary(path: Path) -> bool:
 
     Returns False on any I/O error.
     """
-    import codecs
     try:
         with path.open("rb") as fh:
             sample = fh.read(_BINARY_SNIFF_BYTES)
     except Exception:
         return False
+    return _raw_bytes_binary(sample)
+
+
+def _raw_bytes_binary(sample: bytes) -> bool:
     if not sample:
         return False
     if b"\x00" in sample:
         return True
-    # Count only ASCII control chars (not whitespace, not high bytes)
-    # Tab(9), LF(10), CR(13) are valid in text.
     non_text = sum(
         1 for b in sample
         if b < 9 or (13 < b < 32) or b == 127
     )
     if non_text / len(sample) > 0.30:
         return True
-    # Incremental UTF-8 decode: passes final=False so a multi-byte char split
-    # at the sample boundary does not raise a false UnicodeDecodeError.
     try:
+        import codecs
         dec = codecs.getincrementaldecoder("utf-8")("strict")
         dec.decode(sample, final=False)
     except UnicodeDecodeError:
@@ -1053,23 +1173,7 @@ def build_head_snapshot_section(
                         f"{_FILE_SIZE_LIMIT:,} byte limit)*\n"
                     )
                     continue
-                # Full binary sniffer on raw bytes (mirrors _is_probably_binary logic):
-                # NUL byte, control-char ratio, or UTF-8 incremental decode failure.
-                import codecs as _codecs
-                sample = raw_bytes[:_BINARY_SNIFF_BYTES]
-                is_binary = False
-                if b"\x00" in sample:
-                    is_binary = True
-                else:
-                    non_text = sum(1 for b in sample if b < 9 or (13 < b < 32) or b == 127)
-                    if non_text / len(sample) > 0.30:
-                        is_binary = True
-                    else:
-                        try:
-                            _codecs.getincrementaldecoder("utf-8")("strict").decode(sample, final=False)
-                        except UnicodeDecodeError:
-                            is_binary = True
-                if is_binary:
+                if _raw_bytes_binary(raw_bytes[:_BINARY_SNIFF_BYTES]):
                     parts.append(f"### {rel}\n\n*(HEAD snapshot omitted — binary content detected)*\n")
                     continue
                 # Decode the full raw content for injection into prompt
@@ -1172,14 +1276,10 @@ def check_worktree_version_sync(repo_dir) -> str:
     Shared between the advisory path and any other caller that needs a
     worktree-level (pre-git-add) version consistency check.
     """
-    import re
     from pathlib import Path as _Path
     from ouroboros.tools.release_sync import (
-        _normalize_pep440,
-        _shields_escape,
-        extract_architecture_header_version,
-        extract_readme_badge_version,
         is_release_version,
+        version_carrier_desyncs,
     )
     repo_dir = _Path(repo_dir)
     try:
@@ -1189,31 +1289,15 @@ def check_worktree_version_sync(repo_dir) -> str:
         version_str = version_path.read_text(encoding="utf-8").strip()
         if not is_release_version(version_str):
             return ""
-        desync = []
         pyproject = repo_dir / "pyproject.toml"
-        if pyproject.exists():
-            pyproject_text = pyproject.read_text(encoding="utf-8")
-            pyproject_match = re.search(
-                r'^version\s*=\s*["\']([^"\']+)["\']',
-                pyproject_text,
-                re.MULTILINE,
-            )
-            if not pyproject_match or pyproject_match.group(1).strip() != _normalize_pep440(version_str):
-                desync.append("pyproject.toml")
         readme = repo_dir / "README.md"
-        if readme.exists():
-            readme_text = readme.read_text(encoding="utf-8")
-            badge_expected = f"version-{_shields_escape(version_str)}-green"
-            if (
-                extract_readme_badge_version(readme_text) != version_str
-                or badge_expected not in readme_text
-            ):
-                desync.append("README.md badge")
         arch = repo_dir / "docs" / "ARCHITECTURE.md"
-        if arch.exists():
-            arch_text = arch.read_text(encoding="utf-8")
-            if extract_architecture_header_version(arch_text) != version_str:
-                desync.append("ARCHITECTURE.md header")
+        desync = version_carrier_desyncs(
+            version_str,
+            pyproject_text=pyproject.read_text(encoding="utf-8") if pyproject.exists() else "",
+            readme_text=readme.read_text(encoding="utf-8") if readme.exists() else "",
+            arch_text=arch.read_text(encoding="utf-8") if arch.exists() else "",
+        )
         if desync:
             return f"VERSION={version_str} but {', '.join(desync)} differ. Sync version carriers before committing."
     except Exception:

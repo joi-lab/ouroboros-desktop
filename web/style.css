@@ -2433,8 +2433,6 @@ body {
   align-items: center;
 }
 
-/* v5.7.0: the embedded-Logs Clear button lives inside the filters row
-   (right-aligned) instead of in a duplicate inner page header. */
 .logs-inline-clear {
   margin-left: auto;
 }
@@ -3295,12 +3293,6 @@ body {
   padding-bottom: 2px;
 }
 
-/* v5.2.3: redesigned skill card — calmer hierarchy, single status
- * chip, real toggle switch, technical detail collapsed under a
- * disclosure. The previous wall-of-badges design overwhelmed users
- * with developer metadata (NATIVE / PASS / LIVE / ENABLED / GRANT
- * MISSING) competing for attention; this rewrite shows one chip per
- * card and folds everything else into "Show details". */
 .skills-card {
   border: 1px solid rgba(250, 250, 250, 0.08);
   border-radius: var(--radius);
@@ -3352,8 +3344,6 @@ body {
   min-width: 0;
 }
 
-/* v5.2.3: single status chip — the "summary verdict" of the skill.
- * Replaces the old badge cluster (NATIVE / PASS / LIVE / ENABLED). */
 .skills-status-chip {
   padding: 4px 10px;
   border-radius: 999px;
@@ -3398,13 +3388,6 @@ body {
   border-color: rgba(250, 250, 250, 0.12);
 }
 
-/* v5.2.3: iOS-style on/off toggle switch.
- * Replaces the previous Enable/Disable button so the on/off action
- * uses an affordance everyone recognizes. The native checkbox stays
- * keyboard-accessible; the visible track + thumb is purely
- * decorative (aria-hidden in the markup). The padding around the
- * track grows the click hit area to ~44x44 (WCAG 2.5.5) without
- * changing the visible track size. */
 .skills-switch {
   position: relative;
   display: inline-flex;
@@ -3550,9 +3533,6 @@ body {
   vertical-align: -1px;
 }
 
-/* v5.2.3: friendly "Access" panel for skills that need API key grants.
- * Replaces the previous developer-style line "core key grants:
- * requested OPENROUTER_API_KEY; granted none; missing: ..." */
 .skills-access {
   border: 1px solid rgba(250, 250, 250, 0.1);
   border-radius: var(--radius-md);
@@ -3604,9 +3584,6 @@ body {
   font-size: 11.5px;
 }
 
-/* v5.2.3: collapsed details disclosure — keeps power-user metadata
- * (permissions, runtime info, version drift, provenance, review
- * findings list) one click away without crowding the card. */
 .skills-details {
   margin-top: 4px;
   border-top: 1px solid rgba(250, 250, 250, 0.06);
@@ -3695,11 +3672,6 @@ body {
   padding: 6px 4px;
 }
 
-/* v5.7.0 kebab menu: anchored popover under the trigger (not a centered
-   modal). The wrapper is position:relative so the dialog can position:
-   absolute inside it under the button. The dialog opens via .show()
-   (non-modal) so the rest of the page stays interactive and there is no
-   ::backdrop dim. */
 .skills-card-menu {
   position: relative;
   display: inline-flex;
@@ -3900,12 +3872,6 @@ body {
   }
 }
 
-/* ----- Skills tab navigation (Installed / Marketplace) -----
-   Layout/look is inherited from the shared ``.app-tab-strip`` and
-   ``.app-tab`` rules above (lines 662-696); ``.skills-tabs`` /
-   ``.skills-tab`` previously redeclared the same flex/pill styling
-   verbatim. Only the Skills-page-specific spacing override survives. */
-
 .skills-tabs {
   margin-bottom: 14px;
 }
@@ -3929,8 +3895,6 @@ body {
   margin-top: 4px;
   min-height: 0;
 }
-
-/* ----- ClawHub Marketplace shell ----- */
 
 .marketplace-shell {
   display: flex;

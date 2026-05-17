@@ -15,7 +15,6 @@ context-window errors.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import pathlib
@@ -36,13 +35,14 @@ from ouroboros.tools.review_helpers import (
     _SENSITIVE_EXTENSIONS,
     _SENSITIVE_NAMES,
     load_governance_doc,
-    normalize_reviewer_items,
     _ANTI_THRASHING_RULE_VERDICT,
     _CONVERGENCE_RULE_TEXT,
     _HISTORY_VERIFICATION_ONLY_RULE,
-    build_obligations_block,
-    build_anti_thrashing_rules_section,
+    build_review_history_section as _shared_review_history_section,
+    emit_review_usage,
+    format_review_history_entry,
 )
+from ouroboros.triad_review import extract_json_array
 from ouroboros.utils import run_cmd, utc_now_iso, append_jsonl, estimate_tokens
 
 log = logging.getLogger(__name__)
@@ -170,54 +170,15 @@ def _should_skip_current_touched_context(path: str) -> bool:
     )
 
 
-def _format_history_entry(entry: object, *, default_severity: str = "advisory") -> str:
-    if isinstance(entry, dict):
-        severity = str(entry.get("severity", default_severity) or default_severity).upper()
-        tags = []
-        if entry.get("tag"):
-            tags.append(str(entry.get("tag")))
-        if entry.get("model"):
-            tags.append(f"model={entry.get('model')}")
-        if entry.get("obligation_id"):
-            tags.append(f"obligation={entry.get('obligation_id')}")
-        label = str(entry.get("item") or entry.get("reason") or "?")
-        reason = str(entry.get("reason", "") or "").strip()
-        tag_prefix = " ".join(f"[{tag}]" for tag in tags)
-        return f"[{severity}] {tag_prefix} {label}: {reason}".strip()
-    return str(entry)
-
-
 def _build_review_history_section(history: list, open_obligations: list = None) -> str:
-    """See `ouroboros.tools.review._build_review_history_section` for semantics.
-
-    Scope-history shape is rendered locally (no commit_message field).
-    Obligations block and trailing rules are delegated to the shared
-    ``review_helpers`` helpers so triad/scope/skill reviewers cannot drift
-    apart on anti-thrashing wording.
-    """
-    if not history and not open_obligations:
-        return ""
-    lines = ["## Previous triad review rounds\n"]
-    if history:
-        for entry in history:
-            lines.append(f"### Round {entry.get('attempt', '?')}")
-            if entry.get("critical"):
-                for f in entry["critical"]:
-                    lines.append(f"- CRITICAL: {_format_history_entry(f, default_severity='critical')}")
-            if entry.get("advisory"):
-                for f in entry["advisory"]:
-                    lines.append(f"- Advisory: {_format_history_entry(f)}")
-            lines.append("")
-
-    obligations_block = build_obligations_block(open_obligations)
-    if obligations_block:
-        lines.append(obligations_block)
-
-    lines.append(build_anti_thrashing_rules_section(
-        has_obligations=bool(open_obligations),
-        convergence_fires=bool(history and len(history) >= 2),
-    ))
-    return "\n".join(lines)
+    """Format previous triad rounds for scope-review prompt context."""
+    return _shared_review_history_section(
+        history,
+        open_obligations,
+        title="## Previous triad review rounds",
+        include_commit_message=False,
+        compact_labels=True,
+    )
 
 
 def _parse_staged_name_status(repo_dir: pathlib.Path) -> list:
@@ -432,11 +393,11 @@ def _build_scope_history_section(scope_review_history: Optional[list]) -> str:
         if critical_findings:
             parts.append("Critical findings:")
             for finding in critical_findings:
-                parts.append(f"- {_format_history_entry(finding, default_severity='critical')}")
+                parts.append(f"- {format_review_history_entry(finding, default_severity='critical')}")
         if advisory_findings:
             parts.append("Advisory findings:")
             for finding in advisory_findings:
-                parts.append(f"- {_format_history_entry(finding)}")
+                parts.append(f"- {format_review_history_entry(finding)}")
         if not critical_findings and not advisory_findings:
             parts.append(str(entry.get("summary") or "(no summary)"))
         rounds.append("\n".join(parts))
@@ -711,61 +672,6 @@ section — the staged diff below already shows every `-` line.
     return prompt, None
 
 
-def _parse_scope_json(raw: str) -> Optional[list]:
-    """Best-effort extraction of a JSON array from model output."""
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, list):
-            return normalize_reviewer_items(obj)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    start, end = text.find("["), text.rfind("]")
-    if start != -1 and end > start:
-        try:
-            obj = json.loads(text[start:end + 1])
-            if isinstance(obj, list):
-                return normalize_reviewer_items(obj)
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return None
-
-
-def _emit_usage(ctx: ToolContext, model: str, usage: dict) -> None:
-    """Emit a standard llm_usage event for cost tracking."""
-    from ouroboros.pricing import infer_api_key_type, infer_model_category, infer_provider_from_model
-    provider = infer_provider_from_model(model)
-    event = {
-        "type": "llm_usage", "ts": utc_now_iso(),
-        "task_id": getattr(ctx, "task_id", "") or "",
-        "model": model,
-        "api_key_type": infer_api_key_type(model, provider),
-        "model_category": infer_model_category(model),
-        "usage": {
-            "prompt_tokens": usage.get("prompt_tokens", 0),
-            "completion_tokens": usage.get("completion_tokens", 0),
-            "cached_tokens": usage.get("cached_tokens", 0),
-            "cost": usage.get("cost", 0),
-        },
-        "provider": provider,
-        "source": "scope_review",
-        "category": "review",
-    }
-    eq = getattr(ctx, "event_queue", None)
-    if eq is not None:
-        try:
-            eq.put_nowait(event)
-            return
-        except Exception:
-            pass
-    # Fallback: route to pending_events when event_queue is unavailable.
-    pending = getattr(ctx, "pending_events", None)
-    if pending is not None:
-        pending.append(event)
-
-
 def _classify_scope_findings(items: list) -> tuple:
     """Classify raw JSON items into (critical_findings, advisory_findings) lists."""
     critical_findings: List[dict] = []
@@ -792,6 +698,10 @@ def _classify_scope_findings(items: list) -> tuple:
         else:
             advisory_findings.append(finding)
     return critical_findings, advisory_findings
+
+
+def _emit_usage(ctx: ToolContext, model: str, usage: dict) -> None:
+    emit_review_usage(ctx, model=model, usage=usage, source="scope_review")
 
 
 def _log_scope_result(
@@ -1064,7 +974,7 @@ def run_scope_review(
             cost_usd=_cost_usd,
         )
 
-    items = _parse_scope_json(raw_text)
+    items = extract_json_array(raw_text, normalize=True)
     if items is None:
         return ScopeReviewResult(
             blocked=True,

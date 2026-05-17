@@ -524,6 +524,19 @@
         return rows;
     }
 
+    function providerKeyField({ id, label, placeholder, value, note }) {
+        return `
+            <div class="field">
+                <div class="field-label-row">
+                    <label for="${id}">${label}</label>
+                    <button class="field-clear" data-clear="${id}" type="button">Clear</button>
+                </div>
+                <input id="${id}" type="password" placeholder="${placeholder}" value="${escapeHtml(value)}">
+                <div class="field-note">${note}</div>
+            </div>
+        `;
+    }
+
     function renderProvidersStep() {
         const selectedProfile = activeProviderProfile();
         const localPreset = trim(state.localPreset);
@@ -910,9 +923,10 @@
         const localGpuLayers = document.getElementById('local-gpu-layers');
         const localChatFormat = document.getElementById('local-chat-format');
 
-        if (openrouterInput) openrouterInput.addEventListener('input', () => { state.openrouterKey = openrouterInput.value; state.error = ''; syncCurrentStepActionState(); });
-        if (openaiInput) openaiInput.addEventListener('input', () => { state.openaiKey = openaiInput.value; state.error = ''; syncCurrentStepActionState(); });
-        if (cloudruInput) cloudruInput.addEventListener('input', () => { state.cloudruKey = cloudruInput.value; state.error = ''; syncCurrentStepActionState(); });
+        [[openrouterInput, 'openrouterKey'], [openaiInput, 'openaiKey'], [cloudruInput, 'cloudruKey']].forEach(([input, key]) => {
+            if (!input) return;
+            input.addEventListener('input', () => { state[key] = input.value; state.error = ''; syncCurrentStepActionState(); });
+        });
         if (anthropicInput) anthropicInput.addEventListener('input', () => {
             const wasConfigured = hasAnthropicKeyConfigured();
             state.anthropicKey = anthropicInput.value;

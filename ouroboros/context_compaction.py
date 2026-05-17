@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 
 _COMPACTION_PROTECTED_TOOLS = frozenset({
     "repo_commit",
-    "repo_write_commit",
     "knowledge_read",
     "data_read",
 })
@@ -110,7 +109,6 @@ def _compact_tool_call_arguments(tool_name: str, args_json: str) -> Dict[str, An
     """Compact tool call arguments for old rounds without silent truncation."""
     large_content_tools = {
         "repo_write": "content",
-        "repo_write_commit": "content",
         "data_write": "content",
         "claude_code_edit": "prompt",
         "update_scratchpad": "content",
