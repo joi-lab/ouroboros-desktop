@@ -255,87 +255,48 @@ function summaryCard(summary, installedMap, isPlugin) {
     const installed = installedMap.get(slug);
     const installedAtVersion = installed?.provenance?.version || installed?.version || '';
     const isInstalled = !!installed;
-    const updateAvailable = isInstalled
-        && summary.latest_version
-        && installedAtVersion
-        && summary.latest_version !== installedAtVersion;
-    const downloads = formatNumber(summary.stats?.downloads);
-    const stars = formatNumber(summary.stats?.stars);
-    const license = summary.license || 'no-license';
-    const homepageHref = safeExternalUrl(summary.homepage);
     const description = summary.summary || summary.description || '';
-    const officialBadge = summary.badges?.official
-        ? '<span class="skills-badge skills-badge-ok">official</span>'
-        : '';
-    const reviewBadge = isInstalled ? statusBadgeForReview(installed.review_status) : '';
     const lifecycle = lifecycleFor(summary, installed, pending);
-    const lifecycleChip = '';
     const lifecycleHint = lifecycle.hint
-        ? `<div class="marketplace-card-state-hint">${escapeHtml(lifecycle.hint)}</div>`
+        ? `<p class="marketplace-card-state-hint">${escapeHtml(lifecycle.hint)}</p>`
         : '';
     const workingIndicator = lifecycleSpinnerFor(pending);
+    const primaryButtonLabel = isInstalled && installedAtVersion && !pending
+        ? `Установлен v${escapeHtml(installedAtVersion)}`
+        : escapeHtml(lifecycle.button);
     const primaryButton = isPlugin
-        ? `<button class="btn btn-default" disabled title="OpenClaw Node/TypeScript plugins are not installable in Ouroboros. Use a Python port or MCP bridge.">Plugin</button>`
-        : `<button class="btn btn-primary marketplace-next-action"
+        ? `<button class="btn btn-primary marketplace-next-action" disabled
+                   data-mp-action=""
+                   data-slug="${escapeHtml(slug)}"
+                   title="OpenClaw Node/TypeScript plugins are not installable in Ouroboros. Use a Python port or MCP bridge.">Plugin</button>`
+        : `<button class="btn btn-primary marketplace-next-action${isInstalled ? ' marketplace-next-action--installed' : ''}"
                    data-mp-action="${escapeHtml(lifecycle.action)}"
                    data-slug="${escapeHtml(slug)}"
-                   ${lifecycle.disabled || !lifecycle.action ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`;
-    const secondaryButtons = isPlugin
+                   ${lifecycle.disabled || !lifecycle.action ? 'disabled' : ''}>${primaryButtonLabel}</button>`;
+    const secondaryButton = isPlugin
         ? ''
-        : isInstalled
-            ? `
-                ${updateAvailable ? `<button class="btn btn-default" data-mp-update="${escapeHtml(slug)}">Update</button>` : ''}
-                ${installed.enabled && installed.type === 'extension' ? `<button class="btn btn-default" data-mp-action="disable" data-slug="${escapeHtml(slug)}">Disable</button>` : ''}
-                <button class="btn btn-default" data-mp-uninstall="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || '')}">Uninstall</button>
-            `
-            : '';
-    const buttons = `
-        <div class="marketplace-primary-action">${primaryButton}</div>
-        <div class="marketplace-secondary-actions">${secondaryButtons}</div>
-    `;
+        : `<button class="btn btn-secondary marketplace-details"
+                   data-slug="${escapeHtml(slug)}">Подробнее</button>`;
+    const officialChip = summary.badges?.official
+        ? '<span class="marketplace-status-chip">Официальный</span>'
+        : '';
     const cardClass = lifecycleCardClassFor(pending);
-    const pluginBadge = isPlugin
-        ? '<span class="skills-badge skills-badge-danger">plugin unsupported</span>'
-        : '';
-    const installedBadge = isInstalled
-        ? `<span class="skills-badge skills-badge-ok">installed v${escapeHtml(installedAtVersion || summary.latest_version)}</span>`
-        : '';
-    const updateBadge = updateAvailable
-        ? `<span class="skills-badge skills-badge-warn">update v${escapeHtml(summary.latest_version)}</span>`
-        : '';
-    const buttonsHtml = buttons;
-    const badgesHtml = `
-        ${officialBadge}
-        ${pluginBadge}
-        ${installedBadge}
-        ${updateBadge}
-        ${reviewBadge}
-        ${lifecycleChip}
-    `;
     return `
         <div class="${cardClass}" data-slug="${escapeHtml(slug)}">
             <div class="marketplace-card-head">
-                <div class="marketplace-card-title">
-                    <strong>${escapeHtml(summary.display_name || slug)}</strong>
-                    <span class="muted">${escapeHtml(slug)} · v${escapeHtml(summary.latest_version || '—')}</span>
-                </div>
-                <div class="marketplace-card-badges">
-                    ${badgesHtml}
-                </div>
+                <strong class="marketplace-card-title">${escapeHtml(summary.display_name || slug)}</strong>
+                <span class="marketplace-card-subtitle">${escapeHtml(slug)} · v${escapeHtml(summary.latest_version || '—')}</span>
+                ${officialChip}
             </div>
-            <div class="marketplace-card-body">${escapeHtml(description)}</div>
-            <div class="marketplace-card-state marketplace-state-${lifecycle.tone}">
-                <strong>${workingIndicator}${escapeHtml(lifecycle.label)}</strong>
+            <p class="marketplace-card-description">${escapeHtml(description)}</p>
+            <div class="marketplace-card-state-box marketplace-state-${lifecycle.tone}">
+                <strong class="marketplace-card-state-label">${workingIndicator}${escapeHtml(lifecycle.label)}</strong>
                 ${lifecycleHint}
             </div>
-            <div class="marketplace-card-meta muted">
-                <span>downloads: ${downloads}</span>
-                <span>stars: ${stars}</span>
-                <span>license: ${escapeHtml(license)}</span>
-                ${homepageHref ? `<a href="${homepageHref}" target="_blank" rel="noopener noreferrer">homepage</a>` : ''}
-                ${(summary.os || []).length ? `<span>os: ${(summary.os || []).map((o) => escapeHtml(o)).join(', ')}</span>` : ''}
+            <div class="marketplace-card-actions">
+                ${primaryButton}
+                ${secondaryButton}
             </div>
-            <div class="marketplace-card-actions">${buttonsHtml}</div>
         </div>
     `;
 }
