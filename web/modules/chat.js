@@ -233,8 +233,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     function reconnectBannerText(reason = '') {
-        if (reason === 'sha-change') return '♻️ Restart complete';
-        if (reason) return '♻️ Reconnected';
+        if (reason === 'sha-change') return '♻️ Перезапущен';
+        if (reason) return '♻️ Соединение установлено';
         return '';
     }
 
@@ -1755,7 +1755,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         refreshHeaderControlState(true);
         const reconnectBanner =
             pendingReconnectBannerText
-            || (wsHasConnectedOnce ? '♻️ Reconnected' : '');
+            || (wsHasConnectedOnce ? '♻️ Соединение установлено' : '');
         const shouldClearReconnectParams = Boolean(pendingReconnectBannerText);
         pendingReconnectBannerText = '';
         const isReconnect = wsHasConnectedOnce;

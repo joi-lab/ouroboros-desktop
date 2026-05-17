@@ -296,7 +296,7 @@ export function renderSettingsPage() {
                             ${modelCard({ title: 'Основная', copy: 'Основная модель для рассуждений.', inputId: 's-model', toggleId: 's-local-main', defaultValue: 'anthropic/claude-opus-4.6' })}
                             ${modelCard({ title: 'Код', copy: 'Модель для задач с большим количеством инструментов.', inputId: 's-model-code', toggleId: 's-local-code', defaultValue: 'anthropic/claude-opus-4.6' })}
                             ${modelCard({ title: 'Лёгкая', copy: 'Быстрые резюме и лёгкие задачи.', inputId: 's-model-light', toggleId: 's-local-light', defaultValue: 'anthropic/claude-sonnet-4.6' })}
-                            ${modelCard({ title: 'Запасная', copy: 'Резервный вариант и деградированный путь.', inputId: 's-model-fallback', toggleId: 's-local-fallback', defaultValue: 'anthropic/claude-sonnet-4.6' })}
+                            ${modelCard({ title: 'Запасная', copy: 'Используется, если основная модель недоступна.', inputId: 's-model-fallback', toggleId: 's-local-fallback', defaultValue: 'anthropic/claude-sonnet-4.6' })}
                         </div>
                         <div class="form-row">
                             <div class="form-field">

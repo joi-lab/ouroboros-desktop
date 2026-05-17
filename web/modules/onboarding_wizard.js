@@ -706,7 +706,7 @@
                 ${modelSuggestionField({ id: 'main-model', label: 'Основная модель', value: state.mainModel, note: 'Основная для рассуждений и длинных задач.' })}
                 ${modelSuggestionField({ id: 'code-model', label: 'Модель кода', value: state.codeModel, note: 'Для задач с большим количеством инструментов.' })}
                 ${modelSuggestionField({ id: 'light-model', label: 'Лёгкая модель', value: state.lightModel, note: 'Быстрые резюме и лёгкие задачи.' })}
-                ${modelSuggestionField({ id: 'fallback-model', label: 'Запасная модель', value: state.fallbackModel, note: 'Резервный вариант и деградированный путь.' })}
+                ${modelSuggestionField({ id: 'fallback-model', label: 'Запасная модель', value: state.fallbackModel, note: 'Используется, если основная модель недоступна.' })}
             </div>
             <div class="wizard-inline-note">Прямые провайдеры используют <code>openai::gpt-5.5</code>, <code>cloudru::zai-org/GLM-4.7</code> и <code>anthropic::claude-sonnet-4-6</code>. Простые значения <code>openai/...</code> или <code>anthropic/...</code> остаются в стиле роутера по замыслу.</div>
         `;

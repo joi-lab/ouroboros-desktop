@@ -7234,6 +7234,17 @@ body.nav-collapsed .nav-budget-pill {
   .settings-ghost-btn {
     width: 100%;
   }
+
+  /* Reconnect overlay — solid app background on mobile */
+  #reconnect-overlay {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  #reconnect-overlay .spinner {
+    border-color: var(--bg-tertiary);
+    border-top-color: var(--accent);
+  }
 }
 
 body.keyboard-open #content {

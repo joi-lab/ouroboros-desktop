@@ -986,7 +986,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         try {
             const res = await apiFetch('/api/reset', { method: 'POST' });
             const data = await res.json();
-            if (data.status === 'ok') alert('Deleted: ' + (data.deleted.join(', ') || 'nothing') + '\nRestarting...');
+            if (data.status === 'ok') alert('Deleted: ' + (data.deleted.join(', ') || 'nothing') + '\nПерезапуск...');
             else alert('Error: ' + (data.error || 'unknown'));
         } catch (e) {
             showToast('Reset failed: ' + e.message, 'error');
