@@ -7,6 +7,7 @@ import {
     setPending,
     startLifecyclePoller,
 } from './lifecycle_card.js';
+import { openConfirmDialog } from './confirm_dialog.js';
 import {
     emitSkillLifecycle,
     escapeHtmlAttr as escapeHtml,
@@ -61,7 +62,7 @@ function controlsTemplate() {
         <div class="marketplace-controls">
             <input type="search" id="oh-query" class="marketplace-search"
                    placeholder="Поиск официальных навыков Ouroboros…" autocomplete="off">
-            <button class="btn btn-primary" data-oh-search>Поиск</button>
+            <button class="btn btn-primary" data-oh-search>Найти</button>
         </div>
     `;
 }
@@ -87,12 +88,18 @@ function card(item, installed) {
     const lifecycleHint = lifecycle.hint
         ? `<div class="marketplace-card-state-hint">${escapeHtml(lifecycle.hint)}</div>`
         : '';
-    const status = installed
-        ? `<span class="skills-status-chip skills-status-ok">Установлен v${escapeHtml(installed.version || item.latest_version || '')}</span>`
-        : '<span class="skills-status-chip skills-status-muted">Не установлен</span>';
-    const primary = (installed && !pending)
-        ? '<button class="btn btn-default" disabled>Установлен</button>'
-        : `<button class="btn ${pending?.failed ? 'btn-default' : 'btn-primary'}" data-oh-install="${escapeHtml(slug)}" ${lifecycle.disabled ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`;
+    const installedVersion = installed?.version || item.latest_version || '';
+    const primaryBtnClass = installed ? 'btn-primary' : 'btn-default';
+    const primaryBtnText = installed
+        ? `Установлен v${escapeHtml(installedVersion)}`
+        : escapeHtml(lifecycle.button);
+    const primary = pending
+        ? `<button class="btn ${pending.failed ? 'btn-default' : 'btn-primary'}" data-oh-install="${escapeHtml(slug)}" disabled>${escapeHtml(lifecycle.button)}</button>`
+        : `<button class="btn ${primaryBtnClass}" data-oh-install="${escapeHtml(slug)}" ${installed ? 'disabled' : ''}>${primaryBtnText}</button>`;
+    const needsReview = installed && (
+        installed.review_stale ||
+        !['clean', 'warnings'].includes(installed.review_status)
+    );
     return `
         <article class="${cardClass}" data-slug="${escapeHtml(slug)}">
             <div class="marketplace-card-head">
@@ -101,19 +108,22 @@ function card(item, installed) {
                     <span class="muted">${escapeHtml(slug)} · v${escapeHtml(item.latest_version || '—')}</span>
                 </div>
                 <div class="marketplace-card-badges">
-                    <span class="skills-badge skills-badge-ok">официальный</span>
-                    ${status}
+                    <span class="skills-badge skills-badge-ok">Официальный</span>
                 </div>
             </div>
             <div class="marketplace-card-body">${escapeHtml(item.summary || item.description || '')}</div>
-            <div class="marketplace-card-state marketplace-state-${lifecycle.tone}">
-                <strong>${spinner}${escapeHtml(lifecycle.label)}</strong>
-                ${lifecycleHint}
-            </div>
-            <div class="marketplace-card-actions">
-                <div class="marketplace-primary-action">${primary}</div>
-                <div class="marketplace-secondary-actions">
-                    <button class="btn btn-default" data-oh-preview="${escapeHtml(slug)}">Подробнее</button>
+            <div class="marketplace-card-bottom">
+                <div class="marketplace-card-state marketplace-state-${lifecycle.tone}">
+                    <strong>${spinner}${escapeHtml(lifecycle.label)}</strong>
+                    ${lifecycleHint}
+                </div>
+                <div class="marketplace-card-actions">
+                    <div class="marketplace-primary-action">${primary}</div>
+                    <div class="marketplace-secondary-actions">
+                        ${needsReview ? `<button class="btn btn-default" data-oh-review="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || slug)}">Перепроверить</button>` : ''}
+                        ${installed ? `<button class="btn btn-default" data-oh-uninstall="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || slug)}">Удалить</button>` : ''}
+                        <button class="btn btn-default" data-oh-preview="${escapeHtml(slug)}">Подробнее</button>
+                    </div>
                 </div>
             </div>
         </article>
@@ -179,7 +189,86 @@ export function initOuroborosHub(pane, controlsHost = null) {
         const preview = event.target.closest('[data-oh-preview]');
         if (preview) {
             const slug = preview.dataset.ohPreview;
-            show(`${slug}: подробности официального навыка показаны в карточке каталога.`, 'muted');
+            const item = state.results.find(r => r.slug === slug);
+            if (item) {
+                const installed = state.installed.get(slug);
+                const desc = item.summary || item.description || '';
+                const version = item.latest_version || '—';
+                const backdrop = document.createElement('div');
+                backdrop.className = 'marketplace-modal-backdrop';
+                backdrop.innerHTML = `
+                    <div class="marketplace-modal" role="dialog" aria-modal="true" style="max-width:560px">
+                        <div class="marketplace-modal-head">
+                            <div>
+                                <strong style="font-size:16px">${escapeHtml(item.display_name || slug)}</strong>
+                                <div style="font-size:13px;color:var(--text-secondary);margin-top:2px">${escapeHtml(slug)} · v${escapeHtml(version)}</div>
+                            </div>
+                            <button class="btn btn-default btn-sm" data-close>Закрыть</button>
+                        </div>
+                        <div class="marketplace-modal-body">
+                            <div><span class="skills-badge skills-badge-ok" style="font-size:12px;font-weight:700">Официальный</span></div>
+                            ${desc ? `<p style="margin:0;line-height:1.6">${escapeHtml(desc)}</p>` : ''}
+                            ${installed ? `<table style="width:100%;font-size:13px;border-collapse:collapse"><tr><td style="padding:4px 0;color:var(--text-secondary);width:120px">Установлен</td><td>v${escapeHtml(installed.version || version)}</td></tr></table>` : ''}
+                        </div>
+                    </div>`;
+                backdrop.addEventListener('click', (e) => {
+                    if (e.target === backdrop || e.target.closest('[data-close]')) backdrop.remove();
+                });
+                document.body.appendChild(backdrop);
+            }
+            return;
+        }
+        const reviewBtn = event.target.closest('[data-oh-review]');
+        if (reviewBtn) {
+            const slug = reviewBtn.dataset.ohReview;
+            const name = reviewBtn.dataset.name || slug;
+            reviewBtn.disabled = true;
+            setPending(slug, { label: 'Проверка', tone: 'warn', message: 'Запуск проверки безопасности…' });
+            show(`${slug}: запуск проверки…`, 'muted');
+            try {
+                const data = await fetchJson(`/api/skills/${encodeURIComponent(name)}/review`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+                show(`${slug}: проверка ${data.status || 'завершена'}${data.error ? ` — ${data.error}` : ''}`, data.status === 'clean' ? 'ok' : 'warn');
+                emitSkillLifecycle('review', name, data);
+                clearPending(slug);
+            } catch (err) {
+                setPending(slug, { label: 'Ошибка', tone: 'danger', message: err.message || String(err), failed: true, retry_label: 'Повторить' });
+                show(`${slug}: ${err.message || err}`, 'danger');
+            } finally {
+                reviewBtn.disabled = false;
+                refresh();
+            }
+            return;
+        }
+        const uninstallBtn = event.target.closest('[data-oh-uninstall]');
+        if (uninstallBtn) {
+            const slug = uninstallBtn.dataset.ohUninstall;
+            const name = uninstallBtn.dataset.name || slug;
+            const ok = await openConfirmDialog({
+                title: `Удалить ${slug}?`,
+                body: `Удалить официальный навык ${slug}? Это действие необратимо.`,
+                confirmLabel: 'Удалить',
+                danger: true,
+            });
+            if (!ok) return;
+            uninstallBtn.disabled = true;
+            try {
+                await fetchJson(`/api/marketplace/ouroboroshub/uninstall/${encodeURIComponent(name)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+                show(`${slug}: удалён`, 'ok');
+                emitSkillLifecycle('uninstall', name);
+            } catch (err) {
+                show(`${slug}: ${err.message || err}`, 'danger');
+            } finally {
+                uninstallBtn.disabled = false;
+                refresh();
+            }
             return;
         }
         if (!install) return;

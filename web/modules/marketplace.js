@@ -31,7 +31,7 @@ import {
 
 function installErrorCopy(message) {
     return isRateLimitError(message)
-        ? `${message} Click Install again later to retry.`
+        ? `${message} Попробуйте установить снова позже.`
         : message;
 }
 
@@ -54,14 +54,14 @@ function controlsTemplate() {
     return `
         <div class="marketplace-controls">
             <input type="search" id="mp-query" class="marketplace-search"
-                   placeholder="Search ClawHub skills by name or summary…" autocomplete="off">
-            <button class="btn btn-primary" data-mp-search>Search</button>
+                   placeholder="Поиск по названию или описанию" autocomplete="off">
+            <button class="btn btn-primary" data-mp-search>Найти</button>
         </div>
         <div class="marketplace-filters">
             <label class="marketplace-filter-toggle">
                 <input type="checkbox" id="mp-only-official">
                 <span class="marketplace-filter-track" aria-hidden="true"></span>
-                <span>Official only</span>
+                <span>Только официальные</span>
             </label>
         </div>
     `;
@@ -125,103 +125,103 @@ function lifecycleFor(summary, installed, pending) {
         if (pending.failed === true) {
             return {
                 tone: pending.tone || 'danger',
-                label: pending.label || 'Failed',
+                label: pending.label || 'Ошибка',
                 hint: pending.message || '',
                 action: pending.retry_action || '',
-                button: pending.retry_label || 'Retry',
+                button: pending.retry_label || 'Повторить',
                 disabled: !pending.retry_action,
             };
         }
         return {
             tone: pending.tone || 'warn',
-            label: pending.label || 'Working',
+            label: pending.label || 'Выполняется',
             hint: pending.message || '',
             action: '',
-            button: pending.label || 'Working...',
+            button: pending.label || 'Выполняется…',
             disabled: true,
         };
     }
     if (!installed) {
         return {
             tone: 'muted',
-            label: 'Not installed',
-            hint: 'Install runs the adapter and starts security review automatically.',
+            label: 'Не установлен',
+            hint: 'Установка запускает адаптер и проверку безопасности автоматически.',
             action: 'install',
-            button: 'Install',
+            button: 'Установить',
         };
     }
     if (installed.load_error) {
         return {
             tone: 'danger',
-            label: 'Install needs fix',
+            label: 'Ошибка установки',
             hint: installed.load_error,
             action: 'fix',
-            button: 'Repair',
+            button: 'Исправить',
         };
     }
     if (installed.review_status === 'blockers' && !reviewReady(installed)) {
         const finding = topReviewFinding(installed);
         return {
             tone: 'danger',
-            label: 'Review blockers',
-            hint: finding || 'Review has blocker findings; ask Ouroboros to repair the skill payload.',
+            label: 'Блокеры проверки',
+            hint: finding || 'Проверка обнаружила блокеры; попросите Ouroboros исправить навык.',
             action: 'fix',
-            button: 'Repair',
+            button: 'Исправить',
         };
     }
     if (!reviewReady(installed)) {
         const finding = topReviewFinding(installed);
         return {
             tone: 'warn',
-            label: installed.review_stale ? 'Review stale' : `Review ${installed.review_status || 'pending'}`,
-            hint: finding || 'Review must pass before this skill can run.',
+            label: installed.review_stale ? 'Проверка устарела' : `Проверка ${installed.review_status || 'pending'}`,
+            hint: finding || 'Проверка должна пройти, прежде чем навык сможет работать.',
             action: 'review',
-            button: installed.review_stale ? 'Re-review' : 'Review',
+            button: installed.review_stale ? 'Перепроверить' : 'Проверить',
         };
     }
     if (!grantReady(installed)) {
         const missing = installed.grants?.missing_keys || [];
         return {
             tone: 'warn',
-            label: 'Needs key grant',
-            hint: missing.length ? `Missing: ${missing.join(', ')}` : 'Human key grant required.',
+            label: 'Требуется разрешение',
+            hint: missing.length ? `Отсутствуют: ${missing.join(', ')}` : 'Требуется подтверждение доступа.',
             action: 'grant',
-            button: 'Grant',
+            button: 'Разрешить',
         };
     }
     if (!installed.enabled) {
         return {
             tone: 'ok',
-            label: 'Ready',
-            hint: 'Fresh executable review. Turn it on when you want the skill available.',
+            label: 'Готов',
+            hint: 'Проверка пройдена. Включите навык, когда он понадобится.',
             action: 'enable',
-            button: 'Enable',
+            button: 'Включить',
         };
     }
     if (installed.type === 'extension' && hasInstalledUiTab(installed)) {
         return {
             tone: 'ok',
-            label: 'Enabled',
-            hint: 'Extension skills expose tools/routes and may add Widgets after loading.',
+            label: 'Включён',
+            hint: 'Расширение предоставляет инструменты и может добавлять виджеты.',
             action: 'widgets',
-            button: 'Open widgets',
+            button: 'Открыть виджеты',
         };
     }
     if (installed.type === 'extension') {
         return {
             tone: 'ok',
-            label: 'Enabled',
-            hint: 'Extension is active. This skill does not expose a widget.',
+            label: 'Включён',
+            hint: 'Расширение активно. Этот навык не добавляет виджет.',
             action: 'disable',
-            button: 'Disable',
+            button: 'Отключить',
         };
     }
     return {
         tone: 'ok',
-        label: 'Enabled',
-        hint: 'Skill is enabled.',
+        label: 'Включён',
+        hint: 'Навык включён.',
         action: 'disable',
-        button: 'Disable',
+        button: 'Отключить',
     };
 }
 
@@ -265,7 +265,7 @@ function summaryCard(summary, installedMap, isPlugin) {
     const homepageHref = safeExternalUrl(summary.homepage);
     const description = summary.summary || summary.description || '';
     const officialBadge = summary.badges?.official
-        ? '<span class="skills-badge skills-badge-ok">official</span>'
+        ? '<span class="skills-badge skills-badge-ok">Официальный</span>'
         : '';
     const reviewBadge = isInstalled ? statusBadgeForReview(installed.review_status) : '';
     const lifecycle = lifecycleFor(summary, installed, pending);
@@ -274,21 +274,31 @@ function summaryCard(summary, installedMap, isPlugin) {
         ? `<div class="marketplace-card-state-hint">${escapeHtml(lifecycle.hint)}</div>`
         : '';
     const workingIndicator = lifecycleSpinnerFor(pending);
+    const detailsBtn = `<button class="btn btn-default" data-mp-detail="${escapeHtml(slug)}">Подробнее</button>`;
     const primaryButton = isPlugin
         ? `<button class="btn btn-default" disabled title="OpenClaw Node/TypeScript plugins are not installable in Ouroboros. Use a Python port or MCP bridge.">Plugin</button>`
-        : `<button class="btn btn-primary marketplace-next-action"
+        : isInstalled
+            ? `<button class="btn btn-primary" disabled>Установлен v${escapeHtml(installedAtVersion || summary.latest_version || '—')}</button>`
+            : `<button class="btn btn-default marketplace-next-action"
+                       data-mp-action="${escapeHtml(lifecycle.action)}"
+                       data-slug="${escapeHtml(slug)}"
+                       ${lifecycle.disabled || !lifecycle.action ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`;
+    const lifecycleActionBtn = isInstalled && lifecycle.action && lifecycle.action !== 'disable'
+        ? `<button class="btn btn-default marketplace-next-action"
                    data-mp-action="${escapeHtml(lifecycle.action)}"
                    data-slug="${escapeHtml(slug)}"
-                   ${lifecycle.disabled || !lifecycle.action ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`;
+                   ${lifecycle.disabled ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`
+        : '';
     const secondaryButtons = isPlugin
-        ? ''
+        ? detailsBtn
         : isInstalled
             ? `
-                ${updateAvailable ? `<button class="btn btn-default" data-mp-update="${escapeHtml(slug)}">Update</button>` : ''}
-                ${installed.enabled && installed.type === 'extension' ? `<button class="btn btn-default" data-mp-action="disable" data-slug="${escapeHtml(slug)}">Disable</button>` : ''}
-                <button class="btn btn-default" data-mp-uninstall="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || '')}">Uninstall</button>
+                ${lifecycleActionBtn}
+                ${updateAvailable ? `<button class="btn btn-default" data-mp-update="${escapeHtml(slug)}">Обновить</button>` : ''}
+                <button class="btn btn-default" data-mp-uninstall="${escapeHtml(slug)}" data-name="${escapeHtml(installed.name || '')}">Удалить</button>
+                ${detailsBtn}
             `
-            : '';
+            : detailsBtn;
     const buttons = `
         <div class="marketplace-primary-action">${primaryButton}</div>
         <div class="marketplace-secondary-actions">${secondaryButtons}</div>
@@ -297,9 +307,6 @@ function summaryCard(summary, installedMap, isPlugin) {
     const pluginBadge = isPlugin
         ? '<span class="skills-badge skills-badge-danger">plugin unsupported</span>'
         : '';
-    const installedBadge = isInstalled
-        ? `<span class="skills-badge skills-badge-ok">installed v${escapeHtml(installedAtVersion || summary.latest_version)}</span>`
-        : '';
     const updateBadge = updateAvailable
         ? `<span class="skills-badge skills-badge-warn">update v${escapeHtml(summary.latest_version)}</span>`
         : '';
@@ -307,9 +314,7 @@ function summaryCard(summary, installedMap, isPlugin) {
     const badgesHtml = `
         ${officialBadge}
         ${pluginBadge}
-        ${installedBadge}
         ${updateBadge}
-        ${reviewBadge}
         ${lifecycleChip}
     `;
     return `
@@ -324,18 +329,13 @@ function summaryCard(summary, installedMap, isPlugin) {
                 </div>
             </div>
             <div class="marketplace-card-body">${escapeHtml(description)}</div>
-            <div class="marketplace-card-state marketplace-state-${lifecycle.tone}">
-                <strong>${workingIndicator}${escapeHtml(lifecycle.label)}</strong>
-                ${lifecycleHint}
+            <div class="marketplace-card-bottom">
+                <div class="marketplace-card-state marketplace-state-${lifecycle.tone}">
+                    <strong>${workingIndicator}${escapeHtml(lifecycle.label)}</strong>
+                    ${lifecycleHint}
+                </div>
+                <div class="marketplace-card-actions">${buttonsHtml}</div>
             </div>
-            <div class="marketplace-card-meta muted">
-                <span>downloads: ${downloads}</span>
-                <span>stars: ${stars}</span>
-                <span>license: ${escapeHtml(license)}</span>
-                ${homepageHref ? `<a href="${homepageHref}" target="_blank" rel="noopener noreferrer">homepage</a>` : ''}
-                ${(summary.os || []).length ? `<span>os: ${(summary.os || []).map((o) => escapeHtml(o)).join(', ')}</span>` : ''}
-            </div>
-            <div class="marketplace-card-actions">${buttonsHtml}</div>
         </div>
     `;
 }
@@ -345,21 +345,15 @@ function renderResults(host, summaries, installedMap, registryCount, diagnostics
     if (!summaries.length) {
         const query = String(diagnostics?.query || '').trim();
         const official = Boolean(diagnostics?.official);
-        const mode = query ? 'matching your search' : 'in the marketplace browse list';
-        const officialText = official ? ' official' : '';
-        if (registryCount > 0) {
-            host.innerHTML = `<div class="muted">No installable${officialText} skills found ${mode}.</div>`;
-        } else {
-            const attempts = Array.isArray(diagnostics?.attempts) && diagnostics.attempts.length
-                ? `<details class="marketplace-debug"><summary>Registry diagnostics</summary><pre>${escapeHtml(JSON.stringify(diagnostics.attempts, null, 2))}</pre></details>`
-                : '';
-            host.innerHTML = `
-                <div class="muted">
-                    No installable${officialText} skills found ${mode}.
-                </div>
-                ${attempts}
-            `;
-        }
+        const mode = query ? 'по вашему запросу' : 'в каталоге';
+        const officialText = official ? ' официальных' : '';
+        const failedAttempts = Array.isArray(diagnostics?.attempts)
+            ? diagnostics.attempts.filter(a => !a.ok)
+            : [];
+        const debugBlock = failedAttempts.length
+            ? `<details class="marketplace-debug"><summary>Диагностика реестра</summary><pre>${escapeHtml(JSON.stringify(failedAttempts, null, 2))}</pre></details>`
+            : '';
+        host.innerHTML = `<div class="muted">Устанавливаемых${officialText} навыков не найдено ${mode}.</div>${debugBlock}`;
         return;
     }
     host.innerHTML = summaries
@@ -370,16 +364,16 @@ function renderResults(host, summaries, installedMap, registryCount, diagnostics
 
 function renderPagination(host, { query, limit, count, cursor, hasPrevious, nextCursor }) {
     const searchMode = Boolean(String(query || '').trim());
-    if (searchMode || (!nextCursor && !hasPrevious)) {
+    if (searchMode || (!nextCursor && !hasPrevious) || count === 0) {
         host.hidden = true;
         host.innerHTML = '';
         return;
     }
     host.hidden = false;
     host.innerHTML = `
-        <button class="btn btn-default" data-mp-prev ${hasPrevious ? '' : 'disabled'}>Prev</button>
-        <span class="muted">${cursor ? 'cursor page' : 'first page'} · ${count} shown</span>
-        <button class="btn btn-default" data-mp-next ${nextCursor ? '' : 'disabled'}>Next</button>
+        <button class="btn btn-default" data-mp-prev ${hasPrevious ? '' : 'disabled'}>Назад</button>
+        <span class="muted">${cursor ? 'следующая страница' : 'первая страница'} · ${count} показано</span>
+        <button class="btn btn-default" data-mp-next ${nextCursor ? '' : 'disabled'}>Далее</button>
     `;
 }
 
@@ -499,14 +493,14 @@ export function initMarketplace(pane, controlsHost = null) {
     function syncControlsForMode() {
         const searchMode = Boolean(String(state.query || '').trim());
         onlyOfficial.title = searchMode
-            ? 'Filters enriched search results to skills marked official.'
+            ? 'Фильтрует результаты поиска по официальным навыкам.'
             : '';
     }
 
     async function refresh() {
         syncControlsForMode();
         const query = String(state.query || '').trim();
-        showStatus(pane, query ? `Searching for "${query}"…` : 'Browsing ClawHub…', 'muted');
+        showStatus(pane, query ? `Поиск «${query}»…` : 'Загрузка ClawHub…', 'muted');
         // Cancel any prior in-flight refresh and stake a new token.
         if (activeController) {
             try { activeController.abort(); } catch (_) { /* ignore */ }
@@ -543,22 +537,22 @@ export function initMarketplace(pane, controlsHost = null) {
                 hasPrevious: state.cursorHistory.length > 0,
                 nextCursor: state.nextCursor,
             });
-            const mode = query ? 'search' : 'browse';
-            const official = state.onlyOfficial ? ' · official only' : '';
+            const mode = query ? 'поиск' : 'обзор';
+            const official = state.onlyOfficial ? ' · только официальные' : '';
             if (registryWarnings.length) {
-                showStatus(pane, `${state.results.length} skill${state.results.length === 1 ? '' : 's'} · ${mode}${official} · ${state.registryPath} · ${registryWarnings[0]}`, 'warn');
+                showStatus(pane, `${state.results.length} навык${state.results.length === 1 ? '' : (state.results.length < 5 ? 'а' : 'ов')} · ${mode}${official} · ${state.registryPath} · ${registryWarnings[0]}`, 'warn');
             } else {
-                showStatus(pane, `${state.results.length} skill${state.results.length === 1 ? '' : 's'} · ${mode}${official} · ${state.registryPath}`, 'muted');
+                showStatus(pane, `${state.results.length} навык${state.results.length === 1 ? '' : (state.results.length < 5 ? 'а' : 'ов')} · ${mode}${official} · ${state.registryPath}`, 'muted');
             }
         } catch (err) {
             // Stale-response abort: silent — a newer refresh is already in
             // flight (or just rendered) and owns the UI.
             if (err?.name === 'AbortError' || myToken !== refreshToken) return;
             const rawMessage = String(err?.body?.error || err?.message || err || '');
-            const firstLine = rawMessage.split('\n').map((line) => line.trim()).filter(Boolean)[0] || 'Marketplace request failed';
+            const firstLine = rawMessage.split('\n').map((line) => line.trim()).filter(Boolean)[0] || 'Ошибка запроса к маркетплейсу';
             const timeout = /timed out|timeout/i.test(rawMessage);
             const message = timeout
-                ? 'ClawHub did not respond in time. Try again, or search by name to narrow the request.'
+                ? 'ClawHub не ответил вовремя. Попробуйте ещё раз или уточните запрос.'
                 : firstLine.replace(/^Error:\s*/i, '');
             showStatus(pane, message, 'danger');
             resultsHost.innerHTML = `<div class="skills-load-error">${escapeHtml(message)}</div>`;
@@ -601,64 +595,64 @@ export function initMarketplace(pane, controlsHost = null) {
             return;
         }
         if (action === 'disable' && installed) {
-            setPending(slug, { label: 'Turning off', tone: 'warn', message: 'Disabling skill…' });
+            setPending(slug, { label: 'Отключение', tone: 'warn', message: 'Отключение навыка…' });
             const result = await toggleInstalledSkill(installed, false);
-            showStatus(pane, `${slug} disabled`, 'ok');
+            showStatus(pane, `${slug}: отключён`, 'ok');
             emitSkillLifecycle('disable', installed.name, result);
             return;
         }
         if (action === 'enable' && installed) {
-            setPending(slug, { label: 'Enabling', tone: 'warn', message: 'Turning skill on…' });
+            setPending(slug, { label: 'Включение', tone: 'warn', message: 'Включение навыка…' });
             const result = await toggleInstalledSkill(installed, true);
-            showStatus(pane, `${slug} enabled`, 'ok');
+            showStatus(pane, `${slug}: включён`, 'ok');
             emitSkillLifecycle('enable', installed.name, result);
             return;
         }
         if (action === 'grant' && installed) {
             const keys = installed.grants?.missing_keys || installed.grants?.requested_keys || [];
-            if (!keys.length) throw new Error('No grant keys reported for this skill.');
+            if (!keys.length) throw new Error('Навык не сообщил о ключах доступа.');
             const ok = await openConfirmDialog({
-                title: `Grant access to ${installed.name}`,
-                body: `Grant ${installed.name} access to these core settings keys?\n\n${keys.join('\n')}\n\nOnly grant access to reviewed skills you trust.`,
-                confirmLabel: 'Grant access',
+                title: `Разрешить доступ для ${installed.name}`,
+                body: `Разрешить навыку ${installed.name} доступ к следующим ключам настроек?\n\n${keys.join('\n')}\n\nВыдавайте разрешения только проверенным навыкам.`,
+                confirmLabel: 'Разрешить доступ',
             });
             if (!ok) return;
             const bridge = window.pywebview?.api?.request_skill_key_grant;
             if (!bridge) {
-                throw new Error('Skill key grants require the desktop launcher confirmation bridge.');
+                throw new Error('Выдача разрешений требует десктопного лаунчера.');
             }
-            setPending(slug, { label: 'Granting', tone: 'warn', message: 'Waiting for human confirmation…' });
+            setPending(slug, { label: 'Выдача разрешения', tone: 'warn', message: 'Ожидание подтверждения…' });
             const result = await bridge(installed.name, keys);
-            if (!result?.ok) throw new Error(result?.error || 'Skill key grant was cancelled.');
-            showStatus(pane, `${slug} grant saved`, 'ok');
+            if (!result?.ok) throw new Error(result?.error || 'Выдача разрешения отменена.');
+            showStatus(pane, `${slug}: разрешение сохранено`, 'ok');
             emitSkillLifecycle('grant', installed.name, result);
             return;
         }
         if (action === 'fix' && installed) {
             const ok = await openConfirmDialog({
-                title: `Repair ${installed.name || slug}`,
-                body: `Start a repair task for ${installed.name || slug}? Ouroboros will edit only the skill payload and re-run review.`,
-                confirmLabel: 'Start repair',
+                title: `Исправить ${installed.name || slug}`,
+                body: `Запустить задачу исправления для ${installed.name || slug}? Ouroboros изменит только payload навыка и повторит проверку.`,
+                confirmLabel: 'Начать исправление',
             });
             if (!ok) return;
-            setPending(slug, { label: 'Repair requested', tone: 'warn', message: 'Queueing repair task…' });
+            setPending(slug, { label: 'Исправление запрошено', tone: 'warn', message: 'Постановка в очередь…' });
             await fetchJson('/api/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     cmd: buildHealPrompt(installed, summary),
                     task_constraint: { mode: 'skill_repair', skill_name: installed.name || '', payload_root: installed.payload_root || '', allow_enable: false, allow_review: true },
-                    visible_text: `Repair task queued for ${installed.name || slug}. Ouroboros will inspect the skill payload and re-run review.`,
+                    visible_text: `Задача исправления поставлена в очередь для ${installed.name || slug}. Ouroboros проверит payload и повторит проверку.`,
                     visible_task_id: `skill_repair_${installed.name || slug}`,
                 }),
             });
-            showStatus(pane, `${slug}: repair task queued`, 'ok');
+            showStatus(pane, `${slug}: задача исправления поставлена в очередь`, 'ok');
             emitSkillLifecycle('repair', installed.name || slug);
             document.querySelector('.nav-btn[data-page="chat"]')?.click();
             return;
         }
         if (action === 'review' && installed) {
-            setPending(slug, { label: 'Reviewing', tone: 'warn', message: 'Running skill review…' });
+            setPending(slug, { label: 'Проверка', tone: 'warn', message: 'Запуск проверки навыка…' });
             const result = await fetchJson(`/api/skills/${encodeURIComponent(installed.name)}/review`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -666,7 +660,7 @@ export function initMarketplace(pane, controlsHost = null) {
             });
             showStatus(
                 pane,
-                `${slug}: review ${result.status}${result.error ? ` — ${result.error}` : ''}`,
+                `${slug}: проверка ${result.status}${result.error ? ` — ${result.error}` : ''}`,
                 reviewActionTone(result.status, result.error),
             );
             emitSkillLifecycle('review', installed.name, result);
@@ -674,9 +668,9 @@ export function initMarketplace(pane, controlsHost = null) {
         }
         if (action === 'update' && installed) {
             setPending(slug, {
-                label: 'Updating',
+                label: 'Обновление',
                 tone: 'warn',
-                message: 'Updating skill…',
+                message: 'Обновление навыка…',
                 target: installed.name,
             });
             const result = await fetchJson(`/api/marketplace/clawhub/update/${encodeURIComponent(installed.name)}`, {
@@ -684,29 +678,29 @@ export function initMarketplace(pane, controlsHost = null) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),
             });
-            if (!result.ok) throw new Error(result.error || 'update failed');
-            showStatus(pane, `Updated ${slug} — review ${result.review_status}`, reviewStatusTone(result.review_status));
+            if (!result.ok) throw new Error(result.error || 'ошибка обновления');
+            showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewStatusTone(result.review_status));
             emitSkillLifecycle('update', installed.name, result);
             return;
         }
         if (action === 'install') {
-            setPending(slug, { label: 'Installing', tone: 'warn', message: 'Downloading, adapting, and reviewing…' });
+            setPending(slug, { label: 'Установка', tone: 'warn', message: 'Загрузка, адаптация и проверка…' });
             const result = await fetchJson('/api/marketplace/clawhub/install', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ slug, auto_review: true }),
             });
-            if (!result.ok) throw new Error(result.error || 'install failed');
+            if (!result.ok) throw new Error(result.error || 'ошибка установки');
             const installedName = result.sanitized_name;
             const requestedGrants = result.provenance?.requested_key_grants || [];
             if (['clean', 'warnings'].includes(result.review_status) && installedName && !requestedGrants.length) {
-                showStatus(pane, `Installed ${slug}; review passed. Enable it from the card when ready.`, 'ok');
+                showStatus(pane, `${slug}: установлен, проверка пройдена. Включите навык из карточки.`, 'ok');
             } else if (['clean', 'warnings'].includes(result.review_status) && requestedGrants.length) {
-                showStatus(pane, `Installed ${slug}; grant required before enabling`, 'warn');
+                showStatus(pane, `${slug}: установлен, необходимо разрешение перед включением`, 'warn');
             } else if (result.review_error) {
-                showStatus(pane, `Installed ${slug}; review could not finish: ${result.review_error}`, 'warn');
+                showStatus(pane, `${slug}: установлен, проверка не завершена: ${result.review_error}`, 'warn');
             } else {
-                showStatus(pane, `Installed ${slug}; review ${result.review_status || 'pending'}`, reviewStatusTone(result.review_status));
+                showStatus(pane, `${slug}: установлен, проверка ${result.review_status || 'pending'}`, reviewStatusTone(result.review_status));
             }
             emitSkillLifecycle('install', installedName || slug, result);
         }
@@ -758,6 +752,48 @@ export function initMarketplace(pane, controlsHost = null) {
     });
 
     resultsHost.addEventListener('click', async (event) => {
+        const detailBtn = event.target.closest('[data-mp-detail]');
+        if (detailBtn) {
+            const slug = detailBtn.dataset.mpDetail;
+            const summary = state.results?.find(s => s.slug === slug);
+            if (!summary) return;
+            const installed = state.installedMap?.get(slug);
+            const desc = summary.summary || summary.description || '';
+            const version = summary.latest_version || '—';
+            const homepage = safeExternalUrl(summary.homepage);
+            const license = summary.license || '—';
+            const dl = formatNumber(summary.stats?.downloads);
+            const stars = formatNumber(summary.stats?.stars);
+            const isOfficial = summary.badges?.official;
+            const backdrop = document.createElement('div');
+            backdrop.className = 'marketplace-modal-backdrop';
+            backdrop.innerHTML = `
+                <div class="marketplace-modal" role="dialog" aria-modal="true" style="max-width:560px">
+                    <div class="marketplace-modal-head">
+                        <div>
+                            <strong style="font-size:16px">${escapeHtml(summary.display_name || slug)}</strong>
+                            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px">${escapeHtml(slug)} · v${escapeHtml(version)}</div>
+                        </div>
+                        <button class="btn btn-default btn-sm" data-close>Закрыть</button>
+                    </div>
+                    <div class="marketplace-modal-body">
+                        ${isOfficial ? `<div><span class="skills-badge skills-badge-ok" style="font-size:12px;font-weight:700">Официальный</span></div>` : ''}
+                        ${desc ? `<p style="margin:0;line-height:1.6">${escapeHtml(desc)}</p>` : ''}
+                        <table style="width:100%;font-size:13px;border-collapse:collapse">
+                            ${license !== '—' ? `<tr><td style="padding:4px 0;color:var(--text-secondary);width:120px">Лицензия</td><td>${escapeHtml(license)}</td></tr>` : ''}
+                            ${dl !== '—' ? `<tr><td style="padding:4px 0;color:var(--text-secondary)">Загрузки</td><td>${dl}</td></tr>` : ''}
+                            ${stars !== '—' ? `<tr><td style="padding:4px 0;color:var(--text-secondary)">Звёзды</td><td>${stars}</td></tr>` : ''}
+                            ${installed ? `<tr><td style="padding:4px 0;color:var(--text-secondary)">Установлен</td><td>v${escapeHtml(installed.provenance?.version || installed.version || version)}</td></tr>` : ''}
+                        </table>
+                        ${homepage ? `<a href="${homepage}" target="_blank" rel="noopener noreferrer" class="btn btn-default" style="align-self:flex-start">Открыть страницу</a>` : ''}
+                    </div>
+                </div>`;
+            backdrop.addEventListener('click', (e) => {
+                if (e.target === backdrop || e.target.closest('[data-close]')) backdrop.remove();
+            });
+            document.body.appendChild(backdrop);
+            return;
+        }
         const actionBtn = event.target.closest('[data-mp-action]');
         const updateBtn = event.target.closest('[data-mp-update]');
         const uninstallBtn = event.target.closest('[data-mp-uninstall]');
@@ -776,12 +812,12 @@ export function initMarketplace(pane, controlsHost = null) {
                 const tone = action === 'install' && isRateLimitError(failedMessage) ? 'warn' : 'danger';
                 showStatus(pane, `${slug}: ${failedMessage}`, tone);
                 setPending(slug, {
-                    label: `${action} failed`,
+                    label: 'Ошибка',
                     tone,
                     message: failedMessage,
                     failed: true,
                     retry_action: action,
-                    retry_label: action === 'install' ? 'Retry install' : `Retry ${action}`,
+                    retry_label: action === 'install' ? 'Повторить установку' : 'Повторить',
                 });
             } finally {
                 if (!failedMessage) setPending(slug, null);
@@ -799,7 +835,7 @@ export function initMarketplace(pane, controlsHost = null) {
             const installed = state.installedMap.get(slug);
             const sanitized = installed?.name;
             if (!sanitized) {
-                showStatus(pane, `Cannot update ${slug}: no provenance found`, 'danger');
+                showStatus(pane, `Невозможно обновить ${slug}: данные о происхождении не найдены`, 'danger');
                 updateBtn.disabled = false;
                 return;
             }
@@ -811,7 +847,7 @@ export function initMarketplace(pane, controlsHost = null) {
             const summary = state.results.find((s) => s.slug === slug);
             const latest = summary?.latest_version || '';
             const userVersion = window.prompt(
-                `Update ${slug} to which version? Leave empty for latest (${latest || 'unknown'}).`,
+                `До какой версии обновить ${slug}? Оставьте пустым для последней (${latest || 'неизвестно'}).`,
                 latest,
             );
             if (userVersion === null) {
@@ -820,11 +856,11 @@ export function initMarketplace(pane, controlsHost = null) {
                 return;
             }
             const targetVersion = (userVersion || '').trim();
-            showStatus(pane, `Updating ${slug}${targetVersion ? ` → v${targetVersion}` : ' (latest)'}…`, 'muted');
+            showStatus(pane, `Обновление ${slug}${targetVersion ? ` → v${targetVersion}` : ' (последняя)'}…`, 'muted');
             setPending(slug, {
-                label: 'Updating',
+                label: 'Обновление',
                 tone: 'warn',
-                message: 'Updating skill…',
+                message: 'Обновление навыка…',
                 target: sanitized,
             });
             try {
@@ -837,21 +873,21 @@ export function initMarketplace(pane, controlsHost = null) {
                 if (!result.ok) {
                     throw new Error(result.error || 'update failed');
                 } else {
-                    showStatus(pane, `Updated ${slug} — review ${result.review_status}`, reviewStatusTone(result.review_status));
+                    showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewStatusTone(result.review_status));
                     setPending(slug, null);
                     emitSkillLifecycle('update', sanitized, result);
                 }
             } catch (err) {
                 setPending(slug, {
-                    label: 'Failed',
+                    label: 'Ошибка',
                     tone: 'danger',
                     message: err.message || String(err),
                     failed: true,
                     retry_action: 'update',
-                    retry_label: 'Retry update',
+                    retry_label: 'Повторить обновление',
                     target: sanitized,
                 });
-                showStatus(pane, `Update error: ${err.message}`, 'danger');
+                showStatus(pane, `Ошибка обновления: ${err.message}`, 'danger');
             } finally {
                 updateBtn.disabled = false;
                 scheduleRefresh(true);
@@ -862,9 +898,9 @@ export function initMarketplace(pane, controlsHost = null) {
             const slug = uninstallBtn.dataset.mpUninstall;
             const sanitized = uninstallBtn.dataset.name;
             const ok = await openConfirmDialog({
-                title: `Uninstall ${slug}`,
-                body: `Uninstall ${slug}? This deletes data/skills/clawhub/${sanitized}/.`,
-                confirmLabel: 'Uninstall',
+                title: `Удалить ${slug}`,
+                body: `Удалить ${slug}? Это удалит data/skills/clawhub/${sanitized}/.`,
+                confirmLabel: 'Удалить',
                 danger: true,
             });
             if (!ok) return;
@@ -875,10 +911,10 @@ export function initMarketplace(pane, controlsHost = null) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({}),
                 });
-                showStatus(pane, `Uninstalled ${slug}`, 'ok');
+                showStatus(pane, `${slug}: удалён`, 'ok');
                 emitSkillLifecycle('uninstall', sanitized);
             } catch (err) {
-                showStatus(pane, `Uninstall error: ${err.message}`, 'danger');
+                showStatus(pane, `Ошибка удаления: ${err.message}`, 'danger');
             } finally {
                 uninstallBtn.disabled = false;
                 scheduleRefresh(true);

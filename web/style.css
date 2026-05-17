@@ -3265,7 +3265,7 @@ body {
 #page-skills {
   flex-direction: column;
   min-height: 0;
-  padding: 16px 24px;
+  padding: 0;
   overflow: hidden;
 }
 
@@ -3274,12 +3274,15 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
+  padding-left: var(--page-header-padding-x);
   padding-bottom: calc(var(--scroll-fade-edge) + 12px);
 }
 
 .skills-search-chrome {
   flex: 0 0 auto;
   margin: 2px 0 12px;
+  padding-left: var(--page-header-padding-x);
+  padding-right: var(--page-header-padding-x);
 }
 
 .skills-search-chrome[hidden] {
@@ -4964,9 +4967,9 @@ body {
     flex-wrap: wrap;
   }
 
-  /* Skills page — reduce padding so cards don't get squeezed. */
+  /* Skills page — padding handled by children, not the page container. */
   #page-skills {
-    padding: 12px 12px;
+    padding: 0;
   }
 
   .skills-card-head {
@@ -6432,6 +6435,115 @@ body.nav-collapsed .nav-budget-pill {
   border-bottom: 1px solid var(--divider);
 }
 
+
+/* ── Marketplace card redesign (Figma 1986-27043) ── */
+
+.marketplace-card {
+  border-radius: 22px;
+  padding: 20px;
+  gap: 12px;
+}
+
+.marketplace-card-title strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.marketplace-card-title .muted {
+  font-size: 14px;
+  font-weight: 400;
+  color: #5c789a;
+}
+
+.marketplace-card-body {
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.marketplace-card-bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.marketplace-card-state {
+  background: #e6ecf2;
+  border: none;
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.marketplace-card-state strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #000000;
+  margin-bottom: 2px;
+}
+
+.marketplace-card-state-hint {
+  font-size: 14px;
+  font-weight: 400;
+  color: #000000;
+}
+
+/* Official badge — solid green pill */
+.marketplace-card-badges .skills-badge-ok {
+  background: #31c48d;
+  color: #ffffff;
+  border-color: transparent;
+  font-weight: 700;
+}
+
+/* Hide stats meta row (not in Figma design) */
+.marketplace-card-meta {
+  display: none;
+}
+
+/* Search bar pill shape */
+.marketplace-search {
+  border-radius: 999px;
+  padding: 0 16px;
+}
+
+.marketplace-controls {
+  gap: 8px;
+}
+
+/* Filters row */
+.marketplace-filters {
+  padding: 18px 0 4px;
+  gap: 10px;
+}
+
+.marketplace-filter-toggle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  gap: 10px;
+}
+
+/* Secondary actions: stack vertically like Figma */
+.marketplace-card-actions {
+  gap: 12px;
+}
+
+.marketplace-secondary-actions {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.marketplace-secondary-actions .btn,
+.marketplace-secondary-actions a.btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── end marketplace redesign ── */
+
 .cost-table td {
   border-bottom: 1px solid var(--divider);
   color: var(--text-primary);
@@ -7177,9 +7289,18 @@ body.nav-collapsed .nav-budget-pill {
 
   .files-layout,
   .dashboard-shell,
-  .settings-shell,
-  #page-skills {
+  .settings-shell {
     padding: 0 12px 14px;
+  }
+
+  #page-skills {
+    padding: 0;
+  }
+
+  #page-skills .skills-scroll,
+  #page-skills .skills-search-chrome {
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .costs-stats-grid,
