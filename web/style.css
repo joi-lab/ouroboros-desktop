@@ -1154,7 +1154,7 @@ body {
 
 .chat-bubble.system[data-system-type="skill_review"] {
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .chat-bubble.system[data-system-type="skill_review"] .sender,
