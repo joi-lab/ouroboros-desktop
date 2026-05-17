@@ -257,7 +257,7 @@ export function initEvolution({ ws, state, mount = null, embedded = false, chart
                         backgroundColor: 'rgba(26, 21, 32, 0.95)',
                         titleColor: '#e2e8f0',
                         bodyColor: '#94a3b8',
-                        borderColor: 'rgba(201, 53, 69, 0.18)',
+                        borderColor: 'rgba(36, 56, 112, 0.18)',
                         borderWidth: 1,
                         titleFont: { family: 'JetBrains Mono, monospace', size: 12 },
                         bodyFont: { family: 'JetBrains Mono, monospace', size: 11 },

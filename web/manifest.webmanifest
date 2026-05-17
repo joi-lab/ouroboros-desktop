@@ -12,8 +12,8 @@
     "browser"
   ],
   "orientation": "any",
-  "background_color": "#0d0b0f",
-  "theme_color": "#0d0b0f",
+  "background_color": "#eff5fb",
+  "theme_color": "#eff5fb",
   "lang": "en",
   "categories": [
     "productivity",
