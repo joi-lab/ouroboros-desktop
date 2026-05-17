@@ -7179,6 +7179,49 @@ body.nav-collapsed .nav-budget-pill {
     max-width: 92%;
   }
 
+  .chat-live-summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .chat-live-summary-main {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .chat-live-summary-main .chat-live-title {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .chat-live-summary-side {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+
+  .chat-live-summary-side .chat-live-count,
+  .chat-live-summary-side .chat-live-toggle {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .chat-live-summary-side .chat-live-chevron {
+    margin-left: auto;
+  }
+
   .files-layout,
   .dashboard-shell,
   .settings-shell {
