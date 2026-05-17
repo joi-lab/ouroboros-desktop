@@ -25,6 +25,7 @@ import { apiFetch } from './modules/api_client.js';
 import { escapeHtmlAttr, escapeHtmlText } from './modules/utils.js';
 
 import { initOnboardingOverlay } from './modules/onboarding_overlay.js';
+import { initPwa } from './modules/pwa.js';
 
 // ---------------------------------------------------------------------------
 // Shared State
@@ -228,6 +229,7 @@ initOnboardingOverlay();
 // ---------------------------------------------------------------------------
 initMatrixRain();
 loadVersion();
+initPwa();
 
 // Visual viewport height — keeps layout above soft keyboard on iOS/Android.
 // Updates a <style> tag (not element.style) to set --vvh without inline styles.

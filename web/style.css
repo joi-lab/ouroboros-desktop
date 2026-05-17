@@ -79,6 +79,12 @@ body {
   overflow: hidden;
 }
 
+@media (display-mode: standalone) {
+    #nav-rail {
+        padding-top: env(safe-area-inset-top, 0px);
+    }
+}
+
 #app {
   display: flex;
   height: var(--vvh);
