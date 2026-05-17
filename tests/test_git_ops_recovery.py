@@ -731,11 +731,11 @@ def test_configure_remote_adds_origin_even_when_managed_remote_exists(monkeypatc
         lambda repo_slug, token: calls.append(("helper", repo_slug, token)),
     )
 
-    ok, message = git_ops.configure_remote("joi-lab/ouroboros-desktop", "ghp_test")
+    ok, message = git_ops.configure_remote("komsikov/ouroboros-desktop", "ghp_test")
 
     assert ok
     assert message == "ok"
-    assert ["git", "remote", "add", "origin", "https://github.com/joi-lab/ouroboros-desktop.git"] in calls
+    assert ["git", "remote", "add", "origin", "https://github.com/komsikov/ouroboros-desktop.git"] in calls
 
 
 def test_collect_repo_sync_state_prefers_managed_remote(monkeypatch):
