@@ -5050,6 +5050,20 @@ body {
   }
 }
 
+/* Mobile elements: hidden on desktop, shown via media query */
+#mobile-top-bar {
+  display: none;
+}
+#mobile-drawer-backdrop {
+  display: none;
+}
+#mobile-profile-drawer {
+  display: none;
+}
+#mobile-left-drawer {
+  display: none;
+}
+
 /* Primary Figma redesign system. */
 :root {
   --bg-primary: #ffffff;
@@ -6669,82 +6683,436 @@ body.nav-collapsed .nav-budget-pill {
 }
 
 @media (max-width: 760px) {
-  #nav-rail,
-  body.nav-collapsed #nav-rail {
-    flex-direction: row;
-    top: auto;
-    bottom: 0;
+  /* ── Mobile top bar ── */
+  #mobile-top-bar {
+    display: flex;
+    position: fixed;
+    top: 0;
     left: 0;
     right: 0;
-    width: 100%;
-    height: auto;
-    padding: 6px;
-    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
-    gap: 4px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    background: rgba(255, 255, 255, 0.92);
-    border-top: 1px solid var(--divider);
-    border-right: 0;
-    box-shadow: 0 -8px 24px rgba(0, 13, 49, 0.08);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    z-index: 40;
+    align-items: center;
+    justify-content: space-between;
+    height: calc(44px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 8px 0;
+    background: transparent;
   }
 
-  #nav-collapse-toggle,
-  .nav-section-divider,
-  .nav-widgets-section {
-    display: none;
-  }
-
-  #nav-rail::before,
-  #nav-version,
-  .nav-spacer {
-    display: none;
-  }
-
-  .nav-budget-pill {
-    order: 20;
-    width: 106px;
-    min-width: 106px;
-    height: 44px;
-    min-height: 44px;
-    flex: 0 0 auto;
-    padding: 0;
-    border-radius: 22px;
-  }
-
-  .nav-budget-pill .chat-budget-text {
-    font-size: 16px;
-  }
-
-  .nav-btn {
-    min-width: 66px;
-    min-height: 52px;
-    flex: 0 0 auto;
-    flex-direction: column;
+  .mobile-top-btn {
+    display: flex;
+    align-items: center;
     justify-content: center;
-    gap: 3px;
-    padding: 6px 10px;
-    border-radius: 16px;
-    font-size: 10px;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    transition: background 0.15s ease;
   }
 
-  .nav-btn svg,
-  .nav-icon,
-  .nav-collapse-icon,
-  .nav-widget-icon img {
-    width: 20px;
-    height: 20px;
+  .mobile-top-btn:active {
+    background: rgba(0, 13, 49, 0.06);
   }
 
+  .mobile-top-btn svg {
+    display: block;
+  }
+
+  .mobile-top-title {
+    flex: 1;
+    text-align: center;
+    font-family: 'Manrope', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: #000D31;
+    letter-spacing: -0.01em;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* ── Sub-page back navigation ── */
+  #mobile-back-btn {
+    display: none;
+  }
+
+  #mobile-page-title {
+    display: none;
+    font-family: 'Manrope', sans-serif;
+    font-size: 20px;
+    font-weight: 500;
+    color: #000D31;
+    letter-spacing: -0.02em;
+  }
+
+  body.mobile-subpage #mobile-top-bar {
+    justify-content: flex-start;
+    gap: 4px;
+  }
+
+  body.mobile-subpage #mobile-back-btn {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  body.mobile-subpage #mobile-page-title {
+    display: block;
+  }
+
+  body.mobile-subpage #mobile-nav-open,
+  body.mobile-subpage #mobile-profile-open {
+    display: none;
+  }
+
+  /* ── Nav-rail: desktop only, hidden on mobile ── */
+  #nav-rail,
+  body.nav-collapsed #nav-rail {
+    display: none;
+  }
+
+  /* ── Left widgets drawer (outside #app, no stacking issue) ── */
+  #mobile-left-drawer {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    background: var(--bg-secondary);
+    z-index: 45;
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  }
+
+  body.mobile-nav-open #mobile-left-drawer {
+    transform: translateX(0);
+  }
+
+  /* Hide top bar while left drawer is open */
+  body.mobile-nav-open #mobile-top-bar {
+    display: none;
+  }
+
+  .mobile-left-head {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: max(16px, env(safe-area-inset-top, 0px)) 12px 8px;
+    flex-shrink: 0;
+  }
+
+  /* White card container for widgets */
+  .mobile-widgets-host {
+    margin: 0 16px;
+    background: var(--bg-primary);
+    border-radius: 20px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* Чат — always shown as active (dark navy) item */
+  .mobile-left-navbtn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+  }
+
+  .mobile-left-navbtn img {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
+  }
+
+  .mobile-left-navbtn:active {
+    background: var(--bg-hover);
+  }
+
+  .mobile-left-navbtn.active {
+    background: #000D31;
+    color: #ffffff;
+  }
+
+  .mobile-left-navbtn.active img {
+    opacity: 1;
+    filter: brightness(0) invert(1);
+  }
+
+  /* Widget item rows inside mobile drawer */
+  .mobile-widgets-host .nav-widget-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mobile-widgets-host .nav-widget-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .mobile-widgets-host .nav-widget-item:active {
+    background: var(--bg-hover);
+  }
+
+  .mobile-widgets-host .nav-widget-item.active {
+    background: #000D31;
+    color: #ffffff;
+  }
+
+  .mobile-widgets-host .nav-widget-icon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-widgets-host .nav-widget-icon img {
+    width: 24px;
+    height: 24px;
+    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
+  }
+
+  .mobile-widgets-host .nav-widget-item.active .nav-widget-icon img {
+    filter: brightness(0) invert(1);
+    filter: brightness(0) invert(1);
+  }
+
+  .mobile-widgets-host .nav-widget-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-widgets-host .nav-widget-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-widgets-host .nav-widget-subtitle {
+    font-size: 12px;
+    color: #8AA0BA;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-widgets-host .nav-widget-item.active .nav-widget-subtitle {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .mobile-widgets-host .nav-widget-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  /* ── Backdrop ── */
+  #mobile-drawer-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 13, 49, 0.2);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+
+  body.mobile-profile-open #mobile-drawer-backdrop {
+    display: block;
+  }
+
+  /* ── Right profile drawer — mirrors left drawer exactly ── */
+  #mobile-profile-drawer {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    padding: 0;
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+    background: var(--bg-secondary);
+    border: none;
+    box-shadow: none;
+    transform: translateX(100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 45;
+    overflow-y: auto;
+  }
+
+  body.mobile-profile-open #mobile-profile-drawer {
+    transform: translateX(0);
+  }
+
+  body.mobile-profile-open #mobile-top-bar {
+    display: none;
+  }
+
+  .mobile-profile-head {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: max(16px, env(safe-area-inset-top, 0px)) 12px 8px;
+    flex-shrink: 0;
+  }
+
+  .mobile-drawer-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .mobile-drawer-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .mobile-profile-host {
+    margin: 0 16px;
+    background: var(--bg-primary);
+    border-radius: 20px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mobile-profile-navbtn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+  }
+
+  .mobile-profile-navbtn img,
+  .mobile-profile-navbtn > svg {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
+  }
+
+  .mobile-profile-navbtn:active {
+    background: var(--bg-hover);
+  }
+
+  .mobile-profile-navbtn.active {
+    background: #000D31;
+    color: #ffffff;
+  }
+
+  .mobile-profile-navbtn.active img,
+  .mobile-profile-navbtn.active > svg {
+    filter: brightness(0) invert(1);
+  }
+
+  .mobile-profile-budget-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mobile-profile-budget-row .mobile-profile-navbtn {
+    flex: 1;
+  }
+
+  .mobile-budget-mirror {
+    flex-shrink: 0;
+    cursor: default;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    justify-content: center;
+    width: 100px;
+  }
+
+  /* ── Content: top padding clears the mobile bar, no bottom bar ── */
   #content,
   body.nav-collapsed #content {
-    padding: 6px 6px calc(70px + env(safe-area-inset-bottom, 0px));
+    padding: calc(44px + env(safe-area-inset-top, 0px)) 0 0;
+    background: var(--bg-secondary);
+  }
+
+  /* ── Keyboard open: collapse top bar so more chat is visible ── */
+  body.keyboard-open #mobile-top-bar {
+    display: none;
+  }
+
+  body.keyboard-open #content {
+    padding-top: 0;
+  }
+
+  /* Flat solid background on mobile — no white cards for pages */
+  #app {
+    background: var(--bg-secondary);
   }
 
   .page {
-    border-radius: 20px;
+    border-radius: 0;
+    background: var(--bg-secondary);
   }
 
   .page-header,
@@ -6772,29 +7140,18 @@ body.nav-collapsed .nav-budget-pill {
     display: none;
   }
 
+  /* Hide chat header action area on mobile — controls moved to profile drawer */
   .chat-page-header .app-page-actions {
-    width: auto;
-    top: 10px;
-    right: 12px;
-    overflow: visible;
-    padding-bottom: 0;
-  }
-
-  .chat-action-dropdown.chat-header-actions {
-    width: max-content;
-    min-width: min(260px, calc(100vw - 32px));
-    max-width: calc(100vw - 32px);
-    overflow: visible;
-    flex-wrap: nowrap;
+    display: none;
   }
 
   #chat-messages {
-    padding: 92px 14px
+    padding: 16px 14px
       calc(var(--chat-input-reserve, 126px) + env(safe-area-inset-bottom, 0px));
   }
 
   #chat-messages:empty {
-    padding: 88px 18px 260px;
+    padding: 16px 18px 260px;
   }
 
   #chat-messages:empty::before {
@@ -6840,7 +7197,7 @@ body.nav-collapsed .nav-budget-pill {
   }
 
   .chat-attach-label {
-    font-size: 13px;
+    display: none;
   }
 
   .chat-send-group {

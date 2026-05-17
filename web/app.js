@@ -63,8 +63,17 @@ async function showPage(name) {
     }
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.mobile-profile-navbtn[data-profile-page]').forEach(b => b.classList.remove('active'));
     document.getElementById(`page-${name}`)?.classList.add('active');
     document.querySelector(`.nav-btn[data-page="${name}"]`)?.classList.add('active');
+    document.querySelector(`.mobile-profile-navbtn[data-profile-page="${name}"]`)?.classList.add('active');
+    const chatNavBtn = document.querySelector('.mobile-left-navbtn[data-left-page="chat"]');
+    if (chatNavBtn) chatNavBtn.classList.toggle('active', name === 'chat');
+    const MOBILE_PAGE_TITLES = { files: 'Файлы', dashboard: 'Дашборд', skills: 'Навыки', settings: 'Настройки' };
+    const isSubpage = name in MOBILE_PAGE_TITLES;
+    document.body.classList.toggle('mobile-subpage', isSubpage);
+    const titleEl = document.getElementById('mobile-page-title');
+    if (titleEl) titleEl.textContent = MOBILE_PAGE_TITLES[name] || '';
     if (name !== 'widgets') {
         activeSidebarWidgetKey = '';
         document.querySelectorAll('.nav-widget-item.active').forEach((item) => item.classList.remove('active'));
@@ -146,7 +155,6 @@ function widgetIconSrcForTitle(title = '') {
 async function refreshSidebarWidgets() {
     const list = document.getElementById('nav-widget-list');
     if (!list) return;
-    if (!navWidgetsLoaded) list.innerHTML = '<div class="nav-widget-empty">Loading…</div>';
     try {
         const resp = await apiFetch('/api/extensions', { cache: 'no-store' });
         const data = await resp.json().catch(() => ({}));
@@ -154,7 +162,7 @@ async function refreshSidebarWidgets() {
         const tabs = Array.isArray(data.live?.ui_tabs) ? data.live.ui_tabs : [];
         navWidgetsLoaded = true;
         if (!tabs.length) {
-            list.innerHTML = '<div class="nav-widget-empty">No widgets</div>';
+            list.innerHTML = '';
             return;
         }
         list.innerHTML = tabs.map((tab) => {
@@ -173,7 +181,7 @@ async function refreshSidebarWidgets() {
             `;
         }).join('');
     } catch (error) {
-        list.innerHTML = `<div class="nav-widget-empty" title="${escapeHtmlAttr(String(error?.message || error || ''))}">Widgets unavailable</div>`;
+        list.innerHTML = '';
     }
 }
 
@@ -340,3 +348,161 @@ initPwa();
 }());
 
 ws.connect();
+
+// ---------------------------------------------------------------------------
+// Mobile drawer system
+// ---------------------------------------------------------------------------
+(function initMobileDrawers() {
+    const backdrop = document.getElementById('mobile-drawer-backdrop');
+    const navOpenBtn = document.getElementById('mobile-nav-open');
+    const leftDrawer = document.getElementById('mobile-left-drawer');
+    const leftCloseBtn = document.getElementById('mobile-left-close');
+    const profileOpenBtn = document.getElementById('mobile-profile-open');
+    const profileCloseBtn = document.getElementById('mobile-profile-close');
+    const profileDrawer = document.getElementById('mobile-profile-drawer');
+
+    // Widgets: moved between nav-rail and mobile drawer on open/close
+    const widgetListSrc = document.getElementById('nav-widget-list');
+    const widgetsSection = document.getElementById('nav-widgets-section');
+    const mobileWidgetsHost = document.getElementById('mobile-widgets-host');
+
+    function openNavDrawer() {
+        document.body.classList.add('mobile-nav-open');
+        navOpenBtn?.setAttribute('aria-expanded', 'true');
+        // Move widget list into mobile drawer (preserves all event handlers)
+        if (widgetListSrc && mobileWidgetsHost && !mobileWidgetsHost.contains(widgetListSrc)) {
+            mobileWidgetsHost.appendChild(widgetListSrc);
+        }
+    }
+
+    function closeNavDrawer() {
+        document.body.classList.remove('mobile-nav-open');
+        navOpenBtn?.setAttribute('aria-expanded', 'false');
+        // Move widget list back to nav-rail
+        if (widgetListSrc && widgetsSection && !widgetsSection.contains(widgetListSrc)) {
+            widgetsSection.appendChild(widgetListSrc);
+        }
+    }
+
+    function openProfileDrawer() {
+        document.body.classList.add('mobile-profile-open');
+        profileOpenBtn?.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeProfileDrawer() {
+        document.body.classList.remove('mobile-profile-open');
+        profileOpenBtn?.setAttribute('aria-expanded', 'false');
+    }
+
+    function closeAll() {
+        closeNavDrawer();
+        closeProfileDrawer();
+    }
+
+    navOpenBtn?.addEventListener('click', () => {
+        if (document.body.classList.contains('mobile-nav-open')) closeNavDrawer();
+        else { closeProfileDrawer(); openNavDrawer(); }
+    });
+
+    profileOpenBtn?.addEventListener('click', () => {
+        if (document.body.classList.contains('mobile-profile-open')) closeProfileDrawer();
+        else { closeNavDrawer(); openProfileDrawer(); }
+    });
+
+    leftCloseBtn?.addEventListener('click', closeNavDrawer);
+    profileCloseBtn?.addEventListener('click', closeProfileDrawer);
+    backdrop?.addEventListener('click', closeAll);
+    document.getElementById('mobile-back-btn')?.addEventListener('click', () => showPage('chat'));
+
+    // Left drawer: chat shortcut + widget tap close
+    leftDrawer?.addEventListener('click', (e) => {
+        const pageBtn = e.target.closest('[data-left-page]');
+        if (pageBtn) {
+            showPage(pageBtn.dataset.leftPage);
+            closeNavDrawer();
+            return;
+        }
+        if (e.target.closest('[data-widget-key]')) {
+            setTimeout(closeNavDrawer, 100);
+        }
+    });
+
+    // Right profile drawer: nav links + command delegation
+    profileDrawer?.addEventListener('click', (e) => {
+        const pageBtn = e.target.closest('[data-profile-page]');
+        if (pageBtn) {
+            showPage(pageBtn.dataset.profilePage);
+            closeProfileDrawer();
+            return;
+        }
+        // Delegate chat commands to desktop buttons
+        const cmdBtn = e.target.closest('[data-mobile-cmd]');
+        if (cmdBtn) {
+            const cmd = cmdBtn.dataset.mobileCmd;
+            const desktop = document.querySelector(`#chat-header-actions [data-chat-command="${cmd}"]`);
+            if (desktop) desktop.click();
+            closeProfileDrawer();
+        }
+    });
+
+    // Sync status badge from #chat-status to #mobile-status-mirror
+    const statusSrc = document.getElementById('chat-status');
+    const statusMirror = document.getElementById('mobile-status-mirror');
+    if (statusSrc && statusMirror) {
+        const syncStatus = () => {
+            statusMirror.className = statusSrc.className;
+            statusMirror.textContent = statusSrc.textContent;
+        };
+        syncStatus();
+        new MutationObserver(syncStatus).observe(statusSrc, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+
+    // Sync budget text from #chat-budget-text to #mobile-budget-text-mirror
+    const budgetTextSrc = document.getElementById('chat-budget-text');
+    const budgetTextMirror = document.getElementById('mobile-budget-text-mirror');
+    if (budgetTextSrc && budgetTextMirror) {
+        const syncBudgetText = () => { budgetTextMirror.textContent = budgetTextSrc.textContent; };
+        syncBudgetText();
+        new MutationObserver(syncBudgetText).observe(budgetTextSrc, { childList: true, subtree: true, characterData: true });
+    }
+
+    // Mobile budget button: open settings costs tab
+    const mobileBudgetAction = () => {
+        closeProfileDrawer();
+        openDashboardTab('costs');
+    };
+    document.getElementById('mobile-budget-row-btn')?.addEventListener('click', mobileBudgetAction);
+    document.getElementById('mobile-budget-pill-mirror')?.addEventListener('click', mobileBudgetAction);
+
+    // Sync budget bar width from #chat-budget-bar-fill to #mobile-budget-fill-mirror
+    const budgetFillSrc = document.getElementById('chat-budget-bar-fill');
+    const budgetFillMirror = document.getElementById('mobile-budget-fill-mirror');
+    if (budgetFillSrc && budgetFillMirror) {
+        const syncFill = () => { budgetFillMirror.style.width = budgetFillSrc.style.width; };
+        syncFill();
+        new MutationObserver(syncFill).observe(budgetFillSrc, { attributes: true, attributeFilter: ['style'] });
+    }
+
+    // Sync version text from #nav-version to #mobile-version-mirror
+    const versionSrc = document.getElementById('nav-version');
+    const versionMirror = document.getElementById('mobile-version-mirror');
+    if (versionSrc && versionMirror) {
+        const syncVersion = () => { versionMirror.textContent = versionSrc.textContent; };
+        syncVersion();
+        new MutationObserver(syncVersion).observe(versionSrc, { childList: true, subtree: true, characterData: true });
+    }
+
+    // Sync on/off state of toggle commands (review, bg) from desktop buttons
+    function syncCommandToggleState() {
+        ['review', 'bg'].forEach((cmd) => {
+            const desktop = document.querySelector(`#chat-header-actions [data-chat-command="${cmd}"]`);
+            const mobile = document.querySelector(`[data-mobile-cmd="${cmd}"]`);
+            if (desktop && mobile) {
+                mobile.classList.toggle('on', desktop.classList.contains('on'));
+            }
+        });
+    }
+    // Re-sync toggle states when profile drawer opens
+    profileOpenBtn?.addEventListener('click', syncCommandToggleState);
+    window.addEventListener('ouro:page-shown', syncCommandToggleState);
+}());
