@@ -69,6 +69,10 @@
   display: none !important;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
