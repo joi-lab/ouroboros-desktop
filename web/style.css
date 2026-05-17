@@ -3977,13 +3977,13 @@ body {
 }
 
 .marketplace-card {
-  border: none;
-  border-radius: 22px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(250, 250, 250, 0.08);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .marketplace-card.is-working {
@@ -4104,27 +4104,53 @@ body {
 
 .marketplace-card-head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  justify-content: space-between;
   align-items: flex-start;
+  gap: 10px;
 }
 
-.marketplace-card-title {
-  font-size: 16px;
-  font-family: 'Manrope', sans-serif;
-  font-weight: 500;
-  line-height: 1.4;
-  color: rgba(250, 250, 250, 0.95);
-}
-
-
-.marketplace-card-state-hint {
+.marketplace-card-title strong {
   font-size: 14px;
-  font-family: 'Manrope', sans-serif;
-  font-weight: 400;
-  color: rgba(250, 250, 250, 0.68);
-  margin: 0;
+  margin-right: 8px;
+  display: block;
+}
+
+.marketplace-card-title .muted {
+  font-size: 12px;
+  color: rgba(250, 250, 250, 0.55);
+  word-break: break-all;
+}
+
+.marketplace-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.marketplace-card-body {
+  color: rgba(250, 250, 250, 0.8);
+  font-size: 13px;
   line-height: 1.45;
+  min-height: 38px;
+}
+
+.marketplace-card-state {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.marketplace-card-state strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .marketplace-working-spinner {
@@ -4134,42 +4160,52 @@ body {
   border: 2px solid rgba(245, 158, 11, 0.22);
   border-top-color: rgba(245, 158, 11, 0.95);
   animation: skills-review-spin 900ms linear infinite;
-  flex-shrink: 0;
+}
+
+.marketplace-card-state-hint {
+  color: rgba(250, 250, 250, 0.68);
+  line-height: 1.45;
+}
+
+.marketplace-state-ok {
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.marketplace-state-warn {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.marketplace-state-danger {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.marketplace-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: rgba(250, 250, 250, 0.55);
+}
+
+.marketplace-card-meta a {
+  color: rgba(250, 250, 250, 0.75);
 }
 
 .marketplace-card-actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   margin-top: auto;
 }
 
-.marketplace-card-actions .btn {
+.marketplace-primary-action .btn {
   width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 14px;
-  font-family: 'Manrope', sans-serif;
-  font-weight: 500;
-  border-radius: 100px;
 }
 
-.marketplace-card-actions .btn-primary {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(250, 250, 250, 0.9);
-  border: none;
-}
-
-.marketplace-next-action--installed {
-  background: #000d31 !important;
-  color: #fff !important;
-  border-color: transparent !important;
-}
-
-.marketplace-card-actions .btn-secondary {
-  background: transparent;
-  color: rgba(250, 250, 250, 0.8);
-  border: 1px solid rgba(250, 250, 250, 0.15);
+.marketplace-secondary-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .marketplace-pagination {
@@ -6161,6 +6197,7 @@ body.nav-collapsed .nav-budget-pill {
 .updates-card,
 .stat-card,
 .skills-card,
+.marketplace-card,
 .settings-card,
 .settings-shell .form-section,
 .settings-provider-card,
@@ -6169,19 +6206,11 @@ body.nav-collapsed .nav-budget-pill {
 .settings-effort-card,
 .mcp-server-card,
 .skills-access,
+.marketplace-card-state,
 .widgets-card,
 .log-entry {
   border: 1px solid var(--divider);
   border-radius: 20px;
-  background: #ffffff;
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: none;
-}
-
-.marketplace-card {
-  border: none;
-  border-radius: 22px;
   background: #ffffff;
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
@@ -6343,6 +6372,9 @@ body.nav-collapsed .nav-budget-pill {
 .section-title,
 .costs-table-label,
 .widgets-card-source,
+.marketplace-card-meta,
+.marketplace-card-title .muted,
+.marketplace-card-body,
 .marketplace-card-state-hint,
 .skills-card-desc,
 .skills-details > summary,
@@ -6368,7 +6400,7 @@ body.nav-collapsed .nav-budget-pill {
 .settings-provider-title,
 .settings-model-header h4,
 .skills-card-title h3,
-.marketplace-card-title,
+.marketplace-card-title strong,
 .widgets-card h3 {
   color: var(--text-primary);
 }
@@ -6377,7 +6409,6 @@ body.nav-collapsed .nav-budget-pill {
 .widget-kv-row {
   border-color: var(--divider);
 }
-
 
 .files-entry:hover,
 .files-entry.selected,
