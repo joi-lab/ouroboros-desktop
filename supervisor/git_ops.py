@@ -32,16 +32,16 @@ log = logging.getLogger(__name__)
 REPO_DIR: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "repo"
 DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "data"
 REMOTE_URL: str = ""
-BRANCH_DEV: str = "ouroboros"
+BRANCH_DEV: str = "ouroboros-redesign"
 BRANCH_STABLE: str = "ouroboros-stable"
 MANAGED_REPO_META_NAME = "ouroboros-managed.json"
 BOOTSTRAP_PIN_MARKER_NAME = "ouroboros-bootstrap-pending"
 UPDATE_INTENT_MARKER_NAME = "ouroboros-update-intent.json"
-OFFICIAL_UPDATE_REMOTE_URL = "https://github.com/joi-lab/ouroboros-desktop"
+OFFICIAL_UPDATE_REMOTE_URL = "https://github.com/komsikov/ouroboros-desktop"
 
 
 def init(repo_dir: pathlib.Path, drive_root: pathlib.Path, remote_url: str,
-         branch_dev: str = "ouroboros", branch_stable: str = "ouroboros-stable") -> None:
+         branch_dev: str = "ouroboros-redesign", branch_stable: str = "ouroboros-stable") -> None:
     global REPO_DIR, DRIVE_ROOT, REMOTE_URL, BRANCH_DEV, BRANCH_STABLE
     REPO_DIR = repo_dir
     DRIVE_ROOT = drive_root
