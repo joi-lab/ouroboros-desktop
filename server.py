@@ -380,7 +380,7 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
 
 
 def _runtime_branch_defaults() -> tuple[str, str]:
-    branch_dev = "ouroboros-redesign"
+    branch_dev = "ouroboros"
     branch_stable = "ouroboros-stable"
     if not _LAUNCHER_MANAGED:
         return branch_dev, branch_stable

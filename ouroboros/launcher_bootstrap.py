@@ -19,7 +19,7 @@ MANAGED_REPO_META_NAME = "ouroboros-managed.json"
 BOOTSTRAP_PIN_MARKER_NAME = "ouroboros-bootstrap-pending"
 MANIFEST_SCHEMA_VERSION = 1
 DEFAULT_MANAGED_REMOTE_NAME = "managed"
-DEFAULT_MANAGED_LOCAL_BRANCH = "ouroboros-redesign"
+DEFAULT_MANAGED_LOCAL_BRANCH = "ouroboros"
 DEFAULT_MANAGED_LOCAL_STABLE_BRANCH = "ouroboros-stable"
 DEFAULT_MANAGED_REMOTE_STABLE_BRANCH = "ouroboros-stable"
 
@@ -293,13 +293,7 @@ def _ensure_managed_remote(context: BootstrapContext, repo_dir: pathlib.Path, ma
 
     _run_git(context, ["git", "config", "user.name", "Ouroboros"], cwd=repo_dir, check=False)
     _run_git(context, ["git", "config", "user.email", "ouroboros@local.mac"], cwd=repo_dir, check=False)
-    manifest_to_write = dict(manifest)
-    existing_meta = load_repo_manifest(repo_dir)
-    for key in ("managed_local_branch", "managed_local_stable_branch"):
-        existing_val = str(existing_meta.get(key) or "").strip()
-        if existing_val:
-            manifest_to_write[key] = existing_val
-    _write_repo_manifest(repo_dir, manifest_to_write)
+    _write_repo_manifest(repo_dir, manifest)
 
 
 def _clone_repo_from_bundle(context: BootstrapContext, manifest: dict[str, Any]) -> pathlib.Path:
