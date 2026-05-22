@@ -1,24 +1,8 @@
-"""HTTP surface for the ClawHub marketplace (v4.50).
-
-Endpoints:
-
-- ``GET  /api/marketplace/clawhub/search?q=&official=&limit=&cursor=``
-- ``GET  /api/marketplace/clawhub/info/{slug}``
-- ``GET  /api/marketplace/clawhub/installed`` — local catalog snapshot
-- ``POST /api/marketplace/clawhub/install``     ``{slug, version?, auto_review?, overwrite?}``
-- ``POST /api/marketplace/clawhub/update/{name}``   ``{version?}``
-- ``POST /api/marketplace/clawhub/uninstall/{name}``
-- ``GET  /api/marketplace/clawhub/preview/{slug}`` — lightweight registry preview
-
-Every mutating endpoint defers the heavy work to ``asyncio.to_thread``
-so the Starlette event loop stays responsive while the registry HTTP
-+ stage + adapter + skill_review pipeline runs.
-"""
+"""HTTP surface for ClawHub/OuroborosHub marketplace routes."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import pathlib
 from typing import Any, Dict, Optional
@@ -46,6 +30,7 @@ from ouroboros.skill_lifecycle_queue import (
     run_blocking_preserving_cancellation,
     run_lifecycle_job,
 )
+from ouroboros.utils import read_json_dict
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +50,9 @@ def _review_status_allows_skill_runtime(status: str) -> bool:
 from ouroboros.gateway._helpers import (
     coerce_bool as _coerce_bool,
     coerce_int as _coerce_int,
+    json_error,
+    json_exception,
+    request_json_or,
     request_drive_root as _request_drive_root,
     request_repo_dir as _request_repo_dir,
 )
@@ -80,11 +68,6 @@ def _client_error_response(exc: Exception, *, default_status: int = 502) -> JSON
         status = 500
     log.warning("marketplace error: %s", exc, exc_info=True)
     return JSONResponse({"error": str(exc), "code": exc.__class__.__name__}, status_code=status)
-
-
-# ---------------------------------------------------------------------------
-# Search / info / preview
-# ---------------------------------------------------------------------------
 
 
 async def api_marketplace_search(request: Request) -> JSONResponse:
@@ -138,7 +121,7 @@ async def api_marketplace_search(request: Request) -> JSONResponse:
 async def api_marketplace_info(request: Request) -> JSONResponse:
     slug = (request.path_params.get("slug") or "").strip()
     if not slug:
-        return JSONResponse({"error": "missing slug"}, status_code=400)
+        return json_error("missing slug", 400)
     try:
         summary = await asyncio.to_thread(_registry_info, slug)
     except Exception as exc:
@@ -168,7 +151,7 @@ def _preview_pipeline(slug: str, version: Optional[str]) -> Dict[str, Any]:
 async def api_marketplace_preview(request: Request) -> JSONResponse:
     slug = (request.path_params.get("slug") or "").strip()
     if not slug:
-        return JSONResponse({"error": "missing slug"}, status_code=400)
+        return json_error("missing slug", 400)
     version = (request.query_params.get("version") or "").strip() or None
     try:
         payload = await asyncio.to_thread(_preview_pipeline, slug, version)
@@ -176,14 +159,8 @@ async def api_marketplace_preview(request: Request) -> JSONResponse:
         return _client_error_response(exc)
     except Exception as exc:
         log.exception("marketplace preview failed")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
     return JSONResponse(payload)
-
-
-# ---------------------------------------------------------------------------
-# Install / update / uninstall
-# ---------------------------------------------------------------------------
-
 
 def _serialize_install_result(result: Any) -> Dict[str, Any]:
     """Project an :class:`InstallResult` into a JSON-friendly dict."""
@@ -220,16 +197,90 @@ def _serialize_install_result(result: Any) -> Dict[str, Any]:
     return payload
 
 
+def _serialize_hub_install_result(result: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ok": result.ok,
+        "sanitized_name": result.sanitized_name,
+        "error": result.error,
+        "provenance": result.provenance,
+        "summary": result.summary.to_dict() if result.summary else None,
+    }
+    if result.target_dir is not None:
+        payload["target_dir"] = str(result.target_dir)
+    return payload
+
+
+async def _apply_hub_review_and_deps(
+    payload: Dict[str, Any],
+    *,
+    drive_root: pathlib.Path,
+    repo_dir: pathlib.Path,
+    skill_name: str,
+    progress: JobProgressTarget,
+    review_log_label: str,
+    deps_log_label: str,
+) -> tuple[str, str, str]:
+    progress.set("Running tri-model review…")
+    status, findings, error = await run_blocking_preserving_cancellation(
+        _run_skill_review,
+        drive_root,
+        repo_dir,
+        skill_name,
+        log_label=review_log_label,
+    )
+    payload.update({"review_status": status, "review_findings": findings, "review_error": error})
+    deps_status = "not_required"
+    deps_error = ""
+    if _review_status_allows_skill_runtime(status) and not error:
+        progress.set("Installing dependencies…")
+        deps_status, deps_error = await run_blocking_preserving_cancellation(
+            _reconcile_deps_after_review,
+            drive_root,
+            skill_name,
+            log_label=deps_log_label,
+        )
+        payload.update({"deps_status": deps_status, "deps_error": deps_error})
+        if deps_status == "failed":
+            payload["ok"] = False
+            payload["error"] = deps_error
+    return status, error, deps_status
+
+
+def _lifecycle_options(
+    success_prefix: str,
+    failure_fallback: str,
+    *,
+    progress_target: JobProgressTarget | None = None,
+    object_result: bool = False,
+    include_deps_error: bool = False,
+) -> LifecycleJobOptions:
+    get_value = (lambda item, key, default=None: getattr(item, key, default) if object_result else item.get(key, default))
+
+    return LifecycleJobOptions(
+        progress_target=progress_target,
+        result_message=lambda item: (
+            f"{success_prefix} {get_value(item, 'sanitized_name')}"
+            if get_value(item, "ok", False)
+            else get_value(item, "error", failure_fallback)
+        ),
+        result_error=lambda item: (
+            get_value(item, "error", failure_fallback)
+            if not get_value(item, "ok", False)
+            else (
+                get_value(item, "deps_error", "")
+                if include_deps_error and get_value(item, "deps_status", "") == "failed"
+                else ""
+            )
+        ),
+    )
+
+
 async def api_marketplace_install(request: Request) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
+    body = await request_json_or(request, {}, exceptions=(Exception,))
+    body = body if isinstance(body, dict) else {}
     slug = str(body.get("slug") or "").strip()
     if not slug:
-        return JSONResponse({"error": "missing slug"}, status_code=400)
+        return json_error("missing slug", 400)
     version = str(body.get("version") or "").strip() or None
     auto_review = _coerce_bool(body.get("auto_review"), True)
     overwrite = _coerce_bool(body.get("overwrite"), False)
@@ -257,23 +308,17 @@ async def api_marketplace_install(request: Request) -> JSONResponse:
             source="clawhub",
             message=f"Installing {slug}",
             runner=_run_install,
-            options=LifecycleJobOptions(
+            options=_lifecycle_options(
+                "Installed as",
+                "install failed",
                 progress_target=install_progress,
-                result_message=lambda item: (
-                    f"Installed as {item.sanitized_name}"
-                    if getattr(item, "ok", False)
-                    else getattr(item, "error", "install failed")
-                ),
-                result_error=lambda item: (
-                    getattr(item, "error", "install failed")
-                    if not getattr(item, "ok", False)
-                    else (getattr(item, "deps_error", "") if getattr(item, "deps_status", "") == "failed" else "")
-                ),
+                object_result=True,
+                include_deps_error=True,
             ),
         )
     except Exception as exc:
         log.exception("marketplace install failed")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
     payload = _serialize_install_result(result)
     return JSONResponse(payload, status_code=200 if result.ok else 400)
 
@@ -282,13 +327,9 @@ async def api_marketplace_update(request: Request) -> JSONResponse:
     sanitized = (request.path_params.get("name") or "").strip()
     err = _validate_path_param_name(sanitized)
     if err:
-        return JSONResponse({"error": err}, status_code=400)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
+        return json_error(err, 400)
+    body = await request_json_or(request, {}, exceptions=(Exception,))
+    body = body if isinstance(body, dict) else {}
     version = str(body.get("version") or "").strip() or None
     drive_root = _request_drive_root(request)
     repo_dir = _request_repo_dir(request)
@@ -311,36 +352,22 @@ async def api_marketplace_update(request: Request) -> JSONResponse:
             source="clawhub",
             message=f"Updating {sanitized}",
             runner=_run_update,
-            options=LifecycleJobOptions(
+            options=_lifecycle_options(
+                "Updated",
+                "update failed",
                 progress_target=update_progress,
-                result_message=lambda item: (
-                    f"Updated {item.sanitized_name}"
-                    if getattr(item, "ok", False)
-                    else getattr(item, "error", "update failed")
-                ),
-                result_error=lambda item: (
-                    getattr(item, "error", "update failed")
-                    if not getattr(item, "ok", False)
-                    else (getattr(item, "deps_error", "") if getattr(item, "deps_status", "") == "failed" else "")
-                ),
+                object_result=True,
+                include_deps_error=True,
             ),
         )
     except Exception as exc:
         log.exception("marketplace update failed")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
     return JSONResponse(_serialize_install_result(result), status_code=200 if result.ok else 400)
 
 
 def _validate_path_param_name(name: str) -> Optional[str]:
-    """Reject names that look like path traversal at the HTTP boundary.
-
-    Cycle 2 critics found that Starlette's ``{name}`` matcher (default
-    regex ``[^/]+``) accepts ``%2e%2e`` (``..``) which then flows into
-    ``shutil.rmtree(parent / "..")`` and wipes the data plane. We
-    refuse the request at the HTTP layer before ANY downstream code
-    runs — the install module re-validates as defence-in-depth.
-    Returns an error string (caller turns into 400) or ``None`` on OK.
-    """
+    """Reject traversal-like names at the HTTP boundary; downstream revalidates."""
     cleaned = (name or "").strip()
     if not cleaned:
         return "missing name"
@@ -397,7 +424,7 @@ async def api_marketplace_uninstall(request: Request) -> JSONResponse:
     sanitized = (request.path_params.get("name") or "").strip()
     err = _validate_path_param_name(sanitized)
     if err:
-        return JSONResponse({"error": err}, status_code=400)
+        return json_error(err, 400)
     drive_root = _request_drive_root(request)
     async def _run_uninstall() -> Any:
         return await run_blocking_preserving_cancellation(
@@ -414,18 +441,11 @@ async def api_marketplace_uninstall(request: Request) -> JSONResponse:
             source="clawhub",
             message=f"Uninstalling {sanitized}",
             runner=_run_uninstall,
-            options=LifecycleJobOptions(
-                result_message=lambda item: (
-                    f"Uninstalled {item.sanitized_name}"
-                    if getattr(item, "ok", False)
-                    else getattr(item, "error", "uninstall failed")
-                ),
-                result_error=lambda item: "" if getattr(item, "ok", False) else getattr(item, "error", "uninstall failed"),
-            ),
+            options=_lifecycle_options("Uninstalled", "uninstall failed", object_result=True),
         )
     except Exception as exc:
         log.exception("marketplace uninstall failed")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
     return JSONResponse(
         {
             "ok": result.ok,
@@ -442,43 +462,33 @@ async def api_marketplace_installed(request: Request) -> JSONResponse:
     out = _installed_skills_for_source(drive_root, "clawhub")
     return JSONResponse({"count": len(out), "skills": out})
 
-
-# ---------------------------------------------------------------------------
-# OuroborosHub static official-skill catalog
-# ---------------------------------------------------------------------------
-
-
 async def api_ouroboroshub_catalog(request: Request) -> JSONResponse:
     query = str(request.query_params.get("q") or request.query_params.get("query") or "").strip()
     try:
         results = await asyncio.to_thread(ouroboroshub.search, query)
     except Exception as exc:
         log.warning("OuroborosHub catalog failed: %s", exc, exc_info=True)
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return json_exception(exc, 502)
     return JSONResponse({"query": query, "count": len(results), "results": [item.to_dict() for item in results]})
 
 
 async def api_ouroboroshub_preview(request: Request) -> JSONResponse:
     slug = str(request.path_params.get("slug") or "").strip()
     if not slug:
-        return JSONResponse({"error": "missing slug"}, status_code=400)
+        return json_error("missing slug", 400)
     try:
         summary = await asyncio.to_thread(ouroboroshub.info, slug)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return json_exception(exc, 404)
     return JSONResponse({"summary": summary.to_dict(), "files": summary.files})
 
 
 async def api_ouroboroshub_install(request: Request) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
+    body = await request_json_or(request, {}, exceptions=(Exception,))
+    body = body if isinstance(body, dict) else {}
     slug = str(body.get("slug") or "").strip()
     if not slug:
-        return JSONResponse({"error": "missing slug"}, status_code=400)
+        return json_error("missing slug", 400)
     overwrite = _coerce_bool(body.get("overwrite"), False)
     auto_review = _coerce_bool(body.get("auto_review"), True)
     drive_root = _request_drive_root(request)
@@ -493,37 +503,17 @@ async def api_ouroboroshub_install(request: Request) -> JSONResponse:
             overwrite=overwrite,
             log_label="OuroborosHub install lifecycle operation",
         )
-        payload: Dict[str, Any] = {
-            "ok": result.ok,
-            "sanitized_name": result.sanitized_name,
-            "error": result.error,
-            "provenance": result.provenance,
-            "summary": result.summary.to_dict() if result.summary else None,
-        }
-        if result.target_dir is not None:
-            payload["target_dir"] = str(result.target_dir)
+        payload = _serialize_hub_install_result(result)
         if result.ok and auto_review:
-            install_progress.set("Running tri-model review…")
-            status, findings, error = await run_blocking_preserving_cancellation(
-                _run_skill_review,
-                drive_root,
-                repo_dir,
-                result.sanitized_name,
-                log_label="OuroborosHub install review lifecycle operation",
+            await _apply_hub_review_and_deps(
+                payload,
+                drive_root=drive_root,
+                repo_dir=repo_dir,
+                skill_name=result.sanitized_name,
+                progress=install_progress,
+                review_log_label="OuroborosHub install review lifecycle operation",
+                deps_log_label="OuroborosHub install dependency lifecycle operation",
             )
-            payload.update({"review_status": status, "review_findings": findings, "review_error": error})
-            if _review_status_allows_skill_runtime(status) and not error:
-                install_progress.set("Installing dependencies…")
-                deps_status, deps_error = await run_blocking_preserving_cancellation(
-                    _reconcile_deps_after_review,
-                    drive_root,
-                    result.sanitized_name,
-                    log_label="OuroborosHub install dependency lifecycle operation",
-                )
-                payload.update({"deps_status": deps_status, "deps_error": deps_error})
-                if deps_status == "failed":
-                    payload["ok"] = False
-                    payload["error"] = deps_error
         return payload
 
     payload = await run_lifecycle_job(
@@ -532,14 +522,10 @@ async def api_ouroboroshub_install(request: Request) -> JSONResponse:
         source="ouroboroshub",
         message=f"Installing {slug}",
         runner=_run_install,
-        options=LifecycleJobOptions(
+        options=_lifecycle_options(
+            "Installed as",
+            "install failed",
             progress_target=install_progress,
-            result_message=lambda item: (
-                f"Installed as {item.get('sanitized_name')}"
-                if item.get("ok")
-                else item.get("error", "install failed")
-            ),
-            result_error=lambda item: "" if item.get("ok") else item.get("error", "install failed"),
         ),
     )
     return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
@@ -549,12 +535,51 @@ async def api_ouroboroshub_update(request: Request) -> JSONResponse:
     name = str(request.path_params.get("name") or "").strip()
     err = _validate_path_param_name(name)
     if err:
-        return JSONResponse({"error": err}, status_code=400)
+        return json_error(err, 400)
     drive_root = _request_drive_root(request)
     repo_dir = _request_repo_dir(request)
     update_progress = JobProgressTarget()
 
     async def _run_update() -> Dict[str, Any]:
+        target_dir = drive_root / "skills" / "ouroboroshub" / name
+        marker = target_dir / ".ouroboroshub.json"
+        if not target_dir.exists():
+            return _serialize_hub_install_result(
+                ouroboroshub.HubInstallResult(
+                    False,
+                    name,
+                    error=f"{name} is not installed",
+                )
+            )
+        if not marker.is_file():
+            return _serialize_hub_install_result(
+                ouroboroshub.HubInstallResult(
+                    False,
+                    name,
+                    error="missing OuroborosHub provenance marker",
+                    target_dir=target_dir,
+                )
+            )
+        marker_data = read_json_dict(marker) or {}
+        from ouroboros.skill_loader import _sanitize_skill_name
+
+        marker_name = str(marker_data.get("sanitized_name") or "").strip()
+        marker_slug = str(marker_data.get("slug") or "").strip()
+        if (
+            marker_data.get("schema_version") != 1
+            or str(marker_data.get("source") or "") != "ouroboroshub"
+            or marker_name != name
+            or not marker_slug
+            or _sanitize_skill_name(marker_slug) != name
+        ):
+            return _serialize_hub_install_result(
+                ouroboroshub.HubInstallResult(
+                    False,
+                    name,
+                    error="invalid OuroborosHub provenance marker",
+                    target_dir=target_dir,
+                )
+            )
         was_live = False
         try:
             from ouroboros.extension_loader import is_extension_live, unload_extension
@@ -571,43 +596,21 @@ async def api_ouroboroshub_update(request: Request) -> JSONResponse:
         update_progress.set("Downloading from OuroborosHub…")
         result = await run_blocking_preserving_cancellation(
             ouroboroshub.install,
-            name,
+            marker_slug,
             overwrite=True,
             log_label="OuroborosHub update lifecycle operation",
         )
-        payload: Dict[str, Any] = {
-            "ok": result.ok,
-            "sanitized_name": result.sanitized_name,
-            "error": result.error,
-            "provenance": result.provenance,
-            "summary": result.summary.to_dict() if result.summary else None,
-        }
-        if result.target_dir is not None:
-            payload["target_dir"] = str(result.target_dir)
+        payload = _serialize_hub_install_result(result)
         if result.ok:
-            update_progress.set("Running tri-model review…")
-            status, findings, error = await run_blocking_preserving_cancellation(
-                _run_skill_review,
-                drive_root,
-                repo_dir,
-                result.sanitized_name,
-                log_label="OuroborosHub update review lifecycle operation",
+            status, error, deps_status = await _apply_hub_review_and_deps(
+                payload,
+                drive_root=drive_root,
+                repo_dir=repo_dir,
+                skill_name=result.sanitized_name,
+                progress=update_progress,
+                review_log_label="OuroborosHub update review lifecycle operation",
+                deps_log_label="OuroborosHub update dependency lifecycle operation",
             )
-            payload.update({"review_status": status, "review_findings": findings, "review_error": error})
-            deps_status = "not_required"
-            deps_error = ""
-            if _review_status_allows_skill_runtime(status) and not error:
-                update_progress.set("Installing dependencies…")
-                deps_status, deps_error = await run_blocking_preserving_cancellation(
-                    _reconcile_deps_after_review,
-                    drive_root,
-                    result.sanitized_name,
-                    log_label="OuroborosHub update dependency lifecycle operation",
-                )
-                payload.update({"deps_status": deps_status, "deps_error": deps_error})
-                if deps_status == "failed":
-                    payload["ok"] = False
-                    payload["error"] = deps_error
             if was_live and _review_status_allows_skill_runtime(status) and not error and deps_status != "failed":
                 try:
                     from ouroboros.config import load_settings
@@ -648,14 +651,10 @@ async def api_ouroboroshub_update(request: Request) -> JSONResponse:
         source="ouroboroshub",
         message=f"Updating {name}",
         runner=_run_update,
-        options=LifecycleJobOptions(
+        options=_lifecycle_options(
+            "Updated",
+            "update failed",
             progress_target=update_progress,
-            result_message=lambda item: (
-                f"Updated {item.get('sanitized_name')}"
-                if item.get("ok")
-                else item.get("error", "update failed")
-            ),
-            result_error=lambda item: "" if item.get("ok") else item.get("error", "update failed"),
         ),
     )
     return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
@@ -670,7 +669,7 @@ async def api_ouroboroshub_uninstall(request: Request) -> JSONResponse:
     sanitized = str(request.path_params.get("name") or "").strip()
     err = _validate_path_param_name(sanitized)
     if err:
-        return JSONResponse({"error": err}, status_code=400)
+        return json_error(err, 400)
 
     async def _run_uninstall() -> Dict[str, Any]:
         result = await run_blocking_preserving_cancellation(
@@ -686,14 +685,7 @@ async def api_ouroboroshub_uninstall(request: Request) -> JSONResponse:
         source="ouroboroshub",
         message=f"Uninstalling {sanitized}",
         runner=_run_uninstall,
-        options=LifecycleJobOptions(
-            result_message=lambda item: (
-                f"Uninstalled {item.get('sanitized_name')}"
-                if item.get("ok")
-                else item.get("error", "uninstall failed")
-            ),
-            result_error=lambda item: "" if item.get("ok") else item.get("error", "uninstall failed"),
-        ),
+        options=_lifecycle_options("Uninstalled", "uninstall failed"),
     )
     return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
 

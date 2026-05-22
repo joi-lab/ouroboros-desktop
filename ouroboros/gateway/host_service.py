@@ -31,6 +31,7 @@ from ouroboros.skill_loader import (
 from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
 
 log = logging.getLogger(__name__)
+_json_error = lambda message, status=500: JSONResponse({"ok": False, "error": message}, status_code=status)
 
 DEFAULT_HOST_SERVICE_HOST = "127.0.0.1"
 DEFAULT_HOST_SERVICE_PORT = 8767
@@ -195,10 +196,6 @@ def _token_from_websocket(websocket: WebSocket) -> str:
         if text.startswith(prefix):
             return text[len(prefix):]
     return ""
-
-
-def _json_error(message: str, status_code: int) -> JSONResponse:
-    return JSONResponse({"ok": False, "error": message}, status_code=status_code)
 
 
 async def _api_identity(request: Request) -> JSONResponse:

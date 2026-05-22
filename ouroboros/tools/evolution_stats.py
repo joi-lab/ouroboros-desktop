@@ -1,15 +1,4 @@
-"""Evolution Stats — generates evolution.json from git history and pushes to docs/.
-
-Collects metrics per sampled commit:
-  - ts: ISO timestamp
-  - hash: short commit hash
-  - msg: commit message
-  - version: semver extracted from message (e.g. "v5.2.1")
-  - py_lines: total lines across all .py files
-  - bible_bytes: size of BIBLE.md in bytes
-  - system_bytes: size of prompts/SYSTEM.md in bytes (proxy for self-concept)
-  - module_count: number of .py files
-"""
+"""Generate evolution.json metrics from sampled git history."""
 
 from __future__ import annotations
 
@@ -27,7 +16,6 @@ log = logging.getLogger(__name__)
 _VERSION_RE = re.compile(r"v(\d+\.\d+\.\d+)")
 _REPO_DIR = Path(os.environ.get("OUROBOROS_REPO_DIR", str(Path.home() / "Ouroboros" / "repo")))
 
-# How many data-points to generate (sampled across full history)
 MAX_POINTS = 100
 
 def _git(args: list[str], timeout: int = 15) -> str:

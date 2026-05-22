@@ -1,0 +1,221 @@
+"""Installer for the packaged ``ouroboros`` shell command."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import pathlib
+import platform
+import sys
+from dataclasses import dataclass
+
+from ouroboros.packaged_cli import PackagedCLIError, resolve_packaged_runtime
+from ouroboros.platform_layer import ensure_windows_user_path, is_unstable_macos_app_path
+
+
+MARKER = "# Ouroboros packaged CLI shim"
+
+
+@dataclass(frozen=True)
+class InstallPlan:
+    target: pathlib.Path
+    source: pathlib.Path
+    action: str
+    path_hint: str
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Install the packaged ouroboros CLI command.")
+    parser.add_argument("--dry-run", action="store_true", help="show the planned install without writing files")
+    parser.add_argument("--force", action="store_true", help="replace an existing Ouroboros-owned shim")
+    parser.add_argument("--target-dir", default="", help="override the target directory for the command shim")
+    parser.add_argument(
+        "--allow-unstable-app-path",
+        action="store_true",
+        help="allow installing from DMG/AppTranslocation paths; intended for tests only",
+    )
+    args = parser.parse_args(argv)
+    try:
+        runtime = resolve_packaged_runtime()
+        system = platform.system().lower()
+        if system == "windows":
+            plan = plan_windows_install(
+                runtime.bundle_root,
+                target_dir=pathlib.Path(args.target_dir) if args.target_dir else None,
+                force=args.force,
+            )
+            if not args.dry_run:
+                install_windows(plan, force=args.force)
+        else:
+            if system == "darwin" and not args.allow_unstable_app_path:
+                reject_unstable_macos_path(runtime.bundle_root)
+            plan = plan_posix_install(
+                runtime.bundle_root,
+                target_dir=pathlib.Path(args.target_dir).expanduser() if args.target_dir else None,
+                force=args.force,
+            )
+            if not args.dry_run:
+                install_posix(plan, force=args.force)
+        _print_plan(plan, dry_run=args.dry_run)
+        return 0
+    except PackagedCLIError as exc:
+        print(f"ouroboros CLI install: {exc}", file=sys.stderr)
+        return 2
+
+
+def reject_unstable_macos_path(bundle_root: pathlib.Path) -> None:
+    if is_unstable_macos_app_path(bundle_root):
+        raise PackagedCLIError(
+            "refusing to install CLI from a DMG or AppTranslocation path; "
+            "drag Ouroboros.app to /Applications, open it once, then rerun Install CLI"
+        )
+
+
+def plan_posix_install(
+    bundle_root: pathlib.Path,
+    *,
+    target_dir: pathlib.Path | None = None,
+    force: bool = False,
+) -> InstallPlan:
+    source = _packaged_wrapper_source(bundle_root, windows=False)
+    if not source.is_file():
+        raise PackagedCLIError(f"packaged wrapper is missing: {source}")
+    target_parent = target_dir or choose_posix_target_dir()
+    target = target_parent / "ouroboros"
+    action = _existing_action(target, source, force=force)
+    path_hint = _posix_path_hint(target_parent)
+    return InstallPlan(target=target, source=source, action=action, path_hint=path_hint)
+
+
+def install_posix(plan: InstallPlan, *, force: bool = False) -> None:
+    _existing_action(plan.target, plan.source, force=force)
+    plan.target.parent.mkdir(parents=True, exist_ok=True)
+    if plan.target.exists() or plan.target.is_symlink():
+        plan.target.unlink()
+    os.symlink(str(plan.source), str(plan.target))
+
+
+def choose_posix_target_dir() -> pathlib.Path:
+    home = pathlib.Path.home().resolve()
+    for raw in os.environ.get("PATH", "").split(os.pathsep):
+        if not raw:
+            continue
+        path = pathlib.Path(raw).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if home in (resolved, *resolved.parents) and resolved.is_dir() and os.access(resolved, os.W_OK):
+            return resolved
+    return home / ".local" / "bin"
+
+
+def _posix_path_hint(target_dir: pathlib.Path) -> str:
+    target_text = str(target_dir)
+    path_parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if target_text in path_parts:
+        return "Open a new terminal if your shell cached an older command path."
+    shell = pathlib.Path(os.environ.get("SHELL", "")).name
+    profile = "~/.zprofile" if shell == "zsh" else "~/.bash_profile"
+    return f'Add this to {profile} if needed: export PATH="$PATH:{target_text}"'
+
+
+def plan_windows_install(
+    bundle_root: pathlib.Path,
+    *,
+    target_dir: pathlib.Path | None = None,
+    force: bool = False,
+) -> InstallPlan:
+    source = _packaged_wrapper_source(bundle_root, windows=True)
+    if not source.is_file():
+        raise PackagedCLIError(f"packaged wrapper is missing: {source}")
+    parent = target_dir or windows_user_bin_dir()
+    target = parent / "ouroboros.cmd"
+    action = _existing_action(target, source, force=force)
+    hint = f"Open a new terminal. User PATH will include: {parent}"
+    return InstallPlan(target=target, source=source, action=action, path_hint=hint)
+
+
+def install_windows(plan: InstallPlan, *, force: bool = False) -> None:
+    _existing_action(plan.target, plan.source, force=force)
+    plan.target.parent.mkdir(parents=True, exist_ok=True)
+    plan.target.write_text(_windows_shim_text(plan.source), encoding="utf-8")
+    ensure_windows_user_path(plan.target.parent)
+
+
+def windows_user_bin_dir() -> pathlib.Path:
+    local = os.environ.get("LOCALAPPDATA", "").strip()
+    root = pathlib.Path(local) if local else pathlib.Path.home() / "AppData" / "Local"
+    return root / "Ouroboros" / "bin"
+
+
+def _packaged_wrapper_source(bundle_root: pathlib.Path, *, windows: bool) -> pathlib.Path:
+    explicit = os.environ.get("OUROBOROS_PACKAGED_CLI_WRAPPER", "").strip()
+    if explicit:
+        source = pathlib.Path(explicit).expanduser()
+        if not _is_expected_wrapper_source(source, bundle_root, windows=windows):
+            raise PackagedCLIError(f"packaged wrapper source is outside this bundle: {source}")
+        return source
+    name = "ouroboros.cmd" if windows else "ouroboros"
+    return bundle_root / "bin" / name
+
+
+def _existing_action(target: pathlib.Path, source: pathlib.Path, *, force: bool) -> str:
+    if not target.exists() and not target.is_symlink():
+        return "create"
+    if target.is_symlink():
+        try:
+            if target.resolve() == source.resolve():
+                return "refresh"
+        except OSError:
+            pass
+        if force:
+            return "replace"
+    else:
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if text == _windows_shim_text(source):
+            return "refresh"
+        if force:
+            return "replace"
+    raise PackagedCLIError(
+        f"refusing to overwrite existing non-Ouroboros command: {target}; "
+        "rerun with --force only if you own that file"
+    )
+
+
+def _print_plan(plan: InstallPlan, *, dry_run: bool) -> None:
+    prefix = "Would install" if dry_run else "Installed"
+    print(f"{prefix} ouroboros CLI: {plan.target} -> {plan.source}")
+    print(plan.path_hint)
+
+
+def _windows_shim_text(source: pathlib.Path) -> str:
+    return f"@echo off\r\nrem {MARKER}\r\ncall \"{source}\" %*\r\n"
+
+
+def _resolve_for_compare(path: pathlib.Path) -> pathlib.Path:
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return path.absolute()
+
+
+def _is_expected_wrapper_source(source: pathlib.Path, bundle_root: pathlib.Path, *, windows: bool) -> bool:
+    source = _resolve_for_compare(source)
+    bundle_root = _resolve_for_compare(bundle_root)
+    expected_name = "ouroboros.cmd" if windows else "ouroboros"
+    if source.name != expected_name or source.parent.name != "bin":
+        return False
+    wrapper_root = source.parent.parent
+    if wrapper_root in {bundle_root, bundle_root.parent}:
+        return True
+    if wrapper_root.name == "Resources" and wrapper_root.parent == bundle_root.parent:
+        return True
+    return False
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,34 +1,16 @@
 import { formatUsd2 } from './utils.js';
 import { apiFetch } from './api_client.js';
 
-// ``hostPage`` defaults to ``'dashboard'`` (Dashboard sub-tab migration v5.7+);
-// the legacy ``'settings'`` value is no longer passed by ``app.js``.
-export function initCosts({ ws, state, mount = null, embedded = false, hostPage = 'dashboard', hostSubtab = 'costs' }) {
+export function initCosts({ state, mount }) {
     const page = document.createElement('div');
     page.id = 'page-costs';
-    page.className = embedded ? 'settings-embedded-content settings-costs-panel' : 'page';
-    // v5.7.0: when embedded, drop the inner ".page-header" duplicate label
-    // (the outer Dashboard pill strip already names the panel) and move the
-    // Refresh button into the budget card head row.
-    const headerBlock = embedded
-        ? ''
-        : `
-        <div class="page-header">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            <h2>Costs</h2>
-            <div class="spacer"></div>
-            <button class="btn btn-default btn-sm" id="btn-refresh-costs">Refresh</button>
-        </div>`;
-    const inlineRefresh = embedded
-        ? `<button class="btn btn-default btn-sm costs-budget-refresh" id="btn-refresh-costs">Refresh</button>`
-        : '';
+    page.className = 'settings-embedded-content settings-costs-panel';
     page.innerHTML = `
-        ${headerBlock}
         <div class="costs-scroll">
             <div class="costs-budget-card">
                 <div class="costs-budget-head">
                     <h3 class="costs-budget-title">Budget</h3>
-                    ${inlineRefresh}
+                    <button class="btn btn-default btn-sm costs-budget-refresh" id="btn-refresh-costs">Refresh</button>
                 </div>
                 <div class="costs-budget-fields">
                     <div class="form-field">
@@ -69,47 +51,39 @@ export function initCosts({ ws, state, mount = null, embedded = false, hostPage 
             </div>
         </div>
     `;
-    (mount || document.getElementById('content')).appendChild(page);
+    mount.appendChild(page);
 
     function renderBreakdownTable(tableId, data, totalCost) {
         const tbody = document.querySelector('#' + tableId + ' tbody');
         tbody.innerHTML = '';
+        const cell = (className, text, attrs = {}) => {
+            const td = document.createElement('td');
+            td.className = className;
+            td.textContent = text;
+            Object.entries(attrs).forEach(([key, value]) => td.setAttribute(key, value));
+            return td;
+        };
         for (const [name, info] of Object.entries(data)) {
             const pct = totalCost > 0 ? (info.cost / totalCost * 100) : 0;
             const tr = document.createElement('tr');
-
-            const tdName = document.createElement('td');
-            tdName.className = 'cost-cell-name';
-            tdName.setAttribute('title', name);
-            tdName.textContent = name;
-
-            const tdCalls = document.createElement('td');
-            tdCalls.className = 'cost-cell-right';
-            tdCalls.textContent = info.calls;
-
-            const tdCost = document.createElement('td');
-            tdCost.className = 'cost-cell-right';
-            tdCost.textContent = formatUsd2(info.cost);
-
             const bar = document.createElement('progress');
             bar.className = 'cost-bar';
             bar.max = 100;
             bar.value = Math.min(100, pct);
-
             const tdBar = document.createElement('td');
             tdBar.className = 'cost-bar-cell';
             tdBar.appendChild(bar);
-
-            tr.append(tdName, tdCalls, tdCost, tdBar);
+            tr.append(
+                cell('cost-cell-name', name, { title: name }),
+                cell('cost-cell-right', info.calls),
+                cell('cost-cell-right', formatUsd2(info.cost)),
+                tdBar,
+            );
             tbody.appendChild(tr);
         }
         if (Object.keys(data).length === 0) {
             const tr = document.createElement('tr');
-            const td = document.createElement('td');
-            td.className = 'cost-empty-cell';
-            td.setAttribute('colspan', '4');
-            td.textContent = 'No data';
-            tr.appendChild(td);
+            tr.appendChild(cell('cost-empty-cell', 'No data', { colspan: '4' }));
             tbody.appendChild(tr);
         }
     }
@@ -177,17 +151,7 @@ export function initCosts({ ws, state, mount = null, embedded = false, hostPage 
         loadBudget();
     }
 
-    if (embedded) {
-        window.addEventListener('ouro:settings-subtab-shown', (event) => {
-            if (event.detail?.tab === 'costs') refreshCostsPanel();
-        });
-        window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
-            if (event.detail?.tab === hostSubtab && state.activePage === hostPage) refreshCostsPanel();
-        });
-    } else {
-        const obs = new MutationObserver(() => {
-            if (page.classList.contains('active')) refreshCostsPanel();
-        });
-        obs.observe(page, { attributes: true, attributeFilter: ['class'] });
-    }
+    window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
+        if (event.detail?.tab === 'costs' && state.activePage === 'dashboard') refreshCostsPanel();
+    });
 }

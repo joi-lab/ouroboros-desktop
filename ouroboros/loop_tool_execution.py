@@ -1,10 +1,4 @@
-"""
-Tool execution machinery for the LLM loop.
-
-Handles single-tool execution, parallel dispatch, timeouts, browser thread-affinity,
-result truncation, and progress/trace logging.
-Extracted from loop.py to keep the main loop orchestrator focused.
-"""
+"""LLM-loop tool execution: dispatch, timeouts, truncation, live logs."""
 
 from __future__ import annotations
 
@@ -49,18 +43,12 @@ _FAILURE_PREFIXES = (
 _EXIT_CODE_RE = re.compile(r"exit_code=(-?\d+)")
 _SIGNAL_RE = re.compile(r"signal=([A-Z0-9_]+)")
 
-# Hard ceiling for reviewed mutative tools (e.g. repo_commit) that must not
-# end with an ambiguous timeout.  The normal tool timeout fires first as a
-# soft warning; the executor then re-waits up to this ceiling.
+# Reviewed mutative tools get a hard ceiling after their soft timeout.
 _REVIEWED_MUTATIVE_HARD_CEILING = 1800
 
 
 def _emit_live_log(tools: ToolRegistry, payload: Dict[str, Any]) -> None:
-    """Thin wrapper around the SSOT helper — keeps the call-site signature stable.
-
-    The encapsulation leak (reaching into ``tools._ctx``) is now
-    contained here; the SSOT helper only sees the queue handle.
-    """
+    """Emit a live log through the registry context queue."""
     event_queue = getattr(getattr(tools, "_ctx", None), "event_queue", None)
     emit_log_event(
         event_queue,
@@ -70,12 +58,7 @@ def _emit_live_log(tools: ToolRegistry, payload: Dict[str, Any]) -> None:
 
 
 def _get_tool_timeout(tools: ToolRegistry, tool_name: str) -> int:
-    """Get timeout for a tool call.
-
-    Uses max(settings/env value, per-tool ToolEntry value) so that tools
-    declaring a higher minimum (e.g. claude_code_edit at 1200s) are never
-    silently capped by a lower global default (e.g. 600s).
-    """
+    """Return max(settings/env timeout, per-tool minimum)."""
     settings_val = 0
     try:
         settings_val = int(load_settings().get("OUROBOROS_TOOL_TIMEOUT_SEC") or 0)
@@ -95,7 +78,7 @@ def _get_tool_timeout(tools: ToolRegistry, tool_name: str) -> int:
 
 
 def _path_is_cognitive_artifact(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> bool:
-    """Return True when the tool is reading memory/prompt files that must stay whole."""
+    """Return whether a read target must stay whole."""
     if not tool_args:
         return False
 
@@ -118,7 +101,7 @@ def _should_skip_tool_result_truncation(
     tool_name: str,
     tool_args: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Canonical reads must remain whole; warnings happen elsewhere via health invariants."""
+    """Canonical/cognitive reads must remain whole."""
     return tool_name in _UNTRUNCATED_TOOL_RESULTS or _path_is_cognitive_artifact(tool_name, tool_args)
 
 
@@ -127,7 +110,7 @@ def _truncate_tool_result(
     tool_name: str = "",
     tool_args: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Cap tool result unless the read target is a cognitive artifact that must stay whole."""
+    """Cap tool result unless it is an untruncated artifact."""
     limit = _TOOL_RESULT_LIMITS.get(tool_name, _DEFAULT_TOOL_RESULT_LIMIT)
     s = str(result)
     if _should_skip_tool_result_truncation(tool_name, tool_args):
@@ -138,14 +121,7 @@ def _truncate_tool_result(
 
 
 def _is_tool_execution_failure(tool_ok: bool, result: Any) -> bool:
-    """Classify only executor/runtime failures as tool failures.
-
-    Many tools intentionally return warning-style results such as
-    ``REVIEW_BLOCKED`` or ``GIT_ERROR``. Those should be shown to the model and
-    user as normal completed tool results, not surfaced in the UI as "tool
-    failed". The hard failure bucket is reserved for executor-level failures:
-    parsing errors, timeouts, and uncaught tool exceptions.
-    """
+    """Treat only executor/runtime failures as UI tool failures."""
     if not tool_ok:
         return True
     text = str(result or "")
@@ -258,32 +234,24 @@ def _execute_single_tool(
 
 
 class StatefulToolExecutor:
-    """
-    Thread-sticky executor for stateful tools (browser, etc).
-
-    Playwright sync API uses greenlet internally which has strict thread-affinity:
-    once a greenlet starts in a thread, all subsequent calls must happen in the same thread.
-    This executor ensures browse_page/browser_action always run in the same thread.
-
-    On timeout: we shutdown the executor and create a fresh one to reset state.
-    """
+    """Thread-sticky executor for Playwright/greenlet stateful tools."""
     def __init__(self):
         self._executor: Optional[ThreadPoolExecutor] = None
 
     def submit(self, fn, *args, **kwargs):
-        """Submit work to the sticky thread. Creates executor on first call."""
+        """Submit work to the sticky thread."""
         if self._executor is None:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stateful_tool")
         return self._executor.submit(fn, *args, **kwargs)
 
     def reset(self):
-        """Shutdown current executor and create a fresh one. Used after timeout/error."""
+        """Reset the sticky thread after timeout/error."""
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
 
     def shutdown(self, wait=True, cancel_futures=False):
-        """Final cleanup."""
+        """Shutdown the sticky executor."""
         if self._executor is not None:
             self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
             self._executor = None
@@ -299,7 +267,7 @@ def _make_timeout_result(
     task_id: str = "",
     reset_msg: str = "",
 ) -> Dict[str, Any]:
-    """Create a timeout error result dictionary and log the timeout event."""
+    """Create and log a timeout result."""
     args_for_log = {}
     try:
         args = json.loads(tc["function"]["arguments"] or "{}")
@@ -342,7 +310,7 @@ def _execute_with_timeout(
     task_id: str = "",
     stateful_executor: Optional[StatefulToolExecutor] = None,
 ) -> Dict[str, Any]:
-    """Execute a tool call with a hard timeout."""
+    """Execute one tool call with timeout handling."""
     requested_fn_name = tc["function"]["name"]
     fn_name = str(requested_fn_name or "").strip()
     tool_call_id = tc["id"]
@@ -426,8 +394,7 @@ def _execute_with_timeout(
                 is_reviewed_mutative = fn_name in REVIEWED_MUTATIVE_TOOLS
 
                 if is_reviewed_mutative:
-                    # Reviewed mutative tools must not end with an ambiguous
-                    # timeout — emit a progress event and keep waiting.
+                    # Commit/review tools must not end with ambiguous timeout.
                     try:
                         from ouroboros.tools.commit_gate import _mark_review_attempt_late
                         ctx = getattr(tools, "_ctx", None)
@@ -468,12 +435,7 @@ def _execute_with_timeout(
                         })
                         return result
                     except (TimeoutError, concurrent.futures.TimeoutError):
-                        # True hard ceiling — genuine infrastructure failure.
-                        # Record terminal state so durable state never stays at 'reviewing'.
-                        # NOTE: Python threads cannot be cancelled, so the underlying
-                        # operation may still complete in the background. If it does, the
-                        # git.py _record_commit_attempt call will overwrite this state with
-                        # the actual outcome (succeeded/blocked/failed) — which is correct.
+                        # Hard ceiling records terminal state; late real result may overwrite.
                         try:
                             from ouroboros.tools.commit_gate import _record_commit_attempt
                             ctx = getattr(tools, "_ctx", None)
@@ -546,11 +508,7 @@ def handle_tool_calls(
     llm_trace: Dict[str, Any],
     emit_progress: Callable[[str], None],
 ) -> int:
-    """
-    Execute tool calls and append results to messages.
-
-    Returns: Number of errors encountered
-    """
+    """Execute tool calls, append results, and return error count."""
     can_parallel = (
         len(tool_calls) > 1 and
         all(
@@ -613,11 +571,7 @@ def process_tool_results(
     llm_trace: Dict[str, Any],
     emit_progress: Callable[[str], None],
 ) -> int:
-    """
-    Process tool execution results and append to messages/trace.
-
-    Returns: Number of errors encountered
-    """
+    """Append tool results to messages/trace and return error count."""
     error_count = 0
 
     for exec_result in results:

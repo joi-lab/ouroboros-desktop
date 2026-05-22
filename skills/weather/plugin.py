@@ -1,18 +1,6 @@
-"""Weather extension — Phase 5/v5 reference visual widget.
+"""Reference visual extension for route/tool/widget PluginAPI surfaces.
 
-Registers the three PluginAPI v1 surfaces a real visual extension uses:
-
-- ``register_route`` — ``GET /api/extensions/weather/forecast?city=...``
-  fetches a compact summary from ``wttr.in`` and returns JSON.
-- ``register_tool`` — ``ext_9_r_weather_fetch`` exposes the same call to
-  the agent dispatcher (so the LLM can ask for weather without going
-  through ``skill_exec``).
-- ``register_ui_tab`` — declares a Widgets-page UI declaration so the runtime knows
-  how to render the widget on the top-level Widgets page.
-
-Every byte that runs on a request is in this file; no third-party
-libraries (the ``net`` permission is bounded to ``wttr.in`` by host
-allowlist + scheme allowlist + redirect refusal).
+Network access is bounded to wttr.in by host+scheme checks and redirect refusal.
 """
 
 from __future__ import annotations
@@ -33,8 +21,7 @@ _USER_AGENT = "Ouroboros-Weather/0.2"
 
 
 class _StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Refuse cross-host redirects so a misbehaving wttr.in mirror cannot
-    pivot the request to an attacker-controlled host."""
+    """Refuse cross-host redirects from the allowed weather endpoint."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
         target = urllib.parse.urlparse(newurl).hostname
@@ -49,13 +36,7 @@ _OPENER = urllib.request.build_opener(_StrictRedirectHandler())
 
 
 def _fetch(city: str) -> Dict[str, Any]:
-    """Resolve current conditions for ``city``.
-
-    Returns a structured dict suitable for both the route handler
-    (JSONResponse) and the tool handler (json.dumps). All network
-    failures convert to an ``error`` field; the caller decides how to
-    surface them.
-    """
+    """Resolve current conditions for route JSON and tool JSON output."""
     cleaned = (city or "").strip()
     if not cleaned:
         return {"error": "city is empty"}
@@ -64,7 +45,7 @@ def _fetch(city: str) -> Dict[str, Any]:
     url = f"https://{_ALLOWED_HOST}/{urllib.parse.quote(cleaned)}?format=j1"
     parsed = urllib.parse.urlparse(url)
     if parsed.netloc != _ALLOWED_HOST:
-        # Defensive — quote() is safe but a rule of three is cheap.
+        # Defense-in-depth for the host allowlist.
         return {"error": f"refusing host {parsed.netloc!r}"}
     request = urllib.request.Request(
         url,
@@ -111,24 +92,8 @@ def _coerce_int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
 
-
-# ---------------------------------------------------------------------------
-# Plugin entry point
-# ---------------------------------------------------------------------------
-
-
 async def _route_forecast(request: Request) -> JSONResponse:
-    """Handler for ``GET /api/extensions/weather/forecast?city=...``.
-
-    ``_fetch`` performs a synchronous ``urllib.request.urlopen`` call,
-    which would block the Uvicorn event loop for up to 10 seconds (the
-    fetcher timeout) if invoked directly from the coroutine. v5 Cycle 1
-    Gemini critic Finding 1 flagged this as a real DoS vector — a slow
-    wttr.in or repeated requests from the UI/agent could serialise the
-    worker. We dispatch to ``asyncio.to_thread`` so the blocking call
-    runs in the default thread pool while the event loop stays
-    responsive for `/api/state`, websocket frames, etc.
-    """
+    """GET forecast route; blocking urllib work runs off the event loop."""
     import asyncio
     city = (request.query_params.get("city") or "").strip()
     if not city:
@@ -145,11 +110,7 @@ def _tool_fetch(*, city: str = "") -> str:
 
 
 def register(api: Any) -> None:
-    """PluginAPI v1 entry point.
-
-    The runtime calls this exactly once per load; the loader unloads
-    every registration on disable / re-review by content-hash mismatch.
-    """
+    """PluginAPI entry point called once per extension load."""
     api.register_tool(
         "fetch",
         _tool_fetch,

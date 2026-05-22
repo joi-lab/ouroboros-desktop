@@ -1,9 +1,4 @@
-"""
-Supervisor — Message Bus & Formatting.
-
-Queue-based message bus that connects local UI/skill transports and the
-Agent Supervisor.
-"""
+"""Queue-based bridge between UI/skill transports and the supervisor."""
 
 from __future__ import annotations
 
@@ -22,9 +17,6 @@ from ouroboros.utils import utc_now_iso
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Module-level config (set via init())
-# ---------------------------------------------------------------------------
 DATA_DIR = None  # pathlib.Path
 TOTAL_BUDGET_LIMIT: float = 0.0
 BUDGET_REPORT_EVERY_MESSAGES: int = 10
@@ -50,15 +42,12 @@ def get_bridge() -> "LocalChatBridge":
 
 
 def try_get_bridge() -> "Optional[LocalChatBridge]":
-    """Return the bridge or None if not yet initialized (safe for early callers)."""
+    """Return initialized bridge, if any."""
     return _BRIDGE
 
 
 def refresh_budget_limit(new_limit: Optional[float]) -> None:
-    """Hot-reload the total budget limit used for status messages.
-
-    Accepts None gracefully (treated as 0.0 / no limit).
-    """
+    """Hot-reload budget limit for status messages."""
     global TOTAL_BUDGET_LIMIT
     try:
         TOTAL_BUDGET_LIMIT = float(new_limit) if new_limit is not None else 0.0
@@ -66,12 +55,8 @@ def refresh_budget_limit(new_limit: Optional[float]) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# LocalChatBridge
-# ---------------------------------------------------------------------------
-
 class LocalChatBridge:
-    """Local message bus using queue.Queue."""
+    """Local Queue-backed message bus."""
 
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         self._inbox = queue.Queue()   # user -> agent
@@ -87,13 +72,7 @@ class LocalChatBridge:
             self.configure_from_settings(settings)
 
     def broadcast(self, payload: dict) -> None:
-        """Broadcast a payload to WebSocket clients if the broadcast hook is wired.
-
-        A2A virtual chat_ids are intentionally skipped so that
-        A2A task traffic does not appear in the human-visible chat UI live stream.
-        The history API (server_history_api.py) separately filters A2A chat_ids
-        from page-reload history, providing consistent isolation.
-        """
+        """Broadcast to WebSocket clients, excluding A2A virtual chat_ids."""
         chat_id = payload.get("chat_id")
         if is_a2a_chat_id(chat_id):
             return
@@ -101,7 +80,7 @@ class LocalChatBridge:
             self._broadcast_fn(payload)
 
     def get_updates(self, offset: int, timeout: int = 10) -> List[Dict[str, Any]]:
-        """Block on the inbox queue and return updates."""
+        """Block on inbox and return supervisor-style updates."""
         try:
             raw_msg = self._inbox.get(timeout=timeout)
             if isinstance(raw_msg, str):
@@ -150,11 +129,11 @@ class LocalChatBridge:
             return []
 
     def configure_from_settings(self, settings: Dict[str, Any]) -> None:
-        """Compatibility no-op; chat bridges are now skills."""
+        """Compatibility no-op; chat bridges are skills now."""
         return None
 
     def subscribe_response(self, chat_id: int, callback) -> str:
-        """Subscribe to agent responses for a given chat_id. Returns subscription_id."""
+        """Subscribe to responses for a chat_id."""
         import uuid as _uuid
         sub_id = _uuid.uuid4().hex
         with self._response_subs_lock:
@@ -248,11 +227,13 @@ class LocalChatBridge:
         ts: Optional[str] = None,
         is_progress: bool = False,
         task_id: str = "",
+        progress_meta: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str]:
-        """Put a message in the outbox for the UI to consume."""
+        """Send text to UI, A2A subscribers, and host event stream."""
         clean_text = _strip_markdown(text) if not parse_mode else text
         message_ts = ts or utc_now_iso()
         transport = dict(self._chat_transports.get(int(chat_id or 0), {}) or {})
+        meta = dict(progress_meta or {})
         msg = {
             "type": "text",
             "content": clean_text,
@@ -261,8 +242,9 @@ class LocalChatBridge:
             "ts": message_ts,
             "task_id": str(task_id or ""),
         }
+        if meta:
+            msg.update(meta)
         self._outbox.put(msg)
-        # Notify A2A response subscribers
         with self._response_subs_lock:
             subs = [(sid, cb) for sid, (cid, cb) in self._response_subs.items()
                     if cid == chat_id and not is_progress]
@@ -271,9 +253,8 @@ class LocalChatBridge:
                 cb(clean_text)
             except Exception:
                 log.debug("A2A response callback error for sub %s", sid, exc_info=True)
-        # Skip WebSocket broadcast for A2A virtual chat_ids.
         if self._broadcast_fn and not is_a2a_chat_id(chat_id):
-            self._broadcast_fn({
+            payload = {
                 "type": "chat",
                 "role": "assistant",
                 "content": clean_text,
@@ -282,9 +263,12 @@ class LocalChatBridge:
                 "ts": message_ts,
                 "task_id": str(task_id or ""),
                 "transport": transport,
-            })
+            }
+            if meta:
+                payload.update(meta)
+            self._broadcast_fn(payload)
         if not is_a2a_chat_id(chat_id):
-            publish_event(CHAT_OUTBOUND, {
+            event = {
                 "chat_id": int(chat_id or 0),
                 "text": clean_text,
                 "markdown": bool(parse_mode),
@@ -292,11 +276,14 @@ class LocalChatBridge:
                 "ts": message_ts,
                 "task_id": str(task_id or ""),
                 "transport": transport,
-            })
+            }
+            if meta:
+                event.update(meta)
+            publish_event(CHAT_OUTBOUND, event)
         return True, "ok"
 
     def send_chat_action(self, chat_id: int, action: str = "typing") -> bool:
-        """Send typing indicator to UI via WebSocket broadcast."""
+        """Send typing indicator to UI/event subscribers."""
         if is_a2a_chat_id(chat_id):
             return True
         self._outbox.put({
@@ -342,9 +329,8 @@ class LocalChatBridge:
         })
         return True, "ok"
 
-    # Log streaming
     def push_log(self, event: dict):
-        """Called by append_jsonl hook to stream log events to the UI."""
+        """Stream append_jsonl events to UI."""
         try:
             self._log_queue.put_nowait(event)
         except queue.Full:
@@ -360,7 +346,7 @@ class LocalChatBridge:
             self._broadcast_fn({"type": "log", "data": event})
 
     def ui_poll_logs(self) -> list:
-        """Called by the web UI to drain pending log events."""
+        """Drain pending log events for the web UI."""
         batch = []
         for _ in range(50):
             try:
@@ -369,7 +355,6 @@ class LocalChatBridge:
                 break
         return batch
 
-    # UI hooks
     def ui_send(
         self,
         text: str,
@@ -380,7 +365,7 @@ class LocalChatBridge:
         suppress_chat_log: bool = False,
         task_constraint: Optional[Dict[str, Any]] = None,
     ):
-        """Called by the web UI to send a message to the agent."""
+        """Accept a web UI message for the agent."""
         if broadcast:
             self.handle_web_message(
                 text,
@@ -391,19 +376,15 @@ class LocalChatBridge:
         self.enqueue_local_message(text, suppress_chat_log=suppress_chat_log, task_constraint=task_constraint)
 
     def ui_receive(self, timeout: float = 0.1) -> Optional[Dict[str, Any]]:
-        """Called by the web UI to check for new messages from the agent."""
+        """Poll agent messages for the web UI."""
         try:
             return self._outbox.get(timeout=timeout)
         except queue.Empty:
             return None
 
 
-# ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
 def _strip_markdown(text: str) -> str:
-    """Strip all markdown formatting markers, leaving only plain text."""
+    """Best-effort markdown-to-plain-text fallback."""
     text = re.sub(r"```[^\n]*\n([\s\S]*?)```", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", text)
@@ -425,8 +406,9 @@ def _send_markdown(
     ts: Optional[str] = None,
     is_progress: bool = False,
     task_id: str = "",
+    progress_meta: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
-    """Send markdown text to the UI."""
+    """Send markdown text through the bridge."""
     bridge = get_bridge()
     if not text:
         return False, "empty"
@@ -437,12 +419,9 @@ def _send_markdown(
         ts=ts,
         is_progress=is_progress,
         task_id=task_id,
+        progress_meta=progress_meta,
     )
 
-
-# ---------------------------------------------------------------------------
-# Budget + logging
-# ---------------------------------------------------------------------------
 
 def _format_budget_line(st: Dict[str, Any]) -> str:
     spent = float(st.get("spent_usd") or 0.0)
@@ -511,6 +490,7 @@ def log_chat(
 def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
                      fmt: str = "",
                      is_progress: bool = False, task_id: str = "",
+                     progress_meta: Optional[Dict[str, Any]] = None,
                      ts: Optional[str] = None) -> None:
     st = load_state()
     owner_id = int(st.get("owner_id") or 0)
@@ -518,7 +498,7 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
     msg_ts = ts or utc_now_iso()
 
     if is_progress and DATA_DIR:
-        append_jsonl(DATA_DIR / "logs" / "progress.jsonl", {
+        progress_record = {
             "ts": msg_ts,
             "type": "send_message",
             "task_id": task_id,
@@ -527,7 +507,10 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
             "text": text if log_text is None else log_text,
             "content": _text,
             "format": fmt,
-        })
+        }
+        if progress_meta:
+            progress_record.update(dict(progress_meta))
+        append_jsonl(DATA_DIR / "logs" / "progress.jsonl", progress_record)
     else:
         log_chat(
             "out",
@@ -541,8 +524,7 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
 
     if _text.strip() in ("", "\u200b"):
         return
-    # Budget footers are now shown in dashboard/status flows, not auto-appended
-    # to every outgoing chat message.
+    # Budget footers belong in dashboard/status flows, not every chat reply.
     full = _text
 
     if fmt == "markdown":
@@ -552,8 +534,16 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
             ts=msg_ts,
             is_progress=is_progress,
             task_id=task_id,
+            progress_meta=progress_meta,
         )
         return
 
     bridge = get_bridge()
-    bridge.send_message(chat_id, full, ts=msg_ts, is_progress=is_progress, task_id=task_id)
+    bridge.send_message(
+        chat_id,
+        full,
+        ts=msg_ts,
+        is_progress=is_progress,
+        task_id=task_id,
+        progress_meta=progress_meta,
+    )

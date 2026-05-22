@@ -1,17 +1,9 @@
-"""commit_gate.py — Advisory freshness gate and commit-attempt recording.
-
-Extracted from git.py to relieve module-size pressure under P7 Minimalism.
-Provides:
-  _record_commit_attempt(ctx, commit_message, status, ...)
-  _invalidate_advisory(ctx)
-  _check_advisory_freshness(ctx, commit_message, skip, paths) -> Optional[str]
-"""
+"""Advisory freshness gate and durable commit-attempt recording."""
 
 from __future__ import annotations
 
 import logging
 import pathlib
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ouroboros.tools.registry import ToolContext
@@ -20,40 +12,6 @@ from ouroboros.utils import (
 )
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class CommitAttemptRequest:
-    """Structured payload passed to ``_record_commit_attempt``.
-
-    Replaces the prior 20-positional/keyword-argument signature. The
-    function-arity ceiling lives in ``docs/DEVELOPMENT.md`` ("<8
-    parameters"); a dataclass keeps all the optional fields explicit
-    while reducing the public callable to two params (``ctx`` +
-    ``request``). Legacy keyword call sites stay supported through
-    ``_record_commit_attempt(ctx, commit_message, status, **kwargs)``
-    which constructs this dataclass internally.
-    """
-
-    commit_message: str
-    status: str
-    block_reason: str = ""
-    block_details: str = ""
-    duration_sec: float = 0.0
-    snapshot_hash: str = ""
-    critical_findings: Optional[List[Dict[str, Any]]] = None
-    advisory_findings: Optional[List[Dict[str, Any]]] = None
-    readiness_warnings: Optional[List[str]] = None
-    late_result_pending: bool = False
-    phase: Optional[str] = None
-    pre_review_fingerprint: str = ""
-    post_review_fingerprint: str = ""
-    fingerprint_status: str = ""
-    degraded_reasons: Optional[List[str]] = None
-    triad_models: Optional[List[str]] = None
-    scope_model: str = ""
-    triad_raw_results: Optional[List[Dict[str, Any]]] = None
-    scope_raw_result: Optional[Dict[str, Any]] = None
 
 
 def _current_review_tool_name(ctx: ToolContext) -> str:
@@ -110,51 +68,23 @@ def _attempt_accepts_reviewing_update(existing: Any) -> bool:
 
 def _record_commit_attempt(
     ctx: ToolContext,
-    commit_message_or_request: Any = None,
+    commit_message: Any = None,
     status: Optional[str] = None,
     **legacy_kwargs: Any,
 ) -> None:
-    """Record a commit attempt in durable advisory state.
+    """Record a commit attempt; supports positional or keyword commit_message/status."""
+    if commit_message is not None:
+        legacy_kwargs.setdefault("commit_message", commit_message)
+    if status is not None:
+        legacy_kwargs.setdefault("status", status)
+    if "commit_message" not in legacy_kwargs:
+        raise TypeError("_record_commit_attempt: commit_message is required")
+    if "status" not in legacy_kwargs:
+        raise TypeError("_record_commit_attempt: status is required")
 
-    Three valid call shapes (all-kwargs preserves the existing 47 call
-    sites that pass ``commit_message=...`` as a keyword argument):
+    def _req(name: str, default: Any = "") -> Any:
+        return legacy_kwargs.get(name, default)
 
-    1. **New (preferred):** ``_record_commit_attempt(ctx, request)``
-       where ``request`` is a ``CommitAttemptRequest`` dataclass —
-       satisfies the DEVELOPMENT.md ``<8 parameters`` rule cleanly.
-
-    2. **Positional legacy:** ``_record_commit_attempt(ctx,
-       commit_message, status, **fields)``.
-
-    3. **All-kwargs legacy:** ``_record_commit_attempt(ctx,
-       commit_message="...", status="...", **fields)``.
-
-    Internally shapes (2) and (3) build a ``CommitAttemptRequest`` from
-    those kwargs and re-enter the dataclass path.
-    """
-    if isinstance(commit_message_or_request, CommitAttemptRequest):
-        if status is not None or legacy_kwargs:
-            raise TypeError(
-                "_record_commit_attempt: pass either a CommitAttemptRequest "
-                "OR positional commit_message + status + kwargs, not both"
-            )
-        request = commit_message_or_request
-    else:
-        if commit_message_or_request is not None:
-            legacy_kwargs.setdefault("commit_message", commit_message_or_request)
-        if status is not None:
-            legacy_kwargs.setdefault("status", status)
-        if "commit_message" not in legacy_kwargs:
-            raise TypeError(
-                "_record_commit_attempt: commit_message is required "
-                "(positional, kwarg, or via CommitAttemptRequest.commit_message)"
-            )
-        if "status" not in legacy_kwargs:
-            raise TypeError(
-                "_record_commit_attempt: status is required "
-                "(positional, kwarg, or via CommitAttemptRequest.status)"
-            )
-        request = CommitAttemptRequest(**legacy_kwargs)
     try:
         from ouroboros.review_state import (
             CommitAttemptRecord,
@@ -162,36 +92,30 @@ def _record_commit_attempt(
             update_state,
             _utc_now,
         )
-        commit_message = request.commit_message
-        status = request.status
-        block_reason = request.block_reason
-        block_details = request.block_details
-        duration_sec = request.duration_sec
-        snapshot_hash = request.snapshot_hash
-        critical_findings = request.critical_findings
-        advisory_findings = request.advisory_findings
-        readiness_warnings = request.readiness_warnings
-        late_result_pending = request.late_result_pending
-        phase = request.phase
-        pre_review_fingerprint = request.pre_review_fingerprint
-        post_review_fingerprint = request.post_review_fingerprint
-        fingerprint_status = request.fingerprint_status
-        degraded_reasons = request.degraded_reasons
-        triad_models = request.triad_models
-        scope_model = request.scope_model
-        triad_raw_results = request.triad_raw_results
-        scope_raw_result = request.scope_raw_result
+        commit_message = _req("commit_message")
+        status = _req("status")
+        block_reason = _req("block_reason")
+        block_details = _req("block_details")
+        duration_sec = _req("duration_sec", 0.0)
+        snapshot_hash = _req("snapshot_hash")
+        critical_findings = _req("critical_findings", None)
+        advisory_findings = _req("advisory_findings", None)
+        readiness_warnings = _req("readiness_warnings", None)
+        late_result_pending = _req("late_result_pending", False)
+        phase = _req("phase", None)
+        pre_review_fingerprint = _req("pre_review_fingerprint")
+        post_review_fingerprint = _req("post_review_fingerprint")
+        fingerprint_status = _req("fingerprint_status")
+        degraded_reasons = _req("degraded_reasons", None)
+        triad_models = _req("triad_models", None)
+        scope_model = _req("scope_model")
+        triad_raw_results = _req("triad_raw_results", None)
+        scope_raw_result = _req("scope_raw_result", None)
         dr = pathlib.Path(ctx.drive_root)
         repo_key = make_repo_key(pathlib.Path(ctx.repo_dir))
         tool_name = _current_review_tool_name(ctx)
         task_id = str(getattr(ctx, "task_id", "") or "")
 
-        # --- Phase 1 claim synthesis (BEFORE the state lock) ---
-        # Run ONLY when blocked with findings. Fetches open obligations and
-        # runs the LLM synthesis call outside _mutate so no remote I/O
-        # occurs while the review-state file lock is held.
-        # Fail-open: any exception falls back to the original findings, and a
-        # single update_state call persists those original findings unchanged.
         _findings_for_attempt = critical_findings
         if status == "blocked" and critical_findings:
             try:
@@ -247,14 +171,10 @@ def _record_commit_attempt(
 
             attempt = CommitAttemptRecord(
                 ts=_utc_now(),
-                commit_message=commit_message,  # full message — no [:200] truncation
+                commit_message=commit_message,  # full message; durable evidence
                 status=status,
                 snapshot_hash=snapshot_hash,
                 block_reason=block_reason,
-                # Canonical evidence — full text. Display-side truncation
-                # (review_status, format_status_section) is the right layer
-                # to shorten; durable state stores everything so post-hoc
-                # forensics can reconstruct the exact block message.
                 block_details=block_details,
                 duration_sec=duration_sec,
                 task_id=task_id,
@@ -431,14 +351,7 @@ def _check_overlapping_review_attempt(ctx: ToolContext) -> Optional[str]:
 def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
                               skip_advisory_pre_review: bool = False,
                               paths: Optional[List[str]] = None) -> Optional[str]:
-    from ouroboros.review_state import (
-        AdvisoryRunRecord,
-        compute_snapshot_hash,
-        load_state,
-        make_repo_key,
-        update_state,
-        _utc_now,
-    )
+    from ouroboros.review_state import AdvisoryRunRecord, compute_snapshot_hash, load_state, make_repo_key, update_state, _utc_now
     from ouroboros.config import get_review_enforcement
     from ouroboros.utils import append_jsonl
     drive_root = pathlib.Path(ctx.drive_root)
@@ -463,7 +376,6 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
             for debt in open_debts
         ]
 
-    # Pass only when snapshot is fresh AND no open review debt remains.
     if state.is_fresh(snapshot_hash, repo_key=repo_key) and not open_obs and not open_debts:
         return None
 
@@ -473,20 +385,13 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
         try:
             append_jsonl(ctx.drive_logs() / "events.jsonl", {
                 "ts": _utc_now(), "type": "advisory_pre_review_bypassed",
-                "snapshot_hash": snapshot_hash, "commit_message": commit_message,  # full — no [:200]
+                "snapshot_hash": snapshot_hash, "commit_message": commit_message,
                 "bypass_reason": reason, "task_id": task_id,
             })
         except Exception:
             pass
 
         def _mutate(bypass_state):
-            next_run_attempt = len(
-                bypass_state.filter_advisory_runs(
-                    repo_key=repo_key,
-                    tool_name="advisory_pre_review",
-                    task_id=task_id,
-                )
-            ) + 1
             bypass_state.add_run(AdvisoryRunRecord(
                 snapshot_hash=snapshot_hash,
                 commit_message=commit_message,
@@ -498,21 +403,12 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
                 repo_key=repo_key,
                 tool_name="advisory_pre_review",
                 task_id=task_id,
-                attempt=next_run_attempt,
             ))
 
         update_state(drive_root, _mutate)
 
-        # Bypass is an absolute escape hatch: `skip_advisory_pre_review=True`
-        # short-circuits the commit gate entirely after audit logging. Durable
-        # obligations and commit-readiness debt remain in state (`review_status`
-        # shows `repo_commit_ready=false`), but the bypass flag deliberately
-        # overrides that — it is the documented escape for cases where advisory
-        # cannot run (provider outage, rate limit, etc.). Obligations are
-        # cleared normally by `on_successful_commit()` once the commit lands.
         return None  # audited bypass
 
-    # Advisory is fresh for this snapshot — check if obligations or debt remain.
     if state.is_fresh(snapshot_hash, repo_key=repo_key) and (open_obs or open_debts):
         if enforcement == "advisory":
             drive_logs = ctx.drive_logs() if callable(getattr(ctx, "drive_logs", None)) else drive_root / "logs"
@@ -545,11 +441,9 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
         ]
         if open_obs:
             lines.append("Unresolved obligations:")
-            # No [:N] cap — show all obligations so the agent sees every unresolved item.
             lines += _render_obligations()
         if open_debts:
             lines.append("\nCommit-readiness debt:")
-            # No [:N] cap — show all debts so the agent can start retries from them.
             lines += _render_debts()
         lines.append("\nFix the flagged issues and re-run advisory_pre_review so it can verify them PASS.")
         lines.append("Or bypass: repo_commit(commit_message='...', skip_advisory_pre_review=True) (audited).")
@@ -559,33 +453,24 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
     scoped_runs = state.filter_advisory_runs(repo_key=repo_key)
     latest = scoped_runs[-1] if scoped_runs else None
 
-    # Explicit parse_failure branch: advisory ran for this snapshot but was unparseable.
-    # Must come before the generic stale branch to avoid misleading "snapshot changed" message.
     if matching_run and matching_run.status == "parse_failure":
         obs_section = ""
         if state.get_open_obligations(repo_key=repo_key):
             open_obs = state.get_open_obligations(repo_key=repo_key)
             obs_lines = [f"\nOpen obligations ({len(open_obs)}):"]
-            # No [:N] cap — all obligations shown.
             obs_lines += [f"  [{o.obligation_id}] {o.item}: {_truncate_review_reason(o.reason, limit=80)}"
                           for o in open_obs]
             obs_section = "\n".join(obs_lines)
         return (
             f"⚠️ ADVISORY_PRE_REVIEW_REQUIRED: Last advisory run for this snapshot returned "
-            f"parse_failure (hash={snapshot_hash[:12]}, ts={matching_run.ts}). "  # full ts
+            f"parse_failure (hash={snapshot_hash[:12]}, ts={matching_run.ts}). "
             f"The advisory ran but its output could not be parsed — re-run it.{obs_section}\n"
             "Re-run: advisory_pre_review(commit_message='...')\n"
             "Or bypass: repo_commit(commit_message='...', skip_advisory_pre_review=True) (audited)."
         )
 
-    # Explicit preflight_blocked branch (v4.39.0): advisory SDK was skipped
-    # because a staged `.py` file has a SyntaxError. The raw_result contains
-    # the concrete file:line:msg; surface that instead of the generic stale
-    # message so the agent sees exactly what to fix.
     if matching_run and matching_run.status == "preflight_blocked":
         preflight_detail = (matching_run.raw_result or "").strip()
-        # The sentinel starts with "⚠️ PREFLIGHT_BLOCKED: syntax errors:" and
-        # is already formatted for humans; pass through verbatim.
         return (
             f"⚠️ ADVISORY_PRE_REVIEW_REQUIRED: Last advisory run for this snapshot "
             f"was blocked by the syntax preflight (hash={snapshot_hash[:12]}, "
@@ -597,17 +482,16 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
 
     if latest and latest.status == "stale" and state.last_stale_from_edit_ts:
         stale_reason = (f"Advisory invalidated by worktree edit at "
-                        f"{state.last_stale_from_edit_ts}. Re-run advisory after all edits.")  # full ts
+                        f"{state.last_stale_from_edit_ts}. Re-run advisory after all edits.")
     elif latest:
         stale_reason = (f"Latest run: status={latest.status}, hash={latest.snapshot_hash[:12]}, "
-                        f"ts={latest.ts}. Snapshot changed (files edited after advisory ran).")  # full ts
+                        f"ts={latest.ts}. Snapshot changed (files edited after advisory ran).")
     else:
         stale_reason = "No advisory runs recorded yet."
 
     obs_section = ""
     if open_obs:
         lines = [f"\nOpen obligations ({len(open_obs)}):"]
-        # No [:N] cap — all obligations shown so nothing is silently hidden.
         lines += _render_obligations()
         lines.append("  → advisory_pre_review will verify each obligation is resolved.")
         obs_section = "\n".join(lines)

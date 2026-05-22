@@ -1,9 +1,8 @@
-"""Control, update, migration, and evolution HTTP endpoints."""
+"""Control, update, and evolution HTTP endpoints."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import pathlib
 import time
 from typing import Any, Dict
@@ -12,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros import get_version
-from ouroboros.gateway._helpers import request_drive_root, request_repo_dir
+from ouroboros.gateway._helpers import json_error, json_exception, request_drive_root, request_json_or, request_repo_dir
 from ouroboros.gateway.ws import broadcast_ws_sync
 from ouroboros.utils import utc_now_iso
 
@@ -35,6 +34,29 @@ def _runtime_branch_defaults(request: Request) -> tuple[str, str]:
     return "ouroboros", "ouroboros-stable"
 
 
+def _managed_update_payload(*, fetch: bool, include_tags: bool) -> dict[str, Any]:
+    from supervisor.git_ops import compute_managed_update_status, git_capture
+
+    status = compute_managed_update_status(fetch=fetch)
+    latest_version = ""
+    target_ref = status.get("target_ref") or ""
+    if target_ref and status.get("latest_sha"):
+        rc, version_text, _ = git_capture(["git", "show", f"{target_ref}:VERSION"])
+        if rc == 0:
+            latest_version = version_text.strip()
+    official_tags = []
+    if include_tags:
+        from supervisor.git_ops import list_official_update_tags
+
+        official_tags = list_official_update_tags()
+    return {
+        "current_version": get_version(),
+        "latest_version": latest_version,
+        "official_tags": official_tags,
+        **status,
+    }
+
+
 async def api_reset(request: Request) -> JSONResponse:
     """Reset all runtime data (state, memory, logs, settings) but keep repo."""
     import shutil
@@ -54,7 +76,7 @@ async def api_reset(request: Request) -> JSONResponse:
         _request_restart(request)
         return JSONResponse({"status": "ok", "deleted": deleted, "restarting": True})
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_command(request: Request) -> JSONResponse:
@@ -108,7 +130,7 @@ async def api_command(request: Request) -> JSONResponse:
                 )
         return JSONResponse({"status": "ok"})
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return json_exception(exc, 400)
 
 
 async def api_git_log(_request: Request) -> JSONResponse:
@@ -127,7 +149,7 @@ async def api_git_log(_request: Request) -> JSONResponse:
             "sha": sha.strip() if rc2 == 0 else "",
         })
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_git_rollback(request: Request) -> JSONResponse:
@@ -136,16 +158,16 @@ async def api_git_rollback(request: Request) -> JSONResponse:
         body = await request.json()
         target = body.get("target", "").strip()
         if not target:
-            return JSONResponse({"error": "missing target"}, status_code=400)
+            return json_error("missing target", 400)
         from supervisor.git_ops import rollback_to_version
 
         ok, msg = rollback_to_version(target, reason="ui_rollback")
         if not ok:
-            return JSONResponse({"error": msg}, status_code=400)
+            return json_error(msg, 400)
         _request_restart(request)
         return JSONResponse({"status": "ok", "message": msg})
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_git_promote(request: Request) -> JSONResponse:
@@ -162,59 +184,28 @@ async def api_git_promote(request: Request) -> JSONResponse:
         )
         return JSONResponse({"status": "ok", "message": f"{branch_stable} updated to match {branch_dev}"})
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_update_status(_request: Request) -> JSONResponse:
     """Return passive managed-update status without fetching."""
     try:
-        from supervisor.git_ops import compute_managed_update_status, git_capture
-
-        status = compute_managed_update_status(fetch=False)
-        latest_version = ""
-        target_ref = status.get("target_ref") or ""
-        if target_ref and status.get("latest_sha"):
-            rc, version_text, _ = git_capture(["git", "show", f"{target_ref}:VERSION"])
-            if rc == 0:
-                latest_version = version_text.strip()
-        return JSONResponse({
-            "current_version": get_version(),
-            "latest_version": latest_version,
-            "official_tags": [],
-            **status,
-        })
+        return JSONResponse(_managed_update_payload(fetch=False, include_tags=False))
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_update_check(_request: Request) -> JSONResponse:
     """Fetch the managed remote and return fresh update status."""
     try:
-        from supervisor.git_ops import compute_managed_update_status, git_capture, list_official_update_tags
-
-        status = compute_managed_update_status(fetch=True)
-        latest_version = ""
-        target_ref = status.get("target_ref") or ""
-        if target_ref and status.get("latest_sha"):
-            rc, version_text, _ = git_capture(["git", "show", f"{target_ref}:VERSION"])
-            if rc == 0:
-                latest_version = version_text.strip()
-        return JSONResponse({
-            "current_version": get_version(),
-            "latest_version": latest_version,
-            "official_tags": list_official_update_tags(),
-            **status,
-        })
+        return JSONResponse(_managed_update_payload(fetch=True, include_tags=True))
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_update_apply(request: Request) -> JSONResponse:
     """Prepare a managed update and restart so safe_restart applies it."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await request_json_or(request, {}, exceptions=(Exception,))
     try:
         strategy = str(body.get("strategy") or "replace")
         from supervisor.git_ops import BRANCH_DEV, _clear_update_intent, checkout_and_reset, prepare_managed_update
@@ -243,7 +234,7 @@ async def api_update_apply(request: Request) -> JSONResponse:
         _request_restart(request)
         return JSONResponse({"status": "ok", "restarting": True, **payload})
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 async def api_evolution_data(request: Request) -> JSONResponse:
@@ -277,61 +268,12 @@ async def api_evolution_data(request: Request) -> JSONResponse:
     })
 
 
-async def api_migrations_list(request: Request) -> JSONResponse:
-    """Return the list of unread upgrade migration records."""
-    target = request_drive_root(request) / "state" / "migrations.json"
-    if not target.is_file():
-        return JSONResponse({"migrations": []})
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return JSONResponse({"migrations": []})
-    except Exception:
-        return JSONResponse({"migrations": []})
-    out = []
-    for key, record in data.items():
-        if not isinstance(record, dict):
-            continue
-        if record.get("dismissed"):
-            continue
-        out.append({"key": str(key), **{k: v for k, v in record.items() if k != "dismissed"}})
-    return JSONResponse({"migrations": out})
-
-
-async def api_migrations_dismiss(request: Request) -> JSONResponse:
-    """Mark a migration record as dismissed so the banner stops firing."""
-    key = (request.path_params.get("key") or "").strip()
-    if not key or key in {".", ".."} or "/" in key or "\\" in key or "\x00" in key:
-        return JSONResponse({"error": "invalid migration key"}, status_code=400)
-    target = request_drive_root(request) / "state" / "migrations.json"
-    if not target.is_file():
-        return JSONResponse({"ok": True, "key": key, "note": "no migrations file"})
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            data = {}
-    except Exception:
-        data = {}
-    record = data.get(key)
-    if isinstance(record, dict):
-        record["dismissed"] = True
-        data[key] = record
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
-    return JSONResponse({"ok": True, "key": key})
-
-
 __all__ = [
     "api_command",
     "api_evolution_data",
     "api_git_log",
     "api_git_promote",
     "api_git_rollback",
-    "api_migrations_dismiss",
-    "api_migrations_list",
     "api_reset",
     "api_update_apply",
     "api_update_check",

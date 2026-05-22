@@ -1,18 +1,4 @@
-"""Parallel review orchestration for the pre-commit pipeline.
-
-Extracted from git.py (P7 Minimalism) so the commit path can share one
-review orchestration implementation without duplication.
-
-Public API:
-  run_parallel_review(ctx, commit_message, *, goal, scope, review_rebuttal)
-      -> (review_err, scope_result, triad_block_reason, triad_advisory)
-  aggregate_review_verdict(review_err, scope_result, triad_block_reason, triad_advisory,
-                           ctx, commit_message, commit_start, repo_dir)
-      -> (blocked, combined_msg, block_reason, findings, scope_advisory_items)
-  The caller must apply scope_advisory_items to ctx._review_advisory on both the
-  blocked and non-blocked paths so advisory findings remain visible regardless of
-  whether the commit was blocked.
-"""
+"""Parallel triad + scope review orchestration for commit gates."""
 from __future__ import annotations
 
 import concurrent.futures as _cf
@@ -21,23 +7,14 @@ import logging
 from typing import Optional
 
 from ouroboros.utils import run_cmd
-from ouroboros.tools.review_helpers import format_review_history_entry
+from ouroboros.tools.review_helpers import build_scope_actor_record, format_review_history_entry
 from ouroboros.tools.scope_review import run_scope_review, _get_scope_model
 
 log = logging.getLogger(__name__)
 
 
-# ── Scope-history helpers ────────────────────────────────────────────────────
-
 def _scope_history_entry(scope_result) -> dict:
-    """Build a compact scope-history entry from a ScopeReviewResult.
-
-    Preserves the epistemic ``status`` field (e.g. ``parse_failure``,
-    ``budget_exceeded``, ``empty``) so that the retry / history path in
-    ``_build_scope_history_section`` can distinguish a genuine clean PASS
-    from a dropped-findings failure — the core requirement of the
-    observability / epistemic-integrity fix (v4.32.0).
-    """
+    """Build scope history while preserving non-PASS epistemic status."""
     parts = []
     if scope_result.critical_findings:
         parts.append(
@@ -60,8 +37,7 @@ def _scope_history_entry(scope_result) -> dict:
             )
         )
     status = getattr(scope_result, "status", None) or "responded"
-    # Build summary: for non-responded statuses, lead with the status signal
-    # so empty finding lists are not misread as clean PASS on retry.
+    # Lead with non-responded status so empty findings are not misread as PASS.
     if not parts and status not in ("responded",):
         summary = f"({status})"
     else:
@@ -87,20 +63,11 @@ def _format_scope_advisory_msg(scope_result) -> str:
                      "\n".join(f"  • {f['item']}: {f.get('reason', '')}"
                                 for f in scope_result.advisory_findings))
     return "---\n" + "\n".join(parts) if parts else ""
-# ── Core parallel orchestration ──────────────────────────────────────────────
-
 def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebuttal=""):
-    """Run triad review and scope review concurrently.
-
-    Returns (review_err, scope_result, triad_block_reason, triad_advisory).
-    Both reviewers always run regardless of each other's outcome.
-    Scope review history is keyed to the staged diff hash so findings from a
-    prior blocked attempt on a different diff are not shown to the reviewer.
-    """
+    """Run triad and scope review concurrently against the staged diff."""
     from ouroboros.tools.review import _run_unified_review
 
-    # Reset forensic fields at the start of each parallel review attempt
-    # so stale values from a previous attempt are never persisted on early exit.
+    # Reset forensic fields so prior attempts cannot bleed into early exits.
     ctx._last_scope_model = ""
     ctx._last_triad_raw_results = []
     ctx._last_scope_raw_result = {}
@@ -120,7 +87,7 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
 
     def _run_scope():
         try:
-            ctx._last_scope_model = _get_scope_model()  # forensic: actual resolved model
+            ctx._last_scope_model = _get_scope_model()
             return run_scope_review(
                 ctx, commit_message, goal=goal, scope=scope,
                 review_rebuttal=review_rebuttal,
@@ -134,7 +101,7 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
                 f"⚠️ SCOPE_REVIEW_BLOCKED: Scope review failed — {e}\nFix the issue and retry."
             ))
 
-    # Snapshot advisory state before launching threads to avoid race with scope thread
+    # Snapshot advisory state before threads mutate it.
     _advisory_snapshot_before = list(getattr(ctx, '_review_advisory', []))
     with _cf.ThreadPoolExecutor(max_workers=2) as pool:
         triad_fut = pool.submit(_run_triad)
@@ -146,11 +113,9 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
             review_err = (
                 f"⚠️ REVIEW_BLOCKED: Triad review crashed — {e}\nFix the issue and retry."
             )
-            # Reset per-run triad state so stale fields from a prior attempt don't bleed through
             ctx._last_review_block_reason = 'infra_failure'
             ctx._last_review_critical_findings = []
         triad_block_reason = getattr(ctx, '_last_review_block_reason', 'critical_findings')
-        # Use post-triad advisory (set by _run_unified_review) minus pre-launch items
         triad_advisory_post = list(getattr(ctx, '_review_advisory', []))
         triad_advisory = [a for a in triad_advisory_post if a not in _advisory_snapshot_before]
         try:
@@ -164,29 +129,16 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
 
     if scope_result is not None:
         updated = _scope_history + [_scope_history_entry(scope_result)]
-        # Preserve existing history for other snapshot keys; update only the current key
         existing = getattr(ctx, '_scope_review_history', None) or {}
         if not isinstance(existing, dict):
             existing = {}
         existing[snapshot_key] = updated
         ctx._scope_review_history = existing
-        # Store canonical scope actor record for durable persistence in CommitAttemptRecord
-        ctx._last_scope_raw_result = {
-            "model_id": getattr(scope_result, "model_id", "") or getattr(ctx, "_last_scope_model", ""),
-            "status": getattr(scope_result, "status", "responded"),
-            "raw_text": getattr(scope_result, "raw_text", ""),
-            "prompt_chars": getattr(scope_result, "prompt_chars", 0),
-            "tokens_in": getattr(scope_result, "tokens_in", 0),
-            "tokens_out": getattr(scope_result, "tokens_out", 0),
-            "cost_usd": getattr(scope_result, "cost_usd", 0.0),
-            # parsed_items: same field name as triad actor records; scope has one reviewer
-            # so this holds all structured findings from the scope model (or [] on skip/error)
-            "parsed_items": list(
-                (scope_result.critical_findings or []) + (scope_result.advisory_findings or [])
-            ),
-            "critical_findings": list(scope_result.critical_findings or []),
-            "advisory_findings": list(scope_result.advisory_findings or []),
-        }
+        # Canonical scope actor record for durable CommitAttemptRecord persistence.
+        ctx._last_scope_raw_result = build_scope_actor_record(
+            scope_result,
+            fallback_model_id=getattr(ctx, "_last_scope_model", ""),
+        )
     else:
         ctx._last_scope_raw_result = {}
 
@@ -195,21 +147,12 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
 
 def aggregate_review_verdict(review_err, scope_result, triad_block_reason, triad_advisory,
                               ctx, commit_message, commit_start, repo_dir):
-    """Aggregate triad + scope results.
-
-    Returns (blocked, combined_msg, block_reason, findings, scope_advisory_items).
-    - (False, None, '', [], items) when both reviewers passed — caller should surface scope_advisory_items.
-    - (True, msg, reason, findings, items) when blocked.
-
-    scope_advisory_items is a list of structured advisory entries for ctx._review_advisory,
-    so non-blocking scope findings stay visible on the main thread.
-    """
+    """Aggregate triad/scope result and return block state plus advisory items."""
     _combined_blocked = False
     _combined_messages = []
     _combined_findings = []
     _scope_advisory_items = []
 
-    # Build scope advisory items for ctx surfacing (regardless of blocked/not)
     if scope_result is not None:
         for f in (scope_result.critical_findings or []):
             item = {
@@ -242,7 +185,6 @@ def aggregate_review_verdict(review_err, scope_result, triad_block_reason, triad
         if scope_result.blocked:
             _combined_blocked = True
             _combined_messages.append(scope_result.block_message)
-            # Only add to durable blocking findings when scope actually blocked
             _combined_findings.extend(scope_result.critical_findings or [])
         elif scope_result.advisory_findings or scope_result.critical_findings:
             _advisory_msg = _format_scope_advisory_msg(scope_result)

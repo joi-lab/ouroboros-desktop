@@ -1,36 +1,3 @@
-"""Skill execution substrate + skill-lifecycle tools (Phase 3).
-
-Exposes four tools to the agent:
-
-- ``list_skills``   — catalogue view (no filesystem side effects).
-- ``review_skill``  — run tri-model review against a single skill.
-- ``toggle_skill``  — flip the durable ``enabled.json`` bit for a skill.
-- ``skill_exec``    — execute a script from a reviewed + enabled skill.
-
-Design rules (per the Phase 3 plan):
-
-- ``skill_exec`` is a **separate substrate**, not a ``run_shell`` reuse.
-  It never spawns a user-supplied string command; callers pick a script
-  name declared by the skill manifest, and the runtime resolves that name
-  to the exact on-disk file inside the skill directory.
-- Only skills that are enabled, whose review gate is executable, and
-  whose review is NOT stale against the current content hash can execute.
-  ``type: extension`` skills are deferred until Phase 4.
-- The subprocess runs with ``cwd=skill_dir``, a scrubbed environment, a
-  timeout (from the manifest, hard-capped at 300s), and bounded stdout /
-  stderr so a misbehaving skill cannot flood the runtime logs.
-- The runtime allowlist is ``python``/``python3``/``bash``/``node``;
-  anything else is rejected up-front.
-- Runtime-mode gate (v5.1.2 Frame A): ``light``/``advanced``/``pro`` ALL
-  allow reviewed + enabled skills to execute. The ``runtime_mode`` axis
-  controls only repo self-modification + the ``OUROBOROS_RUNTIME_MODE``
-  elevation ratchet — owner-approved skills already pass through their
-  own independent stack (tri-model review PASS + ``enabled.json`` toggle
-  + content-hash freshness + sandboxed subprocess + ``FORBIDDEN_SKILL_SETTINGS``
-  denylist), so a runtime_mode gate on top would only deny owner-approved
-  capabilities without adding security.
-"""
-
 from __future__ import annotations
 
 import json
@@ -46,15 +13,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from ouroboros.config import get_skills_repo_path, load_settings
 from ouroboros.skill_loader import (
     SkillPayloadUnreadable,
-    VALID_REVIEW_STATUSES,
     compute_content_hash,
     discover_skills,
     find_skill,
     grant_status_for_skill,
-    review_status_allows_execution,
     save_enabled,
     summarize_skills,
     skill_review_gate,
+    skill_state_dir,
 )
 from ouroboros.skill_review import review_skill as _review_skill_impl
 from ouroboros.skill_review_status import normalize_skill_review_status
@@ -62,10 +28,6 @@ from ouroboros.tools.review_helpers import format_prompt_code_block
 from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.utils import append_jsonl, utc_now_iso
 
-# Reuse the panic-integrated tracked-subprocess runner so skills spawned
-# by ``skill_exec`` participate in the same process-group tracking as
-# ``run_shell``/``claude_code_edit``. Without this, a long-running skill
-# would not be killed by ``/panic`` → Emergency Stop Invariant violation.
 from ouroboros.tools.shell import (
     _active_subprocesses,
     _subprocess_lock,
@@ -77,101 +39,37 @@ from ouroboros.contracts.plugin_api import FORBIDDEN_SKILL_SETTINGS
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Execution policy
-# ---------------------------------------------------------------------------
-
-# Hard ceiling regardless of the skill manifest's timeout_sec. Anything
-# longer than this is bundled into a background task by the runtime loop
-# — ``skill_exec`` is for bounded, synchronous helper calls, not for
-# long-running worker tasks.
 _HARD_TIMEOUT_CEILING_SEC = 300
 _SKILL_REVIEW_TOOL_TIMEOUT_SEC = int(os.environ.get("OUROBOROS_SKILL_REVIEW_TOOL_TIMEOUT_SEC", "1800"))
 _DEFAULT_TIMEOUT_SEC = 60
-# v5.7.0: bumped from 64KB / 32KB. Real script skills (image-gen prompt
-# trace, deep-research dump, batch summarisation) routinely produced
-# 80–200KB of stdout, which used to trip ``SKILL_EXEC_OVERFLOW`` and
-# kill the process mid-run. ``tool_capabilities.TOOL_RESULT_LIMITS``
-# pairs this with a 300_000-char per-tool cap so the wrapped JSON does
-# not get re-truncated to 15KB by the loop's default limit.
 _MAX_STDOUT_BYTES = 256 * 1024
 _MAX_STDERR_BYTES = 128 * 1024
 
 _ALLOWED_RUNTIMES = {
-    # Cross-platform compatibility: ``python3`` is the canonical declared
-    # runtime but Windows and some minimal Linux installs only ship
-    # ``python.exe`` / ``python``. Fall back to ``python`` so a skill
-    # declaring ``runtime: python3`` works on every supported OS.
     "python": ("python", "python3"),
     "python3": ("python3", "python"),
     "bash": ("bash",),
     "node": ("node",),
-    # v5.7.0: declared additional runtimes. Resolution still happens via
-    # ``shutil.which`` so the skill subprocess fails closed with a clear
-    # ``SKILL_EXEC_ERROR: runtime <foo> is not in the allowlist or the
-    # matching binary is not on PATH`` if the operator has not installed
-    # the runtime locally. The runtime allowlist + subprocess sandbox
-    # invariants (cwd=skill_dir, scrubbed env, byte caps, panic-tracked
-    # process group) apply identically.
     "deno": ("deno",),
     "ruby": ("ruby",),
     "go": ("go",),
 }
 
-# Environment keys that are always passed through to a skill subprocess
-# regardless of ``env_from_settings``. These are OS-level, not application
-# state, and removing them would break basic ``python`` / ``node`` / ``bash``
-# invocations on many systems. Keys absent from the parent env are silently
-# skipped in ``_scrub_env`` so mixing Unix + Windows spellings in the same
-# set is safe (on Unix ``USERPROFILE`` / ``APPDATA`` simply don't exist;
-# on Windows ``HOME`` usually doesn't).
-_ALWAYS_FORWARDED_ENV = frozenset(
-    {
-        "PATH",
-        "HOME",            # Unix home dir
-        "USERPROFILE",     # Windows equivalent of HOME
-        "APPDATA",         # Windows roaming app data (e.g. pip cache)
-        "LOCALAPPDATA",    # Windows local app data
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "SYSTEMROOT",      # Windows
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-    }
-)
+_ALWAYS_FORWARDED_ENV = frozenset({
+    "PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "TMPDIR", "TMP", "TEMP",
+})
 
-# Core settings keys that require explicit, content-bound owner grants
-# before they can be forwarded through ``env_from_settings``. The first
-# layer of defence is the tri-model skill review, but the runtime still
-# refuses to pass these values unless the reviewed script skill carries a
-# matching grant.
 _FORBIDDEN_ENV_FORWARD_KEYS = FORBIDDEN_SKILL_SETTINGS
 
 
 def _resolve_runtime_binary(runtime: str) -> Optional[str]:
-    """Return the absolute path to the binary implementing the runtime.
-
-    Uses ``shutil.which`` first (the common case on developer machines
-    where ``python3`` / ``node`` / ``bash`` live on PATH). For
-    packaged / frozen builds (``_FROZEN_TOOL_MODULES`` now includes
-    ``skill_exec`` so the tool ships inside the app bundle too), we
-    additionally fall back to ``sys.executable`` for ``python`` /
-    ``python3`` requests so skills declaring the default Python
-    runtime still work even when the bundled ``python-standalone``
-    interpreter is not on PATH.
-    """
     import sys
     candidates = _ALLOWED_RUNTIMES.get(runtime or "", ())
     for candidate in candidates:
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
-    # Packaged-build fallback: the bundled Python interpreter is always
-    # available via ``sys.executable`` even when not on PATH. Mirrors
-    # ``claude_code_edit`` / ``ouroboros/platform_layer.py`` which use
-    # the same trick for the app-managed Claude runtime.
     if runtime in ("python", "python3") and sys.executable:
         resolved = pathlib.Path(sys.executable)
         if resolved.is_file():
@@ -185,15 +83,6 @@ def _scrub_env(
     skill_name: str,
     granted_keys: List[str] | None = None,
 ) -> Dict[str, str]:
-    """Build a minimal env for the subprocess.
-
-    Starts empty, adds always-forwarded OS keys, then copies user-approved
-    settings keys listed in the manifest's ``env_from_settings`` (loaded
-    live from settings.json so key-rotation propagates without a restart).
-    Also exposes the per-skill state directory under
-    ``OUROBOROS_SKILL_STATE_DIR`` so scripts have a documented writable
-    location.
-    """
     env: Dict[str, str] = {}
     for key in _ALWAYS_FORWARDED_ENV:
         val = os.environ.get(key)
@@ -201,12 +90,6 @@ def _scrub_env(
             env[key] = val
     if manifest_env_keys:
         settings = load_settings()
-        # Case-insensitive denylist comparison: the canonical form of
-        # FORBIDDEN_SKILL_SETTINGS is uppercase (``OPENROUTER_API_KEY`` etc.)
-        # but a future settings.get implementation may lowercase keys
-        # before lookup. Compare on the upper form so a manifest that
-        # tries to sneak in ``openrouter_api_key`` (lowercase) is still
-        # refused.
         from ouroboros.skill_loader import requested_core_setting_keys
         protected_upper = {k.upper() for k in _FORBIDDEN_ENV_FORWARD_KEYS}
         protected_upper.update(requested_core_setting_keys(list(manifest_env_keys or [])))
@@ -230,14 +113,6 @@ def _scrub_env(
 
 
 def _drain_pipe_with_cap(pipe, cap: int, buf: bytearray, overflow_flag: Dict[str, bool], label: str) -> None:
-    """Read from ``pipe`` into ``buf`` up to ``cap`` bytes.
-
-    Stops reading (and flips ``overflow_flag[label]``) the moment the
-    buffer exceeds the cap so a pathological skill that writes
-    gigabytes to stdout cannot exhaust runtime memory. The caller is
-    expected to terminate the subprocess once either overflow flag
-    fires (skill_exec does exactly that via ``_kill_process_group``).
-    """
     try:
         while True:
             chunk = pipe.read(4096)
@@ -253,7 +128,6 @@ def _drain_pipe_with_cap(pipe, cap: int, buf: bytearray, overflow_flag: Dict[str
                 return
             buf.extend(chunk)
     except (OSError, ValueError):
-        # Pipe closed mid-read — normal during kill.
         return
 
 
@@ -266,18 +140,6 @@ def _run_skill_subprocess(
     stdout_cap: int,
     stderr_cap: int,
 ) -> Tuple[int, bytes, bytes, bool]:
-    """Spawn a skill subprocess with byte-capped stdout/stderr streaming.
-
-    Returns ``(returncode, stdout_bytes, stderr_bytes, overflowed)``.
-    ``overflowed`` is True when either stream's cap was hit — in that
-    case the process tree was killed; ``returncode`` is whatever the
-    OS returned (often a negative signal number on SIGKILL / SIGTERM).
-
-    Raises ``subprocess.TimeoutExpired`` on wall-clock timeout (with
-    the partial stdout/stderr available via ``exc.stdout``/``exc.stderr``).
-    Raises ``FileNotFoundError`` when the runtime binary disappears
-    between resolution and spawn, matching ``subprocess.run`` semantics.
-    """
     popen_kwargs: Dict[str, Any] = {
         "cwd": cwd,
         "env": env,
@@ -286,9 +148,6 @@ def _run_skill_subprocess(
         "stdin": subprocess.DEVNULL,
     }
     popen_kwargs.update(subprocess_new_group_kwargs())
-    # Suppress the ugly per-skill console window on Windows. ``merge_hidden_kwargs``
-    # is a no-op on Unix and bitwise-ORs ``creationflags`` on Windows so the
-    # process-group flag from ``subprocess_new_group_kwargs`` is preserved.
     popen_kwargs = merge_hidden_kwargs(popen_kwargs)
     proc = Popen(cmd, **popen_kwargs)  # noqa: S603 — cmd is a vetted list, not shell
     with _subprocess_lock:
@@ -316,8 +175,6 @@ def _run_skill_subprocess(
     timed_out = False
     try:
         while True:
-            # Overflow? Kill the tree immediately so a noisy/malicious
-            # skill cannot keep filling dropped-on-the-floor pipes.
             if overflow_flag["stdout"] or overflow_flag["stderr"]:
                 overflowed = True
                 _kill_process_group(proc)
@@ -329,8 +186,6 @@ def _run_skill_subprocess(
                 _kill_process_group(proc)
                 break
             time.sleep(0.05)
-        # Wait briefly for pipe drain / reaper; don't block forever
-        # even if something went sideways.
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -437,35 +292,32 @@ def _render_skill_exec_result(
         "stderr": _cap(stderr_bytes, _MAX_STDERR_BYTES, "stderr"),
     }
     rendered = json.dumps(payload, ensure_ascii=False, indent=2)
-    if overflowed:
+    if overflowed or returncode != 0:
+        error = (
+            "stdout/stderr byte cap exceeded"
+            if overflowed
+            else f"exited with code {returncode}"
+        )
         _emit_skill_lifecycle_event(
             ctx,
             event_type="skill_exec_failed",
             skill=skill_name,
             script=script_rel,
             exit_code=int(returncode),
-            error="stdout/stderr byte cap exceeded",
+            error=error,
         )
-        return (
-            f"⚠️ SKILL_EXEC_OVERFLOW: skill {skill_name!r} script "
-            f"{script_rel!r} exceeded stdout/stderr byte caps "
-            f"(stdout<={_MAX_STDOUT_BYTES}B, stderr<={_MAX_STDERR_BYTES}B) "
-            "and was killed.\n\n" + rendered
-        )
-    if returncode != 0:
-        _emit_skill_lifecycle_event(
-            ctx,
-            event_type="skill_exec_failed",
-            skill=skill_name,
-            script=script_rel,
-            exit_code=int(returncode),
-            error=f"exited with code {returncode}",
-        )
-        return (
-            f"⚠️ SKILL_EXEC_FAILED: skill {skill_name!r} script "
-            f"{script_rel!r} exited with code {returncode}.\n\n"
-            + rendered
-        )
+        if overflowed:
+            header = (
+                f"⚠️ SKILL_EXEC_OVERFLOW: skill {skill_name!r} script {script_rel!r} "
+                f"exceeded stdout/stderr byte caps (stdout<={_MAX_STDOUT_BYTES}B, "
+                f"stderr<={_MAX_STDERR_BYTES}B) and was killed."
+            )
+        else:
+            header = (
+                f"⚠️ SKILL_EXEC_FAILED: skill {skill_name!r} script "
+                f"{script_rel!r} exited with code {returncode}."
+            )
+        return f"{header}\n\n{rendered}"
     _emit_skill_lifecycle_event(
         ctx,
         event_type="skill_exec_finished",
@@ -482,20 +334,6 @@ def _resolve_script_path(
     *,
     reviewed_paths: Optional[List[pathlib.Path]] = None,
 ) -> Optional[pathlib.Path]:
-    """Resolve ``script_rel`` against ``skill_dir``, blocking path escape.
-
-    When ``reviewed_paths`` is supplied, the resolved script must also be
-    a member of that set. This is the "executable surface == reviewed
-    surface" invariant: the content hash + the review pack cover the
-    manifest + manifest-declared ``entry`` + ``scripts/`` + ``assets/``,
-    so ``skill_exec`` must refuse to execute anything outside those
-    reviewed files (e.g. a stray ``skill_dir/helper.py`` the user dropped
-    post-review). Without the match the PASS verdict would cover code
-    that never went through tri-model review.
-
-    Returns ``None`` on any failure (escape, missing file, or not in the
-    reviewed set).
-    """
     rel = (script_rel or "").strip()
     if not rel or rel.startswith("/") or rel.startswith("~"):
         return None
@@ -515,35 +353,18 @@ def _resolve_script_path(
     return candidate
 
 
-# ---------------------------------------------------------------------------
-# Tool handlers
-# ---------------------------------------------------------------------------
-
-
 def _skill_tool_preflight(
     ctx: ToolContext,
 ) -> Optional[str]:
-    """Return an error string when the skill surface is unavailable.
-
-    The tools work whenever ANY skill is discoverable — that's either
-    the bundled ``repo/skills/`` reference set or the user's configured
-    ``OUROBOROS_SKILLS_REPO_PATH`` checkout. Only when both are empty
-    do we surface the "point at a checkout" hint.
-    """
     repo_path = get_skills_repo_path()
     if repo_path:
         return None
-    # No external path — fall back to checking whether the bundled
-    # reference directory is present and non-empty.
-    from ouroboros.skill_loader import _bundled_skills_dir
-    bundled = _bundled_skills_dir()
-    if bundled is not None and any(bundled.iterdir()):
+    if discover_skills(pathlib.Path(getattr(ctx, "drive_root", "")), repo_path=""):
         return None
     return (
         "⚠️ SKILLS_UNAVAILABLE: No skills are discoverable. Point "
         "OUROBOROS_SKILLS_REPO_PATH at a local checkout in Settings → "
-        "Behavior → External Skills Repo, or ensure the bundled "
-        "skills directory ships with the build."
+        "Behavior → External Skills Repo, or install skills into the data plane."
     )
 
 
@@ -562,12 +383,12 @@ def _handle_review_skill(
     review_rebuttal: str = "",
     **_kwargs: Any,
 ) -> str:
-    err = _skill_tool_preflight(ctx)
-    if err:
-        return err
     skill_name = str(skill or "").strip()
     if not skill_name:
         return "⚠️ SKILL_REVIEW_ERROR: 'skill' argument is required."
+    err = _skill_tool_preflight(ctx)
+    if err:
+        return err
     from ouroboros.skill_review import (
         _count_attempts_for_content,
         _load_accepted_rebuttals,
@@ -611,12 +432,17 @@ def _handle_review_skill(
 
 
 def _skill_deps_exec_block(drive_root: pathlib.Path, loaded: Any) -> str:
-    """Return a SKILL_EXEC_BLOCKED string when isolated deps are not ready.
+    deps_status, reason = _skill_deps_not_ready(drive_root, loaded)
+    if not reason:
+        return ""
+    return (
+        f"⚠️ SKILL_EXEC_BLOCKED: skill {loaded.name!r} isolated "
+        f"dependencies are not ready (status={deps_status!r}). "
+        "Re-run review_skill so a fresh executable review can reinstall dependencies."
+    )
 
-    Toggle guards prevent future enables, but already-enabled script skills
-    still need an execution-time check because deps.json can become stale,
-    corrupted, or failed after enablement.
-    """
+
+def _skill_deps_not_ready(drive_root: pathlib.Path, loaded: Any) -> tuple[str, str]:
     try:
         from ouroboros.marketplace.install_specs import install_specs_hash as _specs_hash
         from ouroboros.marketplace.isolated_deps import read_deps_state
@@ -624,19 +450,17 @@ def _skill_deps_exec_block(drive_root: pathlib.Path, loaded: Any) -> str:
 
         auto_specs = auto_install_specs_for_skill(drive_root, loaded)
         if not auto_specs:
-            return ""
-        deps_state = read_deps_state(drive_root, loaded.name)
+            return "", ""
+        deps_state = read_deps_state(drive_root, loaded.name, loaded.skill_dir)
         deps_status = str(deps_state.get("status") or "pending")
-        if deps_status == "installed" and deps_state.get("specs_hash") == _specs_hash(auto_specs):
-            return ""
-        return (
-            f"⚠️ SKILL_EXEC_BLOCKED: skill {loaded.name!r} isolated "
-            f"dependencies are not ready (status={deps_status!r}). "
-            "Re-run review_skill so a fresh executable review can reinstall dependencies."
-        )
+        if deps_status != "installed":
+            return deps_status, "status"
+        if str(deps_state.get("specs_hash") or "") != _specs_hash(auto_specs):
+            return deps_status, "fingerprint"
+        return "", ""
     except Exception:
-        log.debug("skill_exec deps readiness probe failed", exc_info=True)
-        return ""
+        log.debug("skill deps readiness probe failed", exc_info=True)
+        return "", ""
 
 
 def _non_executable_review_message(prefix: str, skill_name: str, status: str, *, stale: bool = False) -> str:
@@ -663,25 +487,13 @@ def _handle_skill_exec(
     args: Optional[List[str]] = None,
     **_kwargs: Any,
 ) -> str:
-    err = _skill_tool_preflight(ctx)
-    if err:
-        return err
-
-    # v5.1.2 light reframed: ``light`` blocks repo self-modification but
-    # ALLOWS reviewed + enabled skills to execute. Skills already have
-    # their own independent safety stack (tri-model review PASS verdict
-    # + ``enabled.json`` toggle + content-hash freshness + sandboxed
-    # subprocess with cwd / scrubbed env / runtime allowlist / 300s
-    # ceiling / byte caps + ``FORBIDDEN_SKILL_SETTINGS`` denylist), so
-    # gating execution by ``runtime_mode`` would only deny owner-
-    # approved capabilities. Repo-mutation tools and the elevation
-    # ratchet (``save_settings`` / ``_data_write`` to settings.json)
-    # remain blocked; that is what ``light`` is for.
-
     skill_name = str(skill or "").strip()
     script_rel = str(script or "").strip()
     if not skill_name or not script_rel:
         return "⚠️ SKILL_EXEC_ERROR: both 'skill' and 'script' are required."
+    err = _skill_tool_preflight(ctx)
+    if err:
+        return err
 
     drive_root = pathlib.Path(ctx.drive_root)
     loaded = find_skill(drive_root, skill_name)
@@ -696,10 +508,6 @@ def _handle_skill_exec(
             f"({loaded.load_error}). Fix the skill package and re-review."
         )
     if loaded.manifest.is_extension():
-        # Extension plugins execute in-process through PluginAPI, not through
-        # the script subprocess substrate. Their registered tools, routes, and
-        # WS handlers are already dispatched by ToolRegistry / extensions_api /
-        # server.py when the extension is live.
         return (
             f"⚠️ SKILL_EXEC_EXTENSION: skill {skill_name!r} is a "
             "type=extension plugin and does not execute through the "
@@ -711,12 +519,6 @@ def _handle_skill_exec(
             "``/api/extensions/<skill>/...`` routes, or provider-safe "
             "extension WebSocket handlers instead."
         )
-    # Phase 3 ``skill_exec`` only executes ``type: script`` skills.
-    # ``instruction`` skills are catalogued + reviewable but have no
-    # executable payload by design (their manifest declares no scripts).
-    # Refusing here keeps the executable surface == ``manifest.scripts``
-    # and prevents the reviewer-executor mismatch the scope reviewer
-    # flagged in Phase 3 round 4.
     if not loaded.manifest.is_script():
         return (
             f"⚠️ SKILL_EXEC_ERROR: skill {skill_name!r} has type "
@@ -773,32 +575,12 @@ def _handle_skill_exec(
             "or the matching binary is not on PATH."
         )
 
-    # Keep the executable surface identical to the manifest-declared
-    # ``scripts`` list — NOT the full reviewed file set. SKILL.md body and
-    # assets/* are part of the reviewed content hash (so editing them
-    # correctly invalidates the PASS verdict), but they are not executable
-    # payload and must not be invokable via ``skill_exec``. Resolve each
-    # declared script ``name`` against the skill directory once, up-front.
-    # Manifest authors may write either a bare filename (``fetch.py``,
-    # expected under ``scripts/``) or an explicit relative path
-    # (``scripts/fetch.py``); both forms are accepted here.
-    # Canonicalise a manifest ``scripts[].name`` to exactly one resolved
-    # filesystem path. A bare name (``fetch.py``) always means
-    # ``scripts/fetch.py`` — never a top-level shadow file of the same
-    # name — so execution cannot depend on an accidentally-present
-    # top-level ``hello.py`` sitting next to the real ``scripts/hello.py``.
-    # Explicit paths (``name: bin/run.sh``) resolve verbatim. If BOTH
-    # forms would resolve for a given declared name (e.g. ``hello.py``
-    # exists both at top level and under ``scripts/``), we pick the
-    # ``scripts/`` form and keep a note that the top-level file is
-    # reviewed content but NOT executable.
     def _canonical_declared_path(declared_name: str) -> Optional[pathlib.Path]:
         name = declared_name.strip()
         if not name:
             return None
         if "/" in name or name.startswith("."):
             return _resolve_script_path(loaded.skill_dir, name)
-        # Bare name — mandate the ``scripts/`` prefix.
         return _resolve_script_path(loaded.skill_dir, f"scripts/{name}")
 
     declared_scripts: List[pathlib.Path] = []
@@ -815,16 +597,9 @@ def _handle_skill_exec(
         if canonical not in declared_scripts:
             declared_scripts.append(canonical)
         declared_by_name[declared_name] = canonical
-        # Also index by the explicit ``scripts/<name>`` spelling so a
-        # caller that passes ``script="scripts/hello.py"`` matches the
-        # same canonical target.
         if "/" not in declared_name:
             declared_by_name[f"scripts/{declared_name}"] = canonical
 
-    # Look up the caller's script argument in the declared-name index
-    # first, then fall back to the path-based check for callers that
-    # pass an explicit relative path that happens to coincide with a
-    # declared script path.
     script_path: Optional[pathlib.Path] = declared_by_name.get(script_rel.strip())
     if script_path is None:
         script_path = _resolve_script_path(
@@ -843,8 +618,6 @@ def _handle_skill_exec(
     if args is None:
         extra_args: List[Any] = []
     elif isinstance(args, str):
-        # Mis-serialized by the caller (``args="alpha"`` would expand to
-        # per-char argv under ``list(args)``). Reject explicitly.
         return (
             "⚠️ SKILL_EXEC_ERROR: 'args' must be a list of scalar "
             "strings/numbers, not a single string. Wrap as ['alpha'] "
@@ -867,15 +640,20 @@ def _handle_skill_exec(
         cmd.append(str(arg))
 
     timeout = _bound_timeout(loaded.manifest.timeout_sec)
-    from ouroboros.skill_loader import grant_status_for_skill, skill_state_dir
 
     state_dir = skill_state_dir(drive_root, loaded.name)
     grants = grant_status_for_skill(drive_root, loaded)
     missing_core = list(grants.get("missing_keys") or [])
-    if missing_core:
+    missing_permissions = list(grants.get("missing_permissions") or [])
+    if missing_core or missing_permissions:
+        requested = []
+        if missing_core:
+            requested.append(f"core settings keys {missing_core}")
+        if missing_permissions:
+            requested.append(f"permissions {missing_permissions}")
         return (
             "⚠️ SKILL_EXEC_GRANT_REQUIRED: skill "
-            f"{loaded.name!r} requests core settings keys {missing_core}. "
+            f"{loaded.name!r} requests {' and '.join(requested)}. "
             "Grant them from the Skills UI after a fresh executable review before execution."
         )
     env = _scrub_env(
@@ -936,9 +714,6 @@ def _handle_skill_exec(
         )
         return f"⚠️ SKILL_EXEC_ERROR: OS error running skill: {exc}"
 
-    # ``overflowed`` means we killed the skill because it exceeded the
-    # per-stream byte cap. Delegate rendering + lifecycle events so this
-    # policy-heavy handler stays under the function-size gate.
     return _render_skill_exec_result(
         ctx,
         payload={
@@ -959,12 +734,6 @@ _FALSE_LITERALS = {"false", "no", "off", "0"}
 
 
 def _coerce_bool_arg(value: Any) -> Optional[bool]:
-    """Strictly coerce an LLM tool argument to a bool.
-
-    Returns ``None`` for values that are not unambiguously boolean — so
-    the handler can reject malformed input instead of silently running
-    ``bool("false") == True`` and flipping enabled ON.
-    """
     if isinstance(value, bool):
         return value
     if isinstance(value, int) and value in (0, 1):
@@ -984,9 +753,6 @@ def _handle_toggle_skill(
     enabled: Any = None,
     **_kwargs: Any,
     ) -> str:
-    err = _skill_tool_preflight(ctx)
-    if err:
-        return err
     skill_name = str(skill or "").strip()
     if not skill_name:
         return "⚠️ SKILL_TOGGLE_ERROR: 'skill' argument is required."
@@ -999,6 +765,9 @@ def _handle_toggle_skill(
             f"{sorted(_TRUE_LITERALS | _FALSE_LITERALS)}. "
             f"Got {enabled!r} ({type(enabled).__name__})."
         )
+    err = _skill_tool_preflight(ctx)
+    if err:
+        return err
 
     drive_root = pathlib.Path(ctx.drive_root)
     from ouroboros.skill_lifecycle_queue import skill_lifecycle_file_lock
@@ -1028,45 +797,29 @@ def _handle_toggle_skill(
                     stale=stale,
                 )
             if not grants.get("all_granted", True):
-                missing = ", ".join(grants.get("missing_keys") or [])
+                missing_bits = []
+                if grants.get("missing_keys"):
+                    missing_bits.append(f"keys={grants.get('missing_keys')}")
+                if grants.get("missing_permissions"):
+                    missing_bits.append(f"permissions={grants.get('missing_permissions')}")
+                missing_text = f" ({', '.join(missing_bits)})" if missing_bits else ""
                 return (
-                    "⚠️ SKILL_TOGGLE_ERROR: cannot enable until requested key grants "
-                    f"are approved{f' ({missing})' if missing else ''}."
+                    "⚠️ SKILL_TOGGLE_ERROR: cannot enable until requested grants "
+                    f"are approved{missing_text}."
                 )
-            # v5.7.0: refuse enable when the skill declared isolated
-            # ``install_specs`` but the deps are not actually installed
-            # (status != "installed") OR are stale relative to the
-            # current provenance specs_hash. Without this guard a user
-            # could toggle an extension whose ``import requests`` would
-            # ImportError mid-dispatch.
-            try:
-                from ouroboros.marketplace.install_specs import install_specs_hash as _specs_hash
-                from ouroboros.marketplace.isolated_deps import read_deps_state
-                from ouroboros.skill_dependencies import auto_install_specs_for_skill
-                auto_specs = auto_install_specs_for_skill(drive_root, loaded)
-                if auto_specs:
-                    deps_state = read_deps_state(drive_root, loaded.name)
-                    deps_status = str(deps_state.get("status") or "pending")
-                    expected_hash = _specs_hash(auto_specs)
-                    actual_hash = str(deps_state.get("specs_hash") or "")
-                    if deps_status != "installed":
-                        return (
-                            f"⚠️ SKILL_TOGGLE_ERROR: skill {loaded.name!r} declares "
-                            f"isolated dependencies (status={deps_status!r}). "
-                            "Re-run review_skill (PASS triggers a deps re-install) "
-                            "before enabling."
-                        )
-                    if actual_hash != expected_hash:
-                        return (
-                            f"⚠️ SKILL_TOGGLE_ERROR: skill {loaded.name!r} dependency "
-                            "fingerprint is stale (provenance changed since last "
-                            "install). Re-run review_skill before enabling."
-                        )
-            except Exception:
-                # Defense-in-depth: never block enable on a probe error;
-                # log and continue. The other guards above + skill_exec's
-                # own freshness checks still apply.
-                log.debug("toggle_skill deps probe failed", exc_info=True)
+            deps_status, deps_reason = _skill_deps_not_ready(drive_root, loaded)
+            if deps_reason == "status":
+                return (
+                    f"⚠️ SKILL_TOGGLE_ERROR: skill {loaded.name!r} declares "
+                    f"isolated dependencies (status={deps_status!r}). "
+                    "Re-run review_skill (PASS triggers a deps re-install) before enabling."
+                )
+            if deps_reason == "fingerprint":
+                return (
+                    f"⚠️ SKILL_TOGGLE_ERROR: skill {loaded.name!r} dependency "
+                    "fingerprint is stale (provenance changed since last install). "
+                    "Re-run review_skill before enabling."
+                )
         if not coerced and collision_load_error:
             extension_action = None
             extension_reason = "name_collision"
@@ -1089,11 +842,6 @@ def _handle_toggle_skill(
         stale = loaded.review.is_stale_for(loaded.content_hash)
         gate = skill_review_gate(loaded.review.status, stale=stale)
         return json.dumps({"skill": loaded.name, "enabled": coerced, "review_status": loaded.review.status, "review_gate": gate, "executable_review": gate["executable_review"], "extension_action": extension_action, "extension_reason": extension_reason, "message": f"Skill {loaded.name!r} enabled={coerced}"}, ensure_ascii=False, indent=2)
-
-
-
-# Tool registrations
-# ---------------------------------------------------------------------------
 
 _LIST_SCHEMA = {
     "name": "list_skills",
@@ -1185,7 +933,7 @@ _TOGGLE_SCHEMA = {
     "description": (
         "Enable or disable a skill. Disabled skills are excluded from "
         "skill_exec regardless of review status. Enabling requires a fresh "
-        "executable review and any requested core-key grants."
+        "executable review and any requested key or host-permission grants."
     ),
     "parameters": {
         "type": "object",

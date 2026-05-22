@@ -807,7 +807,7 @@ def test_world_profile_is_loaded_with_stable_memory(tmp_path):
     assert "world-profile-data" in combined
 
 
-def test_legacy_dialogue_summary_remains_visible_with_blocks(tmp_path):
+def test_retired_dialogue_summary_remains_visible_when_blocks_exist(tmp_path):
     from ouroboros.context import build_memory_sections
     from ouroboros.memory import Memory
 
@@ -824,8 +824,23 @@ def test_legacy_dialogue_summary_remains_visible_with_blocks(tmp_path):
 
     assert "## Dialogue History" in combined
     assert "new dialogue block" in combined
-    assert "## Retired legacy dialogue summary" in combined
+    assert "## Legacy Dialogue Summary (retired flat format, read-only fallback)" in combined
     assert "legacy dialogue" in combined
+
+
+def test_retired_dialogue_summary_fallback_preserves_continuity_without_blocks(tmp_path):
+    from ouroboros.context import build_memory_sections
+    from ouroboros.memory import Memory
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "dialogue_summary.md").write_text("legacy dialogue only", encoding="utf-8")
+    memory = Memory(drive_root=tmp_path)
+
+    combined = "\n\n".join(build_memory_sections(memory, partition="volatile"))
+
+    assert "## Legacy Dialogue Summary (retired flat format, read-only fallback)" in combined
+    assert "legacy dialogue only" in combined
 
 
 def test_recent_sections_filter_process_logs_by_task_id(tmp_path):

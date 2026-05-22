@@ -1,31 +1,4 @@
-"""Unified ``SKILL.md`` / ``skill.json`` manifest (v1).
-
-One manifest format describes all three kinds of external packages:
-
-- ``type: instruction`` — pure markdown guide, no executable payload.
-- ``type: script``      — markdown guide + one or more scripts invoked
-                          through the upcoming ``skill_exec`` tool.
-- ``type: extension``   — markdown guide + ``plugin.py``-style entry plus
-                          optional routes / ws handlers and future UI-tab
-                          declarations.
-
-The parser intentionally works on either::
-
-    ---
-    name: weather
-    type: script
-    ...
-    ---
-    # body (human readable instructions)
-    ...
-
-(YAML frontmatter in ``SKILL.md``) **or** a standalone ``skill.json`` file.
-
-The parser is intentionally tolerant for missing optional fields and
-unknown extras, but it FAILS CLOSED on structural contract damage:
-invalid JSON/YAML, malformed structured fields (for example ``ui_tab``),
-or an unsupported ``schema_version`` all raise ``SkillManifestError``.
-"""
+"""Unified SKILL.md/skill.json parser; tolerant extras, fail-closed structure."""
 
 from __future__ import annotations
 
@@ -45,10 +18,7 @@ VALID_SKILL_RUNTIMES = frozenset({
     "python3",
     "node",
     "bash",
-    # v5.7.0: extended runtime set. The actual binary is still resolved via
-    # ``shutil.which`` at exec time and the skill subprocess fails closed if
-    # the operator's host doesn't ship the runtime, but the manifest
-    # validator no longer rejects these declarations as unknown.
+    # Binaries resolve at exec time; missing runtimes still fail closed there.
     "deno",
     "ruby",
     "go",
@@ -60,12 +30,7 @@ VALID_SKILL_PERMISSIONS = frozenset(
         "subprocess",
         "widget",
         "ws_handler",
-        # Phase 4 ``type: extension`` permissions — kept in sync with
-        # ``ouroboros.contracts.plugin_api.VALID_EXTENSION_PERMISSIONS``
-        # so ``SkillManifest.validate()`` does not warn "unknown
-        # permission" on legitimate extension manifests that declare
-        # these Phase-4 surfaces. The single frozen-set remains the
-        # SSOT for both script-type and extension-type permissions.
+        # Keep extension permissions aligned with plugin_api's frozen contract.
         "route",
         "tool",
         "read_settings",
@@ -80,16 +45,12 @@ _EVENT_TOPIC_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 
 
 class SkillManifestError(ValueError):
-    """Raised when a manifest is structurally broken (not just missing fields)."""
+    """Manifest has structural contract damage."""
 
 
 @dataclass
 class SkillManifest:
-    """Structural description of one skill package.
-
-    Fields marked optional default to empty values so the evolutionary layer
-    can render partial skills in the UI with a ``needs_review`` badge.
-    """
+    """Structural description of one skill package."""
 
     name: str
     description: str
@@ -101,22 +62,19 @@ class SkillManifest:
     runtime: str = ""
     timeout_sec: int = 60
     env_from_settings: List[str] = field(default_factory=list)
-    # script-typed manifests list their scripts; each item is a mapping with
-    # at least ``name`` and optionally ``description``.
+    # Script manifests list script mappings.
     scripts: List[Dict[str, str]] = field(default_factory=list)
-    # extension-typed manifests point at a Python entry module.
+    # Extension manifests point at a Python entry module.
     entry: str = ""
     permissions: List[str] = field(default_factory=list)
     subscribe_events: List[str] = field(default_factory=list)
     companion_processes: List[Dict[str, Any]] = field(default_factory=list)
     ui_tab: Optional[Dict[str, Any]] = None
-    # Human-readable body from SKILL.md after the closing ``---`` line.
+    # Human-readable body after SKILL.md frontmatter.
     body: str = ""
-    # Anything we didn't understand, preserved for forward-compatibility.
+    # Unknown fields preserved for forward compatibility.
     raw_extra: Dict[str, Any] = field(default_factory=dict)
     schema_version: int = SKILL_MANIFEST_SCHEMA_VERSION
-
-    # --- Convenience --------------------------------------------------
 
     def is_instruction(self) -> bool:
         return self.type == "instruction"
@@ -128,12 +86,7 @@ class SkillManifest:
         return self.type == "extension"
 
     def validate(self) -> List[str]:
-        """Return a list of non-blocking warnings for a parsed manifest.
-
-        Blocking failures are raised by ``parse_skill_manifest_text``; this
-        function describes *soft* issues useful to show in review output
-        (unknown type, unknown runtime, permissions typo, etc.).
-        """
+        """Return soft warnings; parse errors already raised on structural damage."""
         warnings: List[str] = []
         if self.type not in VALID_SKILL_TYPES:
             warnings.append(
@@ -166,10 +119,6 @@ class SkillManifest:
         return warnings
 
 
-# ---------------------------------------------------------------------------
-# Parsers
-# ---------------------------------------------------------------------------
-
 _FRONTMATTER_RE = re.compile(
     r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z",
     re.DOTALL,
@@ -177,20 +126,8 @@ _FRONTMATTER_RE = re.compile(
 
 
 def parse_skill_manifest_text(text: str) -> SkillManifest:
-    """Parse a ``SKILL.md`` (frontmatter + body) or a ``skill.json`` document.
-
-    Auto-detects which form the input is in:
-
-    - Starts with ``{`` -> parsed as JSON.
-    - Starts with ``---`` -> parsed as YAML-ish frontmatter, the trailing
-      body becomes ``manifest.body``.
-    - Otherwise treated as an instruction-only markdown file with no
-      frontmatter; a best-effort ``name`` is derived from the first heading.
-
-    Raises ``SkillManifestError`` only on structural damage. Missing optional
-    fields become empty values; unknown fields are preserved in ``raw_extra``.
-    """
-    src = text.lstrip("\ufeff")  # strip BOM if any
+    """Parse JSON, YAML frontmatter, or body-only instruction markdown."""
+    src = text.lstrip("\ufeff")
     stripped = src.lstrip()
 
     if stripped.startswith("{"):
@@ -218,13 +155,7 @@ def parse_skill_manifest_text(text: str) -> SkillManifest:
         if not isinstance(data, dict):
             raise SkillManifestError("SKILL.md frontmatter must be a mapping")
         return _manifest_from_mapping(data, body=body.strip())
-    # Fallback: body-only markdown, treat as instruction skill.
-    # ``stripped.startswith("---")`` is NOT treated as a broken frontmatter
-    # fence here — a markdown document that legitimately starts with a
-    # thematic break (``---`` on its own line) is a valid instruction
-    # skill body. Real frontmatter parse failures (malformed YAML, bad
-    # mapping shape) are caught by the branch above which only runs when
-    # the full frontmatter regex actually matches.
+    # A leading thematic break is valid body markdown, not broken frontmatter.
     name = _derive_name_from_body(src)
     return SkillManifest(
         name=name,
@@ -234,11 +165,6 @@ def parse_skill_manifest_text(text: str) -> SkillManifest:
         body=src.strip(),
         schema_version=SKILL_MANIFEST_SCHEMA_VERSION,
     )
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _manifest_from_mapping(data: Dict[str, Any], *, body: str) -> SkillManifest:

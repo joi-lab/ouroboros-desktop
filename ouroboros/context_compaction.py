@@ -1,11 +1,4 @@
-"""
-Tool-history compaction for LLM context management.
-
-Extracted from context.py to keep the context builder focused on prompt assembly.
-Provides LLM-driven summarization of old reasoning rounds. On LLM failure,
-falls back to a safe, non-destructive structural compaction instead of
-hard-truncating process memory.
-"""
+"""Tool-history compaction with safe structural fallback on LLM failure."""
 
 from __future__ import annotations
 
@@ -70,11 +63,7 @@ def _round_has_protected_content(messages: list, start: int, end: int) -> bool:
         msg = messages[idx]
         role = msg.get("role", "")
         content = str(msg.get("content") or "")
-        # Protect tool-result messages for critical tools or error markers.
-        # (v4.34.0: checkpoint-marker protection removed — the structured
-        # Known/Blocker/Decision/Next reflection format was retired in favour
-        # of a plain periodic user-message self-check, so there is no longer
-        # a durable checkpoint artifact that needs to survive compaction.)
+        # Protect critical tool results and error markers from compaction.
         if role == "tool":
             tool_name = _find_tool_name_for_result(msg, messages)
             if tool_name in _COMPACTION_PROTECTED_TOOLS or content.startswith("⚠️"):

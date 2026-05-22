@@ -41,6 +41,30 @@ def test_utils_exports_shared_helpers():
     assert "export async function fetchJson(" in _read("api_client.js")
 
 
+def test_api_client_owns_extension_route_helpers():
+    src = _read("api_client.js")
+    for sig in (
+        "export function cleanExtensionRoute(",
+        "export function extensionRoutePrefix(",
+        "export function extensionRoutePath(",
+    ):
+        assert sig in src
+    assert "route.includes('\\\\')" in src
+    assert "part === '..'" in src
+    assert "encodeURIComponent(skill)" in src
+
+
+def test_api_client_owns_json_post_ok_false_handling():
+    api_src = _read("api_client.js")
+    mcp_src = _read("mcp_settings.js")
+
+    assert "export function jsonPost(" in api_src
+    assert "rejectOkFalse" in api_src
+    assert "import { jsonPost } from './api_client.js';" in mcp_src
+    assert "function postJson(" not in mcp_src
+    assert "async function postJson(" not in mcp_src
+
+
 def test_safe_external_href_attr_blocks_unsafe_schemes():
     """Schema allowlist must keep blocking javascript:/data:/vbscript:/mailto: hrefs."""
     src = _read("utils.js")
@@ -80,10 +104,11 @@ def test_marketplace_does_not_redeclare_shared_helpers():
 
 def test_skills_does_not_redeclare_shared_helpers():
     src = _read("skills.js")
+    renderer = _read("skill_card_renderer.js")
     assert "boundedText" in src
-    assert "safeExternalHrefAttr as safeExternalUrl" in src
+    assert "safeExternalHrefAttr as safeExternalUrl" in renderer
     assert "function boundedText(" not in src
-    assert "function safeExternalUrl(" not in src
+    assert "function safeExternalUrl(" not in src + renderer
 
 
 def test_widgets_uses_shared_render_markdown():

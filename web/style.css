@@ -95,7 +95,6 @@ body {
   position: relative;
 }
 
-/* Matrix rain canvas */
 #matrix-rain {
   position: fixed;
   top: 0;
@@ -107,11 +106,7 @@ body {
   z-index: 0;
 }
 
-/* Navigation Rail — floating overlay.
-   v5.7.0 spacing pass: top padding 12 -> 28 and inter-item gap 4 -> 10 so
-   the rail is no longer "stuck" to the viewport top edge and tiles breathe.
-   These values track the Material 3 / Apple HIG navigation rail norms and
-   are documented in docs/DEVELOPMENT.md "Navigation rail spacing". */
+/* Floating navigation rail. */
 #nav-rail {
   position: fixed;
   left: 0;
@@ -201,7 +196,7 @@ body {
   display: none;
 }
 
-/* Main content — full width with left padding for floating nav */
+/* Main content offsets the floating nav. */
 #content {
   width: 100%;
   display: flex;
@@ -241,7 +236,7 @@ body {
     );
 }
 
-/* Shared containment for narrow screens and unbroken runtime text. */
+/* Containment for narrow screens and unbroken runtime text. */
 #content,
 #content .page,
 #chat-messages,
@@ -886,7 +881,6 @@ body {
   background: rgba(239, 68, 68, 0.08);
 }
 
-/* Budget pill in chat header */
 .chat-budget-pill {
   appearance: none;
   display: flex;
@@ -941,7 +935,6 @@ body {
   width: 0;
 }
 
-/* Status badge */
 .status-badge {
   padding: 4px 10px;
   border-radius: var(--radius);
@@ -1011,7 +1004,6 @@ body {
   }
 }
 
-/* Web onboarding overlay */
 .onboarding-overlay {
   position: fixed;
   inset: 0;
@@ -1036,6 +1028,30 @@ body {
   background: transparent;
 }
 
+.onboarding-restart-card {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  width: min(460px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+}
+
+.onboarding-restart-card h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.onboarding-restart-card p {
+  margin: 0 0 18px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 @media (max-width: 980px) {
   .files-layout {
     grid-template-columns: 1fr;
@@ -1057,7 +1073,6 @@ body {
   }
 }
 
-/* Chat page */
 #chat-messages {
   flex: 1;
   min-height: 0;
@@ -1271,7 +1286,7 @@ body {
   text-align: left;
 }
 
-/* Progress (thinking) messages — subdued and smaller than regular bubbles */
+/* Subdued progress messages. */
 .chat-bubble.progress {
   border-left: 2px solid rgba(220, 38, 38, 0.2);
   padding-left: 14px;
@@ -1442,7 +1457,7 @@ body {
   background: rgba(239, 68, 68, 0.1);
 }
 
-/* Inline typing dots inside the live card summary row */
+/* Live-card typing dots. */
 .chat-live-typing {
   display: inline-flex;
   gap: 3px;
@@ -1465,7 +1480,6 @@ body {
   animation-delay: 0.4s;
 }
 
-/* Hide typing dots when card is finished */
 .chat-live-card[data-finished="1"] .chat-live-typing {
   display: none;
 }
@@ -1677,7 +1691,7 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* Markdown rendering classes — global, used by renderMarkdown in all contexts */
+/* Global markdown rendering classes. */
 .md-h1 {
   font-size: 16px;
   color: var(--text-primary);
@@ -1705,7 +1719,7 @@ body {
   text-decoration: underline;
 }
 
-/* Table overflow wrapper — prevents wide tables from breaking bubble layout */
+/* Prevent wide tables from breaking bubble layout. */
 .md-table-wrap {
   display: block;
   overflow-x: auto;
@@ -1713,16 +1727,11 @@ body {
   max-width: 100%;
 }
 
-/* Nav spacer (replaces inline style="flex:1") */
 .nav-spacer {
   flex: 1;
 }
 
-/* Mobile responsive — narrow screens only; desktop layout unchanged.
-   NOTE: Rules here apply only to selectors whose base definitions appear
-   BEFORE this block. Overrides for selectors defined later live in the
-   second @media (max-width: 640px) block at the END of this file so they
-   reliably win without !important. */
+/* Early mobile overrides; late-defined selectors are handled at file end. */
 @media (max-width: 640px) {
   /* Prevent iOS zoom on input focus */
   textarea,
@@ -1890,7 +1899,7 @@ body {
   gap: 6px;
 }
 
-/* Attach button sits INSIDE the textarea on the left */
+/* Attach button sits inside the textarea. */
 .chat-attach-btn {
   position: absolute;
   left: 10px;
@@ -2012,7 +2021,7 @@ body {
   color: var(--text-muted);
 }
 
-/* Send group: positions the Send button + chevron as an absolute unit */
+/* Absolute send button + chevron group. */
 .chat-send-group {
   position: absolute;
   right: 8px;
@@ -2028,7 +2037,7 @@ body {
   opacity: 0.72;
 }
 
-/* --send-color: resolved per send-mode via dataset attribute below */
+/* --send-color resolves from data-send-mode. */
 .chat-send-inline {
   border: none;
   background: transparent;
@@ -2058,7 +2067,7 @@ body {
   opacity: 1;
 }
 
-/* Plan mode overrides — toggled via data-send-mode="plan" on the group */
+/* Plan-mode send color. */
 .chat-send-group[data-send-mode="plan"] .chat-send-inline {
   color: var(--amber);
   opacity: 0.85;
@@ -2072,7 +2081,7 @@ body {
   opacity: 1;
 }
 
-/* Chevron button — always visible for touch-screen accessibility */
+/* Chevron remains visible for touch accessibility. */
 .chat-send-chevron {
   border: none;
   border-left: 1px solid rgba(201, 53, 69, 0.2);
@@ -2106,7 +2115,6 @@ body {
   opacity: 1;
 }
 
-/* Dropdown panel */
 .chat-send-dropdown {
   display: none;
   position: absolute;
@@ -2146,21 +2154,121 @@ body {
   color: var(--accent);
   opacity: 1;
 }
-/* Active-mode marker: the currently selected mode item gets a subtle tint */
+/* Active send-mode tint. */
 .chat-send-dropdown-item[data-mode-active="true"] {
   opacity: 1;
   font-weight: 600;
 }
-/* Plan item tinted amber when it's the active mode */
 #chat-dropdown-plan[data-mode-active="true"] {
   color: var(--amber);
 }
-/* Send item tinted accent when it's the active mode */
 #chat-dropdown-send[data-mode-active="true"] {
   color: var(--accent);
 }
 
-/* Shared UI components (stat cards used by Costs, section titles by Evolution) */
+/* Shared UI components. */
+.ui-card,
+:where(
+  .settings-shell .form-section,
+  .settings-card,
+  .settings-provider-card,
+  .settings-extension-section,
+  .mcp-server-card,
+  .settings-model-card,
+  .settings-effort-card,
+  .settings-custom-secret-row,
+  .skills-card,
+  .marketplace-card,
+  .widgets-card,
+  .updates-card,
+  .costs-budget-card
+) {
+  border: 1px solid var(--ui-card-border);
+  border-radius: var(--radius);
+  background: var(--ui-card-bg);
+}
+
+.ui-card-soft,
+:where(
+  .settings-model-card,
+  .settings-effort-card,
+  .settings-custom-secret-row,
+  .skills-card,
+  .marketplace-card,
+  .widgets-card
+) {
+  background: var(--ui-card-bg-soft);
+}
+
+.ui-chip,
+:where(
+  .status-badge,
+  .skills-status-chip,
+  .mcp-server-status,
+  .evo-runtime-pill,
+  .evo-runtime-chip
+) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.ui-status,
+:where(.settings-inline-status, .marketplace-status, .wizard-runtime-status) {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ui-status[data-tone="ok"],
+:where(
+  .settings-inline-status[data-tone="ok"],
+  .settings-test-result[data-tone="ok"],
+  .marketplace-status[data-tone="ok"]
+) {
+  color: var(--ui-tone-ok);
+}
+.ui-status[data-tone="warn"],
+:where(
+  .settings-inline-status[data-tone="warn"],
+  .settings-test-result[data-tone="warn"],
+  .marketplace-status[data-tone="warn"]
+) {
+  color: var(--ui-tone-warn);
+}
+.ui-status[data-tone="danger"],
+.ui-status[data-tone="error"],
+:where(
+  .settings-inline-status[data-tone="error"],
+  .settings-test-result[data-tone="error"],
+  .marketplace-status[data-tone="danger"]
+) {
+  color: var(--ui-tone-danger);
+}
+
+.ui-modal-backdrop,
+:where(.marketplace-modal-backdrop) {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.ui-modal,
+:where(.marketplace-modal) {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--surface-border);
+  background: var(--ui-modal-bg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
 .stat-card {
   background: linear-gradient(
     180deg,
@@ -2703,7 +2811,6 @@ body {
   background: rgba(30, 49, 101, 0.5);
 }
 
-/* Reconnecting overlay */
 #reconnect-overlay {
   display: none;
   position: fixed;
@@ -2735,7 +2842,6 @@ body {
   }
 }
 
-/* Cost tables */
 .cost-table {
   width: 100%;
   border-collapse: collapse;
@@ -2758,11 +2864,7 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
-/* ---------------------------------------------------------------------------
- * Settings — LAN reachability hint
- * Rendered by web/modules/settings.js::_renderNetworkHint into the
- * #settings-lan-hint container inside the Network Gate section.
- * --------------------------------------------------------------------------- */
+/* Settings LAN reachability hint. */
 .settings-lan-hint {
   margin-top: 8px;
   padding: 8px 12px;
@@ -2857,10 +2959,7 @@ body {
   gap: 8px;
 }
 
-/* v5.7.0: when Evolution is embedded in the Dashboard tab strip, the
-   "Refresh" button + status badge that used to live in a duplicate
-   inner ".page-header" relocate into the runtime card head, sitting
-   alongside the existing pills cluster. */
+/* Runtime-card head hosts embedded Evolution controls. */
 .evo-runtime-controls {
   align-items: center;
 }
@@ -2937,7 +3036,6 @@ body {
   }
 }
 
-/* About page */
 .about-body {
   display: flex;
   flex-direction: column;
@@ -3094,7 +3192,6 @@ body {
   text-align: center;
 }
 
-/* Updates panel */
 .updates-scroll {
   flex: 1;
   min-height: 0;
@@ -3124,9 +3221,7 @@ body {
   flex: 1 1 auto;
 }
 
-/* v5.7.0: actions cluster (status badge + relocated Check-for-updates
-   button) sits to the right of the head row, replacing the duplicate
-   inner page-header that used to host the button. */
+/* Updates actions cluster sits in the head row. */
 .updates-head-actions {
   display: flex;
   align-items: center;
@@ -3149,7 +3244,6 @@ body {
   margin-top: 12px;
 }
 
-/* Dashboard */
 #page-dashboard {
   min-height: 0;
 }
@@ -3163,12 +3257,7 @@ body {
   overflow: hidden;
 }
 
-/* ``.dashboard-tabs`` and ``.dashboard-tab`` previously redeclared the
-   same flex/pill styling already covered by ``.app-tab-strip`` and
-   ``.app-tab`` (lines 662-696). Both class names still ride along with
-   the JS query selectors used by ``dashboard.js`` (so the layout
-   selectors remain stable), but the styling now inherits from the
-   shared ``.app-tab*`` rules — no duplicate CSS declaration. */
+/* Dashboard tabs inherit shared .app-tab* styling. */
 
 .dashboard-panels,
 .dashboard-panel {
@@ -3177,14 +3266,7 @@ body {
   overflow: hidden;
 }
 
-/* v5.7.0 scroll-chain fix: ``.dashboard-panels`` is the parent of every
-   embedded sub-panel. Without ``display: flex; flex-direction: column;``
-   the active panel's ``flex: 1; min-height: 0`` collapses to content
-   height, which kills overflow scrolling for Logs / Updates / Costs
-   (and the 3-column Updates Tags view). Evolution previously bypassed
-   the broken chain via an explicit ``height: calc(var(--vvh) - 120px)``
-   on ``.evolution-container`` — that rule stays as a belt-and-braces.
-   With this single rule the sub-panel's flex chain is intact end-to-end. */
+/* Dashboard panels own the scroll-chain for embedded sub-panels. */
 .dashboard-panels {
   display: flex;
   flex-direction: column;
@@ -3254,7 +3336,6 @@ body {
   flex: 1;
 }
 
-/* Extra-small button variant */
 .btn-xs {
   padding: 2px 8px;
   font-size: 11px;
@@ -3472,9 +3553,7 @@ body {
   background: rgba(245, 158, 11, 0.85);
 }
 
-/* v5.2.3: small inline hint shown right under the toggle when the
- * switch is locked by missing review or grants. Replaces the old
- * full-width "Locked: …" pill that competed with the status chip. */
+/* Inline hint for switches locked by review/grants. */
 .skills-lock-hint {
   font-size: 12px;
   color: #fbbf24;
@@ -3746,11 +3825,7 @@ body {
   color: var(--text-primary);
 }
 
-/* v5.2.3 review-cycle fix: source chip on the card front face for
- * non-built-in skills. Surfaces P1 "Provenance matters" without
- * recreating the old 5-badge cluster: built-in skills carry no chip
- * (absence is the signal); ClawHub/External/User-repo skills get a
- * small inline pill next to the title. */
+/* Source/provenance chip for non-built-in skills. */
 .skills-source-chip {
   display: inline-block;
   margin-left: 6px;
@@ -4027,11 +4102,7 @@ body {
   }
 }
 
-/* v5.7.0: marketplace filter row + Official-only toggle (replaces the
-   awkward inline native <input type="checkbox"> wedged between the search
-   field and the Search button). The toggle visually mirrors the design
-   system's switch surface (track + thumb) but uses a real <input> for
-   keyboard / a11y. */
+/* Marketplace filter row; real input preserves keyboard/a11y. */
 .marketplace-filters {
   display: flex;
   flex-wrap: wrap;
@@ -4220,7 +4291,7 @@ body {
   font-size: 12px;
 }
 
-/* ----- Detail modal ----- */
+/* Detail modal. */
 
 .marketplace-modal-backdrop {
   position: fixed;
@@ -4722,10 +4793,7 @@ body {
   gap: 10px;
 }
 
-/* v5.7.0: host-owned map / calendar / kanban renderers. Lightweight
-   declarative layouts; Leaflet upgrade for ``.widget-map`` is kept as
-   a follow-up integration so the widget surface ships without a new
-   third-party dependency in this update. */
+/* Host-owned map/calendar/kanban defaults without extra dependencies. */
 .widget-map {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-sm);
@@ -4833,9 +4901,7 @@ body {
   color: var(--text-primary);
 }
 
-/* Mobile overrides — second block, placed AFTER all base rules so media-query
-   rules reliably win without !important. Kept scoped to <= 640px so desktop
-   is never affected. */
+/* Late mobile overrides; placed after base rules so they win without !important. */
 @media (max-width: 640px) {
   /* Input area safe-area inset for iOS notch */
   #chat-input-area {
@@ -6466,7 +6532,6 @@ body.nav-collapsed .nav-budget-pill {
   border-bottom: 1px solid var(--divider);
 }
 
-
 /* ── Marketplace card redesign (Figma 1986-27043) ── */
 
 .marketplace-card {
@@ -6844,10 +6909,10 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-top-title {
     flex: 1;
     text-align: center;
-    font-family: 'Manrope', sans-serif;
+    font-family: "Manrope", sans-serif;
     font-size: 14px;
     font-weight: 500;
-    color: #000D31;
+    color: #000d31;
     letter-spacing: -0.01em;
     pointer-events: none;
     user-select: none;
@@ -6860,10 +6925,10 @@ body.nav-collapsed .nav-budget-pill {
 
   #mobile-page-title {
     display: none;
-    font-family: 'Manrope', sans-serif;
+    font-family: "Manrope", sans-serif;
     font-size: 20px;
     font-weight: 500;
-    color: #000D31;
+    color: #000d31;
     letter-spacing: -0.02em;
   }
 
@@ -6971,7 +7036,10 @@ body.nav-collapsed .nav-budget-pill {
     text-align: left;
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease,
+      transform 0.1s ease;
   }
 
   .mobile-left-navbtn img,
@@ -6981,7 +7049,8 @@ body.nav-collapsed .nav-budget-pill {
     width: 24px;
     height: 24px;
     flex-shrink: 0;
-    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%) hue-rotate(176deg) brightness(95%);
+    filter: brightness(0) saturate(100%) invert(70%) sepia(13%) saturate(497%)
+      hue-rotate(176deg) brightness(95%);
   }
 
   .mobile-left-navbtn:active,
@@ -6994,7 +7063,7 @@ body.nav-collapsed .nav-budget-pill {
   .mobile-left-navbtn.active,
   .mobile-profile-navbtn.active,
   .mobile-widgets-host .nav-widget-item.active {
-    background: #000D31;
+    background: #000d31;
     color: #ffffff;
   }
 
@@ -7041,7 +7110,7 @@ body.nav-collapsed .nav-budget-pill {
 
   .mobile-widgets-host .nav-widget-subtitle {
     font-size: 12px;
-    color: #8AA0BA;
+    color: #8aa0ba;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -7083,7 +7152,9 @@ body.nav-collapsed .nav-budget-pill {
     color: var(--text-muted);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s, color 0.15s;
+    transition:
+      background 0.15s,
+      color 0.15s;
   }
 
   .mobile-drawer-close:hover {

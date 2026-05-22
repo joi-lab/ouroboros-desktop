@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+import json
 
 from ouroboros.marketplace import ouroboroshub
 
@@ -72,6 +73,26 @@ def test_ouroboroshub_preserves_dict_dependency_specs(monkeypatch, tmp_path):
     assert result.ok
     assert result.provenance["install_specs"]["auto"][0]["package"] == "ddgs"
     assert summary.to_dict()["install_specs"] == {"python": ["ddgs"]}
+
+
+def test_ouroboroshub_uninstall_clears_deps_state(monkeypatch, tmp_path):
+    data_root = tmp_path / "data"
+    hub_root = data_root / "skills" / "ouroboroshub"
+    monkeypatch.setattr(ouroboroshub, "get_ouroboroshub_skills_dir", lambda: hub_root)
+    target = hub_root / "demo"
+    target.mkdir(parents=True)
+    (target / ".ouroboroshub.json").write_text(
+        json.dumps({"schema_version": 1, "source": "ouroboroshub", "slug": "demo", "sanitized_name": "demo"}),
+        encoding="utf-8",
+    )
+    deps = data_root / "state" / "skills" / "demo" / "deps.json"
+    deps.parent.mkdir(parents=True)
+    deps.write_text(json.dumps({"status": "installed", "specs_hash": "abc"}), encoding="utf-8")
+
+    result = ouroboroshub.uninstall("demo")
+
+    assert result.ok
+    assert not deps.exists()
 
 
 def test_ouroboroshub_atomic_land_restores_old_on_move_failure(monkeypatch, tmp_path):

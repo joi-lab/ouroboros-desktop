@@ -1,12 +1,4 @@
-"""
-Ouroboros Agent Server — Self-editable entry point.
-
-This file lives in REPO_DIR and can be modified by the agent.
-It runs as a subprocess of the launcher, serving the web UI and
-coordinating the supervisor/worker system.
-
-Starlette + uvicorn on configurable host:port (default localhost:8765; non-loopback binding supported via OUROBOROS_SERVER_HOST).
-"""
+"""Self-editable Starlette/uvicorn entry point for UI and supervisor runtime."""
 
 import asyncio
 import logging
@@ -46,9 +38,6 @@ from ouroboros.gateway.ws import (
     set_event_loop as _set_ws_event_loop,
 )
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 REPO_DIR = pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", pathlib.Path(__file__).parent))
 DATA_DIR = pathlib.Path(os.environ.get("OUROBOROS_DATA_DIR",
     pathlib.Path.home() / "Ouroboros" / "data"))
@@ -62,9 +51,6 @@ if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
     if isinstance(_agent_python, str) and _agent_python:
         os.environ["OUROBOROS_AGENT_PYTHON"] = _agent_python
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _pytest_default_real_data_dir = (
     "pytest" in sys.modules
@@ -84,28 +70,18 @@ else:
     logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, handlers=[_file_handler, logging.StreamHandler()])
 log = logging.getLogger("server")
 
-# ---------------------------------------------------------------------------
-# Restart signal
-# ---------------------------------------------------------------------------
 RESTART_EXIT_CODE = 42
 PANIC_EXIT_CODE = 99
 _restart_requested = threading.Event()
 _LAUNCHER_MANAGED = str(os.environ.get("OUROBOROS_MANAGED_BY_LAUNCHER", "") or "").strip() == "1"
 
-# ---------------------------------------------------------------------------
-# Runtime network binding (captured in main() from parse_server_args)
-# Used by /api/settings to expose a LAN reachability hint to the Settings UI.
-# ---------------------------------------------------------------------------
+# Captured in main() for Settings LAN-reachability metadata.
 _BIND_HOST = DEFAULT_HOST
 
 
 def _restart_current_process(host: str, port: int) -> None:
     _restart_current_process_impl(host, port, repo_dir=REPO_DIR, log=log)
 
-
-# ---------------------------------------------------------------------------
-# Settings (single source of truth: ouroboros.config)
-# ---------------------------------------------------------------------------
 from ouroboros.config import (
     SETTINGS_DEFAULTS as _SETTINGS_DEFAULTS,
     load_settings, save_settings, apply_settings_to_env as _apply_settings_to_env,
@@ -119,10 +95,6 @@ from ouroboros.server_runtime import (
 )
 from ouroboros.onboarding_wizard import build_onboarding_html
 
-
-# ---------------------------------------------------------------------------
-# Supervisor integration
-# ---------------------------------------------------------------------------
 _supervisor_ready = threading.Event()
 _supervisor_error: Optional[str] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -274,9 +246,7 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
             try:
                 state_dir.mkdir(parents=True, exist_ok=True)
                 owner_restart_flag.write_text("owner_restart", encoding="utf-8")
-                # Stable fallback builds already skip auto-resume on panic_stop.flag.
-                # Pair it with the owner flag so current builds can distinguish
-                # this from real panic while stable builds still avoid auto-resume.
+                # Pair owner flag with panic_stop for stable-build auto-resume compatibility.
                 stable_skip_flag.write_text("owner_restart_no_resume", encoding="utf-8")
             except Exception:
                 owner_restart_flag.unlink(missing_ok=True)
@@ -305,11 +275,7 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
                 log.warning("Failed to send owner restart stop notice; continuing restart", exc_info=True)
             _request_restart_exit()
         elif lowered == "/review" or lowered.startswith("/review "):
-            # Only ``/review`` (with no suffix) or ``/review <args>``
-            # maps to deep_self_review. The slash-commands ``/review-skill``
-            # and any future ``/review-*`` flow through the agent's
-            # normal chat pipeline so they can route to their own
-            # tools.
+            # Keep /review-* commands on the normal chat/tool route.
             ctx.queue_deep_self_review_task(reason="owner:/review", force=True)
         elif lowered.startswith("/evolve"):
             parts = lowered.split()
@@ -471,12 +437,7 @@ def _run_supervisor(settings: dict) -> None:
         soft_timeout = int(settings.get("OUROBOROS_SOFT_TIMEOUT_SEC", 600))
         hard_timeout = int(settings.get("OUROBOROS_HARD_TIMEOUT_SEC", 1800))
 
-        # Branch names come from the managed-repo manifest defaults so a
-        # bundle built with non-default ``--managed-local-branch`` /
-        # ``--managed-local-stable-branch`` drives the worker pool too —
-        # hardcoding ``ouroboros`` / ``ouroboros-stable`` here would bootstrap
-        # one branch set but leave the worker-side commit/restart flows
-        # targeting the old names.
+        # Managed manifest branch defaults must drive worker commit/restart flows too.
         _workers_branch_dev, _workers_branch_stable = _runtime_branch_defaults()
         workers_init(
             repo_dir=REPO_DIR, drive_root=DATA_DIR, max_workers=max_workers,
@@ -549,7 +510,6 @@ def _run_supervisor(settings: dict) -> None:
     _supervisor_ready.set()
     log.info("Supervisor ready.")
 
-    # Main supervisor loop
     offset = 0
     crash_count = 0
     while not _restart_requested.is_set():
@@ -589,7 +549,7 @@ def _run_supervisor(settings: dict) -> None:
 
 
 def _handle_restart_in_supervisor(evt: Dict[str, Any], ctx: Any) -> None:
-    """Handle restart request from agent — graceful shutdown + exit(42)."""
+    """Handle agent restart request via graceful shutdown + exit(42)."""
     st = ctx.load_state()
     if st.get("owner_chat_id"):
         ctx.send_with_budget(
@@ -612,7 +572,7 @@ def _handle_restart_in_supervisor(evt: Dict[str, Any], ctx: Any) -> None:
 
 
 def _request_restart_exit() -> None:
-    """Signal the server to shut down with restart exit code."""
+    """Signal server shutdown with restart exit code."""
     _restart_requested.set()
 
 
@@ -625,10 +585,6 @@ def _execute_panic_stop(consciousness, kill_workers_fn) -> None:
         log=log,
     )
 
-
-# ---------------------------------------------------------------------------
-# HTTP/WebSocket routes
-# ---------------------------------------------------------------------------
 APP_START = time.time()
 
 
@@ -649,10 +605,6 @@ async def api_settings_post(request):
     _sync_gateway_settings_module()
     return await _gateway_settings.api_settings_post(request)
 
-
-# ---------------------------------------------------------------------------
-# App setup
-# ---------------------------------------------------------------------------
 web_dir = resolve_web_dir(REPO_DIR)
 web_dir.mkdir(parents=True, exist_ok=True)
 index_page = make_index_page(web_dir)
@@ -690,10 +642,7 @@ async def lifespan(app):
     if provider_defaults_changed:
         save_settings(settings, allow_elevation=True)
     _apply_settings_to_env(settings)
-    # v5.1.2 elevation ratchet: pin the boot-time runtime-mode baseline AFTER
-    # initial settings load + env apply so the ``save_settings`` chokepoint
-    # compares incoming saves against this owner-fixed value rather than
-    # against on-disk old (which an out-of-process write could corrupt).
+    # Pin boot-time runtime-mode after env apply; save_settings compares to this owner baseline.
     from ouroboros.config import initialize_runtime_mode_baseline
     initialize_runtime_mode_baseline()
     has_local = has_local_routing(settings)
@@ -709,10 +658,7 @@ async def lifespan(app):
         and not os.environ.get("OUROBOROS_DATA_DIR")
     )
 
-    # v4.50: seed ``data/skills/native/`` from ``repo/skills/`` on first
-    # launch. The launcher already does this for packaged builds; calling
-    # it here makes source-mode (``python server.py``) installs land at
-    # the same layout so the Skills/Marketplace UI sees a consistent tree.
+    # Source-mode must seed native skills too, matching packaged launcher layout.
     try:
         if pytest_default_real_data_dir:
             log.info("Skipping native skills bootstrap against real DATA_DIR during pytest")
@@ -765,11 +711,17 @@ async def lifespan(app):
     except Exception:
         log.warning("Failed to start Host Service API", exc_info=True)
 
-    # Phase 4: reload enabled + reviewed extensions so their
-    # ``register(api)`` runs across process restarts. Without this,
-    # ``toggle_skill(enabled=True)`` would be the only path that loads
-    # plugins, and a simple restart would silently unload every
-    # extension until the operator toggled each one again.
+    try:
+        from ouroboros.skill_review_runner import reconcile_stale_review_jobs
+
+        if pytest_default_real_data_dir:
+            log.info("Skipping stale skill-review reconciliation against real DATA_DIR during pytest")
+        else:
+            reconcile_stale_review_jobs(lifespan_drive_root)
+    except Exception:
+        log.warning("Stale skill-review reconciliation at startup failed", exc_info=True)
+
+    # Reload enabled+reviewed extensions across restarts.
     try:
         from ouroboros.config import (
             get_skills_repo_path,
@@ -862,7 +814,7 @@ app.app.state.start_supervisor_if_needed = _start_supervisor_if_needed  # type: 
 
 
 def _emergency_process_cleanup(*, port_sweep: bool = True) -> None:
-    """Kill all child processes, workers, and port holders. Called before any os._exit()."""
+    """Kill child processes, workers, companions, and runtime port holders."""
     try:
         from ouroboros.tools.shell import kill_all_tracked_subprocesses
         kill_all_tracked_subprocesses()
@@ -892,10 +844,6 @@ def _emergency_process_cleanup(*, port_sweep: bool = True) -> None:
     except Exception:
         pass
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def main() -> int:
     try:
         saved_host = str(load_settings().get("OUROBOROS_SERVER_HOST") or "").strip()
@@ -930,12 +878,11 @@ def main() -> int:
     _uvicorn_exited = threading.Event()
 
     def _check_restart():
-        """Monitor for restart signal, then shut down uvicorn."""
+        """Monitor restart signal, then shut down uvicorn."""
         while not _restart_requested.is_set():
             time.sleep(0.5)
         log.info("Restart requested — closing WebSocket clients and shutting down server.")
 
-        # Close all WebSocket connections so uvicorn can shut down cleanly.
         loop = _event_loop
         if loop:
             try:
@@ -946,9 +893,7 @@ def main() -> int:
 
         server.should_exit = True
 
-        # Safety net: only force-exit if uvicorn itself never returns control.
-        # In direct-server mode, the main thread still needs time to run cleanup
-        # and re-exec the process after server.run() exits.
+        # Force-exit only if uvicorn never returns; direct-server mode needs cleanup/re-exec time.
         force_exit_timeout_sec = 5 if _LAUNCHER_MANAGED else 30
         if _uvicorn_exited.wait(timeout=force_exit_timeout_sec):
             return

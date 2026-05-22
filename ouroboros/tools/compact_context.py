@@ -1,13 +1,4 @@
-"""
-compact_context tool — selective LLM-driven context summarization.
-
-When the LLM decides (via self-check or its own judgment) that old tool
-results are bloating context, it calls this tool to selectively compress
-message history. The LLM specifies WHICH parts to compress and which to keep.
-
-This is LLM-first (Bible P5): the agent decides what's important,
-not a hardcoded rule.
-"""
+"""LLM-requested tool-history compaction trigger."""
 
 from __future__ import annotations
 
@@ -20,27 +11,10 @@ log = logging.getLogger(__name__)
 
 
 def _compact_context(ctx, keep_last_n: int = 6, **kwargs) -> str:
-    """
-    Trigger selective compaction of tool history in the current conversation.
+    """Store a pending compaction request for the next loop round."""
 
-    The agent calls this when it notices context is getting large.
-    The actual compaction happens in the loop via compact_tool_history()
-    with the specified keep_last_n parameter.
-
-    Args:
-        ctx: ToolContext (injected by ToolRegistry.execute)
-        keep_last_n: Number of recent tool rounds to keep intact (default 6).
-                     Older rounds get their results summarized to 1-line summaries.
-                     Set higher to preserve more recent context, lower to compress more.
-
-    Returns:
-        Confirmation message with compaction settings applied.
-    """
-
-    # Validate range
     keep_last_n = max(2, min(keep_last_n, 20))
 
-    # Store the compaction request on context for the loop to pick up
     ctx._pending_compaction = keep_last_n
 
     return (

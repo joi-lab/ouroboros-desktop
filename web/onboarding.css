@@ -44,8 +44,16 @@ body {
   min-height: 100vh;
   padding: 24px;
   background:
-    radial-gradient(circle at top left, rgba(36, 56, 112, 0.06), transparent 42%),
-    radial-gradient(circle at top right, rgba(49, 196, 141, 0.08), transparent 36%),
+    radial-gradient(
+      circle at top left,
+      rgba(36, 56, 112, 0.06),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(49, 196, 141, 0.08),
+      transparent 36%
+    ),
     var(--bg-secondary);
   color: var(--text-primary);
   font-family:
@@ -297,7 +305,8 @@ textarea::placeholder {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.field-grid {
+.field-grid,
+.wizard-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
@@ -398,7 +407,8 @@ select:focus {
   box-shadow: var(--focus-ring);
 }
 
-.selection-row {
+.selection-row,
+.footer-actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -463,16 +473,8 @@ select:focus {
   font-weight: 600;
 }
 
-.wizard-choice-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
 .wizard-choice-grid.three {
-  /* Phase 2: runtime-mode picker in the review_mode step has three
-     buttons (Light / Advanced / Pro). Without this rule the grid falls
-     back to the default 2-column layout, producing an ugly 2 + 1 split. */
+  /* Runtime-mode picker has three choices, not the default two. */
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -602,12 +604,6 @@ select:focus {
   line-height: 1.45;
 }
 
-.footer-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .btn {
   min-height: 40px;
   border: 1px solid var(--divider);
@@ -650,6 +646,7 @@ select:focus {
   background: linear-gradient(135deg, #001746 0%, #2f477f 100%);
 }
 
+.btn-secondary,
 .btn-ghost {
   background: var(--bg-primary);
   color: var(--text-primary);

@@ -1,7 +1,9 @@
+import { apiFetch, jsonPost } from './api_client.js';
+import { openConfirmDialog } from './confirm_dialog.js';
 import { renderPageHeader } from './page_header.js';
 import { PAGE_ICONS } from './page_icons.js';
-import { escapeHtmlAttr, escapeHtmlText as escapeHtml } from './utils.js';
-import { apiFetch } from './api_client.js';
+import { downloadViaHostBridge } from './ui_helpers.js';
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr } from './utils.js';
 
 function formatFileSize(size) {
     const num = Number(size);
@@ -99,12 +101,6 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
     const contextMenuPositionStyle = document.createElement('style');
     contextMenuPositionStyle.id = 'files-context-menu-position-style';
     page.appendChild(contextMenuPositionStyle);
-    const modalEl = page.querySelector('#files-modal');
-    const modalTitleEl = page.querySelector('#files-modal-title');
-    const modalMessageEl = page.querySelector('#files-modal-message');
-    const modalInputEl = page.querySelector('#files-modal-input');
-    const modalCancelBtn = page.querySelector('#files-modal-cancel');
-    const modalConfirmBtn = page.querySelector('#files-modal-confirm');
     const saveBtn = page.querySelector('#files-save');
     const downloadBtn = page.querySelector('#files-download');
     const openExternalBtn = page.querySelector('#files-open-external');
@@ -132,7 +128,6 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         editorWritable: false,
         editorIsNew: false,
         editorFilename: '',
-        modalResolve: null,
         clipboard: null,
         contextEntryType: '',
         contextDestinationPath: '.',
@@ -226,29 +221,17 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         return wrapper;
     }
 
-    function closeModal(result) {
-        modalEl.hidden = true;
-        const resolver = state.modalResolve;
-        state.modalResolve = null;
-        if (resolver) resolver(result);
-    }
-
-    function showModal({ title, message, input = false, initialValue = '', confirmLabel = 'OK', cancelLabel = 'Cancel' }) {
-        modalTitleEl.textContent = title || '';
-        modalMessageEl.textContent = message || '';
-        modalInputEl.hidden = !input;
-        modalInputEl.value = input ? initialValue : '';
-        modalConfirmBtn.textContent = confirmLabel;
-        modalCancelBtn.textContent = cancelLabel;
-        modalEl.hidden = false;
-        if (input) {
-            queueMicrotask(() => modalInputEl.focus());
-        } else {
-            queueMicrotask(() => modalConfirmBtn.focus());
-        }
-        return new Promise((resolve) => {
-            state.modalResolve = resolve;
+    async function showModal({ title, message, input = false, initialValue = '', confirmLabel = 'OK', cancelLabel = 'Cancel' }) {
+        const result = await openConfirmDialog({
+            title,
+            body: message,
+            input,
+            initialValue,
+            confirmLabel,
+            cancelLabel,
+            danger: /delete|discard/i.test(confirmLabel),
         });
+        return typeof result === 'boolean' ? { confirmed: result, value: '' } : result;
     }
 
     async function canLeaveEditor() {
@@ -496,10 +479,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         const params = new URLSearchParams({ path });
         const url = `/api/files/download?${params.toString()}`;
         const filename = filenameFromPath(path);
-        const bridge = window.pywebview?.api?.download_file_to_downloads;
-        if (bridge) {
-            const result = await bridge(url, filename, Boolean(openExternal));
-            if (!result?.ok) throw new Error(result?.error || 'native download failed');
+        const result = await downloadViaHostBridge(url, filename, { openExternal });
+        if (result.native) {
             setPreview({
                 path,
                 meta: openExternal ? 'Открыто снаружи' : 'Скачано',
@@ -507,18 +488,6 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             });
             return;
         }
-        const resp = await apiFetch(url);
-        if (!resp.ok) throw new Error(`download failed: HTTP ${resp.status}`);
-        const blob = await resp.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = filename;
-        link.rel = 'noopener';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     }
 
     async function createDirectory() {
@@ -532,33 +501,20 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         });
         const name = (result?.value || '').trim();
         if (!result?.confirmed || !name) return;
-        const resp = await apiFetch('/api/files/mkdir', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                path: state.path || '.',
-                name,
-            }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        const data = await jsonPost('/api/files/mkdir', { path: state.path || '.', name });
         state.selectedPath = '';
         state.selectedType = 'dir';
         await loadDirectory(state.path || '.', { skipLeaveCheck: true });
     }
 
-    async function pasteClipboard() {
+    async function pasteClipboard(destinationPath = state.path || '.') {
         if (!state.clipboard) return;
         if (!(await canLeaveEditor())) return;
 
-        const resp = await apiFetch('/api/files/transfer', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                source_path: state.clipboard.path,
-                destination_dir: state.path || '.',
-                mode: state.clipboard.mode,
-            }),
+        const data = await jsonPost('/api/files/transfer', {
+            source_path: state.clipboard.path,
+            destination_dir: destinationPath || '.',
+            mode: state.clipboard.mode,
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
@@ -622,13 +578,7 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         });
         if (!result?.confirmed) return;
 
-        const resp = await apiFetch('/api/files/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: state.selectedPath }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        await jsonPost('/api/files/delete', { path: state.selectedPath });
 
         resetEditorState();
         state.selectedPath = '';
@@ -685,17 +635,11 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             ? (state.path && state.path !== '.' ? `${state.path}/${relName}` : relName)
             : state.editorPath;
         if (!savePath) return;
-        const resp = await apiFetch('/api/files/write', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                path: savePath,
-                content: state.editorValue,
-                create: state.editorIsNew,
-            }),
+        const data = await jsonPost('/api/files/write', {
+            path: savePath,
+            content: state.editorValue,
+            create: state.editorIsNew,
         });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
 
         state.selectedPath = data.path || savePath;
         state.selectedType = 'file';
@@ -820,37 +764,11 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
                 });
             }
         } else if (action === 'paste') {
-            pasteClipboardInto(state.contextDestinationPath).catch(showError);
+            pasteClipboard(state.contextDestinationPath).catch(showError);
         } else if (action === 'delete') {
             deleteSelectedEntry().catch(showError);
         }
         hideContextMenu();
-    });
-
-    modalCancelBtn.addEventListener('click', () => {
-        closeModal({ confirmed: false, value: '' });
-    });
-
-    modalConfirmBtn.addEventListener('click', () => {
-        closeModal({ confirmed: true, value: modalInputEl.hidden ? '' : modalInputEl.value });
-    });
-
-    modalEl.addEventListener('click', (event) => {
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.dataset.close === 'backdrop') {
-            closeModal({ confirmed: false, value: '' });
-        }
-    });
-
-    modalInputEl.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            closeModal({ confirmed: true, value: modalInputEl.value });
-        }
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            closeModal({ confirmed: false, value: '' });
-        }
     });
 
     document.addEventListener('click', () => {
@@ -884,8 +802,9 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             active.classList?.contains('files-editor') ||
             active.classList?.contains('files-editor-name') ||
             active.id === 'files-search' ||
-            active.id === 'files-modal-input'
+            active.matches?.('[data-confirm-input]')
         );
+        const dialogOpen = Boolean(document.querySelector('.confirm-dialog-backdrop'));
         if (!page.classList.contains('active')) return;
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
             if (!inEditor) return;
@@ -894,7 +813,7 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             return;
         }
         if (event.key === 'Delete') {
-            if (inEditor || modalEl.hidden === false) return;
+            if (inEditor || dialogOpen) return;
             event.preventDefault();
             deleteSelectedEntry().catch(showError);
         }

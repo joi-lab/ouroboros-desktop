@@ -120,7 +120,6 @@ EXPECTED_TOOLS = [
     # Git PR integration (non-core: require enable_tools)
     "fetch_pr_ref", "create_integration_branch",
     "cherry_pick_pr_commits", "stage_adaptations", "stage_pr_merge",
-    "summarize_dialogue",
     # Code search
     "code_search",
     # Task decomposition
@@ -177,6 +176,17 @@ def test_tool_schemas_valid(registry):
         params = func["parameters"]
         assert params["type"] == "object"
         assert "properties" in params
+
+
+def test_github_create_issue_schema_fields(registry):
+    schema = registry.get_schema_by_name("create_github_issue")["function"]
+    props = schema["parameters"]["properties"]
+    assert schema["parameters"]["required"] == ["title"]
+    assert props["title"]["type"] == "string"
+    assert props["body"]["type"] == "string"
+    assert props["body"]["default"] == ""
+    assert props["labels"]["type"] == "string"
+    assert props["labels"]["default"] == ""
 
 
 def test_tool_execute_basic(registry):
@@ -497,7 +507,7 @@ def test_function_count_reasonable():
     """Codebase doesn't have too few or too many functions.
 
     The hard gate value is imported from ouroboros/review.py::MAX_TOTAL_FUNCTIONS
-    (currently 2000 as of v5.7.4) — no hardcoded assertion number here.
+    (currently 2175 as of v5.29.0-rc.2) — no hardcoded assertion number here.
     """
     from ouroboros.review import MAX_TOTAL_FUNCTIONS
 

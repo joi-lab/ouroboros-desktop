@@ -1,9 +1,4 @@
-"""
-Ouroboros — Local model lifecycle manager.
-
-Manages downloading, starting, stopping, and health-checking a local
-llama-cpp-python server for on-device LLM inference.
-"""
+"""Local llama-cpp-python server lifecycle, download, and health manager."""
 
 from __future__ import annotations
 
@@ -24,15 +19,14 @@ log = logging.getLogger(__name__)
 
 _LOCAL_MODEL_DEFAULT_PORT = 8766
 
-# Install command for llama-cpp-python, platform-aware
 def _get_install_command() -> list:
-    """Return the pip install command list for llama-cpp-python."""
+    """Return the llama-cpp-python pip install command."""
     base = [sys.executable, "-m", "pip", "install", "--upgrade", "llama-cpp-python[server]"]
     return base
 
 
 def _get_install_env() -> dict:
-    """Return env vars for the pip install subprocess (Metal flags on macOS)."""
+    """Return pip install env, enabling Metal flags on macOS."""
     env = os.environ.copy()
     if IS_MACOS:
         env["CMAKE_ARGS"] = "-DGGML_METAL=on"
@@ -41,14 +35,14 @@ def _get_install_env() -> dict:
 
 
 def _get_runtime_hint() -> str:
-    """Return a human-readable install hint for llama-cpp-python."""
+    """Return a human-readable llama-cpp-python install hint."""
     if IS_MACOS:
         return 'CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python[server]'
     return "pip install llama-cpp-python[server]"
 
 
 def _with_hidden_subprocess(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge platform-appropriate hidden-window flags into subprocess kwargs."""
+    """Add platform hidden-window flags to subprocess kwargs."""
     hidden = subprocess_hidden_kwargs()
     if hidden:
         kwargs = dict(kwargs)
@@ -56,7 +50,6 @@ def _with_hidden_subprocess(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["creationflags"] = existing | hidden.get("creationflags", 0)
     return kwargs
 
-# Global singleton — one local model server at a time
 _manager: Optional[LocalModelManager] = None
 _manager_lock = threading.Lock()
 
@@ -91,10 +84,6 @@ class LocalModelManager:
         # even before _install_proc is assigned, closing the panic-window race.
         self._install_cancelled = threading.Event()
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
     def get_status(self) -> str:
         if self._proc is not None and self._proc.poll() is not None:
             self._status = "error"
@@ -123,16 +112,8 @@ class LocalModelManager:
             "runtime_install_log": self._runtime_install_log[-500:] if self._runtime_install_log else "",
         }
 
-    # ------------------------------------------------------------------
-    # Runtime (llama_cpp) check & install
-    # ------------------------------------------------------------------
-
     def check_runtime(self) -> bool:
-        """Check whether llama-cpp-python is importable.
-
-        Updates ``_runtime_status`` to ``"ok"`` or ``"missing"``.
-        Returns True if available, False otherwise.
-        """
+        """Check llama-cpp-python importability and update runtime status."""
         try:
             probe = subprocess.run(
                 [sys.executable, "-c", "import llama_cpp"],
@@ -154,18 +135,12 @@ class LocalModelManager:
             return False
 
     def install_runtime(self) -> None:
-        """Install llama-cpp-python in a background thread.
-
-        The install subprocess is tracked on ``_install_proc`` so that
-        ``stop_server()`` (called on panic/shutdown) can terminate it.
-        Updates ``_runtime_status`` throughout the process.
-        """
+        """Install llama-cpp-python in a tracked background thread."""
         with self._lock:
             if self._runtime_status == "installing":
                 log.info("Runtime install already in progress")
                 return
-            # Clear the cancellation flag for a fresh install attempt
-            # (stop_server may have set it in a previous lifecycle).
+            # stop_server may have cancelled a previous lifecycle.
             self._install_cancelled.clear()
             self._runtime_status = "installing"
             self._runtime_install_log = ""
@@ -176,8 +151,7 @@ class LocalModelManager:
 
     def _run_install(self) -> None:
         """Background install worker."""
-        # Check cancellation BEFORE spawning — handles the window between
-        # install_runtime() starting the thread and Popen being called.
+        # Check before spawning to close the install_runtime -> Popen race.
         if self._install_cancelled.is_set():
             self._runtime_status = "missing"
             return
@@ -197,8 +171,7 @@ class LocalModelManager:
             )
             self._install_proc = proc
 
-            # Check again immediately after Popen — stop_server() may have
-            # been called while we were spawning.  If so, kill the process now.
+            # stop_server may have run during Popen; kill immediately if so.
             if self._install_cancelled.is_set():
                 try:
                     terminate_process_tree(proc)
@@ -224,7 +197,6 @@ class LocalModelManager:
             self._runtime_install_log = output
 
             if proc.returncode == 0:
-                # Verify the install actually works
                 if self.check_runtime():
                     self._runtime_status = "install_ok"
                     log.info("llama-cpp-python installed successfully")
@@ -241,25 +213,9 @@ class LocalModelManager:
             self._runtime_install_log = str(exc)
             log.error("llama-cpp-python install exception: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Download helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _resolve_hf_path(source: str, filename: str) -> str:
-        """Auto-resolve full HF path when user omits the subfolder prefix.
-
-        If *filename* already contains a ``/``, it is returned as-is.
-        Otherwise, ``list_repo_files`` is queried and all paths whose
-        basename matches *filename* are collected.  The first match is
-        returned as the resolved path (e.g. ``"UD-Q5_K_XL/model-00001-of-00003.gguf"``).
-
-        Returns the original *filename* unchanged if:
-        - it already contains ``/``
-        - ``huggingface_hub`` is not available
-        - no match is found in the repo
-        - any network/API error occurs (fail-open so the original error propagates)
-        """
+        """Resolve omitted HF subfolders; fail open so original errors propagate."""
         if "/" in filename:
             return filename
         try:
@@ -288,13 +244,7 @@ class LocalModelManager:
 
     @staticmethod
     def _normalize_hf_filename(filename: str):
-        """Split a HuggingFace filename into (subfolder, basename).
-
-        Handles:
-        - Simple filename: "model.gguf" → (None, "model.gguf")
-        - Subfolder path: "quant/model.gguf" → ("quant", "model.gguf")
-        - Subfolder + split: "quant/model-00001-of-00003.gguf" → ("quant", "model-00001-of-00003.gguf")
-        """
+        """Split an HF filename into (subfolder, basename)."""
         filename = filename.strip()
         if "/" in filename:
             subfolder, basename = filename.rsplit("/", 1)
@@ -303,19 +253,7 @@ class LocalModelManager:
 
     @staticmethod
     def _detect_shard_info(basename: str):
-        """Detect split GGUF shard metadata from a filename.
-
-        Returns ``(prefix, shard_num, total_shards, shard_width, total_width, suffix)``
-        if the basename matches the ``-NNNNN-of-MMMMM.gguf`` pattern, else None.
-        The ``shard_width`` and ``total_width`` fields preserve the **original digit
-        widths** used in the filename so ``_all_shard_basenames`` can reconstruct
-        sibling names without introducing a width mismatch.
-
-        Examples:
-            "model-00001-of-00003.gguf" → ("model", 1, 3, 5, 5, ".gguf")
-            "model-01-of-03.gguf"       → ("model", 1, 3, 2, 2, ".gguf")
-            "model.gguf"               → None
-        """
+        """Return split-GGUF shard metadata, preserving original digit widths."""
         import re
         m = re.match(r"^(.*?)-(\d+)-of-(\d+)(\.gguf)$", basename, re.IGNORECASE)
         if m:
@@ -334,27 +272,9 @@ class LocalModelManager:
         shard_width: int = 5,
         total_width: int = 5,
     ):
-        """Yield all shard basenames for a split GGUF in order.
-
-        ``shard_width`` and ``total_width`` must match the widths of the digit
-        fields in the original shard filename (as returned by ``_detect_shard_info``)
-        so that reconstructed sibling names are identical to the actual files on
-        HuggingFace.
-
-        Examples::
-
-            _all_shard_basenames("model", 3, ".gguf", 5, 5)
-            → "model-00001-of-00003.gguf", "model-00002-of-00003.gguf", ...
-
-            _all_shard_basenames("model", 3, ".gguf", 2, 2)
-            → "model-01-of-03.gguf", "model-02-of-03.gguf", ...
-        """
+        """Yield split-GGUF shard basenames using the original digit widths."""
         for i in range(1, total_shards + 1):
             yield f"{prefix}-{str(i).zfill(shard_width)}-of-{str(total_shards).zfill(total_width)}{suffix}"
-
-    # ------------------------------------------------------------------
-    # Download
-    # ------------------------------------------------------------------
 
     def download_model(
         self,
@@ -362,28 +282,7 @@ class LocalModelManager:
         filename: str = "",
         progress_cb: Optional[Callable[[float], None]] = None,
     ) -> str:
-        """Download a model from HuggingFace or resolve a local path.
-
-        Args:
-            source: HF repo ID (e.g. "bartowski/Llama-3.3-70B-Instruct-GGUF")
-                    or absolute path to a .gguf file.
-            filename: Specific file within the HF repo (required for HF repos).
-                      Supports subfolder paths (e.g. "quant/model.gguf") and
-                      split GGUF patterns (e.g. "quant/model-00001-of-00003.gguf").
-                      When a split GGUF is detected, all shards are downloaded
-                      automatically and the path to the first shard is returned.
-                      If a non-first shard is specified, a ValueError is raised.
-            progress_cb: Optional callback(fraction) for download progress.
-
-        Returns:
-            Absolute path to the downloaded/resolved .gguf file (first shard
-            for split GGUFs).
-
-        Note:
-            This method is focused on artifact resolution/download only.
-            Callers (api_local_model_start, auto_start_local_model) are
-            responsible for calling check_runtime() before invoking this method.
-        """
+        """Resolve/download a .gguf; split GGUFs download all shards from shard 1."""
         if os.path.isfile(source):
             log.info("Using local model file: %s", source)
             return source
@@ -394,7 +293,6 @@ class LocalModelManager:
                 return expanded
             raise FileNotFoundError(f"Local model file not found: {expanded}")
 
-        # HuggingFace download
         try:
             from huggingface_hub import hf_hub_download
             from tqdm.auto import tqdm as _base_tqdm
@@ -410,14 +308,9 @@ class LocalModelManager:
                 "Example: filename='model-Q4_K_M.gguf' or 'quant/model-00001-of-00003.gguf'"
             )
 
-        # Auto-resolve subfolder when user omits it (e.g. types just the basename
-        # from the HF URL without the containing directory prefix).
-        # This is a common UX mistake: copying "model-00001-of-00003.gguf" from the
-        # browser URL instead of "UD-Q5_K_XL/model-00001-of-00003.gguf".
+        # Common UX fix: resolve basename-only HF shard filenames to subfolders.
         filename = self._resolve_hf_path(source, filename)
 
-        # Normalize to (subfolder, basename) — handles both subfolder paths and
-        # flat filenames uniformly before shard detection.
         subfolder, basename = self._normalize_hf_filename(filename)
         shard_info = self._detect_shard_info(basename)
 
@@ -436,10 +329,7 @@ class LocalModelManager:
         self._download_progress = 0.0
         log.info("Downloading %s/%s from HuggingFace...", source, filename)
 
-        # Build a tqdm subclass that forwards shard-aware global progress
-        # to our callback and manager.
-        # For split GGUFs the global fraction is:
-        #   (shard_index - 1 + per_file_fraction) / total_shards
+        # For split GGUFs, report global progress across all shards.
         manager_ref = self
 
         def _make_progress_tqdm(shard_index: int, total_shards_count: int):
@@ -470,7 +360,6 @@ class LocalModelManager:
 
         try:
             if shard_info is not None:
-                # Split GGUF: download all shards, return path of the first
                 _prefix, _shard_num, total_shards, _shard_w, _total_w, _suffix = shard_info
                 first_path: Optional[str] = None
                 for idx, shard_basename in enumerate(
@@ -485,7 +374,6 @@ class LocalModelManager:
                         first_path = p
                 path = first_path  # type: ignore[assignment]
             else:
-                # Single file (with optional subfolder)
                 path = _download_one(basename, subfolder, 1, 1)
 
             self._download_progress = 1.0
@@ -498,10 +386,6 @@ class LocalModelManager:
             self._error = f"Download failed: {e}"
             raise
 
-    # ------------------------------------------------------------------
-    # Start / Stop
-    # ------------------------------------------------------------------
-
     def start_server(
         self,
         model_path: str,
@@ -510,14 +394,7 @@ class LocalModelManager:
         n_ctx: int = 0,
         chat_format: str = "",
     ) -> None:
-        """Start the llama-cpp-python server as a subprocess.
-
-        Callers must invoke check_runtime() before this method to provide
-        a clear error message before any download starts.  This method
-        also verifies the runtime as a safety net, but does NOT raise a
-        LlamaRuntimeMissingError — it raises RuntimeError like before so
-        that callers that skip the early check still get a useful message.
-        """
+        """Start the server; rechecks runtime as a safety net before Popen."""
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 raise RuntimeError("Local model server is already running")
@@ -582,16 +459,12 @@ class LocalModelManager:
                 target=self._drain_stderr, daemon=True, name="local-model-stderr"
             ).start()
 
-        # Wait for server to become healthy in a background thread
         threading.Thread(
             target=self._wait_for_healthy, daemon=True, name="local-model-health"
         ).start()
 
     def _drain_stderr(self) -> None:
-        """Continuously read stderr to prevent pipe buffer deadlock.
-
-        Keeps the last 2 KB in self._stderr_buf for error diagnostics.
-        """
+        """Drain stderr to avoid pipe deadlock and retain a diagnostic tail."""
         proc = self._proc
         if proc is None or proc.stderr is None:
             return
@@ -608,7 +481,7 @@ class LocalModelManager:
         self._stderr_buf = buf
 
     def _wait_for_healthy(self, timeout: float = 300.0) -> None:
-        """Poll the server until it responds or times out."""
+        """Poll the local server until healthy or timed out."""
         start = time.time()
         while time.time() - start < timeout:
             if self._proc is None or self._proc.poll() is not None:
@@ -646,9 +519,7 @@ class LocalModelManager:
 
     def stop_server(self) -> None:
         """Stop the local model server subprocess and any ongoing install."""
-        # Signal _run_install() to abort even if Popen hasn't been called yet.
-        # This closes the race window between install_runtime() spawning the
-        # thread and _install_proc being assigned.
+        # Abort install even before _install_proc exists.
         self._install_cancelled.set()
 
         with self._lock:
@@ -689,12 +560,8 @@ class LocalModelManager:
             except subprocess.TimeoutExpired:
                 pass
 
-    # ------------------------------------------------------------------
-    # Health & Info
-    # ------------------------------------------------------------------
-
     def health_check(self) -> Dict[str, Any]:
-        """Query the local server for health and model info."""
+        """Query local server health and loaded-model info."""
         import requests
 
         url = f"http://127.0.0.1:{self._port}/v1/models"
@@ -717,7 +584,7 @@ class LocalModelManager:
         }
 
     def get_context_length(self) -> int:
-        """Return cached context length, or query the server."""
+        """Return cached context length, querying the server if needed."""
         if self._context_length > 0:
             return self._context_length
         try:
@@ -727,15 +594,8 @@ class LocalModelManager:
             self._context_length = 4096
         return self._context_length
 
-    # ------------------------------------------------------------------
-    # Tool calling test
-    # ------------------------------------------------------------------
-
     def test_tool_calling(self) -> Dict[str, Any]:
-        """Run a basic tool call test against the local server.
-
-        Returns dict with: success, chat_ok, tool_call_ok, details, tokens_per_sec.
-        """
+        """Run basic chat and tool-call checks against the local server."""
         from openai import OpenAI
 
         client = OpenAI(
@@ -751,7 +611,6 @@ class LocalModelManager:
             "tokens_per_sec": 0.0,
         }
 
-        # Test 1: basic chat
         try:
             t0 = time.time()
             resp = client.chat.completions.create(
@@ -769,7 +628,6 @@ class LocalModelManager:
             result["details"] = f"Basic chat failed: {e}"
             return result
 
-        # Test 2: tool calling
         try:
             tools = [{
                 "type": "function",

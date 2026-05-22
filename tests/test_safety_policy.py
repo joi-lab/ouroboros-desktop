@@ -762,7 +762,7 @@ def _capture_usage_event(monkeypatch) -> dict:
     """Patch emit_llm_usage_event and return a dict that records the last call."""
     captured: dict = {}
 
-    def _fake_emit(event_queue, task_id, model_name, usage, cost, *, category, provider, source):
+    def _fake_emit(event_queue, task_id, model_name, usage, cost, *, category, provider, source, **kwargs):
         captured.update({
             "event_queue": event_queue,
             "task_id": task_id,
@@ -772,6 +772,7 @@ def _capture_usage_event(monkeypatch) -> dict:
             "category": category,
             "provider": provider,
             "source": source,
+            **kwargs,
         })
 
     import ouroboros.safety as safety

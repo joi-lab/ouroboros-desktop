@@ -14,10 +14,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ouroboros.config import get_ouroboroshub_catalog_url, get_ouroboroshub_skills_dir
-from ouroboros.marketplace.fetcher import FetchError
+from ouroboros.marketplace.fetcher import FetchError, land_staged_tree
 from ouroboros.marketplace.install_specs import install_specs_hash
+from ouroboros.marketplace.isolated_deps import DEPS_STATE_FILENAME
 from ouroboros.skill_dependencies import normalize_declared_dependency_specs
-from ouroboros.skill_loader import _sanitize_skill_name
+from ouroboros.skill_loader import _sanitize_skill_name, skill_state_dir
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
 
@@ -28,6 +29,11 @@ _ALLOWED_HOSTS = frozenset({"raw.githubusercontent.com", "github.com", "localhos
 
 class OuroborosHubError(RuntimeError):
     pass
+
+
+def _raise_if(condition: bool, message: str) -> None:
+    if condition:
+        raise OuroborosHubError(message)
 
 
 class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -83,25 +89,13 @@ class HubInstallResult:
 
 def _fetch_bytes(url: str, *, max_bytes: int, timeout_sec: int = 15) -> bytes:
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"https", "http"}:
-        raise OuroborosHubError(f"URL must use https:// (or localhost http): {url}")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
-        raise OuroborosHubError(f"URL must use https:// for non-localhost hosts: {url}")
-    if parsed.hostname not in _ALLOWED_HOSTS:
-        raise OuroborosHubError(f"Host {parsed.hostname!r} is not allowed for OuroborosHub")
+    _raise_if(parsed.scheme not in {"https", "http"}, f"URL must use https:// (or localhost http): {url}")
+    _raise_if(parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}, f"URL must use https:// for non-localhost hosts: {url}")
+    _raise_if(parsed.hostname not in _ALLOWED_HOSTS, f"Host {parsed.hostname!r} is not allowed for OuroborosHub")
     with _OPENER.open(url, timeout=timeout_sec) as resp:  # noqa: S310 - host allowlist above
         data = resp.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise OuroborosHubError(f"Response exceeded {max_bytes} bytes: {url}")
+    _raise_if(len(data) > max_bytes, f"Response exceeded {max_bytes} bytes: {url}")
     return data
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _catalog_url() -> str:
-    return get_ouroboroshub_catalog_url()
 
 
 def _raw_base(catalog: Dict[str, Any], catalog_url: str) -> str:
@@ -118,7 +112,7 @@ def _raw_base(catalog: Dict[str, Any], catalog_url: str) -> str:
 
 
 def load_catalog() -> Dict[str, Any]:
-    url = _catalog_url()
+    url = get_ouroboroshub_catalog_url()
     data = _fetch_bytes(url, max_bytes=_MAX_CATALOG_BYTES)
     try:
         catalog = json.loads(data.decode("utf-8"))
@@ -201,7 +195,7 @@ def _download_skill_files(summary: HubSkillSummary, raw_base: str, staging_dir: 
             raise OuroborosHubError(f"catalog file {rel} is missing sha256")
         url = f"{raw_base.rstrip('/')}/skills/{urllib.parse.quote(summary.slug)}/{urllib.parse.quote(rel.as_posix(), safe='/')}"
         data = _fetch_bytes(url, max_bytes=_MAX_FILE_BYTES)
-        actual = _sha256(data)
+        actual = hashlib.sha256(data).hexdigest()
         if actual != expected:
             raise OuroborosHubError(f"sha256 mismatch for {rel}: expected {expected}, got {actual}")
         target = staging_dir / pathlib.Path(*rel.parts)
@@ -216,23 +210,7 @@ def _download_skill_files(summary: HubSkillSummary, raw_base: str, staging_dir: 
 
 
 def _land_atomic(staging: pathlib.Path, target_dir: pathlib.Path) -> None:
-    if target_dir.exists():
-        sibling = target_dir.with_name(f"{target_dir.name}.replaced-ouroboroshub")
-        if sibling.exists():
-            shutil.rmtree(sibling, ignore_errors=True)
-        target_dir.rename(sibling)
-        try:
-            shutil.move(str(staging), str(target_dir))
-        except OSError:
-            try:
-                sibling.rename(target_dir)
-            except OSError:
-                pass
-            raise
-        shutil.rmtree(sibling, ignore_errors=True)
-        return
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staging), str(target_dir))
+    land_staged_tree(staging, target_dir, replacement_suffix="replaced-ouroboroshub")
 
 
 def install(slug: str, *, overwrite: bool = False) -> HubInstallResult:
@@ -240,12 +218,12 @@ def install(slug: str, *, overwrite: bool = False) -> HubInstallResult:
     raw_base = str(catalog.get("raw_base_url") or "").rstrip("/")
     summary = next((item for item in _summaries(catalog) if item.slug == slug), None)
     if summary is None:
-        return HubInstallResult(ok=False, sanitized_name="", error=f"skill not found: {slug}")
+        return HubInstallResult(False, "", error=f"skill not found: {slug}")
     sanitized = _sanitize_skill_name(summary.slug)
     target_root = get_ouroboroshub_skills_dir()
     target_dir = target_root / sanitized
     if target_dir.exists() and not overwrite:
-        return HubInstallResult(ok=False, sanitized_name=sanitized, summary=summary, error=f"{sanitized} already installed")
+        return HubInstallResult(False, sanitized, error=f"{sanitized} already installed", summary=summary)
     staging_root = target_root / ".staging"
     staging_root.mkdir(parents=True, exist_ok=True)
     staging = pathlib.Path(tempfile.mkdtemp(prefix="ouroboroshub_skill_", dir=str(staging_root)))
@@ -257,7 +235,7 @@ def install(slug: str, *, overwrite: bool = False) -> HubInstallResult:
             "slug": summary.slug,
             "sanitized_name": sanitized,
             "version": summary.version,
-            "catalog_url": _catalog_url(),
+            "catalog_url": get_ouroboroshub_catalog_url(),
             "raw_base_url": raw_base,
             "installed_at": utc_now_iso(),
             "files": summary.files,
@@ -274,31 +252,32 @@ def install(slug: str, *, overwrite: bool = False) -> HubInstallResult:
             }
         atomic_write_json(staging / ".ouroboroshub.json", provenance, trailing_newline=True)
         _land_atomic(staging, target_dir)
-        return HubInstallResult(ok=True, sanitized_name=sanitized, target_dir=target_dir, summary=summary, provenance=provenance)
+        return HubInstallResult(True, sanitized, target_dir=target_dir, summary=summary, provenance=provenance)
     except Exception as exc:
         shutil.rmtree(staging, ignore_errors=True)
-        return HubInstallResult(ok=False, sanitized_name=sanitized, summary=summary, error=str(exc))
+        return HubInstallResult(False, sanitized, error=str(exc), summary=summary)
 
 
 def uninstall(sanitized_name: str) -> HubInstallResult:
     name = _sanitize_skill_name(sanitized_name)
     if not name or name != sanitized_name:
-        return HubInstallResult(ok=False, sanitized_name=name, error="invalid skill name")
-    target = get_ouroboroshub_skills_dir() / name
+        return HubInstallResult(False, name, error="invalid skill name")
+    target_root = get_ouroboroshub_skills_dir()
+    target = target_root / name
     marker = target / ".ouroboroshub.json"
     if not target.exists():
-        return HubInstallResult(ok=False, sanitized_name=name, error=f"{name} is not installed")
+        return HubInstallResult(False, name, error=f"{name} is not installed")
     if not marker.is_file():
-        return HubInstallResult(ok=False, sanitized_name=name, error="missing OuroborosHub provenance marker")
-    # v5.7.0: unload any in-process extension instance BEFORE removing the
-    # payload directory (mirrors the ClawHub uninstall path). The loader's
-    # registries are otherwise left pointing at deleted modules and any
-    # background work the extension started keeps running until the next
-    # failed dispatch.
+        return HubInstallResult(False, name, error="missing OuroborosHub provenance marker")
+    # Unload live extension before removing payload so registries do not point at deleted modules.
     try:
         from ouroboros.extension_loader import unload_extension
         unload_extension(name)
     except Exception:  # pragma: no cover — defensive
         pass
     shutil.rmtree(target)
-    return HubInstallResult(ok=True, sanitized_name=name, target_dir=target)
+    try:
+        (skill_state_dir(target_root.parent.parent, name) / DEPS_STATE_FILENAME).unlink(missing_ok=True)
+    except Exception:
+        pass
+    return HubInstallResult(True, name, target_dir=target)

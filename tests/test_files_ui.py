@@ -54,11 +54,25 @@ def test_files_layout_uses_internal_scroll_contract():
 
 def test_files_pdf_preview_and_download_bridge_are_safe():
     source = _read("web/modules/files.js")
+    download_helper = _read("web/modules/ui_helpers.js")
     launcher = _read("launcher.py")
     assert 'class="files-preview-frame" sandbox="allow-same-origin"' in source
-    assert "download_file_to_downloads" in source
-    assert "URL.createObjectURL(blob)" in source
+    assert "downloadViaHostBridge(" in source
+    assert "download_file_to_downloads" in download_helper
+    assert "URL.createObjectURL" in download_helper
     assert "encodeURI(data.content_url)" not in source
     assert 'parsed.path != "/api/files/download"' in launcher
     assert 'parsed.path.startswith("/api/extensions/")' in launcher
     assert "parsed.port != actual_port" in launcher
+
+
+def test_files_confirm_dialog_results_are_normalized():
+    source = _read("web/modules/files.js")
+    helper = _read("web/modules/ui_helpers.js")
+    toast = _read("web/modules/toast.js")
+
+    assert "typeof result === 'boolean' ? { confirmed: result, value: '' } : result" in source
+    assert "return Boolean(result?.confirmed);" in source
+    assert "if (!result?.confirmed) return;" in source
+    assert "normalizeTone(tone || 'info', 'info')" in toast
+    assert "export function normalizeTone(tone = 'muted', fallback = 'muted')" in helper

@@ -1,35 +1,7 @@
-"""Durable provenance records for ClawHub-installed skills.
+"""Atomic durable provenance records for ClawHub-installed skills.
 
-Stored at ``data/state/skills/<sanitized_name>/clawhub.json`` next to the
-existing ``enabled.json`` and ``review.json``. Mirrors the atomic-write
-pattern used by :mod:`ouroboros.skill_loader` so concurrent reviews +
-toggles never see a half-written file.
-
-The record is intentionally append-only at the field level: every field
-that the marketplace populates at install time is preserved across
-``Update`` operations so the operator can always cross-reference the
-current installed slug + version + sha256 against the registry record.
-
-Schema (v1)::
-
-    {
-        "schema_version": 1,
-        "source": "clawhub",
-        "slug": "owner/skill",
-        "sanitized_name": "owner__skill",
-        "version": "1.0.0",
-        "sha256": "<archive sha256>",
-        "is_plugin": false,
-        "installed_at": "2026-04-25T...",
-        "updated_at": "2026-04-25T...",
-        "homepage": "https://...",
-        "license": "MIT",
-        "primary_env": "GEMINI_API_KEY",
-        "original_manifest_sha256": "<sha256 of OpenClaw SKILL.md>",
-        "translated_manifest_sha256": "<sha256 of adapted SKILL.md>",
-        "adapter_warnings": [...],
-        "registry_url": "https://clawhub.ai/api/v1"
-    }
+Records live beside skill review/enablement state and preserve install-time
+fields across updates for operator cross-checks against registry metadata.
 """
 
 from __future__ import annotations
@@ -53,12 +25,7 @@ def write_provenance(
     skill_name: str,
     record: Dict[str, Any],
 ) -> pathlib.Path:
-    """Persist a provenance record + return its path on disk.
-
-    Existing fields are preserved when present in ``record``; the helper
-    forces ``schema_version=1``, ``source='clawhub'``, ``updated_at``
-    (UTC ISO8601 now), and ``installed_at`` (only when not already set).
-    """
+    """Persist a provenance record and return its path on disk."""
     state_dir = skill_state_dir(drive_root, skill_name)
     target = state_dir / PROVENANCE_FILENAME
     payload = dict(record or {})

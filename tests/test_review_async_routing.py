@@ -23,6 +23,7 @@ def test_multi_model_review_async_uses_llm_client_chat_async(monkeypatch, tmp_pa
                     "completion_tokens": 5,
                     "cached_tokens": 7,
                     "cache_write_tokens": 2,
+                    "prompt_cache_ttl": "default",
                     "cost": 0.01,
                 },
             )
@@ -46,9 +47,11 @@ def test_multi_model_review_async_uses_llm_client_chat_async(monkeypatch, tmp_pa
     assert calls[0]["temperature"] == 0.2
     assert result["results"][0]["cached_tokens"] == 7
     assert result["results"][0]["cache_write_tokens"] == 2
+    assert result["results"][0]["prompt_cache_ttl"] == "default"
     assert ctx.pending_events
     assert ctx.pending_events[0]["usage"]["cached_tokens"] == 7
     assert ctx.pending_events[0]["usage"]["cache_write_tokens"] == 2
+    assert ctx.pending_events[0]["usage"]["prompt_cache_ttl"] == "default"
 
 
 def test_multi_model_review_async_works_without_openrouter_for_official_openai(monkeypatch, tmp_path):

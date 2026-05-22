@@ -3,7 +3,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-from ouroboros.gateway.contracts import HTTP_ENDPOINTS, WS_MESSAGE_TYPES
+from ouroboros.gateway.contracts import HTTP_ENDPOINTS, SkillLifecycleQueueResponse, WS_MESSAGE_TYPES
 from ouroboros.gateway.router import collect_routes
 
 
@@ -31,7 +31,29 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     text = (pathlib.Path(__file__).resolve().parent.parent / "web" / "modules" / "api_types.js").read_text(
         encoding="utf-8"
     )
-    assert "GATEWAY_CONTRACT_VERSION" in text
-    for name in ("StateResponse", "HealthResponse", "ChatInbound", "ChatOutbound", "UploadResponse"):
+    assert "GATEWAY_CONTRACT_VERSION = '5.30.0-rc.1'" in text
+    for name in (
+        "StateResponse",
+        "HealthResponse",
+        "SettingsMeta",
+        "ChatInbound",
+        "ChatOutbound",
+        "UploadResponse",
+        "TaskCreateResponse",
+        "TaskEvent",
+        "TaskListResponse",
+        "TaskCancelResponse",
+        "LogTailResponse",
+    ):
         assert re.search(rf"@typedef \{{Object\}} {name}\b", text), f"api_types.js missing {name}"
+    for field in ("source", "line", "root"):
+        assert re.search(rf"@property \{{[^}}]+=\}} {field}\b", text), f"TaskEvent missing {field}"
+    assert "setup_contract" in text
     assert {"chat", "command", "log", "heartbeat"} <= set(WS_MESSAGE_TYPES)
+
+
+def test_skill_lifecycle_queue_contract_matches_runtime_shape():
+    fields = set(SkillLifecycleQueueResponse.__annotations__)
+
+    assert {"active", "events"} <= fields
+    assert {"queue", "recent_events", "running"}.isdisjoint(fields)

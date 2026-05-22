@@ -1,10 +1,4 @@
-"""
-Post-task processing pipeline for the Ouroboros agent.
-
-Handles task-result emission, trace summarization, memory consolidation,
-scratchpad compaction, execution reflection, and review context building.
-Extracted from agent.py to keep the agent thin.
-"""
+"""Post-task result emission, memory work, reflections, and review context."""
 
 from __future__ import annotations
 
@@ -161,15 +155,7 @@ def _run_post_task_processing_async(
     review_evidence: Dict[str, Any],
     drive_logs: pathlib.Path,
 ) -> None:
-    """Best-effort async post-task memory work that must not block reply delivery.
-
-    Runs in a daemon thread so reflection, backlog candidate persistence, and
-    task-summary generation stay off the reply critical path. The previous
-    synchronous variant added reflection latency (1–3 s LLM round) to every
-    reply; daemon-thread async restores the pre-v4.39.0 UX contract
-    (ARCHITECTURE.md "Only task summary remains async" was a misnomer — all
-    LLM-heavy post-task work belongs off the critical path).
-    """
+    """Run best-effort LLM-heavy post-task memory work off the reply path."""
     task_snapshot = json.loads(json.dumps(task, ensure_ascii=False, default=str))
     usage_snapshot = json.loads(json.dumps(usage, ensure_ascii=False, default=str))
     trace_snapshot = json.loads(json.dumps(llm_trace, ensure_ascii=False, default=str))
@@ -180,11 +166,7 @@ def _run_post_task_processing_async(
             from ouroboros.llm import LLMClient
 
             llm_client = LLMClient()
-            # Order matters for hard-restart durability: task summary writes
-            # to `logs/chat.jsonl` (durable chat history) and is more
-            # important than reflection/backlog (best-effort process memory).
-            # Running summary FIRST minimises the chance that a worker
-            # shutdown mid-thread drops the more valuable artifact.
+            # Summary first: chat.jsonl is more durable than best-effort reflection/backlog.
             _run_task_summary(
                 env,
                 llm_client,
@@ -292,9 +274,7 @@ def emit_task_results(
 
     _run_chat_consolidation(env, memory, llm, task, drive_logs)
     _run_scratchpad_consolidation(env, memory, llm)
-    # Reflection, backlog persistence, and task summary all run in the daemon
-    # thread started below — LLM-heavy work must stay off the reply critical
-    # path so send_message reaches the UI without extra latency.
+    # LLM-heavy memory work stays off the reply critical path.
     _run_post_task_processing_async(
         env, task, usage, llm_trace, review_evidence, drive_logs,
     )
@@ -313,8 +293,17 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
             str(task.get("id") or ""),
             status,
             parent_task_id=task.get("parent_task_id"),
+            root_task_id=task.get("root_task_id"),
+            session_id=task.get("session_id"),
+            actor_id=task.get("actor_id"),
+            delegation_role=task.get("delegation_role"),
             description=task.get("description"),
             context=task.get("context"),
+            workspace_root=task.get("workspace_root"),
+            workspace_mode=task.get("workspace_mode"),
+            memory_mode=task.get("memory_mode"),
+            child_drive_root=task.get("drive_root"),
+            metadata=task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
             result=text or "",
             trace_summary=trace_summary,
             cost_usd=round(float(usage.get("cost") or 0), 6),
@@ -367,7 +356,7 @@ def _run_task_summary(env, llm, task, usage, llm_trace, drive_logs, review_evide
         rounds = int(usage.get("rounds") or 0)
         cost = float(usage.get("cost") or 0)
 
-        # Skip LLM summary for trivial tasks (0 tool calls, ≤1 round)
+        # Skip LLM summary for trivial tasks.
         if n_tool_calls == 0 and rounds <= 1:
             goal = _truncate_with_notice(task.get("text", ""), 200)
             summary_text = (
@@ -444,7 +433,7 @@ def _run_chat_consolidation(env, memory, llm, task, drive_logs):
                         append_jsonl(_logs / "events.jsonl", {"ts": utc_now_iso(),
                             "type": "chat_block_consolidation", "task_id": _id,
                             "cost_usd": round(float(u.get("cost") or 0), 6)})
-                        # Track cost — consolidation runs in daemon thread, update directly.
+                        # Daemon-thread work updates budget directly.
                         if u.get("cost") or u.get("prompt_tokens"):
                             try:
                                 from supervisor.state import update_budget_from_usage
@@ -472,7 +461,7 @@ def _run_scratchpad_consolidation(env: Any, memory: Any, llm: Any) -> None:
             def _run():
                 try:
                     u = consolidate(memory, kb_dir, llm, _identity)
-                    # Track cost — scratchpad consolidation runs in daemon thread.
+                    # Daemon-thread work updates budget directly.
                     if u and (u.get("cost") or u.get("prompt_tokens")):
                         try:
                             from supervisor.state import update_budget_from_usage
@@ -498,7 +487,6 @@ def _run_reflection(env: Any, llm: Any, task: Dict[str, Any],
         if should_generate_reflection(
             llm_trace,
             rounds=int(usage.get("rounds", 0)),
-            # usage key is "cost" (not "cost_usd") — map explicitly
             cost_usd=float(usage.get("cost", 0.0)),
         ):
             trace_summary = build_trace_summary(llm_trace)
@@ -618,9 +606,7 @@ def build_review_context(env: Any) -> str:
         if scoped_continuations:
             lines.append("\n### Open review continuations")
             scoped_continuations.sort(key=lambda item: str(item.updated_ts or item.created_ts or ""), reverse=True)
-            # Cognitive artifact: keep visible list capped (context budget) but emit
-            # explicit OMISSION NOTEs whenever a cap truncates — DEVELOPMENT.md /
-            # CHECKLISTS 2(f): no silent `[:N]` slicing of review-output artifacts.
+            # Cap review context only with explicit OMISSION NOTEs; no silent slicing.
             _CONTINUATION_CAP = 5
             _PER_FINDING_CAP = 3
             shown_continuations = scoped_continuations[:_CONTINUATION_CAP]

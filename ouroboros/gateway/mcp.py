@@ -1,23 +1,8 @@
-"""HTTP surface for the MCP client manager.
-
-Adds three endpoints used by the Settings → Advanced → MCP Servers
-widget:
-
-- ``GET  /api/mcp/status``    — current servers + discovered tools (auth tokens redacted).
-- ``POST /api/mcp/refresh``   — re-discover tools for one server (body ``{"server_id": "..."}``)
-  or every enabled server (empty body).
-- ``POST /api/mcp/test``      — probe a candidate config without saving it (body ``{"server": {...}}``).
-
-The endpoints intentionally route through the module-level
-:class:`ouroboros.mcp_client.MCPManager` so the same state the agent
-sees in :class:`ouroboros.tools.registry.ToolRegistry` is what the UI
-visualizes — no parallel cache to drift out of sync.
-"""
+"""HTTP surface for the shared MCP manager used by Settings and ToolRegistry."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, Dict
 
@@ -25,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros.config import load_settings
+from ouroboros.gateway._helpers import json_error, request_json_or
 from ouroboros.mcp_client import (
     canonical_server_id,
     get_manager,
@@ -36,18 +22,8 @@ from ouroboros.mcp_client import (
 log = logging.getLogger(__name__)
 
 
-def _error_response(message: str, *, status_code: int = 500) -> JSONResponse:
-    return JSONResponse({"error": message}, status_code=status_code)
-
-
 def _ensure_configured() -> None:
-    """Reconcile the manager state with the on-disk settings.
-
-    Calling this on every endpoint avoids a stale-state regression when
-    settings are edited out-of-band (e.g. test setup or CLI script).
-    Production traffic also goes through the standard ``api_settings_post``
-    reconfigure call but this is cheap and idempotent.
-    """
+    """Reconcile manager with settings; cheap guard against out-of-band edits."""
     try:
         reconfigure_from_settings(load_settings())
     except Exception:
@@ -62,16 +38,13 @@ async def api_mcp_status(request: Request) -> JSONResponse:
         return JSONResponse(payload)
     except Exception as exc:
         log.exception("api_mcp_status failed")
-        return _error_response(f"{type(exc).__name__}: MCP status failed")
+        return json_error(f"{type(exc).__name__}: MCP status failed")
 
 
 async def api_mcp_refresh(request: Request) -> JSONResponse:
     """POST /api/mcp/refresh — refresh one or all servers."""
     try:
-        try:
-            body: Dict[str, Any] = await request.json()
-        except (json.JSONDecodeError, ValueError):
-            body = {}
+        body: Dict[str, Any] = await request_json_or(request, {})
         server_id = canonical_server_id(body.get("server_id") or "")
         await asyncio.to_thread(_ensure_configured)
         manager = get_manager()
@@ -82,29 +55,13 @@ async def api_mcp_refresh(request: Request) -> JSONResponse:
         return JSONResponse(outcome)
     except Exception as exc:
         log.exception("api_mcp_refresh failed")
-        return _error_response(f"{type(exc).__name__}: MCP refresh failed")
+        return json_error(f"{type(exc).__name__}: MCP refresh failed")
 
 
 async def api_mcp_test(request: Request) -> JSONResponse:
-    """POST /api/mcp/test — probe a candidate server without saving it.
-
-    The body contains either:
-
-    - ``{"server": {...}}`` for a brand-new/unsaved card;
-    - ``{"server_id": "..."}`` to test the persisted server exactly;
-    - ``{"server_id": "...", "server": {...}}`` to test an edited saved
-      card while rehydrating a still-masked ``auth_token`` from disk.
-
-    The third form is important for the UI: users often edit URL,
-    transport, auth header, or allowlist on an already-saved server
-    without re-typing the secret. We must probe the edited candidate,
-    not the stale persisted config, while still sending the real token.
-    """
+    """Probe unsaved or edited MCP config; rehydrate masked saved auth token."""
     try:
-        try:
-            body: Dict[str, Any] = await request.json()
-        except (json.JSONDecodeError, ValueError):
-            body = {}
+        body: Dict[str, Any] = await request_json_or(request, {})
         await asyncio.to_thread(_ensure_configured)
         manager = get_manager()
         server_id = canonical_server_id(body.get("server_id") or "")
@@ -142,4 +99,4 @@ async def api_mcp_test(request: Request) -> JSONResponse:
         return JSONResponse(outcome)
     except Exception as exc:
         log.exception("api_mcp_test failed")
-        return _error_response(f"{type(exc).__name__}: MCP test failed")
+        return json_error(f"{type(exc).__name__}: MCP test failed")

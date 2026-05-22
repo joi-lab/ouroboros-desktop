@@ -1,22 +1,18 @@
-"""Global lifecycle queue for mutating skill operations.
-
-The Skills, ClawHub, and OuroborosHub surfaces can all trigger long-running
-operations that touch the same skill state plane. This module provides one
-process-local FIFO lane so install/review/dependency/enable operations do not
-race each other through unrelated HTTP handlers.
-"""
+"""Single FIFO lane for mutating skill install/review/dependency/enable work."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
+import os
 import pathlib
 import re
 import threading
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional
 
 from ouroboros.utils import utc_now_iso as _now_iso
@@ -24,6 +20,17 @@ from ouroboros.utils import utc_now_iso as _now_iso
 log = logging.getLogger(__name__)
 
 _MAX_EVENTS = 80
+_STALE_RUNNING_JOB_SEC = int(os.environ.get("OUROBOROS_SKILL_LIFECYCLE_STALE_SEC", "1800"))
+
+
+def _iso_age_seconds(value: str) -> int:
+    try:
+        dt = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    except Exception:
+        return 0
 
 
 @dataclass
@@ -41,6 +48,8 @@ class LifecycleJob:
     finished_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
+        age_seconds = _iso_age_seconds(self.started_at or self.queued_at)
+        stale = bool(self.status == "running" and age_seconds >= _STALE_RUNNING_JOB_SEC)
         return {
             "id": self.id,
             "kind": self.kind,
@@ -53,6 +62,14 @@ class LifecycleJob:
             "queued_at": self.queued_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "age_seconds": age_seconds,
+            "stale": stale,
+            "stale_reason": "running_too_long" if stale else "",
+            "recovery_hint": (
+                "Lifecycle work is still running in-process. Restart Ouroboros to clear "
+                "a stuck worker after preserving logs."
+                if stale else ""
+            ),
         }
 
 
@@ -106,11 +123,14 @@ def _notify_chat_progress(job: LifecycleJob, phase: str) -> None:
         from supervisor.message_bus import send_with_budget
 
         detail = job.error or job.message or job.status
+        lifecycle = job.to_dict()
+        lifecycle["phase"] = str(phase or "")
         send_with_budget(
             0,
             f"Skill {job.kind}: `{job.target}` — {phase}{f' — {detail}' if detail else ''}",
             is_progress=True,
             task_id=_chat_task_id(job),
+            progress_meta={"lifecycle": lifecycle},
         )
     except Exception:
         return
@@ -188,9 +208,19 @@ async def async_skill_lifecycle_file_lock(drive_root: pathlib.Path):
 
 
 def _notify_chat(job: LifecycleJob) -> None:
-    if job.status not in {"succeeded", "failed"}:
+    if job.status not in {"succeeded", "failed", "cancelled"}:
         return
-    _notify_chat_progress(job, "completed" if job.status == "succeeded" else "failed")
+    phase = {
+        "succeeded": "completed",
+        "cancelled": "cancelled",
+    }.get(job.status, "failed")
+    _notify_chat_progress(job, phase)
+
+
+def _job_snapshot(job: LifecycleJob) -> Dict[str, Any]:
+    payload = job.to_dict()
+    payload["chat_task_id"] = _chat_task_id(job)
+    return payload
 
 
 async def run_lifecycle_job(
@@ -203,15 +233,7 @@ async def run_lifecycle_job(
     dedupe_key: str = "",
     options: LifecycleJobOptions | None = None,
 ) -> Any:
-    """Run ``runner`` through the global skill lifecycle lane.
-
-    v5.7.0: callers can pass ``progress_target`` (a :class:`JobProgressTarget`
-    box) so they can hand a thread-safe stage-message setter to the worker
-    runner. The setter rewrites this job's ``message`` field while it is
-    the active job, which the Skills/Marketplace UIs poll via
-    ``GET /api/skills/lifecycle-queue``. The setter is best-effort: it
-    no-ops once the job has finished.
-    """
+    """Run runner through the lifecycle lane with optional progress updates."""
 
     global _active
     opts = options or LifecycleJobOptions()
@@ -229,6 +251,7 @@ async def run_lifecycle_job(
         opts.progress_target.bind(job)
     result: Any = None
     error_obj: BaseException | None = None
+    terminal_notified = False
     try:
         async with _async_thread_lock(_get_lock()):
             _active = job
@@ -262,19 +285,32 @@ async def run_lifecycle_job(
             finally:
                 job.finished_at = _now_iso()
                 if opts.on_finished is not None:
-                    opts.on_finished(job, result, error_obj)
+                    try:
+                        opts.on_finished(job, result, error_obj)
+                    except BaseException:
+                        log.exception(
+                            "skill lifecycle on_finished hook failed for %s:%s",
+                            job.kind,
+                            job.target,
+                        )
                 _release_dedupe(job)
-                _active = None
+                if _active is job:
+                    _active = None
                 if opts.progress_target is not None:
                     opts.progress_target.release()
                 _notify_chat(job)
+                terminal_notified = True
     except asyncio.CancelledError:
         job.status = "cancelled"
         job.error = job.error or "CancelledError"
         job.finished_at = job.finished_at or _now_iso()
         _release_dedupe(job)
+        if _active is job:
+            _active = None
         if opts.progress_target is not None:
             opts.progress_target.release()
+        if not terminal_notified:
+            _notify_chat(job)
         raise
 
 
@@ -284,14 +320,7 @@ async def run_blocking_preserving_cancellation(
     log_label: str = "lifecycle work",
     **kwargs: Any,
 ) -> Any:
-    """Run blocking lifecycle work without releasing the lane on caller cancellation.
-
-    Python cannot safely kill a thread already inside file I/O, subprocess
-    cleanup, provider SDK code, or extension import/reconcile logic. If the
-    HTTP client disconnects while such work is running, the lifecycle lane must
-    stay occupied until the worker returns; otherwise a second mutating skill
-    operation can overlap with the first thread's side effects.
-    """
+    """Keep the lifecycle lane held until non-killable thread work returns."""
 
     task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
     warned = False
@@ -312,10 +341,7 @@ async def run_blocking_preserving_cancellation(
             if current is not None and hasattr(current, "uncancel"):
                 while current.cancelling():  # type: ignore[attr-defined]
                     current.uncancel()  # type: ignore[attr-defined]
-            # Python <=3.10 has no cancellation counter to clear. Once the
-            # CancelledError is caught, the next shield await blocks until the
-            # worker finishes or a fresh cancellation arrives; this is covered
-            # by the cancellation-preservation tests running on Python 3.9.
+            # Python <=3.10: next shield await blocks until worker finishes.
 
 
 def run_lifecycle_job_blocking(
@@ -374,24 +400,7 @@ def run_lifecycle_job_blocking(
 
 
 class JobProgressTarget:
-    """Tiny thread-safe relay so a worker thread can update a lifecycle
-    job's ``message`` without importing this module's globals.
-
-    Use::
-
-        progress = JobProgressTarget()
-        await run_lifecycle_job(
-            ...,
-            runner=...,
-            options=LifecycleJobOptions(progress_target=progress),
-        )
-
-    The runner (or anything it spawns) calls ``progress.set("Downloading…")``
-    from a worker thread; the setter mutates the active job's ``message``
-    so subsequent ``queue_snapshot()`` calls surface live progress to the
-    UI. After the job finishes, ``release()`` flips an internal flag and
-    further ``set()`` calls become no-ops.
-    """
+    """Thread-safe relay for worker progress into the active lifecycle job."""
 
     __slots__ = ("_job", "_done")
 
@@ -416,6 +425,6 @@ def queue_snapshot() -> Dict[str, Any]:
     """Return a JSON-friendly view of recent lifecycle activity."""
 
     return {
-        "active": _active.to_dict() if _active else None,
-        "events": [job.to_dict() for job in list(_events)],
+        "active": _job_snapshot(_active) if _active else None,
+        "events": [_job_snapshot(job) for job in list(_events)],
     }

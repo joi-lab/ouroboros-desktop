@@ -1,16 +1,7 @@
-"""HTTP + WebSocket envelope shapes for the Gateway Boundary (v1).
+"""Descriptive HTTP + WebSocket Gateway Boundary contracts (v1).
 
-These ``TypedDict`` definitions document the payloads the web gateway sends
-and accepts. They are descriptive contracts, not runtime validators. Their job
-is to make the frontend/backend surface visible, testable, and frozen unless
-Ouroboros is running in ``runtime_mode='pro'``.
-
-Conventions
------------
-- Default to ``total=True`` (keys listed at the top level are required).
-- Mark genuinely optional keys with ``NotRequired[...]``.
-- Keep ``type`` (the discriminator) always required on every WebSocket
-  envelope so clients can dispatch by it.
+TypedDicts document payloads, not runtime validation. Keep discriminating
+``type`` keys required; mark genuinely optional fields with ``NotRequired``.
 """
 
 from __future__ import annotations
@@ -22,10 +13,6 @@ try:  # Python 3.11+
 except ImportError:  # pragma: no cover - CI supports Python 3.10.
     from typing_extensions import Literal, NotRequired, TypedDict  # type: ignore[assignment]
 
-
-# ---------------------------------------------------------------------------
-# WebSocket - inbound (``web/modules/ws.js`` -> gateway.ws)
-# ---------------------------------------------------------------------------
 
 class ChatInbound(TypedDict):
     """Inbound WS chat message. ``type`` and ``content`` are required."""
@@ -63,10 +50,6 @@ class ExtensionInbound(TypedDict, total=False):
     data: Any
 
 
-# ---------------------------------------------------------------------------
-# WebSocket - outbound (supervisor.message_bus / gateway.ws)
-# ---------------------------------------------------------------------------
-
 class TransportMetadata(TypedDict, total=False):
     """Generic external transport provenance for bridge skills."""
 
@@ -85,6 +68,7 @@ class ChatOutbound(TypedDict):
     markdown: NotRequired[bool]
     is_progress: NotRequired[bool]
     task_id: NotRequired[str]
+    lifecycle: NotRequired[Dict[str, Any]]
     source: NotRequired[str]
     sender_label: NotRequired[str]
     sender_session_id: NotRequired[str]
@@ -150,10 +134,6 @@ class ExtensionLifecycleOutbound(TypedDict):
     data: NotRequired[Dict[str, Any]]
 
 
-# ---------------------------------------------------------------------------
-# HTTP responses - core
-# ---------------------------------------------------------------------------
-
 class ErrorResponse(TypedDict):
     error: str
 
@@ -216,7 +196,7 @@ class StateResponse(TypedDict):
 
 
 class SettingsNetworkMeta(TypedDict):
-    """``_meta`` block injected into ``GET /api/settings``."""
+    """Network fields inside the ``GET /api/settings`` ``_meta`` block."""
 
     bind_host: str
     bind_port: int
@@ -224,6 +204,13 @@ class SettingsNetworkMeta(TypedDict):
     reachability: Literal["loopback_only", "lan_reachable", "host_ip_unknown"]
     recommended_url: str
     warning: str
+
+
+class SettingsMeta(SettingsNetworkMeta, total=False):
+    """Complete ``GET /api/settings`` ``_meta`` block."""
+
+    custom_secret_keys: list[str]
+    setup_contract: Dict[str, Any]
 
 
 class SettingsSaveResponse(TypedDict, total=False):
@@ -234,6 +221,29 @@ class SettingsSaveResponse(TypedDict, total=False):
     immediate_changed: bool
     next_task_changed: bool
     warnings: list[str]
+
+
+class OwnerRuntimeModeResponse(TypedDict):
+    ok: bool
+    runtime_mode: str
+    restart_required: bool
+
+
+class OwnerAutoGrantResponse(TypedDict):
+    ok: bool
+    enabled: bool
+
+
+class SkillGrantResponse(TypedDict, total=False):
+    ok: bool
+    skill: str
+    granted_keys: list[str]
+    granted_permissions: list[str]
+    extension_action: str
+    extension_reason: str
+    load_error: str
+    grants: Dict[str, Any]
+    error: str
 
 
 class GitLogResponse(TypedDict):
@@ -266,9 +276,8 @@ class ExtensionsIndexResponse(TypedDict, total=False):
 
 
 class SkillLifecycleQueueResponse(TypedDict, total=False):
-    queue: list[Dict[str, Any]]
-    recent_events: list[Dict[str, Any]]
-    running: bool
+    active: Dict[str, Any]
+    events: list[Dict[str, Any]]
 
 
 class MarketplaceSearchResponse(TypedDict, total=False):
@@ -282,10 +291,6 @@ class MarketplaceInstalledResponse(TypedDict, total=False):
     installed: list[Dict[str, Any]]
     skills: list[Dict[str, Any]]
     error: str
-
-
-class MigrationsResponse(TypedDict):
-    migrations: list[Dict[str, Any]]
 
 
 class LocalModelStatusResponse(TypedDict, total=False):
@@ -324,15 +329,56 @@ class ChatHistoryResponse(TypedDict, total=False):
     error: str
 
 
-# Endpoint registries are intentionally descriptive and small. The router owns
-# the executable Starlette Route objects; this table is the human/test-visible
-# contract index.
+class TaskCreateResponse(TypedDict, total=False):
+    ok: bool
+    task_id: str
+    status: str
+    error: str
+
+
+class TaskListResponse(TypedDict, total=False):
+    tasks: list[Dict[str, Any]]
+    queue: Dict[str, Any]
+    error: str
+
+
+class TaskEvent(TypedDict, total=False):
+    seq: int
+    source: str
+    line: int
+    ts: str
+    type: str
+    task_id: str
+    root: str
+    data: Dict[str, Any]
+
+
+class TaskCancelResponse(TypedDict, total=False):
+    ok: bool
+    task_id: str
+    error: str
+
+
+class LogTailResponse(TypedDict, total=False):
+    name: str
+    entries: list[Dict[str, Any]]
+    error: str
+
+
+# Human/test-visible contract index; routers own executable Route objects.
 HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/health",
     "GET /api/state",
     "GET /api/settings",
     "POST /api/settings",
+    "POST /api/owner/runtime-mode",
+    "POST /api/owner/auto-grant",
     "GET /api/model-catalog",
+    "POST /api/tasks",
+    "GET /api/tasks",
+    "GET /api/tasks/{task_id}",
+    "GET /api/tasks/{task_id}/events",
+    "POST /api/tasks/{task_id}/cancel",
     "POST /api/command",
     "POST /api/reset",
     "GET /api/git/log",
@@ -344,6 +390,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/cost-breakdown",
     "GET /api/evolution-data",
     "GET /api/chat/history",
+    "GET /api/logs/{name}",
     "POST /api/chat/upload",
     "DELETE /api/chat/upload",
     "GET /api/local-model/status",
@@ -377,8 +424,6 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "POST /api/marketplace/ouroboroshub/install",
     "POST /api/marketplace/ouroboroshub/update/{name}",
     "POST /api/marketplace/ouroboroshub/uninstall/{name}",
-    "GET /api/migrations",
-    "POST /api/migrations/{key}/dismiss",
     "GET /api/onboarding",
     "GET /api/claude-code/status",
     "POST /api/claude-code/install",
@@ -423,7 +468,11 @@ __all__ = [
     "StateResponse",
     "EvolutionStateSnapshot",
     "SettingsNetworkMeta",
+    "SettingsMeta",
     "SettingsSaveResponse",
+    "OwnerRuntimeModeResponse",
+    "OwnerAutoGrantResponse",
+    "SkillGrantResponse",
     "GitLogResponse",
     "EvolutionDataResponse",
     "UploadResponse",
@@ -431,12 +480,16 @@ __all__ = [
     "SkillLifecycleQueueResponse",
     "MarketplaceSearchResponse",
     "MarketplaceInstalledResponse",
-    "MigrationsResponse",
     "LocalModelStatusResponse",
     "McpStatusResponse",
     "ModelCatalogResponse",
     "FileBrowserListResponse",
     "ChatHistoryResponse",
+    "TaskCreateResponse",
+    "TaskListResponse",
+    "TaskEvent",
+    "TaskCancelResponse",
+    "LogTailResponse",
     "HTTP_ENDPOINTS",
     "WS_MESSAGE_TYPES",
 ]

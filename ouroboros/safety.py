@@ -1,30 +1,9 @@
 """
-Safety Agent — Policy-based LLM safety check.
+Policy-based safety check for tool calls.
 
-Every tool call in registry.execute() is routed through check_safety() with a
-policy lookup:
-
-  - POLICY_SKIP               — trusted built-in tool; no LLM call.
-  - POLICY_CHECK_CONDITIONAL  — only for run_shell: safe-subject whitelist
-                                bypasses LLM; otherwise LLM check.
-  - POLICY_CHECK              — always LLM check.
-
-Unknown tools (e.g. tools the agent creates at runtime) fall back to
-DEFAULT_POLICY = POLICY_CHECK. This is the "weak cheap recheck" layer for
-newly-created tools — enough to notice obviously destructive calls, fast
-enough not to hurt normal development (single light-model call).
-
-Defense in depth (unchanged, lives elsewhere):
-  - Hardcoded sandbox in ouroboros/tools/registry.py runs BEFORE this
-    module and blocks protected runtime paths (safety-critical, frozen contracts,
-    release invariants), mutative git via shell, and GitHub repo/auth manipulation.
-  - claude_code_edit post-execution revert/non-pro guard for protected paths; normal commit review remains mandatory.
-  - Pre-commit triad + scope review (review.py, scope_review.py).
-
-Returns:
-  (True, "")                         — SAFE, proceed without comment
-  (True, "⚠️ SAFETY_WARNING: ...")    — SUSPICIOUS, proceed but warn the agent
-  (False, "⚠️ SAFETY_VIOLATION: ...") — DANGEROUS, blocked
+Built-ins use explicit policy entries; unknown tools default to one light-model
+check. The registry sandbox still runs first, Claude edits still have protected
+path revert guards, and commit review remains separate.
 """
 
 import ast
@@ -43,25 +22,18 @@ from supervisor.state import update_budget_from_usage
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Policy constants
-# ---------------------------------------------------------------------------
+# Policy constants.
 
 POLICY_SKIP = "skip"
 POLICY_CHECK = "check"
 POLICY_CHECK_CONDITIONAL = "check_conditional"
 
-# Default policy for unknown tools (e.g. agent-created tools that are not yet
-# in TOOL_POLICY). "check" means: always run one cheap LLM check — weak but
-# better than nothing, and low-cost enough not to matter.
+# Unknown/agent-created tools get one cheap LLM recheck.
 DEFAULT_POLICY = POLICY_CHECK
 
-# Explicit policy for every built-in tool exported by modules in
-# ouroboros/tools/. Keep in sync with get_tools() across those modules.
-# An invariant test (test_tool_policy_covers_all_builtin_tools) guards against
-# silent drift when a new built-in tool is added without an entry here.
+# Must cover every built-in exported from ouroboros/tools; invariant-tested.
 TOOL_POLICY: Dict[str, str] = {
-    # --- Read-only / trivially safe ---
+    # Read-only / trivially safe.
     "repo_read": POLICY_SKIP,
     "repo_list": POLICY_SKIP,
     "data_read": POLICY_SKIP,
@@ -93,7 +65,7 @@ TOOL_POLICY: Dict[str, str] = {
     "wait_for_task": POLICY_SKIP,
     "switch_model": POLICY_SKIP,
 
-    # --- Mutative, but guarded by hardcoded sandbox / revert / review gate ---
+    # Mutative but separately guarded by sandbox/revert/review gates.
     "repo_write": POLICY_SKIP,
     "repo_commit": POLICY_SKIP,
     "str_replace_editor": POLICY_SKIP,
@@ -107,7 +79,7 @@ TOOL_POLICY: Dict[str, str] = {
     "revert_commit": POLICY_SKIP,
     "rollback_to_target": POLICY_SKIP,
 
-    # --- Control / messaging / internal side effects ---
+    # Control / messaging / internal side effects.
     "schedule_task": POLICY_SKIP,
     "cancel_task": POLICY_SKIP,
     "request_restart": POLICY_SKIP,
@@ -119,34 +91,25 @@ TOOL_POLICY: Dict[str, str] = {
     "send_user_message": POLICY_SKIP,
     "send_photo": POLICY_SKIP,
     "forward_to_worker": POLICY_SKIP,
-    "summarize_dialogue": POLICY_SKIP,
     "compact_context": POLICY_SKIP,
     "enable_tools": POLICY_SKIP,
     "advisory_pre_review": POLICY_SKIP,
 
-    # --- Phase 3 three-layer refactor: external skill surface ---
-    # Read-only catalogue view.
+    # External skill surface.
     "list_skills": POLICY_SKIP,
-    # Runs the existing tri-model review against a skill package; no
-    # subprocess execution, only durable skill state updates.
+    # Review mutates durable skill state but executes no skill subprocess.
     "review_skill": POLICY_SKIP,
-    # Flips the ``enabled.json`` bit for a single skill in its private
-    # state directory. Cannot touch the main repo.
+    # Toggle only writes private enabled.json state.
     "toggle_skill": POLICY_SKIP,
-    # Actually spawns a subprocess from the external skill checkout.
-    # The tool itself enforces executable review + enabled + non-stale hash;
-    # v5.1.2 Frame A: runtime_mode no longer gates execution. We still
-    # keep a cheap per-call LLM recheck as defense in depth.
+    # skill_exec enforces fresh executable review/enabled/hash; recheck per call.
     "skill_exec": POLICY_CHECK,
-    # v5.7.0: read-only argv-only syntax validator for skill payloads
-    # (Python compile() / node --check / bash -n + manifest parse). Heal-allowed.
-    # No state mutation, no shell strings, scrubbed env, 30s/file cap.
+    # Read-only argv-only syntax validator with scrubbed env and per-file caps.
     "skill_preflight": POLICY_SKIP,
 
-    # --- Conditional: run_shell (safe-subject whitelist) ---
+    # Conditional: run_shell safe-subject whitelist.
     "run_shell": POLICY_CHECK_CONDITIONAL,
 
-    # --- Always LLM-checked built-ins ---
+    # Always LLM-checked built-ins.
     "fetch_pr_ref": POLICY_CHECK,
     "create_integration_branch": POLICY_CHECK,
     "cherry_pick_pr_commits": POLICY_CHECK,
@@ -160,25 +123,16 @@ TOOL_POLICY: Dict[str, str] = {
     "close_github_issue": POLICY_CHECK,
     "create_github_issue": POLICY_CHECK,
 
-    # Delegates to the external Claude Agent SDK/CLI: the code actually
-    # mutating the repo runs outside this process, so we keep one cheap LLM
-    # recheck of the call itself. PreToolUse hooks + post-execution revert in
-    # ouroboros/gateways/claude_code.py and registry.py remain as defense in depth.
+    # External Claude edits mutate outside this process; keep a local recheck too.
     "claude_code_edit": POLICY_CHECK,
 
-    # --- Consciousness-only built-ins manually registered outside get_tools() ---
-    # (e.g. ouroboros/consciousness.py._build_registry) — must still have an
-    # explicit entry so the coverage invariant catches drift.
+    # Consciousness-only built-ins registered outside get_tools().
     "set_next_wakeup": POLICY_SKIP,
 }
 
-# ---------------------------------------------------------------------------
-# run_shell safe-subject whitelist
-# ---------------------------------------------------------------------------
+# run_shell safe-subject whitelist.
 
-# Note: ``pip`` is intentionally omitted — ``pip install/uninstall`` mutates the
-# Python environment and must route through the LLM check. ``python -m pytest``
-# is still whitelisted via the Python interpreter branch below.
+# ``pip`` mutates the Python env and must route through the LLM check.
 SAFE_SHELL_COMMANDS = frozenset([
     "ls", "cat", "head", "tail", "grep", "rg", "find", "wc",
     "git", "pytest", "pwd", "whoami",
@@ -218,7 +172,7 @@ def _split_shell_command(raw_cmd: Any) -> List[str]:
 
 
 def _is_explicit_python_interpreter(executable: str) -> bool:
-    """Allow only literal Python interpreter tokens, not path/basename lookalikes."""
+    """Allow literal Python interpreter tokens, not path/basename lookalikes."""
     token = str(executable or "").strip().lower()
     if not token:
         return False
@@ -228,7 +182,7 @@ def _is_explicit_python_interpreter(executable: str) -> bool:
 
 
 def _normalize_safe_shell_subject(raw_cmd: Any) -> str:
-    """Return the canonical safe subject for deterministic shell allowlisting."""
+    """Return the canonical safe subject for shell allowlisting."""
     argv = _split_shell_command(raw_cmd)
     if not argv:
         return ""
@@ -245,22 +199,17 @@ def _normalize_safe_shell_subject(raw_cmd: Any) -> str:
                 return _SAFE_PYTHON_MODULE_ALIASES.get(module, "")
             if part_str == "-c":
                 break
-            # The moment we see a positional argument (typically a script
-            # path), further ``-m`` / ``-c`` tokens belong to that script,
-            # not to the Python interpreter. Stop here so a malicious
-            # ``python malicious.py -m pytest`` cannot bypass the LLM check.
+            # After a script path, later -m/-c belongs to that script.
             if not part_str.startswith("-"):
                 break
-            # Bare ``--`` terminator — anything after belongs to the script.
+            # After --, everything belongs to the script.
             if part_str == "--":
                 break
 
     return ""
 
 
-# ---------------------------------------------------------------------------
-# LLM check plumbing
-# ---------------------------------------------------------------------------
+# LLM check plumbing.
 
 def _get_safety_prompt() -> str:
     """Load the safety system prompt from prompts/SAFETY.md."""
@@ -276,13 +225,9 @@ def _get_safety_prompt() -> str:
         )
 
 
-# ---------------------------------------------------------------------------
-# Secret redaction
-# ---------------------------------------------------------------------------
+# Secret redaction.
 
-# Segment-level secret key names. Matching is whole-segment (after splitting
-# the key on ``_``/``-``) to avoid false positives like ``override_author``
-# which contains the substring ``auth`` but is not a credential carrier.
+# Segment matching avoids false positives like ``override_author``.
 _SECRET_KEY_SEGMENTS = frozenset({
     "key",  # only together with prefix segment — see _is_secret_key
     "apikey",
@@ -296,8 +241,7 @@ _SECRET_KEY_SEGMENTS = frozenset({
     "authorization",
 })
 
-# Prefix+suffix shapes treated as credential keys regardless of split (e.g.
-# ``api_key`` → segments {"api","key"} which _is_secret_key combines).
+# Prefix+suffix shapes treated as credential keys.
 _SECRET_KEY_COMBO = frozenset({
     ("api", "key"),
     ("access", "key"),
@@ -310,12 +254,7 @@ _SECRET_KEY_COMBO = frozenset({
 
 
 def _is_secret_key(key: str) -> bool:
-    """Segment-aware credential-key classifier.
-
-    Splits on ``_`` / ``-`` and matches only whole segments so that keys
-    whose name merely contains a credential substring (``override_author``,
-    ``authored``, ``coauthor``) are not over-redacted.
-    """
+    """Segment-aware credential-key classifier."""
     segments = [s for s in re.split(r"[_\-]+", str(key).lower()) if s]
     if not segments:
         return False
@@ -325,21 +264,11 @@ def _is_secret_key(key: str) -> bool:
     for i in range(len(segments) - 1):
         if (segments[i], segments[i + 1]) in _SECRET_KEY_COMBO:
             return True
-    # ``apikey`` (no separator) handled by segment set above. ``password``,
-    # ``secret`` etc. caught above. ``key`` alone is too ambiguous (matches
-    # e.g. ``primary_key`` on a DB row) so it only counts in combinations.
+    # ``key`` alone is too ambiguous; count it only in combinations.
     return False
 
-# Inline patterns for known secret shapes (Bearer headers, OpenAI/GitHub tokens,
-# Anthropic keys). Intentionally conservative: redact shape matches and let
-# the LLM reason about surrounding intent.
-# No leading/trailing ``\b`` on the `sk-` family — when a token sits flush
-# against more word characters (pathological `AAA…sk-TOKENBBB…` with no
-# whitespace), a word boundary would fail to match and the redaction
-# would leak. Over-redacting a few neighbouring word characters is
-# acceptable; under-redacting a credential is not. The Bearer and
-# api_key patterns keep their leading ``\b`` since those prefixes
-# starting mid-word would be a false positive.
+# Known inline secret shapes. Do not boundary-anchor sk-/pk-/rk-/gh* tokens:
+# over-redaction is acceptable, under-redaction is not.
 _SECRET_INLINE_PATTERNS = (
     re.compile(r"(sk|pk|rk|gh[opsu])[-_][A-Za-z0-9_\-]{16,}"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{16,}", re.IGNORECASE),
@@ -357,13 +286,7 @@ def _redact_secret_value(value: Any) -> Any:
 
 
 def _redact_secrets_in_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of arguments with secret-like key values redacted.
-
-    Also applies inline-secret-shape scrubbing to every string leaf (including
-    strings inside nested lists/tuples — e.g. ``cmd=["curl","-H","Authorization: Bearer …"]``)
-    and renders non-JSON-serializable values as ``repr`` strings so the safety
-    prompt can never TypeError on arbitrary tool arguments.
-    """
+    """Redact secret-like keys and inline secret shapes from tool arguments."""
     def _walk(value: Any) -> Any:
         if isinstance(value, dict):
             out = {}
@@ -379,15 +302,13 @@ def _redact_secrets_in_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
             return _redact_secrets_in_text(value)
         if isinstance(value, (int, float, bool)) or value is None:
             return value
-        # Fall back to repr for objects that don't JSON-serialize cleanly;
-        # scrub inline shapes out of the repr too in case it contains a token.
+        # Repr fallback is also scrubbed in case it contains a token.
         return _redact_secrets_in_text(repr(value))
 
     try:
         return _walk(arguments)
     except Exception:
-        # Last-ditch fallback — never let secret redaction itself crash the
-        # safety path (would lock the agent out of every unknown tool).
+        # Never let redaction itself block every unknown tool.
         return {"_redacted": "[REDACTION_FAILED]"}
 
 
@@ -400,12 +321,7 @@ def _redact_secrets_in_text(text: str) -> str:
 
 
 def _format_messages_for_safety(messages: List[Dict[str, Any]]) -> str:
-    """Format conversation messages into a compact context string for the safety LLM.
-
-    Secrets are redacted BEFORE truncation so a token-like substring that
-    crosses the 500-char boundary cannot be split into a non-matching
-    fragment and leak to the external safety model.
-    """
+    """Format compact safety context, redacting before truncation."""
     parts = []
     for m in messages:
         role = m.get("role", "?")
@@ -495,21 +411,7 @@ def _any_local_routing_enabled() -> bool:
 
 
 def _light_model_has_reachable_provider(light_model: str) -> bool:
-    """Return True iff the configured light model's provider has a usable
-    runtime configuration (API key AND any additional prerequisites).
-
-    When ``OUROBOROS_MODEL_LIGHT`` is prefixed (``anthropic::…``,
-    ``openai::…``, ``openai-compatible::…``, ``cloudru::…``) it routes
-    directly to that provider regardless of whether another remote key
-    like ``OPENROUTER_API_KEY`` is set. Without this check, a config
-    combining OpenRouter-only credentials with a direct-provider light
-    model would hit the direct path, raise on missing key, and
-    ``SAFETY_VIOLATION`` every ``POLICY_CHECK`` call.
-
-    For ``openai-compatible`` we also require ``OPENAI_COMPATIBLE_BASE_URL``
-    (or legacy ``OPENAI_BASE_URL``) since ``LLMClient._resolve_remote_target``
-    will raise without it — an API key alone is not enough.
-    """
+    """Return whether the light model's direct provider config is reachable."""
     try:
         from ouroboros.pricing import infer_api_key_type
         key_type = infer_api_key_type(light_model)
@@ -531,35 +433,18 @@ def _light_model_has_reachable_provider(light_model: str) -> bool:
 
 
 def _resolve_safety_routing() -> Tuple[bool, bool, Optional[str]]:
-    """Decide whether the safety LLM call should go to local or remote.
-
-    Returns ``(use_local, is_fallback, skip_reason)``.
-
-    - ``skip_reason`` is non-None when no reachable safety backend exists;
-      the caller fails open with a SAFETY_WARNING.
-    - ``is_fallback`` is True when local was chosen only because no reachable
-      remote light-model provider is configured (either no remote keys at
-      all, or the configured light-model's provider key is missing). In that
-      case a local transport failure must also fail open — blocking would
-      recreate the tool-creation friction this refactor set out to remove.
-      When ``USE_LOCAL_LIGHT`` is explicitly opted in, local is primary and
-      ``is_fallback`` is False; a local failure is a real config error.
-    """
+    """Choose local/remote safety backend; unreachable fallback fails open."""
     if str(os.environ.get("USE_LOCAL_LIGHT", "") or "").lower() in ("true", "1"):
         return True, False, None
 
     light_model = get_light_model()
 
     if _any_remote_provider_configured():
-        # The configured light model's provider must itself have a key,
-        # otherwise the direct-provider call will raise and turn every
-        # unknown-tool check into SAFETY_VIOLATION.
+        # The direct light-model provider needs its own key.
         if _light_model_has_reachable_provider(light_model):
             return False, False, None
         if _any_local_routing_enabled():
-            # Provider-mismatch: we route to local as a fallback so the
-            # check still runs somewhere, and mark it as fallback so a
-            # local transport failure is tolerated too.
+            # Provider mismatch: local is fallback, so local outage is tolerated.
             return True, True, None
         return False, False, (
             f"Light model provider key missing for {light_model} "
@@ -568,10 +453,7 @@ def _resolve_safety_routing() -> Tuple[bool, bool, Optional[str]]:
         )
 
     if _any_local_routing_enabled():
-        # Remote keys absent but operator has opted into local routing for
-        # some lane — route safety to local light too so unknown tools aren't
-        # hard-blocked on local-only configs. Fallback semantics apply so a
-        # local transport failure still fails open.
+        # Local-only configs should warn, not hard-block, on local outage.
         return True, True, None
 
     return False, False, (
@@ -619,13 +501,7 @@ def _run_llm_check(
             use_local=_use_local_light,
         )
     except Exception as e:
-        # When the local branch was only chosen as a fallback (because no
-        # reachable light-model backend exists), a local runtime outage must
-        # not turn every unknown-tool call into SAFETY_VIOLATION — that would
-        # hard-block the agent on any degraded config. Fail open with a
-        # visible warning; the hardcoded sandbox still applies to every call,
-        # and claude_code_edit's post-execution revert still applies to that
-        # specific tool.
+        # Fallback local outage warns instead of blocking all unknown tools.
         if _use_local_light and _is_local_fallback:
             log.warning(
                 "Safety local-fallback LLM call failed for %s (%s); proceeding with warning",
@@ -639,9 +515,7 @@ def _run_llm_check(
         return False, f"⚠️ SAFETY_VIOLATION: Safety check failed with error: {e}"
 
     if usage:
-        # Prefer the provider-canonical identity returned by the LLM client over
-        # the raw env/request model string so cost estimation and usage events
-        # match the contract used elsewhere in the repo (plan_review, review).
+        # Use provider-canonical model identity for cost/events.
         resolved_model = str(usage.get("resolved_model") or light_model)
         if _use_local_light:
             provider = "local"
@@ -658,9 +532,7 @@ def _run_llm_check(
                 int(usage.get("cached_tokens") or 0),
                 int(usage.get("cache_write_tokens") or 0),
             )
-            # Populate the estimate back into the usage dict so the
-            # update_budget_from_usage fallback below (when there is no
-            # event_queue to emit through) still attributes the spend.
+            # Budget fallback below needs cost in the usage dict.
             usage["cost"] = cost
         _eq = getattr(ctx, "event_queue", None) if ctx is not None else None
         if _eq is not None:
@@ -694,7 +566,7 @@ def _run_llm_check(
             f"The command was allowed, but consider whether this is the right approach."
         )
 
-    # DANGEROUS (or any unrecognised status — fail safe)
+    # DANGEROUS or unrecognised status: fail safe.
     log.error(f"Safety check blocked {tool_name}: {reason}")
     return False, (
         f"⚠️ SAFETY_VIOLATION: The Safety Supervisor blocked this command.\n"
@@ -703,9 +575,7 @@ def _run_llm_check(
     )
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+# Public entry point.
 
 def check_safety(
     tool_name: str,
@@ -713,15 +583,8 @@ def check_safety(
     messages: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Any] = None,
 ) -> Tuple[bool, str]:
-    """Check if a tool call is safe to execute.
-
-    Returns:
-      (True, "")           — SAFE
-      (True, warning_str)  — SUSPICIOUS (proceed, but warning is passed to agent)
-      (False, error_str)   — DANGEROUS (blocked)
-    """
-    # Defensive: arguments can be None when the LLM serializes a tool call
-    # with no parameters — ``.get()`` on that would AttributeError.
+    """Return ``(allowed, warning_or_error)`` for one tool call."""
+    # Arguments can be None for no-parameter tool calls.
     tool_name = str(tool_name or "").strip()
     arguments = arguments or {}
     policy = TOOL_POLICY.get(tool_name, DEFAULT_POLICY)
@@ -730,11 +593,9 @@ def check_safety(
         return True, ""
 
     if policy == POLICY_CHECK_CONDITIONAL:
-        # Currently only run_shell uses this policy.
         raw_cmd = arguments.get("cmd", arguments.get("command", ""))
         if _normalize_safe_shell_subject(raw_cmd):
             return True, ""
         return _run_llm_check(tool_name, arguments, messages, ctx)
 
-    # POLICY_CHECK (explicit) or DEFAULT_POLICY (unknown tool).
     return _run_llm_check(tool_name, arguments, messages, ctx)

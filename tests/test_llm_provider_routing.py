@@ -1,5 +1,6 @@
 import pytest
 import ouroboros.pricing as pricing_module
+from unittest.mock import patch
 from ouroboros.llm import LLMClient
 
 
@@ -111,6 +112,208 @@ def test_build_remote_kwargs_deduplicates_tool_names_for_openrouter():
     assert kwargs["tools"][0]["function"]["description"] == "first"
 
 
+def test_openrouter_reasoning_returned_by_default_and_env_disables(monkeypatch):
+    client = LLMClient()
+    monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)
+    target = client._resolve_remote_target("anthropic/claude-sonnet-4.6")
+
+    monkeypatch.delenv("OUROBOROS_RETURN_REASONING", raising=False)
+    default_kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "high",
+        512,
+        "auto",
+        None,
+        None,
+    )
+
+    assert default_kwargs["extra_body"]["reasoning"] == {"effort": "high", "exclude": False}
+
+    monkeypatch.setenv("OUROBOROS_RETURN_REASONING", "false")
+    disabled_kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "high",
+        512,
+        "auto",
+        None,
+        None,
+    )
+
+    assert disabled_kwargs["extra_body"]["reasoning"] == {"effort": "high", "exclude": True}
+
+    monkeypatch.setenv("OUROBOROS_RETURN_REASONING", "")
+    empty_disabled_kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "high",
+        512,
+        "auto",
+        None,
+        None,
+    )
+
+    assert empty_disabled_kwargs["extra_body"]["reasoning"] == {"effort": "high", "exclude": True}
+
+
+def test_non_openrouter_payload_strips_reasoning_roundtrip_metadata(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    client = LLMClient()
+    messages = [
+        {"role": "user", "content": "inspect"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "reasoning": "read first",
+            "reasoning_details": [{"type": "reasoning.text", "text": "read first"}],
+            "response_id": "gen-123",
+        },
+    ]
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("openai::gpt-5.2"),
+        messages,
+        "medium",
+        512,
+        "auto",
+        None,
+        None,
+    )
+
+    assistant_msg = kwargs["messages"][1]
+    assert "reasoning" not in assistant_msg
+    assert "reasoning_details" not in assistant_msg
+    assert "response_id" not in assistant_msg
+    assert messages[1]["reasoning_details"] == [{"type": "reasoning.text", "text": "read first"}]
+
+
+def test_openrouter_payload_keeps_reasoning_roundtrip_metadata(monkeypatch):
+    client = LLMClient()
+    monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)
+    messages = [
+        {"role": "user", "content": "inspect"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "reasoning": "read first",
+            "reasoning_details": [{"type": "reasoning.text", "text": "read first"}],
+            "response_id": "gen-123",
+        },
+    ]
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("anthropic/claude-sonnet-4.6"),
+        messages,
+        "medium",
+        512,
+        "auto",
+        None,
+        None,
+    )
+
+    assistant_msg = kwargs["messages"][1]
+    assert assistant_msg["reasoning"] == "read first"
+    assert assistant_msg["reasoning_details"] == [{"type": "reasoning.text", "text": "read first"}]
+    assert assistant_msg["response_id"] == "gen-123"
+
+
+def test_openrouter_gemini_preserves_message_cache_blocks_and_strips_tool_cache(monkeypatch):
+    client = LLMClient()
+    monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "stable", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"type": "text", "text": "dynamic"},
+            ],
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "alpha_tool",
+            "description": "a",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }]
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("google/gemini-3-flash-preview"),
+        messages,
+        "medium",
+        512,
+        "auto",
+        None,
+        tools,
+    )
+
+    assert isinstance(kwargs["messages"][0]["content"], list)
+    assert kwargs["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "ttl" not in kwargs["messages"][0]["content"][0]["cache_control"]
+    assert "cache_control" not in kwargs["tools"][0]
+    assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert tools[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    messages = [
+        {"role": "tool", "tool_call_id": "call-1", "content": [
+            {"type": "text", "text": "cached result", "cache_control": {"type": "ephemeral"}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}},
+        ]},
+    ]
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("openai/gpt-4.1"),
+        messages,
+        "medium",
+        512,
+        "auto",
+        None,
+        [{
+            "type": "function",
+            "function": {"name": "alpha_tool", "description": "a", "parameters": {"type": "object"}},
+            "cache_control": {"type": "ephemeral"},
+        }],
+    )
+
+    assert kwargs["messages"][0]["content"] == "cached result"
+    assert "cache_control" not in kwargs["messages"][1]["content"][0]
+    assert "cache_control" not in kwargs["tools"][0]
+    assert client._prompt_cache_ttl_from_payload(kwargs["messages"], kwargs["tools"]) is None
+    assert "cache_control" in messages[0]["content"][0]
+    assert "cache_control" in messages[1]["content"][0]
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("openai/gpt-4.1"),
+        [{"role": "user", "content": "hi"}],
+        "medium",
+        512,
+        "auto",
+        None,
+        [{
+            "type": "function",
+            "function": {
+                "name": "schema_tool",
+                "description": "schema property collision",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cache_control": {"type": "string"},
+                    },
+                },
+            },
+        }],
+    )
+    assert client._prompt_cache_ttl_from_payload(kwargs["messages"], kwargs["tools"]) is None
+
+
 def test_build_anthropic_tools_deduplicates_tool_names():
     tools = [
         {
@@ -140,6 +343,53 @@ def test_build_anthropic_tools_deduplicates_tool_names():
             "input_schema": {"type": "object", "properties": {}},
         }
     ]
+    sorted_tools = [
+        {"type": "function", "function": {"name": "zeta_tool", "description": "z", "parameters": {"type": "object"}}},
+        {"type": "function", "function": {"name": "alpha_tool", "description": "a", "parameters": {"type": "object"}}},
+    ]
+
+    anthropic_tools = LLMClient._build_anthropic_tools(sorted_tools, cache_control=True)
+
+    assert [tool["name"] for tool in anthropic_tools] == ["alpha_tool", "zeta_tool"]
+    assert "cache_control" not in anthropic_tools[0]
+    assert anthropic_tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_chat_anthropic_sends_tool_cache_control_without_ttl(monkeypatch):
+    from types import SimpleNamespace
+    import requests
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    captured = {}
+    fake_response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"content": [{"type": "text", "text": "ok"}], "usage": {}},
+    )
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda _url, headers=None, json=None, timeout=None: (
+            captured.update({"payload": json}) or fake_response
+        ),
+    )
+    client = LLMClient()
+    message, usage = client._chat_anthropic(
+        client._resolve_remote_target("anthropic::claude-sonnet-4.6"),
+        [{"role": "user", "content": "hi"}],
+        [
+            {"type": "function", "function": {"name": "zeta_tool", "description": "z", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "alpha_tool", "description": "a", "parameters": {"type": "object"}}},
+        ],
+        "medium",
+        128,
+        "auto",
+    )
+
+    assert message["content"] == "ok"
+    assert [tool["name"] for tool in captured["payload"]["tools"]] == ["alpha_tool", "zeta_tool"]
+    assert captured["payload"]["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "ttl" not in captured["payload"]["tools"][-1]["cache_control"]
+    assert usage["prompt_cache_ttl"] == "default"
 
 
 def test_resolve_anthropic_target_normalizes_direct_model(monkeypatch):
@@ -158,21 +408,22 @@ def test_normalize_anthropic_response_maps_tool_use(monkeypatch):
 
     client = LLMClient()
     target = client._resolve_remote_target("anthropic::claude-sonnet-4-6")
-    message, usage = client._normalize_anthropic_response(
-        {
-            "content": [
-                {"type": "text", "text": "Working on it."},
-                {"type": "tool_use", "id": "toolu_1", "name": "echo_tool", "input": {"text": "hello"}},
-            ],
-            "usage": {
-                "input_tokens": 11,
-                "output_tokens": 7,
-                "cache_read_input_tokens": 3,
-                "cache_creation_input_tokens": 2,
+    with patch("ouroboros.pricing.estimate_cost", return_value=0.012345):
+        message, usage = client._normalize_anthropic_response(
+            {
+                "content": [
+                    {"type": "text", "text": "Working on it."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "echo_tool", "input": {"text": "hello"}},
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cache_creation_input_tokens": 2,
+                },
             },
-        },
-        target,
-    )
+            target,
+        )
 
     assert message["content"] == "Working on it."
     assert message["tool_calls"][0]["function"]["name"] == "echo_tool"
@@ -181,6 +432,7 @@ def test_normalize_anthropic_response_maps_tool_use(monkeypatch):
     assert usage["resolved_model"] == "anthropic/claude-sonnet-4-6"
     assert usage["cached_tokens"] == 3
     assert usage["cache_write_tokens"] == 2
+    assert usage["cost_estimated"] is True
 
 
 def test_build_anthropic_messages_preserves_system_blocks_and_cache_control(monkeypatch):
@@ -199,7 +451,7 @@ def test_build_anthropic_messages_preserves_system_blocks_and_cache_control(monk
     ])
 
     assert system_blocks == [
-        {"type": "text", "text": "stable", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": "dynamic"},
     ]
     assert anthropic_messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
@@ -238,8 +490,8 @@ def test_normalize_remote_response_estimates_cost_for_direct_openai(monkeypatch)
     target = client._resolve_remote_target("openai::gpt-5.2")
     seen = {}
 
-    def fake_estimate_cost(model, prompt_tokens, completion_tokens, cached_tokens=0, cache_write_tokens=0):
-        seen["args"] = (model, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens)
+    def fake_estimate_cost(model, prompt_tokens, completion_tokens, cached_tokens=0, cache_write_tokens=0, prompt_cache_ttl=None):
+        seen["args"] = (model, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, prompt_cache_ttl)
         return 0.123456
 
     monkeypatch.setattr(pricing_module, "estimate_cost", fake_estimate_cost)
@@ -250,7 +502,7 @@ def test_normalize_remote_response_estimates_cost_for_direct_openai(monkeypatch)
             "usage": {
                 "prompt_tokens": 100,
                 "completion_tokens": 40,
-                "prompt_tokens_details": {"cached_tokens": 10},
+                "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 5},
             },
         },
         target,
@@ -260,8 +512,37 @@ def test_normalize_remote_response_estimates_cost_for_direct_openai(monkeypatch)
     assert usage["provider"] == "openai"
     assert usage["resolved_model"] == "openai/gpt-5.2"
     assert usage["cached_tokens"] == 10
+    assert usage["cache_write_tokens"] == 5
     assert usage["cost"] == 0.123456
-    assert seen["args"] == ("openai/gpt-5.2", 100, 40, 10, 0)
+    assert usage["cost_estimated"] is True
+    assert seen["args"] == ("openai/gpt-5.2", 100, 40, 10, 5, None)
+
+
+def test_normalize_remote_response_preserves_reasoning_and_response_id():
+    client = LLMClient()
+    target = client._resolve_remote_target("anthropic/claude-sonnet-4.6")
+    message, usage = client._normalize_remote_response(
+        {
+            "id": "gen-123",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+                    "reasoning": "look up the file",
+                    "reasoning_details": [{"type": "reasoning.text", "text": "look up the file"}],
+                },
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        },
+        target,
+        skip_cost_fetch=True,
+    )
+
+    assert message["response_id"] == "gen-123"
+    assert message["reasoning"] == "look up the file"
+    assert message["reasoning_details"] == [{"type": "reasoning.text", "text": "look up the file"}]
+    assert usage["provider"] == "openrouter"
 
 
 def test_build_anthropic_messages_rejects_tool_result_without_tool_call_id(monkeypatch):

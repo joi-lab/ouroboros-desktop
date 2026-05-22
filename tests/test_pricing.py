@@ -14,6 +14,7 @@ from ouroboros.pricing import (
     emit_llm_usage_event,
     get_pricing,
 )
+from ouroboros.llm import fetch_openrouter_pricing
 
 # The fetch function lives in ouroboros.llm but is imported dynamically
 # inside get_pricing(). We must mock it at its source module.
@@ -44,6 +45,57 @@ class TestEstimateCost:
         expected = (2000 * 3.0 + 8000 * 0.30 + 1000 * 15.0) / 1e6
         assert abs(cost - expected) < 1e-6
 
+    def test_cache_write_tokens_are_subtracted_from_regular_input(self):
+        with patch("ouroboros.pricing.get_pricing", return_value={
+            "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
+        }):
+            cost = estimate_cost(
+                "anthropic/claude-sonnet-4.6",
+                prompt_tokens=10000, completion_tokens=1000,
+                cached_tokens=3000, cache_write_tokens=2000,
+            )
+        # 5000 regular input + 3000 cached reads + 2000 cache writes at 1.25x + output
+        expected = (5000 * 3.0 + 3000 * 0.30 + 2000 * (3.0 * 1.25) + 1000 * 15.0) / 1e6
+        assert abs(cost - expected) < 1e-6
+
+    def test_anthropic_one_hour_cache_write_multiplier(self):
+        with patch("ouroboros.pricing.get_pricing", return_value={
+            "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
+        }):
+            cost = estimate_cost(
+                "anthropic/claude-sonnet-4.6",
+                prompt_tokens=2000, completion_tokens=0,
+                cached_tokens=0, cache_write_tokens=2000,
+                prompt_cache_ttl="1h",
+            )
+        expected = 2000 * (3.0 * 2.0) / 1e6
+        assert abs(cost - expected) < 1e-6
+
+    def test_non_anthropic_cache_write_defaults_to_input_price(self):
+        with patch("ouroboros.pricing.get_pricing", return_value={
+            "google/gemini-3-flash-preview": (0.15, 0.015, 0.60),
+        }):
+            cost = estimate_cost(
+                "google/gemini-3-flash-preview",
+                prompt_tokens=2000, completion_tokens=0,
+                cached_tokens=0, cache_write_tokens=1000,
+            )
+        expected = (1000 * 0.15 + 1000 * 0.15) / 1e6
+        assert abs(cost - expected) < 1e-6
+
+    def test_explicit_cache_write_price_overrides_fallback(self):
+        with patch("ouroboros.pricing.get_pricing", return_value={
+            "provider/model": (1.0, 0.2, 1.7, 3.0),
+        }):
+            cost = estimate_cost(
+                "provider/model",
+                prompt_tokens=3000, completion_tokens=1000,
+                cached_tokens=500, cache_write_tokens=1000,
+                prompt_cache_ttl="1h",
+            )
+        expected = (1500 * 1.0 + 500 * 0.2 + 1000 * 1.7 + 1000 * 3.0) / 1e6
+        assert abs(cost - expected) < 1e-6
+
     def test_unknown_model_returns_zero(self):
         cost = estimate_cost("unknown/model-xyz", 1000, 500)
         assert cost == 0.0
@@ -71,10 +123,10 @@ class TestEstimateCost:
         expected = 200 * 0.30 / 1e6
         assert abs(cost - expected) < 1e-6
 
-    def test_all_static_models_have_three_tuple(self):
-        """Every entry in MODEL_PRICING_STATIC is (input, cached, output)."""
+    def test_all_static_models_have_valid_pricing_tuple(self):
+        """Every static entry is (input, cached, output) or (input, cached, write, output)."""
         for model, prices in MODEL_PRICING_STATIC.items():
-            assert len(prices) == 3, f"{model} has {len(prices)} prices, expected 3"
+            assert len(prices) in {3, 4}, f"{model} has {len(prices)} prices, expected 3 or 4"
             assert all(isinstance(p, (int, float)) for p in prices), f"{model} has non-numeric prices"
             assert all(p >= 0 for p in prices), f"{model} has negative prices"
 
@@ -181,6 +233,20 @@ class TestEmitLlmUsageEvent:
         assert event["provider"] == "openai"
         assert event["api_key_type"] == "openai"
 
+    def test_cost_estimated_override_survives_usage_cost(self):
+        q = queue.Queue()
+        emit_llm_usage_event(
+            event_queue=q,
+            task_id="test-123",
+            model="anthropic/claude-sonnet-4.6",
+            usage={"prompt_tokens": 100, "completion_tokens": 50, "cost": 0.01},
+            cost=0.01,
+            cost_estimated=True,
+        )
+
+        event = q.get_nowait()
+        assert event["cost_estimated"] is True
+
     def test_none_queue_no_error(self):
         # Should silently do nothing
         emit_llm_usage_event(None, "t", "m", {}, 0.0)
@@ -231,6 +297,31 @@ class TestGetPricing:
         assert "provider/model-0" in pricing
         # Static entries still present
         assert "anthropic/claude-sonnet-4.6" in pricing
+
+    def test_fetch_openrouter_pricing_maps_cache_write_price(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "data": [
+                        {
+                            "id": "google/gemini-test",
+                            "pricing": {
+                                "prompt": "0.000001",
+                                "input_cache_read": "0.0000001",
+                                "input_cache_write": "0.00000125",
+                                "completion": "0.000003",
+                            },
+                        }
+                    ] * 6
+                }
+
+        with patch("requests.get", return_value=FakeResponse()):
+            pricing = fetch_openrouter_pricing()
+
+        assert pricing["google/gemini-test"] == (1.0, 0.1, 1.25, 3.0)
 
     def test_caches_after_successful_fetch(self):
         import ouroboros.pricing as mod

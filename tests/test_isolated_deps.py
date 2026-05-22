@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import subprocess
 
 from ouroboros.marketplace.install_specs import normalize_install_specs
-from ouroboros.marketplace.isolated_deps import _installer_env, _run, augment_env_for_skill_deps
+from ouroboros.marketplace.isolated_deps import (
+    DEPS_STATE_FILENAME,
+    FINGERPRINT_FILENAME,
+    _installer_env,
+    _run,
+    augment_env_for_skill_deps,
+    isolated_env_dir,
+    read_deps_state,
+)
+from ouroboros.skill_loader import skill_state_dir
 
 
 def test_installer_env_scrubs_secret_keys_and_uses_isolated_home(monkeypatch, tmp_path):
@@ -45,6 +55,24 @@ def test_augment_env_exposes_python_venv_and_node_path(tmp_path):
     assert str(py_bin) in env["PATH"]
     assert env["VIRTUAL_ENV"].startswith(str(skill_dir / ".ouroboros_env" / "python"))
     assert env["NODE_PATH"] == str(node_modules)
+
+
+def test_read_deps_state_verifies_live_env_fingerprint(tmp_path):
+    drive_root = tmp_path / "drive"
+    skill_dir = tmp_path / "skill"
+    state_dir = skill_state_dir(drive_root, "skill")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = {"status": "installed", "specs_hash": "abc"}
+    (state_dir / DEPS_STATE_FILENAME).write_text(json.dumps(state), encoding="utf-8")
+
+    assert read_deps_state(drive_root, "skill")["status"] == "installed"
+    assert read_deps_state(drive_root, "skill", skill_dir)["status"] == "missing"
+
+    env_dir = isolated_env_dir(skill_dir)
+    env_dir.mkdir(parents=True)
+    (env_dir / FINGERPRINT_FILENAME).write_text(json.dumps(state), encoding="utf-8")
+
+    assert read_deps_state(drive_root, "skill", skill_dir)["status"] == "installed"
 
 
 def test_run_discards_unbounded_installer_output(monkeypatch, tmp_path):

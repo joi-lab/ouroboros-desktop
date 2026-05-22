@@ -1,10 +1,3 @@
-"""
-Ouroboros context builder.
-
-Assembles LLM context from prompts, memory, logs, and runtime state.
-Extracted from agent.py to keep the agent thin and focused.
-"""
-
 from __future__ import annotations
 
 import json
@@ -18,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ouroboros.utils import (
     utc_now_iso, read_text, estimate_tokens, get_git_info,
-    truncate_review_artifact, read_json_dict,
+    truncate_review_artifact, read_json_dict, iter_jsonl_objects,
 )
 from ouroboros.memory import Memory
 
@@ -29,58 +22,37 @@ _LARGE_CONTEXT_SECTION_CHARS = 200_000
 def _chat_log_signature_matches(expected: Any, current: Dict[str, Any]) -> bool:
     if not isinstance(expected, dict) or not current:
         return False
-    if expected.get("first_line_sha256") != current.get("first_line_sha256"):
-        return False
     try:
-        return int(current.get("size") or 0) >= int(expected.get("size") or 0)
+        return (
+            expected.get("first_line_sha256") == current.get("first_line_sha256")
+            and int(current.get("size") or 0) >= int(expected.get("size") or 0)
+        )
     except (TypeError, ValueError):
         return False
 
 
 def build_user_content(task: Dict[str, Any]) -> Any:
-    """Build user message content. Supports text + optional image."""
     text = task.get("text", "")
     image_b64 = task.get("image_base64")
-    image_mime = task.get("image_mime", "image/jpeg")
-    image_caption = task.get("image_caption", "")
 
     if not image_b64:
-        # Return fallback text if both text and image are empty
-        if not text:
-            return "(empty message)"
-        return text
+        return text or "(empty message)"
 
-    # Multipart content with text + image
-    parts = []
-    # Combine caption and text for the text part
-    combined_text = ""
-    if image_caption:
-        combined_text = image_caption
-    if text and text != image_caption:
-        combined_text = (combined_text + "\n" + text).strip() if combined_text else text
-
-    # Always include a text part when there's an image
-    if not combined_text:
-        combined_text = "Analyze the screenshot"
-
-    parts.append({"type": "text", "text": combined_text})
-    parts.append({
-        "type": "image_url",
-        "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}
-    })
-    return parts
+    image_caption = task.get("image_caption", "")
+    combined_text = "\n".join(part for part in (image_caption, text if text != image_caption else "") if part) or "Analyze the screenshot"
+    return [
+        {"type": "text", "text": combined_text},
+        {"type": "image_url", "image_url": {"url": f"data:{task.get('image_mime', 'image/jpeg')};base64,{image_b64}"}},
+    ]
 
 
 def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
-    """Build the runtime context section (utc_now, repo_dir, drive_root, git_head, git_branch, task info, budget info)."""
-    # --- Git context ---
     try:
         git_branch, git_sha = get_git_info(env.repo_dir)
     except Exception:
         log.debug("Failed to get git info for context", exc_info=True)
         git_branch, git_sha = "unknown", "unknown"
 
-    # --- Budget calculation ---
     budget_info = None
     try:
         state_json = safe_read(env.drive_path("state/state.json"), fallback="{}")
@@ -91,10 +63,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
         budget_info = {"total_usd": total_usd, "spent_usd": spent_usd, "remaining_usd": remaining_usd}
     except Exception:
         log.debug("Failed to calculate budget info for context", exc_info=True)
-        pass
 
-    # --- Runtime context JSON ---
-    _is_desktop = bool(os.environ.get("OUROBOROS_DESKTOP_MODE", ""))
     try:
         from ouroboros.config import get_runtime_mode
         runtime_mode = get_runtime_mode()
@@ -107,12 +76,27 @@ def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
         "git_head": git_sha,
         "git_branch": git_branch,
         "runtime_mode": runtime_mode,
-        "task": {"id": task.get("id"), "type": task.get("type")},
-        "runtime_env": {
-            "is_desktop": _is_desktop,
-            "platform": sys.platform,
+        "task": {
+            "id": task.get("id"),
+            "type": task.get("type"),
+            "parent_task_id": task.get("parent_task_id"),
+            "root_task_id": task.get("root_task_id"),
+            "session_id": task.get("session_id"),
+            "actor_id": task.get("actor_id"),
+            "delegation_role": task.get("delegation_role"),
         },
+        "runtime_env": {"is_desktop": bool(os.environ.get("OUROBOROS_DESKTOP_MODE", "")), "platform": sys.platform},
     }
+    if str(task.get("workspace_root") or "").strip():
+        runtime_data["active_workspace"] = {
+            "workspace_root": str(task.get("workspace_root") or ""),
+            "workspace_mode": str(task.get("workspace_mode") or ""),
+            "memory_mode": str(task.get("memory_mode") or ""),
+            "rule": (
+                "repo_read/repo_write/repo_list/code_search/run_shell target the active workspace; "
+                "Ouroboros self-review/commit tools are unavailable; final changes are exported as artifacts."
+            ),
+        }
     if str(runtime_mode).lower() == "light":
         runtime_data["runtime_mode_rule"] = (
             "light mode forbids Ouroboros repo mutation; scoped edits under "
@@ -130,7 +114,6 @@ def build_knowledge_sections(
     warn_large: bool = False,
     pattern_header: str = "## Known error patterns (Pattern Register)",
 ) -> List[str]:
-    """Build durable knowledge sections shared by task and consciousness context."""
     sections: List[str] = []
     for rel_path, header, label in (
         ("memory/knowledge/index-full.md", "## Knowledge base", "knowledge index"),
@@ -145,11 +128,23 @@ def build_knowledge_sections(
     return sections
 
 
-_SECTION_BUDGETS = {
-    "scratchpad": 90_000,
-    "identity": 80_000,
-    "registry": 30_000,
-}
+def build_governance_sections(env: Any, *, warn_large: bool = False, warn_label: str = "context") -> List[str]:
+    sections: List[str] = []
+    for rel_path, header, required in (
+        ("BIBLE.md", "## BIBLE.md", False),
+        ("docs/ARCHITECTURE.md", "## ARCHITECTURE.md", True),
+    ):
+        text = safe_read(env.repo_path(rel_path))
+        if text:
+            if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
+                log.warning("%s: %s is large (%d chars)", warn_label, rel_path, len(text))
+            sections.append(f"{header}\n\n{text}")
+        elif required:
+            log.warning("%s: %s not found or empty", warn_label, rel_path)
+    return sections
+
+
+_SECTION_BUDGETS = {"scratchpad": 90_000, "identity": 80_000, "registry": 30_000}
 
 
 def _warn_if_over_budget(name: str, content: str) -> None:
@@ -159,17 +154,13 @@ def _warn_if_over_budget(name: str, content: str) -> None:
 
 
 def _parse_budget_chars(raw: str) -> Optional[int]:
-    token = str(raw or "").strip().lower()
-    token = token.replace("chars", "").replace("char", "").strip()
-    token = token.replace(",", "").replace("_", "")
+    token = str(raw or "").strip().lower().replace("chars", "").replace("char", "").strip().replace(",", "").replace("_", "")
     if token.endswith("k"):
         try:
             return int(float(token[:-1]) * 1000)
         except ValueError:
             return None
-    if token.isdigit():
-        return int(token)
-    return None
+    return int(token) if token.isdigit() else None
 
 
 def _parse_file_size_budgets(dev_text: str) -> List[Tuple[str, int]]:
@@ -195,7 +186,7 @@ def _parse_file_size_budgets(dev_text: str) -> List[Tuple[str, int]]:
 
 
 def _iter_budget_paths(root: pathlib.Path, pattern: str) -> List[pathlib.Path]:
-    if "*" in pattern or "?" in pattern or "[" in pattern:
+    if any(marker in pattern for marker in "*?["):
         return sorted(p for p in root.glob(pattern) if p.is_file())
     path = root / pattern
     return [path] if path.exists() and path.is_file() else []
@@ -231,13 +222,6 @@ def _append_file_size_budget_checks(env: Any, checks: List[str]) -> None:
 
 
 def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
-    """Build memory sections, optionally partitioned by volatility.
-
-    partition:
-      - "all": scratchpad, identity, dialogue, registry (legacy/default)
-      - "stable": identity only
-      - "volatile": scratchpad and dialogue only (registry digest is injected separately)
-    """
     sections = []
 
     include_stable = partition in {"all", "stable"}
@@ -246,49 +230,26 @@ def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
     if include_volatile:
         scratchpad_raw = memory.load_scratchpad()
         _warn_if_over_budget("scratchpad", scratchpad_raw)
-        # Annotate the header so the agent knows scratchpad is already in
-        # context — re-reading via repo_read("scratchpad.md") or data_read
-        # wastes rounds. Companion guard: tools/core.py::_repo_read returns
-        # a NOT_FOUND hint when the agent tries it anyway.
-        sections.append(
-            "## Scratchpad (from `memory/scratchpad.md` — already loaded; "
-            "do not re-read via repo_read or data_read)\n\n" + scratchpad_raw
-        )
+        sections.append("## Scratchpad (from `memory/scratchpad.md` — already loaded; do not re-read via repo_read or data_read)\n\n" + scratchpad_raw)
 
     if include_stable:
         identity_raw = memory.load_identity()
         _warn_if_over_budget("identity", identity_raw)
-        sections.append(
-            "## Identity (from `memory/identity.md` — already loaded; "
-            "do not re-read via repo_read or data_read)\n\n" + identity_raw
-        )
+        sections.append("## Identity (from `memory/identity.md` — already loaded; do not re-read via repo_read or data_read)\n\n" + identity_raw)
         world_raw = memory.load_world_profile().strip()
         if world_raw:
             world_text = truncate_review_artifact(world_raw, limit=4096)
-            sections.append(
-                "## Environment Profile (from `memory/WORLD.md` — already loaded; "
-                "delete WORLD.md and restart to regenerate if the host environment changes)\n\n"
-                + world_text
-            )
+            sections.append("## Environment Profile (from `memory/WORLD.md` — already loaded; delete WORLD.md and restart to regenerate if the host environment changes)\n\n" + world_text)
 
     if include_volatile:
         dialogue_blocks = memory.load_dialogue_blocks()
-        summary_path = memory.drive_root / "memory" / "dialogue_summary.md"
-        summary_text = ""
-        if summary_path.exists():
-            summary_text = read_text(summary_path)
         if dialogue_blocks:
             blocks_md = memory.format_blocks_as_markdown(dialogue_blocks)
             if blocks_md.strip():
                 sections.append("## Dialogue History\n\n" + blocks_md)
-            if summary_text.strip():
-                sections.append(
-                    "## Retired legacy dialogue summary (read-only historical fallback)\n\n"
-                    + summary_text
-                )
-        else:
-            if summary_text.strip():
-                sections.append("## Dialogue Summary\n\n" + summary_text)
+        legacy_summary = safe_read(memory.drive_root / "memory" / "dialogue_summary.md").strip()
+        if legacy_summary:
+            sections.append("## Legacy Dialogue Summary (retired flat format, read-only fallback)\n\n" + legacy_summary)
 
     if partition == "all":
         registry_path = memory.drive_root / "memory" / "registry.md"
@@ -302,7 +263,6 @@ def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
 
 
 def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -> str:
-    """Format recent execution reflections for dynamic context."""
     if not entries:
         return ""
 
@@ -346,7 +306,6 @@ def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -
 
 
 def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[str]:
-    """Build recent dialogue and process-memory sections."""
     sections = []
 
     dialogue_meta = memory.load_dialogue_meta()
@@ -372,26 +331,17 @@ def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[s
     if chat_summary:
         sections.append("## Recent chat\n\n" + chat_summary)
 
-    progress_entries = memory.read_jsonl_tail("progress.jsonl", 200)
-    if task_id:
-        progress_entries = [e for e in progress_entries if str(e.get("task_id", "")).strip() == task_id]
-    progress_summary = memory.summarize_progress(progress_entries, limit=50)
-    if progress_summary:
-        sections.append("## Recent progress\n\n" + progress_summary)
-
-    tools_entries = memory.read_jsonl_tail("tools.jsonl", 200)
-    if task_id:
-        tools_entries = [e for e in tools_entries if str(e.get("task_id", "")).strip() == task_id]
-    tools_summary = memory.summarize_tools(tools_entries)
-    if tools_summary:
-        sections.append("## Recent tools\n\n" + tools_summary)
-
-    events_entries = memory.read_jsonl_tail("events.jsonl", 200)
-    if task_id:
-        events_entries = [e for e in events_entries if str(e.get("task_id", "")).strip() == task_id]
-    events_summary = memory.summarize_events(events_entries)
-    if events_summary:
-        sections.append("## Recent events\n\n" + events_summary)
+    for log_name, header, formatter in (
+        ("progress.jsonl", "## Recent progress", lambda rows: memory.summarize_progress(rows, limit=50)),
+        ("tools.jsonl", "## Recent tools", memory.summarize_tools),
+        ("events.jsonl", "## Recent events", memory.summarize_events),
+    ):
+        entries = memory.read_jsonl_tail(log_name, 200)
+        if task_id:
+            entries = [e for e in entries if str(e.get("task_id", "")).strip() == task_id]
+        summary = formatter(entries)
+        if summary:
+            sections.append(f"{header}\n\n{summary}")
 
     supervisor_summary = memory.summarize_supervisor(memory.read_jsonl_tail("supervisor.jsonl", 200))
     if supervisor_summary:
@@ -403,6 +353,10 @@ def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[s
         sections.append("## Execution reflections\n\n" + reflections_text)
 
     return sections
+
+
+def _iter_recent_jsonl(path: pathlib.Path, max_bytes: int = 256_000):
+    yield from iter_jsonl_objects(path, tail_bytes=max_bytes)
 
 
 def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
@@ -439,29 +393,14 @@ def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
             (env.drive_path("logs/events.jsonl"), "type", "owner_message_injected"),
             (env.drive_path("logs/supervisor.jsonl"), "event_type", "owner_message_injected"),
         ):
-            if not log_path.exists():
-                continue
-            file_size = log_path.stat().st_size
-            with log_path.open("r", encoding="utf-8") as f:
-                if file_size > 256_000:
-                    f.seek(file_size - 256_000)
-                    f.readline()
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        ev = json.loads(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    if ev.get(type_field) != type_value:
-                        continue
-                    text = ev.get("text", "")
-                    if not text and "event_repr" in ev:
-                        event_repr = str(ev.get("event_repr", ""))
-                        text = event_repr[:200] + f" [...{len(event_repr) - 200} chars omitted]" if len(event_repr) > 200 else event_repr
-                    if not text:
-                        continue
+            for ev in _iter_recent_jsonl(log_path):
+                if ev.get(type_field) != type_value:
+                    continue
+                text = ev.get("text", "")
+                if not text and "event_repr" in ev:
+                    event_repr = str(ev.get("event_repr", ""))
+                    text = event_repr[:200] + f" [...{len(event_repr) - 200} chars omitted]" if len(event_repr) > 200 else event_repr
+                if text:
                     task_ids = msg_hash_to_tasks.setdefault(hashlib.md5(text.encode()).hexdigest()[:12], set())
                     task_ids.add(ev.get("task_id") or "unknown")
         dupes = {h: tids for h, tids in msg_hash_to_tasks.items() if len(tids) > 1}
@@ -486,38 +425,25 @@ def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
 
     try:
         events_path = env.drive_path("logs/events.jsonl")
-        if events_path.exists():
-            llm_error_models: Counter = Counter()
-            local_overflow_models: Counter = Counter()
-            file_size = events_path.stat().st_size
-            with events_path.open("r", encoding="utf-8") as f:
-                if file_size > 256_000:
-                    f.seek(file_size - 256_000)
-                    f.readline()
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        ev = json.loads(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    evt_type = str(ev.get("type") or "")
-                    model = str(ev.get("model") or "unknown")
-                    if evt_type in {"llm_api_error", "review_model_error", "consciousness_llm_error", "provider_incomplete_response"}:
-                        llm_error_models[model] += 1
-                    elif evt_type == "local_context_overflow":
-                        local_overflow_models[model] += 1
-            if llm_error_models:
-                top = ", ".join(f"{model} x{count}" for model, count in llm_error_models.most_common(3))
-                checks.append(f"WARNING: PROVIDER/ROUTING ERRORS — {sum(llm_error_models.values())} recent failures ({top}). Reliability or failover may need attention.")
-            else:
-                checks.append("OK: no recent provider/routing errors")
-            if local_overflow_models:
-                top = ", ".join(f"{model} x{count}" for model, count in local_overflow_models.most_common(3))
-                checks.append(f"WARNING: LOCAL CONTEXT OVERFLOW — {sum(local_overflow_models.values())} recent overflow event(s) ({top}). Local context may need more compaction or a larger window.")
-            else:
-                checks.append("OK: no recent local context overflows")
+        llm_error_models: Counter = Counter()
+        local_overflow_models: Counter = Counter()
+        for ev in _iter_recent_jsonl(events_path):
+            evt_type = str(ev.get("type") or "")
+            model = str(ev.get("model") or "unknown")
+            if evt_type in {"llm_api_error", "review_model_error", "consciousness_llm_error", "provider_incomplete_response"}:
+                llm_error_models[model] += 1
+            elif evt_type == "local_context_overflow":
+                local_overflow_models[model] += 1
+        if llm_error_models:
+            top = ", ".join(f"{model} x{count}" for model, count in llm_error_models.most_common(3))
+            checks.append(f"WARNING: PROVIDER/ROUTING ERRORS — {sum(llm_error_models.values())} recent failures ({top}). Reliability or failover may need attention.")
+        else:
+            checks.append("OK: no recent provider/routing errors")
+        if local_overflow_models:
+            top = ", ".join(f"{model} x{count}" for model, count in local_overflow_models.most_common(3))
+            checks.append(f"WARNING: LOCAL CONTEXT OVERFLOW — {sum(local_overflow_models.values())} recent overflow event(s) ({top}). Local context may need more compaction or a larger window.")
+        else:
+            checks.append("OK: no recent local context overflows")
     except Exception:
         pass
 
@@ -548,16 +474,10 @@ def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
 
 
 def build_health_invariants(env: Any) -> str:
-    """Build health invariants section for LLM-first self-detection.
-
-    Checks crash_report.json for CRASH ROLLBACK, plus version sync,
-    budget drift, memory health, prompt drift, log analysis, and file budgets.
-    """
     import time as _time
 
     checks: List[str] = []
 
-    # --- version sync ---
     try:
         from ouroboros.tools.release_sync import (
             _normalize_pep440,
@@ -568,24 +488,22 @@ def build_health_invariants(env: Any) -> str:
         )
         ver_file = read_text(env.repo_path("VERSION")).strip()
         desync_parts = []
-        pyproject = read_text(env.repo_path("pyproject.toml"))
-        pyproject_ver = ""
-        for line in pyproject.splitlines():
-            if line.strip().startswith("version"):
-                pyproject_ver = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
+        pyproject_ver = next(
+            (
+                line.split("=", 1)[1].strip().strip('"').strip("'")
+                for line in read_text(env.repo_path("pyproject.toml")).splitlines()
+                if line.strip().startswith("version")
+            ),
+            "",
+        )
         if is_release_version(ver_file) and pyproject_ver and _normalize_pep440(ver_file) != pyproject_ver:
             desync_parts.append(f"pyproject.toml={pyproject_ver}")
         try:
             readme = read_text(env.repo_path("README.md"))
             badge_ver = extract_readme_badge_version(readme)
-            readme_ver = badge_ver
-            if not readme_ver:
-                rm = re.search(r'\*\*Version:\*\*\s*([^\s]+)', readme)
-                readme_ver = str(rm.group(1) or "").strip() if rm else ""
-            badge_token_ok = True
-            if badge_ver and is_release_version(ver_file):
-                badge_token_ok = f"version-{_shields_escape(ver_file)}-green" in readme
+            rm = None if badge_ver else re.search(r'\*\*Version:\*\*\s*([^\s]+)', readme)
+            readme_ver = badge_ver or (str(rm.group(1) or "").strip() if rm else "")
+            badge_token_ok = not (badge_ver and is_release_version(ver_file)) or f"version-{_shields_escape(ver_file)}-green" in readme
             if readme_ver and readme_ver != ver_file:
                 desync_parts.append(f"README={readme_ver}")
             elif readme_ver and not badge_token_ok:
@@ -606,7 +524,6 @@ def build_health_invariants(env: Any) -> str:
     except Exception:
         pass
 
-    # --- budget drift ---
     try:
         state_data = read_json_dict(env.drive_path("state/state.json")) or {}
         if state_data.get("budget_drift_alert"):
@@ -616,7 +533,6 @@ def build_health_invariants(env: Any) -> str:
     except Exception:
         pass
 
-    # --- high-cost tasks ---
     try:
         from supervisor.state import per_task_cost_summary
         costly = [t for t in per_task_cost_summary(5) if t["cost"] > 5.0]
@@ -627,7 +543,6 @@ def build_health_invariants(env: Any) -> str:
     except Exception:
         pass
 
-    # --- identity freshness & size ---
     try:
         identity_path = env.drive_path("memory/identity.md")
         if identity_path.exists():
@@ -645,7 +560,6 @@ def build_health_invariants(env: Any) -> str:
     except Exception:
         pass
 
-    # --- scratchpad ---
     try:
         sp_len = len(read_text(env.drive_path("memory/scratchpad.md")).strip())
         if sp_len < 50:
@@ -657,7 +571,6 @@ def build_health_invariants(env: Any) -> str:
     except Exception:
         pass
 
-    # Crash rollback — inlined so inspect.getsource sees the literal strings
     try:
         crash_report = env.drive_path("state/crash_report.json")
         crash_data = read_json_dict(crash_report)
@@ -681,33 +594,17 @@ def build_health_invariants(env: Any) -> str:
 
 
 def _compute_cache_hit_rate(env: Any) -> Optional[float]:
-    """Compute prompt cache hit rate from recent llm_round events."""
-    events_path = env.drive_path("logs/events.jsonl")
-    if not events_path.exists():
-        return None
     total_prompt = total_cached = count = 0
     try:
-        file_size = events_path.stat().st_size
-        with events_path.open("r", encoding="utf-8") as f:
-            if file_size > 256_000:
-                f.seek(file_size - 256_000)
-                f.readline()
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                    if ev.get("type") != "llm_round":
-                        continue
-                    usage = ev.get("usage", ev)
-                    pt = int(usage.get("prompt_tokens", 0))
-                    if pt > 0:
-                        total_prompt += pt
-                        total_cached += int(usage.get("cached_tokens", 0))
-                        count += 1
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    continue
+        for ev in _iter_recent_jsonl(env.drive_path("logs/events.jsonl")):
+            if ev.get("type") != "llm_round":
+                continue
+            usage = ev.get("usage", ev)
+            pt = int(usage.get("prompt_tokens", 0))
+            if pt > 0:
+                total_prompt += pt
+                total_cached += int(usage.get("cached_tokens", 0))
+                count += 1
     except Exception:
         return None
     if count < 5 or total_prompt == 0:
@@ -716,11 +613,6 @@ def _compute_cache_hit_rate(env: Any) -> Optional[float]:
 
 
 def _build_registry_digest(env: Any) -> str:
-    """Build a compact one-line-per-source digest from memory/registry.md.
-
-    Returns a markdown table capped at 3000 chars, or empty string if
-    the registry doesn't exist.
-    """
     reg_path = env.drive_path("memory/registry.md")
     if not reg_path.exists():
         return ""
@@ -739,7 +631,6 @@ def _build_registry_digest(env: Any) -> str:
             current_id = line[4:].strip()
             fields = {}
         elif current_id and line.startswith("- **"):
-            # Parse "- **Key:** value"
             m = re.match(r'^- \*\*(\w+):\*\*\s*(.*)', line)
             if m:
                 fields[m.group(1).lower()] = m.group(2).strip()
@@ -760,15 +651,12 @@ def _registry_row(source_id: str, fields: dict) -> str:
     path = fields.get("path", "?")
     updated = fields.get("updated", "?")
     gaps = fields.get("gaps", "—")
-    # Keep gaps short
     if len(gaps) > 60:
         gaps = gaps[:57] + f"... [{len(gaps) - 57} chars omitted]"
     return f"| {source_id} | {path} | {updated} | {gaps} |"
 
 
 def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
-    """Summarize enabled reviewed skills so the agent sees local capabilities."""
-
     try:
         from ouroboros.skill_loader import summarize_skills
         summary = summarize_skills(pathlib.Path(env.drive_root))
@@ -834,11 +722,6 @@ def build_llm_messages(
     review_context_builder: Optional[Any] = None,
     soft_cap_tokens: int = 200_000,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Build the full LLM message context for a task.
-
-    Returns (messages, cap_info) tuple.
-    """
-    task_type = str(task.get("type") or "user")
     base_prompt = safe_read(
         env.repo_path("prompts/SYSTEM.md"),
         fallback="You are Ouroboros. Your base prompt could not be loaded."
@@ -852,34 +735,29 @@ def build_llm_messages(
 
     memory.ensure_files()
 
-    static_text = (
-        base_prompt + "\n\n"
-        + "## BIBLE.md\n\n" + bible_md
-    )
-    if arch_md.strip():
-        static_text += "\n\n## ARCHITECTURE.md\n\n" + arch_md
-    if dev_guide_md.strip():
-        static_text += "\n\n## DEVELOPMENT.md\n\n" + dev_guide_md
-    if readme_md.strip():
-        static_text += "\n\n## README.md\n\n" + readme_md
-    if checklists_md.strip():
-        static_text += "\n\n## CHECKLISTS.md\n\n" + checklists_md
+    static_parts = [base_prompt, "## BIBLE.md\n\n" + bible_md]
+    for header, text in (
+        ("ARCHITECTURE.md", arch_md),
+        ("DEVELOPMENT.md", dev_guide_md),
+        ("README.md", readme_md),
+        ("CHECKLISTS.md", checklists_md),
+    ):
+        if text.strip():
+            static_parts.append(f"## {header}\n\n{text}")
+    static_text = "\n\n".join(static_parts)
 
     semi_stable_parts = []
     semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
     semi_stable_parts.extend(build_knowledge_sections(env))
 
-    # Last deep self-review (if available)
     deep_review_path = env.drive_path("memory/deep_review.md")
     try:
         if deep_review_path.exists():
             dr_text = deep_review_path.read_text(encoding="utf-8")
             if dr_text.strip():
-                # Cap at 8K chars to avoid bloating context
-                if len(dr_text) > 8000:
-                    dr_text = dr_text[:8000] + "\n\n[... truncated — full report in memory/deep_review.md]"
                 semi_stable_parts.append(
-                    "## Last Deep Self-Review\n\n" + dr_text
+                    "## Last Deep Self-Review\n\n"
+                    + truncate_review_artifact(dr_text, limit=8000)
                 )
     except Exception:
         pass
@@ -945,7 +823,7 @@ def build_llm_messages(
                 {
                     "type": "text",
                     "text": static_text,
-                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    "cache_control": {"type": "ephemeral"},
                 },
                 {
                     "type": "text",
@@ -969,7 +847,6 @@ def apply_message_token_soft_cap(
     messages: List[Dict[str, Any]],
     soft_cap_tokens: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Estimate context size without silently trimming cognitive artifacts."""
     def _estimate_message_tokens(msg: Dict[str, Any]) -> int:
         content = msg.get("content", "")
         if isinstance(content, list):
@@ -979,12 +856,7 @@ def apply_message_token_soft_cap(
         return estimate_tokens(str(content)) + 6
 
     estimated = sum(_estimate_message_tokens(m) for m in messages)
-    info: Dict[str, Any] = {
-        "estimated_tokens_before": estimated,
-        "estimated_tokens_after": estimated,
-        "soft_cap_tokens": soft_cap_tokens,
-        "trimmed_sections": [],
-    }
+    info: Dict[str, Any] = {"estimated_tokens_before": estimated, "estimated_tokens_after": estimated, "soft_cap_tokens": soft_cap_tokens, "trimmed_sections": []}
     if soft_cap_tokens > 0 and estimated > soft_cap_tokens:
         info["trimmed_sections"].append("disabled_no_silent_truncation")
     return messages, info
@@ -998,15 +870,6 @@ from ouroboros.context_compaction import (
 
 
 def safe_read(path: pathlib.Path, fallback: str = "") -> str:
-    """Read a file, returning fallback if it doesn't exist or errors.
-
-    Distinguishes "file doesn't exist" (DEBUG) from "file exists but
-    unreadable" (WARNING). For critical files (BIBLE.md, identity.md,
-    ARCHITECTURE.md), an empty value is indistinguishable from "file
-    doesn't exist", so the agent silently runs without its constitutional
-    core when the file is corrupt or has bad permissions. Surface the
-    real-infrastructure-problem case at WARNING.
-    """
     try:
         exists = path.exists()
     except Exception:
@@ -1017,8 +880,5 @@ def safe_read(path: pathlib.Path, fallback: str = "") -> str:
     try:
         return read_text(path)
     except Exception as exc:
-        log.warning(
-            "safe_read: file %s exists but read failed (%s: %s); using fallback",
-            path, type(exc).__name__, exc,
-        )
+        log.warning("safe_read: file %s exists but read failed (%s: %s); using fallback", path, type(exc).__name__, exc)
         return fallback

@@ -161,12 +161,8 @@ def test_resync_reseeds_on_drift_and_wipes_in_skill_user_files(staging, fake_log
     assert (state_dir / "review.json").is_file()
 
 
-def test_resync_writes_migration_record_on_drift(staging, fake_log):
-    """Cycle 1 Opus O-2 + GPT-4(c) coupling — when the resync upgrades a
-    skill in place, the operator gets an entry in
-    ``data/state/migrations.json`` so the Skills UI can render a
-    one-shot banner explaining the change.
-    """
+def test_resync_no_longer_writes_migration_record_on_drift(staging, fake_log):
+    """Native upgrade banners are retired; resync only replaces launcher-owned payloads."""
     from ouroboros.launcher_bootstrap import _per_skill_version_resync
 
     seed_dir, native_root, drive_root = staging
@@ -175,16 +171,7 @@ def test_resync_writes_migration_record_on_drift(staging, fake_log):
     (installed / ".seed-origin").write_text("seeded_from=test\n", encoding="utf-8")
 
     _per_skill_version_resync(seed_dir, native_root, fake_log, drive_root=drive_root)
-    migrations_path = drive_root / "state" / "migrations.json"
-    assert migrations_path.is_file()
-    data = json.loads(migrations_path.read_text(encoding="utf-8"))
-    assert isinstance(data, dict)
-    assert any("weather" in k for k in data.keys()), data.keys()
-    record = next(v for k, v in data.items() if "weather" in k)
-    assert record["skill"] == "weather"
-    assert record["old_version"] == "0.1.0"
-    assert record["new_version"] == "0.2.0"
-    assert record["dismissed"] is False
+    assert not (drive_root / "state" / "migrations.json").exists()
 
 
 # ---------------------------------------------------------------------------

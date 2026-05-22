@@ -3,6 +3,7 @@ import pathlib
 import pytest
 
 from ouroboros.onboarding_wizard import build_onboarding_html, prepare_onboarding_settings
+from ouroboros.settings_setup_contract import build_setup_contract
 
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -134,7 +135,9 @@ def test_prepare_onboarding_settings_preserves_user_visible_provider_fields():
 def test_build_onboarding_html_contains_multistep_markers():
     html = build_onboarding_html({})
 
-    assert "bootstrap.stepOrder || ['providers', 'models', 'review_mode', 'budget', 'summary']" in html
+    assert '"contract": {' in html
+    assert '"providerFields": [' in html
+    assert 'const STEP_ORDER = bootstrap.stepOrder || (SETUP_CONTRACT.steps || []).map' in html
     assert "Add your access" in html
     assert "Keys + local" in html
     assert "Choose models" in html
@@ -169,10 +172,52 @@ def test_build_onboarding_html_adapts_to_multi_provider_access():
     assert "function nextButtonShouldBeDisabled()" in html
     assert "function syncCurrentStepActionState()" in html
     assert "return 'direct-multi';" in html
-    assert "OPENROUTER_API_KEY: trim(state.openrouterKey)" in html
-    assert "OPENAI_API_KEY: trim(state.openaiKey)" in html
-    assert "ANTHROPIC_API_KEY: trim(state.anthropicKey)" in html
+    assert "PROVIDER_FIELDS.map((field) => [field.settingKey, trim(state[field.stateKey])])" in html
+    assert "MODEL_SLOTS.map((slot) => [slot.settingKey, trim(state[slot.stateKey])])" in html
     assert "LOCAL_ROUTING_MODE: trim(state.localSource) ? (trim(state.localRoutingMode) || 'cloud') : 'cloud'" in html
+
+
+def test_setup_contract_has_no_secret_values():
+    contract = build_setup_contract("web")
+    text = repr(contract)
+
+    assert contract["hostMode"] == "web"
+    assert "providerFields" in contract
+    assert "settingsInputId" in contract["providerFields"][0]
+    assert "OPENROUTER_API_KEY" in text
+    assert "sk-or-v1-super-secret" not in text
+    assert "sk-ant-super-secret" not in text
+
+
+def test_api_settings_exposes_setup_contract_without_secrets(tmp_path):
+    from unittest.mock import patch
+
+    import server as srv
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    secret = "sk-or-v1-super-secret-token"
+    patches = [
+        patch.object(srv, "load_settings", return_value={"OPENROUTER_API_KEY": secret}),
+        patch.object(srv, "apply_runtime_provider_defaults", lambda settings: (dict(settings), False, [])),
+        patch("ouroboros.server_auth.get_configured_network_password", return_value=""),
+    ]
+    for item in patches:
+        item.start()
+    try:
+        app = Starlette(routes=[Route("/api/settings", endpoint=srv.api_settings_get, methods=["GET"])])
+        app.state.drive_root = tmp_path
+        with TestClient(app) as client:
+            response = client.get("/api/settings")
+        assert response.status_code == 200
+        assert secret not in response.text
+        contract = response.json()["_meta"]["setup_contract"]
+        assert contract["providerFields"][0]["settingKey"] == "OPENROUTER_API_KEY"
+        assert secret not in repr(contract)
+    finally:
+        for item in patches:
+            item.stop()
 
 
 def test_build_onboarding_html_includes_claude_runtime_cta_and_host_transports():
@@ -222,3 +267,12 @@ def test_web_style_contains_onboarding_overlay_shell():
     assert ".onboarding-overlay {" in style
     assert ".onboarding-frame {" in style
     assert ".onboarding-overlay-backdrop {" in style
+    assert ".onboarding-restart-card {" in style
+
+
+def test_onboarding_overlay_surfaces_restart_required_message():
+    source = (REPO / "web" / "modules" / "onboarding_overlay.js").read_text(encoding="utf-8")
+
+    assert "showRestartRequiredOverlay" in source
+    assert "event.data.restart_required" in source
+    assert "Continue in current mode" in source

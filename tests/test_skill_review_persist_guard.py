@@ -396,6 +396,7 @@ def test_cancellation_during_extension_reconcile_keeps_lifecycle_lane(tmp_path, 
                 target="beta",
                 dedupe_key="review:beta:hash",
                 runner=lambda: asyncio.sleep(0, result={"quick": True}),
+                options=lifecycle_queue.LifecycleJobOptions(drive_root=drive_root),
             )
         )
         await asyncio.sleep(0.05)
@@ -473,4 +474,3 @@ def test_heartbeat_continues_during_extension_reconcile(tmp_path, monkeypatch):
         assert final["status"] == "completed"
 
     asyncio.run(main())
-

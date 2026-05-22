@@ -19,16 +19,7 @@ def _can_bind_port(host: str, port: int) -> bool:
 
 def find_free_port(host: str, start: int = 8765, max_tries: int = 10,
                    wait_retries: int = 20, wait_interval: float = 0.5) -> int:
-    """Try the preferred port first; wait for it to become free on restart.
-
-    During a restart the previous process may still be releasing the socket
-    (TIME_WAIT / lingering close).  Instead of silently moving to the next
-    port (which breaks WebSocket reconnect because the browser still points
-    at the old port), we retry the *preferred* port with short sleeps first.
-
-    Only if the preferred port is still occupied after ``wait_retries`` attempts
-    do we fall back to scanning nearby ports.
-    """
+    """Prefer the old port during restart before scanning nearby fallbacks."""
     import time
 
     for attempt in range(wait_retries):
@@ -37,8 +28,7 @@ def find_free_port(host: str, start: int = 8765, max_tries: int = 10,
         if attempt < wait_retries - 1:
             time.sleep(wait_interval)
 
-    # Preferred port still busy — nearby ports may still be winding down too.
-    # Retry the fallback range instead of returning the original busy port.
+    # Fallback ports may also be winding down; retry the whole range.
     fallback_ports = range(start + 1, start + max_tries)
     for attempt in range(wait_retries):
         for port in fallback_ports:

@@ -124,7 +124,7 @@ def test_build_openrouter_kwargs_for_anthropic_marks_last_sorted_tool_for_cache(
 
     assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["alpha_tool", "zeta_tool"]
     assert "cache_control" not in kwargs["tools"][0]
-    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 

@@ -68,15 +68,7 @@ def _ensure_clean_worktree(repo_root: pathlib.Path) -> None:
 
 
 def _validate_source_branch(repo_root: pathlib.Path, source_branch: str) -> None:
-    """Verify the managed source branch is usable for provenance checks.
-
-    Only accepts branches that resolve locally — either as a real local
-    branch (``refs/heads/<branch>``), a cached origin ref
-    (``refs/remotes/origin/<branch>``), or any other locally-known ref.
-    Remote-visible-only branches (discoverable via ``git ls-remote`` but
-    not fetched) are refused here instead of silently passing and then
-    failing later inside ``_ensure_source_sha_tracks_branch``.
-    """
+    """Require a locally resolvable managed source branch for provenance checks."""
     branch = str(source_branch or "").strip()
     if not branch:
         raise SystemExit("managed source branch must not be empty.")
@@ -145,24 +137,7 @@ def _normalize_release_tag(tag: str) -> str:
 
 
 def _verify_release_tag_in_repo(repo_root: pathlib.Path, tag: str) -> None:
-    """Fail-closed checks for a resolved release tag.
-
-    Three invariants must hold before the tag is embedded into
-    ``repo_bundle_manifest.json``:
-
-    1. ``refs/tags/<tag>`` actually exists in the repo (i.e. the tag was
-       created, not just passed via an env var).
-    2. The tag object is *annotated* (``git cat-file -t`` returns
-       ``"tag"``, not ``"commit"``) — BIBLE.md P9 requires an annotated
-       tag for every release, so a lightweight tag is not acceptable.
-    3. The tag points at ``HEAD``. A tag that exists but points at a
-       previous commit would make the packaged manifest lie about which
-       commit it represents.
-
-    Each failure raises ``SystemExit`` with a concrete, actionable
-    message — this function is called only from the packaging path, so
-    aborting is the intended recovery.
-    """
+    """Fail closed unless release tag exists, is annotated, and points at HEAD."""
     probe = subprocess.run(
         ["git", "rev-parse", "--verify", f"refs/tags/{tag}"],
         cwd=str(repo_root),

@@ -1,11 +1,4 @@
-"""Git rollback tool: rollback_to_target.
-
-Wraps supervisor/git_ops.rollback_to_version() to give the agent a direct
-tool for resetting the current branch to any tag or SHA.  Creates a rescue
-snapshot before resetting (same safety net as the UI Restore button).
-
-Review-exempt: restores to an already-reviewed state (see CHECKLISTS.md).
-"""
+"""Rollback tool wrapper around supervisor.git_ops rollback_to_version()."""
 
 from __future__ import annotations
 
@@ -18,17 +11,12 @@ log = logging.getLogger(__name__)
 
 
 def _rollback_to_target(ctx: ToolContext, target: str, confirm: bool = False) -> str:
-    """Reset current branch to *target* (tag name or commit SHA).
-
-    Creates a rescue snapshot of any uncommitted work before resetting.
-    Equivalent to the UI "Restore" button in Evolution → Versions.
-    """
+    """Reset current branch to a tag/SHA via the supervisor rollback path."""
     target = (target or "").strip()
     if not target:
         return "⚠️ ROLLBACK_ERROR: target parameter is required (tag name or commit SHA)."
 
     if not confirm:
-        # Preview: resolve target and show what will happen
         import subprocess, pathlib
         repo_dir = pathlib.Path(ctx.repo_dir)
         try:
@@ -66,7 +54,6 @@ def _rollback_to_target(ctx: ToolContext, target: str, confirm: bool = False) ->
             "Call again with confirm=true to proceed."
         )
 
-    # Execute rollback via supervisor/git_ops
     try:
         from supervisor.git_ops import rollback_to_version
     except ImportError as e:
@@ -75,9 +62,7 @@ def _rollback_to_target(ctx: ToolContext, target: str, confirm: bool = False) ->
     ok, message = rollback_to_version(target, reason="agent_rollback_tool")
     if ok:
         log.info("rollback_to_target succeeded: %s → %s", target, message)
-        # Request restart so running code matches the rolled-back worktree.
-        # Uses the same ctx.pending_restart_reason pattern as _request_restart
-        # in tools/control.py — flows through emit_task_results → supervisor.
+        # Restart so running code matches the rolled-back worktree.
         ctx.pending_restart_reason = "rollback_to_target completed"
         return f"✅ {message}\nServer restart has been requested to pick up the new state."
     else:

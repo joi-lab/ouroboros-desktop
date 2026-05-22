@@ -72,6 +72,8 @@ def test_provider_failure_hint_empty_without_error():
 
 
 def test_call_llm_with_retry_accumulates_estimated_cost(tmp_path):
+    import queue
+
     class _EstimatedCostLLM:
         def chat(self, **kwargs):
             return (
@@ -88,6 +90,7 @@ def test_call_llm_with_retry_accumulates_estimated_cost(tmp_path):
             )
 
     usage = {}
+    event_queue = queue.Queue()
     with patch("ouroboros.loop_llm_call.estimate_cost", return_value=0.123456):
         _msg, _cost = call_llm_with_retry(
             _EstimatedCostLLM(),
@@ -99,10 +102,13 @@ def test_call_llm_with_retry_accumulates_estimated_cost(tmp_path):
             tmp_path,
             "task-3",
             1,
-            None,
+            event_queue,
             usage,
             "task",
             False,
         )
 
     assert usage["cost"] == 0.123456
+    events = [event_queue.get_nowait() for _ in range(event_queue.qsize())]
+    usage_event = next(evt for evt in events if evt.get("type") == "llm_usage")
+    assert usage_event["cost_estimated"] is True

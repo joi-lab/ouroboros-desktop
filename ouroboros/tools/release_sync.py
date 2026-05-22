@@ -1,36 +1,7 @@
-"""release_sync.py — deterministic release-metadata carrier sync helpers.
+"""Deterministic release metadata sync and P9 preflight helpers.
 
-Shared release-metadata library used by both agent-facing workflows and
-review gates. ``advisory_pre_review`` uses ``sync_release_metadata`` before
-the Claude SDK call when VERSION is in scope, then runs deterministic P9
-checks so release-carrier mistakes are caught before provider budget is spent.
-
-Scope
------
-This library syncs the VERSION string across its three derived *carrier* files:
-``pyproject.toml`` version field, ``README.md`` badge, and
-``docs/ARCHITECTURE.md`` header.  It does NOT create or update the
-``README.md`` Version History changelog row — that remains a manual authoring
-surface because each release entry requires a human-written description.
-``check_history_limit`` and ``detect_numeric_claims`` advise on the quality of
-whatever row the author wrote, without modifying it.
-
-Version format
---------------
-Stable versions are plain semver (``X.Y.Z``). Pre-release versions use the
-author-facing spellings ``4.50.0-rc.1`` / ``4.50.0rc1`` / ``4.50.0-alpha.2``
-etc.; VERSION / README badge display / ARCHITECTURE header all keep the
-author spelling verbatim, while ``pyproject.toml`` receives the PEP 440-
-canonical form (``4.50.0rc1``) via ``_normalize_pep440`` so pip / build /
-twine accept the project metadata. The README badge URL path additionally
-doubles literal hyphens (``4.50.0--rc.1``) per shields.io's escape rule.
-
-Public API
-----------
-sync_release_metadata(repo_dir)  -> list[str]   changed carrier file paths
-check_history_limit(readme_text) -> list[str]   advisory P9 limit warnings
-detect_numeric_claims(text)      -> list[str]   matched numeric-claim strings
-run_release_preflight(repo_dir)  -> (list[str], list[str])  (changed, warnings)
+VERSION remains canonical for author-facing carriers; pyproject receives PEP
+440 spelling, README badge URL escapes hyphens, and changelog prose stays manual.
 """
 
 from __future__ import annotations
@@ -39,43 +10,28 @@ import re
 from pathlib import Path
 from typing import List, Tuple
 
-# ---------------------------------------------------------------------------
-# P9 history limits (BIBLE.md)
-# ---------------------------------------------------------------------------
 _MAX_MAJOR = 2
 _MAX_MINOR = 5
 _MAX_PATCH = 5
 
-# Numeric-claim pattern: stand-alone integer followed by a release noun.
-# Matches "16 tests", "3 fixes", "42 new tests", etc.
+# Stand-alone integer followed by release-count nouns.
 _NUMERIC_CLAIM_RE = re.compile(
     r'\b(\d+)\s+(?:new\s+)?(?:\w+\s+)?(?:tests?|fixes?|checks?|functions?|lines?|changes?|regressions?|assertions?)\b',
     re.IGNORECASE,
 )
 
-# Optional PEP 440 pre-release suffix. Accepts the common author-facing
-# spellings (``-rc.1``, ``-rc1``, ``rc.1``, ``rc1``, ``-alpha.2``,
-# ``-beta.3``, ``-a.1``, ``-b.2``) and their case-insensitive variants.
-# The display spelling is preserved verbatim in VERSION / README /
-# ARCHITECTURE carriers; ``pyproject.toml`` is responsible for holding
-# the PEP 440-canonical form (see sync_release_metadata docstring).
+# Author-facing pre-release suffix; pyproject gets the PEP 440-normalized form.
 _PRE_SUFFIX = r'(?:-?(?:rc|alpha|beta|a|b)\.?\d+)?'
 
-# Full semver+optional-pre token used for VERSION file validation.
 _VERSION_RE = re.compile(r'^\d+\.\d+\.\d+' + _PRE_SUFFIX + r'$', re.IGNORECASE)
 
-# Version row in README Version History: "| X.Y.Z[-suffix] | date | description |"
-# Pre-release rows bucket under their base version (a ``4.50.0-rc.1`` row
-# counts as a minor row for the ``4.50.0`` slot, not a separate patch).
+# README Version History row; pre-release rows bucket under their base version.
 _VERSION_ROW_RE = re.compile(
     r'^\|\s*(\d+)\.(\d+)\.(\d+)' + _PRE_SUFFIX + r'\s*\|',
     re.MULTILINE | re.IGNORECASE,
 )
 
-# README badge display text + shields.io URL path. The URL path encodes
-# literal ``-`` as ``--`` (shields.io path-segment escape) so the right-
-# most ``-green`` separator stays unambiguous, hence the two halves of
-# the regex accept slightly different tokens.
+# Badge display keeps VERSION spelling; URL path doubles hyphens for shields.io.
 _BADGE_DISPLAY_TOKEN = r'\d+\.\d+\.\d+' + _PRE_SUFFIX
 _BADGE_URL_TOKEN = (
     r'\d+\.\d+\.\d+'
@@ -90,7 +46,6 @@ _README_BADGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ARCHITECTURE.md header: "# Ouroboros vX.Y.Z[-suffix] — ..."
 _ARCH_HEADER_RE = re.compile(
     r'^(#\s+Ouroboros\s+v)'
     r'(\d+\.\d+\.\d+' + _PRE_SUFFIX + r')'
@@ -100,19 +55,11 @@ _ARCH_HEADER_RE = re.compile(
 
 
 def _shields_escape(version: str) -> str:
-    """Escape a version string for a shields.io badge URL path segment.
-
-    shields.io interprets ``-`` as a URL-path segment separator; literal
-    hyphens inside a value (``4.50.0-rc.1``) must be doubled (``4.50.0--rc.1``)
-    so the final ``-green`` ending stays unambiguous. Returns *version*
-    unchanged when it contains no hyphen.
-    """
+    """Double literal hyphens so shields.io keeps them inside the value segment."""
     return version.replace('-', '--')
 
 
-# Matches the pre-release tail (``-rc.1`` / ``rc1`` / ``-alpha.2`` / …)
-# anchored at the right side of the full version string. Used by
-# ``_normalize_pep440`` to split base and suffix without double-counting.
+# Pre-release tail anchored at the right side for PEP 440 normalization.
 _PRE_TAIL_RE = re.compile(
     r'(-?)(rc|alpha|beta|a|b)(\.?)(\d+)$',
     re.IGNORECASE,
@@ -120,28 +67,11 @@ _PRE_TAIL_RE = re.compile(
 
 
 def _normalize_pep440(version: str) -> str:
-    """Return the PEP 440-canonical spelling of *version*.
-
-    Author-facing carriers (VERSION / README / ARCHITECTURE) tolerate
-    ``4.50.0-rc.1`` style spellings because they read more naturally in
-    prose and match the ``v{VERSION}`` git-tag convention. ``pyproject.toml``
-    however is consumed by pip / build / twine, which enforce PEP 440:
-    the canonical form for a release-candidate is ``4.50.0rc1`` (no
-    separator between the base version and the pre-release identifier,
-    no dot between ``rc`` and the number). This helper performs that
-    normalisation so the VERSION file can carry the idiomatic spelling
-    while ``pyproject.toml`` stays pip-compatible.
-
-    Stable (non-RC) versions pass through unchanged.
-    """
+    """Return PEP 440 spelling for pyproject while stable versions pass through."""
     match = _PRE_TAIL_RE.search(version)
     if not match:
         return version
     base = version[: match.start()]
-    # PEP 440 §Pre-release spelling: ``alpha`` collapses to ``a``,
-    # ``beta`` to ``b``, ``rc`` stays ``rc`` (``c`` is an alias pip also
-    # accepts but the canonical short form is ``rc``). Every identifier
-    # is lowercased on the way out.
     identifier_raw = match.group(2).lower()
     _pep440_alias = {"alpha": "a", "beta": "b"}
     identifier = _pep440_alias.get(identifier_raw, identifier_raw)
@@ -205,16 +135,7 @@ def version_carrier_desyncs(
 
 
 def sync_release_metadata(repo_dir: str) -> List[str]:
-    """Sync VERSION → pyproject.toml → README badge → ARCHITECTURE.md header.
-
-    Reads the canonical version from the ``VERSION`` file and writes the
-    correct value into the other three carriers when they are out of sync.
-
-    Returns
-    -------
-    list[str]
-        Repo-relative paths of files that were actually modified.
-    """
+    """Sync VERSION into pyproject, README badge, and ARCHITECTURE header."""
     root = Path(repo_dir)
     version_file = root / "VERSION"
     if not version_file.exists():
@@ -224,21 +145,12 @@ def sync_release_metadata(repo_dir: str) -> List[str]:
     if not _VERSION_RE.match(version):
         return []
 
-    # ``pyproject.toml`` must carry the PEP 440-canonical form so pip
-    # / twine / build do not reject the project metadata. Author-facing
-    # spellings like ``4.50.0-rc.1`` normalise to ``4.50.0rc1`` per
-    # PEP 440 §5 (pre-release separator and identifier rules); we do
-    # the normalisation here rather than requiring the VERSION file to
-    # use the canonical form because the hyphen/dot variant is more
-    # idiomatic in README / ARCHITECTURE prose.
+    # pyproject must be PEP 440; author-facing carriers keep VERSION spelling.
     pyproject_version = _normalize_pep440(version)
-    # README badge URL path segment doubles literal ``-`` (shields.io
-    # escape) but the badge display text keeps the author spelling.
     badge_url_version = _shields_escape(version)
 
     changed: List[str] = []
 
-    # --- pyproject.toml ---
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
         text = pyproject.read_text(encoding="utf-8")
@@ -252,7 +164,6 @@ def sync_release_metadata(repo_dir: str) -> List[str]:
             pyproject.write_text(new_text, encoding="utf-8")
             changed.append("pyproject.toml")
 
-    # --- README.md badge ---
     readme = root / "README.md"
     if readme.exists():
         text = readme.read_text(encoding="utf-8")
@@ -266,7 +177,6 @@ def sync_release_metadata(repo_dir: str) -> List[str]:
             readme.write_text(new_text, encoding="utf-8")
             changed.append("README.md")
 
-    # --- docs/ARCHITECTURE.md header ---
     arch = root / "docs" / "ARCHITECTURE.md"
     if arch.exists():
         text = arch.read_text(encoding="utf-8")
@@ -282,11 +192,7 @@ def sync_release_metadata(repo_dir: str) -> List[str]:
 
 
 def check_history_limit(readme_text: str) -> List[str]:
-    """Return advisory warnings when Version History exceeds P9 limits.
-
-    Limits: 2 major, 5 minor, 5 patch rows visible in the history table.
-    Never raises — always returns a (possibly empty) list of warning strings.
-    """
+    """Return advisory warnings when Version History exceeds P9 row limits."""
     warnings: List[str] = []
     major_rows, minor_rows, patch_rows = 0, 0, 0
 
@@ -318,30 +224,12 @@ def check_history_limit(readme_text: str) -> List[str]:
 
 
 def detect_numeric_claims(text: str) -> List[str]:
-    """Return matched numeric-claim strings found in *text*.
-
-    Examples: ``"16 tests"``, ``"3 new fixes"``, ``"42 regression tests"``.
-    Advisory only — callers decide how to surface these.
-    """
+    """Return matched numeric-claim strings found in changelog prose."""
     return [m.group(0) for m in _NUMERIC_CLAIM_RE.finditer(text)]
 
 
 def run_release_preflight(repo_dir: str) -> Tuple[List[str], List[str]]:
-    """Run all release-sync checks and return (changed_files, advisory_warnings).
-
-    1. Sync VERSION carriers (pyproject.toml, README badge, ARCHITECTURE header).
-    2. Check Version History limits.
-    3. Detect numeric claims in the current README changelog row for the new version.
-
-    This function is idempotent: running it twice in a row produces no further
-    changes on the second call (assuming no external modifications between calls).
-
-    Returns
-    -------
-    (changed_files, advisory_warnings)
-        *changed_files* — repo-relative paths actually written.
-        *advisory_warnings* — non-blocking strings describing policy violations.
-    """
+    """Run idempotent carrier sync plus advisory release-history checks."""
     changed = sync_release_metadata(repo_dir)
 
     warnings: List[str] = []
@@ -350,7 +238,7 @@ def run_release_preflight(repo_dir: str) -> Tuple[List[str], List[str]]:
         readme_text = readme.read_text(encoding="utf-8")
         warnings.extend(check_history_limit(readme_text))
 
-        # Find the changelog row for the current VERSION and flag numeric claims.
+        # Flag numeric claims only in the current VERSION row.
         version_file = Path(repo_dir) / "VERSION"
         if version_file.exists():
             version = version_file.read_text(encoding="utf-8").strip()

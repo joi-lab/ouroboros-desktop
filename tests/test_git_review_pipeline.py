@@ -1326,6 +1326,42 @@ class TestBypassPathTestsRun:
         # invariant tested here is that the preflight gate does not block.
         assert outcome.get("block_reason") != "tests_preflight_blocked"
 
+    def test_advisory_paths_include_rename_sources(self, tmp_path, monkeypatch):
+        """Advisory freshness must see the same rename/copy source paths as
+        protected-path classification, not only git diff --name-only output."""
+        from ouroboros.tools import git as git_mod
+        from ouroboros.tools.registry import ToolContext
+
+        repo = tmp_path / "repo"
+        drive = tmp_path / "drive"
+        repo.mkdir()
+        (drive / "logs").mkdir(parents=True)
+        (drive / "locks").mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
+        (repo / "old_name.txt").write_text("same\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True)
+        (repo / "old_name.txt").rename(repo / "new_name.txt")
+
+        captured = {}
+
+        def _fake_freshness(ctx, commit_message, skip_advisory_pre_review=False, *, paths=None):
+            captured["paths"] = list(paths or [])
+            return "blocked for test"
+
+        monkeypatch.setattr(git_mod, "_check_advisory_freshness", _fake_freshness)
+
+        outcome = git_mod._run_reviewed_stage_cycle(
+            ToolContext(repo_dir=repo, drive_root=drive),
+            commit_message="rename advisory paths",
+            commit_start=0.0,
+        )
+
+        assert outcome["block_reason"] == "no_advisory"
+        assert {"old_name.txt", "new_name.txt"} <= set(captured["paths"])
+
     def test_non_bypass_path_does_not_run_preflight_here(self, tmp_path, monkeypatch):
         """Without skip_advisory_pre_review, the stage cycle must NOT run the
         preflight tests — the advisory side already ran them, and the commit

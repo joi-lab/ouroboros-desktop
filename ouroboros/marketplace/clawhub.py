@@ -1,32 +1,4 @@
-"""Read-only HTTP client for the ClawHub registry (https://clawhub.ai/api/v1).
-
-The client wraps four operations the marketplace UI / installer need:
-
-- :func:`search` — keyword + filter search of the skill registry.
-- :func:`info` — resolve the latest version metadata for one skill.
-- :func:`list_versions` — every published version for one slug.
-- :func:`download` — fetch the binary archive bytes for one version.
-
-Defensive design choices that matter for security:
-
-- Hostname allowlist: only ``clawhub.ai`` (or the configured registry
-  URL's host) is contacted. Arbitrary user-supplied URLs cannot
-  redirect requests to a different host even if the registry returns
-  a malformed response.
-- Aggressive timeouts (default 15s) so the UI never blocks on a
-  hung registry call.
-- No authentication. The marketplace surface only exposes anonymous
-  read operations — publish/sync workflows live in the upstream
-  ``clawhub`` CLI which Ouroboros never invokes.
-- Response size cap: the JSON endpoints reject anything > 4 MB and
-  the download endpoint applies the 50 MB cap from
-  :mod:`ouroboros.marketplace.fetcher`. This prevents a malicious
-  registry from filling the runtime with a multi-GB response.
-
-The client is intentionally synchronous (``requests`` /
-``urllib`` style). Marketplace HTTP routes call it from
-``asyncio.to_thread`` so the Starlette event loop stays responsive.
-"""
+"""Read-only ClawHub registry client for search/info/version/download."""
 
 from __future__ import annotations
 
@@ -37,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
@@ -55,25 +27,12 @@ _SEARCH_ENRICH_TIMEOUT_SEC = 2
 _MAX_RATE_LIMIT_RETRIES = 2
 _MAX_RATE_LIMIT_SLEEP_SEC = 3.0
 
-# Allowed registry hosts. The canonical registry is ``clawhub.ai`` (per
-# the official docs at github.com/openclaw/clawhub). ``clawhub.com``
-# is documented as a legacy alias but Ouroboros does not enforce that
-# it shares ownership with ``clawhub.ai`` — until we have an
-# independent ownership audit (DNS / TLS pin / signed metadata), we
-# refuse it. Localhost remains allowlisted for self-hosted dev mirrors.
-_ALLOWED_REGISTRY_HOSTS = frozenset(
-    {
-        "clawhub.ai",
-        "www.clawhub.ai",
-        "registry.clawhub.ai",
-        "localhost",
-        "127.0.0.1",
-    }
-)
+# Allow only audited ClawHub hosts plus localhost dev mirrors; reject legacy aliases.
+_ALLOWED_REGISTRY_HOSTS = frozenset({"clawhub.ai", "www.clawhub.ai", "registry.clawhub.ai", "localhost", "127.0.0.1"})
 
 
 class ClawHubClientError(RuntimeError):
-    """Raised on any registry-side failure (HTTP, JSON, host policy)."""
+    pass
 
 
 class ClawHubRateLimitError(ClawHubClientError):
@@ -88,19 +47,12 @@ class ClawHubRateLimitError(ClawHubClientError):
 
 
 class ClawHubClientHostBlocked(ClawHubClientError):
-    """Registry URL points at a host outside the marketplace allowlist."""
+    pass
 
 
 @dataclass
 class ClawHubSkillSummary:
-    """Lightweight per-skill record returned by ``search`` / ``info``.
-
-    Mirrors the schema described in
-    https://github.com/openclaw/clawhub/blob/main/docs/spec.md but is
-    intentionally permissive: any field that the registry omits is
-    rendered as the empty string / 0 / [] so downstream UI code can
-    render the card without conditional branches.
-    """
+    """Permissive per-skill record returned by ``search`` / ``info``."""
 
     slug: str
     display_name: str = ""
@@ -142,13 +94,6 @@ class ClawHubSkillSummary:
 
 
 def _registry_base_url(override: Optional[str] = None) -> str:
-    """Return the resolved registry base URL with trailing slash stripped.
-
-    Defers to :func:`ouroboros.config.get_clawhub_registry_url` when no
-    explicit override is supplied. Hostnames outside the marketplace
-    allowlist raise :class:`ClawHubClientHostBlocked` so a malicious
-    settings override cannot redirect HTTP traffic.
-    """
     if override is None or not str(override).strip():
         from ouroboros.config import get_clawhub_registry_url
         url = get_clawhub_registry_url()
@@ -167,20 +112,12 @@ def _registry_base_url(override: Optional[str] = None) -> str:
         raise ClawHubClientHostBlocked(f"Registry URL {url!r} has no hostname.")
     if parsed.hostname not in _ALLOWED_REGISTRY_HOSTS:
         raise ClawHubClientHostBlocked(
-            f"Registry host {parsed.hostname!r} is not in the marketplace "
-            f"allowlist {sorted(_ALLOWED_REGISTRY_HOSTS)}."
+            f"Registry host {parsed.hostname!r} is not in the marketplace allowlist {sorted(_ALLOWED_REGISTRY_HOSTS)}."
         )
     return url.rstrip("/")
 
 
 def _build_url(base: str, path: str, query: Optional[Dict[str, Any]] = None) -> str:
-    """Join ``base`` + ``path`` defensively (preserves any base path).
-
-    See https://github.com/openclaw/clawhub/issues/433 — ``new URL(path,
-    base)`` semantics drop the base path when ``path`` starts with ``/``.
-    We strip leading slashes from path and append manually so a
-    subpath-deployed registry still works.
-    """
     rel = path.lstrip("/")
     composed = f"{base.rstrip('/')}/{rel}"
     if query:
@@ -189,16 +126,6 @@ def _build_url(base: str, path: str, query: Optional[Dict[str, Any]] = None) -> 
 
 
 class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Refuse 30x redirects whose target host leaves the marketplace allowlist.
-
-    The default ``urllib.request.urlopen`` opener follows redirects
-    transparently with no host re-validation, which would otherwise
-    let the registry hand us a ``302 Location: https://evil.example.com/...``
-    and exfiltrate / SSRF-pivot the request. Substituting this handler
-    closes that loophole — every hop must independently satisfy
-    :data:`_ALLOWED_REGISTRY_HOSTS`.
-    """
-
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
         target = urllib.parse.urlparse(newurl).hostname
         if target not in _ALLOWED_REGISTRY_HOSTS:
@@ -212,7 +139,6 @@ _OPENER = urllib.request.build_opener(_AllowlistRedirectHandler())
 
 
 def _parse_retry_after(value: Any) -> Optional[float]:
-    """Return Retry-After seconds for numeric values; ignore HTTP-date forms."""
     try:
         seconds = float(str(value or "").strip())
     except (TypeError, ValueError):
@@ -245,24 +171,9 @@ def _http_get(
     accept: str = "application/json",
     max_bytes: int = _MAX_JSON_RESPONSE_BYTES,
 ) -> Tuple[bytes, Dict[str, str]]:
-    """Issue a GET, capping the response to ``max_bytes`` bytes.
-
-    Reads the response body in 64 KiB chunks and aborts as soon as the
-    cap is exceeded. Returns ``(body_bytes, headers)``. Raises
-    :class:`ClawHubClientError` on transport / HTTP / oversize errors,
-    or :class:`ClawHubClientHostBlocked` on a redirect target outside
-    :data:`_ALLOWED_REGISTRY_HOSTS`.
-    """
     last_retry_after: Optional[float] = None
     for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Accept": accept,
-            },
-            method="GET",
-        )
+        request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, "Accept": accept}, method="GET")
         try:
             with _OPENER.open(request, timeout=timeout) as response:
                 status = int(getattr(response, "status", 0) or response.getcode() or 0)
@@ -274,9 +185,7 @@ def _http_get(
                         continue
                     raise ClawHubRateLimitError(url, retry_after)
                 if status >= 400:
-                    raise ClawHubClientError(
-                        f"GET {url} returned HTTP {status}"
-                    )
+                    raise ClawHubClientError(f"GET {url} returned HTTP {status}")
                 buf = bytearray()
                 while True:
                     chunk = response.read(64 * 1024)
@@ -284,8 +193,7 @@ def _http_get(
                         break
                     if len(buf) + len(chunk) > max_bytes:
                         raise ClawHubClientError(
-                            f"GET {url} response exceeds {max_bytes} byte cap "
-                            "(possible registry abuse)."
+                            f"GET {url} response exceeds {max_bytes} byte cap (possible registry abuse)."
                         )
                     buf.extend(chunk)
                 headers = {k.lower(): v for k, v in response.headers.items()}
@@ -311,14 +219,7 @@ def _decode_json(body: bytes, *, url: str) -> Any:
         text = body.decode("utf-8", errors="replace")
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ClawHubClientError(
-            f"GET {url} returned invalid JSON: {exc}"
-        ) from exc
-
-
-# ---------------------------------------------------------------------------
-# Summary parsing
-# ---------------------------------------------------------------------------
+        raise ClawHubClientError(f"GET {url} returned invalid JSON: {exc}") from exc
 
 
 def _coerce_str_list(value: Any) -> List[str]:
@@ -327,15 +228,7 @@ def _coerce_str_list(value: Any) -> List[str]:
     if isinstance(value, list):
         result = []
         for item in value:
-            if isinstance(item, dict):
-                text = (
-                    item.get("version")
-                    or item.get("name")
-                    or item.get("tag")
-                    or item.get("value")
-                )
-            else:
-                text = item
+            text = _coerce_version(item) if isinstance(item, dict) else item
             cleaned = str(text or "").strip()
             if cleaned:
                 result.append(cleaned)
@@ -347,69 +240,28 @@ def _coerce_str_list(value: Any) -> List[str]:
 
 def _coerce_version(value: Any) -> str:
     if isinstance(value, dict):
-        return str(
-            value.get("version")
-            or value.get("name")
-            or value.get("tag")
-            or ""
-        ).strip()
+        return str(value.get("version") or value.get("name") or value.get("tag") or value.get("value") or "").strip()
     return str(value or "").strip()
 
 
 def _detect_plugin(raw: Dict[str, Any]) -> bool:
-    """Return True when the registry record looks like a Node plugin.
-
-    OpenClaw plugins announce themselves via either an explicit
-    ``kind: plugin`` discriminator (newer registry shape) or by
-    bundling an ``openclaw.plugin.json`` in the package — the registry
-    indexes that under ``plugin_manifest`` / ``has_plugin`` /
-    ``package_kind == 'plugin'``. We accept any of these as a plugin
-    flag; the marketplace UI hides plugins from search results.
-    """
-    kind = str(
-        raw.get("kind")
-        or raw.get("package_kind")
-        or raw.get("family")
-        or ""
-    ).lower()
-    if kind in {"plugin", "code-plugin"}:
-        return True
-    if raw.get("plugin_manifest"):
-        return True
-    if raw.get("has_plugin") is True:
-        return True
-    return False
+    kind = str(raw.get("kind") or raw.get("package_kind") or raw.get("family") or "").lower()
+    return kind in {"plugin", "code-plugin"} or bool(raw.get("plugin_manifest")) or raw.get("has_plugin") is True
 
 
 def _extract_metadata_openclaw(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Pull the ``metadata.openclaw`` block out of a parsed record.
-
-    The registry sometimes nests metadata one level deep
-    (``metadata.openclaw``), sometimes uses the legacy ``clawdis`` /
-    ``clawdbot`` aliases, and sometimes flattens fields onto the
-    top-level record. We consult all three and the FIRST non-empty
-    block wins.
-    """
-    metadata = raw.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    for key in ("openclaw", "clawdis", "clawdbot"):
-        block = metadata.get(key)
-        if isinstance(block, dict) and block:
-            return block
     parsed = raw.get("parsed")
-    if isinstance(parsed, dict):
-        nested = parsed.get("metadata", {})
-        if isinstance(nested, dict):
-            for key in ("openclaw", "clawdis", "clawdbot"):
-                block = nested.get(key)
-                if isinstance(block, dict) and block:
-                    return block
+    for metadata in (raw.get("metadata"), parsed.get("metadata") if isinstance(parsed, dict) else None):
+        if not isinstance(metadata, dict):
+            continue
+        for key in ("openclaw", "clawdis", "clawdbot"):
+            block = metadata.get(key)
+            if isinstance(block, dict) and block:
+                return block
     return {}
 
 
 def _normalize_record(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Flatten modern package/detail wrappers into one summary record."""
     if isinstance(raw.get("package"), dict):
         normalized = dict(raw["package"])
     elif isinstance(raw.get("skill"), dict):
@@ -426,48 +278,25 @@ def _normalize_record(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_items_and_cursor(parsed: Any, *, path: str) -> Tuple[List[Any], str]:
-    """Return registry items + cursor from browse/search response shapes."""
     if isinstance(parsed, list):
         return parsed, ""
     if not isinstance(parsed, dict):
-        raise ClawHubClientError(
-            f"Unexpected response shape from {path}: {type(parsed).__name__}"
-        )
+        raise ClawHubClientError(f"Unexpected response shape from {path}: {type(parsed).__name__}")
     container = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
     if not isinstance(container, dict):
-        raise ClawHubClientError(
-            f"Unexpected data shape from {path}: {type(container).__name__}"
-        )
-    items = (
-        container.get("results")
-        or container.get("items")
-        or container.get("skills")
-        or container.get("packages")
-        or []
-    )
+        raise ClawHubClientError(f"Unexpected data shape from {path}: {type(container).__name__}")
+    items = container.get("results") or container.get("items") or container.get("skills") or container.get("packages") or []
     if not isinstance(items, list):
-        raise ClawHubClientError(
-            f"Unexpected items shape from {path}: {type(items).__name__}"
-        )
-    next_cursor = str(
-        container.get("nextCursor")
-        or container.get("next_cursor")
-        or container.get("cursor")
-        or ""
-    )
+        raise ClawHubClientError(f"Unexpected items shape from {path}: {type(items).__name__}")
+    next_cursor = str(container.get("nextCursor") or container.get("next_cursor") or container.get("cursor") or "")
     return items, next_cursor
 
 
 def _summary_from_record(raw: Any) -> ClawHubSkillSummary:
-    """Build a :class:`ClawHubSkillSummary` from one registry record."""
     if not isinstance(raw, dict):
-        raise ClawHubClientError(
-            f"Registry record must be an object, got {type(raw).__name__}"
-        )
+        raise ClawHubClientError(f"Registry record must be an object, got {type(raw).__name__}")
     raw = _normalize_record(raw)
-    slug = (
-        str(raw.get("slug") or raw.get("name") or "").strip()
-    )
+    slug = str(raw.get("slug") or raw.get("name") or "").strip()
     if not slug:
         raise ClawHubClientError("Registry record missing required 'slug'/'name'")
 
@@ -544,16 +373,10 @@ def _summary_from_record(raw: Any) -> ClawHubSkillSummary:
     )
 
 
-# ---------------------------------------------------------------------------
-# Public client surface
-# ---------------------------------------------------------------------------
-
-
 def _merge_enriched_summary(
     bare: ClawHubSkillSummary,
     rich: ClawHubSkillSummary,
 ) -> ClawHubSkillSummary:
-    """Merge a thin /search hit with the rich package detail record."""
     rich_display = rich.display_name
     if rich_display == rich.slug and bare.display_name:
         rich_display = ""
@@ -561,24 +384,18 @@ def _merge_enriched_summary(
     raw.update(rich.raw)
     if "score" in bare.raw and "search_score" not in raw:
         raw["search_score"] = bare.raw.get("score")
+    values = {
+        item.name: getattr(rich, item.name) or getattr(bare, item.name)
+        for item in fields(ClawHubSkillSummary)
+        if item.name not in {"slug", "display_name", "badges", "is_plugin", "raw"}
+    }
     return ClawHubSkillSummary(
         slug=bare.slug,
         display_name=rich_display or bare.display_name,
-        summary=rich.summary or bare.summary,
-        description=rich.description or bare.description,
-        latest_version=rich.latest_version or bare.latest_version,
-        versions=rich.versions or bare.versions,
-        license=rich.license or bare.license,
-        homepage=rich.homepage or bare.homepage,
-        os_list=rich.os_list or bare.os_list,
-        requires_env=rich.requires_env or bare.requires_env,
-        requires_bins=rich.requires_bins or bare.requires_bins,
-        primary_env=rich.primary_env or bare.primary_env,
-        install_specs=rich.install_specs or bare.install_specs,
         badges={**bare.badges, **rich.badges},
-        stats=rich.stats or bare.stats,
         is_plugin=rich.is_plugin or bare.is_plugin,
         raw=raw,
+        **values,
     )
 
 
@@ -588,7 +405,6 @@ def _enrich_search_summaries(
     registry_url: Optional[str],
     timeout_sec: int,
 ) -> Tuple[List[ClawHubSkillSummary], List[str]]:
-    """Recover rich package metadata for thin /search results."""
     if not summaries:
         return summaries, []
     enriched = list(summaries)
@@ -653,16 +469,11 @@ def search(
     max_limit = _SEARCH_ENRICH_LIMIT if cleaned_query else 100
     safe_limit = max(1, min(int(limit or 25), max_limit))
     path = _LEXICAL_SEARCH_PATH if cleaned_query else _BROWSE_PATH
-    if cleaned_query:
-        query_params: Dict[str, Any] = {
-            "q": cleaned_query,
-            "limit": safe_limit,
-        }
-    else:
-        query_params = {
-            "family": "skill",
-            "limit": safe_limit,
-        }
+    query_params: Dict[str, Any] = {"q": cleaned_query, "limit": safe_limit} if cleaned_query else {
+        "family": "skill",
+        "limit": safe_limit,
+    }
+    if not cleaned_query:
         if official_only:
             query_params["isOfficial"] = "true"
         cleaned_cursor = str(cursor or "").strip()
@@ -710,18 +521,6 @@ def search(
 
 
 def _validate_slug(slug: str) -> str:
-    """Strip + validate a slug before sending it to the registry.
-
-    Slugs reach this function via the HTTP route ``{slug:path}`` which
-    accepts arbitrary path segments including ``..`` traversal. The
-    install pipeline's ``sanitize_clawhub_slug`` already protects the
-    on-disk landing path, but a slug like ``../../etc`` would still be
-    issued as ``GET /api/v1/skills/../../etc`` to the registry — a
-    small SSRF amplifier letting an external HTTP caller probe
-    arbitrary registry paths via the Ouroboros server. We reject ``..``
-    segments and absolute paths up-front so the registry only sees
-    well-formed slug shapes.
-    """
     cleaned = (slug or "").strip()
     if not cleaned:
         raise ClawHubClientError("'slug' must be non-empty")
@@ -737,10 +536,6 @@ def _fetch_summary_path(base: str, path: str, *, timeout_sec: int) -> ClawHubSki
     url = _build_url(base, path)
     body, _headers = _http_get(url, timeout=timeout_sec)
     parsed = _decode_json(body, url=url)
-    if isinstance(parsed, dict) and "skill" in parsed:
-        return _summary_from_record(parsed)
-    if isinstance(parsed, dict) and "package" in parsed:
-        return _summary_from_record(parsed)
     return _summary_from_record(parsed)
 
 
@@ -830,20 +625,10 @@ def download(
     registry_url: Optional[str] = None,
     timeout_sec: int = _DEFAULT_TIMEOUT_SEC * 2,
 ) -> ClawHubArchive:
-    """Download the binary archive for ``slug`` (specific version or latest).
+    """Download an archive and return bytes plus a local sha256 fingerprint.
 
-    The download endpoint is ``GET /download?slug=<skill>&version=<version>``.
-    On success returns the bytes
-    + a sha256 fingerprint computed locally over those bytes.
-
-    Important: the returned ``sha256`` is the fingerprint of WHAT WE
-    RECEIVED, not a registry-side advertised digest. The current
-    ClawHub registry does not expose a separate per-version digest in
-    its ``info`` response, so there is no out-of-band integrity anchor
-    we can cross-check against. The TLS connection to ``clawhub.ai``
-    is the only integrity gate the marketplace enjoys today; the
-    fingerprint here is useful for provenance + change-detection on
-    update flows, NOT as an MITM defense.
+    The sha256 describes what was received, not a registry-advertised digest;
+    TLS is the current integrity anchor.
     """
     import hashlib
     cleaned = _validate_slug(slug)

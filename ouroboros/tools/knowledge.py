@@ -1,8 +1,4 @@
-"""Knowledge base tools: persistent structured memory on local disk.
-
-Provides read/write/list operations for topic-based knowledge files
-stored in memory/knowledge/ on the local data directory. Auto-maintains an index file.
-"""
+"""Persistent topic-based knowledge files with an auto-maintained index."""
 
 import json
 import logging
@@ -18,29 +14,23 @@ log = logging.getLogger(__name__)
 KNOWLEDGE_DIR = "memory/knowledge"
 INDEX_FILE = "index-full.md"
 
-# --- Sanitization ---
-
 _VALID_TOPIC = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,98}[a-zA-Z0-9]$|^[a-zA-Z0-9]$')
 _RESERVED = frozenset({"_index", "index-full", "con", "prn", "aux", "nul"})
 
 
 def _sanitize_topic(topic: str) -> str:
-    """Validate and sanitize topic name. Raises ValueError on bad input."""
+    """Validate a topic name and raise ValueError on bad input."""
     if not topic or not isinstance(topic, str):
         raise ValueError("Topic must be a non-empty string")
 
-    # Strip whitespace
     topic = topic.strip()
 
-    # Reject path separators and traversal
     if '/' in topic or '\\' in topic or '..' in topic:
         raise ValueError(f"Invalid characters in topic: {topic}")
 
-    # Check against pattern
     if not _VALID_TOPIC.match(topic):
         raise ValueError(f"Invalid topic name: {topic}. Use alphanumeric, underscore, hyphen, dot.")
 
-    # Reject reserved names
     if topic.lower() in _RESERVED:
         raise ValueError(f"Reserved topic name: {topic}")
 
@@ -48,20 +38,14 @@ def _sanitize_topic(topic: str) -> str:
 
 
 def _safe_path(ctx: ToolContext, topic: str) -> tuple[Path, str]:
-    """Build and verify path is within knowledge directory.
-
-    Returns:
-        tuple[Path, str]: (path, sanitized_topic)
-    """
+    """Build a knowledge path and verify containment."""
     sanitized_topic = _sanitize_topic(topic)
     kdir = ctx.drive_path(KNOWLEDGE_DIR)
     path = kdir / f"{sanitized_topic}.md"
 
-    # Resolve and verify containment
     resolved = path.resolve()
     kdir_resolved = kdir.resolve()
 
-    # Use relative_to for robust path containment check
     try:
         resolved.relative_to(kdir_resolved)
     except ValueError:
@@ -70,26 +54,19 @@ def _safe_path(ctx: ToolContext, topic: str) -> tuple[Path, str]:
     return path, sanitized_topic
 
 
-# --- Helpers ---
-
 def _ensure_dir(ctx: ToolContext):
-    """Create knowledge directory if it doesn't exist."""
+    """Create the knowledge directory."""
     ctx.drive_path(KNOWLEDGE_DIR).mkdir(parents=True, exist_ok=True)
 
 
 def _extract_summary(text: str, max_chars: int = 150) -> str:
-    """Extract a richer summary from knowledge file content.
-
-    Skips heading lines (starting with #) and collects up to 3 meaningful
-    content sentences/lines, joined with ' | ', capped at max_chars.
-    """
+    """Extract up to three non-heading snippets for the index."""
     lines = text.strip().split("\n")
     snippets = []
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        # Strip markdown list/bold markers for a cleaner snippet
         clean = stripped.lstrip("-*").strip().lstrip("#").strip()
         if clean:
             snippets.append(clean)
@@ -103,7 +80,7 @@ def _extract_summary(text: str, max_chars: int = 150) -> str:
 
 
 def _rebuild_index(ctx: ToolContext):
-    """Rebuild the knowledge index from all .md files (full scan)."""
+    """Rebuild the knowledge index from all topic files."""
     kdir = ctx.drive_path(KNOWLEDGE_DIR)
     if not kdir.exists():
         return
@@ -112,14 +89,11 @@ def _rebuild_index(ctx: ToolContext):
     for f in sorted(kdir.glob("*.md")):
         if f.name == INDEX_FILE:
             continue
-        # Sanitize topic from filename to protect against hand-crafted filenames
         try:
             topic = _sanitize_topic(f.stem)
         except ValueError:
-            # Skip files with invalid names
             continue
 
-        # Read first 3 non-heading lines as summary
         try:
             text = f.read_text(encoding="utf-8").strip()
             summary = _extract_summary(text)
@@ -138,20 +112,18 @@ def _rebuild_index(ctx: ToolContext):
 
 
 def _update_index_entry(ctx: ToolContext, topic: str):
-    """Incrementally update the index for a single topic."""
+    """Update the index entry for one topic."""
     kdir = ctx.drive_path(KNOWLEDGE_DIR)
     index_path = kdir / INDEX_FILE
     topic_path = kdir / f"{topic}.md"
 
     _ensure_dir(ctx)
 
-    # Read existing index or create header
     if index_path.exists():
         index_content = index_path.read_text(encoding="utf-8")
     else:
         index_content = "# Knowledge Base Index\n\n"
 
-    # Split into lines, preserving header
     lines = index_content.split("\n")
     header_end = 0
     for i, line in enumerate(lines):
@@ -164,11 +136,9 @@ def _update_index_entry(ctx: ToolContext, topic: str):
     header = "\n".join(lines[:header_end])
     entries = [line for line in lines[header_end:] if line.strip() and line.strip() != "(empty)"]
 
-    # Remove old entry for this topic (if exists)
     pattern = f"- **{topic}**:"
     entries = [e for e in entries if not e.strip().startswith(pattern)]
 
-    # Add new entry if topic file exists
     if topic_path.exists():
         try:
             text = topic_path.read_text(encoding="utf-8").strip()
@@ -178,26 +148,21 @@ def _update_index_entry(ctx: ToolContext, topic: str):
             log.debug(f"Failed to read knowledge file for index update: {topic}", exc_info=True)
             new_entry = f"- **{topic}**: (unreadable)"
 
-        # Insert in sorted position
         entries.append(new_entry)
         entries.sort(key=lambda e: e.lower())
 
-    # Rebuild index content
     if entries:
         new_index = header.rstrip("\n") + "\n\n" + "\n".join(entries) + "\n"
     else:
         new_index = header.rstrip("\n") + "\n\n(empty)\n"
 
-    # Atomic write: temp file + replace (works on Windows even if target exists)
     temp_path = index_path.with_suffix(".tmp")
     temp_path.write_text(new_index, encoding="utf-8")
     temp_path.replace(index_path)
 
 
-# --- Tool handlers ---
-
 def _knowledge_read(ctx: ToolContext, topic: str) -> str:
-    """Read a knowledge file by topic name."""
+    """Read a knowledge topic."""
     try:
         path, sanitized_topic = _safe_path(ctx, topic)
     except ValueError as e:
@@ -209,28 +174,25 @@ def _knowledge_read(ctx: ToolContext, topic: str) -> str:
 
 
 def _knowledge_write(ctx: ToolContext, topic: str, content: str, mode: str = "overwrite") -> str:
-    """Write or append to a knowledge file."""
+    """Write or append a knowledge topic."""
     try:
         path, sanitized_topic = _safe_path(ctx, topic)
     except ValueError as e:
         return f"⚠️ Invalid topic: {e}"
 
-    # Validate mode explicitly
     if mode not in ("overwrite", "append"):
         return f"⚠️ Invalid mode '{mode}'. Use 'overwrite' or 'append'."
 
     _ensure_dir(ctx)
 
     if mode == "append":
-        # Check if we need a leading newline by reading last byte first
         needs_newline = False
         if path.exists() and path.stat().st_size > 0:
             with open(path, "rb") as rf:
-                rf.seek(-1, 2)  # Seek to last byte
+                rf.seek(-1, 2)
                 if rf.read(1) != b"\n":
                     needs_newline = True
 
-        # Now open for append and write
         with open(path, "a", encoding="utf-8") as f:
             if needs_newline:
                 f.write("\n")
@@ -240,7 +202,6 @@ def _knowledge_write(ctx: ToolContext, topic: str, content: str, mode: str = "ov
 
     _update_index_entry(ctx, sanitized_topic)
 
-    # Journal for evolution tracking
     try:
         journal_path = ctx.drive_root / "memory" / "knowledge_journal.jsonl"
         total_kb = 0
@@ -259,20 +220,19 @@ def _knowledge_write(ctx: ToolContext, topic: str, content: str, mode: str = "ov
         with open(journal_path, "a", encoding="utf-8") as jf:
             jf.write(json.dumps(entry) + "\n")
     except Exception:
-        pass  # Don't fail write on journal error
+        pass
 
     return f"✅ Knowledge '{sanitized_topic}' saved ({mode})."
 
 
 def _knowledge_list(ctx: ToolContext) -> str:
-    """List all knowledge topics with summaries."""
+    """List knowledge topics with summaries."""
     kdir = ctx.drive_path(KNOWLEDGE_DIR)
     index_path = kdir / INDEX_FILE
 
     if index_path.exists():
         return index_path.read_text(encoding="utf-8")
 
-    # No index yet — build it
     if kdir.exists():
         _rebuild_index(ctx)
         if index_path.exists():
@@ -280,8 +240,6 @@ def _knowledge_list(ctx: ToolContext) -> str:
 
     return "Knowledge base is empty. Use knowledge_write to add topics."
 
-
-# --- Tool registration ---
 
 def get_tools() -> List[ToolEntry]:
     return [

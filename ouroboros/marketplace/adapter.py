@@ -1,30 +1,4 @@
-"""OpenClaw -> Ouroboros frontmatter adapter (v4.50).
-
-Reads a staged ClawHub skill (output of :mod:`ouroboros.marketplace.fetcher`)
-and produces a translated ``SKILL.md`` that conforms to Ouroboros's
-:class:`ouroboros.contracts.skill_manifest.SkillManifest` shape, while
-preserving the original ``SKILL.md`` as ``SKILL.openclaw.md`` for
-auditability + later review.
-
-The adapter NEVER:
-
-- Auto-forwards a setting key that overlaps with
-  :data:`ouroboros.contracts.plugin_api.FORBIDDEN_SKILL_SETTINGS`.
-  Core keys may be preserved in ``env_from_settings`` only as explicit
-  per-skill grant requirements; runtime access still requires a fresh executable review
-  review plus owner approval bound to the current content hash.
-- Normalises ``metadata.openclaw.install`` specs into review-first
-  isolated dependency installs where possible; global host mutations
-  become manual guidance.
-- Trusts a declared ``always: true`` flag — every adapted skill lands
-  with ``enabled: false`` and must be opted into by the operator
-  through the Skills UI / ``toggle_skill`` after a fresh executable review.
-
-Returns an :class:`AdapterResult` whose ``ok`` field summarises whether
-the staged tree can proceed to the install + review stage. ``blockers``
-explains every reason for a rejection and ``warnings`` carries
-non-blocking notes the UI should surface to the operator.
-"""
+"""Translate staged OpenClaw skill metadata into Ouroboros ``SKILL.md`` with preserved provenance."""
 
 from __future__ import annotations
 
@@ -61,7 +35,7 @@ ADAPTER_VERSION = "5.5.0"
 
 @dataclass
 class AdapterResult:
-    """Outcome of :func:`adapt_openclaw_skill`."""
+    """Outcome of ``adapt_openclaw_skill``."""
 
     ok: bool
     sanitized_name: str
@@ -77,13 +51,6 @@ class AdapterResult:
 
 
 def sanitize_clawhub_slug(slug: str) -> str:
-    """Convert a ClawHub slug into an on-disk directory basename.
-
-    ``owner/skill`` becomes ``owner__skill`` (double underscore so it
-    cannot collide with a native ``owner_skill`` skill). Non-allowed
-    characters become a single underscore. Empty/pathological inputs
-    fall back to ``"_clawhub_skill"``.
-    """
     cleaned = (slug or "").strip()
     if not cleaned:
         return "_clawhub_skill"
@@ -96,14 +63,6 @@ def sanitize_clawhub_slug(slug: str) -> str:
 
 
 def _read_skill_md(staging_dir: pathlib.Path) -> tuple[str, str, Dict[str, Any]]:
-    """Return ``(raw_text, body_after_frontmatter, parsed_frontmatter)``.
-
-    Tries ``SKILL.md`` first then ``skill.json``. ``parsed_frontmatter``
-    is whatever ``parse_skill_manifest_text`` recovered, including the
-    extras under ``raw_extra``. Raises :class:`SkillManifestError` if
-    neither manifest is present (which would normally have been caught
-    by the fetcher already, but we re-check defensively).
-    """
     skill_md = staging_dir / "SKILL.md"
     skill_json = staging_dir / "skill.json"
     if skill_md.is_file():
@@ -120,12 +79,6 @@ def _read_skill_md(staging_dir: pathlib.Path) -> tuple[str, str, Dict[str, Any]]
 
 
 def _manifest_frontmatter_dict(manifest: SkillManifest) -> Dict[str, Any]:
-    """Reconstruct a frontmatter-shaped dict from a parsed manifest.
-
-    Keeps the parser-extracted ``raw_extra`` intact so downstream code
-    can introspect OpenClaw-specific keys (``metadata`` /
-    ``allowed-tools`` / ``compatibility`` / ...).
-    """
     front: Dict[str, Any] = {
         "name": manifest.name,
         "description": manifest.description,
@@ -145,15 +98,7 @@ def _manifest_frontmatter_dict(manifest: SkillManifest) -> Dict[str, Any]:
     front.update(manifest.raw_extra or {})
     return front
 
-
-# ---------------------------------------------------------------------------
-# Field translators
-# ---------------------------------------------------------------------------
-
-
 def _json_safe(value: Any) -> Any:
-    """Return a JSON-serializable copy for provenance snapshots."""
-
     try:
         return json.loads(json.dumps(value, ensure_ascii=False, default=str))
     except (TypeError, ValueError):
@@ -165,8 +110,6 @@ def _openclaw_compat_snapshot(
     metadata_block: Dict[str, Any],
     warnings: List[str],
 ) -> Dict[str, Any]:
-    """Preserve OpenClaw authoring metadata not native to Ouroboros."""
-
     requires = metadata_block.get("requires") if isinstance(metadata_block, dict) else {}
     if not isinstance(requires, dict):
         requires = {}
@@ -185,14 +128,11 @@ def _openclaw_compat_snapshot(
     }
     if requires.get("config"):
         warnings.append(
-            "OpenClaw metadata declares requires.config gates. Ouroboros "
-            "preserves them in provenance but does not treat them as runtime "
-            "permissions or auto-enable conditions."
+            "OpenClaw metadata declares requires.config gates. Ouroboros preserves them in provenance but does not treat them as runtime permissions or auto-enable conditions."
         )
     if metadata_block.get("always") is True:
         warnings.append(
-            "OpenClaw metadata declares always=true. Ouroboros ignores it: "
-            "marketplace installs still require review and explicit enablement."
+            "OpenClaw metadata declares always=true. Ouroboros ignores it: marketplace installs still require review and explicit enablement."
         )
     return {
         "adapter_version": ADAPTER_VERSION,
@@ -213,7 +153,6 @@ def _openclaw_compat_snapshot(
 
 
 def _normalise_os(value: Any) -> str:
-    """Map OpenClaw ``os: ['darwin','linux']`` to Ouroboros's single-string field."""
     items = _coerce_str_list(value)
     if not items:
         return "any"
@@ -225,8 +164,7 @@ def _normalise_os(value: Any) -> str:
     if len(normalised) == 1:
         only = next(iter(normalised))
         return only if only in {"darwin", "linux", "windows"} else "any"
-    # Mixed (e.g. darwin+linux). Use comma-joined sorted list for visibility,
-    # with "any" as a safe fallback when validation later refuses it.
+    # Mixed OS values stay visible; later validation may fall back to "any".
     return ",".join(sorted(normalised))
 
 
@@ -235,16 +173,6 @@ def _detect_runtime(
     staging_dir: pathlib.Path,
     warnings: List[str],
 ) -> str:
-    """Decide which runtime the skill scripts target.
-
-    Checks (in order):
-
-    1. ``metadata.openclaw.requires.bins`` declared by the publisher.
-    2. Shebangs / file extensions inside ``staging_dir/scripts/`` if
-       any script files exist.
-    3. ``""`` (empty) when there is no scripts/ directory at all — the
-       skill becomes ``type: instruction`` downstream.
-    """
     requires = metadata_block.get("requires") or {}
     if not isinstance(requires, dict):
         requires = {}
@@ -254,14 +182,10 @@ def _detect_runtime(
     declared_outside = [b for b in declared if b not in _ALLOWED_RUNTIME_BINS]
     if declared_outside:
         warnings.append(
-            "Skill declares CLI dependencies outside the allowed runtime "
-            f"set ({sorted(_ALLOWED_RUNTIME_BINS)}): {declared_outside}. "
-            "Scripts will not be executable; the skill will land as "
-            "'type: instruction' (markdown-only)."
+            f"Skill declares CLI dependencies outside the allowed runtime set ({sorted(_ALLOWED_RUNTIME_BINS)}): {declared_outside}. Scripts will not be executable; the skill will land as 'type: instruction' (markdown-only)."
         )
     if declared_in_allowlist:
-        # Prefer the most common case (python > node > bash) when multiple
-        # runtimes are declared but only one is supported by skill_exec.
+        # Prefer the common case when only one runtime can be emitted.
         for preferred in ("python3", "python", "node", "bash"):
             if preferred in declared_in_allowlist:
                 return preferred
@@ -281,7 +205,6 @@ def _detect_runtime(
 
 
 def _list_scripts_dir(staging_dir: pathlib.Path) -> List[Dict[str, str]]:
-    """Return Ouroboros-shaped ``scripts`` entries for files under ``scripts/``."""
     scripts_dir = staging_dir / "scripts"
     out: List[Dict[str, str]] = []
     if not scripts_dir.is_dir():
@@ -298,23 +221,6 @@ def _translate_permissions(
     front: Dict[str, Any],
     warnings: List[str],
 ) -> List[str]:
-    """Approximate Ouroboros permissions from OpenClaw metadata.
-
-    The mapping is deliberately conservative: any time we cannot prove
-    a less-permissive set works, we widen the permission and warn so
-    the reviewer knows to double-check. Specifically:
-
-    - ``allowed-tools`` containing ``Bash(python:*)`` -> ``subprocess``.
-    - ``allowed-tools`` containing ``Read``/``Write`` -> ``fs``.
-    - ``metadata.openclaw.requires.bins`` non-empty -> ``subprocess``.
-    - ``metadata.openclaw.requires.env`` non-empty AND (likely a
-      network credential) -> ``net``.
-    - Tokens we did not match (``Edit``, ``Glob``, ``Grep``, ``LS``,
-      ``TodoWrite``, ``MultiEdit``, custom verbs, etc.) are recorded
-      and surfaced as a single grouped warning so the reviewer knows
-      the publisher declared capabilities the adapter could not map —
-      those tokens are NEVER silently dropped without a trace.
-    """
     perms: set[str] = set()
     unrecognised: List[str] = []
     allowed_tools_raw = front.get("allowed-tools") or front.get("allowed_tools") or ""
@@ -340,24 +246,18 @@ def _translate_permissions(
             unrecognised.append(token)
     if unrecognised:
         warnings.append(
-            "OpenClaw 'allowed-tools' tokens not mapped to Ouroboros permissions: "
-            f"{sorted(set(unrecognised))}. Reviewer must cross-check "
-            "SKILL.openclaw.md to confirm the publisher's declared capabilities "
-            "are still honoured by the translated manifest."
+            f"OpenClaw 'allowed-tools' tokens not mapped to Ouroboros permissions: {sorted(set(unrecognised))}. Reviewer must cross-check SKILL.openclaw.md to confirm the publisher's declared capabilities are still honoured by the translated manifest."
         )
     requires = metadata_block.get("requires") or {}
     if isinstance(requires, dict):
         if _coerce_str_list(requires.get("bins")) or _coerce_str_list(requires.get("anyBins")):
             perms.add("subprocess")
         if _coerce_str_list(requires.get("env")):
-            # Most ClawHub skills use env vars for API tokens that imply
-            # outbound HTTP. We err on the side of declaring ``net``.
+            # Env vars often imply API tokens and outbound HTTP.
             perms.add("net")
     if not perms:
         warnings.append(
-            "Could not derive any specific permissions from the OpenClaw "
-            "manifest; skill will be installed with an empty permissions "
-            "list. Reviewer must verify scripts make no privileged calls."
+            "Could not derive any specific permissions from the OpenClaw manifest; skill will be installed with an empty permissions list. Reviewer must verify scripts make no privileged calls."
         )
     return sorted(perms)
 
@@ -367,16 +267,6 @@ def _translate_env_from_settings(
     blockers: List[str],
     warnings: Optional[List[str]] = None,
 ) -> List[str]:
-    """Translate the publisher's declared env keys into Ouroboros allowlist.
-
-    Both the adapter and the runtime denylist (``skill_exec._FORBIDDEN_ENV_FORWARD_KEYS``)
-    use a CASE-INSENSITIVE comparison: a publisher could otherwise
-    declare ``openrouter_api_key`` (lowercase) and slip past the
-    sorted-set check, since ``FORBIDDEN_SKILL_SETTINGS`` is canonically
-    UPPERCASE. We normalise to UPPER at the boundary and emit the
-    canonical form so the runtime + reviewer + UI all agree on the
-    allowlisted shape.
-    """
     requires = metadata_block.get("requires") or {}
     keys = _coerce_str_list(requires.get("env") if isinstance(requires, dict) else None)
     forbidden_upper = {k.upper() for k in FORBIDDEN_SKILL_SETTINGS}
@@ -391,33 +281,17 @@ def _translate_env_from_settings(
             continue
         out.append(canonical)
     if blocked:
+        message = f"OpenClaw manifest requests core settings keys that require explicit per-skill grants before execution: {sorted(set(blocked))}."
         if warnings is not None:
-            warnings.append(
-                "OpenClaw manifest requests core settings keys that require "
-                f"explicit per-skill grants before execution: {sorted(set(blocked))}."
-            )
+            warnings.append(message)
         else:
-            blockers.append(
-                "OpenClaw manifest requests core settings keys that require "
-                f"explicit per-skill grants before execution: {sorted(set(blocked))}."
-            )
+            blockers.append(message)
     return out + [key for key in sorted(set(blocked)) if key not in out]
 
-
-# ---------------------------------------------------------------------------
-# Rendering
-# ---------------------------------------------------------------------------
-
-
 def _render_frontmatter(front: Dict[str, Any]) -> str:
-    """Render translated frontmatter as YAML in a stable key order."""
     import yaml  # type: ignore
 
-    order = (
-        "name", "description", "version", "type", "runtime",
-        "timeout_sec", "when_to_use", "permissions", "env_from_settings",
-        "os", "requires", "entry", "scripts",
-    )
+    order = ("name", "description", "version", "type", "runtime", "timeout_sec", "when_to_use", "permissions", "env_from_settings", "os", "requires", "entry", "scripts")
     ordered = {
         key: front[key]
         for key in order
@@ -457,12 +331,6 @@ def _append_manual_install_guidance(body: str, manual_specs: List[Dict[str, Any]
         lines.append(f"- `{label}`: {reason}")
     return (body or "").rstrip() + "\n" + "\n".join(lines) + "\n"
 
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
 def adapt_openclaw_skill(
     staging_dir: pathlib.Path,
     *,
@@ -471,22 +339,7 @@ def adapt_openclaw_skill(
     sha256: str = "",
     is_plugin: bool = False,
 ) -> AdapterResult:
-    """Translate a staged ClawHub package into Ouroboros's manifest shape.
-
-    On success the staged tree gains:
-
-    - ``SKILL.openclaw.md`` — the original manifest, untouched. Carries
-      the OpenClaw frontmatter the registry indexed.
-    - ``SKILL.md`` — the translated manifest using Ouroboros's
-      vocabulary (``type``, ``runtime``, ``permissions``, ``scripts``,
-      ``env_from_settings``).
-
-    The staged directory is otherwise unchanged. Caller is responsible
-    for moving it into ``data/skills/clawhub/<sanitized_name>/``.
-
-    On failure ``ok`` is ``False`` and ``blockers`` lists the reasons.
-    The caller should call ``StagedSkill.cleanup`` and abort install.
-    """
+    """Translate staged package metadata; blockers prevent install/review."""
     sanitized = sanitize_clawhub_slug(slug)
     target_dirname = sanitized
     warnings: List[str] = []
@@ -503,34 +356,40 @@ def adapt_openclaw_skill(
         "installed_at": utc_now_iso(),
     }
 
-    if is_plugin:
-        blockers.append(
-            "Package is an OpenClaw Node/TypeScript plugin (openclaw.plugin.json "
-            "present). Ouroboros does not run Node-host plugins; refusing "
-            "to install. Ask the author for a Python port or expose via MCP."
-        )
+    def _result(
+        ok: bool,
+        *,
+        manifest: Optional[SkillManifest] = None,
+        translated_front: Optional[Dict[str, Any]] = None,
+        original_front: Optional[Dict[str, Any]] = None,
+        original_body: str = "",
+        plugin: bool = False,
+    ) -> AdapterResult:
         return AdapterResult(
-            ok=False,
+            ok=ok,
             sanitized_name=sanitized,
             target_dirname=target_dirname,
+            manifest=manifest,
             warnings=warnings,
             blockers=blockers,
             provenance=provenance,
-            is_plugin=True,
+            translated_frontmatter=translated_front or {},
+            original_frontmatter=original_front or {},
+            original_body=original_body,
+            is_plugin=plugin,
         )
+
+    if is_plugin:
+        blockers.append(
+            "Package is an OpenClaw Node/TypeScript plugin (openclaw.plugin.json present). Ouroboros does not run Node-host plugins; refusing to install. Ask the author for a Python port or expose via MCP."
+        )
+        return _result(False, plugin=True)
 
     try:
         original_text, body, original_front = _read_skill_md(staging_dir)
     except SkillManifestError as exc:
         blockers.append(f"Manifest unreadable: {exc}")
-        return AdapterResult(
-            ok=False,
-            sanitized_name=sanitized,
-            target_dirname=target_dirname,
-            warnings=warnings,
-            blockers=blockers,
-            provenance=provenance,
-        )
+        return _result(False)
 
     metadata_block = _extract_metadata_block(original_front)
     openclaw_compat = _openclaw_compat_snapshot(original_front, metadata_block, warnings)
@@ -540,14 +399,11 @@ def adapt_openclaw_skill(
     warnings.extend(install_warnings)
     if auto_install_specs:
         warnings.append(
-            "Skill declares dependency install specs. Ouroboros will land the "
-            "payload disabled, require a fresh executable review, then install these "
-            "dependencies only inside the skill's .ouroboros_env directory."
+            "Skill declares dependency install specs. Ouroboros will land the payload disabled, require a fresh executable review, then install these dependencies only inside the skill's .ouroboros_env directory."
         )
     if manual_install_specs:
         warnings.append(
-            "Some install specs were converted to manual setup guidance because "
-            "they cannot be isolated without mutating global host state."
+            "Some install specs were converted to manual setup guidance because they cannot be isolated without mutating global host state."
         )
 
     env_keys = _translate_env_from_settings(metadata_block, blockers, warnings)
@@ -556,36 +412,26 @@ def adapt_openclaw_skill(
     scripts_entries = _list_scripts_dir(staging_dir)
     if runtime and not scripts_entries:
         warnings.append(
-            f"Runtime '{runtime}' detected but no executable files found "
-            "under scripts/; skill becomes 'type: instruction'."
+            f"Runtime '{runtime}' detected but no executable files found under scripts/; skill becomes 'type: instruction'."
         )
-    if not runtime:
-        skill_type = "instruction"
-    elif scripts_entries:
-        skill_type = "script"
-    else:
-        skill_type = "instruction"
+    skill_type = "script" if runtime and scripts_entries else "instruction"
 
     permissions = _translate_permissions(metadata_block, original_front, warnings)
     if skill_type != "script":
-        # Strip subprocess permission for instruction-only skills — they
-        # have no executable surface to invoke.
+        # Instruction-only skills have no executable subprocess surface.
         permissions = [p for p in permissions if p != "subprocess"]
 
     name = sanitized
     description = str(original_front.get("description") or "").strip()
     when_to_use = str(original_front.get("when_to_use") or "").strip()
     if not when_to_use and description:
-        # OpenClaw uses ``description`` as the activation trigger; mirror it
-        # into Ouroboros's dedicated ``when_to_use`` so the agent's
-        # context-builder sees the same trigger surface.
+        # Preserve OpenClaw's description-as-trigger behavior.
         when_to_use = description
 
     os_field = _normalise_os(metadata_block.get("os"))
     if os_field not in {"any", "darwin", "linux", "windows"}:
         warnings.append(
-            f"OS restriction '{os_field}' could not be normalised to a single "
-            "OS literal; falling back to 'any' so the skill is discoverable."
+            f"OS restriction '{os_field}' could not be normalised to a single OS literal; falling back to 'any' so the skill is discoverable."
         )
         os_field = "any"
 
@@ -593,10 +439,7 @@ def adapt_openclaw_skill(
     license_field = str(original_front.get("license") or "").strip()
     primary_env = str(metadata_block.get("primaryEnv") or "").strip()
 
-    # Recorded in provenance only — NOT folded into the rendered
-    # SKILL.md (avoids dragging untrusted publisher URLs through any
-    # future markdown-to-HTML rendering path; the marketplace UI reads
-    # these from the provenance record directly via /api/marketplace/clawhub/installed).
+    # Keep untrusted publisher URLs in provenance, not rendered SKILL.md.
     provenance_extras: Dict[str, Any] = {"clawhub_slug": slug}
     if homepage:
         provenance_extras["homepage"] = homepage
@@ -627,9 +470,7 @@ def adapt_openclaw_skill(
             timeout_sec = int(raw_timeout)
         except (TypeError, ValueError):
             warnings.append(
-                f"Manifest timeout_sec={raw_timeout!r} is not integer-valued; "
-                "defaulting to 60s. Reviewer should confirm the publisher's "
-                "intent (some OpenClaw skills ship suffixes like '60s'."
+                f"Manifest timeout_sec={raw_timeout!r} is not integer-valued; defaulting to 60s. Reviewer should confirm the publisher's intent (some OpenClaw skills ship suffixes like '60s'."
             )
             timeout_sec = 60
         if timeout_sec <= 0:
@@ -659,20 +500,9 @@ def adapt_openclaw_skill(
         new_manifest = parse_skill_manifest_text(rendered_skill_md)
     except SkillManifestError as exc:
         blockers.append(
-            f"Adapter produced an unparseable Ouroboros manifest: {exc}. "
-            "This is an internal bug; please report."
+            f"Adapter produced an unparseable Ouroboros manifest: {exc}. This is an internal bug; please report."
         )
-        return AdapterResult(
-            ok=False,
-            sanitized_name=sanitized,
-            target_dirname=target_dirname,
-            warnings=warnings,
-            blockers=blockers,
-            provenance=provenance,
-            translated_frontmatter=translated_front,
-            original_frontmatter=original_front,
-            original_body=body,
-        )
+        return _result(False, translated_front=translated_front, original_front=original_front, original_body=body)
 
     manifest_warnings = new_manifest.validate()
     for w in manifest_warnings:
@@ -686,64 +516,27 @@ def adapt_openclaw_skill(
     provenance.update(provenance_extras)
 
     if blockers:
-        return AdapterResult(
-            ok=False,
-            sanitized_name=sanitized,
-            target_dirname=target_dirname,
-            manifest=new_manifest,
-            warnings=warnings,
-            blockers=blockers,
-            provenance=provenance,
-            translated_frontmatter=translated_front,
-            original_frontmatter=original_front,
-            original_body=body,
-        )
+        return _result(False, manifest=new_manifest, translated_front=translated_front, original_front=original_front, original_body=body)
 
-    # Persist both manifests inside the staging directory. The fetcher
-    # already validated that the staging dir is otherwise safe to copy.
+    # Persist both manifests inside the already-validated staging directory.
     skill_md_path = staging_dir / "SKILL.md"
     openclaw_path = staging_dir / "SKILL.openclaw.md"
     try:
-        # Move original aside, write translated SKILL.md.
         if openclaw_path.exists():
             openclaw_path.unlink()
         if skill_md_path.exists():
             shutil.copy2(str(skill_md_path), str(openclaw_path))
         else:
-            # Rare: skill.json was used instead — preserve as-is.
+            # Preserve skill.json inputs for audit.
             (staging_dir / "skill.openclaw.json").write_text(original_text, encoding="utf-8")
         skill_md_path.write_text(rendered_skill_md, encoding="utf-8")
-        # Drop a sidecar provenance marker so a quick directory listing
-        # makes the source obvious to humans, without depending on the
-        # durable state plane.
+        # Sidecar makes source obvious without reading durable state.
         atomic_write_json(staging_dir / ".clawhub.json", provenance, trailing_newline=True)
     except OSError as exc:
         blockers.append(f"Failed to persist translated manifest: {exc}")
-        return AdapterResult(
-            ok=False,
-            sanitized_name=sanitized,
-            target_dirname=target_dirname,
-            manifest=new_manifest,
-            warnings=warnings,
-            blockers=blockers,
-            provenance=provenance,
-            translated_frontmatter=translated_front,
-            original_frontmatter=original_front,
-            original_body=body,
-        )
+        return _result(False, manifest=new_manifest, translated_front=translated_front, original_front=original_front, original_body=body)
 
-    return AdapterResult(
-        ok=True,
-        sanitized_name=sanitized,
-        target_dirname=target_dirname,
-        manifest=new_manifest,
-        warnings=warnings,
-        blockers=blockers,
-        provenance=provenance,
-        translated_frontmatter=translated_front,
-        original_frontmatter=original_front,
-        original_body=body,
-    )
+    return _result(True, manifest=new_manifest, translated_front=translated_front, original_front=original_front, original_body=body)
 
 
 def _sha256_of_text(text: str) -> str:

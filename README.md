@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 5.25.0-rc.3](https://img.shields.io/badge/version-5.25.0--rc.3-green.svg)](VERSION)
+[![Version 5.30.0-rc.1](https://img.shields.io/badge/version-5.30.0--rc.1-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -27,15 +27,20 @@ Not a coding assistant. A digital being with a constitution, background consciou
 
 | Platform | Download | Instructions |
 |----------|----------|--------------|
-| **macOS** 12+ | [Ouroboros.dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Open DMG → drag to Applications |
-| **Linux** x86_64 | [Ouroboros-linux.tar.gz](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `./Ouroboros/Ouroboros`. If browser tools fail due to missing system libs, run: `./Ouroboros/python-standalone/bin/python3 -m playwright install-deps chromium` |
-| **Windows** x64 | [Ouroboros-windows.zip](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `Ouroboros\Ouroboros.exe` |
+| **macOS** 12+ | [Ouroboros.dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Open DMG → drag to Applications → optional CLI: run `Install CLI.command` after the app is in Applications |
+| **Linux** x86_64 | [Ouroboros-linux.tar.gz](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `./Ouroboros/Ouroboros` → optional CLI: `./Ouroboros/bin/install-ouroboros-cli`. If browser tools fail due to missing system libs, run: `./Ouroboros/python-standalone/bin/python3 -m playwright install-deps chromium` |
+| **Windows** x64 | [Ouroboros-windows.zip](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `Ouroboros\Ouroboros.exe` → optional CLI: `Ouroboros\bin\install-ouroboros-cli.cmd` |
 
 <p align="center">
   <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
 </p>
 
 On first launch, right-click → **Open** (Gatekeeper bypass). The shared desktop/web wizard is now multi-step: add access first, choose visible models second, set review mode third, set budget fourth, and confirm the final summary last. It refuses to continue until at least one runnable remote key or local model source is configured, keeps the model step aligned with whatever key combination you entered, and still auto-remaps untouched default model values to official OpenAI defaults when OpenRouter is absent and OpenAI is the only configured remote runtime. The broader multi-provider setup remains available in **Settings**. Existing supported provider settings skip the wizard automatically.
+
+The packaged CLI installer creates a user-local `ouroboros` command without
+sudo. The packaged command attaches to the desktop app by default; `ouroboros
+run --start "2+2?"` starts the app through the launcher, waits for the gateway,
+and then uses the same headless task API as the web UI.
 
 Upgrade floor: very old pre-block-memory or pre-data-plane skill layouts are no longer auto-migrated. If you are upgrading from an unsupported historical build and see trapped native skills or flat memory files, use a clean reinstall, move user-managed skills into `~/Ouroboros/data/skills/external/` manually before launch, or move old flat scratchpad notes before appending new scratchpad blocks.
 
@@ -75,21 +80,61 @@ Most AI agents execute tasks. Ouroboros **creates itself.**
 ```bash
 git clone https://github.com/joi-lab/ouroboros-desktop.git
 cd ouroboros-desktop
-pip install -r requirements.txt
+python3.11 -m venv .venv      # any Python >= 3.10 is OK
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
+```
+
+Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv      # any Python >= 3.10 is OK
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
 ```
 
 ### Run
 
 ```bash
-python server.py
+ouroboros server
 ```
 
 Then open `http://127.0.0.1:8765` in your browser. The setup wizard will guide you through API key configuration.
 
+### CLI / Headless
+
+The `ouroboros` console command is a gateway-backed operator interface. It
+attaches to the local server by default and only starts one when `--start` is
+passed.
+
+```bash
+ouroboros status
+ouroboros run --start "2+2?"
+ouroboros run "Summarize current runtime state"
+ouroboros run --workspace /path/to/project --memory-mode forked --patch-out result.patch "Fix the failing test"
+ouroboros tasks list
+ouroboros logs tail progress --task-id <task_id>
+```
+
+External workspace runs keep Ouroboros's own repo as the governance source,
+resolve contextual repo tools against the active workspace, expose only the
+workspace-safe tool allowlist, and export workspace changes as patch artifacts
+instead of committing in the target repo. A workspace must be a separate git
+worktree root; it may not overlap Ouroboros's system repo or data drive.
+`--patch` and `--patch-out` read the artifact from the gateway host filesystem,
+so use them with a local/same-filesystem server.
+Benchmark helpers under `scripts/` expect clean, local, per-instance checkouts;
+they do not reset or commit target repositories.
+
 You can also override the bind address and port:
 
 ```bash
-python server.py --host 127.0.0.1 --port 9000
+ouroboros server --host 127.0.0.1 --port 9000
+ouroboros --url http://127.0.0.1:9000 status
 ```
 
 Available launch arguments:
@@ -236,7 +281,9 @@ bash scripts/download_python_standalone.sh
 OUROBOROS_SIGN=0 bash build.sh
 ```
 
-Output: `dist/Ouroboros-<VERSION>.dmg`
+Output: `dist/Ouroboros-<VERSION>.dmg`, containing `Ouroboros.app` and
+`Install CLI.command`. The app bundle also contains
+`Contents/Resources/bin/ouroboros` and `install-ouroboros-cli`.
 
 `build.sh` packages the macOS app and DMG. By default it signs with the
 configured local Developer ID identity; set `OUROBOROS_SIGN=0` for an unsigned
@@ -280,7 +327,8 @@ bash scripts/download_python_standalone.sh
 bash build_linux.sh
 ```
 
-Output: `dist/Ouroboros-<VERSION>-linux-<arch>.tar.gz`
+Output: `dist/Ouroboros-<VERSION>-linux-<arch>.tar.gz`, containing
+`Ouroboros/bin/ouroboros` and `Ouroboros/bin/install-ouroboros-cli`.
 
 > **Linux native libs:** The Chromium browser binary is bundled, but some hosts need
 > native system libraries. If browser tools fail, install deps via the bundled Python
@@ -296,7 +344,8 @@ powershell -ExecutionPolicy Bypass -File scripts/download_python_standalone.ps1
 powershell -ExecutionPolicy Bypass -File build_windows.ps1
 ```
 
-Output: `dist\Ouroboros-<VERSION>-windows-x64.zip`
+Output: `dist\Ouroboros-<VERSION>-windows-x64.zip`, containing
+`Ouroboros\bin\ouroboros.cmd` and `Ouroboros\bin\install-ouroboros-cli.cmd`.
 
 ---
 
@@ -353,7 +402,7 @@ All keys are configured through the **Settings** page in the UI or during the fi
 | Light | `anthropic/claude-sonnet-4.6` | Safety checks, consciousness, fast tasks |
 | Fallback | `anthropic/claude-sonnet-4.6` | When primary model fails |
 | Claude Agent SDK | `claude-opus-4-6[1m]` | Anthropic model for Claude Agent SDK tools (`claude_code_edit`, `advisory_pre_review`); the `[1m]` suffix is a Claude Code selector that requests the 1M-context extended mode |
-| Scope Review | `openai/gpt-5.5` | Blocking scope reviewer (single-model, runs in parallel with triad review) |
+| Scope Review | `openai/gpt-5.5` | Single-model scope reviewer; blocking/advisory behavior follows review enforcement |
 | Web Search | `gpt-5.2` | OpenAI Responses API for web search |
 
 Task/chat reasoning defaults to `medium`. Scope review reasoning defaults to `high`.
@@ -371,8 +420,8 @@ The web UI file browser is rooted at one configurable directory. Users can brows
 Examples:
 
 ```bash
-OUROBOROS_FILE_BROWSER_DEFAULT=/home/app python server.py
-OUROBOROS_FILE_BROWSER_DEFAULT=/mnt/shared python server.py --port 9000
+OUROBOROS_FILE_BROWSER_DEFAULT=/home/app ouroboros server
+OUROBOROS_FILE_BROWSER_DEFAULT=/mnt/shared ouroboros server --port 9000
 ```
 
 If the variable is not set, Ouroboros uses the current user's home directory. If the configured path does not exist or is not a directory, Ouroboros also falls back to the home directory.
@@ -396,7 +445,7 @@ Available in the chat interface:
 | `/restart` | Soft restart. Saves state, kills workers, re-launches. |
 | `/status` | Shows active workers, task queue, and budget breakdown. |
 | `/evolve` | Toggle autonomous evolution mode (on/off). |
-| `/review` | Queue a deep self-review: sends all agent code, prompts, docs, and core memory artifacts (identity, scratchpad, registry, WORLD, knowledge index, patterns, improvement-backlog) to a 1M-context model for Constitution-grounded analysis. Excludes vendored libraries and operational logs. Rejected with an explicit error if the assembled prompt (system + pack) exceeds ~850K estimated tokens — on 1M-context models the window is shared between input and output. |
+| `/review` | Queue a deep self-review: sends all agent code, prompts, docs, and core memory artifacts (identity, scratchpad, registry, WORLD, knowledge index, patterns, improvement-backlog) to a 1M-context model for Constitution-grounded analysis. Excludes vendored libraries and operational logs. Rejected with an explicit error if the assembled prompt (system + pack) exceeds ~920K estimated tokens — on 1M-context models the window is shared between input and output. |
 | `/bg` | Toggle background consciousness loop (start/stop/status). |
 
 The same runtime actions are also exposed as compact buttons in the Chat header. All other messages are sent directly to the LLM.
@@ -419,14 +468,12 @@ not paraphrase it.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.25.0-rc.3 | 2026-05-17 | **rc(docs): restore compact endpoint navigation.** Adds a minimal current route table to `docs/ARCHITECTURE.md` from the gateway, file-browser, static, and Host Service route sources without restoring the old verbose endpoint prose. |
-| 5.25.0-rc.2 | 2026-05-17 | **rc(refactor): remove retired compatibility shims.** Drops legacy advisory-review state folding and the old `inline_card` widget compatibility path now that current state uses the v3 ledger and the bundled weather widget is declarative. |
-| 5.25.0-rc.1 | 2026-05-17 | **rc(refactor): shrink review-pack surface while preserving core capabilities.** Removes stale compatibility code, duplicate parsers, and broken marketplace/detail widget paths while keeping ClawHub/OpenClaw install/update support, gateway routes, review gates, local-model behavior, and public tool surfaces intact. |
-| 5.24.0-rc.2 | 2026-05-16 | **rc(review): preserve legacy attempt ordering after scope-pack shrink.** Fixes legacy advisory-review state folding so older `blocking_history` entries cannot appear newer than a later successful `last_commit_attempt`, keeping `review_status` and context recovery anchored to the real latest attempt after upgrades. |
-| 5.24.0-rc.1 | 2026-05-16 | **rc(refactor): shrink scope-review pack without weakening review gates.** Removes OpenClaw tool aliases and the legacy `repo_write_commit` path, consolidates review usage/history helpers, folds old advisory-review compatibility views into canonical ledgers while preserving `commit_readiness_debts`, compresses `SYSTEM.md` and `ARCHITECTURE.md` with rationale kept self-contained, and trims small web/UI duplicates. |
-| 5.20.1-rc.2 | 2026-05-13 | **rc(review): free advisory and surface skill auto-grant.** Surfaces reviewed-skill auto-grant requests/grants in outcomes and lifecycle payloads, shows granted items in headlines and chat review blocks, enables self-authored `auto_flow` wiring, and lets fresh advisory runs acknowledge open obligations/debts under advisory enforcement with a durable audit event. |
-| 5.20.1-rc.1 | 2026-05-13 | **rc(review): harden Claude advisory and skill-review observability.** Moves read-only Claude Code advisory onto the `ClaudeSDKClient` lifecycle, normalizes SDK token usage, routes advisory effort through the Scope Review setting, aligns skill advisory prompts with the Skill Review Checklist, persists skill advisory evidence/session metadata, and makes `bug_hunting` a critical skill-review blocker with concrete fix guidance. |
-Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.23.0 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
+| 5.30.0-rc.1 | 2026-05-21 | **rc(llm): preserve OpenRouter reasoning continuity and split prompt-cache capabilities.** Keeps opaque reasoning payloads across tool-call rounds, fixes checkpoint handling for assistant `content: null`, routes cache markers only to supported Anthropic/Gemini surfaces without TTL, and accounts for cache reads/writes in usage telemetry and costs. |
+| 5.29.0-rc.3 | 2026-05-21 | **rc(packaging): make packaged CLI release CI portable.** Keeps the packaged CLI wrapper/installer release and fixes Windows test fixtures for `python-standalone` layout and macOS path detection before publishing artifacts. |
+| 5.29.0-rc.2 | 2026-05-21 | **rc(packaging): add packaged CLI install path.** Ships desktop artifact CLI wrappers and user-local installers, routes packaged `run --start` through the launcher-managed runtime, and documents packaged versus source CLI setup without adding a second runtime. |
+| 5.29.0-rc.1 | 2026-05-20 | **rc(headless): add CLI and external workspace task mode.** Adds gateway-backed task APIs, SSE task event replay, a multi-command CLI, isolated external workspace memory modes, patch artifacts, and tiny benchmark adapter scripts without adding file-manager or public commit/review CLI surfaces. |
+| 5.28.0 | 2026-05-20 | **release(stability): harden skills, owner parity, and relaunch cleanup.** Adds structured skill lifecycle recovery state, web owner endpoints for runtime mode/auto-grant/grants, process-group server cleanup for desktop relaunches, best-effort isolated-deps cleanup, and a 920K review prompt budget. |
+Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.27.0-rc.1 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
 
 ---
 

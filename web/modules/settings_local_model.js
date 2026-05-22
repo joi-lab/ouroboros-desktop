@@ -32,7 +32,6 @@ function setInstallBtnVisible(visible) {
 }
 
 function setProgressBar(fraction) {
-    // fraction: 0.0–1.0, or null to hide
     const wrap = document.getElementById('local-model-progress-wrap');
     const bar = document.getElementById('local-model-progress-bar');
     if (!wrap || !bar) return;
@@ -58,7 +57,6 @@ export function bindLocalModelControls({ state }) {
             const isDownloading = d.status === 'downloading';
             const runtimeMissing = d.runtime_status === 'missing' || d.runtime_status === 'install_error';
 
-            // Status text
             let text = 'Статус: ' + (d.status || 'offline').charAt(0).toUpperCase() + (d.status || 'offline').slice(1);
             if (isReady && d.context_length) text += ` (ctx: ${d.context_length})`;
             if (isDownloading && d.download_progress != null) {
@@ -76,23 +74,18 @@ export function bindLocalModelControls({ state }) {
             el.textContent = text;
             el.dataset.tone = isReady ? 'ok' : (d.status === 'error' || d.runtime_status === 'install_error' ? 'error' : 'muted');
 
-            // Button states
             document.getElementById('btn-local-stop').disabled = !isReady;
             document.getElementById('btn-local-test').disabled = !isReady;
             document.getElementById('btn-local-start').disabled = isInstalling || isDownloading;
 
-            // Install button: show when runtime missing/errored, hide otherwise
             setInstallBtnVisible(runtimeMissing);
-            // Re-enable the install button when not actively installing (allows retry after failure)
             const installBtn = document.getElementById('btn-local-install-runtime');
             if (installBtn) installBtn.disabled = isInstalling;
 
-            // Install log (shown on error)
             if (d.runtime_status === 'install_error' && d.runtime_install_log) {
                 setTestResult('Ошибка установки:\n' + d.runtime_install_log, 'error');
             }
 
-            // If install just completed successfully, auto-retry start if we have a source
             if (d.runtime_status === 'install_ok' && state._pendingLocalStart) {
                 state._pendingLocalStart = false;
                 triggerStart();
@@ -129,7 +122,6 @@ export function bindLocalModelControls({ state }) {
             });
             const data = await resp.json();
             if (resp.status === 412 && data.error === 'runtime_missing') {
-                // Runtime not installed — show the install button and a clear message
                 setInstallBtnVisible(true);
                 setLocalStatus('Локальная среда не установлена. Нажмите «Установить локальную среду» ниже.', 'error');
                 setTestResult(
@@ -182,14 +174,12 @@ export function bindLocalModelControls({ state }) {
         }
     });
 
-    // Install Local Runtime button
     const installBtn = document.getElementById('btn-local-install-runtime');
     if (installBtn) {
         installBtn.addEventListener('click', async () => {
             installBtn.disabled = true;
             setTestResult('Установка llama-cpp-python, это может занять несколько минут…', 'muted');
             setLocalStatus('Статус: Установка локальной среды…', 'muted');
-            // Remember that we want to start after install
             const body = readLocalModelBody();
             state._pendingLocalStart = !!body.source;
             try {
@@ -199,7 +189,6 @@ export function bindLocalModelControls({ state }) {
                     setTestResult('Ошибка запроса установки: ' + d.error, 'error');
                     installBtn.disabled = false;
                 }
-                // Polling will pick up the progress and handle auto-start on install_ok
             } catch (e) {
                 setTestResult('Установка не удалась: ' + e.message, 'error');
                 installBtn.disabled = false;

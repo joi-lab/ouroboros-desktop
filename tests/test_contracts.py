@@ -106,6 +106,20 @@ def test_toolcontext_protocol_fields_match_dataclass():
     )
 
 
+def test_toolcontext_protocol_methods_match_dataclass():
+    """Every method in ToolContextProtocol must also exist on ToolContext."""
+    from ouroboros.tools.registry import ToolContext
+
+    source = inspect.getsource(ToolContextProtocol)
+    protocol_method_names = set(
+        re.findall(r"^    def ([a-zA-Z_][a-zA-Z0-9_]*)\(", source, flags=re.MULTILINE)
+    )
+    missing = {name for name in protocol_method_names if not hasattr(ToolContext, name)}
+    assert missing == set(), (
+        f"ToolContextProtocol declares methods not present on ToolContext: {missing}"
+    )
+
+
 def test_toolcontext_path_helpers_resolve_inside_root():
     """repo_path()/drive_path()/drive_logs() must stay inside the declared roots."""
     from ouroboros.tools.registry import ToolContext
@@ -471,6 +485,14 @@ def test_settings_network_meta_matches_build_network_meta():
         assert not missing, (
             f"_build_network_meta branch missing declared keys: {missing}"
         )
+
+
+def test_settings_meta_declares_additive_meta_keys():
+    """SettingsMeta must document additive /api/settings _meta keys."""
+    from ouroboros.gateway.contracts import SettingsMeta
+
+    declared = set(SettingsMeta.__annotations__.keys())
+    assert {"custom_secret_keys", "setup_contract"} <= declared
 
 
 def test_command_inbound_matches_ws_endpoint_dispatch():

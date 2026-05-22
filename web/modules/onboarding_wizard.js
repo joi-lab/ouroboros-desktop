@@ -1,13 +1,5 @@
 (() => {
-    // ``escapeHtml`` here is intentionally a verbatim mirror of
-    // ``escapeHtmlAttr`` in ``web/modules/utils.js``. The onboarding
-    // wizard ships as a self-contained IIFE bundle (loaded by both the
-    // pywebview launcher and the server-rendered web overlay), not as
-    // an ES module, so a real ``import`` would force a bootstrap
-    // restructuring beyond the scope of v5.8.3-rc.5. The drift is
-    // pinned by ``tests/test_web_utils_ssot.py::
-    // test_onboarding_escape_mirrors_utils`` so any divergence on a
-    // security boundary fails immediately.
+    // Self-contained IIFE mirror of utils.escapeHtmlAttr; SSOT drift is tested.
     function escapeHtml(value) {
         return String(value ?? '')
             .replace(/&/g, '&amp;')
@@ -19,47 +11,64 @@
     }
 
     const bootstrap = window.__OURO_ONBOARDING_BOOTSTRAP__ || {};
+    const SETUP_CONTRACT = bootstrap.contract || {};
     const HOST_MODE = bootstrap.hostMode || 'desktop';
     const LOCAL_RUNTIME_CONTROLS = Boolean(bootstrap.supportsLocalRuntimeControls);
-    const STEP_ORDER = bootstrap.stepOrder || ['providers', 'models', 'review_mode', 'budget', 'summary'];
+    const STEP_ORDER = bootstrap.stepOrder || (SETUP_CONTRACT.steps || []).map((step) => step.id);
+    const STEP_META = Object.assign(
+        Object.fromEntries((SETUP_CONTRACT.steps || []).map((step) => [step.id, step])),
+        {
+            providers: {
+                title: 'Добавьте доступ',
+                railCopy: 'Ключи + локальная',
+                copy: 'Заполните хотя бы один удалённый ключ или источник локальной модели. Следующий шаг адаптируется к тому, что вы настроили здесь.',
+                footer: 'Вставляйте только то, что у вас уже есть. OpenRouter, прямые ключи провайдеров и необязательная локальная модель могут сосуществовать.',
+            },
+            models: {
+                title: 'Выберите модели',
+                railCopy: '4 слота моделей',
+                copy: 'Просмотрите видимые настройки моделей по умолчанию, полученные из вашей текущей конфигурации, затем измените всё, что нужно, перед запуском.',
+                footer: 'Значения вида openai/... или anthropic/... остаются в стиле роутера. Прямые значения используют openai::... и anthropic::....',
+            },
+            review_mode: {
+                title: 'Выберите режим проверки',
+                railCopy: 'Рекомендательный / Блокирующий',
+                copy: 'Определите строгость проверки перед коммитом до того, как Ouroboros начнёт самомодификацию.',
+                footer: 'Выберите режим проверки и начальный режим среды выполнения до запуска Ouroboros.',
+            },
+            budget: {
+                title: 'Установите бюджет',
+                railCopy: 'Ограничения сессии',
+                copy: 'Бюджет — отдельный шаг, потому что он напрямую определяет, насколько далеко Ouroboros может зайти за одну сессию и в одной задаче.',
+                footer: 'Общий бюджет — глобальный. Лимит затрат на задачу — мягкое напоминание, а не жёсткий выключатель.',
+            },
+            summary: {
+                title: 'Проверьте перед запуском',
+                railCopy: 'Финальная проверка',
+                copy: 'Проверьте итоговую картину по провайдерам, моделям, проверке и бюджету. Ouroboros сохранит эти значения перед запуском.',
+                footer: 'Те же параметры останутся доступными для редактирования в Настройках.',
+            },
+        },
+    );
+    const PROVIDER_FIELDS = SETUP_CONTRACT.providerFields || [];
+    const PROVIDER_PROFILES = SETUP_CONTRACT.providerProfiles || {};
+    const MODEL_SLOTS = SETUP_CONTRACT.modelSlots || [];
+    const REVIEW_MODES = SETUP_CONTRACT.reviewModes || [];
+    const RUNTIME_MODES = SETUP_CONTRACT.runtimeModes || [];
+    const LOCAL_ROUTING_MODES = SETUP_CONTRACT.localRoutingModes || [];
+    const BUDGET_FIELDS = SETUP_CONTRACT.budgetFields || [];
+    const LOCAL_FIELDS = [
+        ['local-source', 'localSource', 'Источник модели', 'Qwen/Qwen2.5-7B-Instruct-GGUF или /абсолютный/путь/model.gguf', 'Используйте либо ID репозитория HuggingFace, либо абсолютный путь к GGUF-файлу.', 'field field-full'],
+        ['local-filename', 'localFilename', 'Имя GGUF-файла', 'qwen2.5-7b-instruct-q3_k_m.gguf', 'Требуется только для ID репозиториев HuggingFace. Оставьте пустым, если указан прямой путь.', 'field field-full'],
+        ['local-context', 'localContextLength', 'Длина контекста', '', '', 'field', 'number', '2048', '1024'],
+        ['local-gpu-layers', 'localGpuLayers', 'GPU-слои', '', '', 'field', 'number', '', '1'],
+        ['local-chat-format', 'localChatFormat', 'Формат чата', 'Оставьте пустым для автоопределения', '', 'field field-full'],
+    ];
     const MODEL_DEFAULTS = bootstrap.modelDefaults || {};
     const LOCAL_PRESETS = bootstrap.localPresets || {};
     const MODEL_SUGGESTIONS = bootstrap.modelSuggestions || [];
     const INITIAL_STATE = bootstrap.initialState || {};
     const root = document.getElementById('root');
-
-    const STEP_META = {
-        providers: {
-            title: 'Добавьте доступ',
-            railCopy: 'Ключи + локальная',
-            copy: 'Заполните хотя бы один удалённый ключ или источник локальной модели. Следующий шаг адаптируется к тому, что вы настроили здесь.',
-            footer: 'Вставляйте только то, что у вас уже есть. OpenRouter, прямые ключи провайдеров и необязательная локальная модель могут сосуществовать.',
-        },
-        models: {
-            title: 'Выберите модели',
-            railCopy: '4 слота моделей',
-            copy: 'Просмотрите видимые настройки моделей по умолчанию, полученные из вашей текущей конфигурации, затем измените всё, что нужно, перед запуском.',
-            footer: 'Значения вида openai/... или anthropic/... остаются в стиле роутера. Прямые значения используют openai::... и anthropic::....',
-        },
-        review_mode: {
-            title: 'Выберите режим проверки',
-            railCopy: 'Рекомендательный / Блокирующий',
-            copy: 'Определите строгость проверки перед коммитом до того, как Ouroboros начнёт самомодификацию.',
-            footer: 'Выберите режим проверки и начальный режим среды выполнения до запуска Ouroboros.',
-        },
-        budget: {
-            title: 'Установите бюджет',
-            railCopy: 'Ограничения сессии',
-            copy: 'Бюджет — отдельный шаг, потому что он напрямую определяет, насколько далеко Ouroboros может зайти за одну сессию и в одной задаче.',
-            footer: 'Общий бюджет — глобальный. Лимит затрат на задачу — мягкое напоминание, а не жёсткий выключатель.',
-        },
-        summary: {
-            title: 'Проверьте перед запуском',
-            railCopy: 'Финальная проверка',
-            copy: 'Проверьте итоговую картину по провайдерам, моделям, проверке и бюджету. Ouroboros сохранит эти значения перед запуском.',
-            footer: 'Те же параметры останутся доступными для редактирования в Настройках.',
-        },
-    };
 
     const state = Object.assign({
         currentStep: STEP_ORDER[0],
@@ -105,24 +114,32 @@
         return hasAnthropicKeyConfigured() && !state.claudeCliDismissed;
     }
 
-    function isLocalFilesystemSource(value) {
-        const text = trim(value);
-        return text.startsWith('/') || text.startsWith('~');
-    }
+        function isLocalFilesystemSource(value) {
+            const text = trim(value);
+            return text.startsWith('/') || text.startsWith('~');
+        }
 
-    function detectProviderProfile() {
-        const hasOpenrouter = trim(state.openrouterKey).length >= 10;
-        const hasOpenai = trim(state.openaiKey).length >= 10;
-        const hasCloudru = trim(state.cloudruKey).length >= 10;
-        const hasAnthropic = trim(state.anthropicKey).length >= 10;
-        if (hasOpenrouter) return 'openrouter';
-        if ([hasOpenai, hasCloudru, hasAnthropic].filter(Boolean).length > 1) return 'direct-multi';
-        if (hasOpenai) return 'openai';
-        if (hasCloudru) return 'cloudru';
-        if (hasAnthropic) return 'anthropic';
-        if (hasLocalModel()) return 'local';
-        return 'openrouter';
-    }
+        function optionByValue(items, value) {
+            return (items || []).find((item) => item.value === value) || {};
+        }
+
+        function detectProviderProfile() {
+            const configured = Object.fromEntries(PROVIDER_FIELDS.map((field) => [
+                field.settingKey,
+                trim(state[field.stateKey]).length >= 10,
+            ]));
+            const hasOpenrouter = configured.OPENROUTER_API_KEY;
+            const direct = [
+                ['OPENAI_API_KEY', 'openai'],
+                ['CLOUDRU_FOUNDATION_MODELS_API_KEY', 'cloudru'],
+                ['ANTHROPIC_API_KEY', 'anthropic'],
+            ].filter(([settingKey]) => configured[settingKey]);
+            if (hasOpenrouter) return 'openrouter';
+            if (direct.length > 1) return 'direct-multi';
+            if (direct.length === 1) return direct[0][1];
+            if (hasLocalModel()) return 'local';
+            return 'openrouter';
+        }
 
     function activeProviderProfile() {
         const profile = detectProviderProfile();
@@ -131,28 +148,19 @@
     }
 
     function profileLabel(profile) {
-        if (profile === 'openai') return 'OpenAI';
-        if (profile === 'cloudru') return 'Cloud.ru Foundation Models';
-        if (profile === 'anthropic') return 'Anthropic';
-        if (profile === 'direct-multi') return 'Несколько прямых провайдеров';
-        if (profile === 'local') return 'Локальный-первый';
-        return 'OpenRouter';
+        return PROVIDER_PROFILES[profile]?.label || PROVIDER_PROFILES.openrouter?.label || 'OpenRouter';
     }
 
     function reviewLabel(mode) {
-        return mode === 'blocking' ? 'Блокирующий' : 'Рекомендательный';
+        return optionByValue(REVIEW_MODES, mode).label || 'Рекомендательный';
     }
 
     function runtimeModeLabel(mode) {
-        if (mode === 'light') return 'Light';
-        if (mode === 'pro') return 'Pro';
-        return 'Advanced';
+        return optionByValue(RUNTIME_MODES, mode).label || 'Advanced';
     }
 
     function localRoutingLabel(mode) {
-        if (mode === 'all') return 'Все модели локальные';
-        if (mode === 'fallback') return 'Запасная модель локальная';
-        return 'Только облачные модели';
+        return optionByValue(LOCAL_ROUTING_MODES, mode).label || 'Только облачные модели';
     }
 
     function nextButtonShouldBeDisabled() {
@@ -164,6 +172,11 @@
     function syncCurrentStepActionState() {
         const next = document.getElementById('next-btn');
         if (next) next.disabled = nextButtonShouldBeDisabled();
+    }
+
+    function markStepEdited() {
+        state.error = '';
+        syncCurrentStepActionState();
     }
 
     function applyPresetSelection(presetId) {
@@ -221,20 +234,16 @@
     }
 
     function validateProvidersStep() {
-        const openrouterKey = trim(state.openrouterKey);
-        const openaiKey = trim(state.openaiKey);
-        const cloudruKey = trim(state.cloudruKey);
-        const anthropicKey = trim(state.anthropicKey);
+        const keyValues = PROVIDER_FIELDS.map((field) => [field, trim(state[field.stateKey])]);
         const localSource = trim(state.localSource);
         const localFilename = trim(state.localFilename);
-        if (openrouterKey && openrouterKey.length < 10) return 'Ключ OpenRouter API выглядит слишком коротким.';
-        if (openaiKey && openaiKey.length < 10) return 'Ключ OpenAI API выглядит слишком коротким.';
-        if (cloudruKey && cloudruKey.length < 10) return 'Ключ Cloud.ru Foundation Models API выглядит слишком коротким.';
-        if (anthropicKey && anthropicKey.length < 10) return 'Ключ Anthropic API выглядит слишком коротким.';
-        if (!openrouterKey && !openaiKey && !cloudruKey && !anthropicKey && !localSource) {
+        const shortKey = keyValues.find(([, value]) => value && value.length < 10);
+        if (shortKey) return `Ключ ${shortKey[0].label.replace(' API Key', '')} выглядит слишком коротким.`;
+        const hasRemote = keyValues.some(([, value]) => value);
+        if (!hasRemote && !localSource) {
             return 'Введите хотя бы один удалённый ключ или источник локальной модели перед продолжением.';
         }
-        if (localSource && !openrouterKey && !openaiKey && !cloudruKey && !anthropicKey && trim(state.localRoutingMode) === 'cloud') {
+        if (localSource && !hasRemote && trim(state.localRoutingMode) === 'cloud') {
             return 'Только-локальные конфигурации должны маршрутизировать хотя бы одну модель на локальную среду.';
         }
         if (localSource && localSource.includes('/') && !isLocalFilesystemSource(localSource) && !localFilename) {
@@ -524,20 +533,33 @@
         return rows;
     }
 
-    function providerKeyField({ id, label, placeholder, value, note }) {
-        return `
-            <div class="field">
+        function providerKeyField({ id, label, placeholder, value, note }) {
+            return `
+                <div class="field">
                 <div class="field-label-row">
-                    <label for="${id}">${label}</label>
-                    <button class="field-clear" data-clear="${id}" type="button">Clear</button>
+                    <label for="${escapeHtml(id)}">${escapeHtml(label)}</label>
+                    <button class="field-clear" data-clear="${escapeHtml(id)}" type="button">Clear</button>
                 </div>
-                <input id="${id}" type="password" placeholder="${placeholder}" value="${escapeHtml(value)}">
-                <div class="field-note">${note}</div>
+                <input id="${escapeHtml(id)}" type="password" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}">
+                <div class="field-note">${escapeHtml(note)}</div>
             </div>
-        `;
-    }
+            `;
+        }
 
-    function renderProvidersStep() {
+        function localInputField([id, stateKey, label, placeholder, note, className, type = 'text', min = '', step = '']) {
+            const clear = ['local-source', 'local-filename', 'local-chat-format'].includes(id)
+                ? `<button class="field-clear" data-clear="${id}" type="button">Clear</button>`
+                : '';
+            return `
+                <div class="${className}">
+                    <div class="field-label-row"><label for="${id}">${label}</label>${clear}</div>
+                    <input id="${id}" type="${type}" ${min ? `min="${min}"` : ''} ${step ? `step="${step}"` : ''} placeholder="${placeholder}" value="${escapeHtml(state[stateKey])}">
+                    ${note ? `<div class="field-note">${note}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function renderProvidersStep() {
         const selectedProfile = activeProviderProfile();
         const localPreset = trim(state.localPreset);
         const localSourceOpen = state.localSourceOpen || hasLocalModel();
@@ -550,53 +572,13 @@
             </div>
             <div class="panel-card">
                 <h3>Сначала ключи, потом маршрутизация</h3>
-                <p>${escapeHtml(
-                    trim(state.openrouterKey)
-                        ? 'OpenRouter настроен, поэтому на следующем шаге сохранятся настройки по умолчанию в стиле роутера, а дополнительные прямые ключи также будут сохранены.'
-                        : selectedProfile === 'direct-multi'
-                            ? 'Настроено несколько прямых провайдеров, поэтому на следующем шаге значения моделей остаются редактируемыми без привязки к одному семейству провайдеров.'
-                            : selectedProfile === 'openai'
-                                ? 'Настроен OpenAI, поэтому на следующем шаге будут предзаполнены прямые значения openai:: моделей.'
-                                : selectedProfile === 'cloudru'
-                                    ? 'Настроен Cloud.ru, поэтому на следующем шаге будут предзаполнены прямые значения cloudru:: моделей.'
-                                : selectedProfile === 'anthropic'
-                                    ? 'Настроен Anthropic, поэтому на следующем шаге будут предзаполнены прямые значения anthropic:: моделей.'
-                                    : 'Удалённый ключ ещё не добавлен, поэтому ниже доступна только-локальная конфигурация.'
-                )}</p>
+                <p>${escapeHtml(PROVIDER_PROFILES[selectedProfile]?.providerCopy || '')}</p>
             </div>
             <div class="field-grid">
-                <div class="field">
-                    <div class="field-label-row">
-                        <label for="openrouter-key">OpenRouter API Key</label>
-                        <button class="field-clear" data-clear="openrouter-key" type="button">Очистить</button>
-                    </div>
-                    <input id="openrouter-key" type="password" placeholder="sk-or-v1-..." value="${escapeHtml(state.openrouterKey)}">
-                    <div class="field-note">Необязательно. Лучший вариант, если нужен один роутер для OpenAI, Anthropic, Google и других.</div>
-                </div>
-                <div class="field">
-                    <div class="field-label-row">
-                        <label for="openai-key">OpenAI API Key</label>
-                        <button class="field-clear" data-clear="openai-key" type="button">Очистить</button>
-                    </div>
-                    <input id="openai-key" type="password" placeholder="sk-..." value="${escapeHtml(state.openaiKey)}">
-                    <div class="field-note">Необязательно. Если это единственный удалённый ключ, на следующем шаге будут предзаполнены прямые модели <code>openai::...</code>.</div>
-                </div>
-                <div class="field">
-                    <div class="field-label-row">
-                        <label for="cloudru-key">Cloud.ru Foundation Models API Key</label>
-                        <button class="field-clear" data-clear="cloudru-key" type="button">Очистить</button>
-                    </div>
-                    <input id="cloudru-key" type="password" placeholder="Ключ Cloud.ru API" value="${escapeHtml(state.cloudruKey)}">
-                    <div class="field-note">Необязательно. Если это единственный удалённый ключ, на следующем шаге будут предзаполнены прямые модели <code>cloudru::...</code>.</div>
-                </div>
-                <div class="field">
-                    <div class="field-label-row">
-                        <label for="anthropic-key">Anthropic API Key</label>
-                        <button class="field-clear" data-clear="anthropic-key" type="button">Очистить</button>
-                    </div>
-                    <input id="anthropic-key" type="password" placeholder="sk-ant-..." value="${escapeHtml(state.anthropicKey)}">
-                    <div class="field-note">Необязательно. Сохраняется для прямых моделей <code>anthropic::...</code> и инструментов Claude.</div>
-                </div>
+                ${PROVIDER_FIELDS.map((field) => providerKeyField({
+                    ...field,
+                    value: state[field.stateKey],
+                })).join('')}
             </div>
             ${renderClaudeCliControls()}
             <details class="wizard-collapse" ${localSourceOpen ? 'open' : ''}>
@@ -613,9 +595,7 @@
                             </div>
                             <select id="local-preset">
                                 <option value="" ${localPreset === '' ? 'selected' : ''}>Нет</option>
-                                <option value="qwen25-7b" ${localPreset === 'qwen25-7b' ? 'selected' : ''}>Qwen2.5-7B Instruct Q3_K_M</option>
-                                <option value="qwen3-14b" ${localPreset === 'qwen3-14b' ? 'selected' : ''}>Qwen3-14B Instruct Q4_K_M</option>
-                                <option value="qwen3-32b" ${localPreset === 'qwen3-32b' ? 'selected' : ''}>Qwen3-32B Instruct Q4_K_M</option>
+                                ${Object.entries(LOCAL_PRESETS).map(([id, preset]) => `<option value="${escapeHtml(id)}" ${localPreset === id ? 'selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
                                 <option value="custom" ${localPreset === 'custom' ? 'selected' : ''}>Пользовательский источник</option>
                             </select>
                             <div class="field-note">Большинству пользователей не нужно. Открывайте только если хотите локальную GGUF маршрутизацию.</div>
@@ -623,43 +603,11 @@
                         <div class="field">
                             <div class="field-label-row"><label>Локальная маршрутизация</label></div>
                             <div class="selection-row">
-                                <button class="selection-pill ${state.localRoutingMode === 'cloud' ? 'active' : ''}" data-local-mode="cloud" type="button">Только облако</button>
-                                <button class="selection-pill ${state.localRoutingMode === 'fallback' ? 'active' : ''}" data-local-mode="fallback" type="button">Запасная локальная</button>
-                                <button class="selection-pill ${state.localRoutingMode === 'all' ? 'active' : ''}" data-local-mode="all" type="button">Все локальные</button>
+                                ${LOCAL_ROUTING_MODES.map((mode) => `<button class="selection-pill ${state.localRoutingMode === mode.value ? 'active' : ''}" data-local-mode="${escapeHtml(mode.value)}" type="button">${escapeHtml(mode.buttonLabel || mode.label)}</button>`).join('')}
                             </div>
                             <div class="field-note">Игнорируется, если источник локальной модели не настроен ниже.</div>
                         </div>
-                        <div class="field field-full">
-                            <div class="field-label-row">
-                                <label for="local-source">Источник модели</label>
-                                <button class="field-clear" data-clear="local-source" type="button">Очистить</button>
-                            </div>
-                            <input id="local-source" placeholder="Qwen/Qwen2.5-7B-Instruct-GGUF или /абсолютный/путь/model.gguf" value="${escapeHtml(state.localSource)}">
-                            <div class="field-note">Используйте ID репозитория HuggingFace или локальный абсолютный GGUF путь.</div>
-                        </div>
-                        <div class="field field-full">
-                            <div class="field-label-row">
-                                <label for="local-filename">Имя файла GGUF</label>
-                                <button class="field-clear" data-clear="local-filename" type="button">Очистить</button>
-                            </div>
-                            <input id="local-filename" placeholder="qwen2.5-7b-instruct-q3_k_m.gguf" value="${escapeHtml(state.localFilename)}">
-                            <div class="field-note">Требуется только для ID репозиториев HuggingFace. Оставьте пустым при прямом пути к файлу.</div>
-                        </div>
-                        <div class="field">
-                            <label for="local-context">Длина контекста</label>
-                            <input id="local-context" type="number" min="2048" step="1024" value="${escapeHtml(state.localContextLength)}">
-                        </div>
-                        <div class="field">
-                            <label for="local-gpu-layers">Слои GPU</label>
-                            <input id="local-gpu-layers" type="number" step="1" value="${escapeHtml(state.localGpuLayers)}">
-                        </div>
-                        <div class="field field-full">
-                            <div class="field-label-row">
-                                <label for="local-chat-format">Формат чата</label>
-                                <button class="field-clear" data-clear="local-chat-format" type="button">Очистить</button>
-                            </div>
-                            <input id="local-chat-format" placeholder="Оставьте пустым для автоопределения" value="${escapeHtml(state.localChatFormat)}">
-                        </div>
+                        ${LOCAL_FIELDS.map(localInputField).join('')}
                     </div>
                     ${renderLocalControls()}
                 </div>
@@ -670,16 +618,17 @@
     function modelSuggestionField({ id, label, value, note }) {
         return `
             <div class="field wizard-model-field" data-wizard-model-field>
-                <label for="${id}">${label}</label>
-                <input id="${id}" value="${escapeHtml(value)}" autocomplete="off" spellcheck="false" data-wizard-model-input>
+                <label for="${escapeHtml(id)}">${escapeHtml(label)}</label>
+                <input id="${escapeHtml(id)}" value="${escapeHtml(value)}" autocomplete="off" spellcheck="false" data-wizard-model-input>
                 <div class="wizard-model-suggestions" hidden></div>
-                <div class="field-note">${note}</div>
+                <div class="field-note">${escapeHtml(note)}</div>
             </div>
         `;
     }
 
-    function renderModelsStep() {
-        return `
+        function renderModelsStep() {
+            const profile = activeProviderProfile();
+            return `
             <div class="step-header">
                 <div>
                     <h2 class="step-title">${escapeHtml(STEP_META.models.title)}</h2>
@@ -714,11 +663,10 @@
 
     function renderReviewModeStep() {
         const runtimeMode = trim(state.runtimeMode) || 'advanced';
-        const runtimeModeDisabled = HOST_MODE !== 'desktop';
-        const runtimeModeCopy = runtimeModeDisabled
-            ? 'Режим среды контролируется владельцем при веб/Docker установке и не может быть сохранён через /api/settings. Используйте десктопный лаунчер или отредактируйте settings.json при остановленном сервере.'
-            : 'Отдельная ось от режима проверки. Этот первоначальный выбор становится базовым при загрузке до запуска Ouroboros; последующее повышение требует нативного подтверждения лаунчера.';
-        const disabledAttr = runtimeModeDisabled ? ' disabled aria-disabled="true"' : '';
+        const runtimeModeCopy = HOST_MODE === 'desktop'
+            ? 'Отдельная ось от режима проверки. Этот первоначальный выбор становится базовым при загрузке до запуска Ouroboros; последующее повышение требует нативного подтверждения лаунчера.'
+            : 'Отдельная ось от режима проверки. Веб/Docker-настройка сохраняет это через owner-эндпоинт; выбранный режим активируется после перезапуска.';
+        const disabledAttr = '';
         return `
             <div class="step-header">
                 <div>
@@ -770,8 +718,8 @@
         `;
     }
 
-    function renderBudgetStep() {
-        return `
+        function renderBudgetStep() {
+            return `
             <div class="step-header">
                 <div>
                     <h2 class="step-title">${escapeHtml(STEP_META.budget.title)}</h2>
@@ -874,31 +822,34 @@
         renderClaudeCliStatus();
     }
 
-    function bindClearButtons() {
+        function bindClearButtons() {
+            const clearActions = Object.fromEntries(PROVIDER_FIELDS.map((field) => [
+                field.id,
+                () => { state[field.stateKey] = ''; },
+            ]));
+            Object.assign(clearActions, {
+                'local-preset': () => {
+                    state.localPreset = '';
+                    state.localSource = '';
+                state.localFilename = '';
+                state.localRoutingMode = 'cloud';
+                state.localSourceOpen = false;
+            },
+            'local-source': () => {
+                state.localSource = '';
+                state.localPreset = detectLocalPresetSelection();
+            },
+            'local-filename': () => {
+                state.localFilename = '';
+                state.localPreset = detectLocalPresetSelection();
+                },
+                'local-chat-format': () => { state.localChatFormat = ''; },
+                'skills-repo-path': () => { state.skillsRepoPath = ''; },
+            });
         root.querySelectorAll('[data-clear]').forEach((button) => {
             button.addEventListener('click', () => {
                 const target = button.getAttribute('data-clear');
-                if (target === 'openrouter-key') state.openrouterKey = '';
-                if (target === 'openai-key') state.openaiKey = '';
-                if (target === 'cloudru-key') state.cloudruKey = '';
-                if (target === 'anthropic-key') state.anthropicKey = '';
-                if (target === 'local-preset') {
-                    state.localPreset = '';
-                    state.localSource = '';
-                    state.localFilename = '';
-                    state.localRoutingMode = 'cloud';
-                    state.localSourceOpen = false;
-                }
-                if (target === 'local-source') {
-                    state.localSource = '';
-                    state.localPreset = detectLocalPresetSelection();
-                }
-                if (target === 'local-filename') {
-                    state.localFilename = '';
-                    state.localPreset = detectLocalPresetSelection();
-                }
-                if (target === 'local-chat-format') state.localChatFormat = '';
-                if (target === 'skills-repo-path') state.skillsRepoPath = '';
+                if (clearActions[target]) clearActions[target]();
                 state.error = '';
                 render();
             });
@@ -912,55 +863,57 @@
                 state.localSourceOpen = details.open;
             });
         }
-        const openrouterInput = document.getElementById('openrouter-key');
-        const openaiInput = document.getElementById('openai-key');
-        const cloudruInput = document.getElementById('cloudru-key');
-        const anthropicInput = document.getElementById('anthropic-key');
-        const localPreset = document.getElementById('local-preset');
-        const localSource = document.getElementById('local-source');
+            const localPreset = document.getElementById('local-preset');
+            const localSource = document.getElementById('local-source');
         const localFilename = document.getElementById('local-filename');
         const localContext = document.getElementById('local-context');
         const localGpuLayers = document.getElementById('local-gpu-layers');
         const localChatFormat = document.getElementById('local-chat-format');
 
-        [[openrouterInput, 'openrouterKey'], [openaiInput, 'openaiKey'], [cloudruInput, 'cloudruKey']].forEach(([input, key]) => {
+        function bindStateInput(input, key, after = null) {
             if (!input) return;
-            input.addEventListener('input', () => { state[key] = input.value; state.error = ''; syncCurrentStepActionState(); });
-        });
-        if (anthropicInput) anthropicInput.addEventListener('input', () => {
-            const wasConfigured = hasAnthropicKeyConfigured();
-            state.anthropicKey = anthropicInput.value;
-            if (!wasConfigured && hasAnthropicKeyConfigured()) {
-                state.claudeCliDismissed = false;
-                startClaudeCliStatusPolling();
-                updateClaudeCliStatus();
-            }
-            state.error = '';
-            syncClaudeCliVisibility();
-            syncCurrentStepActionState();
-        });
+            input.addEventListener('input', () => {
+                state[key] = input.value;
+                if (after) after(input);
+                markStepEdited();
+            });
+        }
+
+            PROVIDER_FIELDS.forEach((field) => {
+                const input = document.getElementById(field.id);
+                if (field.settingKey !== 'ANTHROPIC_API_KEY') {
+                    bindStateInput(input, field.stateKey);
+                    return;
+                }
+                if (!input) return;
+                input.addEventListener('input', () => {
+                    const wasConfigured = hasAnthropicKeyConfigured();
+                    state[field.stateKey] = input.value;
+                    if (!wasConfigured && hasAnthropicKeyConfigured()) {
+                        state.claudeCliDismissed = false;
+                        startClaudeCliStatusPolling();
+                        updateClaudeCliStatus();
+                    }
+                    syncClaudeCliVisibility();
+                    markStepEdited();
+                });
+            });
         if (localPreset) localPreset.addEventListener('change', () => { applyPresetSelection(localPreset.value); state.error = ''; render(); });
-        if (localSource) localSource.addEventListener('input', () => {
-            state.localSource = localSource.value;
+        bindStateInput(localSource, 'localSource', () => {
             state.localPreset = detectLocalPresetSelection();
             if (localPreset) localPreset.value = state.localPreset || '';
             state.localSourceOpen = true;
             if (trim(state.localSource) && activeProviderProfile() === 'local' && trim(state.localRoutingMode) === 'cloud') {
                 state.localRoutingMode = 'all';
             }
-            state.error = '';
-            syncCurrentStepActionState();
         });
-        if (localFilename) localFilename.addEventListener('input', () => {
-            state.localFilename = localFilename.value;
+        bindStateInput(localFilename, 'localFilename', () => {
             state.localPreset = detectLocalPresetSelection();
             if (localPreset) localPreset.value = state.localPreset || '';
-            state.error = '';
-            syncCurrentStepActionState();
         });
-        if (localContext) localContext.addEventListener('input', () => { state.localContextLength = localContext.value; state.error = ''; syncCurrentStepActionState(); });
-        if (localGpuLayers) localGpuLayers.addEventListener('input', () => { state.localGpuLayers = localGpuLayers.value; state.error = ''; syncCurrentStepActionState(); });
-        if (localChatFormat) localChatFormat.addEventListener('input', () => { state.localChatFormat = localChatFormat.value; state.error = ''; syncCurrentStepActionState(); });
+        bindStateInput(localContext, 'localContextLength');
+        bindStateInput(localGpuLayers, 'localGpuLayers');
+        bindStateInput(localChatFormat, 'localChatFormat');
         root.querySelectorAll('[data-local-mode]').forEach((button) => {
             button.addEventListener('click', () => {
                 state.localRoutingMode = button.getAttribute('data-local-mode');
@@ -986,7 +939,6 @@
                     });
                     const data = await resp.json().catch(() => ({}));
                     if (resp.status === 412 && data.error === 'runtime_missing') {
-                        // llama-cpp-python not installed — show actionable message
                         setLocalTestResult(
                             'Локальная среда (llama-cpp-python) не установлена.\n' +
                             'Перейдите в Настройки → Расширенные → Локальная среда выполнения модели\n' +
@@ -1055,26 +1007,14 @@
         syncCurrentStepActionState();
     }
 
-    function bindModelsStep() {
-        const map = {
-            'main-model': 'mainModel',
-            'code-model': 'codeModel',
-            'light-model': 'lightModel',
-            'fallback-model': 'fallbackModel',
-        };
-        function suggestionMatches(query) {
-            const needle = trim(query).toLowerCase();
-            const source = MODEL_SUGGESTIONS.length ? MODEL_SUGGESTIONS : [
-                'openai::gpt-5.5',
-                'openai::gpt-5.5-mini',
-                'anthropic::claude-opus-4-6',
-                'anthropic::claude-sonnet-4-6',
-                'openai/gpt-5.5',
-            ];
-            return source
-                .filter((model) => !needle || String(model).toLowerCase().includes(needle))
-                .slice(0, 8);
-        }
+        function bindModelsStep() {
+            const modelInputMap = Object.fromEntries(MODEL_SLOTS.map((slot) => [slot.inputId, slot.stateKey]));
+            function suggestionMatches(query) {
+                const needle = trim(query).toLowerCase();
+                return MODEL_SUGGESTIONS
+                    .filter((model) => !needle || String(model).toLowerCase().includes(needle))
+                    .slice(0, 8);
+            }
         function closeSuggestions(exceptInput = null) {
             root.querySelectorAll('.wizard-model-suggestions').forEach((panel) => {
                 if (exceptInput && panel.parentElement?.querySelector('input') === exceptInput) return;
@@ -1096,7 +1036,7 @@
             )).join('');
             panel.hidden = false;
         }
-        Object.entries(map).forEach(([id, key]) => {
+            Object.entries(modelInputMap).forEach(([id, key]) => {
             const input = document.getElementById(id);
             if (!input) return;
             input.addEventListener('focus', () => {
@@ -1154,31 +1094,36 @@
             });
         });
         const skillsInput = document.getElementById('skills-repo-path');
-        if (skillsInput) {
-            skillsInput.addEventListener('input', () => {
-                state.skillsRepoPath = skillsInput.value;
-                syncCurrentStepActionState();
-            });
-        }
+        if (skillsInput) skillsInput.addEventListener('input', () => { state.skillsRepoPath = skillsInput.value; markStepEdited(); });
         syncCurrentStepActionState();
     }
 
-    function bindBudgetStep() {
-        const totalBudget = document.getElementById('total-budget');
-        const perTaskBudget = document.getElementById('per-task-budget');
-        if (totalBudget) totalBudget.addEventListener('input', () => { state.totalBudget = totalBudget.value; state.error = ''; syncCurrentStepActionState(); });
-        if (perTaskBudget) perTaskBudget.addEventListener('input', () => { state.perTaskCostUsd = perTaskBudget.value; state.error = ''; syncCurrentStepActionState(); });
-        syncCurrentStepActionState();
-    }
+        function bindBudgetStep() {
+            BUDGET_FIELDS.forEach((field) => {
+                const input = document.getElementById(field.inputId);
+                if (input) input.addEventListener('input', () => { state[field.stateKey] = input.value; markStepEdited(); });
+            });
+            syncCurrentStepActionState();
+        }
 
     async function saveWizardPayload(payload) {
         if (HOST_MODE === 'web') {
+            const runtimeMode = trim(state.runtimeMode) || 'advanced';
             await apiRequest('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            window.parent?.postMessage({ type: 'ouroboros:onboarding-complete' }, '*');
+            const runtimeResult = await apiRequest('/api/owner/runtime-mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: runtimeMode }),
+            });
+            window.parent?.postMessage({
+                type: 'ouroboros:onboarding-complete',
+                restart_required: Boolean(runtimeResult?.restart_required),
+                runtime_mode: runtimeResult?.runtime_mode || runtimeMode,
+            }, '*');
             if (!window.parent || window.parent === window) {
                 window.location.replace('/');
             }
@@ -1202,32 +1147,23 @@
             render();
             return;
         }
-        state.saving = true;
-        state.error = '';
-        render();
-        const payload = {
-            OPENROUTER_API_KEY: trim(state.openrouterKey),
-            OPENAI_API_KEY: trim(state.openaiKey),
-            CLOUDRU_FOUNDATION_MODELS_API_KEY: trim(state.cloudruKey),
-            ANTHROPIC_API_KEY: trim(state.anthropicKey),
-            TOTAL_BUDGET: Number(state.totalBudget || 0),
-            OUROBOROS_PER_TASK_COST_USD: Number(state.perTaskCostUsd || 0),
-            OUROBOROS_REVIEW_ENFORCEMENT: trim(state.reviewEnforcement) || 'advisory',
-            OUROBOROS_SKILLS_REPO_PATH: trim(state.skillsRepoPath),
-            LOCAL_MODEL_SOURCE: trim(state.localSource),
+            state.saving = true;
+            state.error = '';
+            render();
+            const payload = {
+                ...Object.fromEntries(PROVIDER_FIELDS.map((field) => [field.settingKey, trim(state[field.stateKey])])),
+                ...Object.fromEntries(BUDGET_FIELDS.map((field) => [field.settingKey, Number(state[field.stateKey] || 0)])),
+                OUROBOROS_REVIEW_ENFORCEMENT: trim(state.reviewEnforcement) || 'advisory',
+                OUROBOROS_SKILLS_REPO_PATH: trim(state.skillsRepoPath),
+                LOCAL_MODEL_SOURCE: trim(state.localSource),
             LOCAL_MODEL_FILENAME: trim(state.localFilename),
             LOCAL_MODEL_CONTEXT_LENGTH: Number(state.localContextLength || 0),
-            LOCAL_MODEL_N_GPU_LAYERS: Number(state.localGpuLayers || 0),
-            LOCAL_MODEL_CHAT_FORMAT: trim(state.localChatFormat),
-            LOCAL_ROUTING_MODE: trim(state.localSource) ? (trim(state.localRoutingMode) || 'cloud') : 'cloud',
-            OUROBOROS_MODEL: trim(state.mainModel),
-            OUROBOROS_MODEL_CODE: trim(state.codeModel),
-            OUROBOROS_MODEL_LIGHT: trim(state.lightModel),
-            OUROBOROS_MODEL_FALLBACK: trim(state.fallbackModel),
-        };
-        if (HOST_MODE === 'desktop') {
-            payload.OUROBOROS_RUNTIME_MODE = trim(state.runtimeMode) || 'advanced';
-        }
+                LOCAL_MODEL_N_GPU_LAYERS: Number(state.localGpuLayers || 0),
+                LOCAL_MODEL_CHAT_FORMAT: trim(state.localChatFormat),
+                LOCAL_ROUTING_MODE: trim(state.localSource) ? (trim(state.localRoutingMode) || 'cloud') : 'cloud',
+                ...Object.fromEntries(MODEL_SLOTS.map((slot) => [slot.settingKey, trim(state[slot.stateKey])])),
+            };
+        payload.OUROBOROS_RUNTIME_MODE = trim(state.runtimeMode) || 'advanced';
         try {
             await saveWizardPayload(payload);
         } catch (error) {

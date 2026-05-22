@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -21,7 +22,7 @@ from ouroboros.config import (
     load_settings,
     save_settings,
 )
-from ouroboros.gateway._helpers import request_drive_root
+from ouroboros.gateway._helpers import json_error, json_exception, request_drive_root
 from ouroboros.onboarding_wizard import build_onboarding_html
 from ouroboros.platform_layer import is_container_env
 from ouroboros.server_runtime import (
@@ -30,6 +31,8 @@ from ouroboros.server_runtime import (
     has_startup_ready_provider,
     has_supervisor_provider,
 )
+from ouroboros.settings_setup_contract import build_setup_contract
+from ouroboros.utils import append_jsonl, atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
 DEFAULT_PORT = int(os.environ.get("OUROBOROS_SERVER_PORT", "8765"))
@@ -46,7 +49,7 @@ _SECRET_SETTING_KEYS = {
 _CUSTOM_SECRET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
 
 def _get_lan_ip() -> str:
-    """Return the LAN IP using a UDP socket trick (no packet sent). Returns '' on failure."""
+    """Return LAN IP via UDP socket trick; no packet is sent."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("192.0.2.1", 80))  # RFC 5737 TEST-NET-1, no packet sent
@@ -55,7 +58,6 @@ def _get_lan_ip() -> str:
         return ""
 
 
-# IPv4 wildcard hosts that mean "listen on all interfaces"
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", ""})
 
 
@@ -68,14 +70,10 @@ def _trust_nonlocal_bind_without_password_enabled() -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-from ouroboros.platform_layer import is_container_env
-
-
 def _build_network_meta(bind_host: str, bind_port: int) -> dict:
-    """Build the _meta dict for /api/settings response."""
+    """Build /api/settings network metadata."""
     from ouroboros.server_auth import get_network_auth_startup_warning, is_loopback_host
-    # Strip surrounding brackets from IPv6 literals (e.g. "[::1]" → "::1") so
-    # is_loopback_host can correctly classify bracketed IPv6 loopback addresses.
+    # Strip IPv6 brackets before loopback classification.
     unbracketed = bind_host[1:-1] if bind_host.startswith("[") and bind_host.endswith("]") else bind_host
     loopback = is_loopback_host(unbracketed)
     if loopback:
@@ -87,26 +85,21 @@ def _build_network_meta(bind_host: str, bind_port: int) -> dict:
             "recommended_url": "",
             "warning": "Server is bound to localhost — not accessible from other devices.",
         }
-    # Non-loopback: determine the advertised IP
     wildcard = _is_wildcard_host(bind_host)
     if wildcard:
         if is_container_env():
-            # Container bridge IPs are typically not reachable from the user's LAN
             lan_ip = ""
         else:
             lan_ip = _get_lan_ip()
     elif bind_host in ("::", "[::]"):
-        # IPv6 wildcard — startup uses AF_INET only (server_entrypoint.py), so we
-        # cannot reliably detect or advertise an IPv6 LAN IP. Degrade gracefully.
+        # AF_INET startup cannot advertise an IPv6 wildcard LAN IP reliably.
         lan_ip = ""
     else:
-        # Specific non-loopback bind address — use it directly (IPv4 or hostname).
-        # Use unbracketed form so URL construction can uniformly re-bracket IPv6.
+        # Use unbracketed form so URL construction can re-bracket IPv6 uniformly.
         lan_ip = unbracketed
 
     auth_warning = get_network_auth_startup_warning(bind_host) or ""
     if lan_ip:
-        # Handle IPv6 addresses (bracket them for URL)
         host_in_url = f"[{lan_ip}]" if ":" in lan_ip else lan_ip
         reachability = "lan_reachable"
         recommended_url = f"http://{host_in_url}:{bind_port}"
@@ -196,7 +189,6 @@ def _rehydrate_mcp_servers_payload(incoming: Any, current: Any) -> list:
     return out
 
 
-# Keys that refresh immediately in the running supervisor (no restart, no task boundary).
 _IMMEDIATE_KEYS = frozenset({
     "TOTAL_BUDGET",
     "OUROBOROS_SOFT_TIMEOUT_SEC",
@@ -206,8 +198,6 @@ _IMMEDIATE_KEYS = frozenset({
     "GITHUB_REPO",
 })
 
-# Keys that require a full process restart when changed.
-# Everything else is hot-reloadable (takes effect on the next task).
 _RESTART_REQUIRED_KEYS = frozenset({
     "OUROBOROS_MAX_WORKERS",
     "OUROBOROS_SERVER_HOST",
@@ -227,11 +217,7 @@ def _classify_settings_changes(
     old: Dict[str, Any],
     new: Dict[str, Any],
 ) -> list:
-    """Return list of changed keys that require a process restart.
-
-    Keys that changed but are NOT in ``_RESTART_REQUIRED_KEYS`` are
-    hot-reloadable — they take effect at the start of the next task.
-    """
+    """Return changed keys requiring process restart; others hot-reload next task."""
     return [
         k for k in _RESTART_REQUIRED_KEYS
         if str(new.get(k, "") or "") != str(old.get(k, "") or "")
@@ -241,13 +227,7 @@ def _classify_settings_changes(
 def _merge_settings_payload(current: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     merged = {k: v for k, v in current.items()}
     for key in _SETTINGS_DEFAULTS:
-        # v5.1.2 elevation ratchet: ``OUROBOROS_RUNTIME_MODE`` is owner-only.
-        # The runtime mode axis controls how far Ouroboros may self-modify;
-        # accepting it from /api/settings POST gives the agent a same-process
-        # path to raise its own privilege scope (loopback POST has no auth).
-        # Mode changes happen only through direct ``settings.json`` edits while
-        # the agent is stopped, plus restart. The desktop UI uses a
-        # launcher-native confirmation bridge instead of this HTTP path.
+        # Runtime mode is owner-only; loopback HTTP settings cannot raise scope.
         if key in {"OUROBOROS_RUNTIME_MODE", "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"}:
             continue
         if key not in body:
@@ -286,14 +266,113 @@ def _start_supervisor_if_needed_for_request(request: Request, settings: dict) ->
     callback = getattr(getattr(request.app, "state", None), "start_supervisor_if_needed", None)
     return bool(callback(settings)) if callable(callback) else False
 
-def _claude_code_status_payload() -> Dict[str, Any]:
-    """Return Claude runtime status using the app-managed runtime contract.
 
-    Replaces the old SDK-only installed/missing check with a richer
-    payload that reports: runtime source, interpreter path, SDK version,
-    CLI path/version, app-managed vs legacy state, API key readiness,
-    and the most recent stderr output on failure.
-    """
+def _owner_audit(request: Request, action: str, payload: Dict[str, Any]) -> None:
+    try:
+        drive_root = request_drive_root(request)
+    except Exception:
+        drive_root = pathlib.Path(DATA_DIR)
+    try:
+        client = getattr(request, "client", None)
+        append_jsonl(
+            drive_root / "logs" / "events.jsonl",
+            {
+                "ts": utc_now_iso(),
+                "type": "owner_api_action",
+                "action": str(action or ""),
+                "client_host": str(getattr(client, "host", "") or ""),
+                **{
+                    key: value
+                    for key, value in dict(payload or {}).items()
+                    if "key" not in str(key).lower() and "secret" not in str(key).lower()
+                },
+            },
+        )
+    except Exception:
+        log.debug("Failed to write owner API audit event", exc_info=True)
+
+
+def _owner_write_settings(settings: Dict[str, Any]) -> None:
+    """Write owner-controlled settings without applying the runtime-mode ratchet."""
+    from ouroboros import config as _config
+
+    _config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    fd = _config._acquire_settings_lock()
+    try:
+        atomic_write_json(_config.SETTINGS_PATH, dict(settings), trailing_newline=False)
+    finally:
+        _config._release_settings_lock(fd)
+
+
+def _owner_read_settings_raw() -> Dict[str, Any]:
+    """Read settings for owner endpoints without applying runtime-mode ratchets."""
+    from ouroboros import config as _config
+
+    merged = dict(_SETTINGS_DEFAULTS)
+    try:
+        if _config.SETTINGS_PATH.exists():
+            raw = json.loads(_config.SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                merged.update(raw)
+    except Exception:
+        log.debug("Failed to read raw owner settings; using defaults", exc_info=True)
+    return merged
+
+
+async def api_owner_runtime_mode(request: Request) -> JSONResponse:
+    """Persist the owner-selected runtime mode for the next boot."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from ouroboros import config as _config
+
+    raw_mode = str((body or {}).get("mode") or "").strip().lower()
+    if raw_mode not in set(_config.VALID_RUNTIME_MODES):
+        return json_error("'mode' must be one of: light, advanced, pro", 400)
+    old_settings = _owner_read_settings_raw()
+    previous_mode = _config.normalize_runtime_mode(old_settings.get("OUROBOROS_RUNTIME_MODE"))
+    active_mode = _config.get_runtime_mode()
+    next_mode = _config.normalize_runtime_mode(raw_mode)
+    restart_required = active_mode != next_mode
+    current = dict(old_settings)
+    current["OUROBOROS_RUNTIME_MODE"] = next_mode
+    _owner_write_settings(current)
+    _owner_audit(
+        request,
+        "runtime_mode",
+        {
+            "runtime_mode": next_mode,
+            "previous_runtime_mode": previous_mode,
+            "active_runtime_mode": active_mode,
+            "restart_required": restart_required,
+        },
+    )
+    return JSONResponse({
+        "ok": True,
+        "runtime_mode": next_mode,
+        "restart_required": restart_required,
+    })
+
+
+async def api_owner_auto_grant(request: Request) -> JSONResponse:
+    """Persist the owner auto-grant toggle outside generic settings writes."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+        return json_error("'enabled' must be a boolean", 400)
+    enabled = bool(body.get("enabled"))
+    current = _owner_read_settings_raw()
+    current["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"] = "true" if enabled else "false"
+    _owner_write_settings(current)
+    os.environ["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"] = current["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"]
+    _owner_audit(request, "auto_grant", {"enabled": enabled})
+    return JSONResponse({"ok": True, "enabled": enabled})
+
+def _claude_code_status_payload() -> Dict[str, Any]:
+    """Return app-managed Claude runtime status, versions, readiness, and stderr."""
     from ouroboros.platform_layer import resolve_claude_runtime
 
     rt = resolve_claude_runtime()
@@ -345,7 +424,6 @@ async def api_settings_get(request: Request) -> JSONResponse:
             continue
         if _CUSTOM_SECRET_KEY_RE.match(str(key)) and value:
             safe[key] = _mask_secret_value(value)
-    # Inject read-only runtime network metadata for the Settings UI hint
     try:
         port = int(_port_file(request).read_text().strip()) if _port_file(request).exists() else _default_port(request)
     except (ValueError, OSError):
@@ -358,6 +436,7 @@ async def api_settings_get(request: Request) -> JSONResponse:
         and _CUSTOM_SECRET_KEY_RE.match(str(key))
         and settings.get(key)
     )
+    meta["setup_contract"] = build_setup_contract("web")
     safe["_meta"] = meta
     return JSONResponse(safe)
 
@@ -386,12 +465,7 @@ async def api_claude_code_status(request: Request) -> JSONResponse:
 
 
 async def api_claude_code_install(request: Request) -> JSONResponse:
-    """Repair/update the app-managed Claude runtime.
-
-    Replaces the old "pip install SDK" endpoint. Now operates on the
-    app-managed interpreter (prefers embedded python-standalone) and
-    always reinstalls/upgrades to the pinned baseline version.
-    """
+    """Repair/update Claude runtime using the app-managed interpreter."""
     try:
         import subprocess as _sp
         import sys as _sys
@@ -405,15 +479,7 @@ async def api_claude_code_install(request: Request) -> JSONResponse:
         except Exception:
             pass
 
-        # Single source of truth for the SDK baseline — mirrors the launcher
-        # bootstrap probe so web/onboarding repair installs the same version
-        # that the launcher repair path installs. Imported at call time (rather
-        # than at module load) so the error raises a clean 500 from the install
-        # endpoint instead of breaking server startup; but NO defaulted literal
-        # fallback is kept — that would reintroduce the drift this SSOT was
-        # meant to eliminate (one edit to `_CLAUDE_SDK_BASELINE` and one here
-        # would diverge silently). If the import truly fails, the runtime is
-        # already unusable and the caller should see the error.
+        # Import SDK baseline at call time: one SSOT, clean endpoint error if broken.
         from ouroboros.launcher_bootstrap import _CLAUDE_SDK_BASELINE as sdk_baseline
 
         result = await asyncio.to_thread(
@@ -449,28 +515,27 @@ async def api_settings_post(request: Request) -> JSONResponse:
     try:
         body = await request.json()
         old_settings = load_settings()
+        from ouroboros.config import get_runtime_mode, normalize_runtime_mode as _norm_runtime_mode
+
+        raw_old_settings = _owner_read_settings_raw()
+        pending_runtime_mode = _norm_runtime_mode(
+            raw_old_settings.get("OUROBOROS_RUNTIME_MODE", old_settings.get("OUROBOROS_RUNTIME_MODE"))
+        )
+        current_runtime_mode = get_runtime_mode()
+        old_effective_settings = dict(old_settings)
+        old_effective_settings["OUROBOROS_RUNTIME_MODE"] = current_runtime_mode
         if "MCP_SERVERS" in body:
             body = dict(body)
             body["MCP_SERVERS"] = _rehydrate_mcp_servers_payload(
                 body.get("MCP_SERVERS"),
                 old_settings.get("MCP_SERVERS"),
             )
-        current = _merge_settings_payload(old_settings, body)
-        # Phase 2: normalize the new runtime-mode axis on the save path so a
-        # typo like ``{"OUROBOROS_RUNTIME_MODE": "turbo"}`` cannot land in
-        # settings.json. The same normalizer runs on the read side
-        # (``get_runtime_mode``), so /api/settings, /api/state, and the UI
-        # segmented control stay in lockstep.
-        from ouroboros.config import normalize_runtime_mode as _norm_runtime_mode
-        # v5.1.2 elevation ratchet: belt-and-braces. ``_merge_settings_payload``
-        # already skips ``OUROBOROS_RUNTIME_MODE`` so the body cannot influence
-        # it, but if a future contributor adds a side channel we still want
-        # the saved mode to match the on-disk old value, not the request body.
-        current["OUROBOROS_RUNTIME_MODE"] = _norm_runtime_mode(
-            old_settings.get("OUROBOROS_RUNTIME_MODE")
-        )
-        # Skills-repo path is opaque text; trim incidental whitespace so the
-        # "configured vs empty" boolean in /api/state stays deterministic.
+        current = _merge_settings_payload(old_effective_settings, body)
+        # Generic settings saves operate on the current boot baseline. A pending
+        # next-boot mode written by /api/owner/runtime-mode is preserved on disk
+        # below, but never hot-applied to this process/env.
+        current["OUROBOROS_RUNTIME_MODE"] = current_runtime_mode
+        # Trim opaque path text so configured/empty state is deterministic.
         current["OUROBOROS_SKILLS_REPO_PATH"] = str(
             current.get("OUROBOROS_SKILLS_REPO_PATH") or ""
         ).strip()
@@ -481,28 +546,20 @@ async def api_settings_post(request: Request) -> JSONResponse:
             trust_unauth = _trust_nonlocal_bind_without_password_enabled()
             allowed_saved_hosts = {"", "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "::", "[::]"}
             if desired_host and desired_host not in allowed_saved_hosts:
-                return JSONResponse(
-                    {
-                        "error": (
-                            "Server Bind Host in Settings supports localhost or wildcard "
-                            "binds only (127.0.0.1 or 0.0.0.0). Specific LAN IP binds "
-                            "are manual/env-only so the desktop launcher can keep using "
-                            "a reliable loopback health check."
-                        )
-                    },
-                    status_code=400,
+                return json_error(
+                    "Server Bind Host in Settings supports localhost or wildcard "
+                    "binds only (127.0.0.1 or 0.0.0.0). Specific LAN IP binds "
+                    "are manual/env-only so the desktop launcher can keep using "
+                    "a reliable loopback health check.",
+                    400,
                 )
             if desired_host and not is_loopback_host(desired_host) and not desired_password and not trust_unauth:
-                return JSONResponse(
-                    {
-                        "error": (
-                            "Setting a non-localhost Server Bind Host through the web UI "
-                            "requires a Network Password in the same save. For manual "
-                            "trusted-lab/Docker setups, stop Ouroboros and edit "
-                            "settings.json or environment variables directly."
-                        )
-                    },
-                    status_code=400,
+                return json_error(
+                    "Setting a non-localhost Server Bind Host through the web UI "
+                    "requires a Network Password in the same save. For manual "
+                    "trusted-lab/Docker setups, stop Ouroboros and edit "
+                    "settings.json or environment variables directly.",
+                    400,
                 )
             current_effective_host = (
                 str(_current_bind_host(request) or "").strip()
@@ -516,32 +573,26 @@ async def api_settings_post(request: Request) -> JSONResponse:
                 and not desired_password
                 and not trust_unauth
             ):
-                return JSONResponse(
-                    {
-                        "error": (
-                            "Cannot clear Network Password while the running server is "
-                            "still bound to a non-localhost interface. First save a "
-                            "loopback Server Bind Host and restart, then clear the password."
-                        )
-                    },
-                    status_code=400,
+                return json_error(
+                    "Cannot clear Network Password while the running server is "
+                    "still bound to a non-localhost interface. First save a "
+                    "loopback Server Bind Host and restart, then clear the password.",
+                    400,
                 )
         except Exception:
             log.warning("Could not validate network bind settings", exc_info=True)
         current, provider_defaults_changed, provider_default_keys = apply_runtime_provider_defaults(current)
         if str(current.get("LOCAL_MODEL_SOURCE", "") or "").strip() and not has_supervisor_provider(current):
-            return JSONResponse(
-                {"error": "Local-only setups must route at least one model to the local runtime."},
-                status_code=400,
-            )
-        # Detect what actually changed before saving.
+            return json_error("Local-only setups must route at least one model to the local runtime.", 400)
         all_changed = [
             k for k in current
-            if str(current.get(k, "") or "") != str(old_settings.get(k, "") or "")
+            if str(current.get(k, "") or "") != str(old_effective_settings.get(k, "") or "")
         ]
-        restart_keys = _classify_settings_changes(old_settings, current)
+        restart_keys = _classify_settings_changes(old_effective_settings, current)
 
-        save_settings(current)
+        settings_to_save = dict(current)
+        settings_to_save["OUROBOROS_RUNTIME_MODE"] = pending_runtime_mode
+        _owner_write_settings(settings_to_save)
         _apply_settings_to_env(current)
         _start_supervisor_if_needed_for_request(request, current)
 
@@ -555,23 +606,15 @@ async def api_settings_post(request: Request) -> JSONResponse:
         except Exception:
             log.warning("MCP reconfigure after settings change failed", exc_info=True)
 
-        # Phase 4: when OUROBOROS_SKILLS_REPO_PATH changed, reconcile the
-        # extension loader against the new path so stale registrations
-        # from the previous path are torn down and any enabled +
-        # PASS-reviewed extensions at the new path come up live. Hot-
-        # reload pattern mirrors the other "next task" plumbing below.
+        # Skills repo/runtime changes require extension loader reconciliation.
         try:
             from ouroboros.extension_loader import reload_all as _reload_extensions
             new_path = str(current.get("OUROBOROS_SKILLS_REPO_PATH") or "").strip()
-            old_path = str(old_settings.get("OUROBOROS_SKILLS_REPO_PATH") or "").strip()
+            old_path = str(old_effective_settings.get("OUROBOROS_SKILLS_REPO_PATH") or "").strip()
             new_runtime_mode = str(current.get("OUROBOROS_RUNTIME_MODE") or "").strip()
-            old_runtime_mode = str(old_settings.get("OUROBOROS_RUNTIME_MODE") or "").strip()
+            old_runtime_mode = str(old_effective_settings.get("OUROBOROS_RUNTIME_MODE") or "").strip()
             if new_path != old_path or new_runtime_mode != old_runtime_mode:
-                # Use ``load_settings`` rather than ``lambda: current``
-                # so extensions see fresh settings on subsequent reads
-                # (capturing ``current`` would freeze the snapshot at
-                # settings-save time and drift from disk on later
-                # edits).
+                # Use load_settings so extensions do not capture a stale snapshot.
                 from ouroboros.config import load_settings as _load_settings
                 reload_drive_root = pathlib.Path(
                     request.app.state.drive_root
@@ -593,7 +636,6 @@ async def api_settings_post(request: Request) -> JSONResponse:
         except Exception:
             log.warning("Extension reload after settings change failed", exc_info=True)
 
-        # Hot-reload supervisor globals that can change without restart.
         try:
             from supervisor.state import refresh_budget_from_settings
             refresh_budget_from_settings(current)
@@ -614,9 +656,7 @@ async def api_settings_post(request: Request) -> JSONResponse:
 
         warnings = []
         if provider_defaults_changed:
-            change_kind = classify_runtime_provider_change(old_settings, current)
-            # Reverse migration (OpenRouter added back, :: → /) is silent
-            # housekeeping — the old warning text was misleading in that case.
+            change_kind = classify_runtime_provider_change(old_effective_settings, current)
             if change_kind == "direct_normalize":
                 warnings.append(
                     "Normalized direct-provider routing because OpenRouter is not configured for the active provider."
@@ -671,4 +711,4 @@ async def api_settings_post(request: Request) -> JSONResponse:
             resp["warnings"] = warnings
         return JSONResponse(resp)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return json_exception(e, 400)

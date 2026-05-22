@@ -114,21 +114,23 @@ def _prepare_extension(
 
 def _mark_isolated_deps_installed(drive_root: pathlib.Path, loaded) -> None:
     from ouroboros.marketplace.install_specs import install_specs_hash
+    from ouroboros.marketplace.isolated_deps import FINGERPRINT_FILENAME, isolated_env_dir
     from ouroboros.skill_dependencies import auto_install_specs_for_skill
     from ouroboros.skill_loader import skill_state_dir
 
     auto_specs = auto_install_specs_for_skill(drive_root, loaded)
     assert auto_specs
+    payload = {
+        "status": "installed",
+        "specs_hash": install_specs_hash(auto_specs),
+        "installed": auto_specs,
+    }
     state_dir = skill_state_dir(drive_root, loaded.name)
     state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "deps.json").write_text(
-        json.dumps({
-            "status": "installed",
-            "specs_hash": install_specs_hash(auto_specs),
-            "installed": auto_specs,
-        }),
-        encoding="utf-8",
-    )
+    (state_dir / "deps.json").write_text(json.dumps(payload), encoding="utf-8")
+    env_dir = isolated_env_dir(loaded.skill_dir)
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / FINGERPRINT_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +551,288 @@ def test_isolated_namespace_packages_are_purged_after_import_scope(tmp_path):
     extension_loader.unload_extension("env_namespace")
 
 
+def test_isolated_regular_parent_namespace_child_is_purged_after_import_scope(tmp_path):
+    import sys
+
+    loaded, repo_root, drive_root = _prepare_extension(
+        tmp_path,
+        "env_regular_parent_namespace_child",
+        (
+            "import importlib\n"
+            "importlib.import_module('regular_parent_pkg.data')\n"
+            "def register(api):\n"
+            "    api.register_tool('value', lambda ctx: 'ok', description='value', schema={})\n"
+        ),
+        permissions=["tool"],
+        extra_frontmatter="dependencies:\n  - regular_parent_pkg\n",
+    )
+    skill_dir = repo_root / "env_regular_parent_namespace_child"
+    site_dir = (
+        skill_dir
+        / ".ouroboros_env"
+        / "python"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    pkg_dir = site_dir / "regular_parent_pkg"
+    data_dir = pkg_dir / "data"
+    data_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("VALUE = 'regular-parent'\n", encoding="utf-8")
+    (data_dir / "payload.txt").write_text("namespace-child\n", encoding="utf-8")
+    _mark_isolated_deps_installed(drive_root, loaded)
+
+    err = extension_loader.load_extension(loaded, lambda: {}, drive_root=drive_root)
+
+    assert err is None, err
+    assert "regular_parent_pkg" not in sys.modules
+    assert "regular_parent_pkg.data" not in sys.modules
+    extension_loader.unload_extension("env_regular_parent_namespace_child")
+
+
+def test_isolated_regular_parent_namespace_child_is_purged_after_async_handler(tmp_path):
+    import asyncio
+    import sys
+
+    loaded, repo_root, drive_root = _prepare_extension(
+        tmp_path,
+        "env_async_regular_parent_namespace_child",
+        (
+            "import importlib\n"
+            "async def _value(ctx):\n"
+            "    module = importlib.import_module('async_regular_parent_pkg.data')\n"
+            "    return module.__name__\n"
+            "def register(api):\n"
+            "    api.register_tool('value', _value, description='value', schema={})\n"
+        ),
+        permissions=["tool"],
+        extra_frontmatter="dependencies:\n  - async_regular_parent_pkg\n",
+    )
+    skill_dir = repo_root / "env_async_regular_parent_namespace_child"
+    site_dir = (
+        skill_dir
+        / ".ouroboros_env"
+        / "python"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    pkg_dir = site_dir / "async_regular_parent_pkg"
+    data_dir = pkg_dir / "data"
+    data_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("VALUE = 'regular-parent'\n", encoding="utf-8")
+    (data_dir / "payload.txt").write_text("namespace-child\n", encoding="utf-8")
+    _mark_isolated_deps_installed(drive_root, loaded)
+
+    err = extension_loader.load_extension(loaded, lambda: {}, drive_root=drive_root)
+    assert err is None, err
+    tool = extension_loader.get_tool(
+        extension_loader.extension_surface_name("env_async_regular_parent_namespace_child", "value")
+    )
+    assert tool is not None
+
+    assert asyncio.run(tool["handler"]({})) == "async_regular_parent_pkg.data"
+    assert "async_regular_parent_pkg" not in sys.modules
+    assert "async_regular_parent_pkg.data" not in sys.modules
+    extension_loader.unload_extension("env_async_regular_parent_namespace_child")
+
+
+def test_isolated_site_scope_releases_execution_lock_when_cleanup_fails(tmp_path, monkeypatch):
+    from ouroboros import extension_isolated_deps
+
+    def fail_cleanup(_site_dirs):
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(extension_isolated_deps, "release_isolated_site_dirs", fail_cleanup)
+
+    with extension_isolated_deps.isolated_site_dirs_scope(tmp_path, enabled=False):
+        pass
+
+    assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+    extension_isolated_deps._execution_lock.release()
+
+
+def test_async_isolated_site_scope_releases_execution_lock_when_cleanup_fails(tmp_path, monkeypatch):
+    import asyncio
+
+    from ouroboros import extension_isolated_deps
+
+    def fail_cleanup(_site_dirs):
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(extension_isolated_deps, "release_isolated_site_dirs", fail_cleanup)
+
+    async def run_scope():
+        async with extension_isolated_deps.async_isolated_site_dirs_scope(tmp_path, enabled=False):
+            pass
+
+    asyncio.run(run_scope())
+
+    assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+    extension_isolated_deps._execution_lock.release()
+
+
+def test_isolated_site_scope_releases_execution_lock_when_inject_fails(tmp_path, monkeypatch):
+    from ouroboros import extension_isolated_deps
+
+    def fail_inject(_skill_dir):
+        raise RuntimeError("inject failed")
+
+    monkeypatch.setattr(extension_isolated_deps, "inject_isolated_site_dirs", fail_inject)
+
+    with pytest.raises(RuntimeError, match="inject failed"):
+        with extension_isolated_deps.isolated_site_dirs_scope(tmp_path, enabled=True):
+            pass
+
+    assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+    extension_isolated_deps._execution_lock.release()
+
+
+def test_async_isolated_site_scope_releases_execution_lock_when_inject_fails(tmp_path, monkeypatch):
+    import asyncio
+
+    from ouroboros import extension_isolated_deps
+
+    def fail_inject(_skill_dir):
+        raise RuntimeError("inject failed")
+
+    monkeypatch.setattr(extension_isolated_deps, "inject_isolated_site_dirs", fail_inject)
+
+    async def run_scope():
+        async with extension_isolated_deps.async_isolated_site_dirs_scope(tmp_path, enabled=True):
+            pass
+
+    with pytest.raises(RuntimeError, match="inject failed"):
+        asyncio.run(run_scope())
+
+    assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+    extension_isolated_deps._execution_lock.release()
+
+
+def test_async_isolated_site_scope_cancel_while_waiting_does_not_wedge_lock(tmp_path):
+    import asyncio
+
+    from ouroboros import extension_isolated_deps
+
+    async def run_scope():
+        async with extension_isolated_deps.async_isolated_site_dirs_scope(tmp_path, enabled=False):
+            return "entered"
+
+    async def main():
+        assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+        task = asyncio.create_task(run_scope())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        extension_isolated_deps._execution_lock.release()
+        await asyncio.sleep(0.05)
+        assert extension_isolated_deps._execution_lock.acquire(blocking=False)
+        extension_isolated_deps._execution_lock.release()
+
+    asyncio.run(main())
+
+
+def test_release_isolated_site_dirs_removes_path_when_module_scan_fails(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from ouroboros import extension_isolated_deps
+
+    skill_dir = tmp_path / "skill"
+    site_dir = (
+        skill_dir
+        / ".ouroboros_env"
+        / "python"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    site_dir.mkdir(parents=True)
+    site_str = str(site_dir.resolve())
+
+    injected = extension_isolated_deps.inject_isolated_site_dirs(skill_dir)
+    assert injected == [site_str]
+    assert site_str in sys.path
+    assert extension_isolated_deps._injected_site_dir_refs.get(site_str) == 1
+    module_name = "scan_failure_pkg"
+    module = types.ModuleType(module_name)
+    module.__file__ = str(site_dir / "scan_failure_pkg.py")
+    sys.modules[module_name] = module
+
+    def fail_scan(_site_path):
+        raise RuntimeError("module scan failed")
+
+    monkeypatch.setattr(extension_isolated_deps, "_module_names_under_site_dir", fail_scan)
+
+    extension_isolated_deps.release_isolated_site_dirs(injected)
+
+    assert site_str not in sys.path
+    assert site_str not in extension_isolated_deps._injected_site_dir_refs
+    assert module_name not in sys.modules
+
+
+def test_release_isolated_site_dirs_removes_preexisting_env_parent_path(tmp_path):
+    import sys
+
+    from ouroboros import extension_isolated_deps
+
+    skill_dir = tmp_path / "skill"
+    env_parent = skill_dir / ".ouroboros_env" / "python"
+    site_dir = (
+        env_parent
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    site_dir.mkdir(parents=True)
+    env_parent_str = str(env_parent.resolve())
+    site_str = str(site_dir.resolve())
+    sys.path.insert(0, env_parent_str)
+    try:
+        injected = extension_isolated_deps.inject_isolated_site_dirs(skill_dir)
+        assert injected == [site_str]
+        extension_isolated_deps.release_isolated_site_dirs(injected)
+        assert env_parent_str not in sys.path
+        assert site_str not in sys.path
+    finally:
+        while env_parent_str in sys.path:
+            sys.path.remove(env_parent_str)
+        while site_str in sys.path:
+            sys.path.remove(site_str)
+        extension_isolated_deps._injected_site_dir_refs.pop(site_str, None)
+
+
+def test_inject_isolated_site_dirs_tracks_preexisting_env_path(tmp_path):
+    import sys
+
+    from ouroboros import extension_isolated_deps
+
+    skill_dir = tmp_path / "skill"
+    site_dir = (
+        skill_dir
+        / ".ouroboros_env"
+        / "python"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    site_dir.mkdir(parents=True)
+    site_str = str(site_dir.resolve())
+    sys.path.insert(0, site_str)
+    try:
+        injected = extension_isolated_deps.inject_isolated_site_dirs(skill_dir)
+        assert injected == [site_str]
+        assert extension_isolated_deps._injected_site_dir_refs.get(site_str) == 1
+        extension_isolated_deps.release_isolated_site_dirs(injected)
+        assert site_str not in sys.path
+        assert site_str not in extension_isolated_deps._injected_site_dir_refs
+    finally:
+        while site_str in sys.path:
+            sys.path.remove(site_str)
+        extension_isolated_deps._injected_site_dir_refs.pop(site_str, None)
+
+
 def test_isolated_python_deps_do_not_leak_during_overlapping_handlers(tmp_path):
     import sys
     import threading
@@ -927,6 +1211,30 @@ def test_register_ui_tab_surfaces_hostable_widget(tmp_path):
     assert snap["ui_tabs"] == []
 
 
+def test_register_ui_tab_snapshots_nested_render_dicts(tmp_path):
+    loaded, _, drive_root = _prepare_extension(
+        tmp_path,
+        "uicopy",
+        "_RENDER = {'kind': 'declarative', 'schema_version': 1, 'components': [{'type': 'markdown', 'text': 'ok'}]}\n"
+        "def register(api):\n"
+        "    api.register_ui_tab('weather', 'Weather', render=_RENDER)\n"
+        "    _RENDER['components'][0]['text'] = 'mutated after registration'\n",
+        permissions=["widget"],
+    )
+    err = extension_loader.load_extension(loaded, lambda: {}, drive_root=drive_root)
+    assert err is None, err
+
+    snap = extension_loader.snapshot()
+    assert snap["ui_tabs"][0]["render"]["components"][0]["text"] == "ok"
+    snap["ui_tabs"][0]["render"]["components"][0]["text"] = "mutated by caller"
+    assert (
+        extension_loader.snapshot()["ui_tabs"][0]["render"]["components"][0]["text"]
+        == "ok"
+    )
+
+    extension_loader.unload_extension("uicopy")
+
+
 def test_register_ui_tab_promotes_render_span_metadata(tmp_path):
     loaded, _, drive_root = _prepare_extension(
         tmp_path,
@@ -987,6 +1295,13 @@ _UI_TAB_REJECTION_CASES = [
         "def register(api):\n"
         "    api.register_ui_tab('bad', 'Bad', render={'kind': 'declarative', 'schema_version': 1, 'components': [{'type': 'gallery', 'items': [None]}]})\n",
         "item 0 must be an object",
+    ),
+    (
+        "non_object_render",
+        "baduirender",
+        "def register(api):\n"
+        "    api.register_ui_tab('bad', 'Bad', render=[])\n",
+        "ui render must be an object",
     ),
 ]
 

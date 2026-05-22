@@ -12,35 +12,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ouroboros.platform_layer import (
-    IS_WINDOWS,
-    assign_pid_to_job,
-    close_job,
-    create_kill_on_close_job,
-    kill_process_on_port,
-    kill_process_tree,
-    merge_hidden_kwargs,
-    subprocess_new_group_kwargs,
-    terminate_job,
-    terminate_process_tree,
-)
+from ouroboros.platform_layer import IS_WINDOWS, assign_pid_to_job, close_job, create_kill_on_close_job, kill_process_on_port, kill_process_tree, merge_hidden_kwargs, subprocess_new_group_kwargs, terminate_job, terminate_process_tree
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
 
 _SERVER_PROCESS_PID = int(os.environ.get("OUROBOROS_SERVER_PROCESS_PID") or "-1")
 _GLOBAL_SUPERVISOR: Optional["CompanionSupervisor"] = None
-_COMPANION_BASE_ENV_KEYS = {
-    "PATH",
-    "SYSTEMROOT",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-    "TEMP",
-    "TMP",
-    "HOME",
-    "USERPROFILE",
-}
+_COMPANION_BASE_ENV_KEYS = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "HOME", "USERPROFILE"}
 
 
 def _companion_base_env() -> Dict[str, str]:
@@ -178,31 +157,23 @@ class CompanionSupervisor:
             return True
 
     def _start_drainers(self, runtime: CompanionRuntime) -> None:
-        if runtime.process.stdout is not None:
+        for label, pipe, cap, buf in (
+            ("stdout", runtime.process.stdout, runtime.descriptor.stdout_cap, runtime.stdout),
+            ("stderr", runtime.process.stderr, runtime.descriptor.stderr_cap, runtime.stderr),
+        ):
+            if pipe is None:
+                continue
             threading.Thread(
                 target=_drain_companion_pipe,
                 args=(
-                    runtime.process.stdout,
-                    runtime.descriptor.stdout_cap,
-                    runtime.stdout,
+                    pipe,
+                    cap,
+                    buf,
                     runtime.overflow,
-                    "stdout",
+                    label,
                 ),
                 daemon=True,
-                name=f"companion-stdout-{runtime.descriptor.skill_name}-{runtime.descriptor.name}",
-            ).start()
-        if runtime.process.stderr is not None:
-            threading.Thread(
-                target=_drain_companion_pipe,
-                args=(
-                    runtime.process.stderr,
-                    runtime.descriptor.stderr_cap,
-                    runtime.stderr,
-                    runtime.overflow,
-                    "stderr",
-                ),
-                daemon=True,
-                name=f"companion-stderr-{runtime.descriptor.skill_name}-{runtime.descriptor.name}",
+                name=f"companion-{label}-{runtime.descriptor.skill_name}-{runtime.descriptor.name}",
             ).start()
 
     def _monitor_runtime(self, key: str, runtime: CompanionRuntime) -> None:
@@ -295,17 +266,21 @@ class CompanionSupervisor:
     def snapshot(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
             return {
-                key: {
-                    "skill_name": rt.descriptor.skill_name,
-                    "name": rt.descriptor.name,
-                    "pid": rt.process.pid,
-                    "returncode": rt.process.poll(),
-                    "ports": list(rt.descriptor.ports),
-                    "started_at_monotonic": rt.started_at,
-                    "updated_at": utc_now_iso(),
-                }
+                key: self._runtime_snapshot(rt)
                 for key, rt in self._runtimes.items()
             }
+
+    @staticmethod
+    def _runtime_snapshot(rt: CompanionRuntime) -> Dict[str, Any]:
+        return {
+            "skill_name": rt.descriptor.skill_name,
+            "name": rt.descriptor.name,
+            "pid": rt.process.pid,
+            "returncode": rt.process.poll(),
+            "ports": list(rt.descriptor.ports),
+            "started_at_monotonic": rt.started_at,
+            "updated_at": utc_now_iso(),
+        }
 
     def _write_runtime_snapshot(self) -> None:
         try:
@@ -337,11 +312,6 @@ def panic_kill_all() -> None:
 
 
 __all__ = [
-    "CompanionDescriptor",
-    "CompanionSupervisor",
-    "init_global_supervisor",
-    "init_server_process_pid",
-    "is_server_process",
-    "panic_kill_all",
-    "snapshot_processes",
+    "CompanionDescriptor", "CompanionSupervisor", "init_global_supervisor",
+    "init_server_process_pid", "is_server_process", "panic_kill_all", "snapshot_processes",
 ]

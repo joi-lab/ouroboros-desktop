@@ -335,6 +335,8 @@ def test_triad_review_prompt_includes_architecture_md(tmp_path):
     rendered = _REVIEW_PROMPT_TEMPLATE.format(
         preamble="PREAMBLE",
         critical_calibration=CRITICAL_FINDING_CALIBRATION,
+        json_contract="JSON",
+        anti_pattern_lock_guard="LOCK",
         checklist_section="CHECKLIST",
         goal_section="GOAL",
         dev_guide_text="DEVGUIDE",

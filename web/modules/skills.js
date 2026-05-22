@@ -4,15 +4,17 @@ import { renderPageHeader, renderTabStrip } from './page_header.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { PAGE_ICONS } from './page_icons.js';
 import { showToast } from './toast.js';
-import { apiFetch } from './api_client.js';
+import { apiClient, apiFetch } from './api_client.js';
+import { renderInstalledSkillCard } from './skill_card_renderer.js';
+import { installedTime } from './ui_helpers.js';
 import {
     boundedText,
     emitSkillLifecycle,
     escapeHtmlAttr as escapeHtml,
     grantReady,
-    isRateLimitError,
     renderSkillRepairPrompt,
-    safeExternalHrefAttr as safeExternalUrl,
+    reviewTone,
+    reviewReady,
 } from './utils.js';
 
 const SKILLS_TABS = [
@@ -21,15 +23,7 @@ const SKILLS_TABS = [
     { value: 'ouroboroshub', label: 'OuroborosHub', pillId: 'skills-tab-pill-ouroboroshub', pillClass: 'skills-tab-pill' },
 ];
 
-/**
- * Ouroboros Skills UI — Phase 5.
- *
- * Lists every discovered skill under ``OUROBOROS_SKILLS_REPO_PATH`` plus
- * the bundled reference set, shows per-skill review status + permissions
- * + grant/review readiness, and exposes the lifecycle buttons:
- * Review, Toggle enable, Delete (placeholder — Phase 6 wires actual
- * delete). Read-only against ``/api/state`` + ``/api/extensions``.
- */
+/** Installed skills UI: review, grant, enable, repair, update, uninstall. */
 
 function skillsPageTemplate() {
     return `
@@ -68,63 +62,6 @@ function skillsPageTemplate() {
     `;
 }
 
-
-function statusBadge(status, gate = null) {
-    const gateExecutable = gate && typeof gate.executable_review === 'boolean'
-        ? gate.executable_review
-        : ['clean', 'warnings'].includes(status);
-    const tone = status === 'blockers' ? 'danger'
-        : gateExecutable ? 'ok'
-        : status === 'warnings' ? 'warn'
-        : 'muted';
-    const tooltip = {
-        clean: 'All checklist items pass.',
-        warnings: 'Warning findings exist; they do not block execution.',
-        blockers: gateExecutable
-            ? 'Blocker findings exist, but advisory enforcement allows execution.'
-            : 'Blocker findings prevent execution under blocking enforcement.',
-        pending: 'Review has not produced a verdict yet.',
-    }[status] || 'Unknown or stale review state.';
-    return `<span class="skills-badge skills-badge-${tone}" title="${escapeHtml(tooltip)}">${escapeHtml(status)}</span>`;
-}
-
-function reviewReady(skill) {
-    if (skill?.review_gate && typeof skill.review_gate.executable_review === 'boolean') {
-        return skill.review_gate.executable_review;
-    }
-    if (typeof skill?.executable_review === 'boolean') return skill.executable_review;
-    return ['clean', 'warnings'].includes(skill.review_status) && !skill.review_stale;
-}
-
-function reviewToastTone(status, error = '') {
-    if (error) return 'danger';
-    if (status === 'clean') return 'ok';
-    if (status === 'blockers') return 'danger';
-    return 'warn';
-}
-
-function healReady(skill) {
-    const source = (skill.source || 'native').toLowerCase();
-    if (!['clawhub', 'ouroboroshub', 'external'].includes(source)) return false;
-    const payloadRoot = String(skill.payload_root || '');
-    if (!/^skills\/(external|clawhub|ouroboroshub)\//.test(payloadRoot)) return false;
-    const missingGrantError = !grantReady(skill) && String(skill.load_error || '').includes('missing owner grants');
-    return payloadRoot.startsWith('skills/')
-        && (skill.review_status === 'blockers' || (Boolean(skill.load_error) && !missingGrantError));
-}
-
-function submitHubReady(skill, githubTokenConfigured = false) {
-    const source = (skill.source || 'native').toLowerCase();
-    const sourceAllowed = ['external', 'self_authored', 'user_repo', 'ouroboroshub', 'clawhub'].includes(source);
-    if (!sourceAllowed) return { visible: false, disabled: true, reason: '' };
-    if (!githubTokenConfigured) {
-        return { visible: true, disabled: true, reason: 'Configure GITHUB_TOKEN in Settings -> Secrets' };
-    }
-    if (skill.review_status !== 'clean' || skill.review_stale) {
-        return { visible: true, disabled: true, reason: 'Skill needs a fresh clean review before submission' };
-    }
-    return { visible: true, disabled: false, reason: 'Open a PR to OuroborosHub from your GitHub fork' };
-}
 
 function isMissingGrantLoadError(skill) {
     return !grantReady(skill) && String(skill.load_error || '').includes('missing owner grants');
@@ -356,7 +293,7 @@ function sortSkillsForDisplay(skills) {
     return [...skills].sort((a, b) => {
         if (a.lifecycle_virtual && !b.lifecycle_virtual) return -1;
         if (!a.lifecycle_virtual && b.lifecycle_virtual) return 1;
-        return installTimestamp(b) - installTimestamp(a) || String(a.name || '').localeCompare(String(b.name || ''));
+        return installedTime(b) - installedTime(a) || String(a.name || '').localeCompare(String(b.name || ''));
     });
 }
 
@@ -657,14 +594,11 @@ function renderSkillCard(skill, reviewingSkills = new Set(), repairingSkills = n
 
 async function fetchSkills() {
     const [stateResp, extResp, queueResp] = await Promise.all([
-        apiFetch('/api/state').then(r => r.ok ? r.json() : {}),
-        apiFetch('/api/extensions').then(r => r.ok ? r.json() : { skills: [], live: {} }),
-        apiFetch('/api/skills/lifecycle-queue').then(r => r.ok ? r.json() : { events: [] }).catch(() => ({ events: [] })),
+        apiClient.state().catch(() => ({})),
+        apiClient.extensions().catch(() => ({ skills: [], live: {} })),
+        apiClient.skillLifecycleQueue().catch(() => ({ events: [] })),
     ]);
-    // ``/api/state`` does not yet expose a ``summarize_skills`` payload
-    // directly (that can land in a later round if needed). For now we
-    // synthesize the per-skill list via the extensions catalogue plus the
-    // skills-repo boolean. Runtime mode no longer gates skill execution.
+    // Per-skill state is synthesized from extensions + lifecycle queue.
     const skillsRepoConfigured = Boolean(stateResp.skills_repo_configured);
     const githubTokenConfigured = Boolean(stateResp.github_token_configured);
     return {
@@ -739,7 +673,7 @@ async function renderSkillsList(container, emptyEl, reviewingSkills = new Set(),
         return;
     }
     if (emptyEl) emptyEl.hidden = true;
-    container.innerHTML = sortSkillsForDisplay(skills).map((skill) => renderSkillCard(
+    container.innerHTML = sortSkillsForDisplay(skills).map((skill) => renderInstalledSkillCard(
         skill,
         reviewingSkills,
         repairingSkills,
@@ -875,22 +809,21 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
         });
     }
 
-    async function requestMissingKeyGrants(name, keys) {
-        const cleanKeys = (keys || []).map((k) => String(k || '').trim()).filter(Boolean);
-        if (!cleanKeys.length) return;
+    async function requestMissingKeyGrants(name, items) {
+        const cleanItems = (items || []).map((k) => String(k || '').trim()).filter(Boolean);
+        if (!cleanItems.length) return;
         const ok = await openConfirmDialog({
             title: `Предоставить доступ для ${name}`,
-            body: `Предоставить доступ к ${cleanKeys.join(', ')} для ${name}? Требуемые ключи берутся из настроек. Приложение запросит дополнительное подтверждение.`,
+            body: `Предоставить ${name} доступ к этим ключам и разрешениям?\n\n${cleanItems.join('\n')}\n\nВыдавайте доступ только проверенным навыкам, которым вы доверяете.`,
             confirmLabel: 'Предоставить доступ',
         });
-        if (!ok) throw new Error('Skill key grant cancelled.');
+        if (!ok) throw new Error('Skill grant cancelled.');
         const bridge = window.pywebview?.api?.request_skill_key_grant;
-        if (!bridge) {
-            throw new Error('Skill key grants require the desktop launcher confirmation bridge.');
-        }
-        const result = await bridge(name, cleanKeys);
+        const result = bridge
+            ? await bridge(name, cleanItems)
+            : await apiClient.skillGrants(name, cleanItems);
         if (!result?.ok) {
-            throw new Error(result?.error || 'Skill key grant was cancelled.');
+            throw new Error(result?.error || 'Skill grant was cancelled.');
         }
         return result;
     }
@@ -904,6 +837,24 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
         const { skills } = await fetchSkills();
         const skill = (skills || []).find((item) => item.name === name);
         if (!skill) throw new Error('Skill not found in current catalogue.');
+
+        if (action === 'retry_install') {
+            showToast(`${name}: retrying ClawHub install (this may take ~30s)`, 'muted');
+            const result = await postWithFeedback('/api/marketplace/clawhub/install', {
+                slug: name,
+                overwrite: true,
+                auto_review: true,
+            });
+            const tail = result.review_status ? ` — review ${result.review_status}` : '';
+            showToast(
+                result.ok
+                    ? `${name}: install retried${tail}`
+                    : `${name}: install retry failed — ${result.error || 'unknown'}`,
+                result.ok ? 'ok' : 'danger',
+            );
+            if (result.ok) emitSkillLifecycle('retry_install', name, result);
+            return;
+        }
 
         if (action === 'review' || action === 'rereview') {
             const ok = await openConfirmDialog({
@@ -924,7 +875,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
             const missing = keys.length ? keys : [...missingKeys, ...missingPermissions];
             const result = await requestMissingKeyGrants(name, missing);
             if (result) {
-                showToast(`${name}: requested key grants saved`, 'ok');
+                showToast(`${name}: requested grants saved`, 'ok');
                 emitSkillLifecycle('grant', name, result);
             }
             return;
@@ -1034,7 +985,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
             const errorTail = result.error ? ` — ${result.error}` : '';
             showToast(
                 `${name}: review ${result.status}${findings ? ` (${findings} findings)` : ''}${errorTail}`,
-                reviewToastTone(result.status, result.error)
+                reviewTone(result.status, result.error)
             );
             emitSkillLifecycle('review', name, result);
             return result;
@@ -1044,9 +995,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
         }
     }
 
-    // v5.2.3: the skill enable/disable control is an <input type="checkbox">
-    // (a real toggle switch) instead of a <button>. We listen for
-    // ``change`` so keyboard activation works the same as mouse.
+    // Checkbox toggle uses change so keyboard and mouse activation match.
     container.addEventListener('change', async (event) => {
         const target = event.target;
         if (!target || !target.classList || !target.classList.contains('skills-toggle')) {
@@ -1068,15 +1017,16 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                 }
                 if (!grantReady(current)) {
                     const grants = current.grants || {};
-                    const missing = Array.isArray(grants.missing_keys) ? grants.missing_keys : (grants.requested_keys || []);
+                    const missingKeys = Array.isArray(grants.missing_keys) ? grants.missing_keys : (grants.requested_keys || []);
+                    const missingPermissions = Array.isArray(grants.missing_permissions) ? grants.missing_permissions : (grants.requested_permissions || []);
+                    const missing = [...missingKeys, ...missingPermissions];
                     await requestMissingKeyGrants(name, missing);
                 }
             }
             await toggleSkillEnabled(name, wantsEnabled);
             target.setAttribute('aria-checked', wantsEnabled ? 'true' : 'false');
         } catch (err) {
-            // Roll the toggle back to the server-truth state if the
-            // request failed (e.g. 409 because grants are still missing).
+            // Roll back to server-truth state on failed enable/disable.
             target.checked = !wantsEnabled;
             target.setAttribute('aria-checked', (!wantsEnabled).toString());
             showToast(`${name}: ${err.message || err}`, (err.message || '').includes('cancel') ? 'warn' : 'danger');
@@ -1101,10 +1051,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
             closeSkillMenus(opening ? menu : null);
             if (popover && menu) {
                 menuTrigger.setAttribute('aria-expanded', opening ? 'true' : 'false');
-                // v5.7.0: open as a non-modal anchored popover (popover.show()
-                // not .showModal()) so the menu sits under the trigger and
-                // does not dim the rest of the page. Outside clicks close
-                // the menu via the document-level handler installed below.
+                // Non-modal anchored popover; outside handlers close it.
                 if (opening) popover.show();
                 else popover.close();
             }
@@ -1135,8 +1082,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
         const target = event.target.closest('button[data-skill]');
         if (!target) return;
         if (target.classList.contains('skills-toggle')) {
-            // Toggle is now a checkbox handled above; ignore stale
-            // legacy button clicks if any sneak through.
+            // Checkbox handler above owns current toggles; ignore legacy buttons.
             return;
         }
         const name = target.dataset.skill;
@@ -1158,31 +1104,13 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
             if (target.classList.contains('skills-next-toggle')) {
                 const wantsEnabled = target.dataset.enabled === 'true';
                 await toggleSkillEnabled(name, wantsEnabled);
-            } else if (target.classList.contains('skills-open-widgets')) {
-                document.querySelector('.nav-btn[data-page="widgets"]')?.click();
-            } else if (target.classList.contains('skills-retry-install')) {
-                showToast(`${name}: retrying install from ClawHub`, 'muted');
-                const result = await postWithFeedback('/api/marketplace/clawhub/install', {
-                    slug: name,
-                    auto_review: true,
-                });
-                if (!result.ok) {
-                    throw new Error(result.error || 'install failed');
-                }
-                showToast(`${name}: install queued/retried`, 'ok');
             } else if (target.classList.contains('skills-grant')) {
                 const keys = (target.dataset.keys || '').split(',').map((k) => k.trim()).filter(Boolean);
                 if (!keys.length) {
-                    showToast(`${name}: no requested keys to grant`, 'warn');
+                    showToast(`${name}: no requested keys or permissions to grant`, 'warn');
                 } else {
                     const result = await requestMissingKeyGrants(name, keys);
-                    // v5.2.2: surface the cross-process reconcile
-                    // outcome so users know whether the just-granted
-                    // key actually reached the live extension. The
-                    // launcher posts to /api/skills/<name>/reconcile
-                    // after writing grants.json; if that call fails
-                    // the grant itself was persisted but the live
-                    // extension still needs a manual disable/enable.
+                    // Grant may persist even if live extension reconcile fails.
                     const reason = result.extension_reason;
                     const action = result.extension_action;
                     const loadError = result.load_error;
@@ -1199,7 +1127,7 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                     } else if (action === 'extension_loaded') {
                         showToast(`${name}: grant saved and extension loaded`, 'ok');
                     } else {
-                        showToast(`${name}: requested key grants saved`, 'ok');
+                        showToast(`${name}: requested grants saved`, 'ok');
                     }
                 }
             } else if (target.classList.contains('skills-update')) {
@@ -1217,13 +1145,6 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                         : `${name}: update failed — ${result.error || 'unknown'}`,
                     result.ok ? 'ok' : 'danger',
                 );
-            } else if (target.classList.contains('skills-heal')) {
-                const { skills } = await fetchSkills();
-                const skill = (skills || []).find((item) => item.name === name);
-                if (!skill) {
-                    throw new Error('Skill not found in current catalogue.');
-                }
-                await triggerSkillAction(name, 'repair');
             } else if (target.classList.contains('skills-submit-hub')) {
                 await triggerSkillAction(name, 'submit_hub');
             } else if (target.classList.contains('skills-uninstall')) {
@@ -1289,9 +1210,7 @@ async function renderMarketplacePane() {
     const pane = document.getElementById('skills-pane-marketplace');
     if (!pane) return;
     if (pane.dataset.bootstrapped === 'true') {
-        // Refresh installed-state on tab entry without simulating a
-        // search-button click. The button remains as a manual fallback,
-        // but normal tab navigation should keep cards current by itself.
+        // Tab entry refreshes installed state without simulating Search.
         if (typeof pane._marketplaceRefresh === 'function') {
             pane._marketplaceRefresh();
         }

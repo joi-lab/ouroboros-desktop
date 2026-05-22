@@ -1,8 +1,4 @@
-"""
-Supervisor — State management.
-
-Persistent state on local disk: load, save, atomic writes, file locks.
-"""
+"""Supervisor persistent state, atomic writes, locks, and budget accounting."""
 
 from __future__ import annotations
 
@@ -15,14 +11,11 @@ import uuid
 from typing import Any, Dict, Optional
 
 from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
-from ouroboros.utils import utc_now_iso
+from ouroboros.utils import append_jsonl, iter_llm_usage_events, llm_usage_cost, utc_now_iso
 
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Module-level config (set via init())
-# ---------------------------------------------------------------------------
 DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "data"
 STATE_PATH: pathlib.Path = DRIVE_ROOT / "state" / "state.json"
 STATE_LAST_GOOD_PATH: pathlib.Path = DRIVE_ROOT / "state" / "state.last_good.json"
@@ -39,10 +32,6 @@ def init(drive_root: pathlib.Path, total_budget_limit: float = 0.0) -> None:
     QUEUE_SNAPSHOT_PATH = drive_root / "state" / "queue_snapshot.json"
     set_budget_limit(total_budget_limit)
 
-
-# ---------------------------------------------------------------------------
-# Atomic file operations
-# ---------------------------------------------------------------------------
 
 def atomic_write_text(path: pathlib.Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,10 +57,6 @@ def json_load_file(path: pathlib.Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# File locks
-# ---------------------------------------------------------------------------
-
 def acquire_file_lock(lock_path: pathlib.Path, timeout_sec: float = 4.0,
                       stale_sec: float = 90.0) -> Optional[int]:
     return acquire_exclusive_file_lock(
@@ -85,14 +70,6 @@ def acquire_file_lock(lock_path: pathlib.Path, timeout_sec: float = 4.0,
 def release_file_lock(lock_path: pathlib.Path, lock_fd: Optional[int]) -> None:
     release_exclusive_file_lock(lock_path, lock_fd)
 
-
-# Re-export append_jsonl from ouroboros.utils (single source of truth)
-from ouroboros.utils import append_jsonl  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
-# State schema
-# ---------------------------------------------------------------------------
 
 def ensure_state_defaults(st: Dict[str, Any]) -> Dict[str, Any]:
     st.setdefault("created_at", utc_now_iso())
@@ -127,16 +104,12 @@ def ensure_state_defaults(st: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def default_state_dict() -> Dict[str, Any]:
-    """Create a fresh state dict. Single source of truth: ensure_state_defaults."""
+    """Create fresh state through ensure_state_defaults."""
     return ensure_state_defaults({})
 
 
-# ---------------------------------------------------------------------------
-# Load / Save
-# ---------------------------------------------------------------------------
-
 def _load_state_unlocked() -> Dict[str, Any]:
-    """Load state without acquiring lock. Caller must hold STATE_LOCK."""
+    """Load state; caller must hold STATE_LOCK."""
     recovered = False
     st_obj = json_load_file(STATE_PATH)
     if st_obj is None:
@@ -155,7 +128,7 @@ def _load_state_unlocked() -> Dict[str, Any]:
 
 
 def _save_state_unlocked(st: Dict[str, Any]) -> None:
-    """Save state without acquiring lock. Caller must hold STATE_LOCK."""
+    """Save state; caller must hold STATE_LOCK."""
     st = ensure_state_defaults(st)
     payload = json.dumps(st, ensure_ascii=False, indent=2)
     atomic_write_text(STATE_PATH, payload)
@@ -179,20 +152,13 @@ def save_state(st: Dict[str, Any]) -> None:
 
 
 def init_state() -> Dict[str, Any]:
-    """
-    Initialize state at session start, capturing snapshots for budget drift detection.
-
-    Fetches OpenRouter ground truth and stores session_daily_snapshot and
-    session_spent_snapshot for drift calculation.
-    """
+    """Initialize session snapshots for budget drift detection."""
     lock_fd = acquire_file_lock(STATE_LOCK_PATH)
     try:
         st = _load_state_unlocked()
 
-        # Capture session snapshots for drift detection
         st["session_spent_snapshot"] = float(st.get("spent_usd") or 0.0)
 
-        # Fetch OpenRouter ground truth to capture total_usd baseline
         ground_truth = check_openrouter_ground_truth()
         if ground_truth is not None:
             st["session_total_snapshot"] = ground_truth["total_usd"]
@@ -200,10 +166,8 @@ def init_state() -> Dict[str, Any]:
             st["openrouter_daily_usd"] = ground_truth["daily_usd"]
             st["openrouter_last_check_at"] = utc_now_iso()
         else:
-            # If we can't fetch ground truth, use 0 as baseline
             st["session_total_snapshot"] = 0.0
 
-        # Reset drift tracking
         st["budget_drift_pct"] = None
         st["budget_drift_alert"] = False
 
@@ -213,28 +177,18 @@ def init_state() -> Dict[str, Any]:
         release_file_lock(STATE_LOCK_PATH, lock_fd)
 
 
-# ---------------------------------------------------------------------------
-# Budget tracking (moved from workers.py)
-# ---------------------------------------------------------------------------
 TOTAL_BUDGET_LIMIT: float = 0.0
 EVOLUTION_BUDGET_RESERVE: float = 2.0  # Stop evolution when remaining < this
 
 
 def set_budget_limit(limit: float) -> None:
-    """Set total budget limit for budget_pct calculation."""
+    """Set total budget limit for budget_pct."""
     global TOTAL_BUDGET_LIMIT
     TOTAL_BUDGET_LIMIT = limit
 
 
 def refresh_budget_from_settings(settings: Dict[str, Any]) -> None:
-    """Hot-reload total budget limit from a settings dict.
-
-    Reads ``TOTAL_BUDGET`` and updates the module-level ``TOTAL_BUDGET_LIMIT``
-    global so the running supervisor sees the new value immediately.
-
-    Silently swallows parse errors so a bad value never crashes the supervisor.
-    Missing key → treated as 0.0 (no limit).
-    """
+    """Hot-reload TOTAL_BUDGET; bad/missing values mean no limit."""
     try:
         raw = settings.get("TOTAL_BUDGET")
         value = float(raw) if raw is not None else 0.0
@@ -244,20 +198,16 @@ def refresh_budget_from_settings(settings: Dict[str, Any]) -> None:
 
 
 def budget_remaining(st: Dict[str, Any]) -> float:
-    """Calculate remaining budget in USD."""
+    """Return remaining budget in USD."""
     spent = float(st.get("spent_usd") or 0.0)
     total = float(TOTAL_BUDGET_LIMIT or 0.0)
     if total <= 0:
-        return float('inf')  # No limit set
+        return float('inf')
     return max(0.0, total - spent)
 
 
 def check_openrouter_ground_truth() -> Optional[Dict[str, float]]:
-    """
-    Call OpenRouter API to get ground truth usage.
-
-    Returns dict with total_usd and daily_usd spent according to OpenRouter, or None on error.
-    """
+    """Return OpenRouter total/daily usage, or None on error."""
     try:
         import urllib.request
         api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -269,7 +219,7 @@ def check_openrouter_ground_truth() -> Optional[Dict[str, float]]:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        # OpenRouter API returns usage already in dollars (not cents)
+        # OpenRouter usage is dollars, not cents.
         usage_total = data.get("data", {}).get("usage", 0)
         usage_daily = data.get("data", {}).get("usage_daily", 0)
         return {
@@ -282,7 +232,7 @@ def check_openrouter_ground_truth() -> Optional[Dict[str, float]]:
 
 
 def budget_pct(st: Dict[str, Any]) -> float:
-    """Calculate budget percentage used."""
+    """Return budget percent used."""
     spent = float(st.get("spent_usd") or 0.0)
     total = float(TOTAL_BUDGET_LIMIT or 0.0)
     if total <= 0:
@@ -291,13 +241,7 @@ def budget_pct(st: Dict[str, Any]) -> float:
 
 
 def update_budget_from_usage(usage: Dict[str, Any]) -> None:
-    """Update state with LLM usage costs and tokens.
-
-    Uses a single lock scope for the read-modify-write cycle to prevent
-    concurrent writes from losing budget updates.
-
-    Every 50 calls, fetches OpenRouter ground truth for comparison.
-    """
+    """Update LLM cost/token counters and periodically compare OpenRouter truth."""
     def _to_float(v: Any, default: float = 0.0) -> float:
         try:
             return float(v)
@@ -312,7 +256,7 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> None:
             log.debug(f"Failed to convert value to int: {v!r}", exc_info=True)
             return default
 
-    # Step 1: Update budget counters under lock (fast, no I/O beyond Drive)
+    # Keep the lock around local counters only; network check runs outside it.
     lock_fd = acquire_file_lock(STATE_LOCK_PATH)
     try:
         st = _load_state_unlocked()
@@ -333,7 +277,6 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> None:
     finally:
         release_file_lock(STATE_LOCK_PATH, lock_fd)
 
-    # Step 2: HTTP to OpenRouter OUTSIDE the lock (can take up to 10s)
     if should_check_ground_truth:
         ground_truth = check_openrouter_ground_truth()
         if ground_truth is not None:
@@ -383,48 +326,16 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> None:
                 release_file_lock(STATE_LOCK_PATH, lock_fd)
 
 
-# ---------------------------------------------------------------------------
-# Budget breakdown by category
-# ---------------------------------------------------------------------------
-
 def budget_breakdown(st: Dict[str, Any]) -> Dict[str, float]:
-    """
-    Calculate budget breakdown by category from events.jsonl.
-
-    Reads llm_usage events and aggregates cost_usd by category field.
-    Returns dict like {"task": 12.5, "evolution": 45.2, ...}
-    """
+    """Aggregate llm_usage cost by category from events.jsonl."""
     events_path = DRIVE_ROOT / "logs" / "events.jsonl"
-    if not events_path.exists():
-        return {}
-
     breakdown: Dict[str, float] = {}
     try:
-        with events_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    if event.get("type") != "llm_usage":
-                        continue
-
-                    # Get category (default to "other" if not present)
-                    category = event.get("category", "other")
-
-                    # Get cost from either top-level "cost" or nested "usage.cost"
-                    cost = 0.0
-                    if "cost" in event:
-                        cost = float(event.get("cost", 0))
-                    elif "usage" in event and isinstance(event["usage"], dict):
-                        cost = float(event["usage"].get("cost", 0))
-
-                    if cost > 0:
-                        breakdown[category] = breakdown.get(category, 0.0) + cost
-
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    continue
+        for event in iter_llm_usage_events(events_path):
+            category = event.get("category", "other")
+            cost = llm_usage_cost(event)
+            if cost > 0:
+                breakdown[category] = breakdown.get(category, 0.0) + cost
     except Exception:
         log.warning("Failed to calculate budget breakdown", exc_info=True)
 
@@ -432,58 +343,23 @@ def budget_breakdown(st: Dict[str, Any]) -> Dict[str, float]:
 
 
 def model_breakdown(st: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate budget breakdown by model from events.jsonl.
-
-    Returns dict like:
-    {
-        "anthropic/claude-sonnet-4.6": {"cost": 12.5, "calls": 120, "prompt_tokens": 50000, "completion_tokens": 3000},
-        "openai/gpt-4o": {"cost": 3.2, "calls": 15, ...},
-    }
-    """
+    """Aggregate llm_usage cost/calls/tokens by model."""
     events_path = DRIVE_ROOT / "logs" / "events.jsonl"
-    if not events_path.exists():
-        return {}
-
     breakdown: Dict[str, Dict[str, float]] = {}
     try:
-        with events_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        for event in iter_llm_usage_events(events_path):
+            model = event.get("model") or "unknown"
+            stats = breakdown.setdefault(model, {
+                "cost": 0.0, "calls": 0, "prompt_tokens": 0,
+                "completion_tokens": 0, "cached_tokens": 0,
+            })
+            stats["cost"] += llm_usage_cost(event)
+            stats["calls"] += 1
+            for key in ("prompt_tokens", "completion_tokens", "cached_tokens"):
                 try:
-                    event = json.loads(line)
-                    if event.get("type") != "llm_usage":
-                        continue
-
-                    model = event.get("model") or "unknown"
-                    if not model:
-                        model = "unknown"
-
-                    # Get cost
-                    cost = 0.0
-                    if "cost" in event:
-                        cost = float(event.get("cost", 0))
-                    elif "usage" in event and isinstance(event["usage"], dict):
-                        cost = float(event["usage"].get("cost", 0))
-
-                    # Get tokens
-                    prompt_tokens = int(event.get("prompt_tokens", 0) or 0)
-                    completion_tokens = int(event.get("completion_tokens", 0) or 0)
-                    cached_tokens = int(event.get("cached_tokens", 0) or 0)
-
-                    if model not in breakdown:
-                        breakdown[model] = {"cost": 0.0, "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
-
-                    breakdown[model]["cost"] += cost
-                    breakdown[model]["calls"] += 1
-                    breakdown[model]["prompt_tokens"] += prompt_tokens
-                    breakdown[model]["completion_tokens"] += completion_tokens
-                    breakdown[model]["cached_tokens"] += cached_tokens
-
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    continue
+                    stats[key] += int(event.get(key, 0) or 0)
+                except (TypeError, ValueError):
+                    pass
     except Exception:
         log.warning("Failed to calculate model breakdown", exc_info=True)
 
@@ -491,51 +367,24 @@ def model_breakdown(st: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
 
 
 def per_task_cost_summary(max_tasks: int = 10, tail_bytes: int = 512_000) -> List[Dict[str, Any]]:
-    """Return cost summary for recent tasks from events.jsonl.
-
-    Only reads the last `tail_bytes` of the file to avoid scanning
-    megabytes of history on every LLM round.
-
-    Returns list of dicts: [{task_id, cost, rounds, model}, ...]
-    sorted by cost descending, limited to max_tasks.
-    """
+    """Return recent task cost summary from the tail of events.jsonl."""
     events_path = DRIVE_ROOT / "logs" / "events.jsonl"
-    if not events_path.exists():
-        return []
-
     tasks: Dict[str, Dict[str, Any]] = {}
     try:
-        file_size = events_path.stat().st_size
-        with events_path.open("r", encoding="utf-8") as f:
-            if file_size > tail_bytes:
-                f.seek(file_size - tail_bytes)
-                f.readline()  # skip partial first line
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    if event.get("type") != "llm_usage":
-                        continue
-                    tid = event.get("task_id") or "unknown"
-                    cost = float(event.get("cost", 0) or 0)
-                    if tid not in tasks:
-                        tasks[tid] = {"task_id": tid, "cost": 0.0, "rounds": 0, "model": event.get("model", "")}
-                    tasks[tid]["cost"] += cost
-                    tasks[tid]["rounds"] += 1
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    continue
+        for event in iter_llm_usage_events(events_path, tail_bytes=tail_bytes):
+            tid = event.get("task_id") or "unknown"
+            task = tasks.setdefault(
+                tid,
+                {"task_id": tid, "cost": 0.0, "rounds": 0, "model": event.get("model", "")},
+            )
+            task["cost"] += llm_usage_cost(event)
+            task["rounds"] += 1
     except Exception:
         log.warning("Failed to calculate per-task cost summary", exc_info=True)
 
     sorted_tasks = sorted(tasks.values(), key=lambda x: x["cost"], reverse=True)
     return sorted_tasks[:max_tasks]
 
-
-# ---------------------------------------------------------------------------
-# Status text (moved from workers.py)
-# ---------------------------------------------------------------------------
 
 def status_text(workers_dict: Dict[int, Any], pending_list: list, running_dict: Dict[str, Dict[str, Any]],
                 soft_timeout_sec: int, hard_timeout_sec: int) -> str:
@@ -590,16 +439,13 @@ def status_text(workers_dict: Dict[int, Any], pending_list: list, running_dict: 
     lines.append(f"spent_calls: {st.get('spent_calls')}")
     lines.append(f"prompt_tokens: {st.get('spent_tokens_prompt')}, completion_tokens: {st.get('spent_tokens_completion')}, cached_tokens: {st.get('spent_tokens_cached')}")
 
-    # Add budget breakdown by category
     breakdown = budget_breakdown(st)
     if breakdown:
-        # Sort by cost descending
         sorted_categories = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)
         breakdown_parts = [f"{cat}=${cost:.2f}" for cat, cost in sorted_categories if cost > 0]
         if breakdown_parts:
             lines.append(f"budget_breakdown: {', '.join(breakdown_parts)}")
 
-    # Display budget drift if available
     drift_pct = st.get("budget_drift_pct")
     if drift_pct is not None:
         session_total_snap = st.get("session_total_snapshot")
@@ -616,7 +462,6 @@ def status_text(workers_dict: Dict[int, Any], pending_list: list, running_dict: 
                 f"(tracked: ${our_delta:.2f} vs OpenRouter: ${or_delta:.2f})"
             )
 
-    # Model breakdown
     models = model_breakdown(st)
     if models:
         sorted_models = sorted(models.items(), key=lambda x: x[1]["cost"], reverse=True)

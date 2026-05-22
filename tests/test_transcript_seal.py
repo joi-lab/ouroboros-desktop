@@ -172,7 +172,7 @@ def test_only_one_sealed_boundary_at_a_time():
 # ─────────────────────────────────────────────────────────────
 
 def test_strip_cache_control_flattens_tool_role_list_to_string():
-    """_strip_cache_control flattens tool-role list content to a plain string."""
+    """Provider cache cleanup flattens tool-role list content to a plain string."""
     from ouroboros.llm import LLMClient
     msgs = [
         {"role": "tool", "tool_call_id": "tc1", "content": [
@@ -183,7 +183,11 @@ def test_strip_cache_control_flattens_tool_role_list_to_string():
             {"type": "text", "text": "user", "cache_control": {"type": "ephemeral"}},
         ]},
     ]
-    cleaned = LLMClient._strip_cache_control(msgs)
+    cleaned = LLMClient._copy_messages_with_cache_policy(
+        msgs,
+        allow_message_cache_control=False,
+        flatten_tool_content_blocks=True,
+    )
     # Tool role should be flattened to plain string
     assert cleaned[0]["content"] == "hello world"
     # Non-tool list content should just lose cache_control

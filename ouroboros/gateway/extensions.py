@@ -1,23 +1,9 @@
-"""Phase 5 HTTP surface for Phase 4 ``type: extension`` skills.
-
-Three endpoints are exposed:
-
-- ``GET  /api/extensions``                       — catalogue snapshot.
-- ``GET  /api/extensions/<skill>/manifest``      — raw manifest JSON.
-- ``ALL  /api/extensions/<skill>/<rest>``        — dispatch to the handler
-                                                   the extension registered via
-                                                   ``PluginAPI.register_route``.
-
-Combined with the Phase 4 ``extension_loader`` the agent/web UI can now
-actually invoke the routes extensions attach, instead of only reading them
-from ``extension_loader.snapshot()``.
-"""
+"""HTTP endpoints for extension catalogue, manifests, modules, and dispatch."""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import pathlib
 from datetime import datetime, timezone
@@ -29,7 +15,10 @@ from starlette.responses import JSONResponse, Response
 from ouroboros.extension_loader import list_routes, snapshot
 from ouroboros.gateway._helpers import (
     coerce_bool,
+    json_error,
+    json_exception,
     request_drive_root as _request_drive_root,
+    request_json_or,
     request_repo_dir as _request_repo_dir,
 )
 from ouroboros.skill_lifecycle_queue import (
@@ -42,24 +31,33 @@ from ouroboros.skill_loader import (
     discover_skills,
     find_skill,
     grant_status_for_skill,
+    requested_core_setting_keys,
+    requested_skill_permissions,
     review_status_allows_execution,
+    save_skill_grants,
     skill_review_gate,
 )
+from ouroboros.utils import append_jsonl, utc_now_iso
 
 log = logging.getLogger(__name__)
 
 
 def _coerce_bool_arg(value: Any) -> bool | None:
-    """Tri-state coercion: returns ``None`` on unparseable input.
-
-    Distinct from :func:`http_api.coerce_bool` which always falls back to a
-    default; here ``None`` lets the caller decide whether absence means
-    "no override" vs "explicit false". Used by ``api_skill_toggle`` /
-    ``api_extension_dispatch``.
-    """
+    """Tri-state bool coercion; ``None`` means unparseable/absent."""
     sentinel = object()
     coerced = coerce_bool(value, default=sentinel)  # type: ignore[arg-type]
     return None if coerced is sentinel else coerced
+
+
+def _review_fields(loaded: Any, *, stale: bool | None = None, gate: dict[str, Any] | None = None) -> dict[str, Any]:
+    stale = loaded.review.is_stale_for(loaded.content_hash) if stale is None else stale
+    gate = skill_review_gate(loaded.review.status, stale=stale) if gate is None else gate
+    return {
+        "review_status": loaded.review.status,
+        "review_stale": stale,
+        "review_gate": gate,
+        "executable_review": gate["executable_review"],
+    }
 
 
 def _broadcast_extension_lifecycle(request: Request, skill: str, action: Any, reason: Any = "") -> None:
@@ -79,27 +77,53 @@ def _broadcast_extension_lifecycle(request: Request, skill: str, action: Any, re
     })
 
 
+def _owner_grant_audit(drive_root: pathlib.Path, request: Request, payload: Dict[str, Any]) -> None:
+    try:
+        client = getattr(request, "client", None)
+        append_jsonl(
+            pathlib.Path(drive_root) / "logs" / "events.jsonl",
+            {
+                "ts": utc_now_iso(),
+                "type": "owner_api_action",
+                "action": "skill_grant",
+                "client_host": str(getattr(client, "host", "") or ""),
+                "skill": str(payload.get("skill") or ""),
+                "granted_key_count": int(payload.get("granted_key_count") or 0),
+                "granted_permission_count": int(payload.get("granted_permission_count") or 0),
+                "extension_action": str(payload.get("extension_action") or ""),
+                "extension_reason": str(payload.get("extension_reason") or ""),
+            },
+        )
+    except Exception:
+        log.debug("Failed to write owner grant audit event", exc_info=True)
+
+
+def _grant_items_from_body(body: Dict[str, Any]) -> list[str]:
+    raw = body.get("items")
+    if raw is None:
+        raw = body.get("keys")
+    if raw is None:
+        raw = body.get("granted_keys")
+    if raw is None:
+        return []
+    out: list[str] = []
+    values = raw if isinstance(raw, list) else [raw]
+    for item in values:
+        if isinstance(item, dict):
+            value = item.get("value") or item.get("key") or item.get("permission") or item.get("name")
+        else:
+            value = item
+        text = str(value or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 async def api_extensions_index(request: Request) -> JSONResponse:
-    """GET /api/extensions — catalogue + live registration snapshot.
+    """Return discovered extensions plus live loader snapshot.
 
-    Returns a merged view: ``skills`` is the list of discovered
-    ``type: extension`` skills (directory basename + manifest version
-    + review status + enabled flag); ``live`` is the loader's
-    ``snapshot()`` of in-process registrations. The UI can cross-
-    reference the two to know which extensions are "catalogued but
-    not yet loaded" vs "actively dispatching".
-
-    v5.7.0 perf: the synchronous ``discover_skills`` walk + per-extension
-    ``runtime_state_for_skill_name`` (which used to re-walk the entire
-    skills tree) were stalling the asyncio loop and made the Widgets
-    page show "Loading…" with an empty viewport for many seconds while
-    a parallel review/install job was running. Two fixes:
-
-    1. The whole synchronous body runs on a worker thread via
-       ``asyncio.to_thread`` so the loop stays responsive.
-    2. ``runtime_state_for_loaded_skill`` is a new helper that takes the
-       already-discovered ``LoadedSkill`` and skips the second walk,
-       collapsing 1+K filesystem walks into exactly one.
+    The synchronous body runs in a worker thread and reuses discovered skills
+    to avoid repeated filesystem walks during Widgets/Skills refresh.
     """
     try:
         import asyncio
@@ -114,21 +138,15 @@ async def api_extensions_index(request: Request) -> JSONResponse:
         return JSONResponse(payload)
     except Exception as exc:
         log.exception("api_extensions_index failure")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 def _build_extensions_index(drive_root, repo_path):
-    """Synchronous body of ``GET /api/extensions``. Keep this function
-    pure: it is called via ``asyncio.to_thread`` and must not depend on
-    request scope."""
+    """Threaded, request-scope-free body for ``GET /api/extensions``."""
     from ouroboros.extension_loader import extension_name_prefix, runtime_state_for_loaded_skill
 
     live_snapshot = snapshot()
-    # Always scan — ``discover_skills`` still returns the bundled
-    # ``repo/skills/`` reference set even when the user has not
-    # configured ``OUROBOROS_SKILLS_REPO_PATH``. The earlier "only
-    # scan when repo_path is non-empty" check silently dropped
-    # the bundled weather skill on a default install.
+    # Scan data plane plus optional external checkout; bootstrap copies native refs.
     skills = discover_skills(drive_root, repo_path=repo_path)
     runtime_states = {
         s.name: runtime_state_for_loaded_skill(s, drive_root)
@@ -156,13 +174,7 @@ def _build_extensions_index(drive_root, repo_path):
             if str(name).startswith(prefix)
         ]
 
-    # v5: include marketplace provenance directly on clawhub skills so
-    # the Installed UI can show the registry slug, archive sha256,
-    # homepage / license, adapter warnings, and a "version vs latest"
-    # mismatch hint without making a second round-trip to
-    # ``/api/marketplace/clawhub/installed``. ``read_provenance``
-    # returns ``None`` for any non-clawhub skill (no sidecar present),
-    # so this is a no-op for native / external entries.
+    # Inline ClawHub provenance so Installed UI avoids a second round-trip.
     try:
         from ouroboros.marketplace.provenance import read_provenance
     except Exception:  # pragma: no cover — defensive
@@ -198,16 +210,7 @@ def _build_extensions_index(drive_root, repo_path):
             "version": s.manifest.version,
             "description": s.manifest.description,
             "enabled": s.enabled,
-            "review_status": s.review.status,
-            "review_stale": s.review.is_stale_for(s.content_hash),
-            "review_gate": skill_review_gate(
-                s.review.status,
-                stale=s.review.is_stale_for(s.content_hash),
-            ),
-            "executable_review": skill_review_gate(
-                s.review.status,
-                stale=s.review.is_stale_for(s.content_hash),
-            )["executable_review"],
+            **_review_fields(s),
             "permissions": list(s.manifest.permissions or []),
             "load_error": runtime_states.get(s.name, {}).get("load_error", s.load_error),
             "desired_live": runtime_states.get(s.name, {}).get("desired_live", False),
@@ -222,11 +225,7 @@ def _build_extensions_index(drive_root, repo_path):
             "review_findings": list(s.review.findings or []),
             "grants": grant_status_for_skill(drive_root, s),
             "is_self_authored": bool(getattr(s, "is_self_authored", False)),
-            # v4.50: surface the discovery source so the Skills tab
-            # can render a clawhub badge + Update/Uninstall buttons
-            # for marketplace-installed skills. Without this the
-            # /api/extensions catalogue would silently mislabel
-            # clawhub skills as "native" (P6 honesty regression).
+            # Keep source explicit so marketplace skills are not mislabeled native.
             "source": s.source,
             "payload_root": payload_root,
             "installed_at": _path_installed_at(s.skill_dir),
@@ -269,12 +268,12 @@ async def api_extension_manifest(request: Request) -> JSONResponse:
 
     skill_name = str(request.path_params.get("skill") or "").strip()
     if not skill_name:
-        return JSONResponse({"error": "missing skill name"}, status_code=400)
+        return json_error("missing skill name", 400)
     drive_root = _request_drive_root(request)
     repo_path = get_skills_repo_path()
     loaded = await asyncio.to_thread(find_skill, drive_root, skill_name, repo_path=repo_path)
     if loaded is None:
-        return JSONResponse({"error": "skill not found"}, status_code=404)
+        return json_error("skill not found", 404)
     runtime_state = await asyncio.to_thread(
         runtime_state_for_skill_name,
         skill_name,
@@ -298,16 +297,7 @@ async def api_extension_manifest(request: Request) -> JSONResponse:
                 "ui_tab": loaded.manifest.ui_tab,
             },
             "enabled": loaded.enabled,
-            "review_status": loaded.review.status,
-            "review_stale": loaded.review.is_stale_for(loaded.content_hash),
-            "review_gate": skill_review_gate(
-                loaded.review.status,
-                stale=loaded.review.is_stale_for(loaded.content_hash),
-            ),
-            "executable_review": skill_review_gate(
-                loaded.review.status,
-                stale=loaded.review.is_stale_for(loaded.content_hash),
-            )["executable_review"],
+            **_review_fields(loaded),
             "content_hash": loaded.content_hash,
             "load_error": load_error,
         }
@@ -315,23 +305,16 @@ async def api_extension_manifest(request: Request) -> JSONResponse:
 
 
 async def api_extension_module(request: Request) -> Response:
-    """GET /api/extensions/<skill>/module/<entry> — reviewed widget module JS.
-
-    This is deliberately separate from the catch-all extension route
-    dispatcher: ``kind: "module"`` points at a static JS file inside the
-    reviewed skill payload, not an arbitrary route registered by plugin.py.
-    The handler only serves the exact ``ui_tab.render.entry`` declared in the
-    fresh, enabled extension manifest; it never serves arbitrary files.
-    """
+    """Serve reviewed widget module JS only for live registered tab entries."""
     from ouroboros.config import get_skills_repo_path
     from ouroboros.extension_loader import runtime_state_for_skill_name
 
     skill_name = str(request.path_params.get("skill") or "").strip()
     entry = str(request.path_params.get("entry") or "").strip()
     if not skill_name or not entry:
-        return JSONResponse({"error": "missing skill/module entry"}, status_code=400)
+        return json_error("missing skill/module entry", 400)
     if "/" in entry or "\\" in entry or ".." in entry or entry.startswith("."):
-        return JSONResponse({"error": "invalid module entry"}, status_code=400)
+        return json_error("invalid module entry", 400)
 
     drive_root = _request_drive_root(request)
     repo_path = get_skills_repo_path()
@@ -342,19 +325,11 @@ async def api_extension_module(request: Request) -> Response:
         repo_path=repo_path,
     )
     if not state.get("desired_live"):
-        return JSONResponse(
-            {"error": f"extension {skill_name!r} not live: {state.get('reason')}", "state": state},
-            status_code=409,
-        )
+        return json_error(f"extension {skill_name!r} not live: {state.get('reason')}", 409, state=state)
     loaded = await asyncio.to_thread(find_skill, drive_root, skill_name, repo_path=repo_path)
     if loaded is None:
-        return JSONResponse({"error": "skill not found"}, status_code=404)
-    # Authorize against the LIVE registered tab snapshot, not only the
-    # manifest's optional ui_tab block. Extensions may register UI tabs from
-    # plugin.py via PluginAPI without duplicating the declaration in
-    # frontmatter; the Widgets page receives that live snapshot and then asks
-    # this endpoint for ``entry``. If we checked only manifest.ui_tab, valid
-    # live PluginAPI tabs would 404.
+        return json_error("skill not found", 404)
+    # Authorize against live PluginAPI tab registrations, not only manifest ui_tab.
     live = snapshot()
     module_declared = any(
         str(tab.get("skill") or "") == skill_name
@@ -363,18 +338,18 @@ async def api_extension_module(request: Request) -> Response:
         for tab in live.get("ui_tabs", [])
     )
     if not module_declared:
-        return JSONResponse({"error": "module entry is not declared by a live widget tab"}, status_code=404)
+        return json_error("module entry is not declared by a live widget tab", 404)
     target = (loaded.skill_dir / entry).resolve()
     try:
         target.relative_to(loaded.skill_dir.resolve())
     except ValueError:
-        return JSONResponse({"error": "module entry escapes skill directory"}, status_code=400)
+        return json_error("module entry escapes skill directory", 400)
     if not target.is_file():
-        return JSONResponse({"error": "module entry file not found"}, status_code=404)
+        return json_error("module entry file not found", 404)
     try:
         text = await asyncio.to_thread(target.read_text, encoding="utf-8")
     except UnicodeDecodeError:
-        return JSONResponse({"error": "module entry is not UTF-8 text"}, status_code=400)
+        return json_error("module entry is not UTF-8 text", 400)
     return Response(
         text,
         media_type="application/javascript; charset=utf-8",
@@ -383,15 +358,10 @@ async def api_extension_module(request: Request) -> Response:
 
 
 async def api_extension_settings_section(request: Request) -> JSONResponse:
-    """GET /api/extensions/<skill>/settings_section — declarative Settings sections.
-
-    Extensions register these via ``PluginAPI.register_settings_section``.
-    The response is a stable list (usually length 0 or 1) so future
-    extensions can publish multiple small sections without adding more routes.
-    """
+    """Return declarative Settings sections registered by one extension."""
     skill_name = str(request.path_params.get("skill") or "").strip()
     if not skill_name:
-        return JSONResponse({"error": "missing skill name"}, status_code=400)
+        return json_error("missing skill name", 400)
     live = snapshot()
     sections = [
         item
@@ -402,13 +372,7 @@ async def api_extension_settings_section(request: Request) -> JSONResponse:
 
 
 async def api_extension_dispatch(request: Request) -> Response:
-    """Catch-all dispatcher for ``/api/extensions/<skill>/<rest>``.
-
-    Looks up the fully-qualified mount point in the extension loader
-    route registry and invokes the handler the extension registered
-    via ``PluginAPI.register_route``. Honors the registered methods
-    tuple.
-    """
+    """Dispatch an extension route after reconciling live loader state."""
     from ouroboros.config import get_skills_repo_path, load_settings
     from ouroboros.extension_loader import reconcile_extension, runtime_state_for_skill_name
 
@@ -435,20 +399,11 @@ async def api_extension_dispatch(request: Request) -> Response:
             )
             spec = list_routes().get(mount)
             if spec is None and state.get("action") == "extension_load_error":
-                return JSONResponse(
-                    {"error": f"extension {skill!r} failed to go live", "state": state},
-                    status_code=409,
-                )
+                return json_error(f"extension {skill!r} failed to go live", 409, state=state)
         elif state.get("reason") != "missing":
-            return JSONResponse(
-                {"error": f"extension {skill!r} not live: {state.get('reason')}", "state": state},
-                status_code=409,
-            )
+            return json_error(f"extension {skill!r} not live: {state.get('reason')}", 409, state=state)
     if spec is None:
-        return JSONResponse(
-            {"error": f"no extension route registered for {mount!r}"},
-            status_code=404,
-        )
+        return json_error(f"no extension route registered for {mount!r}", 404)
     state = await asyncio.to_thread(
         runtime_state_for_skill_name,
         str(spec.get("skill") or skill),
@@ -465,34 +420,20 @@ async def api_extension_dispatch(request: Request) -> Response:
         )
         spec = list_routes().get(mount)
         if state.get("action") == "extension_load_error":
-            return JSONResponse(
-                {"error": f"extension {skill!r} failed to go live", "state": state},
-                status_code=409,
-            )
+            return json_error(f"extension {skill!r} failed to go live", 409, state=state)
     if not state.get("desired_live") or not state.get("live_loaded"):
-        return JSONResponse(
-            {"error": f"extension {skill!r} not live: {state.get('reason')}", "state": state},
-            status_code=409,
-        )
+        return json_error(f"extension {skill!r} not live: {state.get('reason')}", 409, state=state)
     if spec is None:
-        return JSONResponse(
-            {"error": f"no extension route registered for {mount!r}"},
-            status_code=404,
-        )
+        return json_error(f"no extension route registered for {mount!r}", 404)
     method = request.method.upper()
     allowed = {m.upper() for m in spec.get("methods", ("GET",))}
     if "GET" in allowed:
         allowed.add("HEAD")
     if method not in allowed:
-        return JSONResponse(
-            {"error": f"method {method} not allowed; allowed={sorted(allowed)}"},
-            status_code=405,
-        )
+        return json_error(f"method {method} not allowed; allowed={sorted(allowed)}", 405)
     handler = spec.get("handler")
     if not callable(handler):
-        return JSONResponse(
-            {"error": "registered handler is not callable"}, status_code=500
-        )
+        return json_error("registered handler is not callable")
     try:
         if inspect.iscoroutinefunction(handler):
             result = await handler(request)
@@ -502,43 +443,32 @@ async def api_extension_dispatch(request: Request) -> Response:
             result = await result
     except Exception as exc:
         log.exception("extension dispatch failure: %s", mount)
-        return JSONResponse(
-            {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
-        )
+        return json_error(f"{type(exc).__name__}: {exc}")
     if isinstance(result, Response):
         return result
     return JSONResponse(result if result is not None else {})
 
 
 async def api_skill_toggle(request: Request) -> JSONResponse:
-    """POST /api/skills/<skill>/toggle {enabled: bool}.
-
-    Direct UI-facing endpoint so the Skills page can flip the enabled
-    bit + run the extension load/unload path without routing through
-    the agent. Uses the same machinery as ``toggle_skill`` tool but
-    via HTTP.
-    """
+    """Toggle a skill from the UI and run extension load/unload reconciliation."""
     from ouroboros.config import get_skills_repo_path, load_settings
     from ouroboros.skill_loader import find_skill, grant_status_for_skill, save_enabled
     from ouroboros import extension_loader
 
     skill_name = str(request.path_params.get("skill") or "").strip()
     if not skill_name:
-        return JSONResponse({"error": "missing skill name"}, status_code=400)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+        return json_error("missing skill name", 400)
+    body = await request_json_or(request, {}, exceptions=(Exception,))
     enabled = _coerce_bool_arg(body.get("enabled"))
     if enabled is None:
-        return JSONResponse({"error": "'enabled' must be a boolean"}, status_code=400)
+        return json_error("'enabled' must be a boolean", 400)
 
     drive_root = _request_drive_root(request)
     repo_path = get_skills_repo_path()
 
     initial = await asyncio.to_thread(find_skill, drive_root, skill_name, repo_path=repo_path)
     if initial is None:
-        return JSONResponse({"error": "skill not found"}, status_code=404)
+        return json_error("skill not found", 404)
     def _run_toggle_sync() -> dict[str, Any]:
         loaded = find_skill(drive_root, skill_name, repo_path=repo_path)
         if loaded is None:
@@ -554,26 +484,17 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
                 return {
                     "error": "cannot enable until review status is a fresh executable review",
                     "status_code": 409,
-                    "review_status": loaded.review.status,
-                    "review_stale": stale,
-                    "review_gate": gate,
-                    "executable_review": gate["executable_review"],
+                    **_review_fields(loaded, stale=stale, gate=gate),
                     "grants": grants,
                 }
             if not grants.get("all_granted", True):
                 return {
-                    "error": "cannot enable until requested key grants are approved",
+                    "error": "cannot enable until requested key and permission grants are approved",
                     "status_code": 409,
-                    "review_status": loaded.review.status,
-                    "review_stale": stale,
-                    "review_gate": gate,
-                    "executable_review": gate["executable_review"],
+                    **_review_fields(loaded, stale=stale, gate=gate),
                     "grants": grants,
                 }
-            # v5.7.0: mirror the dependency-state enable guard from the
-            # ``toggle_skill`` tool. The Skills UI uses this HTTP path, so
-            # without the guard users could enable a skill whose isolated deps
-            # failed or whose deps.json is stale/missing.
+            # Mirror toggle_skill's isolated-dependency enable guard for the UI.
             try:
                 from ouroboros.marketplace.install_specs import install_specs_hash
                 from ouroboros.marketplace.isolated_deps import read_deps_state
@@ -581,7 +502,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
 
                 auto_specs = auto_install_specs_for_skill(drive_root, loaded)
                 if auto_specs:
-                    deps_state = read_deps_state(drive_root, loaded.name)
+                    deps_state = read_deps_state(drive_root, loaded.name, loaded.skill_dir)
                     deps_status = str(deps_state.get("status") or "pending")
                     expected_hash = install_specs_hash(auto_specs)
                     actual_hash = str(deps_state.get("specs_hash") or "")
@@ -591,10 +512,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
                             "status_code": 409,
                             "deps_status": deps_status,
                             "deps_error": deps_state.get("error", ""),
-                            "review_status": loaded.review.status,
-                            "review_stale": stale,
-                            "review_gate": gate,
-                            "executable_review": gate["executable_review"],
+                            **_review_fields(loaded, stale=stale, gate=gate),
                             "grants": grants,
                         }
                     if actual_hash != expected_hash:
@@ -602,10 +520,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
                             "error": "cannot enable until isolated dependency fingerprint is refreshed",
                             "status_code": 409,
                             "deps_status": "stale",
-                            "review_status": loaded.review.status,
-                            "review_stale": stale,
-                            "review_gate": gate,
-                            "executable_review": gate["executable_review"],
+                            **_review_fields(loaded, stale=stale, gate=gate),
                             "grants": grants,
                         }
             except Exception:
@@ -641,16 +556,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
         return {
             "skill": loaded.name,
             "source": loaded.source,
-            "review_status": loaded.review.status,
-            "review_stale": loaded.review.is_stale_for(loaded.content_hash),
-            "review_gate": skill_review_gate(
-                loaded.review.status,
-                stale=loaded.review.is_stale_for(loaded.content_hash),
-            ),
-            "executable_review": skill_review_gate(
-                loaded.review.status,
-                stale=loaded.review.is_stale_for(loaded.content_hash),
-            )["executable_review"],
+            **_review_fields(loaded),
             "grants": grant_status_for_skill(drive_root, loaded),
             "action": action,
             "live_reason": live_reason,
@@ -669,6 +575,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
         message=("Enabling" if enabled else "Disabling") + f" {initial.name}",
         runner=_run_toggle,
         options=LifecycleJobOptions(
+            drive_root=drive_root,
             result_message=lambda item: (
                 item.get("error", "")
                 or (("Enabled" if enabled else "Disabled") + f" {item.get('skill', initial.name)}")
@@ -700,13 +607,7 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
 
 
 class _ApiReviewCtx:
-    """Minimal ToolContext-compatible stub for ``api_skill_review``.
-
-    Includes every attribute the downstream review pipeline (``review.py::
-    _emit_usage_event``, ``review_helpers``) reads, not only the bare
-    ``drive_root`` the review itself needs. Missing ``event_queue``
-    previously crashed the usage-event emission path.
-    """
+    """Minimal ToolContext-compatible carrier for HTTP-triggered review."""
 
     def __init__(self, drive_root: pathlib.Path, repo_dir: pathlib.Path) -> None:
         self.drive_root = drive_root
@@ -720,18 +621,10 @@ class _ApiReviewCtx:
 
 
 async def api_skill_review(request: Request) -> JSONResponse:
-    """POST /api/skills/<skill>/review — trigger tri-model skill review.
-
-    Delegated Phase 5 endpoint so the Skills UI can queue a review
-    without routing through the agent command bus. The tri-model
-    pipeline is a multi-second blocking network op — we offload it
-    to a worker thread via ``asyncio.to_thread`` so the Starlette
-    event loop keeps serving other requests / WebSocket traffic while
-    the review runs.
-    """
+    """Queue tri-model skill review from the UI without blocking the event loop."""
     skill_name = str(request.path_params.get("skill") or "").strip()
     if not skill_name:
-        return JSONResponse({"error": "missing skill name"}, status_code=400)
+        return json_error("missing skill name", 400)
 
     drive_root = _request_drive_root(request)
     repo_dir = _request_repo_dir(request)
@@ -761,39 +654,146 @@ async def api_skill_lifecycle_queue(request: Request) -> JSONResponse:
 
 
 async def api_skill_grants(request: Request) -> JSONResponse:
-    """Reject direct grant writes; desktop launcher owns this boundary."""
-    return JSONResponse(
+    """Owner grant path for reviewed skill settings keys and host permissions."""
+    from ouroboros import extension_loader
+    from ouroboros.config import get_skills_repo_path, load_settings
+
+    skill_name = str(request.path_params.get("skill") or "").strip()
+    if not skill_name:
+        return json_error("missing skill name", 400)
+    body = await request_json_or(request, {}, exceptions=(Exception,))
+    if not isinstance(body, dict):
+        return json_error("request body must be a JSON object", 400)
+
+    drive_root = _request_drive_root(request)
+    repo_path = get_skills_repo_path()
+
+    def _save_grants_sync() -> dict[str, Any]:
+        loaded = find_skill(drive_root, skill_name, repo_path=repo_path)
+        if loaded is None:
+            return {"error": "skill not found", "status_code": 404}
+        if not (loaded.manifest.is_script() or loaded.manifest.is_extension()):
+            return {
+                "error": "key and permission grants are supported for script and extension skills",
+                "status_code": 400,
+            }
+        stale = loaded.review.is_stale_for(loaded.content_hash)
+        gate = skill_review_gate(loaded.review.status, stale=stale)
+        if not review_status_allows_execution(loaded.review.status) or stale:
+            return {
+                "error": "key and permission grants require a fresh executable review",
+                "status_code": 409,
+                **_review_fields(loaded, stale=stale, gate=gate),
+                "grants": grant_status_for_skill(drive_root, loaded),
+            }
+        allowed_keys = requested_core_setting_keys(list(loaded.manifest.env_from_settings or []))
+        allowed_permissions = requested_skill_permissions(
+            list(getattr(loaded.manifest, "permissions", []) or []),
+            list(getattr(loaded.manifest, "subscribe_events", []) or []),
+        )
+        permission_map = {permission.lower(): permission for permission in allowed_permissions}
+        requested_raw = _grant_items_from_body(body)
+        requested_keys: list[str] = []
+        requested_permissions: list[str] = []
+        rejected: list[str] = []
+        for item in requested_raw:
+            key = item.upper()
+            permission = permission_map.get(item.lower())
+            if key in allowed_keys:
+                if key not in requested_keys:
+                    requested_keys.append(key)
+            elif permission:
+                if permission not in requested_permissions:
+                    requested_permissions.append(permission)
+            else:
+                rejected.append(item)
+        if not requested_raw or rejected or (not requested_keys and not requested_permissions):
+            return {
+                "error": (
+                    "grant items must be requested by the current manifest; "
+                    f"allowed keys={allowed_keys}, permissions={allowed_permissions}"
+                ),
+                "status_code": 400,
+                "allowed_keys": allowed_keys,
+                "allowed_permissions": allowed_permissions,
+                "rejected_items": rejected,
+            }
+        save_skill_grants(
+            drive_root,
+            loaded.name,
+            requested_keys,
+            content_hash=loaded.content_hash,
+            requested_keys=allowed_keys,
+            granted_permissions=requested_permissions,
+            requested_permissions=allowed_permissions,
+        )
+        extension_action = None
+        extension_reason = None
+        extension_load_error = None
+        if loaded.manifest.is_extension():
+            try:
+                state = extension_loader.reconcile_extension(
+                    loaded.name,
+                    drive_root,
+                    load_settings,
+                    repo_path=repo_path,
+                    retry_load_error=True,
+                )
+                extension_action = state.get("action")
+                extension_reason = state.get("reason")
+                extension_load_error = state.get("load_error")
+            except Exception as exc:
+                log.warning(
+                    "Skill grant saved but extension reconcile failed for %s: %s",
+                    loaded.name,
+                    exc,
+                    exc_info=True,
+                )
+                extension_reason = "reconcile_call_failed"
+                extension_load_error = str(exc)
+        refreshed = find_skill(drive_root, loaded.name, repo_path=repo_path) or loaded
+        return {
+            "ok": True,
+            "skill": loaded.name,
+            "granted_keys": requested_keys,
+            "granted_permissions": requested_permissions,
+            "extension_action": extension_action,
+            "extension_reason": extension_reason,
+            "load_error": extension_load_error,
+            "grants": grant_status_for_skill(drive_root, refreshed),
+        }
+
+    result = await asyncio.to_thread(_save_grants_sync)
+    if result.get("error"):
+        return JSONResponse(result, status_code=int(result.get("status_code") or 400))
+    _owner_grant_audit(
+        drive_root,
+        request,
         {
-            "error": "key grants require desktop launcher confirmation",
-            "code": "owner_confirmation_required",
+            "skill": result.get("skill"),
+            "granted_key_count": len(result.get("granted_keys") or []),
+            "granted_permission_count": len(result.get("granted_permissions") or []),
+            "extension_action": result.get("extension_action"),
+            "extension_reason": result.get("extension_reason"),
         },
-        status_code=403,
     )
+    _broadcast_extension_lifecycle(
+        request,
+        str(result.get("skill") or skill_name),
+        result.get("extension_action"),
+        result.get("extension_reason"),
+    )
+    return JSONResponse(result)
 
 
 async def api_skill_reconcile(request: Request) -> JSONResponse:
-    """POST /api/skills/<skill>/reconcile — re-run the extension load gate.
-
-    The desktop launcher owns the grant-write path because it is the only
-    surface that can summon the native confirmation dialog. After the
-    launcher persists ``grants.json`` to disk it cannot reach the
-    server's in-process extension registry directly: launcher.py and
-    server.py run as separate OS processes, each with its own copy of
-    ``extension_loader._extensions`` / ``_load_failures``. The launcher
-    therefore POSTs this loopback endpoint after a successful grant so
-    the agent server clears any cached load failure and re-imports the
-    plugin with the fresh ``granted_keys`` set, lifting the user out of
-    the disable/enable workaround that previous releases required.
-
-    Idempotent: any caller (UI refresh, agent, launcher) may invoke
-    this without side effects beyond reconciling the named skill.
-    """
+    """Re-run the extension load gate after launcher-owned grants change."""
     from ouroboros.config import get_skills_repo_path, load_settings
     from ouroboros import extension_loader
 
     skill_name = str(request.path_params.get("skill") or "").strip()
     if not skill_name:
-        return JSONResponse({"error": "missing skill name"}, status_code=400)
+        return json_error("missing skill name", 400)
 
     drive_root = _request_drive_root(request)
     repo_path = get_skills_repo_path()

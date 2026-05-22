@@ -1,14 +1,4 @@
-"""
-Per-task owner message injection for running worker tasks.
-
-Each task gets its own mailbox file: owner_messages_{task_id}.jsonl
-Messages have unique IDs for dedup. Reading uses offset tracking
-(append-only within a session) instead of clearing the file.
-
-The supervisor does NOT write here directly. Only the LLM (via
-forward_to_worker tool) writes to a task's mailbox. Workers drain
-messages for their own task_id on each LLM round.
-"""
+"""Per-task owner-message mailboxes for running worker tasks."""
 import json
 import logging
 import pathlib
@@ -52,11 +42,7 @@ def drain_owner_messages(
     task_id: str,
     seen_ids: Optional[set] = None,
 ) -> List[str]:
-    """Read new messages for a specific task. Returns list of message texts.
-
-    Uses seen_ids set for dedup: messages already in the set are skipped,
-    new message IDs are added to it. Caller should keep the set across rounds.
-    """
+    """Read unseen message texts for one task, updating seen_ids for dedup."""
     path = _mailbox_path(drive_root, task_id)
     if not path.exists():
         return []

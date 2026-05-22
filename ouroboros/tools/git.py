@@ -1,7 +1,4 @@
-"""Git tools: repo_write, repo_commit, git_status, git_diff,
-pull_from_remote, restore_to_head, revert_commit.
-Advisory pre-review + triad + scope review run before each commit (parallel_review.py).
-"""
+"""Git/write tools with advisory, triad, and scope review commit gates."""
 
 from __future__ import annotations
 
@@ -27,7 +24,7 @@ from ouroboros.runtime_mode_policy import (
     protected_write_block_message,
 )
 from ouroboros.platform_layer import acquire_exclusive_file_lock, unlink_lockfile
-from ouroboros.tools.registry import ToolContext, ToolEntry
+from ouroboros.tools.registry import ToolContext, ToolEntry, active_repo_dir_for
 from ouroboros.tools.commit_gate import (
     _check_advisory_freshness,
     _check_overlapping_review_attempt,
@@ -40,22 +37,21 @@ from ouroboros.tools.parallel_review import run_parallel_review as _run_parallel
 from ouroboros.tools.review_helpers import (
     _run_review_preflight_tests,
     format_review_history_entry,
+    paths_from_name_status,
+    paths_from_porcelain_line as _review_paths_from_porcelain_line,
 )
-from ouroboros.tools.core import is_skill_control_plane_path
+from ouroboros.tools.core import _data_skill_path, is_skill_control_plane_path
 from ouroboros.contracts.task_constraint import normalize_task_constraint, resolve_payload_path
 from ouroboros.contracts.skill_payload_policy import (
-    SkillPayloadPathError,
     cross_skill_redirect_error,
     decide_payload_short_form,
-    resolve_skill_payload_target,
 )
 _CONTENT_OMITTED_PREFIX = "<<CONTENT_OMITTED"
 log = logging.getLogger(__name__)
 
 
 def _normalize_to_posix(path_str: str) -> str:
-    """Normalize to forward-slash POSIX form; replaces backslashes first so
-    Windows-style paths match protected runtime paths on Linux/macOS."""
+    """Normalize paths to POSIX form before protected-path matching."""
     return normalize_repo_path(path_str)
 
 
@@ -64,13 +60,6 @@ def _current_runtime_mode() -> str:
         return get_runtime_mode()
     except Exception:
         return "advanced"
-
-
-def _data_skill_path(path: str, drive_root: pathlib.Path) -> pathlib.Path | None:
-    try:
-        return resolve_skill_payload_target(pathlib.Path(drive_root), path).target_path
-    except SkillPayloadPathError:
-        return None
 
 
 def _protected_paths_block_message(paths, *, runtime_mode: str, action: str) -> str:
@@ -110,47 +99,6 @@ def _fingerprint_staged_diff(repo_dir: pathlib.Path) -> Dict[str, Any]:
         "reason": "",
         "chars": len(diff_text),
     }
-
-
-def _staged_paths_for_protection(repo_dir: pathlib.Path) -> Optional[list[str]]:
-    """Return staged paths including both sides of renames/copies."""
-    try:
-        raw = run_cmd(["git", "diff", "--cached", "--name-status", "-M"], cwd=repo_dir)
-    except Exception:
-        return None
-    paths: list[str] = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        status = parts[0]
-        code = status[:1]
-        if code in {"R", "C"} and len(parts) >= 3:
-            paths.extend([parts[1], parts[2]])
-        elif len(parts) >= 2:
-            paths.append(parts[-1])
-        elif parts:
-            paths.append(parts[0])
-    return paths
-
-
-def _paths_from_porcelain_line(line: str) -> list[str]:
-    """Return current and source paths from one porcelain v1 status line.
-
-    Rename/copy entries are rendered as ``R  old -> new``. The restore guard
-    needs both sides so a protected source path cannot disappear behind an
-    unprotected destination name.
-    """
-    if not line or len(line) < 4:
-        return []
-    status = line[:2]
-    entry = line[3:].strip()
-    if not entry:
-        return []
-    if ("R" in status or "C" in status) and " -> " in entry:
-        before, after = entry.rsplit(" -> ", 1)
-        return [before.strip(), after.strip()]
-    return [entry]
 
 
 def _handle_revalidation_failure(*args, **kwargs):
@@ -203,16 +151,7 @@ _DOC_ONLY_EXTENSIONS = (".md", ".txt", ".rst")
 
 
 def _diff_is_doc_only(staged_paths: List[str]) -> bool:
-    """Return True iff every staged path is a documentation file outside ``tests/``.
-
-    Prose docs (.md/.txt/.rst) changes can't break test behaviour, so the
-    preflight test gate is wasteful for them. The maintainer hit a 6-retry
-    loop on a doc-only commit (39 rounds, 3 hours) before this check existed.
-    JSON is intentionally excluded: config/schema/package JSON can affect
-    runtime behaviour and must keep the preflight.
-    Defensive: any staged file under ``tests/`` triggers the full preflight,
-    even if the extension is .md, since test fixtures can be markdown.
-    """
+    """Return True only for docs outside tests; JSON/config keep preflight."""
     if not staged_paths:
         return False
     saw_any = False
@@ -307,25 +246,32 @@ def _run_reviewed_stage_cycle(
     if not status.strip():
         return _failed("⚠️ GIT_NO_CHANGES: nothing to commit.")
 
-    # Advisory scope must match what the commit actually covers — use the FULL
-    # staged index (`git diff --cached --name-only`), not the caller-supplied
-    # `paths` list. Otherwise a narrowed stage scope for one caller could let a
-    # fresh advisory for that single file satisfy the gate even if unrelated
-    # files were staged earlier
-    # in the same lock. The blocking review and `git commit` step always operate
-    # on the full staged index, so advisory must match that scope.
     try:
-        staged_names_raw = run_cmd(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=ctx.repo_dir,
-        )
+        staged_status_raw = run_cmd(["git", "diff", "--cached", "--name-status", "-M"], cwd=ctx.repo_dir)
+        classification_paths = paths_from_name_status(staged_status_raw)
     except Exception as exc:
-        return _failed(f"⚠️ GIT_ERROR (staged-names): {_sanitize_git_error(str(exc))}")
-    advisory_paths = [
-        line.strip() for line in staged_names_raw.splitlines() if line.strip()
-    ] or None
-    classification_paths = _staged_paths_for_protection(pathlib.Path(ctx.repo_dir))
-    if classification_paths is None:
+        try:
+            staged_names_raw = run_cmd(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=ctx.repo_dir,
+            )
+        except Exception:
+            return _failed(f"⚠️ GIT_ERROR (staged-status): {_sanitize_git_error(str(exc))}")
+        classification_paths = [
+            line.strip() for line in staged_names_raw.splitlines() if line.strip()
+        ]
+    advisory_paths = classification_paths or None
+    if advisory_paths is None:
+        try:
+            staged_names_raw = run_cmd(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=ctx.repo_dir,
+            )
+        except Exception as exc:
+            return _failed(f"⚠️ GIT_ERROR (staged-names): {_sanitize_git_error(str(exc))}")
+        advisory_paths = [
+            line.strip() for line in staged_names_raw.splitlines() if line.strip()
+        ] or None
         classification_paths = advisory_paths or []
     protected_staged_paths = protected_paths_in(classification_paths)
     runtime_mode = _current_runtime_mode()
@@ -376,23 +322,6 @@ def _run_reviewed_stage_cycle(
             "block_reason": "no_advisory",
         }
 
-    # Bypass test preflight gate: when advisory is skipped via
-    # ``skip_advisory_pre_review=True`` OR auto-bypassed because no Anthropic
-    # key is configured, the advisory-side test runner never fires. Without
-    # this gate, broken code could reach the expensive triad + scope review.
-    # Mirror the same pytest preflight here so both bypass paths provide
-    # equivalent coverage.
-    #
-    # Two skip paths layered on top:
-    #   1. ``skip_tests=True`` — explicit caller opt-out. Previously this flag
-    #      was silently ignored when advisory was bypassed (the agent surfaced
-    #      this bug at 16:25:32 after a 39-round commit-loop task).
-    #   2. Doc-only diffs — prose `.md`/`.txt`/`.rst` changes outside
-    #      ``tests/`` can't affect test behaviour, so running the full
-    #      pytest suite is pure overhead. JSON/config files are excluded.
-    #      Disable via
-    #      ``OUROBOROS_PREFLIGHT_DIFF_AWARE=false`` if the heuristic ever
-    #      misfires.
     _advisory_bypassed = skip_advisory_pre_review or not os.environ.get("ANTHROPIC_API_KEY", "")
     _diff_aware = (os.environ.get("OUROBOROS_PREFLIGHT_DIFF_AWARE", "true") or "true").strip().lower() in ("true", "1", "yes")
     _doc_only = _diff_aware and _diff_is_doc_only(classification_paths)
@@ -432,9 +361,6 @@ def _run_reviewed_stage_cycle(
                 "block_reason": "tests_preflight_blocked",
             }
     elif _advisory_bypassed:
-        # Skip path: emit a visible progress note so the operator (and the
-        # events log) records why preflight didn't run. ``reason`` is the most
-        # specific applicable cause.
         if skip_tests and _doc_only:
             _skip_reason = "skip_tests + doc_only"
         elif skip_tests:
@@ -793,13 +719,6 @@ def _git_commit_with_tests(ctx: ToolContext) -> Optional[str]:
     return None
 
 
-# Compatibility re-exports for ``ouroboros.tools.review`` symbols that
-# external integrations historically imported from this module were
-# retired in v5.8.3-rc.5; nothing inside the repo depends on them and a
-# repo-wide grep confirms no external import path. Pull from
-# ``ouroboros.tools.review`` directly going forward.
-
-
 def _post_commit_result(ctx, commit_message, skip_tests, tw_ref):
     global _consecutive_test_failures
     if skip_tests:
@@ -815,9 +734,7 @@ def _post_commit_result(ctx, commit_message, skip_tests, tw_ref):
 
 
 def _check_ci_status_after_push(repo_dir: pathlib.Path) -> str:
-    """Query GitHub Actions for the CI run matching the just-pushed commit SHA.
-    Filters by head_sha so stale runs from previous pushes are never reported.
-    Returns a short status string to append to commit output, or "" on any error."""
+    """Return CI status for the just-pushed commit SHA, or empty on error."""
     try:
         import urllib.request
         token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -835,8 +752,6 @@ def _check_ci_status_after_push(repo_dir: pathlib.Path) -> str:
             "Accept": "application/vnd.github+json",
             "User-Agent": "ouroboros-ci-check",
         }
-        # Filter by head_sha in the API query so GitHub returns only runs for
-        # the just-pushed commit; client-side filter retained as defense-in-depth.
         import urllib.parse
         runs_url = (
             f"https://api.github.com/repos/{repo}/actions/runs"
@@ -848,7 +763,6 @@ def _check_ci_status_after_push(repo_dir: pathlib.Path) -> str:
         runs = [r for r in (data.get("workflow_runs") or []) if r.get("head_sha") == local_sha]
         if not runs:
             return "\n\n⏳ CI: Run not yet registered — check GitHub Actions in ~30s."
-        # Prefer runs that are active; fall back to latest completed run for this SHA.
         if runs[0].get("status") in ("in_progress", "queued"):
             return "\n\n⏳ CI: Run in progress — check GitHub Actions for results."
         completed = next((r for r in runs if r.get("status") == "completed"), None)
@@ -882,7 +796,6 @@ def _check_ci_status_after_push(repo_dir: pathlib.Path) -> str:
                 f"  Fix: investigate failing tests, then push a fix commit.\n"
                 f"  URL: {html_url}"
             )
-        # Other terminal conclusions: cancelled, timed_out, startup_failure, etc.
         return (
             f"\n\n⚠️ CI STATUS: Run {conclusion.upper()} for this commit (run #{run_number})\n"
             f"  URL: {html_url}"
@@ -903,7 +816,7 @@ def _format_commit_result(ctx, commit_message, push_status, test_warning):
 
 
 def _check_shrink_guard(ctx: ToolContext, file_path: str, new_content: str, force: bool = False) -> Optional[str]:
-    """Return a warning string if writing new_content would shrink a tracked file by >30%. None if OK."""
+    """Block likely accidental tracked-file truncation unless force=True."""
     if force:
         return None
     try:
@@ -912,7 +825,7 @@ def _check_shrink_guard(ctx: ToolContext, file_path: str, new_content: str, forc
             return None
         result = subprocess.run(
             ["git", "ls-files", "--error-unmatch", safe_relpath(file_path)],
-            cwd=str(ctx.repo_dir), capture_output=True, text=True,
+            cwd=str(active_repo_dir_for(ctx)), capture_output=True, text=True,
         )
         if result.returncode != 0:
             return None
@@ -956,7 +869,7 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
 
     for e in write_list:
         norm = _normalize_to_posix(e["path"])
-        if is_protected_runtime_path(norm) and not mode_allows_protected_write(_current_runtime_mode()):
+        if not ctx.is_workspace_mode() and is_protected_runtime_path(norm) and not mode_allows_protected_write(_current_runtime_mode()):
             return protected_write_block_message(
                 path=norm,
                 runtime_mode=_current_runtime_mode(),
@@ -977,7 +890,7 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
                 _invalidate_advisory(
                     ctx,
                     changed_paths=written_paths,
-                    mutation_root=pathlib.Path(ctx.repo_dir),
+                    mutation_root=active_repo_dir_for(ctx),
                     source_tool="repo_write",
                 )
             return shrink_warning
@@ -992,7 +905,7 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
                 _invalidate_advisory(
                     ctx,
                     changed_paths=written_paths,
-                    mutation_root=pathlib.Path(ctx.repo_dir),
+                    mutation_root=active_repo_dir_for(ctx),
                     source_tool="repo_write",
                 )
             already = ", ".join(written) if written else "(none)"
@@ -1004,16 +917,22 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
     _invalidate_advisory(
         ctx,
         changed_paths=written_paths,
-        mutation_root=pathlib.Path(ctx.repo_dir),
+        mutation_root=active_repo_dir_for(ctx),
         source_tool="repo_write",
     )
     summary = ", ".join(written)
-    result = (
-        f"✅ Written {len(written)} file(s): {summary}\n"
-        "Files are on disk but NOT committed. Run repo_commit when ready.\n"
-        "⚠️ Advisory pre-review is now stale — run advisory_pre_review before repo_commit."
-    )
-    protected_written = protected_paths_in(written_paths)
+    if ctx.is_workspace_mode():
+        result = (
+            f"✅ Written {len(written)} file(s): {summary}\n"
+            "Files are on disk in the active workspace. Do not commit; the headless runner will emit a patch artifact."
+        )
+    else:
+        result = (
+            f"✅ Written {len(written)} file(s): {summary}\n"
+            "Files are on disk but NOT committed. Run repo_commit when ready.\n"
+            "⚠️ Advisory pre-review is now stale — run advisory_pre_review before repo_commit."
+        )
+    protected_written = [] if ctx.is_workspace_mode() else protected_paths_in(written_paths)
     if protected_written and mode_allows_protected_write(_current_runtime_mode()):
         result += "\n\n" + core_patch_notice(protected_written)
     return result
@@ -1034,36 +953,40 @@ def _str_replace_editor(
         return "⚠️ STR_REPLACE_ERROR: old_str is required (cannot be empty)."
 
     norm = _normalize_to_posix(path)
-    if is_protected_runtime_path(norm) and not mode_allows_protected_write(_current_runtime_mode()):
+    if not ctx.is_workspace_mode() and is_protected_runtime_path(norm) and not mode_allows_protected_write(_current_runtime_mode()):
         return protected_write_block_message(
             path=norm,
             runtime_mode=_current_runtime_mode(),
             action="edit",
         )
 
-    short_form = decide_payload_short_form(
-        bucket=bucket,
-        skill_name=skill_name,
-        path_text=path,
-        repo_dir=pathlib.Path(ctx.repo_dir),
-        drive_root=pathlib.Path(ctx.drive_root),
-    )
-    if short_form.error:
-        return f"⚠️ STR_REPLACE_ERROR: {short_form.error}"
-    synth = short_form.constraint
     existing_tc = normalize_task_constraint(getattr(ctx, "task_constraint", None))
-    redirect_err = cross_skill_redirect_error(existing_tc, synth)
-    if redirect_err:
-        return f"⚠️ SKILL_REDIRECT_BLOCKED: {redirect_err}"
-
     data_skill_target = None
-    # Real skill_repair task_constraint wins over a synthesized one — repair
-    # confinement is sticky.
-    if existing_tc and existing_tc.mode == "skill_repair":
-        task_constraint = existing_tc
+    task_constraint = existing_tc
+    short_form = None
+    if ctx.is_workspace_mode():
+        try:
+            target = ctx.repo_path(path)
+        except ValueError as e:
+            return f"⚠️ PATH_ERROR: {e}"
+        invalidation_root = active_repo_dir_for(ctx)
     else:
-        task_constraint = synth or existing_tc
-    if task_constraint and task_constraint.mode == "skill_repair" and task_constraint.payload_root:
+        short_form = decide_payload_short_form(
+            bucket=bucket,
+            skill_name=skill_name,
+            path_text=path,
+            repo_dir=pathlib.Path(ctx.repo_dir),
+            drive_root=pathlib.Path(ctx.drive_root),
+        )
+        if short_form.error:
+            return f"⚠️ STR_REPLACE_ERROR: {short_form.error}"
+        synth = short_form.constraint
+        redirect_err = cross_skill_redirect_error(existing_tc, synth)
+        if redirect_err:
+            return f"⚠️ SKILL_REDIRECT_BLOCKED: {redirect_err}"
+        task_constraint = existing_tc if existing_tc and existing_tc.mode == "skill_repair" else synth or existing_tc
+
+    if not ctx.is_workspace_mode() and task_constraint and task_constraint.mode == "skill_repair" and task_constraint.payload_root:
         try:
             target = resolve_payload_path(pathlib.Path(ctx.drive_root), task_constraint, path)
             data_skill_target = target
@@ -1076,7 +999,7 @@ def _str_replace_editor(
                 "control-plane state. Edit user-authored payload files instead."
             )
         invalidation_root = pathlib.Path(ctx.drive_root)
-    else:
+    elif not ctx.is_workspace_mode():
         data_skill_target = _data_skill_path(path, pathlib.Path(ctx.drive_root))
         if data_skill_target is not None:
             if is_skill_control_plane_path(data_skill_target, pathlib.Path(ctx.drive_root).resolve(strict=False)):
@@ -1092,7 +1015,7 @@ def _str_replace_editor(
                 target = ctx.repo_path(path)
             except ValueError as e:
                 return f"⚠️ PATH_ERROR: {e}"
-            invalidation_root = pathlib.Path(ctx.repo_dir)
+            invalidation_root = active_repo_dir_for(ctx)
 
     if not target.exists():
         return f"⚠️ STR_REPLACE_ERROR: file not found: {path}"
@@ -1147,13 +1070,15 @@ def _str_replace_editor(
         f"Context:\n{context_preview}\n\n"
         "File is on disk but NOT committed."
     )
-    if short_form.ignored_reason:
+    if short_form is not None and short_form.ignored_reason:
         result += f"\n⚠️ SKILL_SHORT_FORM_IGNORED: {short_form.ignored_reason}."
-    if data_skill_target is None:
+    if data_skill_target is None and ctx.is_workspace_mode():
+        result += "\nDo not commit; the headless runner will emit a patch artifact."
+    elif data_skill_target is None:
         result += "\nRun repo_commit when ready.\n⚠️ Advisory pre-review is now stale — run advisory_pre_review before repo_commit."
     else:
         result += "\nRun review_skill for this skill before enabling or declaring it ready."
-    if is_protected_runtime_path(norm) and mode_allows_protected_write(_current_runtime_mode()):
+    if not ctx.is_workspace_mode() and is_protected_runtime_path(norm) and mode_allows_protected_write(_current_runtime_mode()):
         result += "\n\n" + core_patch_notice([norm])
     return result
 
@@ -1168,8 +1093,6 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
     """Stage, review, and commit files with unified pre-commit review."""
     ctx.last_push_succeeded = False
     ctx._review_advisory = []
-    # Reset forensic fields at the start of each commit attempt so stale values
-    # from a previous attempt never persist on early-exit paths (e.g. fingerprint_unavailable).
     ctx._last_triad_models = []
     ctx._last_scope_model = ""
     ctx._last_triad_raw_results = []
@@ -1209,14 +1132,6 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
         try:
             run_cmd(["git", "checkout", ctx.branch_dev], cwd=ctx.repo_dir)
         except Exception as e:
-            # The original code aborted on ANY checkout failure — including
-            # the common case where the agent is already on ``branch_dev``
-            # with a dirty tree because the dirty files ARE what they're
-            # trying to commit. When checkout fails, check whether we're
-            # already on the right branch. If so, the checkout failure is
-            # incidental (typically a no-op-but-git-complained on a dirty
-            # tree) and we can proceed to staging. Only abort when on a
-            # different branch — where the checkout was actually needed.
             err_msg = _sanitize_git_error(str(e))
             already_on_target = False
             try:
@@ -1247,7 +1162,6 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
                     "the checkout failure as an incidental dirty-tree no-op.\n"
                     f"{unmerged}"
                 )
-            # else: already on branch_dev with a clean merge index; proceed to stage.
         outcome = _run_reviewed_stage_cycle(
             ctx,
             commit_message,
@@ -1312,7 +1226,7 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
 
 def _git_status(ctx: ToolContext) -> str:
     try:
-        return run_cmd(["git", "status", "--porcelain"], cwd=ctx.repo_dir)
+        return run_cmd(["git", "status", "--porcelain"], cwd=active_repo_dir_for(ctx))
     except Exception as e:
         return f"⚠️ GIT_ERROR: {_sanitize_git_error(str(e))}"
 
@@ -1322,7 +1236,7 @@ def _git_diff(ctx: ToolContext, staged: bool = False) -> str:
         cmd = ["git", "diff"]
         if staged:
             cmd.append("--staged")
-        return run_cmd(cmd, cwd=ctx.repo_dir)
+        return run_cmd(cmd, cwd=active_repo_dir_for(ctx))
     except Exception as e:
         return f"⚠️ GIT_ERROR: {_sanitize_git_error(str(e))}"
 
@@ -1395,7 +1309,7 @@ def _restore_to_head(ctx: ToolContext, confirm: bool = False,
     dirty_files = [
         path
         for line in status.splitlines()
-        for path in _paths_from_porcelain_line(line)
+        for path in _review_paths_from_porcelain_line(line)
     ]
     affected_protected = protected_paths_in(dirty_files)
     if paths:

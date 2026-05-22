@@ -5,10 +5,33 @@ import { applyMcpSettings, collectMcpSettings, initMcpSettings } from './mcp_set
 import { SECRET_KEYS, bindSecretInputs, bindSettingsTabs, renderSettingsPage } from './settings_ui.js';
 import { showToast } from './toast.js';
 import { escapeHtmlAttr as escapeHtml, formatDualVersion } from './utils.js';
-import { apiFetch } from './api_client.js';
+import { apiClient, apiFetch, cleanExtensionRoute, extensionRoutePath } from './api_client.js';
 
 let markSettingsDirty = () => {};
 const BASE_SECRET_KEYS = new Set(SECRET_KEYS.map(([key]) => key));
+let setupContract = {};
+
+const INPUT_FIELDS = [
+    ['s-openai-base-url', 'OPENAI_BASE_URL'], ['s-openai-compatible-base-url', 'OPENAI_COMPATIBLE_BASE_URL'], ['s-cloudru-base-url', 'CLOUDRU_FOUNDATION_MODELS_BASE_URL'],
+    ['s-server-host', 'OUROBOROS_SERVER_HOST', '127.0.0.1'], ['s-claude-code-model', 'CLAUDE_CODE_MODEL', 'claude-opus-4-6[1m]'],
+    ['s-review-models', 'OUROBOROS_REVIEW_MODELS'], ['s-scope-review-model', 'OUROBOROS_SCOPE_REVIEW_MODEL'], ['s-skills-repo-path', 'OUROBOROS_SKILLS_REPO_PATH'],
+    ['s-clawhub-registry-url', 'OUROBOROS_CLAWHUB_REGISTRY_URL'], ['s-websearch-model', 'OUROBOROS_WEBSEARCH_MODEL'], ['s-gh-repo', 'GITHUB_REPO'],
+    ['s-local-source', 'LOCAL_MODEL_SOURCE'], ['s-local-filename', 'LOCAL_MODEL_FILENAME'], ['s-local-chat-format', 'LOCAL_MODEL_CHAT_FORMAT'],
+];
+const VALUE_FIELDS = [
+    ['s-effort-task', 'OUROBOROS_EFFORT_TASK', 'medium'], ['s-effort-evolution', 'OUROBOROS_EFFORT_EVOLUTION', 'high'], ['s-effort-review', 'OUROBOROS_EFFORT_REVIEW', 'medium'],
+    ['s-effort-consciousness', 'OUROBOROS_EFFORT_CONSCIOUSNESS', 'low'], ['s-effort-scope-review', 'OUROBOROS_EFFORT_SCOPE_REVIEW', 'high'],
+    ['s-review-enforcement', 'OUROBOROS_REVIEW_ENFORCEMENT', 'advisory'], ['s-runtime-mode', 'OUROBOROS_RUNTIME_MODE', 'advanced'],
+];
+const NUMBER_FIELDS = [
+    ['s-workers', 'OUROBOROS_MAX_WORKERS', 5], ['s-soft-timeout', 'OUROBOROS_SOFT_TIMEOUT_SEC', 600], ['s-hard-timeout', 'OUROBOROS_HARD_TIMEOUT_SEC', 1800],
+    ['s-tool-timeout', 'OUROBOROS_TOOL_TIMEOUT_SEC', 120], ['s-local-port', 'LOCAL_MODEL_PORT', 8766], ['s-local-gpu-layers', 'LOCAL_MODEL_N_GPU_LAYERS', -1, true],
+    ['s-local-ctx', 'LOCAL_MODEL_CONTEXT_LENGTH', 16384],
+];
+
+function setupModelSlots() {
+    return Array.isArray(setupContract.modelSlots) ? setupContract.modelSlots : [];
+}
 
 function byId(id) {
     return document.getElementById(id);
@@ -35,11 +58,6 @@ function setStatus(text, tone = 'ok') {
 
 function readInt(id, fallback) {
     const value = parseInt(byId(id).value, 10);
-    return Number.isNaN(value) ? fallback : value;
-}
-
-function readFloat(id, fallback) {
-    const value = parseFloat(byId(id).value);
     return Number.isNaN(value) ? fallback : value;
 }
 
@@ -130,14 +148,6 @@ function renderExtensionSettingsSections(root, sections) {
         host.innerHTML = '<div class="muted">No extension settings registered.</div>';
         return;
     }
-    const cleanExtensionRoute = (value) => {
-        const route = String(value || '').trim().replace(/^\/+/, '');
-        const parts = route.split('/').filter(Boolean);
-        if (!route || route.includes('\\') || parts.some((part) => part === '.' || part === '..')) {
-            return '';
-        }
-        return parts.map(encodeURIComponent).join('/');
-    };
     const fieldHtml = (field) => {
         const name = escapeHtml(field.name || '');
         const label = escapeHtml(field.label || field.name || '');
@@ -161,12 +171,12 @@ function renderExtensionSettingsSections(root, sections) {
         }
         if (type === 'form' || type === 'action') {
             const fields = Array.isArray(component.fields) ? component.fields : [];
-            const route = cleanExtensionRoute(component.route || component.api_route || '');
-            if (!route) {
+            const rawRoute = component.route || component.api_route || '';
+            if (!cleanExtensionRoute(rawRoute)) {
                 return '<div class="settings-inline-note">Invalid extension settings route.</div>';
             }
             return `
-                <form class="settings-extension-form" data-extension-settings-form data-skill="${escapeHtml(section.skill || '')}" data-route="${escapeHtml(route)}">
+                <form class="settings-extension-form" data-extension-settings-form data-skill="${escapeHtml(section.skill || '')}" data-route="${escapeHtml(rawRoute)}">
                     <div class="form-grid two">${fields.map(fieldHtml).join('')}</div>
                     <button class="btn btn-primary btn-sm" type="submit">${escapeHtml(component.submit_label || component.label || 'Save')}</button>
                     <div class="settings-inline-status" data-extension-settings-status></div>
@@ -210,7 +220,7 @@ function renderExtensionSettingsSections(root, sections) {
             try {
                 const cleanRoute = cleanExtensionRoute(route);
                 if (!cleanRoute) throw new Error('invalid extension settings route');
-                const resp = await apiFetch(`/api/extensions/${encodeURIComponent(skill)}/${cleanRoute}`, {
+                const resp = await apiFetch(extensionRoutePath(skill, route), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(values),
@@ -244,12 +254,7 @@ function collectSecretValue(id, body) {
     if (value && !value.includes('...')) body[settingKey] = value;
 }
 
-// Suggestion pills for the model picker.  Should include every default
-// shipped in ``ouroboros/config.py::SETTINGS_DEFAULTS`` for the four
-// model lanes (main / code / light / fallback) so a future config bump
-// does not silently strand the UI on a stale id. Extra direct-provider
-// variants (``openai::gpt-5.5``, etc.) stay as useful pills even when
-// they are not the OpenRouter default.
+// Fallback picker pills mirror config defaults plus useful direct-provider ids.
 const SETTINGS_FALLBACK_MODELS = [
     'anthropic::claude-opus-4-6',
     'anthropic::claude-sonnet-4-6',
@@ -279,10 +284,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     bindSecretInputs(page);
     bindEffortSegments(page);
     bindLocalModelControls({ state });
-    // Populate the About sub-tab version label from /api/health so the
-    // existing #nav-version short label and the in-Settings detailed version
-    // string stay consistent. The fetch is best-effort — if it fails the
-    // label simply remains empty rather than blocking settings load.
+    // Best-effort About version from /api/health.
     apiFetch('/api/health')
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then((d) => {
@@ -293,11 +295,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     let currentSettings = {};
     let claudeCodePollStarted = false;
     let extensionRefreshPending = false;
-    // v4.33.1 status_label priority fix: even when the user has not configured
-    // ANTHROPIC_API_KEY, we still surface the runtime card when the backend
-    // reports status="error" (e.g. SDK below baseline). Otherwise a version-gate
-    // failure is silently hidden until the user adds a key, which defeats the
-    // whole point of prioritizing error over no_api_key in `status_label`.
+    // Runtime errors must surface even before ANTHROPIC_API_KEY is configured.
     let claudeRuntimeHasError = false;
     let settingsLoaded = false;
     let settingsBaseline = '';
@@ -314,9 +312,6 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     }
 
     function shouldShowClaudeRuntimeCard() {
-        // Show when the user has configured an Anthropic key, OR when the
-        // backend has reported a concrete runtime error that the user needs
-        // to see and repair (e.g. SDK below baseline, bundled CLI missing).
         return anthropicKeyConfigured() || claudeRuntimeHasError;
     }
 
@@ -350,10 +345,10 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         if (group) {
             group.title = hasBridge
                 ? 'Runtime mode changes require native launcher confirmation and restart.'
-                : 'Runtime mode is view-only here. Use the desktop app or edit settings.json while Ouroboros is stopped.';
+                : 'Runtime mode changes are saved through the owner endpoint and take effect after restart.';
         }
         document.querySelectorAll('[data-runtime-mode-group] [data-effort-value]').forEach((button) => {
-            button.disabled = !hasBridge;
+            button.disabled = false;
         });
     }
 
@@ -394,8 +389,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         const installed = Boolean(payload.installed);
         const busy = Boolean(payload.busy);
         const error = String(payload.error || '').trim();
-        // Track backend error state so `shouldShowClaudeRuntimeCard` can
-        // surface the card even without a configured API key.
+        // Backend error state controls visibility without an API key.
         claudeRuntimeHasError = Boolean(error);
         const message = String(payload.message || '').trim()
             || (ready ? 'Claude runtime ready.' : (installed ? 'Claude runtime available but not ready.' : 'Claude runtime not available.'));
@@ -415,9 +409,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     }
 
     async function refreshClaudeCodeStatus() {
-        // Always poll the backend — status errors (e.g. SDK below baseline) must
-        // surface even without a configured API key. The backend distinguishes
-        // "no_api_key" from "error" via the v4.33.1 `status_label` priority fix.
+        // Poll even without API key; backend separates no_api_key from errors.
         try {
             const resp = await apiFetch('/api/claude-code/status', { cache: 'no-store' });
             const data = await resp.json().catch(() => ({}));
@@ -438,11 +430,11 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         const hasBridge = Boolean(window.pywebview?.api?.request_auto_grant_reviewed_skills_change);
         const checkbox = byId('s-auto-grant-reviewed-skills');
         const label = checkbox?.closest('.local-toggle');
-        if (checkbox) checkbox.disabled = !hasBridge;
+        if (checkbox) checkbox.disabled = false;
         if (label) {
             label.title = hasBridge
-                ? 'Requires native confirmation. Applies only after a fresh skill review pass and only to manifest-declared grants for that exact content hash.'
-                : 'Reviewed-skill auto-grant requires the desktop launcher confirmation bridge. Stop Ouroboros and edit settings.json manually outside desktop mode.';
+                ? 'Requires native confirmation. Applies only after a fresh executable skill review and only to manifest-declared grants for that exact content hash.'
+                : 'Uses the owner endpoint. Applies only after a fresh executable skill review and only to manifest-declared grants for that exact content hash.';
         }
     }
 
@@ -451,58 +443,25 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         claudeCodePollStarted = true;
         refreshClaudeCodeStatus();
         setInterval(() => {
-            // Poll unconditionally so a below-baseline SDK stays visible even
-            // after the user clears the Anthropic key.
             refreshClaudeCodeStatus();
         }, 3000);
     }
 
     function applySettings(s) {
-        applyInputValue('s-openrouter', s.OPENROUTER_API_KEY);
-        applyInputValue('s-openai', s.OPENAI_API_KEY);
-        applyInputValue('s-openai-base-url', s.OPENAI_BASE_URL);
-        applyInputValue('s-openai-compatible-key', s.OPENAI_COMPATIBLE_API_KEY);
-        applyInputValue('s-openai-compatible-base-url', s.OPENAI_COMPATIBLE_BASE_URL);
-        applyInputValue('s-cloudru-key', s.CLOUDRU_FOUNDATION_MODELS_API_KEY);
-        applyInputValue('s-cloudru-base-url', s.CLOUDRU_FOUNDATION_MODELS_BASE_URL);
-        applyInputValue('s-anthropic', s.ANTHROPIC_API_KEY);
-        applyInputValue('s-network-password', s.OUROBOROS_NETWORK_PASSWORD);
-        applyInputValue('s-server-host', s.OUROBOROS_SERVER_HOST || '127.0.0.1');
-
-        applyInputValue('s-model', s.OUROBOROS_MODEL);
-        applyInputValue('s-model-code', s.OUROBOROS_MODEL_CODE);
-        applyInputValue('s-model-light', s.OUROBOROS_MODEL_LIGHT);
-        applyInputValue('s-model-fallback', s.OUROBOROS_MODEL_FALLBACK);
-        applyInputValue('s-claude-code-model', s.CLAUDE_CODE_MODEL);
-        byId('s-effort-task').value = s.OUROBOROS_EFFORT_TASK || 'medium';
-        byId('s-effort-evolution').value = s.OUROBOROS_EFFORT_EVOLUTION || 'high';
-        byId('s-effort-review').value = s.OUROBOROS_EFFORT_REVIEW || 'medium';
-        byId('s-effort-consciousness').value = s.OUROBOROS_EFFORT_CONSCIOUSNESS || 'low';
-        applyInputValue('s-review-models', s.OUROBOROS_REVIEW_MODELS);
-        applyInputValue('s-scope-review-model', s.OUROBOROS_SCOPE_REVIEW_MODEL);
-        byId('s-effort-scope-review').value = s.OUROBOROS_EFFORT_SCOPE_REVIEW || 'high';
-        byId('s-review-enforcement').value = s.OUROBOROS_REVIEW_ENFORCEMENT || 'advisory';
-        byId('s-runtime-mode').value = s.OUROBOROS_RUNTIME_MODE || 'advanced';
-        applyCheckboxValue('s-auto-grant-reviewed-skills', s.OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS);
-        applyInputValue('s-skills-repo-path', s.OUROBOROS_SKILLS_REPO_PATH);
-        applyInputValue('s-clawhub-registry-url', s.OUROBOROS_CLAWHUB_REGISTRY_URL);
-        if (s.OUROBOROS_MAX_WORKERS) byId('s-workers').value = s.OUROBOROS_MAX_WORKERS;
-        if (s.OUROBOROS_SOFT_TIMEOUT_SEC) byId('s-soft-timeout').value = s.OUROBOROS_SOFT_TIMEOUT_SEC;
-        if (s.OUROBOROS_HARD_TIMEOUT_SEC) byId('s-hard-timeout').value = s.OUROBOROS_HARD_TIMEOUT_SEC;
-        if (s.OUROBOROS_TOOL_TIMEOUT_SEC) byId('s-tool-timeout').value = s.OUROBOROS_TOOL_TIMEOUT_SEC;
-        applyInputValue('s-websearch-model', s.OUROBOROS_WEBSEARCH_MODEL);
-        applyInputValue('s-gh-repo', s.GITHUB_REPO);
+        setupContract = s?._meta?.setup_contract || setupContract || {};
         applySecretInputs(page, s);
-        applyInputValue('s-local-source', s.LOCAL_MODEL_SOURCE);
-        applyInputValue('s-local-filename', s.LOCAL_MODEL_FILENAME);
-        if (s.LOCAL_MODEL_PORT) byId('s-local-port').value = s.LOCAL_MODEL_PORT;
-        if (s.LOCAL_MODEL_N_GPU_LAYERS !== null && s.LOCAL_MODEL_N_GPU_LAYERS !== undefined) byId('s-local-gpu-layers').value = s.LOCAL_MODEL_N_GPU_LAYERS;
-        if (s.LOCAL_MODEL_CONTEXT_LENGTH) byId('s-local-ctx').value = s.LOCAL_MODEL_CONTEXT_LENGTH;
-        applyInputValue('s-local-chat-format', s.LOCAL_MODEL_CHAT_FORMAT);
-        applyCheckboxValue('s-local-main', s.USE_LOCAL_MAIN);
-        applyCheckboxValue('s-local-code', s.USE_LOCAL_CODE);
-        applyCheckboxValue('s-local-light', s.USE_LOCAL_LIGHT);
-        applyCheckboxValue('s-local-fallback', s.USE_LOCAL_FALLBACK);
+        INPUT_FIELDS.forEach(([id, key, fallback = '']) => applyInputValue(id, fallback && !s[key] ? fallback : s[key]));
+        VALUE_FIELDS.forEach(([id, key, fallback]) => { byId(id).value = s[key] || fallback; });
+        setupModelSlots().forEach((slot) => {
+            applyInputValue(slot.settingsInputId, s[slot.settingKey]);
+            applyCheckboxValue(slot.settingsToggleId, s[`USE_LOCAL_${slot.slot.toUpperCase()}`]);
+        });
+        applyCheckboxValue('s-auto-grant-reviewed-skills', s.OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS);
+        NUMBER_FIELDS.forEach(([id, key, fallback, allowFalsy]) => {
+            const value = s[key];
+            if (allowFalsy ? value !== null && value !== undefined : value) byId(id).value = value;
+            else byId(id).value = fallback;
+        });
         applyMcpSettings(s);
         resetSecretClearFlags(page);
         syncEffortSegments(page);
@@ -534,16 +493,13 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     }
 
     async function loadSettings() {
-        const [settingsResp, extResp] = await Promise.all([
-            apiFetch('/api/settings', { cache: 'no-store' }),
-            apiFetch('/api/extensions', { cache: 'no-store' }).catch(() => null),
+        const [data, extData] = await Promise.all([
+            apiClient.settings(),
+            apiClient.extensions().catch(() => ({})),
         ]);
-        const data = await settingsResp.json().catch(() => ({}));
-        const extData = extResp && extResp.ok ? await extResp.json().catch(() => ({})) : {};
         const sections = Array.isArray(extData?.live?.settings_sections)
             ? extData.live.settings_sections
             : [];
-        if (!settingsResp.ok) throw new Error(data.error || `HTTP ${settingsResp.status}`);
         currentSettings = data;
         applySettings(data);
         renderExtensionSettingsSections(page, sections);
@@ -555,11 +511,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         renderClaudeCodeUi();
         settingsLoaded = true;
         markSettingsDirty = updateSettingsDirtyState;
-    syncSettingsLoadState();
-        // Always start polling so a below-baseline SDK surfaces even before
-        // the user sets ANTHROPIC_API_KEY. `refreshClaudeCodeStatus` is now
-        // unconditional, and `shouldShowClaudeRuntimeCard` uses the runtime
-        // error signal to decide visibility.
+        syncSettingsLoadState();
         startClaudeCodePolling();
     }
 
@@ -606,48 +558,23 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     }
 
     function collectBody() {
+        const fieldValue = (id) => byId(id)?.value || '';
         const body = {
-            OUROBOROS_MODEL: byId('s-model').value,
-            OUROBOROS_MODEL_CODE: byId('s-model-code').value,
-            OUROBOROS_MODEL_LIGHT: byId('s-model-light').value,
-            OUROBOROS_MODEL_FALLBACK: byId('s-model-fallback').value,
-            CLAUDE_CODE_MODEL: byId('s-claude-code-model').value || 'claude-opus-4-6[1m]',
-            OUROBOROS_SERVER_HOST: (byId('s-server-host')?.value || '127.0.0.1').trim() || '127.0.0.1',
-            OUROBOROS_EFFORT_TASK: byId('s-effort-task').value,
-            OUROBOROS_EFFORT_EVOLUTION: byId('s-effort-evolution').value,
-            OUROBOROS_EFFORT_REVIEW: byId('s-effort-review').value,
-            OUROBOROS_EFFORT_CONSCIOUSNESS: byId('s-effort-consciousness').value,
-            OUROBOROS_REVIEW_MODELS: byId('s-review-models').value.trim(),
-            OUROBOROS_SCOPE_REVIEW_MODEL: byId('s-scope-review-model').value.trim(),
-            OUROBOROS_EFFORT_SCOPE_REVIEW: byId('s-effort-scope-review').value,
-            OUROBOROS_REVIEW_ENFORCEMENT: byId('s-review-enforcement').value,
             OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS: byId('s-auto-grant-reviewed-skills')?.checked ? 'true' : 'false',
-            // OUROBOROS_RUNTIME_MODE is owner-only: /api/settings still
-            // ignores it, while desktop mode changes go through the
-            // launcher-native confirmation bridge after normal settings save.
-            OUROBOROS_SKILLS_REPO_PATH: byId('s-skills-repo-path').value.trim(),
-            OUROBOROS_CLAWHUB_REGISTRY_URL: byId('s-clawhub-registry-url')?.value.trim() || '',
-            OUROBOROS_MAX_WORKERS: readInt('s-workers', 5),
-            OUROBOROS_SOFT_TIMEOUT_SEC: readInt('s-soft-timeout', 600),
-            OUROBOROS_HARD_TIMEOUT_SEC: readInt('s-hard-timeout', 1800),
-            OUROBOROS_TOOL_TIMEOUT_SEC: readInt('s-tool-timeout', 120),
-            OUROBOROS_WEBSEARCH_MODEL: byId('s-websearch-model').value.trim(),
-            GITHUB_REPO: byId('s-gh-repo').value,
-            LOCAL_MODEL_SOURCE: byId('s-local-source').value,
-            LOCAL_MODEL_FILENAME: byId('s-local-filename').value,
-            LOCAL_MODEL_PORT: readInt('s-local-port', 8766),
-            LOCAL_MODEL_N_GPU_LAYERS: readInt('s-local-gpu-layers', -1),
-            LOCAL_MODEL_CONTEXT_LENGTH: readInt('s-local-ctx', 16384),
-            LOCAL_MODEL_CHAT_FORMAT: byId('s-local-chat-format').value,
-            USE_LOCAL_MAIN: byId('s-local-main').checked,
-            USE_LOCAL_CODE: byId('s-local-code').checked,
-            USE_LOCAL_LIGHT: byId('s-local-light').checked,
-            USE_LOCAL_FALLBACK: byId('s-local-fallback').checked,
-            OPENAI_BASE_URL: byId('s-openai-base-url').value.trim(),
-            OPENAI_COMPATIBLE_BASE_URL: byId('s-openai-compatible-base-url').value.trim(),
-            CLOUDRU_FOUNDATION_MODELS_BASE_URL: byId('s-cloudru-base-url').value.trim(),
             ...collectMcpSettings(),
         };
+        setupModelSlots().forEach((slot) => {
+            body[slot.settingKey] = fieldValue(slot.settingsInputId);
+            body[`USE_LOCAL_${slot.slot.toUpperCase()}`] = Boolean(byId(slot.settingsToggleId)?.checked);
+        });
+        INPUT_FIELDS.forEach(([id, key, fallback = '']) => {
+            const value = fieldValue(id).trim();
+            body[key] = key === 'OUROBOROS_SERVER_HOST' ? value || fallback : value || (key === 'CLAUDE_CODE_MODEL' ? fallback : '');
+        });
+        VALUE_FIELDS
+            .filter(([, key]) => key !== 'OUROBOROS_RUNTIME_MODE')
+            .forEach(([id, key]) => { body[key] = fieldValue(id); });
+        NUMBER_FIELDS.forEach(([id, key, fallback]) => { body[key] = readInt(id, fallback); });
 
         page.querySelectorAll('[data-secret-setting]').forEach((input) => {
             collectSecretValue(input.id, body);
@@ -670,15 +597,15 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     async function saveRuntimeModeViaNativeBridgeIfNeeded() {
         const nextMode = byId('s-runtime-mode').value || 'advanced';
         const currentMode = currentSettings?.OUROBOROS_RUNTIME_MODE || 'advanced';
-        if (nextMode === currentMode) return null;
         const bridge = window.pywebview?.api?.request_runtime_mode_change;
-        if (!bridge) {
-            throw new Error(
-                'Runtime mode changes require the desktop launcher confirmation bridge. '
-                + 'Use the desktop app, or stop Ouroboros and edit settings.json manually.'
-            );
+        if (nextMode === currentMode) {
+            return bridge ? await bridge(nextMode) : await apiClient.ownerRuntimeMode(nextMode);
         }
-        const result = await bridge(nextMode);
+        const result = bridge
+            ? await bridge(nextMode)
+            : (confirm(`Change Ouroboros runtime mode from ${currentMode} to ${nextMode}? The change takes effect after restart.`)
+                ? await apiClient.ownerRuntimeMode(nextMode)
+                : { ok: false, error: 'Runtime mode change cancelled.' });
         if (!result || result.ok !== true) {
             throw new Error(result?.error || 'Runtime mode change was cancelled.');
         }
@@ -692,13 +619,11 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         const currentEnabled = isTruthySetting(currentSettings?.OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS);
         if (nextEnabled === currentEnabled) return null;
         const bridge = window.pywebview?.api?.request_auto_grant_reviewed_skills_change;
-        if (!bridge) {
-            throw new Error(
-                'Reviewed-skill auto-grant changes require the desktop launcher confirmation bridge. '
-                + 'Use the desktop app, or stop Ouroboros and edit settings.json manually.'
-            );
-        }
-        const result = await bridge(nextEnabled);
+        const result = bridge
+            ? await bridge(nextEnabled)
+            : (confirm(`${nextEnabled ? 'Enable' : 'Disable'} reviewed-skill auto-grant? It only applies after a fresh executable review for the current content hash.`)
+                ? await apiClient.ownerAutoGrant(nextEnabled)
+                : { ok: false, error: 'Reviewed-skill auto-grant change cancelled.' });
         if (!result || result.ok !== true) {
             throw new Error(result?.error || 'Reviewed-skill auto-grant change was cancelled.');
         }
@@ -919,13 +844,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         const body = collectBody();
 
         try {
-            const resp = await apiFetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            const data = await apiClient.saveSettings(body);
             let runtimeModeResult = null;
             let runtimeModeError = '';
             let autoGrantResult = null;

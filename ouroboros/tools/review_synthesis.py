@@ -1,19 +1,7 @@
-"""review_synthesis.py — LLM-based synthesis of raw reviewer findings into canonical issues.
+"""Synthesize raw reviewer claims into canonical durable review issues.
 
-Phase 1 of the "claim-first, canonical-issue-second" review pipeline redesign.
-
-Design contract:
-  * Reviewers produce *claims* (raw evidence-backed findings). They are hypotheses,
-    not truth-by-default.
-  * This module provides one function: ``synthesize_to_canonical_issues``.
-    It merges overlapping claims from multiple reviewers (triad + scope) into
-    a deduplicated canonical list before they become durable obligations in state.
-  * The synthesizer uses a single cheap LLM call (OUROBOROS_MODEL_LIGHT, low effort).
-  * On any failure (import error, parse error, timeout, API error) it falls back
-    to returning the raw findings unchanged — the system is no worse than before.
-  * Existing ``_update_obligations_from_attempt`` and ``_resolve_matching_obligations``
-    logic is untouched; this runs BEFORE obligations are created, so de-duplication
-    happens by construction rather than post-hoc.
+Reviewer findings are claims; one cheap LLM deduplicates before obligations are
+created. On any failure, raw findings pass through unchanged.
 """
 
 from __future__ import annotations
@@ -27,11 +15,9 @@ from ouroboros.tools.review_helpers import emit_review_usage
 
 log = logging.getLogger(__name__)
 
-# Maximum number of claims we will send to the synthesizer in one call.
-# Avoids runaway cost when a triad of 3 models each emit many findings.
+# Bound cost and avoid mixed canonical/raw output on oversized finding sets.
 _MAX_CLAIMS_FOR_SYNTHESIS = 30
 
-# Minimum number of claims below which synthesis is skipped (not worth the call).
 _MIN_CLAIMS_FOR_SYNTHESIS = 2
 
 _SYNTHESIS_PROMPT_TEMPLATE = (
@@ -86,12 +72,7 @@ def _redact(text: str) -> str:
 
 
 def _format_obligations(open_obligations: List[Any]) -> str:
-    """Render open obligations as compact JSON for the synthesis prompt.
-
-    Obligation reasons are redacted for secrets before serialization so that
-    previously-seen reviewer text (which may echo diff content) does not leak
-    credentials to the synthesis model.
-    """
+    """Render open obligations as compact secret-redacted JSON."""
     if not open_obligations:
         return "[]"
     from ouroboros.utils import truncate_review_artifact
@@ -111,10 +92,7 @@ def _format_obligations(open_obligations: List[Any]) -> str:
 
 
 def _format_claims(findings: List[Dict[str, Any]]) -> str:
-    """Render raw findings as compact JSON for the synthesis prompt.
-
-    Reason strings are redacted for secrets before serialization.
-    """
+    """Render raw findings as compact JSON with secret-redacted reasons."""
     try:
         safe = []
         for f in findings:
@@ -128,13 +106,7 @@ def _format_claims(findings: List[Dict[str, Any]]) -> str:
 
 
 def _normalize_evidence(value: Any) -> List[str]:
-    """Normalize evidence_from_reviewers to a flat list of strings.
-
-    Handles the case where the synthesizer returns a bare string (e.g. ``"triad"``)
-    instead of a JSON array — ``list("triad")`` would produce ``['t','r','i','a','d']``,
-    corrupting provenance. This function wraps bare strings in a one-element list and
-    filters any non-string members from arrays.
-    """
+    """Normalize evidence_from_reviewers without splitting bare strings into chars."""
     if not value:
         return []
     if isinstance(value, str):
@@ -151,7 +123,6 @@ def _parse_synthesis_output(raw: str) -> Optional[List[Dict[str, Any]]]:
     parsed = extract_json_array(raw)
     if not isinstance(parsed, list):
         return None
-    # Validate each entry has at minimum an "item" field
     result = []
     for entry in parsed:
         if not isinstance(entry, dict):
@@ -164,12 +135,9 @@ def _parse_synthesis_output(raw: str) -> Optional[List[Dict[str, Any]]]:
             "reason": str(entry.get("reason", "") or ""),
             "obligation_id": str(entry.get("obligation_id", "") or ""),
             "evidence_from_reviewers": _normalize_evidence(entry.get("evidence_from_reviewers")),
-            # Default verdict to "FAIL" so _update_obligations_from_attempt
-            # (which filters on verdict == "FAIL") creates durable obligations
-            # from synthesized findings.  Synthesizer may omit this field.
+            # FAIL default ensures synthesized findings create obligations downstream.
             "verdict": str(entry.get("verdict", "") or "FAIL"),
         }
-        # Carry forward any extra fields (tag, model) that downstream uses
         for key in ("tag", "model"):
             if key in entry:
                 canonical[key] = entry[key]
@@ -183,37 +151,14 @@ def synthesize_to_canonical_issues(
     open_obligations: Optional[List[Any]] = None,
     ctx: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Synthesize raw multi-reviewer findings into a deduplicated canonical list.
-
-    This is a pure transformation step: the input findings are the claims from
-    all triad + scope reviewers; the output is a smaller, deduplicated list
-    where one root cause = one entry.
-
-    On any failure the original ``critical_findings`` list is returned unchanged
-    (fail-open contract) so the commit pipeline continues working exactly as before.
-
-    Args:
-        critical_findings: Raw findings from all reviewers (list of dicts).
-        open_obligations: Current open ObligationItem list from durable state.
-            Used to map findings to existing obligation_ids, preventing ID rotation.
-        ctx: ToolContext (optional). Used to route the LLM call via the shared
-            ``LLMClient``. If None, a best-effort import is attempted.
-
-    Returns:
-        Deduplicated canonical findings list (same dict format as input).
-    """
+    """Return deduplicated findings, or original findings on any synthesis failure."""
     if not critical_findings:
         return critical_findings
 
-    # Skip synthesis when there are too few claims to bother
     if len(critical_findings) < _MIN_CLAIMS_FOR_SYNTHESIS:
         return critical_findings
 
-    # Skip synthesis when there are too many claims: synthesizing a subset and
-    # appending the raw tail would produce a hybrid list that mixes canonical
-    # deduped entries with unsynthesized raw ones, making downstream dedup
-    # unpredictable.  Return original unchanged — better no synthesis than
-    # a silently corrupted mixed list.
+    # Oversized sets pass through unchanged; no hybrid canonical/raw tail.
     if len(critical_findings) > _MAX_CLAIMS_FOR_SYNTHESIS:
         log.debug(
             "review_synthesis: %d claims exceeds limit %d — skipping synthesis, "
@@ -259,27 +204,16 @@ def synthesize_to_canonical_issues(
 
 
 def _call_synthesis_llm(prompt: str, *, ctx: Any = None) -> Optional[str]:
-    """Make a cheap LLM call to synthesize findings. Returns raw text or None.
-
-    Uses the shared ``LLMClient`` from ``ouroboros.llm`` — same routing layer
-    used by reflection, consolidation, and review tools.  ``LLMClient()`` takes
-    no positional arguments; the model is passed to ``.chat()``.
-
-    Budget tracking: emits a ``llm_usage`` event to ``ctx.event_queue`` /
-    ``ctx.pending_events`` (fallback chain) so synthesis spend reaches the
-    standard cost-accounting pipeline (same pattern as plan_review, reflection).
-    """
+    """Call the light LLM and emit usage so synthesis spend is accounted."""
     try:
         from ouroboros.llm import LLMClient
         from ouroboros.config import get_light_model
 
         model = get_light_model()
 
-        # LLMClient() has no model/queue constructor args — those go to .chat()
         client = LLMClient()
 
-        # Low reasoning effort, bounded but generous token budget for dedup.
-        # no_proxy=True is fork-safe (avoids SCDynamicStore in worker processes).
+        # no_proxy avoids macOS fork-safety crashes in worker processes.
         msg, usage = client.chat(
             messages=[{"role": "user", "content": prompt}],
             model=model,
@@ -288,7 +222,6 @@ def _call_synthesis_llm(prompt: str, *, ctx: Any = None) -> Optional[str]:
             no_proxy=True,
         )
 
-        # Emit budget event so synthesis spend reaches cost accounting.
         if _has_billable_usage(usage):
             resolved_model = str((usage or {}).get("resolved_model") or "") or model
             provider = str((usage or {}).get("provider") or "") if isinstance(usage, dict) else ""
@@ -305,7 +238,6 @@ def _call_synthesis_llm(prompt: str, *, ctx: Any = None) -> Optional[str]:
         content = msg.get("content") if isinstance(msg, dict) else None
         if not content:
             return None
-        # Handle both plain string and list-of-blocks content
         if isinstance(content, str):
             return content
         if isinstance(content, list):

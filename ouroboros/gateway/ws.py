@@ -141,28 +141,10 @@ async def _dispatch_extension_message(
             raise KeyError(msg_type)
         state = reconcile_extension(skill_name, drive_root, load_settings, repo_path=repo_path)
         if not state.get("desired_live"):
-            await websocket.send_text(json.dumps({
-                "type": "log",
-                "data": {
-                    "level": "warning",
-                    "message": (
-                        f"extension WS handler {msg_type!r} is not live: "
-                        f"{state.get('reason')}"
-                    ),
-                },
-            }))
+            await websocket.send_text(json.dumps({"type": "log", "data": {"level": "warning", "message": f"extension WS handler {msg_type!r} is not live: {state.get('reason')}"}}))
             return True
         if state.get("action") == "extension_load_error" or not state.get("live_loaded"):
-            await websocket.send_text(json.dumps({
-                "type": "log",
-                "data": {
-                    "level": "warning",
-                    "message": (
-                        f"extension WS handler {msg_type!r} failed to go live: "
-                        f"{state.get('load_error') or state.get('reason')}"
-                    ),
-                },
-            }))
+            await websocket.send_text(json.dumps({"type": "log", "data": {"level": "warning", "message": f"extension WS handler {msg_type!r} failed to go live: {state.get('load_error') or state.get('reason')}"}}))
             return True
         handler_spec = list_ws_handlers().get(msg_type)
     except Exception:
@@ -172,13 +154,7 @@ async def _dispatch_extension_message(
         extra = ""
         if isinstance(state, dict) and state.get("action") == "extension_load_error":
             extra = f" (load_error={state.get('load_error')})"
-        await websocket.send_text(json.dumps({
-            "type": "log",
-            "data": {
-                "level": "warning",
-                "message": f"no extension WS handler for {msg_type!r}{extra}",
-            },
-        }))
+        await websocket.send_text(json.dumps({"type": "log", "data": {"level": "warning", "message": f"no extension WS handler for {msg_type!r}{extra}"}}))
         return True
 
     handler = handler_spec.get("handler")
@@ -189,13 +165,7 @@ async def _dispatch_extension_message(
         if result is not None:
             await websocket.send_text(json.dumps({"type": msg_type + ".reply", "data": result}))
     except Exception as exc:
-        await websocket.send_text(json.dumps({
-            "type": "log",
-            "data": {
-                "level": "error",
-                "message": f"extension WS handler {msg_type!r} raised: {type(exc).__name__}: {exc}",
-            },
-        }))
+        await websocket.send_text(json.dumps({"type": "log", "data": {"level": "error", "message": f"extension WS handler {msg_type!r} raised: {type(exc).__name__}: {exc}"}}))
     return True
 
 

@@ -1,4 +1,4 @@
-const TONES = new Set(['ok', 'danger', 'warn', 'muted', 'info']);
+import { normalizeTone } from './ui_helpers.js';
 
 function getStack() {
     let stack = document.getElementById('toast-stack');
@@ -16,7 +16,7 @@ function getStack() {
 export function showToast(message, tone = 'info', { ttl = 6000 } = {}) {
     const stack = getStack();
     const toast = document.createElement('div');
-    const cleanTone = TONES.has(tone) ? tone : 'info';
+    const cleanTone = normalizeTone(tone || 'info', 'info');
     toast.className = `toast toast-${cleanTone}`;
     toast.setAttribute('role', cleanTone === 'danger' ? 'alert' : 'status');
     toast.textContent = message || '';

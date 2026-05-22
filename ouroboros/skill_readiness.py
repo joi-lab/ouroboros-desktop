@@ -1,18 +1,17 @@
-"""Unified skill readiness checks shared by loop and runtime gates."""
-
 from __future__ import annotations
 
 import pathlib
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from ouroboros.skill_review_status import skill_review_gate
 
+log = logging.getLogger(__name__)
+
 
 @dataclass
 class SkillReadiness:
-    """Execution/finalization readiness plus human-readable blockers."""
-
     ready: bool
     blockers: List[str] = field(default_factory=list)
     agent_fixable_blockers: List[str] = field(default_factory=list)
@@ -28,7 +27,6 @@ def skill_readiness_for_execution(
     require_enabled: bool = True,
     require_grants: bool = True,
 ) -> SkillReadiness:
-    """Return the single readiness verdict for skill execution/finalization."""
     blockers: List[str] = []
     agent_fixable: List[str] = []
     owner_action: List[str] = []
@@ -64,6 +62,25 @@ def skill_readiness_for_execution(
             msg = f"missing_grants:keys={missing_keys},permissions={missing_permissions}"
             blockers.append(msg)
             owner_action.append(msg)
+
+    try:
+        from ouroboros.marketplace.install_specs import install_specs_hash
+        from ouroboros.marketplace.isolated_deps import read_deps_state
+        from ouroboros.skill_dependencies import auto_install_specs_for_skill
+
+        auto_specs = auto_install_specs_for_skill(pathlib.Path(drive_root), skill)
+        if auto_specs:
+            deps_state = read_deps_state(pathlib.Path(drive_root), skill.name, skill.skill_dir)
+            deps_status = str(deps_state.get("status") or "pending")
+            if deps_status != "installed":
+                msg = f"deps_not_ready:{deps_status}"
+                blockers.append(msg)
+                agent_fixable.append(msg)
+            elif deps_state.get("specs_hash") != install_specs_hash(auto_specs):
+                blockers.append("deps_stale")
+                agent_fixable.append("deps_stale")
+    except Exception:
+        log.debug("skill readiness deps probe failed", exc_info=True)
 
     return SkillReadiness(
         ready=not blockers,

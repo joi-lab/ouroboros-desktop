@@ -54,7 +54,7 @@ _cached_pricing = None
 _pricing_lock = threading.Lock()
 
 
-def get_pricing() -> Dict[str, Tuple[float, float, float]]:
+def get_pricing() -> Dict[str, Tuple[float, ...]]:
     """
     Lazy-load pricing. On first call, attempts to fetch from OpenRouter API.
     Falls back to static pricing if fetch fails.
@@ -85,7 +85,8 @@ def get_pricing() -> Dict[str, Tuple[float, float, float]]:
 
 
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
-                  cached_tokens: int = 0, cache_write_tokens: int = 0) -> float:
+                  cached_tokens: int = 0, cache_write_tokens: int = 0,
+                  prompt_cache_ttl: Optional[str] = None) -> float:
     """Estimate cost from token counts using known pricing. Returns 0 if model unknown."""
     model_pricing = get_pricing()
     # Try exact match first
@@ -102,12 +103,21 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
         pricing = best_match
     if not pricing:
         return 0.0
-    input_price, cached_price, output_price = pricing
-    # Non-cached input tokens = prompt_tokens - cached_tokens
-    regular_input = max(0, prompt_tokens - cached_tokens)
+    input_price = float(pricing[0])
+    cached_price = float(pricing[1])
+    explicit_write_price = float(pricing[2]) if len(pricing) >= 4 else None
+    output_price = float(pricing[3] if len(pricing) >= 4 else pricing[2])
+    if explicit_write_price is not None:
+        write_price = explicit_write_price
+    elif str(model or "").strip().startswith(("anthropic/", "anthropic::")):
+        write_price = input_price * (2.0 if str(prompt_cache_ttl or "").strip().lower() == "1h" else 1.25)
+    else:
+        write_price = input_price
+    regular_input = max(0, prompt_tokens - cached_tokens - cache_write_tokens)
     cost = (
         regular_input * input_price / 1_000_000
         + cached_tokens * cached_price / 1_000_000
+        + cache_write_tokens * write_price / 1_000_000
         + completion_tokens * output_price / 1_000_000
     )
     return round(cost, 6)
@@ -197,6 +207,7 @@ def emit_llm_usage_event(
     category: str = "task",
     provider: Optional[str] = None,
     source: str = "loop",
+    cost_estimated: Optional[bool] = None,
 ) -> None:
     """
     Emit llm_usage event to the event queue.
@@ -226,8 +237,13 @@ def emit_llm_usage_event(
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cached_tokens": int(usage.get("cached_tokens") or 0),
             "cache_write_tokens": int(usage.get("cache_write_tokens") or 0),
+            "prompt_cache_ttl": str(usage.get("prompt_cache_ttl") or ""),
             "cost": cost,
-            "cost_estimated": not bool(usage.get("cost")),
+            "cost_estimated": (
+                bool(cost_estimated)
+                if cost_estimated is not None
+                else bool(usage.get("cost_estimated")) or not bool(usage.get("cost"))
+            ),
             "usage": usage,
             "category": category,
         })

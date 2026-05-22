@@ -1,10 +1,3 @@
-"""
-Ouroboros — Memory.
-
-Scratchpad (append-blocks), identity, chat history, dialogue blocks.
-Contract: load scratchpad/identity, chat_history().
-"""
-
 from __future__ import annotations
 
 import json
@@ -16,8 +9,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
-from ouroboros.utils import utc_now_iso, read_text, write_text, append_jsonl, short, read_json_dict
-
+from ouroboros.utils import append_jsonl, iter_jsonl_objects, read_json_dict, read_text, short, utc_now_iso, write_text
 from ouroboros.platform_layer import (
     file_lock_exclusive as _lock_ex,
     file_lock_shared as _lock_sh,
@@ -30,51 +22,30 @@ _SCRATCHPAD_MAX_BLOCKS = 10
 
 
 class Memory:
-    """Ouroboros memory management: scratchpad, identity, chat history, logs."""
-
     def __init__(self, drive_root: pathlib.Path, repo_dir: Optional[pathlib.Path] = None):
         self.drive_root = drive_root
         self.repo_dir = repo_dir
 
-    # --- Paths ---
-
     def _memory_path(self, rel: str) -> pathlib.Path:
         return (self.drive_root / "memory" / rel).resolve()
 
-    def scratchpad_path(self) -> pathlib.Path:
-        return self._memory_path("scratchpad.md")
-
-    def scratchpad_blocks_path(self) -> pathlib.Path:
-        return self._memory_path("scratchpad_blocks.json")
-
-    def identity_path(self) -> pathlib.Path:
-        return self._memory_path("identity.md")
-
-    def world_path(self) -> pathlib.Path:
-        return self._memory_path("WORLD.md")
-
-    def journal_path(self) -> pathlib.Path:
-        return self._memory_path("scratchpad_journal.jsonl")
-
-    def identity_journal_path(self) -> pathlib.Path:
-        return self._memory_path("identity_journal.jsonl")
-
-    def logs_path(self, name: str) -> pathlib.Path:
-        return (self.drive_root / "logs" / name).resolve()
-
-    # --- Scratchpad: append-block model ---
+    def scratchpad_path(self) -> pathlib.Path: return self._memory_path("scratchpad.md")
+    def scratchpad_blocks_path(self) -> pathlib.Path: return self._memory_path("scratchpad_blocks.json")
+    def identity_path(self) -> pathlib.Path: return self._memory_path("identity.md")
+    def world_path(self) -> pathlib.Path: return self._memory_path("WORLD.md")
+    def journal_path(self) -> pathlib.Path: return self._memory_path("scratchpad_journal.jsonl")
+    def identity_journal_path(self) -> pathlib.Path: return self._memory_path("identity_journal.jsonl")
+    def logs_path(self, name: str) -> pathlib.Path: return (self.drive_root / "logs" / name).resolve()
 
     def load_scratchpad(self) -> str:
-        """Load the auto-generated scratchpad.md for context injection."""
-        p = self.scratchpad_path()
-        if p.exists():
-            return read_text(p)
+        path = self.scratchpad_path()
+        if path.exists():
+            return read_text(path)
         default = self._default_scratchpad()
-        write_text(p, default)
+        write_text(path, default)
         return default
 
     def load_scratchpad_blocks(self) -> List[Dict[str, Any]]:
-        """Load raw scratchpad blocks from JSON (file-locked)."""
         bp = self.scratchpad_blocks_path()
         if not bp.exists():
             return []
@@ -113,7 +84,6 @@ class Memory:
         )
 
     def append_scratchpad_block(self, content: str, source: str = "task") -> Dict[str, Any]:
-        """Append a block to scratchpad. Returns the new block. File-locked, FIFO rotation."""
         bp = self.scratchpad_blocks_path()
         bp.parent.mkdir(parents=True, exist_ok=True)
 
@@ -176,7 +146,6 @@ class Memory:
 
         self.regenerate_scratchpad_md()
 
-        # Write total scratchpad size to journal for evolution metrics interpolation
         try:
             total_chars = sum(len(b.get("content", "")) for b in self.load_scratchpad_blocks())
             append_jsonl(self.journal_path(), {
@@ -190,7 +159,6 @@ class Memory:
         return new_block
 
     def regenerate_scratchpad_md(self) -> None:
-        """Rebuild scratchpad.md from current blocks (newest-first for context)."""
         blocks = self.load_scratchpad_blocks()
         if not blocks:
             write_text(self.scratchpad_path(), self._default_scratchpad())
@@ -207,18 +175,13 @@ class Memory:
         write_text(self.scratchpad_path(), "\n".join(parts))
 
     def save_scratchpad(self, content: str) -> None:
-        """Legacy full-overwrite (used only by migration/bootstrap)."""
         write_text(self.scratchpad_path(), content)
 
-    # --- Dialogue blocks ---
-
     def load_dialogue_blocks(self) -> List[Dict[str, Any]]:
-        """Load dialogue_blocks.json (block-wise chat history)."""
         path = self.drive_root / "memory" / "dialogue_blocks.json"
         return self._load_json_blocks(path)
 
     def load_dialogue_meta(self) -> Dict[str, Any]:
-        """Load dialogue_meta.json consolidation cursor metadata."""
         path = self.drive_root / "memory" / "dialogue_meta.json"
         return read_json_dict(path) or {}
 
@@ -226,39 +189,31 @@ class Memory:
         if not path.exists():
             return []
         try:
-            data = json.loads(read_text(path))
-            return data if isinstance(data, list) else []
+            data = json.loads(read_text(path)); return data if isinstance(data, list) else []
         except (json.JSONDecodeError, ValueError):
             log.warning("Corrupt blocks file %s", path)
             return []
 
     @staticmethod
     def format_blocks_as_markdown(blocks: List[Dict[str, Any]]) -> str:
-        """Format block list into markdown for LLM context."""
-        parts = []
-        for b in blocks:
-            parts.append(b.get("content", ""))
-        return "\n\n".join(parts)
+        return "\n\n".join(b.get("content", "") for b in blocks)
 
     def load_identity(self) -> str:
-        p = self.identity_path()
-        if p.exists():
-            return read_text(p)
+        path = self.identity_path()
+        if path.exists():
+            return read_text(path)
         default = self._default_identity()
-        write_text(p, default)
+        write_text(path, default)
         return default
 
     def load_world_profile(self) -> str:
-        """Load the stable host/environment profile, if present."""
         p = self.world_path()
         return read_text(p) if p.exists() else ""
 
     def ensure_files(self) -> None:
-        """Create memory files if they don't exist."""
-        if not self.scratchpad_path().exists():
-            write_text(self.scratchpad_path(), self._default_scratchpad())
-        if not self.identity_path().exists():
-            write_text(self.identity_path(), self._default_identity())
+        for path, default in ((self.scratchpad_path(), self._default_scratchpad), (self.identity_path(), self._default_identity)):
+            if not path.exists():
+                write_text(path, default())
         if not self.world_path().exists():
             try:
                 from ouroboros.world_profiler import generate_world_profile
@@ -266,34 +221,17 @@ class Memory:
                 generate_world_profile(str(self.world_path()))
             except Exception:
                 log.debug("Failed to generate WORLD.md during memory bootstrap", exc_info=True)
-        if not self.journal_path().exists():
-            write_text(self.journal_path(), "")
-        if not self.identity_journal_path().exists():
-            write_text(self.identity_journal_path(), "")
-
-    # --- Chat history ---
+        for path in (self.journal_path(), self.identity_journal_path()):
+            if not path.exists():
+                write_text(path, "")
 
     def chat_history(self, count: int = 100, offset: int = 0, search: str = "") -> str:
-        """Read from logs/chat.jsonl. count messages, offset from end, filter by search."""
         chat_path = self.logs_path("chat.jsonl")
         if not chat_path.exists():
             return "(chat history is empty)"
 
         try:
-            raw_lines = chat_path.read_text(encoding="utf-8").strip().split("\n")
-            entries = []
-            for line in raw_lines:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    log.debug(f"Failed to parse JSON line in chat_history: {line[:100]}")
-                    continue
-
-            # Filter out A2A synthetic traffic — only human dialogue
-            entries = [e for e in entries if not is_a2a_chat_id(e.get("chat_id"))]
+            entries = self._read_jsonl_entries("chat.jsonl", exclude_a2a=True)
 
             if search:
                 search_lower = search.lower()
@@ -307,48 +245,33 @@ class Memory:
             if not entries:
                 return "(no messages matching query)"
 
-            lines = []
-            for e in entries:
-                dir_raw = str(e.get("direction", "")).lower()
-                ts = str(e.get("ts", ""))[:16]
-                raw_text = str(e.get("text", ""))
-                if dir_raw in ("out", "outgoing"):
-                    lines.append(f"→ [{ts}] {raw_text}")
-                elif dir_raw == "system":
-                    entry_type = str(e.get("type", "")).strip() or "system"
-                    lines.append(f"📋 [{ts}] [{entry_type}] {raw_text}")
-                else:
-                    username = e.get("username") or e.get("author") or "User"
-                    lines.append(f"← [{ts}] [{username}] {raw_text}")
-
+            lines = [self._format_chat_line(e, compact=False) for e in entries]
             return f"Showing {len(entries)} messages:\n\n" + "\n".join(lines)
         except Exception as e:
             return f"(error reading history: {e})"
 
-    # --- JSONL tail reading ---
-
-    def read_jsonl_tail(self, log_name: str, max_entries: int = 100) -> List[Dict[str, Any]]:
-        """Read the last max_entries records from a JSONL file."""
+    def _read_jsonl_entries(
+        self,
+        log_name: str,
+        max_entries: Optional[int] = None,
+        exclude_a2a: bool = False,
+    ) -> List[Dict[str, Any]]:
         path = self.logs_path(log_name)
         if not path.exists():
             return []
         try:
-            lines = path.read_text(encoding="utf-8").strip().split("\n")
-            tail = lines[-max_entries:] if max_entries < len(lines) else lines
             entries = []
-            for line in tail:
-                line = line.strip()
-                if not line:
+            for entry in iter_jsonl_objects(path, max_entries=max_entries):
+                if exclude_a2a and is_a2a_chat_id(entry.get("chat_id")):
                     continue
-                try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    log.debug(f"Failed to parse JSON line in read_jsonl_tail: {line[:100]}", exc_info=True)
-                    continue
+                entries.append(entry)
             return entries
         except Exception:
-            log.warning(f"Failed to read JSONL tail from {log_name}", exc_info=True)
+            log.warning("Failed to read JSONL entries from %s", log_name, exc_info=True)
             return []
+
+    def read_jsonl_tail(self, log_name: str, max_entries: int = 100) -> List[Dict[str, Any]]:
+        return self._read_jsonl_entries(log_name, max_entries=max_entries)
 
     def read_jsonl_tail_after_offset(
         self,
@@ -356,54 +279,21 @@ class Memory:
         offset: int,
         max_entries: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Read up to max_entries records after a consolidation entry offset.
-
-        The dialogue consolidator persists the number of non-A2A chat entries
-        it has already summarized. Context should show that prefix through
-        dialogue blocks and keep only the not-yet-consolidated suffix verbatim.
-        If the cursor looks stale after log rotation, fall back to the normal
-        tail so no recent dialogue silently disappears.
-        """
-        path = self.logs_path(log_name)
-        if not path.exists():
-            return []
-        try:
-            lines = path.read_text(encoding="utf-8").strip().split("\n")
-            entries = []
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except Exception:
-                    log.debug(
-                        "Failed to parse JSON line in read_jsonl_tail_after_offset: %s",
-                        line[:100],
-                        exc_info=True,
-                    )
-                    continue
-                if is_a2a_chat_id(entry.get("chat_id")):
-                    continue
-                entries.append(entry)
-            if offset <= 0:
-                return entries[-max_entries:] if max_entries < len(entries) else entries
-            if offset > len(entries):
-                log.warning(
-                    "Dialogue consolidation offset %s exceeds %s filtered entry count %s; using plain tail",
-                    offset,
-                    log_name,
-                    len(entries),
-                )
-                return entries[-max_entries:] if max_entries < len(entries) else entries
-            suffix = entries[offset:]
-            return suffix[-max_entries:] if max_entries < len(suffix) else suffix
-        except Exception:
-            log.warning("Failed to read JSONL tail after offset from %s", log_name, exc_info=True)
-            return []
+        entries = self._read_jsonl_entries(log_name, exclude_a2a=True)
+        if offset <= 0:
+            return entries[-max_entries:] if max_entries < len(entries) else entries
+        if offset > len(entries):
+            log.warning(
+                "Dialogue consolidation offset %s exceeds %s filtered entry count %s; using plain tail",
+                offset,
+                log_name,
+                len(entries),
+            )
+            return entries[-max_entries:] if max_entries < len(entries) else entries
+        suffix = entries[offset:]
+        return suffix[-max_entries:] if max_entries < len(suffix) else suffix
 
     def jsonl_generation_signature(self, log_name: str) -> Dict[str, Any]:
-        """Return a small signature for the current JSONL generation."""
         path = self.logs_path(log_name)
         if not path.exists():
             return {}
@@ -422,38 +312,32 @@ class Memory:
         except OSError:
             return {}
 
-    # --- Log summarization ---
-
     def summarize_chat(self, entries: List[Dict[str, Any]]) -> str:
         if not entries:
             return ""
-        lines = []
-        for e in entries[-1000:]:
-            dir_raw = str(e.get("direction", "")).lower()
-            ts_full = e.get("ts", "")
-            ts_hhmm = ts_full[11:16] if len(ts_full) >= 16 else ""
-            raw_text = str(e.get("text", ""))
-            if dir_raw in ("out", "outgoing"):
-                lines.append(f"→ {ts_hhmm} {raw_text}")
-            elif dir_raw == "system":
-                entry_type = str(e.get("type", "")).strip() or "system"
-                lines.append(f"📋 {ts_hhmm} [{entry_type}] {raw_text}")
-            else:
-                username = e.get("username") or e.get("author") or "User"
-                lines.append(f"← {ts_hhmm} [{username}] {raw_text}")
-        return "\n".join(lines)
+        return "\n".join(self._format_chat_line(e, compact=True) for e in entries[-1000:])
+
+    @staticmethod
+    def _format_chat_line(e: Dict[str, Any], *, compact: bool) -> str:
+        dir_raw = str(e.get("direction", "")).lower()
+        ts_full = str(e.get("ts", ""))
+        ts = (ts_full[11:16] if len(ts_full) >= 16 else "") if compact else ts_full[:16]
+        raw_text = str(e.get("text", ""))
+        if dir_raw in ("out", "outgoing"):
+            return f"→ {ts} {raw_text}" if compact else f"→ [{ts}] {raw_text}"
+        if dir_raw == "system":
+            entry_type = str(e.get("type", "")).strip() or "system"
+            return f"📋 {ts} [{entry_type}] {raw_text}" if compact else f"📋 [{ts}] [{entry_type}] {raw_text}"
+        username = e.get("username") or e.get("author") or "User"
+        return f"← {ts} [{username}] {raw_text}" if compact else f"← [{ts}] [{username}] {raw_text}"
 
     def summarize_progress(self, entries: List[Dict[str, Any]], limit: int = 15) -> str:
-        """Summarize progress.jsonl entries (Ouroboros's self-talk / progress messages)."""
         if not entries:
             return ""
-        lines = []
-        for e in entries[-limit:]:
-            ts_full = e.get("ts", "")
-            ts_hhmm = ts_full[11:16] if len(ts_full) >= 16 else ""
-            text = short(str(e.get("text", "")), 800)
-            lines.append(f"⚙️ {ts_hhmm} {text}")
-        return "\n".join(lines)
+        return "\n".join(
+            f"⚙️ {str(e.get('ts', ''))[11:16] if len(str(e.get('ts', ''))) >= 16 else ''} {short(str(e.get('text', '')), 800)}"
+            for e in entries[-limit:]
+        )
 
     def summarize_tools(self, entries: List[Dict[str, Any]]) -> str:
         if not entries:
@@ -487,19 +371,13 @@ class Memory:
     def summarize_events(self, entries: List[Dict[str, Any]]) -> str:
         if not entries:
             return ""
-        type_counts: Counter = Counter()
-        for e in entries:
-            type_counts[e.get("type", "unknown")] += 1
-        top_types = type_counts.most_common(10)
         lines = ["Event counts:"]
-        for evt_type, count in top_types:
-            lines.append(f"  {evt_type}: {count}")
+        lines.extend(f"  {evt_type}: {count}" for evt_type, count in Counter(e.get("type", "unknown") for e in entries).most_common(10))
         error_types = {"tool_error", "task_error", "tool_rounds_exceeded", "commit_test_failure"}
         errors = [e for e in entries if e.get("type") in error_types]
         if errors:
             lines.append("\nRecent errors:")
-            for e in errors[-10:]:
-                lines.append(f"  {e.get('type', '?')}: {short(str(e.get('error', '')), 120)}")
+            lines.extend(f"  {e.get('type', '?')}: {short(str(e.get('error', '')), 120)}" for e in errors[-10:])
         return "\n".join(lines)
 
     def summarize_supervisor(self, entries: List[Dict[str, Any]]) -> str:
@@ -517,8 +395,6 @@ class Memory:
 
     def append_identity_journal(self, entry: Dict[str, Any]) -> None:
         append_jsonl(self.identity_journal_path(), entry)
-
-    # --- Defaults ---
 
     def _default_scratchpad(self) -> str:
         return f"# Scratchpad\n\nUpdatedAt: {utc_now_iso()}\n\n(empty — write anything here)\n"

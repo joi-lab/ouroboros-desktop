@@ -79,13 +79,9 @@ def _reset_runtime_mode_baseline_between_tests():
 
 @pytest.fixture(autouse=True)
 def _hide_bundled_skills(monkeypatch):
-    """Phase 5: skill tests must not see the shipped ``repo/skills/``
-    reference skills. Tests build their own fixtures under ``tmp_path``
-    and rely on ``discover_skills`` returning exactly those — letting
-    the bundled reference skills leak into the view would make every
-    test assertion brittle to changes in the shipped reference set.
+    """Keep skill tests isolated from the developer machine's data plane.
 
-    v4.50: ALSO neutralise the data-plane skills lookup so a developer
+    v4.50: neutralise the data-plane skills lookup so a developer
     machine with installed skills under ``~/Ouroboros/data/skills/`` does
     not poison test results. ``discover_skills`` consults
     ``_resolve_data_skills_dir`` for its primary scan; pinning that to
@@ -94,13 +90,8 @@ def _hide_bundled_skills(monkeypatch):
     or stick to ``OUROBOROS_SKILLS_REPO_PATH`` fixtures under tmp_path.
 
     Production keeps the default behaviour untouched; this fixture only
-    neutralises the bundled / data-plane lookups inside the pytest
-    process.
+    neutralises global data-plane lookups inside the pytest process.
     """
-    monkeypatch.setattr(
-        "ouroboros.skill_loader._bundled_skills_dir",
-        lambda: None,
-    )
     # Patch the data-plane resolver to None unless the caller supplied
     # an explicit ``drive_root`` (in which case the v4.50 implementation
     # honours that argument and never touches the global). The signature

@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros.config import load_settings
+from ouroboros.gateway._helpers import json_error, json_exception
 
 log = logging.getLogger(__name__)
 
@@ -307,18 +308,6 @@ async def api_model_catalog(_request: Request) -> JSONResponse:
     })
 
 
-# ---------------------------------------------------------------------------
-# Local model lifecycle endpoints
-# ---------------------------------------------------------------------------
-
-"""Local model management API endpoints, extracted from server.py."""
-
-import asyncio
-
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-
-
 async def api_local_model_start(request: Request) -> JSONResponse:
     try:
         body = await request.json()
@@ -362,7 +351,7 @@ async def api_local_model_start(request: Request) -> JSONResponse:
         mgr.start_server(model_path, port=port, n_gpu_layers=n_gpu_layers, n_ctx=n_ctx, chat_format=chat_format)
         return JSONResponse({"status": "starting", "model_path": model_path})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return json_exception(e)
 
 
 async def api_local_model_stop(request: Request) -> JSONResponse:
@@ -371,7 +360,7 @@ async def api_local_model_stop(request: Request) -> JSONResponse:
         get_manager().stop_server()
         return JSONResponse({"status": "stopped"})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return json_exception(e)
 
 
 async def api_local_model_status(request: Request) -> JSONResponse:
@@ -393,11 +382,11 @@ async def api_local_model_test(request: Request) -> JSONResponse:
         from ouroboros.local_model import get_manager
         mgr = get_manager()
         if not mgr.is_running:
-            return JSONResponse({"error": "Local model server is not running"}, status_code=400)
+            return json_error("Local model server is not running", 400)
         result = mgr.test_tool_calling()
         return JSONResponse(result)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return json_exception(e)
 
 
 async def api_local_model_install_runtime(request: Request) -> JSONResponse:
@@ -421,4 +410,4 @@ async def api_local_model_install_runtime(request: Request) -> JSONResponse:
         mgr.install_runtime()
         return JSONResponse({"status": "installing"})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return json_exception(e)

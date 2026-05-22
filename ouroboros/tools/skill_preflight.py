@@ -1,30 +1,8 @@
-"""Skill payload preflight — read-only validators a heal-mode agent can run.
+"""Read-only skill payload syntax/contract preflight for heal-mode agents.
 
-The Skill Review Checklist (``docs/CHECKLISTS.md`` §"Skill Review Checklist")
-is the single enable-gate for skill payloads. Tri-model ``review_skill`` is
-the authoritative pass; ``skill_preflight`` is its **cheap, syntax-only**
-companion: it runs ``python -m py_compile`` / ``node --check`` / ``bash -n``
-on the payload's actual files plus a manifest parse, with no LLM calls and
-no review-state mutation. The agent can therefore catch trivial syntax
-errors before spending money on a tri-model review.
-
-Heal-mode agents are blocked from ``run_shell``, so prior to v5.7.0 they
-had no way to even syntax-check their just-edited payload.
-``skill_preflight`` is added to ``_HEAL_MODE_ALLOWED_TOOLS`` so the heal
-prompt's "fix payload, then re-review" loop is reachable end-to-end.
-
-Safety contract (mirrors ``skill_exec``'s argv-only invariant):
-
-- argv array, never a shell string. We never set ``shell=True``.
-- ``cwd=skill_dir`` so a script can't escape into peer payloads.
-- Scrubbed environment via the same ``_scrub_env`` allowlist as
-  ``skill_exec``, with no ``env_from_settings`` keys forwarded
-  (preflight does NOT need provider tokens to run a syntax check).
-- 30s wall-clock timeout per JS/shell file; killed via ``_kill_process_group``
-  on overflow (panic-tracked, like ``skill_exec``). Python syntax checks are
-  done in-process via ``compile()`` over file text so they are genuinely
-  read-only (``py_compile`` writes ``__pycache__``).
-- Read-only: no review.json / enabled.json / grants.json mutation.
+Tri-model review remains authoritative. Preflight uses argv-only subprocesses,
+cwd=skill_dir, scrubbed env, 30s timeout, in-process Python compile(), and no
+review/enablement/grant state mutation.
 """
 
 from __future__ import annotations
@@ -56,10 +34,7 @@ _PREFLIGHT_TIMEOUT_SEC = 30
 _PREFLIGHT_MAX_OUTPUT_BYTES = 16 * 1024
 _PREFLIGHT_HARD_FILE_LIMIT = 60  # mirrors skill_review's _MAX_SKILL_FILES headroom
 
-# Mapping from file extension to (validator argv template, runtime label).
-# Each template uses ``{path}`` as a placeholder for the absolute file path
-# under cwd=skill_dir; we substitute it explicitly into the argv array so
-# there is never a shell string anywhere in the chain.
+# Extension -> argv template + runtime; {path} is substituted into argv only.
 _VALIDATORS: Dict[str, Tuple[List[str], str]] = {
     ".js": (["node", "--check", "{path}"], "node"),
     ".mjs": (["node", "--check", "{path}"], "node"),
@@ -78,9 +53,7 @@ def _resolve_runtime(runtime: str) -> Optional[str]:
 
 
 def _run_check(cmd: List[str], cwd: pathlib.Path) -> Dict[str, Any]:
-    """Run a validator argv with the same panic-tracked subprocess machinery
-    skill_exec uses. Returns a dict with ``returncode``, ``stdout``, ``stderr``,
-    ``timeout`` flags. Never raises."""
+    """Run validator argv through panic-tracked subprocess machinery; never raises."""
     popen_kwargs: Dict[str, Any] = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
@@ -129,12 +102,7 @@ def _run_check(cmd: List[str], cwd: pathlib.Path) -> Dict[str, Any]:
 
 
 def _run_python_syntax_check(path: pathlib.Path) -> Dict[str, Any]:
-    """Read-only Python syntax check.
-
-    ``py_compile`` would write ``__pycache__`` under the skill payload, which
-    violates the advertised read-only preflight contract. ``compile()`` over
-    source text catches the same syntax errors without touching disk.
-    """
+    """Use compile() so Python syntax checks stay read-only."""
     try:
         text = path.read_text(encoding="utf-8")
         compile(text, str(path), "exec")
@@ -168,12 +136,7 @@ def _validate_widget_render(render: Any, *, source: str) -> Dict[str, Any]:
 
 
 def _literal_widget_renders_from_plugin(plugin_path: pathlib.Path) -> List[Dict[str, Any]]:
-    """Return literal top-level widget render dicts from plugin.py.
-
-    This intentionally avoids importing the plugin. It catches the common
-    ``_UI_RENDER = {...}`` shape used by first-party/reference skills and by
-    agent-authored extensions, including the historical ``action_route`` typo.
-    """
+    """Extract literal top-level widget render dicts without importing plugin.py."""
     try:
         tree = ast.parse(plugin_path.read_text(encoding="utf-8"), filename=str(plugin_path))
     except Exception:
@@ -281,10 +244,7 @@ def _handle_skill_preflight(
 
     skill_dir = loaded.skill_dir.resolve()
 
-    # Manifest parse first: even if the manifest itself is broken, we still
-    # report it as a preflight finding rather than refusing to run other
-    # validators. The user expects "tell me what's broken", not "exit on
-    # first error".
+    # Broken manifests still become findings; keep other validators running.
     manifest_findings: List[Dict[str, Any]] = []
     widget_findings: List[Dict[str, Any]] = []
     permission_findings: List[Dict[str, Any]] = []
@@ -340,9 +300,7 @@ def _handle_skill_preflight(
             })
             widget_findings.extend(_widget_schema_findings(skill_dir, None))
 
-    # Resolve which files to validate. ``paths`` lets the caller scope the
-    # check to a single file they just edited; otherwise we walk the same
-    # surface ``skill_loader._iter_payload_files`` exposes.
+    # paths scopes recent edits; otherwise walk the reviewable payload surface.
     files_to_check: List[pathlib.Path] = []
     path_findings: List[Dict[str, Any]] = []
     if paths:

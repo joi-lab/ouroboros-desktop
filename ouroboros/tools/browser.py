@@ -1,13 +1,4 @@
-"""
-Browser automation tools via Playwright (sync API).
-
-Provides browse_page (open URL, get content/screenshot)
-and browser_action (click, fill, evaluate JS on current page).
-
-Each BrowserState (in ToolContext) fully owns its Playwright lifecycle:
-no module-level singletons, no cross-context sharing. Thread affinity
-is tracked per-BrowserState via _thread_id.
-"""
+"""Playwright browser tools with per-ToolContext lifecycle/thread affinity."""
 
 from __future__ import annotations
 
@@ -35,24 +26,10 @@ _MISSING_EXECUTABLE_RE = re.compile(r"Executable doesn't exist at ([^\n]+)")
 
 
 def _has_platform_chromium(local_browsers_dir: pathlib.Path) -> bool:
-    """Return True if *local_browsers_dir* contains a bundled Chromium payload that
-    matches the current platform.
-
-    Supported layouts:
-    - ``PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium`` ->
-      ``chromium-<rev>/chrome-{mac,linux,win}-*/``
-    - ``PLAYWRIGHT_BROWSERS_PATH=0 playwright install --only-shell chromium`` ->
-      ``chromium_headless_shell-<rev>/chrome-headless-shell-{mac,linux,win}-*/``
-
-    We only consider the bundle usable when at least one platform-matching entry
-    is present *and* contains the expected executable. Foreign-platform payloads
-    (e.g. an arm64 bundle on an x86 host) are ignored so we don't accidentally
-    point Playwright at the wrong binary.
-    """
+    """Return True when a platform-matching bundled Chromium executable exists."""
     if not local_browsers_dir.is_dir():
         return False
     plat = sys.platform
-    # Platform-matching folder name fragments inside bundled browser payloads.
     if plat == "darwin":
         candidates = ["chrome-mac", "chrome-headless-shell-mac"]
     elif plat.startswith("win"):
@@ -68,25 +45,14 @@ def _has_platform_chromium(local_browsers_dir: pathlib.Path) -> bool:
         for sub in chromium_dir.iterdir():
             if not any(sub.name.startswith(c) for c in candidates):
                 continue
-            # Confirm the platform directory contains the expected browser executable,
-            # not just metadata. Partial downloads leave the directory non-empty but
-            # without the binary, which would redirect Playwright to a broken bundle.
+            # Avoid treating partial downloads as usable browser bundles.
             if _platform_executable_exists(sub):
                 return True
     return False
 
 
 def _platform_executable_exists(platform_dir: pathlib.Path) -> bool:
-    """Return True when *platform_dir* contains the platform-native browser executable.
-
-    Expected locations (set by Playwright's own download convention):
-    - macOS:   Chromium.app/Contents/MacOS/Chromium
-               OR chrome-headless-shell
-    - Linux:   chrome  (or chrome-linux)
-               OR chrome-headless-shell
-    - Windows: chrome.exe
-               OR chrome-headless-shell.exe
-    """
+    """Check Playwright's expected platform-native browser executable paths."""
     plat = sys.platform
     if plat == "darwin":
         return (
@@ -99,7 +65,6 @@ def _platform_executable_exists(platform_dir: pathlib.Path) -> bool:
             or (platform_dir / "chrome-headless-shell.exe").exists()
         )
     else:
-        # Linux: Playwright names the full-browser binary 'chrome' inside the platform dir.
         return (
             (platform_dir / "chrome").exists()
             or (platform_dir / "chrome-headless-shell").exists()
@@ -107,22 +72,10 @@ def _platform_executable_exists(platform_dir: pathlib.Path) -> bool:
 
 
 def _set_playwright_browsers_path_if_bundled() -> None:
-    """Set ``PLAYWRIGHT_BROWSERS_PATH=0`` at import time when a platform-matching
-    bundled Chromium payload is detected inside the playwright package directory.
-
-    This makes the packaged ``.app`` / ``.tar.gz`` / ``.zip`` builds work out of
-    the box: either the full Chromium bundle or the headless shell was installed
-    into the playwright package tree during the build step, so setting the same
-    env-var at runtime tells Playwright to look in that bundled location.
-
-    Source/dev installs that already have Chromium in ``~/.cache/ms-playwright/``
-    are unaffected: the check only fires when ``_has_platform_chromium`` confirms
-    that a matching bundled binary actually exists inside the package directory.
-    If the env-var is already set explicitly, it is always respected as-is.
-    """
+    """Use bundled Chromium in packaged builds; respect explicit env override."""
     import os
     if "PLAYWRIGHT_BROWSERS_PATH" in os.environ:
-        return  # already set — respect explicit override
+        return
     try:
         import playwright as _pw_pkg
         pkg_root = pathlib.Path(_pw_pkg.__file__).parent
@@ -134,7 +87,6 @@ def _set_playwright_browsers_path_if_bundled() -> None:
         pass  # non-fatal; fall through to standard cache lookup
 
 
-# Set PLAYWRIGHT_BROWSERS_PATH when a bundled Chromium is present (packaged builds).
 _set_playwright_browsers_path_if_bundled()
 
 
@@ -223,8 +175,7 @@ def _launch_browser_with_fallback(pw_instance: Any) -> Any:
 
 
 def _ensure_browser(ctx: ToolContext):
-    """Create or reuse browser for this context. All Playwright state lives
-    in ctx.browser_state — no module-level globals."""
+    """Create or reuse this context's browser; no module-level Playwright state."""
     bs = ctx.browser_state
     current_thread_id = threading.get_ident()
     stored_thread_id = getattr(bs, "_thread_id", None)
@@ -268,8 +219,7 @@ def _ensure_browser(ctx: ToolContext):
 
 
 def cleanup_browser(ctx: ToolContext) -> None:
-    """Full teardown: close page, browser, AND stop the Playwright instance.
-    Called by agent.py in finally block and by recovery logic on errors."""
+    """Close page/browser and stop the Playwright instance."""
     bs = ctx.browser_state
     try:
         if bs.page is not None:
@@ -293,11 +243,7 @@ def cleanup_browser(ctx: ToolContext) -> None:
 
 
 def _is_infrastructure_error(obj: Any) -> bool:
-    """Detect browser infrastructure failure from either context state or an error object.
-
-    Backward-compat: older tests call this with an exception and expect string-based
-    detection of greenlet/thread/browser teardown failures.
-    """
+    """Detect context-state or legacy string-based browser infrastructure failures."""
     if hasattr(obj, "browser_state"):
         bs = obj.browser_state
         if bs.browser is None or bs.pw_instance is None:

@@ -1,41 +1,9 @@
-"""MCP (Model Context Protocol) client for Ouroboros.
+"""Client-only MCP integration for external HTTP/SSE tool servers.
 
-This is a *client-only* layer: Ouroboros connects to one or more external
-HTTP/SSE MCP servers, lists their tools, and exposes those tools through
-the existing :class:`ouroboros.tools.registry.ToolRegistry` so the
-LLM can invoke them like any other tool. Ouroboros does NOT (yet) expose
-its own tools as an MCP server.
-
-Design choices
---------------
-
-* **Settings-driven**: the active server list is read from
-  ``MCP_SERVERS`` in settings.json. Each entry is a dict with ``id``,
-  ``name``, ``enabled``, ``transport``, ``url``, ``auth_header``,
-  ``auth_token``, and ``allowed_tools``. The schema is documented in
-  :func:`normalize_server_config`.
-* **Hot-reloadable**: :func:`reconfigure` is called whenever
-  ``/api/settings`` saves a new payload; it rebuilds the server table
-  without restarting the process. No long-lived sessions are kept open
-  between calls — every ``call_tool`` opens a fresh transport, runs the
-  request, and closes it. This trades latency for simplicity and makes
-  the client robust against transient errors.
-* **Provider-safe tool names**: the LLM sees tools as
-  ``mcp_<serverSlug>__<toolSlug>`` clamped to the OpenAI/Anthropic 64-char
-  limit. Slugs are sanitized to alnum/underscore and truncated with a
-  short SHA1 suffix when they would overflow.
-* **Secret hygiene**: ``auth_token`` is never returned via the status
-  payload. The HTTP layer in :mod:`ouroboros.gateway.mcp` reuses the same
-  masking convention as the rest of ``settings.json`` secrets.
-* **Network safety**: a small deny-list refuses obvious cloud-metadata
-  endpoints to harden against SSRF-style abuse from prompt-injected MCP
-  configs.
-* **Untrusted descriptions**: external MCP tool descriptions are wrapped
-  before they reach the LLM so server-supplied text is treated as data,
-  not policy.
-* **SDK guard**: the Python ``mcp`` package is a base dependency, but the
-  import is still guarded so broken/minimal source checkouts load and
-  report ``sdk_available=false`` instead of crashing the whole app.
+Configured servers are hot-reloaded from settings, listed tools are exposed
+through ToolRegistry as provider-safe ``mcp_<server>__<tool>`` names, and each
+call opens a fresh session. Secrets, server descriptions/results, and obvious
+metadata SSRF targets are handled defensively because MCP servers are external.
 """
 
 from __future__ import annotations
@@ -54,10 +22,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# SDK availability — guarded base dependency.
-# ---------------------------------------------------------------------------
 
 try:  # pragma: no cover - import guard exercised by tests via monkeypatch
     from mcp import ClientSession  # type: ignore
@@ -83,10 +47,7 @@ _MAX_TOOL_SLUG = 32
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-# Hard-coded deny list for obvious SSRF-style targets that are extremely
-# unlikely to be a legitimate MCP endpoint. We do NOT block private LAN
-# ranges by default — many users run MCP servers on localhost or on a
-# trusted home network.
+# Block obvious metadata SSRF targets, but allow localhost/private LAN MCP servers.
 _DENIED_HOSTS = frozenset(
     {
         "169.254.169.254",  # AWS / Azure / OCI metadata
@@ -97,14 +58,9 @@ _DENIED_HOSTS = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class MCPServerConfig:
-    """Validated, normalized MCP server config."""
+    """Validated MCP server config."""
 
     id: str
     name: str
@@ -124,7 +80,7 @@ class MCPServerConfig:
 
 @dataclass
 class MCPTool:
-    """A discovered tool from an MCP server, normalized for the registry."""
+    """Discovered MCP tool normalized for ToolRegistry."""
 
     server_id: str
     raw_name: str
@@ -135,7 +91,7 @@ class MCPTool:
 
 @dataclass
 class MCPServerRuntime:
-    """Mutable per-server runtime state (discovered tools + last status)."""
+    """Mutable per-server tools and status."""
 
     config: MCPServerConfig
     tools: List[MCPTool] = field(default_factory=list)
@@ -144,23 +100,11 @@ class MCPServerRuntime:
     last_attempted: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Validation helpers
-# ---------------------------------------------------------------------------
-
-
 def _slugify(value: str, *, max_len: int) -> str:
-    """Return a provider-safe lowercase alnum/underscore slug.
-
-    Empty / non-string inputs return ``""``. Long inputs are truncated
-    deterministically with a short SHA1 suffix so two distinct tools cannot
-    collide just because their first N characters match.
-    """
+    """Return a provider-safe slug, hashing truncated tails to avoid collisions."""
     text = str(value or "").strip()
     if not text:
         return ""
-    # Replace any non-alnum/underscore character with ``_``, lowercase the
-    # result, collapse repeated underscores, and trim leading/trailing ``_``.
     safe = re.sub(r"[^A-Za-z0-9_]", "_", text)
     safe = re.sub(r"_+", "_", safe).strip("_").lower()
     if not safe:
@@ -175,37 +119,26 @@ def _slugify(value: str, *, max_len: int) -> str:
 
 
 def canonical_server_id(value: str) -> str:
-    """Return the canonical persisted/runtime MCP server id.
-
-    The Settings UI accepts friendly input (spaces, uppercase, punctuation),
-    but every downstream surface (settings.json, /api/settings, /api/mcp/*,
-    MCPManager) must agree on a single id. Persisting the canonical id avoids
-    a split where the manager reports ``github_server`` but the UI still calls
-    refresh/test with ``GitHub Server!``.
-    """
+    """Canonicalize the id shared by settings, UI routes, and MCPManager."""
     return _slugify(value, max_len=_MAX_SERVER_SLUG)
 
 
 def make_tool_name(server_id: str, tool_name: str) -> str:
-    """Return the provider-safe ``mcp_<server>__<tool>`` string."""
+    """Return provider-safe ``mcp_<server>__<tool>``."""
     server_slug = canonical_server_id(server_id)
     tool_slug = _slugify(tool_name, max_len=_MAX_TOOL_SLUG)
     if not server_slug or not tool_slug:
         return ""
     candidate = f"{TOOL_NAME_PREFIX}{server_slug}__{tool_slug}"
     if len(candidate) > _MAX_TOOL_NAME_LEN:
-        # ``_slugify`` already capped each side; if we still overflow, hash
-        # the whole tail and rebuild.
+        # If capped parts still overflow, hash the combined tail.
         digest = hashlib.sha1(candidate.encode("utf-8")).hexdigest()[:6]
         candidate = f"{TOOL_NAME_PREFIX}{server_slug}__{digest}"
     return candidate
 
 
 def parse_tool_name(name: str) -> Optional[Dict[str, str]]:
-    """Reverse :func:`make_tool_name` into ``{server_slug, tool_slug}``.
-
-    Returns ``None`` for non-MCP names or invalid shapes.
-    """
+    """Reverse :func:`make_tool_name`, or return ``None`` for non-MCP names."""
     text = str(name or "")
     if not text.startswith(TOOL_NAME_PREFIX):
         return None
@@ -219,17 +152,12 @@ def parse_tool_name(name: str) -> Optional[Dict[str, str]]:
 
 
 def is_mcp_tool_name(name: str) -> bool:
-    """Return True when ``name`` looks like a manager-issued MCP tool name."""
+    """Return whether ``name`` is a manager-issued MCP tool name."""
     return parse_tool_name(name) is not None
 
 
 def _validate_url(url: str) -> str:
-    """Return a normalized URL or raise ``ValueError``.
-
-    Accepts only ``http``/``https`` schemes and refuses obvious SSRF
-    targets (``169.254.169.254``, cloud-metadata hostnames). Private LAN
-    addresses are allowed — many users run MCP servers on loopback.
-    """
+    """Normalize HTTP(S) URLs while refusing obvious metadata SSRF hosts."""
     text = str(url or "").strip()
     if not text:
         raise ValueError("url is required")
@@ -247,8 +175,7 @@ def _validate_url(url: str) -> str:
         raise ValueError("MCP server url must not include username/password credentials")
     if host in _DENIED_HOSTS:
         raise ValueError(f"MCP server hostname {host!r} is on the deny list")
-    # Also block obvious link-local IPs even when not in the literal deny
-    # list (e.g. someone supplies 169.254.169.254 with port).
+    # Also block link-local IPs when supplied with a port or IPv6 mapping.
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
@@ -290,25 +217,7 @@ def _coerce_str_list(value: Any) -> List[str]:
 
 
 def normalize_server_config(raw: Dict[str, Any]) -> Optional[MCPServerConfig]:
-    """Validate and normalize a single ``MCP_SERVERS`` entry.
-
-    Returns ``None`` for unsalvageable entries; the caller (typically
-    :func:`reconfigure`) logs a warning. Returns a frozen
-    :class:`MCPServerConfig` otherwise.
-
-    The schema (deliberately small for v1):
-
-    .. code-block:: yaml
-
-        id: "github"            # required, sanitized into a slug
-        name: "GitHub MCP"      # optional pretty name
-        enabled: true           # default false
-        transport: streamable_http   # one of SUPPORTED_TRANSPORTS
-        url: "https://..."      # required for HTTP transports
-        auth_header: "Authorization"   # default "Authorization"
-        auth_token: "Bearer xxx"        # optional, masked on the wire
-        allowed_tools: ["search", ...]  # empty list = allow every discovered tool
-    """
+    """Validate one ``MCP_SERVERS`` entry; return ``None`` if unsalvageable."""
     if not isinstance(raw, dict):
         return None
 
@@ -362,8 +271,7 @@ def parse_servers(raw_list: Any) -> List[MCPServerConfig]:
             log.warning("Skipping invalid MCP server entry")
             continue
         if cfg.id in seen:
-            # Same id appearing twice would create duplicate tool prefixes
-            # and confuse the registry; keep the first occurrence only.
+            # Duplicate ids would share tool prefixes; keep the first config.
             continue
         seen.add(cfg.id)
         out.append(cfg)
@@ -371,7 +279,7 @@ def parse_servers(raw_list: Any) -> List[MCPServerConfig]:
 
 
 def redact_servers_for_status(configs: List[MCPServerConfig]) -> List[Dict[str, Any]]:
-    """Return a list of dicts safe to send to the UI (auth tokens masked)."""
+    """Return UI-safe server configs with auth tokens masked."""
     out: List[Dict[str, Any]] = []
     for cfg in configs:
         out.append(
@@ -458,18 +366,11 @@ def _wrap_schema_text_fields(value: Any) -> Any:
     return value
 
 
-# ---------------------------------------------------------------------------
-# Async transport — the only place that imports the optional ``mcp`` SDK.
-# ---------------------------------------------------------------------------
+# Async transport.
 
 
 async def _list_tools_async(cfg: MCPServerConfig, *, timeout_sec: int) -> List[Dict[str, Any]]:
-    """Connect to ``cfg`` and return the raw discovered tools list.
-
-    Returns ``[]`` when the SDK is not available so callers see a clean
-    "no tools" outcome with a populated ``last_error``. Errors are
-    re-raised so the caller can surface them in the status payload.
-    """
+    """Connect to ``cfg`` and return raw tools; errors surface to status."""
     if not _MCP_SDK_AVAILABLE:
         raise RuntimeError(
             "MCP client SDK not installed. Add `mcp>=1.6` to the runtime."
@@ -480,8 +381,7 @@ async def _list_tools_async(cfg: MCPServerConfig, *, timeout_sec: int) -> List[D
 
     async def _do_with_session(session_factory) -> List[Dict[str, Any]]:
         async with session_factory as transport_ctx:
-            # Both transports yield ``(read, write[, ...])``; we only need
-            # the first two streams.
+            # Both transports yield read/write streams.
             streams = transport_ctx
             if isinstance(streams, tuple):
                 read, write = streams[0], streams[1]
@@ -543,13 +443,7 @@ async def _call_tool_async(
 
 
 def _stringify_call_result(result: Any) -> str:
-    """Convert an ``mcp.types.CallToolResult`` into a model-friendly string.
-
-    The SDK exposes results as a list of content parts (``TextContent``,
-    ``ImageContent``, etc.) plus an ``isError`` flag. We concatenate text
-    parts and JSON-encode anything else so the model gets a faithful
-    representation without us hallucinating fields.
-    """
+    """Stringify MCP content parts without inventing fields."""
     parts: List[str] = []
     is_error = bool(getattr(result, "isError", False) or getattr(result, "is_error", False))
     for item in getattr(result, "content", []) or []:
@@ -583,25 +477,17 @@ def _serialize_content_part(item: Any) -> Dict[str, Any]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Sync wrapper — survives both "no event loop" and "running event loop" cases.
-# ---------------------------------------------------------------------------
+# Sync wrapper.
 
 
 def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Optional[int] = None) -> Any:
-    """Run an async coroutine from a synchronous caller.
-
-    The caller passes a *factory* (``lambda: coro()``) instead of a coroutine
-    object so that, when we end up needing a fresh coroutine on the second
-    branch, we don't reuse a closed one.
-    """
+    """Run async work from sync code; the factory avoids reusing closed coroutines."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro_factory())
 
-    # We're on a thread that already has a running loop — do a sub-thread
-    # ``asyncio.run`` so we don't have to await it back into the parent loop.
+    # Existing loop: run the coroutine in a sub-thread.
     holder: Dict[str, Any] = {}
 
     def _runner() -> None:
@@ -620,13 +506,11 @@ def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Opti
     return holder.get("value")
 
 
-# ---------------------------------------------------------------------------
-# Manager — module-global singleton.
-# ---------------------------------------------------------------------------
+# Manager singleton.
 
 
 class MCPManager:
-    """Process-wide registry of configured MCP servers + discovered tools."""
+    """Process-wide MCP server/tool registry."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -637,8 +521,7 @@ class MCPManager:
         self._settings_fingerprint = ""
         self._settings_mtime_ns: Optional[int] = None
         self._refresh_running = False
-        # Hook used by tests to inject a fake transport. Production callers
-        # rely on the real ``_list_tools_async`` / ``_call_tool_async``.
+        # Test hook; production uses the real async transports.
         self._async_list_tools: Callable[[MCPServerConfig, int], Awaitable[List[Dict[str, Any]]]] = (
             lambda cfg, timeout: _list_tools_async(cfg, timeout_sec=timeout)
         )
@@ -662,12 +545,7 @@ class MCPManager:
         return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
 
     def reconfigure(self, settings: Dict[str, Any], *, settings_mtime_ns: Optional[int] = None) -> bool:
-        """Rebuild the server table from a freshly loaded settings dict.
-
-        Preserves previously discovered tools for servers whose config did
-        not change so an in-flight task continues to see the same tool
-        schemas without an immediate re-discover round-trip.
-        """
+        """Rebuild servers, preserving tools for unchanged configs."""
         with self._lock:
             fingerprint = self._fingerprint(settings)
             if self._configured and fingerprint == self._settings_fingerprint:
@@ -720,7 +598,7 @@ class MCPManager:
             return self._tool_timeout_sec
 
     def list_tools_for_registry(self) -> List[Dict[str, Any]]:
-        """Return enabled-server tool descriptors in ToolRegistry shape."""
+        """Return enabled MCP tools in ToolRegistry shape."""
         with self._lock:
             if not self._enabled:
                 return []
@@ -788,10 +666,8 @@ class MCPManager:
                 "servers": servers,
             }
 
-    # -- discovery ----------------------------------------------------------
-
     def refresh_server(self, server_id: str) -> Dict[str, Any]:
-        """Re-list tools for one server. Returns a per-server status dict."""
+        """Re-list tools for one server."""
         with self._lock:
             if not self._enabled:
                 return {"ok": False, "error": "MCP client is disabled."}
@@ -831,8 +707,7 @@ class MCPManager:
             if str(item.get("name") or "").strip()
         ]
         normalized = [tool for tool in normalized if tool.prefixed_name]
-        # Drop duplicates by prefixed_name (e.g. tools whose names collapse
-        # to the same slug after sanitisation).
+        # Drop duplicates caused by slug collisions.
         seen: set = set()
         deduped: List[MCPTool] = []
         for tool in normalized:
@@ -869,7 +744,7 @@ class MCPManager:
         }
 
     def refresh_all(self) -> Dict[str, Any]:
-        """Refresh every enabled server. Returns per-server outcomes."""
+        """Refresh every enabled server."""
         outcomes: Dict[str, Any] = {}
         with self._lock:
             if not self._enabled:
@@ -899,11 +774,7 @@ class MCPManager:
         threading.Thread(target=_runner, name=f"mcp-refresh-{reason}", daemon=True).start()
 
     def test_server(self, raw_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Probe a candidate config without persisting it.
-
-        Used by the UI ``Test connection`` action so the user can confirm
-        their URL/auth before saving the new config to ``settings.json``.
-        """
+        """Probe a candidate config without persisting it."""
         cfg = normalize_server_config(raw_config)
         if cfg is None:
             return {
@@ -928,15 +799,8 @@ class MCPManager:
             ],
         }
 
-    # -- dispatch -----------------------------------------------------------
-
     def call_tool(self, prefixed_name: str, arguments: Dict[str, Any]) -> str:
-        """Synchronously invoke an MCP tool. Returns a model-friendly string.
-
-        Errors are returned as ``"⚠️ MCP_TOOL_ERROR: ..."`` strings rather
-        than raised so the caller (``ToolRegistry.execute``) can surface
-        them through the standard tool result channel.
-        """
+        """Synchronously invoke an MCP tool and return a model-facing string."""
         if not self.is_enabled():
             return "⚠️ MCP_DISABLED: enable MCP in Settings → Advanced to use this tool."
         with self._lock:
@@ -978,13 +842,7 @@ class MCPManager:
 
 
 def _normalize_input_schema(value: Any) -> Dict[str, Any]:
-    """Coerce an MCP-server-supplied input_schema into an OpenAI-style schema.
-
-    OpenAI/Anthropic tool schemas expect a JSON Schema object with at least
-    ``type: object`` and a ``properties`` map. MCP servers usually return
-    that shape directly, but a defensive normaliser keeps a malformed
-    server from crashing the registry.
-    """
+    """Coerce external input_schema into the provider tool-schema minimum."""
     if not isinstance(value, dict):
         return {"type": "object", "properties": {}}
     out = _wrap_schema_text_fields(dict(value))
@@ -994,18 +852,12 @@ def _normalize_input_schema(value: Any) -> Dict[str, Any]:
         out["properties"] = {}
     return out
 
-
-# ---------------------------------------------------------------------------
-# Module-level singleton + convenience helpers.
-# ---------------------------------------------------------------------------
-
-
 _manager_lock = threading.Lock()
 _manager: Optional[MCPManager] = None
 
 
 def get_manager() -> MCPManager:
-    """Return the process-global :class:`MCPManager`, creating it on first use."""
+    """Return the process-global manager."""
     global _manager
     with _manager_lock:
         if _manager is None:
@@ -1014,28 +866,19 @@ def get_manager() -> MCPManager:
 
 
 def reset_manager_for_tests() -> None:
-    """Test-only helper to drop the module-level singleton."""
+    """Drop the module-level singleton for tests."""
     global _manager
     with _manager_lock:
         _manager = None
 
 
 def reconfigure_from_settings(settings: Dict[str, Any]) -> None:
-    """Reconfigure the global manager from a settings dict.
-
-    Public helper so :mod:`server` can call this on every settings save
-    without importing the MCPManager class directly.
-    """
+    """Reconfigure the global manager from settings."""
     get_manager().reconfigure(settings)
 
 
 def ensure_configured_from_settings(*, refresh: bool = False) -> None:
-    """Configure this process's manager from settings, optionally discovering tools.
-
-    The Starlette server and each worker process have separate Python heaps.
-    Registry calls in workers must therefore initialize their own MCPManager
-    rather than relying on the server process's startup reconfigure.
-    """
+    """Configure this process's manager; workers have separate Python heaps."""
     from ouroboros.config import SETTINGS_PATH, load_settings
 
     manager = get_manager()
@@ -1057,5 +900,5 @@ def refresh_all_background(*, reason: str = "settings") -> None:
 
 
 def call_mcp_tool(name: str, arguments: Dict[str, Any]) -> str:
-    """Synchronous tool-call helper for :class:`ToolRegistry`."""
+    """ToolRegistry sync call helper."""
     return get_manager().call_tool(name, arguments or {})

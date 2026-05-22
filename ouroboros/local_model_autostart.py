@@ -8,13 +8,7 @@ log = logging.getLogger(__name__)
 
 
 def auto_start_local_model(settings: dict) -> None:
-    """Download (if needed) and start the local model server in background.
-
-    Performs a preflight check for llama-cpp-python before attempting to
-    download the model.  If the runtime is missing, a clear warning is logged
-    and the start is aborted — the user will see a meaningful status message
-    rather than a confusing traceback after a long download.
-    """
+    """Start local model in background after runtime preflight."""
     try:
         from ouroboros.local_model import get_manager, _get_runtime_hint
 
@@ -29,7 +23,6 @@ def auto_start_local_model(settings: dict) -> None:
         n_ctx = int(settings.get("LOCAL_MODEL_CONTEXT_LENGTH", 16384))
         chat_format = str(settings.get("LOCAL_MODEL_CHAT_FORMAT", "")).strip()
 
-        # Preflight: verify llama-cpp-python is installed before downloading.
         if not mgr.check_runtime():
             hint = _get_runtime_hint()
             log.warning(

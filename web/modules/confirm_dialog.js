@@ -6,6 +6,8 @@ let activeClose = null;
 export function openConfirmDialog({
     title,
     body,
+    input = false,
+    initialValue = '',
     confirmLabel = 'Продолжить',
     cancelLabel = 'Отмена',
     danger = false,
@@ -22,6 +24,7 @@ export function openConfirmDialog({
                 </div>
                 <div class="marketplace-modal-body">
                     <p>${escapeHtml(body || 'Продолжить?')}</p>
+                    ${input ? `<input class="files-modal-input confirm-dialog-input" data-confirm-input type="text" value="${escapeHtml(initialValue)}">` : ''}
                 </div>
                 <div class="marketplace-modal-actions">
                     <button type="button" class="btn btn-default" data-confirm-cancel>${escapeHtml(cancelLabel)}</button>
@@ -39,22 +42,29 @@ export function openConfirmDialog({
             backdrop.remove();
             resolve(value);
         };
+        const result = (confirmed) => input
+            ? { confirmed, value: confirmed ? (backdrop.querySelector('[data-confirm-input]')?.value || '') : '' }
+            : confirmed;
         backdrop.addEventListener('click', (event) => {
             if (event.target === backdrop || event.target.closest('[data-confirm-cancel]')) {
-                finish(false);
+                finish(result(false));
             } else if (event.target.closest('[data-confirm-ok]')) {
-                finish(true);
+                finish(result(true));
             }
         });
         const onKey = (event) => {
             if (event.key === 'Escape' && activeDialog === backdrop) {
-                finish(false);
+                finish(result(false));
+            } else if (input && event.key === 'Enter' && event.target?.matches?.('[data-confirm-input]')) {
+                event.preventDefault();
+                finish(result(true));
             }
         };
         document.addEventListener('keydown', onKey);
         document.body.appendChild(backdrop);
         activeDialog = backdrop;
         activeClose = finish;
-        backdrop.querySelector('[data-confirm-ok]')?.focus();
+        (backdrop.querySelector(input ? '[data-confirm-input]' : '[data-confirm-ok]'))?.focus();
+        backdrop.querySelector('[data-confirm-input]')?.select?.();
     });
 }

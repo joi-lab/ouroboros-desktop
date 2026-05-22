@@ -349,9 +349,9 @@ but they do not bypass review. As of v5.9.0, `review_skill` routes them
 through the same tri-model skill review as marketplace and user-managed
 skills; no deterministic PASS or enablement is written automatically. Key
 and permission grants remain explicit unless the owner has enabled
-`OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS`, in which case any completed review
-verdict (`clean`, `warnings`, or `blockers`) grants only manifest-declared
-settings keys and host permissions for that exact content hash.
+`OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS`, in which case a fresh executable
+review grants only manifest-declared settings keys and host permissions for
+that exact content hash.
 
 The Skills UI Repair affordance is only a task starter: it asks Ouroboros
 to edit payload files and rerun `review_skill`. It must not write

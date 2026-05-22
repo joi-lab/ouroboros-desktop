@@ -83,6 +83,24 @@ External API / filesystem / subprocess
 
 Not every layer is required for every operation. Simple cases (e.g., `repo_read`) go Tool → filesystem directly.
 
+### CLI / Headless Additions
+
+- CLI commands should stay thin: parse flags, call gateway HTTP/SSE endpoints,
+  render stdout/stderr/JSONL, and avoid duplicating runtime business logic.
+- Headless task features belong behind gateway task APIs and the existing
+  supervisor queue. Do not add a second scheduler for benchmarks.
+- External workspace support must keep Ouroboros governance context pinned to
+  the system repo while contextual repo tools resolve against the active
+  workspace through `ToolContext.active_repo_dir()`.
+- Workspace-mode tasks must use an explicit allowlist, reject system-repo/data
+  overlap, require a git worktree root, and return patch artifacts instead of
+  committing in the target repository.
+- Treat workspace mode as routing plus guardrails, not an OS sandbox. If stronger
+  isolation becomes required, add a real Docker/SSH/remote tool-execution layer
+  instead of expanding shell-command heuristics.
+- Do not add a CLI file-manager surface. Attachments, task artifacts, and logs
+  are the allowed v1 file-adjacent surfaces.
+
 ---
 
 ## Module Size & Complexity
@@ -93,7 +111,7 @@ Derived from P7 (Minimalism): entire codebase fits in one context window.
 - Module hard gate: 1600 lines for non-grandfathered modules in `tests/test_smoke.py`. Grandfathered (`GRANDFATHERED_OVERSIZED_MODULES` in `ouroboros/review.py`): `llm.py`, `claude_advisory_review.py`, `review_state.py`, `server.py`, and temporary v5.7.1 debt `git.py` — split deferred until each surface stabilises, with `git.py` expected to pay down in the next tools pass.
 - Method target: <150 lines. Crossing that line is a decomposition signal, not an automatic failure by itself.
 - Method hard gate: 300 lines in `tests/test_smoke.py`.
-- Codebase-wide function-count hard gate: enforced by `tests/test_smoke.py` against the value defined in `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` (currently 2000; single source of truth — bump the constant when adding a feature with an explicit comment justifying the increase).
+- Codebase-wide function-count hard gate: enforced by `tests/test_smoke.py` against the value defined in `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` (currently 2175; single source of truth — bump the constant when adding a feature with an explicit comment justifying the increase).
 - Function parameters: <8.
 - Net complexity growth per cycle approaches zero.
 - If a feature is not used in the current cycle — it is premature.
@@ -182,12 +200,14 @@ Reviewed commits now have an explicit **two-step gate**:
      completeness and cross-module consistency with full-repo context
      (`build_full_repo_pack`).
 
-Both blocking reviewers always run concurrently via `concurrent.futures.ThreadPoolExecutor`
+Triad and scope reviewers run concurrently via `concurrent.futures.ThreadPoolExecutor`
 (orchestrated in `ouroboros/tools/parallel_review.py`). The caller receives one
-combined verdict with all findings in a single round. Scope review still runs even
-when triad blocks, **except** when the fully assembled scope-review prompt exceeds
-the model context budget (`_SCOPE_BUDGET_TOKEN_LIMIT`), in which case scope review
-is skipped with a non-blocking advisory warning. `docs/CHECKLISTS.md` remains the
+combined verdict with all findings in a single round. Scope review findings block
+only when `OUROBOROS_REVIEW_ENFORCEMENT=blocking`; advisory mode downgrades them
+to warnings by operator policy. Scope review still runs even when triad blocks,
+**except** when the fully assembled scope-review prompt exceeds the shared
+`REVIEW_PROMPT_TOKEN_BUDGET` / `_SCOPE_BUDGET_TOKEN_LIMIT` (920K estimated tokens),
+in which case scope review is skipped with a non-blocking advisory warning. `docs/CHECKLISTS.md` remains the
 single source of truth for review items; do not duplicate or fork checklist policy here.
 
 Preferred workflow for non-trivial edits: choose the right edit tool first —
@@ -219,7 +239,7 @@ Before every commit, verify the following:
 #### Module Size & Complexity
 - [ ] Module stays near one context window (~1000 lines target; 1600 hard gate unless explicitly grandfathered debt)
 - [ ] No method exceeds the practical target (150 lines) or the hard gate (300 lines)
-- [ ] Total Python function count stays under the current smoke hard gate (currently 2000; consult `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` for the active value; bump with a comment if a feature requires more headroom)
+- [ ] Total Python function count stays under the current smoke hard gate (currently 2175; consult `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` for the active value; bump with a comment if a feature requires more headroom)
 - [ ] No function has more than 8 parameters
 - [ ] No gratuitous abstract layers (Bible P7)
 
@@ -447,8 +467,8 @@ one semantic variant:
 | `.btn-save` | Persist settings or budget changes |
 | `.btn-danger` | Destructive or emergency action |
 
-Size modifiers are `.btn-xs`, `.btn-sm`, `.btn-md`, and `.btn-lg`. Omit a size
-modifier for the default medium size. Do not combine semantic variants (for
+Size modifiers are `.btn-xs` and `.btn-sm`; omit a size modifier for the
+default medium size. Do not combine semantic variants (for
 example, `.btn-default.btn-primary` is invalid), and do not invent one-off
 button schemes in feature modules. Onboarding and modal buttons use the same
 `.btn` variants as the main SPA.
@@ -565,7 +585,7 @@ Browser-facing backend work goes through `ouroboros/gateway/`.
   `runtime_mode='pro'`.
 - Domain handlers live in sibling modules: `settings.py`, `control.py`,
   `files.py`, `models.py`, `extensions.py`, `marketplace.py`, `mcp.py`,
-  `host_service.py`, `history.py`, and `state.py`.
+  `host_service.py`, `history.py`, `tasks.py`, `logs.py`, and `state.py`.
 - Frontend code calls backend APIs through `web/modules/api_client.js`.
   `web/modules/api_types.js` mirrors core contracts via JSDoc so frontend
   contributors have a visible surface without TypeScript, codegen, or a build

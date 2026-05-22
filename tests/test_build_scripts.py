@@ -81,16 +81,43 @@ class TestBuildSh:
         assert pi_pos != -1, "PyInstaller command not found in build.sh"
         assert bundle_pos < pi_pos, "repo bundle generation must happen before PyInstaller in build.sh"
 
-    def test_repo_bundle_requires_real_tag_on_head(self):
+    def test_repo_bundle_delegates_release_tag_validation_to_python_ssot(self):
         src = _read("build.sh")
-        assert 'refs/tags/$RELEASE_TAG' in src
-        assert 'git tag --points-at HEAD' in src
+        assert 'scripts/build_repo_bundle.py' in src
+        assert 'refs/tags/$RELEASE_TAG' not in src
+        assert 'git tag --points-at HEAD' not in src
         assert 'OUROBOROS_RELEASE_TAG="$RELEASE_TAG"' not in src
 
-    def test_repo_bundle_requires_annotated_tag(self):
+    def test_repo_bundle_script_has_no_duplicate_annotated_tag_guard(self):
         src = _read("build.sh")
-        assert 'git cat-file -t "refs/tags/$RELEASE_TAG"' in src
-        assert 'requires annotated git tag' in src
+        assert 'git cat-file -t "refs/tags/$RELEASE_TAG"' not in src
+        assert 'requires annotated git tag' not in src
+
+    def test_packaged_cli_wrappers_are_copied_before_signing_and_dmg(self):
+        src = _read("build.sh")
+        wrapper_pos = src.find("Installing packaged CLI wrappers")
+        sign_pos = src.find("=== Signing Ouroboros.app ===")
+        dmg_pos = src.find("=== Creating DMG ===")
+        assert wrapper_pos != -1
+        assert "Contents/Resources/bin" in src
+        assert "packaging/cli/ouroboros" in src
+        assert "packaging/cli/install-ouroboros-cli" in src
+        assert sign_pos != -1 and wrapper_pos < sign_pos
+        assert dmg_pos != -1 and wrapper_pos < dmg_pos
+
+    def test_macos_dmg_includes_install_cli_command(self):
+        src = _read("build.sh")
+        assert "dmg-stage" in src
+        assert "Install CLI.command" in src
+        assert "install-ouroboros-cli-macos.command" in src
+
+    def test_macos_dmg_cli_command_delegates_installed_app_before_refusing_dmg(self):
+        src = _read("packaging/cli/install-ouroboros-cli-macos.command")
+        installed_check = src.find('if [ -x "$INSTALLED_CLI" ]; then')
+        refusal = src.find('Install Ouroboros.app to /Applications')
+        assert installed_check != -1
+        assert refusal != -1
+        assert installed_check < refusal
 
     def test_symlink_normalizer_skips_playwright_browser_bundles(self):
         src = _read("build.sh")
@@ -142,16 +169,33 @@ class TestBuildLinuxSh:
         assert pi_pos != -1
         assert bundle_pos < pi_pos, "repo bundle generation must happen before PyInstaller in build_linux.sh"
 
-    def test_repo_bundle_requires_real_tag_on_head(self):
+    def test_repo_bundle_delegates_release_tag_validation_to_python_ssot(self):
         src = _read("build_linux.sh")
-        assert 'refs/tags/$RELEASE_TAG' in src
-        assert 'git tag --points-at HEAD' in src
+        assert 'scripts/build_repo_bundle.py' in src
+        assert 'refs/tags/$RELEASE_TAG' not in src
+        assert 'git tag --points-at HEAD' not in src
         assert 'OUROBOROS_RELEASE_TAG="$RELEASE_TAG"' not in src
 
-    def test_repo_bundle_requires_annotated_tag(self):
+    def test_repo_bundle_script_has_no_duplicate_annotated_tag_guard(self):
         src = _read("build_linux.sh")
-        assert 'git cat-file -t "refs/tags/$RELEASE_TAG"' in src
-        assert 'requires annotated git tag' in src
+        assert 'git cat-file -t "refs/tags/$RELEASE_TAG"' not in src
+        assert 'requires annotated git tag' not in src
+
+    def test_linux_archive_includes_packaged_cli_bin(self):
+        src = _read("build_linux.sh")
+        wrapper_pos = src.find("Installing packaged CLI wrappers")
+        archive_pos = src.find("=== Creating archive ===")
+        assert wrapper_pos != -1
+        assert "dist/Ouroboros/bin" in src
+        assert "packaging/cli/ouroboros" in src
+        assert "packaging/cli/install-ouroboros-cli" in src
+        assert archive_pos != -1 and wrapper_pos < archive_pos
+
+    def test_posix_cli_wrappers_search_pyinstaller_internal_root_without_env_trust(self):
+        for name in ("packaging/cli/ouroboros", "packaging/cli/install-ouroboros-cli"):
+            src = _read(name)
+            assert 'OUROBOROS_PACKAGED_BUNDLE_ROOT:-' not in src
+            assert '$SCRIPT_DIR/../_internal' in src
 
 
 # ---------------------------------------------------------------------------
@@ -203,16 +247,33 @@ class TestBuildWindowsPs1:
         assert pi_pos != -1
         assert bundle_pos < pi_pos, "repo bundle generation must happen before PyInstaller in build_windows.ps1"
 
-    def test_repo_bundle_requires_real_tag_on_head(self):
+    def test_repo_bundle_delegates_release_tag_validation_to_python_ssot(self):
         src = _read("build_windows.ps1")
-        assert 'refs/tags/$ReleaseTag' in src
-        assert 'git tag --points-at HEAD' in src
+        assert 'scripts/build_repo_bundle.py' in src
+        assert 'refs/tags/$ReleaseTag' not in src
+        assert 'git tag --points-at HEAD' not in src
         assert '$env:OUROBOROS_RELEASE_TAG' not in src
 
-    def test_repo_bundle_requires_annotated_tag(self):
+    def test_repo_bundle_script_has_no_duplicate_annotated_tag_guard(self):
         src = _read("build_windows.ps1")
-        assert 'git cat-file -t "refs/tags/$ReleaseTag"' in src
-        assert 'annotated git tag' in src
+        assert 'git cat-file -t "refs/tags/$ReleaseTag"' not in src
+        assert 'annotated git tag' not in src
+
+    def test_windows_archive_includes_packaged_cli_bin(self):
+        src = _read("build_windows.ps1")
+        wrapper_pos = src.find("Installing packaged CLI wrappers")
+        length_pos = src.find("Checking Windows archive path lengths")
+        assert wrapper_pos != -1
+        assert "dist\\Ouroboros\\bin" in src
+        assert "packaging\\cli\\ouroboros.cmd" in src
+        assert "packaging\\cli\\install-ouroboros-cli.cmd" in src
+        assert length_pos != -1 and wrapper_pos < length_pos
+
+    def test_windows_cli_wrappers_search_pyinstaller_internal_root(self):
+        for name in ("packaging/cli/ouroboros.cmd", "packaging/cli/install-ouroboros-cli.cmd"):
+            src = _read(name)
+            assert r"%ROOT%\_internal\repo.bundle" in src
+            assert 'set "ROOT=%ROOT%\\_internal"' in src
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +359,33 @@ class TestDockerfile:
             f"Found {len(playwright_invocations)} playwright invocation(s) at positions: "
             f"{playwright_invocations}"
         )
+
+
+# ---------------------------------------------------------------------------
+# scripts/build_repo_bundle.py  (release tag SSOT)
+# ---------------------------------------------------------------------------
+
+class TestRepoBundleReleaseTagGuard:
+    """The platform scripts delegate release-tag integrity to the Python
+    bundler so the invariant has one fail-closed implementation."""
+
+    def test_bundler_requires_release_tag_at_head(self):
+        src = _read("scripts/build_repo_bundle.py")
+        assert "def _resolve_release_tag" in src
+        assert '"tag", "--points-at", "HEAD"' in src
+        assert "does not match VERSION" in src
+
+    def test_bundler_requires_annotated_tag(self):
+        src = _read("scripts/build_repo_bundle.py")
+        assert "def _verify_release_tag_in_repo" in src
+        assert '"cat-file", "-t"' in src
+        assert "is not an annotated tag" in src
+
+    def test_bundler_checks_tag_points_at_head_sha(self):
+        src = _read("scripts/build_repo_bundle.py")
+        assert '"rev-parse", "HEAD"' in src
+        assert '"rev-list", "-1"' in src
+        assert "does not point at HEAD" in src
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +744,13 @@ def test_spec_bundles_assets_and_icon():
     assert "icon='assets/icon.icns'" in source
 
 
+@pytest.mark.skipif(not _BUNDLE_FILES_PRESENT, reason=_PACKAGING_SKIP_REASON)
+def test_spec_bundles_ouroboros_package_for_packaged_cli_bridge():
+    source = _pkg_read("Ouroboros.spec")
+    assert "('ouroboros', 'ouroboros')" in source
+    assert "('python-standalone', 'python-standalone')" in source
+
+
 @pytest.mark.skipif(
     not _LAUNCHER_HAS_BOOTSTRAP,
     reason="launcher.py does not import launcher_bootstrap (may be a newer version without bootstrap bridge)",
@@ -728,6 +823,12 @@ def test_ci_release_preflight_validates_tag_matches_version():
     assert "Validate tag matches VERSION" in workflow
     assert 'expected_tag = f"v{version}"' in workflow
     assert 'tag != expected_tag' in workflow
+
+
+def test_ci_branch_filters_include_packaging_assets():
+    workflow = _ci_workflow()
+
+    assert "- 'packaging/**'" in workflow
 
 
 def test_ci_release_prerelease_flag_uses_preflight_output():

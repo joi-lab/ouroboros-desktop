@@ -58,6 +58,27 @@ class ParsedTriadReview:
         return [f"DEGRADED: {', '.join(reasons)} (quorum still met)"]
 
 
+def _actor_record(
+    actor: Dict[str, Any],
+    *,
+    idx: int,
+    model_label: str,
+    status: str,
+    raw_text: str,
+    parsed_items: Optional[List[Dict[str, Any]]] = None,
+) -> ReviewActorRecord:
+    return ReviewActorRecord(
+        model_id=model_label,
+        status=status,
+        raw_text=raw_text,
+        parsed_items=parsed_items or [],
+        tokens_in=int(actor.get("tokens_in", 0) or 0),
+        tokens_out=int(actor.get("tokens_out", 0) or 0),
+        cost_usd=float(actor.get("cost_estimate", 0.0) or 0.0),
+        slot=idx + 1,
+    )
+
+
 def extract_json_array(
     raw: str,
     *,
@@ -153,32 +174,13 @@ def parse_model_review_results(
             continue
         model = str(actor.get("model") or actor.get("request_model") or "").strip()
         raw_text = str(actor.get("text") or "")
-        tokens_in = int(actor.get("tokens_in", 0) or 0)
-        tokens_out = int(actor.get("tokens_out", 0) or 0)
-        cost_usd = float(actor.get("cost_estimate", 0.0) or 0.0)
         model_label = model or "reviewer"
         if str(actor.get("verdict") or "").upper() == "ERROR":
-            records.append(ReviewActorRecord(
-                model_id=model_label,
-                status="error",
-                raw_text=raw_text,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_usd=cost_usd,
-                slot=idx + 1,
-            ))
+            records.append(_actor_record(actor, idx=idx, model_label=model_label, status="error", raw_text=raw_text))
             continue
         parsed = extract_json_array(raw_text, normalize=not required)
         if parsed is None:
-            records.append(ReviewActorRecord(
-                model_id=model_label,
-                status="parse_failure",
-                raw_text=raw_text,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_usd=cost_usd,
-                slot=idx + 1,
-            ))
+            records.append(_actor_record(actor, idx=idx, model_label=model_label, status="parse_failure", raw_text=raw_text))
             continue
         actor_findings: List[Dict[str, Any]] = []
         covered_items: set[str] = set()
@@ -199,29 +201,11 @@ def parse_model_review_results(
                 **({"obligation_id": str(entry.get("obligation_id") or "")} if entry.get("obligation_id") else {}),
             })
         if required and not required.issubset(covered_items):
-            records.append(ReviewActorRecord(
-                model_id=model_label,
-                status="partial",
-                raw_text=raw_text,
-                parsed_items=actor_findings,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_usd=cost_usd,
-                slot=idx + 1,
-            ))
+            records.append(_actor_record(actor, idx=idx, model_label=model_label, status="partial", raw_text=raw_text, parsed_items=actor_findings))
             continue
         findings.extend(actor_findings)
         responsive.append(f"{model_label}#{idx + 1}")
-        records.append(ReviewActorRecord(
-            model_id=model_label,
-            status="responded",
-            raw_text=raw_text,
-            parsed_items=actor_findings,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=cost_usd,
-            slot=idx + 1,
-        ))
+        records.append(_actor_record(actor, idx=idx, model_label=model_label, status="responded", raw_text=raw_text, parsed_items=actor_findings))
     return ParsedTriadReview(findings=findings, responsive_models=responsive, actor_records=records)
 
 

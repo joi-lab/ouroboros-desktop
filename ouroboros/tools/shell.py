@@ -19,8 +19,8 @@ from typing import Any, Dict, List
 from ouroboros.platform_layer import IS_WINDOWS, kill_process_tree, subprocess_new_group_kwargs
 from ouroboros.config import load_settings
 from ouroboros.tools.commit_gate import _invalidate_advisory
-from ouroboros.tools.registry import ToolContext, ToolEntry
-from ouroboros.utils import utc_now_iso, run_cmd
+from ouroboros.tools.registry import ToolContext, ToolEntry, active_repo_dir_for
+from ouroboros.utils import safe_relpath, utc_now_iso, run_cmd
 from ouroboros.contracts.task_constraint import normalize_task_constraint
 from ouroboros.contracts.skill_payload_policy import (
     SkillPayloadPathError,
@@ -31,9 +31,7 @@ from ouroboros.contracts.skill_payload_policy import (
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Subprocess process-group registry (for panic kill)
-# ---------------------------------------------------------------------------
+# Tracked process groups let panic kill descendant trees too.
 _active_subprocesses: set = set()
 _subprocess_lock = threading.Lock()
 
@@ -41,11 +39,7 @@ _RUN_SHELL_DEFAULT_TIMEOUT_SEC = 360
 
 
 def _tracked_subprocess_run(cmd, **kwargs):
-    """subprocess.run() replacement with process group tracking.
-
-    Each subprocess gets its own session (start_new_session=True) so the
-    entire process tree can be killed via os.killpg() on panic.
-    """
+    """subprocess.run replacement with process-tree tracking."""
     timeout = kwargs.pop("timeout", None)
     kwargs.update(subprocess_new_group_kwargs())
     kwargs.setdefault("stdin", subprocess.DEVNULL)
@@ -65,12 +59,12 @@ def _tracked_subprocess_run(cmd, **kwargs):
 
 
 def _kill_process_group(proc):
-    """Kill a subprocess and its entire process tree."""
+    """Kill a subprocess tree."""
     kill_process_tree(proc)
 
 
 def kill_all_tracked_subprocesses():
-    """Kill all tracked subprocess trees. Called on panic."""
+    """Kill all tracked subprocess trees on panic."""
     with _subprocess_lock:
         procs = list(_active_subprocesses)
     for proc in procs:
@@ -111,7 +105,7 @@ def _describe_returncode(returncode: int) -> str:
 
 
 def _format_process_output(stdout: str, stderr: str, *, limit: int = 50_000) -> str:
-    """Render stdout/stderr sections with truncation."""
+    """Render bounded stdout/stderr sections."""
     stdout_text = str(stdout or "").strip()
     stderr_text = str(stderr or "").strip()
     parts: List[str] = []
@@ -148,9 +142,6 @@ def _status_snapshot(repo_dir: pathlib.Path | None) -> list[str]:
     return sorted(_get_changed_files(repo_dir))
 
 
-# ---------------------------------------------------------------------------
-# Shell builtins / operators that cannot run via subprocess
-# ---------------------------------------------------------------------------
 _SHELL_BUILTINS = frozenset([
     "cd", "source", ".", "export", "alias", "eval",
     "set", "unset", "pushd", "popd", "read", "ulimit",
@@ -165,14 +156,7 @@ _SHELL_INTERPRETERS = frozenset({
 })
 _ENV_REF_PATTERN = re.compile(r'\$(?:\{[A-Z][A-Z0-9_]*\}|[A-Z][A-Z0-9_]*)')
 
-# 2026-05-04: detect one bash/GNU grep alternation idiom that doesn't work
-# portably in argv mode. In bash, ``grep "A\|B"`` works on GNU grep because
-# basic-regex with `\|` as alternation is a GNU extension (and shell doesn't
-# expand the backslash inside double quotes). BSD grep on macOS treats ``\|``
-# as the literal two-character sequence, so the pattern matches nothing. Smaller
-# models that learned ``grep "A\|B"`` from bash scripts hit this when their
-# tool calls go to subprocess directly. Auto-correct to the portable
-# extended-regex argv form (``-E "A|B"``) and annotate the output.
+# Portable grep fix: GNU basic-regex "\|" fails on BSD grep in argv mode.
 _GREP_TOOLS = frozenset(("grep", "egrep", "fgrep"))
 _GREP_REGEX_MODE_FLAGS = frozenset((
     "-E", "--extended-regexp",
@@ -194,7 +178,7 @@ def _is_search_no_match(res: CompletedProcess) -> bool:
 
 
 def _grep_has_explicit_regex_mode(cmd: List[str]) -> bool:
-    """Return True when grep argv explicitly chooses regex/string flavor."""
+    """Return whether grep argv already chooses regex/string flavor."""
     if not cmd:
         return False
     tool = pathlib.Path(cmd[0]).name.lower()
@@ -234,22 +218,16 @@ def _maybe_autocorrect_grep_backslash_pipe(cmd: List[str]) -> tuple[List[str], s
     )
 
 
-# ---------------------------------------------------------------------------
-# run_shell
-# ---------------------------------------------------------------------------
 def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
     if isinstance(cmd, str):
-        # Cascade recovery: try to parse the string into a list before failing.
-        # LLMs frequently pass cmd as a string instead of a JSON array.
+        # Recover common stringified argv mistakes before failing.
         recovered = None
-        # 1. JSON array: '["grep", "-r", "pattern"]'
         try:
             parsed = json.loads(cmd)
             if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
                 recovered = parsed
         except (json.JSONDecodeError, ValueError):
             pass
-        # 2. Python literal: "['grep', '-r']"
         if recovered is None:
             try:
                 parsed = ast.literal_eval(cmd)
@@ -257,14 +235,7 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
                     recovered = parsed
             except (ValueError, SyntaxError):
                 pass
-        # 3. Shell-style string: "grep -rn pattern ."
-        #
-        # If the input STARTED with `[` or `{` and both structured-parse
-        # layers failed, it's a malformed JSON/Python literal — NOT a
-        # shell command. Refuse here rather than letting shlex.split strip
-        # the brackets and produce garbage argv that subprocess will fail
-        # to exec with a useless ENOENT (e.g. ``'[git,'``). 2026-05-03
-        # production bug.
+        # Malformed structured literals are not shell commands; refuse explicitly.
         if recovered is None:
             stripped = cmd.lstrip()
             is_posix_test_cmd = stripped.startswith("[ ") and stripped.rstrip().endswith(" ]")
@@ -316,7 +287,6 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
                     "or read the environment variable inside the called program."
                 )
 
-    # Reject shell builtins (they are not executables)
     if cmd and cmd[0] in _SHELL_BUILTINS:
         if cmd[0] == "cd":
             return (
@@ -332,7 +302,6 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
 
     cmd, autocorrect_note = _maybe_autocorrect_grep_backslash_pipe(cmd)
 
-    # Reject shell operators in cmd array (subprocess doesn't interpret them)
     found_ops = _SHELL_OPERATORS.intersection(cmd)
     if found_ops:
         op = sorted(found_ops)[0]
@@ -343,11 +312,21 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
             '(2) For pipes/chaining: ["sh", "-c", "cmd1 && cmd2"]'
         )
 
-    work_dir = ctx.repo_dir
+    active_repo_dir = active_repo_dir_for(ctx)
+    active_root = pathlib.Path(active_repo_dir).resolve(strict=False)
+    work_dir = pathlib.Path(active_root)
     if cwd and cwd.strip() not in ("", ".", "./"):
-        candidate = (ctx.repo_dir / cwd).resolve()
-        if candidate.exists() and candidate.is_dir():
-            work_dir = candidate
+        cwd_text = str(cwd).strip()
+        if bool(getattr(ctx, "is_workspace_mode", lambda: False)()) and pathlib.Path(cwd_text).is_absolute():
+            return "⚠️ SHELL_CWD_BLOCKED: absolute cwd is not allowed in workspace mode."
+        try:
+            candidate = (active_root / safe_relpath(cwd_text)).resolve(strict=False)
+            candidate.relative_to(active_root)
+        except (OSError, ValueError) as exc:
+            return f"⚠️ SHELL_CWD_BLOCKED: cwd escapes active workspace/repo: {exc}"
+        if not candidate.exists() or not candidate.is_dir():
+            return f"⚠️ SHELL_CWD_BLOCKED: cwd is not a directory: {cwd_text}"
+        work_dir = candidate
     repo_root = _resolve_git_root(pathlib.Path(work_dir))
     before_changed = _status_snapshot(repo_root)
 
@@ -387,12 +366,8 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
         return f"⚠️ SHELL_ERROR: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Orchestration helpers (live in tool layer, not in gateway)
-# ---------------------------------------------------------------------------
-
 def _load_project_context(repo_dir: pathlib.Path) -> str:
-    """Load project docs for Claude Code system_prompt injection."""
+    """Load governance docs for Claude Code system_prompt injection."""
     docs = [
         ("BIBLE.md", "CONSTITUTION"),
         ("docs/DEVELOPMENT.md", "DEVELOPMENT GUIDE"),
@@ -414,7 +389,7 @@ def _load_project_context(repo_dir: pathlib.Path) -> str:
 
 
 def _get_changed_files(repo_dir: pathlib.Path) -> list:
-    """Return list of changed files after an edit."""
+    """Return changed files after an edit."""
     try:
         res = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -442,7 +417,7 @@ def _get_diff_stat(repo_dir: pathlib.Path) -> str:
 
 
 def _run_validation(repo_dir: pathlib.Path) -> str:
-    """Run basic validation after edit (tests). Returns summary."""
+    """Run basic post-edit validation."""
     agent_python = sys.executable or os.environ.get("OUROBOROS_AGENT_PYTHON") or "python3"
     try:
         res = subprocess.run(
@@ -459,18 +434,10 @@ def _run_validation(repo_dir: pathlib.Path) -> str:
         return f"ERROR: validation failed: {e}"
 
 
-# ---------------------------------------------------------------------------
-# claude_code_edit — SDK-only path
-# ---------------------------------------------------------------------------
-
 def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "",
                       budget: float = 5.0, validate: bool = False,
                       bucket: str = "", skill_name: str = "") -> str:
-    """Delegate code edits via the Claude Agent SDK gateway.
-
-    Uses the claude-agent-sdk Python package with PreToolUse safety hooks
-    that block writes outside cwd and to protected runtime paths.
-    """
+    """Delegate SDK edits with cwd and protected-path safety hooks."""
     from ouroboros.tools.git import _acquire_git_lock, _release_git_lock
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -494,8 +461,7 @@ def _claude_code_edit(ctx: ToolContext, prompt: str, cwd: str = "",
     redirect_err = cross_skill_redirect_error(existing_tc, synth)
     if redirect_err:
         return f"⚠️ SKILL_REDIRECT_BLOCKED: {redirect_err}"
-    # Real skill_repair task_constraint wins over a synthesized one — repair
-    # confinement is sticky.
+    # Real skill_repair constraint wins; repair confinement is sticky.
     if existing_tc and existing_tc.mode == "skill_repair":
         task_constraint = existing_tc
     else:

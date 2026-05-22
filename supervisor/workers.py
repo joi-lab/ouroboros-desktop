@@ -1,9 +1,4 @@
-"""
-Supervisor — Worker lifecycle management.
-
-Multiprocessing workers, worker health, direct chat handling.
-Queue operations moved to supervisor.queue.
-"""
+"""Worker lifecycle, health, and direct-chat handling for the supervisor."""
 
 from __future__ import annotations
 import logging
@@ -26,9 +21,6 @@ from supervisor.message_bus import send_with_budget
 from ouroboros.utils import utc_now_iso
 
 
-# ---------------------------------------------------------------------------
-# Module-level config (set via init())
-# ---------------------------------------------------------------------------
 REPO_DIR: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "repo"
 DRIVE_ROOT: pathlib.Path = pathlib.Path.home() / "Ouroboros" / "data"
 MAX_WORKERS: int = 5
@@ -44,10 +36,8 @@ _CTX = None
 _LAST_SPAWN_TIME: float = 0.0  # grace period: don't count dead workers right after spawn
 _SPAWN_GRACE_SEC: float = 90.0  # workers need up to ~60s to init (spawn + pip)
 
-# "spawn" re-imports __main__ in child processes, which in PyInstaller frozen apps
-# causes fork bombs (each child re-runs the full app). Use "fork" by default on
-# Linux and macOS. Workers don't touch GUI, so fork is safe.
-# Windows only supports "spawn".
+# Avoid spawn in frozen Unix apps: it re-imports __main__ and can fork-bomb.
+# Workers do not touch GUI, so fork is safe there; Windows only supports spawn.
 _DEFAULT_WORKER_START_METHOD = "spawn" if sys.platform == "win32" else "fork"
 _WORKER_START_METHOD = str(os.environ.get("OUROBOROS_WORKER_START_METHOD", _DEFAULT_WORKER_START_METHOD) or _DEFAULT_WORKER_START_METHOD).strip().lower()
 if _WORKER_START_METHOD not in {"fork", "spawn", "forkserver"}:
@@ -55,7 +45,7 @@ if _WORKER_START_METHOD not in {"fork", "spawn", "forkserver"}:
 
 
 def _get_ctx():
-    """Return multiprocessing context used for worker processes."""
+    """Return the multiprocessing context for workers."""
     global _CTX
     if _CTX is None:
         _CTX = mp.get_context(_WORKER_START_METHOD)
@@ -76,15 +66,9 @@ def init(repo_dir: pathlib.Path, drive_root: pathlib.Path, max_workers: int,
     BRANCH_DEV = branch_dev
     BRANCH_STABLE = branch_stable
 
-    # Initialize queue module
     from supervisor import queue
     queue.init(drive_root, soft_timeout, hard_timeout)
     queue.init_queue_refs(PENDING, RUNNING, QUEUE_SEQ_COUNTER_REF)
-
-
-# ---------------------------------------------------------------------------
-# Worker data structures
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Worker:
@@ -98,7 +82,7 @@ _EVENT_Q = None
 
 
 def get_event_q():
-    """Get the current EVENT_Q, creating if needed."""
+    """Return EVENT_Q, creating it lazily."""
     global _EVENT_Q
     if _EVENT_Q is None:
         _EVENT_Q = _get_ctx().Queue()
@@ -111,24 +95,16 @@ RUNNING: Dict[str, Dict[str, Any]] = {}
 CRASH_TS: List[float] = []
 QUEUE_SEQ_COUNTER_REF: Dict[str, int] = {"value": 0}
 
-# Lock for all mutations to PENDING, RUNNING, WORKERS shared collections.
-# Canonical definition lives in queue.py; imported here for use by assign_tasks/kill_workers.
+# Shared queue lock; queue.py owns the canonical definition.
 from supervisor.queue import _queue_lock
 
 
 def get_running_task_ids() -> List[str]:
-    """Return list of task IDs currently being processed by workers."""
+    """Return task IDs currently assigned to workers."""
     return [w.busy_task_id for w in WORKERS.values() if w.busy_task_id]
 
-
-# ---------------------------------------------------------------------------
-# Chat agent (direct mode)
-# ---------------------------------------------------------------------------
 _chat_agent = None
-# Module-level lock serializing ALL callers of handle_chat_direct, including
-# A2A tasks (via a2a_executor._dispatch_to_supervisor) and Web UI calls.
-# The shared _chat_agent singleton has mutable per-call state (_busy,
-# _current_chat_id, _current_task_id) that is not safe for concurrent access.
+# Serializes every direct-chat caller; _chat_agent has mutable per-call state.
 import threading as _threading
 _chat_agent_lock = _threading.Lock()
 
@@ -174,15 +150,13 @@ def _handle_chat_direct_locked(chat_id: int, text: str, image_data: Optional[Uni
         if task_constraint:
             task["task_constraint"] = dict(task_constraint)
         if image_data:
-            # image_data is (base64, mime) or (base64, mime, caption)
+            # image_data is (base64, mime) or (base64, mime, caption).
             task["image_base64"] = image_data[0]
             task["image_mime"] = image_data[1]
             if len(image_data) > 2 and image_data[2]:
                 task["image_caption"] = image_data[2]
-                # Prefer caption as task text if text is empty
                 if not text:
                     task["text"] = image_data[2]
-        # Fallback for truly empty messages
         if not task["text"]:
             task["text"] = "(image attached)" if image_data else ""
         events = agent.handle_task(task)
@@ -206,18 +180,8 @@ def _handle_chat_direct_locked(chat_id: int, text: str, image_data: Optional[Uni
         except Exception:
             log.debug("Suppressed exception", exc_info=True)
 
-
-# ---------------------------------------------------------------------------
-# Auto-resume after restart
-# ---------------------------------------------------------------------------
-
 def auto_resume_after_restart() -> None:
-    """If recent restart left open work, auto-resume without waiting for owner message.
-
-    Checks: scratchpad content, recent restart events, pending_restart_verify.
-    Background consciousness will subsume this eventually, but auto-resume is
-    needed immediately after a restart so the agent doesn't go silent.
-    """
+    """Auto-resume after a recent restart when scratchpad still has work."""
     try:
         owner_restart_flag = DRIVE_ROOT / "state" / "owner_restart_no_resume.flag"
         if owner_restart_flag.exists():
@@ -233,7 +197,7 @@ def auto_resume_after_restart() -> None:
             log.info("Owner restart flag detected — skipping auto-resume.")
             return
 
-        # Panic flag: skip auto-resume after emergency stop (consumed on check)
+        # Panic/owner-restart flags suppress auto-resume and are consumed.
         panic_flag = DRIVE_ROOT / "state" / "panic_stop.flag"
         if panic_flag.exists():
             panic_flag.unlink(missing_ok=True)
@@ -245,13 +209,11 @@ def auto_resume_after_restart() -> None:
         if not chat_id:
             return
 
-        # Check for recent restart (within 2 minutes)
         restart_verify_path = DRIVE_ROOT / "state" / "pending_restart_verify.json"
         recent_restart = False
         if restart_verify_path.exists():
             recent_restart = True
         else:
-            # Check supervisor.jsonl for recent restart event
             sup_log = DRIVE_ROOT / "logs" / "supervisor.jsonl"
             if sup_log.exists():
                 try:
@@ -269,26 +231,21 @@ def auto_resume_after_restart() -> None:
         if not recent_restart:
             return
 
-        # Check if scratchpad has meaningful content
         scratchpad_path = DRIVE_ROOT / "memory" / "scratchpad.md"
         if not scratchpad_path.exists():
             return
 
         scratchpad = scratchpad_path.read_text(encoding="utf-8")
-        # Skip if scratchpad is empty or default
         stripped = scratchpad.strip()
         if not stripped or stripped == "# Scratchpad" or "(empty" in stripped.lower():
-            # Check if it's just the default template with all empty sections
             content_lines = [
                 ln.strip() for ln in stripped.splitlines()
                 if ln.strip() and not ln.strip().startswith("#") and ln.strip() != "- (empty)"
             ]
-            # Filter out UpdatedAt lines
             content_lines = [ln for ln in content_lines if not ln.startswith("UpdatedAt:")]
             if not content_lines:
                 return
 
-        # Auto-resume: inject synthetic message
         time.sleep(2)  # Let everything initialize
         agent = _get_chat_agent()
         if not agent._busy:
@@ -314,11 +271,6 @@ def auto_resume_after_restart() -> None:
             "error": repr(e),
         })
 
-
-# ---------------------------------------------------------------------------
-# Worker process
-# ---------------------------------------------------------------------------
-
 def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str) -> None:
     from ouroboros.platform_layer import create_new_session
     create_new_session()
@@ -328,25 +280,13 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str)
     if not getattr(_sys, 'frozen', False):
         _sys.path.insert(0, repo_dir)
     _drive = _pathlib.Path(drive_root)
-    # v5.1.2 iter-2 fix: pin the runtime-mode baseline in this worker
-    # process. On ``fork`` start methods the parent's pin is inherited
-    # via copy-on-write memory, so this is a no-op (re-call early-
-    # returns). On ``spawn`` (Windows default + macOS Python 3.8+ when
-    # configured) the worker re-imports ``ouroboros.config`` from
-    # scratch with ``_BOOT_RUNTIME_MODE = None``; the pin reads the
-    # parent-exported ``OUROBOROS_BOOT_RUNTIME_MODE`` env var
-    # (inherited across spawn) and re-establishes the chokepoint
-    # in this worker. Without this, a future tool inside the worker
-    # that calls ``save_settings(..., allow_elevation=True)`` could
-    # bypass the ratchet — the env-var fallback in ``save_settings``
-    # already covers this transparently, but pinning explicitly here
-    # keeps the in-process path identical to the supervisor.
+    # Spawned workers must pin the runtime-mode baseline from the parent env;
+    # forked workers inherit it. This keeps the elevation ratchet consistent.
     try:
         from ouroboros.config import initialize_runtime_mode_baseline
         initialize_runtime_mode_baseline()
     except Exception:
-        # Non-fatal — the ``save_settings`` env-var fallback continues
-        # to gate elevation. Logged so a regression is visible.
+        # Non-fatal: save_settings still has env-var fallback gating.
         try:
             _log_worker_crash(wid, _drive, "init_baseline", None, _tb.format_exc())
         except Exception:
@@ -362,7 +302,12 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str)
             task = in_q.get()
             if task is None or task.get("type") == "shutdown":
                 break
-            events = agent.handle_task(task)
+            task_drive_root = str(task.get("drive_root") or drive_root)
+            if task_drive_root != str(drive_root):
+                task_agent = make_agent(repo_dir=repo_dir, drive_root=task_drive_root, event_queue=out_q)
+                events = task_agent.handle_task(task)
+            else:
+                events = agent.handle_task(task)
             for e in events:
                 e2 = dict(e)
                 e2["worker_id"] = wid
@@ -376,7 +321,7 @@ def _write_failure_result(
     reason: str = "Worker process crashed (crash storm). Task was not completed.",
     status: str = "",
 ) -> None:
-    """Write a failure result file for a crashed/orphaned task (zombie prevention)."""
+    """Write failure result for a crashed/orphaned task."""
     if not task_id:
         return
     try:
@@ -384,7 +329,7 @@ def _write_failure_result(
             STATUS_FAILED, STATUS_COMPLETED, STATUS_REJECTED_DUPLICATE,
             STATUS_CANCELLED, load_task_result, write_task_result,
         )
-        # Only truly final statuses — STATUS_INTERRUPTED is NOT final (written before requeue)
+        # STATUS_INTERRUPTED is not final; it is written before requeue.
         _FINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED, STATUS_REJECTED_DUPLICATE, STATUS_CANCELLED}
         existing = load_task_result(DRIVE_ROOT, task_id)
         if existing and existing.get("status") in _FINAL_STATUSES:
@@ -402,7 +347,7 @@ def _write_failure_result(
 
 
 def _log_worker_crash(wid: int, drive_root: pathlib.Path, phase: str, exc: Exception, tb: str) -> None:
-    """Best-effort: write crash info to supervisor.jsonl from inside worker process."""
+    """Best-effort worker-side crash logging."""
     import os as _os
     try:
         path = drive_root / "logs" / "supervisor.jsonl"
@@ -423,7 +368,7 @@ def _log_worker_crash(wid: int, drive_root: pathlib.Path, phase: str, exc: Excep
 
 
 def _first_worker_boot_event_since(offset_bytes: int) -> Optional[Dict[str, Any]]:
-    """Read first worker_boot event written after the given file offset."""
+    """Read first worker_boot event after a file offset."""
     path = DRIVE_ROOT / "logs" / "events.jsonl"
     if not path.exists():
         return None
@@ -453,7 +398,7 @@ def _first_worker_boot_event_since(offset_bytes: int) -> Optional[Dict[str, Any]
 
 
 def _verify_worker_sha_after_spawn(events_offset: int, timeout_sec: float = 90.0) -> None:
-    """Verify that newly spawned workers booted with expected current_sha."""
+    """Verify newly spawned workers booted at expected current_sha."""
     st = load_state()
     expected_sha = str(st.get("current_sha") or "").strip()
     if not expected_sha:
@@ -508,7 +453,7 @@ def _verify_worker_sha_after_spawn(events_offset: int, timeout_sec: float = 90.0
 
 def spawn_workers(n: int = 0) -> None:
     global _CTX, _EVENT_Q
-    # Force fresh context to ensure workers use latest code
+    # Fresh context ensures workers use current code.
     _CTX = mp.get_context(_WORKER_START_METHOD)
     _EVENT_Q = _CTX.Queue()
     events_path = DRIVE_ROOT / "logs" / "events.jsonl"
@@ -537,7 +482,7 @@ def spawn_workers(n: int = 0) -> None:
         WORKERS[i] = Worker(wid=i, proc=proc, in_q=in_q, busy_task_id=None)
     global _LAST_SPAWN_TIME
     _LAST_SPAWN_TIME = time.time()
-    # Run SHA verification in background to avoid blocking the main loop for up to 90s
+    # Verify asynchronously so spawn does not block the supervisor loop.
     threading.Thread(target=_verify_worker_sha_after_spawn, args=(events_offset,), daemon=True).start()
 
 
@@ -557,7 +502,6 @@ def kill_workers(
             w.proc.join(timeout=3)
         _kill_survivors()
         WORKERS.clear()
-        # --- Zombie prevention: write failure results before clearing ---
         try:
             orphaned_ids = []
             for task_id in list(RUNNING):
@@ -621,10 +565,7 @@ def respawn_worker(wid: int) -> None:
     proc.daemon = True
     proc.start()
     WORKERS[wid] = Worker(wid=wid, proc=proc, in_q=in_q, busy_task_id=None)
-    # NOTE: do NOT reset _LAST_SPAWN_TIME here — only spawn_workers() resets it.
-    # Resetting on every respawn would give a fresh 90s grace to each respawned
-    # worker, preventing crash storm detection from accumulating 3 timestamps
-    # within 60s during a rapid crash loop.
+    # Do not reset _LAST_SPAWN_TIME here; respawn grace would hide crash storms.
 
 
 def assign_tasks() -> None:
@@ -671,14 +612,9 @@ def assign_tasks() -> None:
                         )
                 queue.persist_queue_snapshot(reason="assign_task")
 
-
-# ---------------------------------------------------------------------------
-# Health + crash storm
-# ---------------------------------------------------------------------------
-
 def ensure_workers_healthy() -> None:
     from supervisor import queue
-    # Grace period: skip health check right after spawn — workers need time to initialize
+    # Workers need init time after spawn.
     if (time.time() - _LAST_SPAWN_TIME) < _SPAWN_GRACE_SEC:
         return
     busy_crashes = 0
@@ -726,9 +662,7 @@ def ensure_workers_healthy() -> None:
                 task = meta.get("task") if isinstance(meta, dict) else None
                 if isinstance(task, dict):
                     task_type = str(task.get("type") or "")
-                    # deep_self_review crashes deterministically on some platforms
-                    # (SIGSEGV / signal 11 due to macOS fork-safety + heavy subprocess I/O).
-                    # Do not retry — it would loop forever.  Emit a failure result instead.
+                    # deep_self_review SIGSEGVs can loop forever on macOS fork-safety paths.
                     is_crash_signal = isinstance(exitcode, int) and exitcode < 0
                     no_retry_types = {"deep_self_review"}
                     if task_type in no_retry_types and is_crash_signal:
@@ -745,9 +679,7 @@ def ensure_workers_healthy() -> None:
                             )
                         except Exception:
                             log.debug("Failed to write failed status for %s", w.busy_task_id, exc_info=True)
-                        # Send failure message FIRST, then task_done, to avoid ordering race:
-                        # if task_done arrives before the message, the UI closes the card
-                        # before the explanatory text is visible.
+                        # Message before task_done: otherwise the UI may close the card first.
                         chat_id = int(task.get("chat_id") or 1)
                         try:
                             from supervisor.message_bus import get_bridge
@@ -761,7 +693,6 @@ def ensure_workers_healthy() -> None:
                                 )
                         except Exception:
                             log.debug("Failed to send deep_self_review crash message", exc_info=True)
-                        # Emit terminal task_done AFTER the message is queued
                         try:
                             get_event_q().put({
                                 "type": "task_done",
@@ -781,10 +712,7 @@ def ensure_workers_healthy() -> None:
                                 STATUS_COMPLETED, STATUS_FAILED, STATUS_REJECTED_DUPLICATE,
                                 STATUS_CANCELLED,
                             )
-                            # STATUS_INTERRUPTED is intentionally excluded: it is written
-                            # by the normal retry path BEFORE requeueing, so it is not a
-                            # true terminal state. Including it would cause the second crash
-                            # of a requeued task to be silently dropped.
+                            # STATUS_INTERRUPTED precedes requeue and is not terminal.
                             _TERMINAL_STATUSES = {
                                 STATUS_COMPLETED, STATUS_FAILED,
                                 STATUS_REJECTED_DUPLICATE, STATUS_CANCELLED,
@@ -800,9 +728,8 @@ def ensure_workers_healthy() -> None:
                             log.debug("Failed to check existing result for %s", w.busy_task_id, exc_info=True)
 
                         if already_done:
-                            pass  # Don't requeue — task completed via another path
+                            pass
                         elif attempt > QUEUE_MAX_RETRIES:
-                            # Retry limit exhausted — mark as failed and notify
                             log.warning(
                                 "Task %s exceeded crash retry limit (%d/%d) — marking failed",
                                 w.busy_task_id, attempt, QUEUE_MAX_RETRIES,
@@ -820,7 +747,6 @@ def ensure_workers_healthy() -> None:
                                 )
                             except Exception:
                                 log.debug("Failed to write failed status for %s", w.busy_task_id, exc_info=True)
-                            # Send failure message FIRST so it arrives before the card closes
                             chat_id = int(task.get("chat_id") or 1)
                             try:
                                 from supervisor.message_bus import get_bridge
@@ -834,7 +760,6 @@ def ensure_workers_healthy() -> None:
                                     )
                             except Exception:
                                 log.debug("Failed to send failure message for %s", w.busy_task_id, exc_info=True)
-                            # Emit task_done terminal event AFTER the message is queued
                             try:
                                 get_event_q().put({
                                     "type": "task_done",
@@ -845,7 +770,6 @@ def ensure_workers_healthy() -> None:
                             except Exception:
                                 log.debug("Failed to emit terminal event for %s", w.busy_task_id, exc_info=True)
                         else:
-                            # Increment attempt counter before requeue
                             task = dict(task)
                             task["_attempt"] = attempt + 1
                             try:
@@ -863,20 +787,15 @@ def ensure_workers_healthy() -> None:
     now = time.time()
     alive_now = sum(1 for w in WORKERS.values() if w.proc.is_alive())
     if dead_detections:
-        # Count only meaningful failures:
-        # - any crash while a task was running, or
-        # - all workers dead at once.
+        # Only count busy crashes or all-workers-dead as storm signals.
         if busy_crashes > 0 or alive_now == 0:
             CRASH_TS.extend([now] * max(1, dead_detections))
         else:
-            # Idle worker deaths with at least one healthy worker are degraded mode,
-            # not a crash storm condition.
             CRASH_TS.clear()
 
     CRASH_TS[:] = [t for t in CRASH_TS if (now - t) < 60.0]
     if len(CRASH_TS) >= 3:
-        # Log crash storm but DON'T execv restart — that creates infinite loops.
-        # Instead: kill dead workers, notify owner, continue with direct-chat (threading).
+        # Do not execv on crash storms; keep direct-chat mode alive.
         st = load_state()
         append_jsonl(
             DRIVE_ROOT / "logs" / "supervisor.jsonl",
@@ -894,8 +813,5 @@ def ensure_workers_healthy() -> None:
                 "⚠️ Frequent worker crashes. Multiprocessing workers disabled, "
                 "continuing in direct-chat mode (threading).",
             )
-        # Kill all workers — direct chat via handle_chat_direct still works
         kill_workers()
         CRASH_TS.clear()
-
-

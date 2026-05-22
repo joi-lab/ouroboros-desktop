@@ -1,13 +1,4 @@
-"""Minimal actionable improvement backlog helpers.
-
-This module maintains a small durable backlog of concrete improvements discovered
-while tasks run. Unlike `patterns.md`, which tracks recurring error classes, the
-improvement backlog stores pending actionable follow-ups with provenance.
-
-Storage lives inside the knowledge base as `memory/knowledge/improvement-backlog.md`
-so it reuses existing durability/indexing infrastructure without creating a new
-registry class of artifact.
-"""
+"""Durable actionable improvement backlog stored in the knowledge base."""
 
 from __future__ import annotations
 

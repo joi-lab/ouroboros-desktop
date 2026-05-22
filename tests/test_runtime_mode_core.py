@@ -23,6 +23,7 @@ import sys
 
 import pytest
 
+from ouroboros.onboarding_wizard import build_onboarding_html
 from ouroboros.runtime_mode_policy import protected_path_category
 from ouroboros.tools.registry import ToolEntry, ToolRegistry
 
@@ -294,41 +295,46 @@ def test_settings_js_reads_and_writes_phase2_keys():
     src = (REPO / "web" / "modules" / "settings.js").read_text(encoding="utf-8")
     assert "OUROBOROS_RUNTIME_MODE" in src
     assert "OUROBOROS_SKILLS_REPO_PATH" in src
-    assert "byId('s-runtime-mode').value = s.OUROBOROS_RUNTIME_MODE" in src
-    assert "byId('s-skills-repo-path').value.trim()" in src
+    assert "['s-runtime-mode', 'OUROBOROS_RUNTIME_MODE', 'advanced']" in src
+    assert "['s-skills-repo-path', 'OUROBOROS_SKILLS_REPO_PATH']" in src
+    assert "fieldValue(id).trim()" in src
 
 
 def test_onboarding_js_has_runtime_mode_selector_and_save_payload():
     src = (REPO / "web" / "modules" / "onboarding_wizard.js").read_text(encoding="utf-8")
+    html = build_onboarding_html({})
     for mode in ("light", "advanced", "pro"):
-        assert f'data-runtime-mode="{mode}"' in src
+        assert f'"value": "{mode}"' in html
+    assert "data-runtime-mode" in src
     assert "OUROBOROS_RUNTIME_MODE" in src
     assert "OUROBOROS_SKILLS_REPO_PATH" in src
 
 
 def test_phase4_ui_copy_matches_shipped_runtime():
     settings_ui = (REPO / "web" / "modules" / "settings_ui.js").read_text(encoding="utf-8")
-    onboarding_js = (REPO / "web" / "modules" / "onboarding_wizard.js").read_text(encoding="utf-8")
+    onboarding_html = build_onboarding_html({})
 
     assert "Phase 2 plumbing only" not in settings_ui
     assert "land in Phase 3" not in settings_ui
     assert "data/skills/" in settings_ui
-    assert "Pick both review enforcement and the initial runtime mode" in onboarding_js
-    assert "normal triad + scope review" in onboarding_js
-    assert "Phase 6+:" not in onboarding_js
+    assert "Pick both review enforcement and the initial runtime mode" in onboarding_html
+    assert "normal triad + scope review" in onboarding_html
+    assert "Phase 6+:" not in onboarding_html
 
 
 def test_skills_ui_reads_live_extension_state_fields():
-    src = (REPO / "web" / "modules" / "skills.js").read_text(encoding="utf-8")
+    renderer = (REPO / "web" / "modules" / "skill_card_renderer.js").read_text(encoding="utf-8")
+    orchestration = (REPO / "web" / "modules" / "skills.js").read_text(encoding="utf-8")
+    src = renderer + "\n" + orchestration
     assert "live_loaded" in src
-    assert "live_reason" in src
-    assert "review_gate.executable_review" in src
+    assert "review_gate?.executable_review" in src or "review_gate.executable_review" in src
     assert "executable_review" in src
     assert "skill.review_status === 'blockers' && !reviewReady(skill)" in src
     assert "function statusBadge(status, gate = null)" in src
     assert "statusBadge(skill.review_status, skill.review_gate)" in src
-    assert "catalog only" in src
-    assert "ui_tabs_pending" in src
+    assert "Open widgets" in src
+    assert "retry_install" in src
+    assert "Retry install" in src
     assert "result.error" in src
 
 
@@ -337,7 +343,7 @@ def test_onboarding_js_exposes_skills_repo_path_input_and_binding():
     assert 'id="skills-repo-path"' in src
     assert 'data-clear="skills-repo-path"' in src
     assert "state.skillsRepoPath = skillsInput.value" in src
-    assert "target === 'skills-repo-path'" in src
+    assert "'skills-repo-path': () => { state.skillsRepoPath = ''; }" in src
 
 
 def test_onboarding_css_has_three_column_variant():
@@ -371,6 +377,8 @@ def test_api_settings_post_clamps_unknown_runtime_mode(tmp_path, monkeypatch):
 
     with patch.object(srv, "load_settings", side_effect=fake_load_settings), \
             patch.object(srv, "save_settings", side_effect=fake_save_settings), \
+            patch.object(srv._gateway_settings, "_owner_read_settings_raw", side_effect=fake_load_settings), \
+            patch.object(srv._gateway_settings, "_owner_write_settings", side_effect=fake_save_settings), \
             patch.object(srv, "_start_supervisor_if_needed", lambda *_a, **_k: None), \
             patch.object(srv, "_apply_settings_to_env", lambda *_a, **_k: None), \
             patch.object(srv, "apply_runtime_provider_defaults", lambda s: (s, False, [])), \
@@ -410,6 +418,8 @@ def test_api_settings_post_silently_drops_runtime_mode_changes():
 
     with patch.object(srv, "load_settings", side_effect=fake_load_settings), \
             patch.object(srv, "save_settings", side_effect=fake_save_settings), \
+            patch.object(srv._gateway_settings, "_owner_read_settings_raw", side_effect=fake_load_settings), \
+            patch.object(srv._gateway_settings, "_owner_write_settings", side_effect=fake_save_settings), \
             patch.object(srv, "_start_supervisor_if_needed", lambda *_a, **_k: None), \
             patch.object(srv, "_apply_settings_to_env", lambda *_a, **_k: None), \
             patch.object(srv, "apply_runtime_provider_defaults", lambda s: (s, False, [])), \

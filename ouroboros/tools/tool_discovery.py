@@ -30,6 +30,8 @@ def _list_available_tools(ctx: ToolContext, **kwargs) -> str:
     non_core = _policy_list_non_core(_registry)
     # Exclude the meta-tools themselves from the listing
     non_core = [t for t in non_core if t["name"] not in ("list_available_tools", "enable_tools")]
+    if getattr(ctx, "is_workspace_mode", lambda: False)():
+        non_core = [t for t in non_core if _registry.get_schema_by_name(t["name"]) is not None]
     if not non_core:
         return "All tools are already in your active set."
     lines = [f"**{len(non_core)} additional tools available** (use `enable_tools` to activate):\n"]

@@ -73,11 +73,23 @@ def test_readme_documents_release_tag_prerequisite_for_build_scripts():
     assert "git tag -a" in readme
 
 
+def test_readme_documents_packaged_cli_installer_and_source_venv():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+
+    assert "Install CLI.command" in readme
+    assert "./Ouroboros/bin/install-ouroboros-cli" in readme
+    assert r"Ouroboros\bin\install-ouroboros-cli.cmd" in readme
+    assert "python3.11 -m venv .venv" in readme
+    assert "ouroboros run --start \"2+2?\"" in readme
+
+
 def test_architecture_doc_describes_build_script_release_tag_check():
     architecture = (REPO / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
 
     assert "Release tag prerequisite" in architecture
-    assert "git tag --points-at HEAD" in architecture
+    assert "scripts/build_repo_bundle.py" in architecture
+    assert "release-tag SSOT" in architecture
+    assert "annotated `v$(cat VERSION)` tag points at `HEAD`" in architecture
 
 
 def test_system_prompt_lists_bible_in_safety_critical_set():

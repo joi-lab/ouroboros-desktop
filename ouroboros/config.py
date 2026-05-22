@@ -19,9 +19,7 @@ from ouroboros.platform_layer import pid_lock_release as _compat_pid_lock_releas
 from ouroboros.provider_models import compute_direct_review_models_fallback, migrate_model_value
 
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 HOME = pathlib.Path.home()
 APP_ROOT = pathlib.Path(os.environ.get("OUROBOROS_APP_ROOT", HOME / "Ouroboros"))
 REPO_DIR = pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", APP_ROOT / "repo"))
@@ -35,9 +33,7 @@ PANIC_EXIT_CODE = 99
 AGENT_SERVER_PORT = 8765
 
 
-# ---------------------------------------------------------------------------
 # Settings defaults
-# ---------------------------------------------------------------------------
 SETTINGS_DEFAULTS = {
     "OPENROUTER_API_KEY": "",
     "OPENAI_API_KEY": "",
@@ -71,27 +67,18 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6",
     # Pre-commit review enforcement: advisory | blocking
     "OUROBOROS_REVIEW_ENFORCEMENT": "advisory",
-    # Reviewed-skill grants are manual by default. When enabled, a successful
-    # skill review grants all manifest-requested keys/permissions for that
-    # exact content hash so closed-loop skill development can run unattended.
+    # Optional auto-grants remain bound to the reviewed content hash.
     "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS": "false",
-    # Runtime mode: light | advanced | pro.
-    # "advanced" preserves the existing self-modifying evolutionary layer and
-    # is the safe default for current installs. "pro" is reserved for a
-    # direct protected-surface lane guarded by the normal triad+scope review gate.
+    # Runtime mode: light | advanced | pro; pro still requires review gates.
     "OUROBOROS_RUNTIME_MODE": "advanced",
-    # Optional EXTRA discovery root for an external skills/extensions
-    # repository (the user's own git checkout). Ouroboros scans this on
-    # top of the in-data-plane ``data/skills/`` tree (which is the
-    # primary location since v4.50). Empty means "use only the data
-    # plane". Ouroboros never clones or pulls this directory itself.
+    # Optional extra user-managed skills checkout; Ouroboros never clones/pulls it.
     "OUROBOROS_SKILLS_REPO_PATH": "",
     "OUROBOROS_CLAWHUB_REGISTRY_URL": "https://clawhub.ai/api/v1",
     "OUROBOROS_HUB_CATALOG_URL": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main/catalog.json",
     "MCP_ENABLED": False,
     "MCP_SERVERS": [],
     "MCP_TOOL_TIMEOUT_SEC": 60,
-    # Scope review: single-model blocking reviewer (runs after triad review)
+    # Scope review: single-model reviewer; enforcement follows OUROBOROS_REVIEW_ENFORCEMENT.
     "OUROBOROS_SCOPE_REVIEW_MODEL": "openai/gpt-5.5",
     # Reasoning effort per task type: none | low | medium | high
     "OUROBOROS_EFFORT_TASK": "medium",
@@ -99,6 +86,7 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_EFFORT_REVIEW": "medium",
     "OUROBOROS_EFFORT_SCOPE_REVIEW": "high",
     "OUROBOROS_EFFORT_CONSCIOUSNESS": "low",
+    "OUROBOROS_RETURN_REASONING": True,
     "GITHUB_TOKEN": "",
     "GITHUB_REPO": "",
     # Local model (llama-cpp-python server)
@@ -127,56 +115,23 @@ def get_light_model() -> str:
 _VALID_EFFORTS = ("none", "low", "medium", "high")
 _DIRECT_PROVIDER_REVIEW_RUNS = 3
 
-# Phase 2 three-layer refactor runtime mode. Separate axis from
-# ``OUROBOROS_REVIEW_ENFORCEMENT`` — review strictness and self-modification
-# scope are orthogonal concerns and must not collapse into one flag.
+# Runtime mode and review enforcement are separate axes.
 VALID_RUNTIME_MODES = ("light", "advanced", "pro")
 
-# Privilege ranking: lower = stricter scope. Used by ``save_settings`` to
-# refuse self-elevation attempts. ``light`` blocks repo self-modification;
-# ``advanced`` opens evolutionary-layer writes; ``pro`` opens protected
-# core/contract/release writes (still gated by triad+scope review at
-# commit). Owner picks scope; agent must not raise it through any
-# tool channel — see ``save_settings`` chokepoint below.
+# Lower rank = stricter scope. ``save_settings`` refuses agent self-elevation.
 _RUNTIME_MODE_RANK = {"light": 0, "advanced": 1, "pro": 2}
 
-# Boot-time runtime mode baseline. Captured once by
-# ``initialize_runtime_mode_baseline`` (called from server lifespan and
-# launcher startup AFTER initial settings load + apply_settings_to_env)
-# and used by ``save_settings`` to refuse elevation against THIS value
-# instead of against on-disk old. The on-disk-old baseline is bypassable
-# by an out-of-process write (e.g. subprocess that goes around the
-# chokepoint): if disk gets corrupted to ``pro``, a follow-up
-# ``load_settings → save_settings`` round-trip sees ``incoming==disk_old``
-# and lets the elevation through. Pinning the baseline to the value
-# captured at process boot closes that loophole — the disk corruption
-# can no longer be propagated into ``os.environ`` via any in-process
-# ``save_settings`` caller.
-#
-# v5.1.2 iter-2 fix (multi-critic finding F2-1): the baseline is also
-# exported to ``os.environ[BOOT_RUNTIME_MODE_ENV_KEY]`` whenever
-# ``initialize_runtime_mode_baseline`` runs. ``save_settings`` falls
-# back to that env var when the in-memory ``_BOOT_RUNTIME_MODE`` is
-# still ``None`` — which is the case in fresh subprocesses spawned by
-# ``run_shell`` / ``skill_exec`` / ``multiprocessing`` (spawn). Env
-# vars are inherited across ``subprocess.Popen``, ``mp.spawn``, and
-# ``mp.fork``, so a child of the supervisor sees the same baseline.
-# The agent CAN clobber its own ``os.environ`` from Python, but a
-# subprocess cannot reach back into the parent's ``os.environ``;
-# therefore, even after a clobbered child, the parent supervisor's
-# in-memory ``_BOOT_RUNTIME_MODE`` continues to gate writes via the
-# in-process ``save_settings`` path.
+# Boot-time runtime-mode baseline. Pinning the owner-selected mode after
+# settings load prevents an out-of-process settings edit from becoming the new
+# baseline through a later load/save round-trip. The pin is also exported via
+# ``OUROBOROS_BOOT_RUNTIME_MODE`` so fresh subprocess imports inherit the same
+# ratchet; a child can clobber only its own env, not the parent's in-memory pin.
 _BOOT_RUNTIME_MODE: Optional[str] = None
 BOOT_RUNTIME_MODE_ENV_KEY = "OUROBOROS_BOOT_RUNTIME_MODE"
 
 
 def _resolve_baseline_from_env() -> Optional[str]:
-    """Return the pinned-baseline value inherited via env var, or None.
-
-    Used by ``save_settings`` so a fresh subprocess that re-imports
-    this module sees the parent's pin instead of falling back to the
-    permissive ``allow_elevation=True`` branch.
-    """
+    """Return the parent-pinned runtime-mode baseline inherited via env."""
     raw = os.environ.get(BOOT_RUNTIME_MODE_ENV_KEY, "")
     if not raw:
         return None
@@ -184,65 +139,29 @@ def _resolve_baseline_from_env() -> Optional[str]:
 
 
 def initialize_runtime_mode_baseline(mode: Optional[str] = None) -> None:
-    """Pin the boot-time runtime-mode baseline used by ``save_settings``.
+    """Pin the immutable runtime-mode baseline before any agent code runs.
 
-    **Order contract (must be respected by every entry point):**
-
-    1. Call AFTER ``load_settings`` + ``apply_settings_to_env`` so the
-       captured value reflects the owner's actual choice for this run
-       (``OUROBOROS_RUNTIME_MODE`` is what the env carries at this
-       point, which equals the on-disk value the launcher / lifespan
-       already validated).
-    2. Call BEFORE any agent code runs (worker spawn, supervisor
-       start, anything that may import + call ``save_settings``). The
-       chokepoint is only meaningful once this is set.
-    3. Subsequent calls are no-ops — the baseline is immutable for the
-       life of the process.
-
-    Production callers MUST also propagate the baseline to subprocess
-    children. This function does so automatically by exporting
-    ``OUROBOROS_BOOT_RUNTIME_MODE`` (a parallel env var, distinct from
-    ``OUROBOROS_RUNTIME_MODE`` so the application code reads the
-    current mode and the chokepoint reads the boot-time baseline).
-    Children that re-import ``ouroboros.config`` see the parent's pin
-    via ``_resolve_baseline_from_env``.
-
-    Tests that monkeypatch settings paths can call this with an
-    explicit ``mode`` to set the baseline for a hermetic test, or pass
-    ``None`` to read the current ``OUROBOROS_RUNTIME_MODE`` env var.
+    Call after ``load_settings``/``apply_settings_to_env`` and before worker or
+    supervisor startup. The pin is exported as ``OUROBOROS_BOOT_RUNTIME_MODE``
+    so subprocesses enforce the same owner-selected baseline.
     """
     global _BOOT_RUNTIME_MODE
     if _BOOT_RUNTIME_MODE is not None:
         return
     if mode is None:
-        # v5.1.2 iter-2 real triad+scope finding SR1: prefer the
-        # parent-exported ``OUROBOROS_BOOT_RUNTIME_MODE`` over
-        # ``OUROBOROS_RUNTIME_MODE``. A fresh subprocess inherits BOTH
-        # vars, but the parent considers only the BOOT key authoritative
-        # (the agent CAN clobber its own ``OUROBOROS_RUNTIME_MODE`` to
-        # poison the baseline; ``OUROBOROS_BOOT_RUNTIME_MODE`` is only
-        # set by ``initialize_runtime_mode_baseline`` itself and is the
-        # actual owner-pinned value). Only fall back to RUNTIME_MODE on
-        # processes where no baseline was ever pinned (true first
-        # launch / hermetic test).
+        # Prefer the parent-exported BOOT key; RUNTIME_MODE is mutable app state.
         inherited = _resolve_baseline_from_env()
         if inherited is not None:
             mode = inherited
         else:
             mode = os.environ.get("OUROBOROS_RUNTIME_MODE", "advanced") or "advanced"
     _BOOT_RUNTIME_MODE = normalize_runtime_mode(mode)
-    # Propagate to env so subprocesses can inherit the pin.
+    # Propagate the pin to subprocesses.
     os.environ[BOOT_RUNTIME_MODE_ENV_KEY] = _BOOT_RUNTIME_MODE
 
 
 def reset_runtime_mode_baseline_for_tests() -> None:
-    """Test-only helper to clear the pinned baseline AND the env var.
-
-    Production code MUST NOT call this. Tests that need to exercise
-    different baselines call this between cases. Documented under a
-    descriptive name so a casual reader cannot mistake it for a
-    production API.
-    """
+    """Test-only helper to clear the pinned baseline and env export."""
     global _BOOT_RUNTIME_MODE
     _BOOT_RUNTIME_MODE = None
     os.environ.pop(BOOT_RUNTIME_MODE_ENV_KEY, None)
@@ -288,8 +207,7 @@ def resolve_effort(task_type: str) -> str:
         key = "OUROBOROS_EFFORT_CONSCIOUSNESS"
         default = "low"
     else:
-        # v5.15.0: legacy ``OUROBOROS_INITIAL_REASONING_EFFORT`` alias retired.
-        # Users on the legacy key need to switch to ``OUROBOROS_EFFORT_TASK``.
+        # Legacy INITIAL_REASONING_EFFORT is retired; use EFFORT_TASK.
         key = "OUROBOROS_EFFORT_TASK"
         default = "medium"
 
@@ -298,15 +216,7 @@ def resolve_effort(task_type: str) -> str:
 
 
 def direct_provider_review_models_fallback(provider: str) -> list[str]:
-    """Return the exact review-models list a direct-provider fallback would emit.
-
-    Mirrors `server_runtime._normalize_direct_review_models`. Public so callers
-    (e.g. `plan_task`'s quorum validator) can recognise the exact shape the
-    auto-fallback would have produced and distinguish it from user-authored
-    duplicate lists. Returns `[]` when `provider` is not one of the supported
-    exclusive direct providers or when the main-model lane is not
-    provider-prefixed.
-    """
+    """Return the exact review-models list a direct-provider fallback emits."""
     if provider not in ("openai", "anthropic"):
         return []
     main_model = str(
@@ -339,9 +249,7 @@ def get_review_models() -> list[str]:
 
     migrated = [migrate_model_value(provider, model) for model in models]
     if not migrated or len(migrated) < 2 or any(not model.startswith(provider_prefix) for model in migrated):
-        # Mirror `server_runtime._normalize_direct_review_models`: seed three
-        # reviewer slots. Duplicate model IDs are valid stochastic slots, so
-        # this remains quorum-compatible even when main/light collapse.
+        # Duplicate model IDs are valid stochastic reviewer slots.
         return direct_provider_review_models_fallback(provider)
     return migrated
 
@@ -371,32 +279,14 @@ def get_auto_grant_enabled() -> bool:
 
 
 def normalize_runtime_mode(value: Any) -> str:
-    """Clamp an arbitrary caller-supplied runtime mode to a valid value.
-
-    Used on both the write path (``api_settings_post`` / onboarding save)
-    and the read path (``get_runtime_mode``) so the stored value,
-    ``/api/settings`` echo, ``/api/state``, and the UI segmented control
-    can never drift — a typo like ``"turbo"`` is silently pinned to the
-    default (``advanced``) everywhere instead of being accepted by the
-    save path and clamped only at read time.
-
-    Returns the canonical lowercase mode string. Non-string / empty /
-    unknown inputs map to ``SETTINGS_DEFAULTS["OUROBOROS_RUNTIME_MODE"]``.
-    """
+    """Clamp caller-supplied runtime mode to the canonical closed enum."""
     default_val = str(SETTINGS_DEFAULTS["OUROBOROS_RUNTIME_MODE"])
     text = str(value or "").strip().lower()
     return text if text in VALID_RUNTIME_MODES else default_val
 
 
 def get_runtime_mode() -> str:
-    """Return the configured runtime mode (light / advanced / pro).
-
-    Reads ``OUROBOROS_RUNTIME_MODE`` from the environment with
-    ``SETTINGS_DEFAULTS`` as fallback, then delegates to
-    ``normalize_runtime_mode`` so unknown or empty values silently degrade
-    to the default. Phase 2 is plumbing only — callers should still guard
-    behaviour against this value on their own in Phase 3+.
-    """
+    """Return the configured runtime mode (light / advanced / pro)."""
     default_val = str(SETTINGS_DEFAULTS["OUROBOROS_RUNTIME_MODE"])
     return normalize_runtime_mode(
         os.environ.get("OUROBOROS_RUNTIME_MODE", default_val) or default_val
@@ -404,11 +294,7 @@ def get_runtime_mode() -> str:
 
 
 def get_skills_repo_path() -> str:
-    """Return the configured external skills repo checkout path (or empty).
-
-    Expands a leading ``~`` so settings files written as ``~/Ouroboros/skills``
-    resolve to the user home. Returns an empty string when unset.
-    """
+    """Return the configured external skills checkout path, expanding ``~``."""
     raw = (
         os.environ.get("OUROBOROS_SKILLS_REPO_PATH", "") or ""
     ).strip()
@@ -420,23 +306,11 @@ def get_skills_repo_path() -> str:
         return raw
 
 
-# ---------------------------------------------------------------------------
 # Skills data layout
-# ---------------------------------------------------------------------------
 #
-# v4.50 moved skill packages out of the git-tracked ``repo/skills/`` source
-# tree into the data plane (``data/skills/``) so the launcher seed (still
-# shipped under ``repo/skills/``) is a one-time bootstrap copy rather than
-# the live runtime location. Subdirectories carry the discovery source so
-# the Skills/Marketplace UI can group/filter by origin:
-#
-#   data/skills/native/<slug>/    -- bootstrapped from repo/skills/<slug>/
-#   data/skills/clawhub/<slug>/   -- installed by the ClawHub marketplace
-#   data/skills/external/<slug>/  -- user-managed (drop in manually)
-#   data/skills/ouroboroshub/<slug>/ -- installed from the official static GitHub catalog
-#
-# ``OUROBOROS_SKILLS_REPO_PATH`` continues to work as an OPTIONAL extra
-# discovery root for power users who keep skills in their own checkout.
+# Runtime skill packages live under ``data/skills/<source>/<slug>/``. The
+# git-tracked ``repo/skills/`` tree is only a launcher seed; the optional
+# ``OUROBOROS_SKILLS_REPO_PATH`` adds a user-managed checkout.
 
 SKILL_SOURCE_NATIVE = "native"
 SKILL_SOURCE_CLAWHUB = "clawhub"
@@ -454,28 +328,12 @@ SKILL_SOURCE_SUBDIRS = (
 
 
 def get_data_skills_dir() -> pathlib.Path:
-    """Return ``<DATA_DIR>/skills/`` (created on demand).
-
-    Single root for all skill packages discovered by the runtime;
-    subdirectories distinguish source (``native`` / ``clawhub`` /
-    ``external``). The directory is created on first read so callers
-    can rely on ``.iterdir()`` working without a separate bootstrap.
-    """
+    """Return ``<DATA_DIR>/skills/`` (created on demand)."""
     return ensure_data_skills_dir(DATA_DIR)
 
 
 def ensure_data_skills_dir(data_dir: pathlib.Path) -> pathlib.Path:
-    """Create + return ``<data_dir>/skills/{native,clawhub,external}/``.
-
-    Split out from :func:`get_data_skills_dir` so callers that want
-    to ENSURE the layout (launcher bootstrap, marketplace install)
-    can opt-in to the side effect, while pure-lookup callers (skill
-    discovery in tests) can use :func:`resolve_data_skills_dir` which
-    is read-only. Cycle 2 critic finding (Opus #3): the previous
-    behaviour of creating directories from inside a function whose
-    name implied "resolve" surprised tests and bled mock state into
-    the developer's real ``~/Ouroboros/data/`` tree.
-    """
+    """Create and return the data skills root plus source subdirectories."""
     root = data_dir / "skills"
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -487,13 +345,7 @@ def ensure_data_skills_dir(data_dir: pathlib.Path) -> pathlib.Path:
 
 
 def resolve_data_skills_dir(data_dir: pathlib.Path) -> Optional[pathlib.Path]:
-    """Return ``<data_dir>/skills/`` if it exists on disk, else ``None``.
-
-    Pure read — does NOT create the directory. The marketplace +
-    launcher call :func:`ensure_data_skills_dir` to create the layout
-    explicitly; callers that just want to know "does this exist yet"
-    use this helper.
-    """
+    """Return existing ``<data_dir>/skills/`` without creating it."""
     candidate = data_dir / "skills"
     return candidate if candidate.is_dir() else None
 
@@ -526,21 +378,7 @@ def get_ouroboroshub_skills_dir() -> pathlib.Path:
 
 
 def get_clawhub_registry_url() -> str:
-    """Return the configured ClawHub registry base URL (raw value).
-
-    Trailing slashes are stripped + any query string / fragment is
-    dropped so callers can append path segments without double-slash
-    bugs and without accidentally appending after a ``?key=foo``.
-
-    HOST ENFORCEMENT IS NOT PERFORMED HERE — this function only
-    normalises the raw value. The actual allowlist check happens at
-    HTTP-call time inside
-    :func:`ouroboros.marketplace.clawhub._registry_base_url` (also
-    re-applied per redirect hop via
-    :class:`ouroboros.marketplace.clawhub._AllowlistRedirectHandler`).
-    A future caller that uses this URL outside the marketplace client
-    must re-validate the host explicitly.
-    """
+    """Return the normalized ClawHub registry URL; callers enforce host allowlists."""
     raw = (os.environ.get("OUROBOROS_CLAWHUB_REGISTRY_URL", "") or "").strip()
     default_url = "https://clawhub.ai/api/v1"
     if not raw:
@@ -553,9 +391,7 @@ def get_clawhub_registry_url() -> str:
     return cleaned
 
 
-# ---------------------------------------------------------------------------
 # Version
-# ---------------------------------------------------------------------------
 def read_version() -> str:
     try:
         if getattr(sys, "frozen", False):
@@ -567,9 +403,7 @@ def read_version() -> str:
         return "0.0.0"
 
 
-# ---------------------------------------------------------------------------
 # Settings file locking
-# ---------------------------------------------------------------------------
 _SETTINGS_LOCK = pathlib.Path(str(SETTINGS_PATH) + ".lock")
 
 
@@ -606,16 +440,10 @@ def _release_settings_lock(fd: Optional[int]) -> None:
 
 def _coerce_setting_value(key: str, value):
     default = SETTINGS_DEFAULTS.get(key)
-    # Phase 2: runtime-mode is a closed enum. Normalize on the read path
-    # (``load_settings``) so every downstream consumer — ``api_settings_get``,
-    # the onboarding bootstrap, ``get_runtime_mode`` — sees the clamped
-    # value. A legacy ``settings.json`` containing e.g. ``"turbo"`` cannot
-    # leak an invalid mode into the UI or the runtime.
+    # Normalize runtime mode on read so all consumers see the closed enum.
     if key == "OUROBOROS_RUNTIME_MODE":
         return normalize_runtime_mode(value)
-    # Phase 2: whitespace around the opaque skills-repo path would leave the
-    # ``skills_repo_configured`` boolean in ``/api/state`` non-deterministic.
-    # Trim on load so empty-with-spaces truly reads as empty.
+    # Trim so whitespace-only config is not treated as a configured skills repo.
     if key == "OUROBOROS_SKILLS_REPO_PATH":
         return str(value or "").strip()
     if key == "MCP_SERVERS":
@@ -649,9 +477,7 @@ def _coerce_setting_value(key: str, value):
     return str(value or "")
 
 
-# ---------------------------------------------------------------------------
 # Load / Save
-# ---------------------------------------------------------------------------
 def load_settings() -> dict:
     fd = _acquire_settings_lock()
     try:
@@ -670,7 +496,12 @@ def load_settings() -> dict:
         settings.update(loaded)
         for key in SETTINGS_DEFAULTS:
             raw_env = os.environ.get(key)
-            if raw_env is None or raw_env == "":
+            if raw_env is None:
+                continue
+            if key == "OUROBOROS_RETURN_REASONING" and raw_env == "":
+                settings[key] = ""
+                continue
+            if raw_env == "":
                 continue
             if key in loaded and settings.get(key) not in {None, ""}:
                 continue
@@ -681,49 +512,16 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict, *, allow_elevation: bool = False) -> None:
-    """Persist settings to disk.
+    """Persist settings and enforce the runtime-mode self-elevation ratchet.
 
-    Single chokepoint for the runtime_mode self-elevation ratchet
-    (v5.1.2): if the incoming ``OUROBOROS_RUNTIME_MODE`` ranks higher
-    than the boot-time baseline (or on-disk old as fallback) and the
-    caller did not pass ``allow_elevation=True``, the write is refused
-    with ``PermissionError``. Same-mode and downgrade saves are
-    unaffected.
-
-    **Security note (iter-1 real triad+scope finding T1):**
-    ``allow_elevation=True`` is honoured ONLY before the boot-time
-    baseline has been pinned (i.e., during launcher / lifespan
-    pre-agent initialization). Once ``_BOOT_RUNTIME_MODE`` is set, an
-    agent-reachable subprocess that imports this function cannot use
-    the public ``allow_elevation=True`` argument to bypass the rank
-    comparison — the kwarg becomes inert. This makes the consent flag
-    non-forgeable from agent code: the only way to elevate is to stop
-    the agent (which clears ``_BOOT_RUNTIME_MODE``) and then either
-    edit ``settings.json`` directly or restart through the launcher /
-    server lifespan path.
-
-    The baseline is the boot-time ``_BOOT_RUNTIME_MODE`` if pinned, or
-    the on-disk value as a fallback for hermetic tests / pre-baseline
-    saves. The on-disk fallback is bypassable by an out-of-process
-    write (subprocess that goes around the chokepoint), so production
-    code MUST call ``initialize_runtime_mode_baseline`` before any
-    agent code runs.
+    Elevation above the boot baseline is refused after initialization; then
+    ``allow_elevation=True`` is inert to agent-reachable subprocesses. Production
+    entry points must call ``initialize_runtime_mode_baseline`` before agent code.
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     fd = _acquire_settings_lock()
     try:
-        # Baseline preference order:
-        #   1. ``_BOOT_RUNTIME_MODE`` if the launcher/lifespan has
-        #      pinned the boot-time mode in this Python process.
-        #   2. ``_resolve_baseline_from_env()`` — the parent's pinned
-        #      baseline propagated via env var. Closes the
-        #      fresh-subprocess regression where ``_BOOT_RUNTIME_MODE``
-        #      starts as ``None`` because Python re-imports
-        #      ``ouroboros.config`` from scratch.
-        #   3. On-disk old value as a final fallback for hermetic tests
-        #      and pre-launcher scenarios where neither pin nor env
-        #      var exists.
-        #   4. ``"advanced"`` default (matches ``SETTINGS_DEFAULTS``).
+        # Baseline order: in-process pin, inherited env pin, on-disk fallback.
         baseline_pinned_in_process = _BOOT_RUNTIME_MODE is not None
         baseline_inherited_from_env = (
             not baseline_pinned_in_process and _resolve_baseline_from_env() is not None
@@ -741,13 +539,7 @@ def save_settings(settings: dict, *, allow_elevation: bool = False) -> None:
                 except (OSError, json.JSONDecodeError):
                     pass
         new_mode = normalize_runtime_mode(settings.get("OUROBOROS_RUNTIME_MODE"))
-        # Once the boot baseline is pinned (in this process OR inherited
-        # from the parent supervisor via env), ``allow_elevation`` becomes
-        # inert. Agent-reachable subprocesses that import ``save_settings``
-        # and try to pass the public ``allow_elevation=True`` cannot bypass
-        # the rank check — the consent flag is only honoured during
-        # pre-agent initialization (launcher / lifespan), when both the
-        # in-process global AND the inherited env var are absent.
+        # Once a boot baseline is pinned, allow_elevation is inert.
         baseline_pinned = baseline_pinned_in_process or baseline_inherited_from_env
         consent_honoured = allow_elevation and not baseline_pinned
         if (_RUNTIME_MODE_RANK[new_mode] > _RUNTIME_MODE_RANK[baseline_mode]
@@ -826,15 +618,16 @@ def apply_settings_to_env(settings: dict) -> None:
         "OUROBOROS_REVIEW_MODELS", "OUROBOROS_REVIEW_ENFORCEMENT",
         "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS",
         "OUROBOROS_SCOPE_REVIEW_MODEL",
-        # Phase 2 runtime-mode + skills-repo plumbing (no runtime gating yet).
+        # Runtime-mode and skills-repo plumbing.
         "OUROBOROS_RUNTIME_MODE", "OUROBOROS_SKILLS_REPO_PATH",
         "OUROBOROS_HOST_SERVICE_PORT",
-        # v4.50+ ClawHub marketplace registry URL.
+        # ClawHub marketplace registry URL.
         "OUROBOROS_CLAWHUB_REGISTRY_URL",
         "MCP_ENABLED", "MCP_TOOL_TIMEOUT_SEC",
         "OUROBOROS_EFFORT_TASK", "OUROBOROS_EFFORT_EVOLUTION",
         "OUROBOROS_EFFORT_REVIEW", "OUROBOROS_EFFORT_SCOPE_REVIEW",
         "OUROBOROS_EFFORT_CONSCIOUSNESS",
+        "OUROBOROS_RETURN_REASONING",
         "LOCAL_MODEL_SOURCE", "LOCAL_MODEL_FILENAME",
         "LOCAL_MODEL_PORT", "LOCAL_MODEL_N_GPU_LAYERS", "LOCAL_MODEL_CONTEXT_LENGTH",
         "LOCAL_MODEL_CHAT_FORMAT",
@@ -843,6 +636,9 @@ def apply_settings_to_env(settings: dict) -> None:
     ]
     for k in env_keys:
         val = settings.get(k)
+        if k == "OUROBOROS_RETURN_REASONING" and val == "":
+            os.environ[k] = ""
+            continue
         if val is None or val == "":
             os.environ.pop(k, None)
         else:
@@ -853,12 +649,7 @@ def apply_settings_to_env(settings: dict) -> None:
         os.environ["OUROBOROS_REVIEW_ENFORCEMENT"] = str(SETTINGS_DEFAULTS["OUROBOROS_REVIEW_ENFORCEMENT"])
 
 
-# ---------------------------------------------------------------------------
-# PID lock (single instance) — crash-proof locking via ouroboros.platform_layer.
-# On Unix the OS releases flock automatically when the process dies
-# (even SIGKILL), so stale lock files can never block future launches.
-# On Windows msvcrt.locking provides equivalent semantics.
-# ---------------------------------------------------------------------------
+# PID lock: platform_layer uses OS-released locks on Unix and Windows.
 
 def acquire_pid_lock() -> bool:
     APP_ROOT.mkdir(parents=True, exist_ok=True)

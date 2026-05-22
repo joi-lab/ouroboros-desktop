@@ -1,0 +1,49 @@
+#!/bin/sh
+# Ouroboros packaged CLI installer
+set -eu
+
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd)
+    LINK=$(readlink "$SCRIPT")
+    case "$LINK" in
+        /*) SCRIPT="$LINK" ;;
+        *) SCRIPT="$DIR/$LINK" ;;
+    esac
+done
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd)
+
+find_root() {
+    for candidate in \
+        "$SCRIPT_DIR/.." \
+        "$SCRIPT_DIR/../_internal" \
+        "$SCRIPT_DIR/../.." \
+        "$SCRIPT_DIR/../../Resources" \
+        "$SCRIPT_DIR/../../Frameworks" \
+        "$SCRIPT_DIR/../../_internal"
+    do
+        [ -n "$candidate" ] || continue
+        if [ -f "$candidate/repo.bundle" ] && [ -f "$candidate/repo_bundle_manifest.json" ]; then
+            if [ -x "$candidate/python-standalone/bin/python3" ] || [ -x "$candidate/python-standalone/bin/python" ]; then
+                CDPATH= cd -- "$candidate" && pwd
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+BUNDLE_ROOT=$(find_root) || {
+    echo "ouroboros CLI install: could not locate packaged bundle root" >&2
+    exit 2
+}
+
+PY="$BUNDLE_ROOT/python-standalone/bin/python3"
+if [ ! -x "$PY" ]; then
+    PY="$BUNDLE_ROOT/python-standalone/bin/python"
+fi
+
+PYTHONPATH="$BUNDLE_ROOT" \
+OUROBOROS_PACKAGED_BUNDLE_ROOT="$BUNDLE_ROOT" \
+OUROBOROS_PACKAGED_CLI_WRAPPER="$SCRIPT_DIR/ouroboros" \
+exec "$PY" -m ouroboros.packaged_cli_install "$@"

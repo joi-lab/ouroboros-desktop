@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros import get_version
+from ouroboros.gateway._helpers import json_exception
 
 
 def _state_attr(request: Request, name: str, default: Any = None) -> Any:
@@ -81,7 +82,7 @@ async def api_state(request: Request) -> JSONResponse:
             "github_token_configured": bool(github_token_from_env_or_settings()),
         })
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return json_exception(exc)
 
 
 __all__ = ["api_health", "api_state"]

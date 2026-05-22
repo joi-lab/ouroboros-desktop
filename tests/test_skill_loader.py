@@ -72,80 +72,27 @@ def _valid_script_manifest(name: str = "weather") -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_discover_skills_returns_empty_when_unconfigured(tmp_path):
+def test_discover_skills_returns_empty_when_data_plane_missing(tmp_path):
     drive_root = tmp_path / "drive"
     drive_root.mkdir()
-    # With ``include_bundled=False`` (forced by the autouse fixture in
-    # conftest.py that stubs out ``_bundled_skills_dir``), an
-    # unconfigured external path yields an empty catalogue.
     assert discover_skills(drive_root, repo_path="") == []
     # A missing path is also silently tolerated — same "no skills" signal.
     assert discover_skills(drive_root, repo_path=str(tmp_path / "does-not-exist")) == []
 
 
-def test_discover_skills_includes_bundled_by_default(tmp_path, monkeypatch):
-    """Phase 5 regression: ``discover_skills`` merges the bundled
-    ``repo/skills/`` reference set with the configured external path
-    by default, so the shipped ``weather`` skill appears in a default
-    install even when ``OUROBOROS_SKILLS_REPO_PATH`` is empty.
-
-    The autouse ``_hide_bundled_skills`` fixture zeroes out the
-    bundled path helper for hermetic tests — we undo it locally to
-    exercise the real production behaviour.
-    """
-    bundled_root = tmp_path / "bundled"
-    bundled_root.mkdir()
+def test_discover_skills_uses_data_plane_native_bucket(tmp_path):
+    drive_root = tmp_path / "drive"
+    native_root = drive_root / "skills" / "native"
     _write_skill(
-        bundled_root,
+        native_root,
         "weather",
         manifest=_valid_script_manifest("weather"),
         scripts={"fetch.py": "print('ok')\n"},
     )
-    # Override the autouse fixture: re-point the bundled helper at our
-    # tmp ``bundled_root`` so we don't need the real shipped skills.
-    monkeypatch.setattr(
-        "ouroboros.skill_loader._bundled_skills_dir",
-        lambda: bundled_root,
-    )
-
-    drive_root = tmp_path / "drive"
-    drive_root.mkdir()
-
-    # Empty external path — bundled alone must still surface.
+    (native_root / "weather" / ".seed-origin").write_text("seeded_from=test\n", encoding="utf-8")
     skills = discover_skills(drive_root, repo_path="")
     names = {s.name for s in skills}
     assert "weather" in names
-
-    # include_bundled=False must hide it again.
-    skills_hermetic = discover_skills(
-        drive_root, repo_path="", include_bundled=False
-    )
-    assert skills_hermetic == []
-
-
-def test_bundled_skills_dir_falls_back_to_module_repo_root(monkeypatch):
-    """Phase 5 regression: source/dev runs should still discover the shipped
-    ``repo/skills/`` bundle even when ``ouroboros.config.REPO_DIR`` points at
-    the launcher-managed default path instead of the active checkout."""
-    import importlib.util
-    import sys
-
-    import ouroboros.config as config_module
-    import ouroboros.skill_loader as live_skill_loader
-
-    module_path = pathlib.Path(live_skill_loader.__file__).resolve()
-    repo_root = module_path.parents[1]
-    assert (repo_root / "skills").is_dir(), "repo/skills/ fixture missing from checkout"
-    spec = importlib.util.spec_from_file_location("skill_loader_test_copy", module_path)
-    assert spec is not None and spec.loader is not None
-    skill_loader_module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = skill_loader_module
-    spec.loader.exec_module(skill_loader_module)
-
-    monkeypatch.setattr(config_module, "REPO_DIR", pathlib.Path("/tmp/nonexistent-ouroboros-repo"))
-
-    bundled = skill_loader_module._bundled_skills_dir()
-    assert bundled == repo_root / "skills"
 
 
 def test_load_skill_parses_manifest_and_computes_hash(tmp_path):
@@ -788,8 +735,7 @@ def test_summarize_skills_reflects_runtime_mode_light(tmp_path, monkeypatch):
     """v5.1.2 Frame A: a reviewed + enabled skill stays ``available``
     in light mode, because ``skill_exec`` no longer refuses light.
     The static-readiness signal and the available-for-execution flag
-    converge in this release; ``runtime_blocked`` always counts 0 once
-    the runtime-mode gate is gone."""
+    converge in this release."""
     drive_root = tmp_path / "drive"
     drive_root.mkdir()
     repo_root = tmp_path / "skills"
@@ -815,7 +761,6 @@ def test_summarize_skills_reflects_runtime_mode_light(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     adv = summarize_skills(drive_root)
     assert adv["available"] == 1
-    assert adv["runtime_blocked"] == 0
     assert adv["skills"][0]["available_for_execution"] is True
 
     # v5.1.2 Frame A: light is also ``available`` — skills run regardless
@@ -824,12 +769,88 @@ def test_summarize_skills_reflects_runtime_mode_light(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     light = summarize_skills(drive_root)
     assert light["available"] == 1
-    assert light["runtime_blocked"] == 0
     assert light["skills"][0]["available_for_execution"] is True
     assert light["skills"][0]["review_gate"]["executable_review"] is True
     assert light["skills"][0]["executable_review"] is True
-    assert light["skills"][0]["runtime_blocked_by_mode"] is False
     assert light["skills"][0]["static_ready"] is True
+
+
+def test_summarize_skills_blocks_missing_isolated_deps(tmp_path, monkeypatch):
+    drive_root = tmp_path / "drive"
+    drive_root.mkdir()
+    repo_root = tmp_path / "skills"
+    manifest = _valid_script_manifest("alpha").replace(
+        "scripts:\n",
+        "install_specs:\n"
+        "  - kind: pip\n"
+        "    package: wheel\n"
+        "scripts:\n",
+    )
+    skill_dir = _write_skill(
+        repo_root,
+        "alpha",
+        manifest=manifest,
+        scripts={"fetch.py": "print('ok')\n"},
+    )
+    loaded = find_skill(drive_root, "alpha", repo_path=str(repo_root))
+    assert loaded is not None
+    save_enabled(drive_root, "alpha", True)
+    save_review_state(
+        drive_root,
+        "alpha",
+        SkillReviewState(status="pass", content_hash=compute_content_hash(skill_dir)),
+    )
+    monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(repo_root))
+
+    summary = summarize_skills(drive_root)
+
+    assert list_available_for_execution(drive_root, repo_path=str(repo_root)) == []
+    assert summary["available"] == 0
+    assert summary["skills"][0]["available_for_execution"] is False
+    assert summary["skills"][0]["static_ready"] is False
+
+
+def test_available_summary_keeps_runtime_and_script_substrate_gate(tmp_path, monkeypatch):
+    drive_root = tmp_path / "drive"
+    drive_root.mkdir()
+    repo_root = tmp_path / "skills"
+    unsupported_runtime = _valid_script_manifest("bad_runtime").replace(
+        "runtime: python3\n",
+        "runtime: perl\n",
+    )
+    missing_script = _valid_script_manifest("missing_script")
+    skill_dirs = {
+        "bad_runtime": _write_skill(
+            repo_root,
+            "bad_runtime",
+            manifest=unsupported_runtime,
+            scripts={"fetch.py": "print('ok')\n"},
+        ),
+        "missing_script": _write_skill(
+            repo_root,
+            "missing_script",
+            manifest=missing_script,
+            scripts={},
+        ),
+    }
+    for name, skill_dir in skill_dirs.items():
+        save_enabled(drive_root, name, True)
+        save_review_state(
+            drive_root,
+            name,
+            SkillReviewState(status="pass", content_hash=compute_content_hash(skill_dir)),
+        )
+    monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(repo_root))
+
+    summary = summarize_skills(drive_root)
+
+    assert list_available_for_execution(drive_root, repo_path=str(repo_root)) == []
+    assert summary["available"] == 0
+    by_name = {row["name"]: row for row in summary["skills"]}
+    assert by_name["bad_runtime"]["available_for_execution"] is False
+    assert by_name["bad_runtime"]["static_ready"] is False
+    assert by_name["missing_script"]["available_for_execution"] is False
+    assert by_name["missing_script"]["static_ready"] is False
 
 
 def test_valid_review_statuses_exported():
@@ -1128,6 +1149,45 @@ def test_auto_grant_if_enabled_marks_granted_when_toggle_on(tmp_path, monkeypatc
     grants = load_skill_grants(drive_root, "auto")
     assert grants["granted_keys"] == ["OPENROUTER_API_KEY"]
     assert grants["granted_permissions"] == ["inject_chat"]
+
+
+def test_auto_grant_if_enabled_uses_executable_review_gate(tmp_path, monkeypatch):
+    import ouroboros.config as config
+    from ouroboros.contracts.skill_manifest import SkillManifest
+    from ouroboros.skill_loader import (
+        LoadedSkill,
+        SkillReviewState,
+        auto_grant_if_enabled,
+        load_skill_grants,
+    )
+
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "missing-settings.json")
+    monkeypatch.setenv("OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS", "true")
+    monkeypatch.setenv("OUROBOROS_REVIEW_ENFORCEMENT", "blocking")
+    drive_root = tmp_path / "drive"
+    skill_dir = tmp_path / "skill"
+    drive_root.mkdir()
+    skill_dir.mkdir()
+    skill = LoadedSkill(
+        name="auto_blocked",
+        skill_dir=skill_dir,
+        manifest=SkillManifest(
+            name="auto_blocked",
+            description="auto grant blocker test",
+            version="0.1",
+            type="extension",
+            env_from_settings=["OPENROUTER_API_KEY"],
+        ),
+        content_hash="hash-a",
+        review=SkillReviewState(status="blockers", content_hash="hash-a"),
+    )
+
+    outcome = auto_grant_if_enabled(drive_root, skill)
+
+    assert outcome.granted is False
+    assert outcome.requested_keys == ["OPENROUTER_API_KEY"]
+    assert outcome.granted_keys == []
+    assert load_skill_grants(drive_root, "auto_blocked")["granted_keys"] == []
 
 
 def test_save_skill_grants_merges_partial_approvals(tmp_path):

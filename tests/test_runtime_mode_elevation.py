@@ -506,7 +506,7 @@ def test_merge_settings_payload_skips_runtime_mode():
 
 
 def test_merge_settings_payload_skips_auto_grant_reviewed_skills():
-    """Auto-grant changes require the desktop owner-confirmation bridge."""
+    """Auto-grant changes use the dedicated owner endpoint, not /api/settings."""
     from ouroboros.gateway import settings as server_mod
 
     old = {"OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS": "false"}
@@ -514,6 +514,139 @@ def test_merge_settings_payload_skips_auto_grant_reviewed_skills():
     merged = server_mod._merge_settings_payload(old, body)
 
     assert merged["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"] == "false"
+
+
+def test_owner_runtime_mode_endpoint_persists_next_boot_without_env_elevation(isolated_settings, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros import config as cfg
+    from ouroboros.gateway.settings import api_owner_runtime_mode
+
+    _seed_disk(isolated_settings, {"OUROBOROS_RUNTIME_MODE": "advanced"})
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
+    cfg.initialize_runtime_mode_baseline("advanced")
+
+    app = Starlette(routes=[Route("/api/owner/runtime-mode", endpoint=api_owner_runtime_mode, methods=["POST"])])
+    app.state.drive_root = isolated_settings.parent
+    response = TestClient(app).post("/api/owner/runtime-mode", json={"mode": "pro"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "runtime_mode": "pro", "restart_required": True}
+    on_disk = json.loads(isolated_settings.read_text(encoding="utf-8"))
+    assert on_disk["OUROBOROS_RUNTIME_MODE"] == "pro"
+    assert os.environ["OUROBOROS_RUNTIME_MODE"] == "advanced"
+    assert os.environ["OUROBOROS_BOOT_RUNTIME_MODE"] == "advanced"
+
+
+def test_owner_runtime_mode_endpoint_reports_no_restart_when_mode_unchanged(isolated_settings, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros import config as cfg
+    from ouroboros.gateway.settings import api_owner_runtime_mode
+
+    _seed_disk(isolated_settings, {"OUROBOROS_RUNTIME_MODE": "advanced"})
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
+    cfg.initialize_runtime_mode_baseline("advanced")
+
+    app = Starlette(routes=[Route("/api/owner/runtime-mode", endpoint=api_owner_runtime_mode, methods=["POST"])])
+    app.state.drive_root = isolated_settings.parent
+    response = TestClient(app).post("/api/owner/runtime-mode", json={"mode": "advanced"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "runtime_mode": "advanced", "restart_required": False}
+    assert os.environ["OUROBOROS_RUNTIME_MODE"] == "advanced"
+
+
+def test_owner_runtime_mode_endpoint_reports_restart_until_pending_mode_is_active(isolated_settings, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros import config as cfg
+    from ouroboros.gateway.settings import api_owner_runtime_mode
+
+    _seed_disk(isolated_settings, {"OUROBOROS_RUNTIME_MODE": "pro"})
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
+    cfg.initialize_runtime_mode_baseline("advanced")
+
+    app = Starlette(routes=[Route("/api/owner/runtime-mode", endpoint=api_owner_runtime_mode, methods=["POST"])])
+    app.state.drive_root = isolated_settings.parent
+    response = TestClient(app).post("/api/owner/runtime-mode", json={"mode": "pro"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "runtime_mode": "pro", "restart_required": True}
+    assert os.environ["OUROBOROS_RUNTIME_MODE"] == "advanced"
+
+
+@pytest.mark.parametrize("next_mode", ["pro", "light"])
+def test_generic_settings_save_preserves_pending_runtime_mode_without_hot_apply(
+    isolated_settings,
+    monkeypatch,
+    next_mode,
+):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros import config as cfg
+    from ouroboros.gateway import settings as settings_mod
+    from ouroboros.gateway.settings import api_owner_runtime_mode, api_settings_post
+
+    _seed_disk(isolated_settings, {
+        "OUROBOROS_RUNTIME_MODE": "advanced",
+        "TOTAL_BUDGET": "10",
+    })
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
+    cfg.initialize_runtime_mode_baseline("advanced")
+    monkeypatch.setattr(settings_mod, "apply_runtime_provider_defaults", lambda s: (s, False, []))
+    monkeypatch.setattr(settings_mod, "_start_supervisor_if_needed_for_request", lambda *_a, **_k: False)
+
+    app = Starlette(routes=[
+        Route("/api/owner/runtime-mode", endpoint=api_owner_runtime_mode, methods=["POST"]),
+        Route("/api/settings", endpoint=api_settings_post, methods=["POST"]),
+    ])
+    app.state.drive_root = isolated_settings.parent
+    client = TestClient(app)
+
+    owner_resp = client.post("/api/owner/runtime-mode", json={"mode": next_mode})
+    assert owner_resp.status_code == 200, owner_resp.text
+    save_resp = client.post("/api/settings", json={"TOTAL_BUDGET": "77"})
+
+    assert save_resp.status_code == 200, save_resp.text
+    on_disk = json.loads(isolated_settings.read_text(encoding="utf-8"))
+    assert on_disk["OUROBOROS_RUNTIME_MODE"] == next_mode
+    assert on_disk["TOTAL_BUDGET"] == "77"
+    assert os.environ["OUROBOROS_RUNTIME_MODE"] == "advanced"
+    assert os.environ["OUROBOROS_BOOT_RUNTIME_MODE"] == "advanced"
+
+
+def test_owner_auto_grant_endpoint_persists_outside_generic_settings(isolated_settings, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros.gateway.settings import api_owner_auto_grant
+
+    _seed_disk(isolated_settings, {
+        "OUROBOROS_RUNTIME_MODE": "pro",
+        "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS": "false",
+    })
+    monkeypatch.delenv("OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS", raising=False)
+
+    app = Starlette(routes=[Route("/api/owner/auto-grant", endpoint=api_owner_auto_grant, methods=["POST"])])
+    app.state.drive_root = isolated_settings.parent
+    response = TestClient(app).post("/api/owner/auto-grant", json={"enabled": True})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "enabled": True}
+    on_disk = json.loads(isolated_settings.read_text(encoding="utf-8"))
+    assert on_disk["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"] == "true"
+    assert on_disk["OUROBOROS_RUNTIME_MODE"] == "pro"
+    assert os.environ["OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"] == "true"
 
 
 def test_merge_settings_payload_preserves_other_keys():
@@ -590,6 +723,7 @@ def test_launcher_runtime_mode_bridge_saves_after_confirmation(monkeypatch):
     saved = {}
     monkeypatch.setattr(launcher, "_load_settings", lambda: {"OUROBOROS_RUNTIME_MODE": "advanced"})
     monkeypatch.setattr(launcher, "_save_settings", lambda settings: saved.update(settings))
+    monkeypatch.setattr(launcher, "get_runtime_mode", lambda: "advanced")
 
     result = launcher._request_runtime_mode_change("pro", lambda _title, _message: True)
 
@@ -597,6 +731,34 @@ def test_launcher_runtime_mode_bridge_saves_after_confirmation(monkeypatch):
     assert result["runtime_mode"] == "pro"
     assert result["restart_required"] is True
     assert saved["OUROBOROS_RUNTIME_MODE"] == "pro"
+
+
+def test_launcher_runtime_mode_bridge_reports_pending_restart_against_active(monkeypatch):
+    import launcher
+
+    saved = {}
+    monkeypatch.setattr(launcher, "_load_settings", lambda: {"OUROBOROS_RUNTIME_MODE": "pro"})
+    monkeypatch.setattr(launcher, "_save_settings", lambda settings: saved.update(settings))
+    monkeypatch.setattr(launcher, "get_runtime_mode", lambda: "advanced")
+
+    result = launcher._request_runtime_mode_change("pro", lambda _title, _message: False)
+
+    assert result == {"ok": True, "runtime_mode": "pro", "restart_required": True}
+    assert saved == {}
+
+
+def test_launcher_runtime_mode_bridge_can_cancel_pending_mode_without_restart(monkeypatch):
+    import launcher
+
+    saved = {}
+    monkeypatch.setattr(launcher, "_load_settings", lambda: {"OUROBOROS_RUNTIME_MODE": "pro"})
+    monkeypatch.setattr(launcher, "_save_settings", lambda settings: saved.update(settings))
+    monkeypatch.setattr(launcher, "get_runtime_mode", lambda: "advanced")
+
+    result = launcher._request_runtime_mode_change("advanced", lambda _title, _message: True)
+
+    assert result == {"ok": True, "runtime_mode": "advanced", "restart_required": False}
+    assert saved["OUROBOROS_RUNTIME_MODE"] == "advanced"
 
 
 def test_launcher_auto_grant_bridge_saves_after_confirmation(monkeypatch):

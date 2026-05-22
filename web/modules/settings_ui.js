@@ -9,8 +9,22 @@ const SETTINGS_TABS = [
     { value: 'advanced', label: 'Расширенные' },
     { value: 'about', label: 'О программе' },
 ];
-// Static guard markers: renderTabStrip emits data-settings-tab="behavior"
-// and data-settings-tab="advanced" from SETTINGS_TABS at runtime.
+// Guard markers: renderTabStrip emits behavior/advanced tabs at runtime.
+
+const MODEL_CARDS = [
+    ['Основная', 'Основная модель для рассуждений.', 's-model', 's-local-main', 'anthropic/claude-opus-4.6'],
+    ['Код', 'Модель для задач с большим количеством инструментов.', 's-model-code', 's-local-code', 'anthropic/claude-opus-4.6'],
+    ['Лёгкая', 'Быстрые резюме и лёгкие задачи.', 's-model-light', 's-local-light', 'anthropic/claude-sonnet-4.6'],
+    ['Запасная', 'Используется, если основная модель недоступна.', 's-model-fallback', 's-local-fallback', 'anthropic/claude-sonnet-4.6'],
+];
+
+const EFFORT_FIELDS = [
+    ['s-effort-task', 'Задача / Чат', 'medium'],
+    ['s-effort-evolution', 'Эволюция', 'high'],
+    ['s-effort-review', 'Проверка', 'medium'],
+    ['s-effort-scope-review', 'Проверка области', 'high'],
+    ['s-effort-consciousness', 'Сознание', 'low'],
+];
 
 function providerCard({ id, title, icon, hint, body, open = false }) {
     return `
@@ -40,6 +54,63 @@ function secretField({ id, settingKey, label, placeholder }) {
             </div>
         </div>
     `;
+}
+
+function plainField({ id, label, placeholder }) {
+    return `<div class="form-field"><label>${label}</label><input id="${id}" placeholder="${placeholder}"></div>`;
+}
+
+const PROVIDER_CARDS = [
+    {
+        id: 'openrouter', title: 'OpenRouter', icon: '/static/providers/openrouter.ico', hint: 'Роутер по умолчанию для нескольких моделей', open: true,
+        fields: [{ id: 's-openrouter', settingKey: 'OPENROUTER_API_KEY', label: 'OpenRouter API Key', placeholder: 'sk-or-...' }],
+    },
+    {
+        id: 'openai', title: 'OpenAI', icon: '/static/providers/openai.svg', hint: 'Официальный OpenAI API',
+        fields: [{ id: 's-openai', settingKey: 'OPENAI_API_KEY', label: 'OpenAI API Key', placeholder: 'sk-...' }],
+        note: 'Используйте значения моделей вида <code>openai::gpt-5.5</code> во вкладке «Модели» для прямой маршрутизации. Если OpenRouter отсутствует и значения по умолчанию не изменялись, Ouroboros автоматически переключается на официальные модели OpenAI.',
+    },
+    {
+        id: 'compatible', title: 'OpenAI Compatible', icon: '/static/providers/openai-compatible.svg', hint: 'Пользовательский OpenAI-совместимый эндпоинт',
+        fields: [
+            { id: 's-openai-compatible-key', settingKey: 'OPENAI_COMPATIBLE_API_KEY', label: 'API Key', placeholder: 'Ключ совместимого провайдера' },
+            { id: 's-openai-compatible-base-url', label: 'Base URL', placeholder: 'https://provider.example/v1' },
+        ],
+        note: 'Используйте эту карточку для пользовательских Base URL. Встроенный веб-поиск работает только с официальным OpenAI Responses API, поэтому оставьте <code>OPENAI_BASE_URL</code> пустым, если нужен <code>web_search</code>.',
+    },
+    {
+        id: 'cloudru', title: 'Cloud.ru Foundation Models', icon: '/static/providers/cloudru.svg', hint: 'Cloud.ru OpenAI-совместимая среда',
+        fields: [
+            { id: 's-cloudru-key', settingKey: 'CLOUDRU_FOUNDATION_MODELS_API_KEY', label: 'API Key', placeholder: 'API-ключ Cloud.ru Foundation Models' },
+            { id: 's-cloudru-base-url', label: 'Base URL', placeholder: 'https://foundation-models.api.cloud.ru/v1' },
+        ],
+    },
+    {
+        id: 'anthropic', title: 'Anthropic', icon: '/static/providers/anthropic.png', hint: 'Прямая среда и инструменты Claude',
+        fields: [{ id: 's-anthropic', settingKey: 'ANTHROPIC_API_KEY', label: 'Anthropic API Key', placeholder: 'sk-ant-...' }],
+        note: 'Используйте значения моделей вида <code>anthropic::claude-sonnet-4-6</code> во вкладке «Модели» для прямой маршрутизации через Anthropic. Инструменты Claude также используют этот ключ.',
+        extra: `
+            <div class="settings-toolbar" id="settings-claude-code-panel" hidden>
+                <button type="button" class="settings-ghost-btn" id="btn-claude-code-install">Восстановить среду</button>
+                <span id="settings-claude-code-status" class="settings-inline-status">Проверка среды Claude...</span>
+            </div>
+            <div class="settings-inline-note" id="settings-claude-code-copy" hidden>Среда Claude обеспечивает делегированное редактирование кода и рекомендательную проверку. Управляется приложением автоматически.</div>
+        `,
+    },
+];
+
+function providerSettingsCard(spec) {
+    const fields = (spec.fields || [])
+        .map((field) => field.settingKey ? secretField(field) : plainField(field))
+        .join('');
+    return providerCard({
+        id: spec.id,
+        title: spec.title,
+        icon: spec.icon,
+        hint: spec.hint,
+        open: spec.open,
+        body: `<div class="form-row">${fields}</div>${spec.note ? `<div class="settings-inline-note">${spec.note}</div>` : ''}${spec.extra || ''}`,
+    });
 }
 
 function modelCard({ title, copy, inputId, toggleId, defaultValue }) {
@@ -158,95 +229,7 @@ export function renderSettingsPage() {
                         Настройте удалённых провайдеров и дополнительный сетевой шлюз. Поля секретов теперь содержат явные
                         кнопки <code>Очистить</code> для намеренного удаления скрытых значений.
                     </div>
-                    ${providerCard({
-                        id: 'openrouter',
-                        title: 'OpenRouter',
-                        icon: '/static/providers/openrouter.ico',
-                        hint: 'Роутер по умолчанию для нескольких моделей',
-                        open: true,
-                        body: `<div class="form-row">${secretField({
-                            id: 's-openrouter',
-                            settingKey: 'OPENROUTER_API_KEY',
-                            label: 'OpenRouter API Key',
-                            placeholder: 'sk-or-...',
-                        })}</div>`,
-                    })}
-                    ${providerCard({
-                        id: 'openai',
-                        title: 'OpenAI',
-                        icon: '/static/providers/openai.svg',
-                        hint: 'Официальный OpenAI API',
-                        body: `
-                            <div class="form-row">${secretField({
-                                id: 's-openai',
-                                settingKey: 'OPENAI_API_KEY',
-                                label: 'OpenAI API Key',
-                                placeholder: 'sk-...',
-                            })}</div>
-                            <div class="settings-inline-note">Используйте значения моделей вида <code>openai::gpt-5.5</code> во вкладке «Модели» для прямой маршрутизации. Если OpenRouter отсутствует и значения по умолчанию не изменялись, Ouroboros автоматически переключается на официальные модели OpenAI.</div>
-                        `,
-                    })}
-                    ${providerCard({
-                        id: 'compatible',
-                        title: 'OpenAI Compatible',
-                        icon: '/static/providers/openai-compatible.svg',
-                        hint: 'Пользовательский OpenAI-совместимый эндпоинт',
-                        body: `
-                            <div class="form-row">
-                                ${secretField({
-                                    id: 's-openai-compatible-key',
-                                    settingKey: 'OPENAI_COMPATIBLE_API_KEY',
-                                    label: 'API Key',
-                                    placeholder: 'Ключ совместимого провайдера',
-                                })}
-                                <div class="form-field">
-                                    <label>Base URL</label>
-                                    <input id="s-openai-compatible-base-url" placeholder="https://provider.example/v1">
-                                </div>
-                            </div>
-                            <div class="settings-inline-note">Используйте эту карточку для пользовательских Base URL. Встроенный веб-поиск работает только с официальным OpenAI Responses API, поэтому оставьте <code>OPENAI_BASE_URL</code> пустым, если нужен <code>web_search</code>.</div>
-                        `,
-                    })}
-                    ${providerCard({
-                        id: 'cloudru',
-                        title: 'Cloud.ru Foundation Models',
-                        icon: '/static/providers/cloudru.svg',
-                        hint: 'Cloud.ru OpenAI-совместимая среда',
-                        body: `
-                            <div class="form-row">
-                                ${secretField({
-                                    id: 's-cloudru-key',
-                                    settingKey: 'CLOUDRU_FOUNDATION_MODELS_API_KEY',
-                                    label: 'API Key',
-                                    placeholder: 'API-ключ Cloud.ru Foundation Models',
-                                })}
-                                <div class="form-field">
-                                    <label>Base URL</label>
-                                    <input id="s-cloudru-base-url" placeholder="https://foundation-models.api.cloud.ru/v1">
-                                </div>
-                            </div>
-                        `,
-                    })}
-                    ${providerCard({
-                        id: 'anthropic',
-                        title: 'Anthropic',
-                        icon: '/static/providers/anthropic.png',
-                        hint: 'Прямая среда и инструменты Claude',
-                        body: `
-                            <div class="form-row">${secretField({
-                                id: 's-anthropic',
-                                settingKey: 'ANTHROPIC_API_KEY',
-                                label: 'Anthropic API Key',
-                                placeholder: 'sk-ant-...',
-                            })}</div>
-                            <div class="settings-inline-note">Используйте значения моделей вида <code>anthropic::claude-sonnet-4-6</code> во вкладке «Модели» для прямой маршрутизации через Anthropic. Инструменты Claude также используют этот ключ.</div>
-                            <div class="settings-toolbar" id="settings-claude-code-panel" hidden>
-                                <button type="button" class="settings-ghost-btn" id="btn-claude-code-install">Восстановить среду</button>
-                                <span id="settings-claude-code-status" class="settings-inline-status">Проверка среды Claude...</span>
-                            </div>
-                            <div class="settings-inline-note" id="settings-claude-code-copy" hidden>Среда Claude обеспечивает делегированное редактирование кода и рекомендательную проверку. Управляется приложением автоматически.</div>
-                        `,
-                    })}
+                    ${PROVIDER_CARDS.map(providerSettingsCard).join('')}
                     <div class="form-section compact">
                         <h3>Совместимость с устаревшими версиями</h3>
                         <div class="form-row">
@@ -293,10 +276,7 @@ export function renderSettingsPage() {
                             <span id="settings-model-catalog-status" class="settings-inline-status">Каталог моделей необязателен и устойчив к сбоям.</span>
                         </div>
                         <div class="settings-model-grid">
-                            ${modelCard({ title: 'Основная', copy: 'Основная модель для рассуждений.', inputId: 's-model', toggleId: 's-local-main', defaultValue: 'anthropic/claude-opus-4.6' })}
-                            ${modelCard({ title: 'Код', copy: 'Модель для задач с большим количеством инструментов.', inputId: 's-model-code', toggleId: 's-local-code', defaultValue: 'anthropic/claude-opus-4.6' })}
-                            ${modelCard({ title: 'Лёгкая', copy: 'Быстрые резюме и лёгкие задачи.', inputId: 's-model-light', toggleId: 's-local-light', defaultValue: 'anthropic/claude-sonnet-4.6' })}
-                            ${modelCard({ title: 'Запасная', copy: 'Используется, если основная модель недоступна.', inputId: 's-model-fallback', toggleId: 's-local-fallback', defaultValue: 'anthropic/claude-sonnet-4.6' })}
+                            ${MODEL_CARDS.map(([title, copy, inputId, toggleId, defaultValue]) => modelCard({ title, copy, inputId, toggleId, defaultValue })).join('')}
                         </div>
                         <div class="form-row">
                             <div class="form-field">
@@ -337,11 +317,7 @@ export function renderSettingsPage() {
                         <h3>Уровень рассуждений</h3>
                         <div class="settings-section-copy">Управляет глубиной размышлений модели для каждого типа задач. Выше уровень — медленнее, но тщательнее.</div>
                         <div class="settings-effort-grid">
-                            ${effortField({ id: 's-effort-task', label: 'Задача / Чат', defaultValue: 'medium' })}
-                            ${effortField({ id: 's-effort-evolution', label: 'Эволюция', defaultValue: 'high' })}
-                            ${effortField({ id: 's-effort-review', label: 'Проверка', defaultValue: 'medium' })}
-                            ${effortField({ id: 's-effort-scope-review', label: 'Проверка области', defaultValue: 'high' })}
-                            ${effortField({ id: 's-effort-consciousness', label: 'Сознание', defaultValue: 'low' })}
+                            ${EFFORT_FIELDS.map(([id, label, defaultValue]) => effortField({ id, label, defaultValue })).join('')}
                         </div>
                     </div>
 
@@ -365,6 +341,7 @@ export function renderSettingsPage() {
                             Оставьте отключённым, если каждое разрешение навыка должно требовать отдельного одобрения пользователем.
                         </div>
                         <label class="local-toggle" title="Применяется только после прохождения проверки навыком и только для разрешений, задекларированных в манифесте для этого хэша.">
+
                             <input type="checkbox" id="s-auto-grant-reviewed-skills">
                             Автоматически выдавать ключи и разрешения проверенным навыкам
                         </label>
@@ -378,7 +355,7 @@ export function renderSettingsPage() {
                             <code>Advanced</code> — режим по умолчанию: самомодификация эволюционного слоя разрешена; защищённые файлы ядра/контрактов/релизов охраняются политикой режима.
                             <code>Pro</code> позволяет редактировать защищённые поверхности ядра/контрактов/релизов, но коммиты по-прежнему проходят через триаду и проверку области.
                             <br><strong>Управляется пользователем:</strong> десктопные сборки запрашивают нативное подтверждение лаунчера перед сохранением изменения режима.
-                            Веб/Docker-сессии могут просматривать текущий режим, но не могут повысить его с этой страницы.
+                            Веб/Docker-сессии сохраняют изменение режима через owner-эндпоинт; новый режим вступает в силу после перезапуска.
                         </div>
                         <div class="settings-effort-card">
                             <label>Режим среды выполнения</label>
@@ -600,12 +577,7 @@ export function bindSettingsTabs(root, options = {}) {
     const state = options.state || null;
     const onActivate = typeof options.onActivate === 'function' ? options.onActivate : null;
 
-    // v5.7.0: the v5.6.0 drill-down ("settings-subtab-open" + back button)
-    // is gone. On every viewport the tab strip stays as horizontal-scroll
-    // pills (auto-scrolling the active pill into view), and tapping a tab
-    // simply swaps panels in place. The .settings-mobile-back element is
-    // still present in the DOM for back-compat, but is hidden via CSS and
-    // we never bind a handler to it.
+    // All viewports use horizontal tab pills; mobile back remains DOM-only for compat.
     function activate(tabName) {
         root.dataset.activeSettingsTab = tabName;
         let activeButton = null;
@@ -619,8 +591,7 @@ export function bindSettingsTabs(root, options = {}) {
         });
         if (scrollRoot) scrollRoot.scrollTop = 0;
         if (state) state.settingsActiveSubtab = tabName;
-        // Auto-scroll the active pill into the visible part of the strip
-        // on narrow viewports (the strip itself horizontally scrolls).
+        // Keep active pill visible in the horizontal strip.
         if (activeButton && typeof activeButton.scrollIntoView === 'function') {
             activeButton.scrollIntoView({
                 behavior: 'auto',

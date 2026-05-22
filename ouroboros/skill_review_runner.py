@@ -1,12 +1,10 @@
-"""Shared lifecycle-backed runner for expensive skill reviews."""
-
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
 import pathlib
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -65,6 +63,10 @@ def _chat_jsonl_path(drive_root: pathlib.Path) -> pathlib.Path:
     return pathlib.Path(drive_root) / "logs" / "chat.jsonl"
 
 
+def _progress_jsonl_path(drive_root: pathlib.Path) -> pathlib.Path:
+    return pathlib.Path(drive_root) / "logs" / "progress.jsonl"
+
+
 def _read_review_job(path: pathlib.Path) -> Dict[str, Any]:
     return read_json_dict(path) or {}
 
@@ -83,6 +85,52 @@ def _iso_age_sec(value: str) -> float:
         return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
     except Exception:
         return 0.0
+
+
+def _review_lifecycle_chat_task_id(skill_name: str, job_id: str) -> str:
+    skill_suffix = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(skill_name or "skill")).strip("_")
+    job_suffix = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(job_id or "")).strip("_")
+    return f"skill_lifecycle_review_{skill_suffix or 'skill'}_{job_suffix or 'job'}"
+
+
+def _append_interrupted_review_progress(
+    drive_root: pathlib.Path,
+    skill_name: str,
+    payload: Dict[str, Any],
+    *,
+    ts: str,
+) -> None:
+    reason = str(payload.get("interrupt_reason") or "interrupted")
+    job_id = str(payload.get("job_id") or "")
+    lifecycle = {
+        "id": job_id,
+        "kind": "review",
+        "target": skill_name,
+        "status": "interrupted",
+        "phase": "interrupted",
+        "message": "Review job was interrupted before completion.",
+        "error": reason,
+        "stale": False,
+        "stale_reason": reason,
+        "recovery_hint": "Start a fresh review for this skill before enabling or granting access.",
+    }
+    text = f"Skill review: `{skill_name}` — interrupted — {reason}"
+    append_jsonl(
+        _progress_jsonl_path(drive_root),
+        {
+            "ts": ts,
+            "type": "send_message",
+            "task_id": _review_lifecycle_chat_task_id(skill_name, job_id),
+            "is_progress": True,
+            "direction": "out",
+            "chat_id": 0,
+            "user_id": 0,
+            "text": text,
+            "content": text,
+            "format": "",
+            "lifecycle": lifecycle,
+        },
+    )
 
 
 def mark_stale_review_job_interrupted(
@@ -112,6 +160,7 @@ def mark_stale_review_job_interrupted(
         "content_hash": data.get("content_hash") or current_content_hash,
     }
     atomic_write_json(path, payload, trailing_newline=True)
+    _append_interrupted_review_progress(drive_root, skill_name, payload, ts=now)
     append_jsonl(
         _events_path(drive_root),
         {
@@ -130,8 +179,6 @@ def reconcile_stale_review_jobs(
     *,
     stale_after_sec: int = _STALE_REVIEW_JOB_SEC,
 ) -> int:
-    """Mark stale running review jobs interrupted across the skill state plane."""
-
     root = pathlib.Path(drive_root) / "state" / "skills"
     if not root.exists():
         return 0
@@ -222,38 +269,25 @@ def _call_review_with_lifecycle_guard(
     skill_name: str,
 ) -> SkillReviewOutcome:
     sentinel = object()
-    previous_guard = getattr(ctx, "_skill_review_lifecycle_guard", sentinel)
-    previous_job_id = getattr(ctx, "_skill_review_lifecycle_job_id", sentinel)
+    previous = {
+        "_skill_review_lifecycle_guard": getattr(ctx, "_skill_review_lifecycle_guard", sentinel),
+        "_skill_review_lifecycle_job_id": getattr(ctx, "_skill_review_lifecycle_job_id", sentinel),
+    }
     job_data = _read_review_job(review_job_state_path(pathlib.Path(ctx.drive_root), skill_name))
     setattr(ctx, "_skill_review_lifecycle_guard", True)
     setattr(ctx, "_skill_review_lifecycle_job_id", str(job_data.get("job_id") or ""))
     try:
         return review_impl(ctx, skill_name)
     finally:
-        if previous_guard is sentinel:
-            try:
-                delattr(ctx, "_skill_review_lifecycle_guard")
-            except AttributeError:
-                pass
-        else:
-            setattr(ctx, "_skill_review_lifecycle_guard", previous_guard)
-        if previous_job_id is sentinel:
-            try:
-                delattr(ctx, "_skill_review_lifecycle_job_id")
-            except AttributeError:
-                pass
-        else:
-            setattr(ctx, "_skill_review_lifecycle_job_id", previous_job_id)
+        for attr, value in previous.items():
+            if value is sentinel:
+                with contextlib.suppress(AttributeError):
+                    delattr(ctx, attr)
+            else:
+                setattr(ctx, attr, value)
 
 
 async def _to_thread_preserving_result(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """Run blocking work in a thread and preserve its result across cancellation.
-
-    HTTP clients can disconnect while an expensive review is in flight. The
-    underlying reviewer thread cannot be killed, so the lifecycle lane must
-    stay occupied until it finishes instead of reporting a terminal job early.
-    """
-
     return await run_blocking_preserving_cancellation(
         func,
         *args,
@@ -293,45 +327,31 @@ def _can_persist_review_outcome(
     *,
     expected_job_id: str = "",
 ) -> bool:
-    """Prevent late reviewer threads from overwriting terminal lifecycle state."""
-
     data = _read_review_job(review_job_state_path(pathlib.Path(drive_root), skill_name))
     if not data:
         return True
     status = str(data.get("status") or "")
     job_hash = str(data.get("content_hash") or "")
     job_id = str(data.get("job_id") or "")
+
+    def _skip(reason: str) -> bool:
+        _emit_review_persist_skipped(
+            pathlib.Path(drive_root),
+            skill_name,
+            content_hash,
+            reason=reason,
+            job_status=status,
+            job_id=job_id,
+        )
+        return False
+
     if expected_job_id and job_id and job_id != expected_job_id:
-        _emit_review_persist_skipped(
-            pathlib.Path(drive_root),
-            skill_name,
-            content_hash,
-            reason="review job id no longer matches lifecycle owner",
-            job_status=status,
-            job_id=job_id,
-        )
-        return False
+        return _skip("review job id no longer matches lifecycle owner")
     if job_hash and job_hash != content_hash:
-        _emit_review_persist_skipped(
-            pathlib.Path(drive_root),
-            skill_name,
-            content_hash,
-            reason="content hash no longer matches current review job",
-            job_status=status,
-            job_id=job_id,
-        )
-        return False
+        return _skip("content hash no longer matches current review job")
     terminal_blocking = {"interrupted", "failed", "cancelled"}
     if status in terminal_blocking and (not job_hash or job_hash == content_hash):
-        _emit_review_persist_skipped(
-            pathlib.Path(drive_root),
-            skill_name,
-            content_hash,
-            reason=f"review job already {status}",
-            job_status=status,
-            job_id=job_id,
-        )
-        return False
+        return _skip(f"review job already {status}")
     return True
 
 
@@ -358,8 +378,6 @@ def _reconcile_deps_after_pass_review(
     *,
     repo_path: str | None = None,
 ) -> tuple[str, str]:
-    """Install/reinstall isolated deps after an executable review."""
-
     try:
         from ouroboros.marketplace.install_specs import install_specs_hash
         from ouroboros.marketplace.isolated_deps import (
@@ -375,7 +393,7 @@ def _reconcile_deps_after_pass_review(
         auto_specs = auto_install_specs_for_skill(drive_root, loaded)
         if not auto_specs:
             return "not_required", ""
-        deps_state = read_deps_state(drive_root, skill_name)
+        deps_state = read_deps_state(drive_root, skill_name, loaded.skill_dir)
         expected_hash = install_specs_hash(auto_specs)
         if (
             str(deps_state.get("status") or "") == "installed"
@@ -571,12 +589,6 @@ def _on_finished(
             },
         )
 
-        # Full review markdown → chat.jsonl as direction:"system", type:"skill_review".
-        # This is the foreground-agent-visible artifact (summarize_chat does not
-        # truncate per row, unlike the lifecycle progress card's 180-char headline).
-        # Pure infrastructure aborts emit only events.jsonl, but reviewer
-        # parse/partial failures still carry raw_actor_records and must be
-        # foreground-visible.
         has_review_evidence = bool(
             result is not None and (
                 getattr(result, "findings", None)
@@ -617,7 +629,6 @@ def _on_finished(
                     },
                 )
             except Exception:
-                # Best-effort: failure to render must not break the lifecycle.
                 pass
 
     return _callback
@@ -703,80 +714,13 @@ async def run_skill_review_lifecycle(
     review_impl: ReviewImpl = _default_review_skill,
     repo_path: str | None = None,
 ) -> Dict[str, Any]:
-    drive_root = pathlib.Path(ctx.drive_root)
-    repo_path = repo_path if repo_path is not None else get_skills_repo_path()
-    content_hash = _skill_content_hash(drive_root, skill_name, repo_path)
-    mark_stale_review_job_interrupted(drive_root, skill_name, current_content_hash=content_hash)
-    dedupe_key = _review_dedupe_key(skill_name, content_hash)
-    started_monotonic: Dict[str, float] = {}
-    progress = JobProgressTarget()
-
-    async def _run_review() -> SkillReviewOutcome:
-        with _review_job_heartbeat(drive_root, skill_name):
-            progress.set("Running tri-model review…")
-            outcome = await _to_thread_preserving_result(
-                _call_review_with_lifecycle_guard,
-                review_impl,
-                ctx,
-                skill_name,
-            )
-            deps_status = "not_required"
-            deps_error = ""
-            executable_review = review_status_allows_execution(getattr(outcome, "status", ""))
-            if executable_review:
-                progress.set("Installing dependencies…")
-                deps_status, deps_error = await _to_thread_preserving_result(
-                    _reconcile_deps_after_pass_review,
-                    drive_root,
-                    skill_name,
-                    repo_path=repo_path,
-                )
-            setattr(outcome, "deps_status", deps_status)
-            setattr(outcome, "deps_error", deps_error)
-            if executable_review and getattr(outcome, "auto_flow", False) and deps_status == "failed":
-                outcome.status = STATUS_PENDING
-                outcome.error = deps_error or "self-authored dependency reconciliation failed"
-                executable_review = False
-            if executable_review and getattr(outcome, "auto_flow", False):
-                save_enabled(drive_root, skill_name, True)
-            progress.set("Reloading extension…")
-            extension_action, extension_reason = await _to_thread_preserving_result(
-                _reconcile_extension_payload,
-                ctx,
-                skill_name,
-                repo_path=repo_path,
-                heal_mode=_heal_mode(ctx),
-            )
-            setattr(outcome, "extension_action", extension_action)
-            setattr(outcome, "extension_reason", extension_reason)
-        return outcome
-
-    try:
-        outcome = await run_lifecycle_job(
-            kind="review",
-            target=skill_name,
-            source=source,
-            message=f"Reviewing {skill_name}",
-            dedupe_key=dedupe_key,
-            runner=_run_review,
-            options=LifecycleJobOptions(
-                drive_root=drive_root,
-                progress_target=progress,
-                result_message=_review_result_message,
-                result_error=lambda item: getattr(item, "error", "") or getattr(item, "deps_error", "") or "",
-                on_started=_on_started(drive_root, skill_name, content_hash, started_monotonic),
-                on_finished=_on_finished(drive_root, skill_name, content_hash, started_monotonic),
-            ),
-        )
-    except DuplicateLifecycleJobError as exc:
-        return _duplicate_payload(skill_name, content_hash, exc.job)
-
-    return _outcome_payload(
-        outcome,
-        deps_status=getattr(outcome, "deps_status", "not_required"),
-        deps_error=getattr(outcome, "deps_error", ""),
-        extension_action=getattr(outcome, "extension_action", None),
-        extension_reason=getattr(outcome, "extension_reason", None),
+    return await _to_thread_preserving_result(
+        run_skill_review_lifecycle_blocking,
+        ctx,
+        skill_name,
+        source=source,
+        review_impl=review_impl,
+        repo_path=repo_path,
     )
 
 
@@ -856,4 +800,3 @@ def run_skill_review_lifecycle_blocking(
         extension_action=getattr(outcome, "extension_action", None),
         extension_reason=getattr(outcome, "extension_reason", None),
     )
-

@@ -1,10 +1,4 @@
-"""
-Startup verification checks for the Ouroboros agent.
-
-Runs on worker boot to detect uncommitted changes, version desync,
-budget issues, and missing memory files.
-Extracted from agent.py to keep the agent thin.
-"""
+"""Worker-boot checks for dirty repo, version sync, budget, and memory files."""
 
 from __future__ import annotations
 
@@ -26,23 +20,7 @@ def _is_release_tag(tag: str) -> bool:
 
 
 def check_uncommitted_changes(env: Any) -> Tuple[dict, int]:
-    """Diagnose uncommitted changes on worker boot. Warning-only: never commits.
-
-    Rescue of a dirty worktree is owned by the supervisor-side mechanism
-    ``safe_restart(..., unsynced_policy='rescue_and_reset')`` in
-    ``server.py::_bootstrap_supervisor_repo``, which creates a proper rescue
-    snapshot directory via ``supervisor/git_ops.py::_create_rescue_snapshot`` —
-    it runs exactly once per supervisor start and does not pollute the
-    ``ouroboros`` dev branch.
-
-    This worker-side check used to perform its own ``git add -u`` + ``git
-    commit`` as a second rescue mechanism. That duplication was the root
-    cause of the v4.36.0 bug: because ``OUROBOROS_MANAGED_BY_LAUNCHER=1`` is
-    inherited by every subprocess (pytest runs, A2A agent-card builder,
-    supervisor-side ``_get_chat_agent``), any code path reaching
-    ``make_agent()`` would steal the agent's in-progress edits into a
-    worker-side auto-rescue commit on the dev branch.
-    """
+    """Warn on dirty worker boot; rescue/reset is supervisor-owned, never worker-owned."""
     try:
         lock_path = env.repo_path(".git/index.lock")
         if lock_path.exists():

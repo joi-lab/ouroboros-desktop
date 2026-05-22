@@ -1,22 +1,4 @@
-"""Git PR integration tools: fetch_pr_ref, create_integration_branch,
-cherry_pick_pr_commits, stage_adaptations, stage_pr_merge.
-
-Attribution invariant: `cherry_pick_pr_commits` replays each source commit with
-`git cherry-pick --no-edit`, preserving author identity/date while setting the
-committer explicitly from repo-local git config (fallback:
-`Ouroboros <ouroboros@local.mac>`). `override_author` may amend author
-name/email for placeholder-author PRs while preserving the original author date.
-
-Reviewed merge invariant: adaptation edits are staged, not committed, then
-`stage_pr_merge` runs `git merge --no-ff --no-commit`; the final reviewed
-`repo_commit` creates the single merge commit on `ouroboros`. There is no
-reviewed commit path on the integration branch and no unreviewed commit path in
-this module.
-
-Packaged-build note: `git_pr.py` is dev/source auto-discovered and not in
-`registry.py::_FROZEN_TOOL_MODULES`; `github.py` is frozen so PR inspection
-tools remain packaged.
-"""
+"""Git PR integration tools with author-preserving cherry-picks and reviewed merges."""
 
 from __future__ import annotations
 
@@ -38,7 +20,6 @@ _PR_BRANCH_PREFIX = "integrate/pr-"
 
 def _g(args: List[str], cwd: pathlib.Path,
        env: Optional[dict] = None, timeout: int = 60) -> subprocess.CompletedProcess:
-    """Run a git subprocess; returns CompletedProcess (returncode, stdout, stderr)."""
     return subprocess.run(
         ["git"] + args, cwd=str(cwd),
         capture_output=True, text=True, timeout=timeout,
@@ -47,17 +28,6 @@ def _g(args: List[str], cwd: pathlib.Path,
 
 
 def _ouroboros_committer_env(repo_dir: pathlib.Path) -> dict:
-    """Build an env dict with explicit GIT_COMMITTER_* set to this repo's user identity.
-
-    Reads user.name / user.email from the repo-local git config only (--local).
-    Atomic pair fallback: if EITHER local field is missing or empty, BOTH
-    fields fall back together to the Ouroboros defaults. This prevents
-    mixed/Frankenstein identities like ``Alice <ouroboros@local.mac>`` that
-    could occur if only one of the two fields were configured. It also
-    ensures we never leak the developer's global git identity into
-    cherry-picked commits — committer attribution stays deterministic and
-    testable regardless of ambient shell identity.
-    """
     env = os.environ.copy()
     name_r = subprocess.run(
         ["git", "config", "--local", "user.name"], cwd=str(repo_dir),
@@ -69,8 +39,6 @@ def _ouroboros_committer_env(repo_dir: pathlib.Path) -> dict:
     )
     local_name = name_r.stdout.strip() if name_r.returncode == 0 else ""
     local_email = email_r.stdout.strip() if email_r.returncode == 0 else ""
-    # Atomic pair fallback: if EITHER field is missing or empty, use both
-    # Ouroboros defaults. Prevents mixed identities like 'Alice <ouroboros@local.mac>'.
     if local_name and local_email:
         env["GIT_COMMITTER_NAME"] = local_name
         env["GIT_COMMITTER_EMAIL"] = local_email
@@ -81,12 +49,6 @@ def _ouroboros_committer_env(repo_dir: pathlib.Path) -> dict:
 
 
 def _validate_git_ref_arg(value: str, param_name: str) -> Optional[str]:
-    """Return an error string if value looks like a git option (starts with '-').
-
-    Prevents option-injection attacks where a caller passes '--abort' or '--all'
-    as a remote/branch/ref argument, causing git to interpret it as a flag.
-    Returns None when the value is safe.
-    """
     if value.startswith("-"):
         return (
             f"⚠️ INVALID_ARG: {param_name!r} must not start with '-' "
@@ -95,31 +57,11 @@ def _validate_git_ref_arg(value: str, param_name: str) -> Optional[str]:
     return None
 
 
-# Characters forbidden in override_author name/email — these break the
-# `--author="Name <email>"` argument parsing or introduce malformed git
-# metadata. Note: git author strings are passed as a single argv element
-# (not shell-interpolated), so there is no shell-injection risk, but
-# angle brackets and control chars still corrupt the format git writes
-# into the commit object.
 _AUTHOR_FORBIDDEN_CHARS = ("\r", "\n", "\t", "<", ">", "\x00")
-
-
-# Commit SHA format: 7-40 hex characters. Used to reject symbolic refs
-# (branch names, HEAD, HEAD~1, lightweight tag names, etc.) up front before
-# any git operation. Commit-SHA-only is the documented contract; `git
-# cat-file -t` is insufficient because branches, HEAD, and lightweight tags
-# all resolve to 'commit' too.
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 
 def _validate_override_author(override: Optional[dict]) -> Optional[str]:
-    """Validate an override_author dict. Returns None if valid (or None input),
-    or an error string starting with '⚠️ CHERRY_PICK_ERROR:' on failure.
-
-    Valid shape: {"name": <non-empty str>, "email": <non-empty str with '@'>}
-    Both fields are required; extra keys are ignored (forward-compat).
-    Forbidden characters in either field: newline, CR, tab, NUL, '<', '>'.
-    """
     if override is None:
         return None
     if not isinstance(override, dict):
@@ -156,15 +98,6 @@ def _validate_override_author(override: Optional[dict]) -> Optional[str]:
 
 
 def _fetch_pr_ref(ctx: ToolContext, pr_number: int, remote: str = "origin") -> str:
-    """Fetch a GitHub PR's commits locally via the pull/{n}/head ref.
-
-    Uses the '+' force-update prefix so the fetch succeeds even when the
-    PR has been rebased or force-pushed since the last fetch.  After
-    fetching, the local ref pr/{pr_number} is available for cherry-pick.
-
-    Author metadata on the fetched commits is preserved exactly as the
-    contributor pushed it — no re-authoring occurs.
-    """
     if pr_number <= 0:
         return "⚠️ PR_FETCH_ERROR: pr_number must be a positive integer."
     err = _validate_git_ref_arg(remote, "remote")
@@ -173,7 +106,6 @@ def _fetch_pr_ref(ctx: ToolContext, pr_number: int, remote: str = "origin") -> s
 
     repo_dir = pathlib.Path(ctx.repo_dir)
     local_ref = f"pr/{pr_number}"
-    # '+' prefix allows non-fast-forward updates (rebased / force-pushed PRs)
     refspec = f"+refs/pull/{pr_number}/head:{local_ref}"
 
     lock = _acquire_git_lock(ctx)
@@ -215,12 +147,6 @@ def _create_integration_branch(
     pr_number: int,
     base_branch: str = "ouroboros",
 ) -> str:
-    """Create a fresh integration branch (integrate/pr-N) from base_branch.
-
-    The integration branch is where external commits will be cherry-picked
-    (preserving original authorship) and any Ouroboros adaptation changes
-    will be staged for finalization through the reviewed pipeline.
-    """
     if pr_number <= 0:
         return "⚠️ PR_BRANCH_ERROR: pr_number must be a positive integer."
     err = _validate_git_ref_arg(base_branch, "base_branch")
@@ -236,11 +162,6 @@ def _create_integration_branch(
             f"To start fresh: git branch -D {branch_name}"
         )
 
-    # Guard: refuse to create a branch if the working tree is not clean.
-    # git checkout carries staged/unstaged tracked edits onto the new branch;
-    # stage_adaptations runs `git add -A` which would also pick up any pre-existing
-    # untracked files, contaminating the integration branch with unrelated work.
-    # We check all three states via `git status --porcelain`.
     status_r = _g(["status", "--porcelain"], repo_dir)
     if status_r.returncode == 0 and status_r.stdout.strip():
         return (
@@ -292,14 +213,6 @@ def _rollback_failed_amend(
     amend_r: subprocess.CompletedProcess,
     applied: List[str],
 ) -> str:
-    """Rollback the just-created cherry-pick commit after a failed --amend.
-
-    HEAD~1 is safe here because the caller just created HEAD via cherry-pick
-    in the same loop iteration. Removes the sha from the applied list (since
-    it's been rolled back), invalidates advisory for any earlier successful
-    commits in the batch, and returns a diagnostic error string for the caller
-    to return directly.
-    """
     amend_err = (amend_r.stderr or amend_r.stdout or "").strip()
     _g(["reset", "--hard", "HEAD~1"], repo_dir)
     applied.pop()
@@ -322,26 +235,9 @@ def _validate_sha_list(
     shas: List[str],
     repo_dir: pathlib.Path,
 ) -> object:
-    """Prevalidate a list of refs as commit SHAs.
-
-    Returns either a list of resolved full SHAs (success) or an error string
-    starting with '⚠️ CHERRY_PICK_ERROR:' (failure). Helper extracted from
-    _cherry_pick_pr_commits to keep that function under the 250-line hard gate.
-
-    Two checks per ref:
-      1. `git rev-parse --verify <ref>^{commit}` — ref must resolve to a
-         commit object (catches tree/blob objects).
-      2. `git cat-file -t <ref>` must equal 'commit' — rejects tag refs that
-         dereference to commits (annotated or lightweight tags). Cherry-picking
-         a tag is semantically meaningless and the later `%aI` date-read path
-         expects a commit SHA exactly.
-    """
     resolved: List[str] = []
     for sha in shas:
         sha = sha.strip()
-        # Require hex-only SHA format (7-40 chars). This rejects branch names,
-        # HEAD, HEAD~1, lightweight tags, and any other symbolic refs up front,
-        # before any git operation. Commit-SHA-only is the documented contract.
         if not _SHA_PATTERN.match(sha):
             return (
                 f"⚠️ CHERRY_PICK_ERROR: '{sha}' is not a commit SHA "
@@ -356,7 +252,6 @@ def _validate_sha_list(
                 f"Verify it was fetched with fetch_pr_ref and is a commit object."
             )
         resolved.append(r.stdout.strip())
-        # Reject tag refs and non-commit object types.
         type_r = _g(["cat-file", "-t", sha], repo_dir)
         if type_r.returncode != 0 or type_r.stdout.strip() != "commit":
             obj_type = type_r.stdout.strip() or "unknown"
@@ -375,19 +270,6 @@ def _amend_author_on_head(
     orig_date: str,
     committer_env: dict,
 ) -> subprocess.CompletedProcess:
-    """Run `git commit --amend --no-edit --author=... --date=<orig>` on HEAD.
-
-    Helper extracted from _cherry_pick_pr_commits to keep that function under
-    the 250-line hard gate. Rewrites the author of the current HEAD commit
-    (assumed to be a just-created cherry-pick) while preserving the original
-    author date (passed via --date) and the repo-local committer identity
-    with Ouroboros fallback (via committer_env's GIT_COMMITTER_* vars).
-
-    Returns the CompletedProcess so the caller can inspect returncode/stderr
-    and decide on rollback. Does NOT handle failure itself — that's the
-    caller's responsibility (it needs access to the applied list for
-    advisory invalidation).
-    """
     author_str = f'{override_author["name"]} <{override_author["email"]}>'
     return _g(
         ["commit", "--amend", "--no-edit",
@@ -403,57 +285,6 @@ def _cherry_pick_pr_commits(
     stop_on_conflict: bool = True,
     override_author: Optional[dict] = None,
 ) -> str:
-    """Replay PR commits onto the current integration branch.
-
-    ATTRIBUTION CONTRACT (default: override_author=None):
-      Uses `git cherry-pick --no-edit` (NOT --no-commit).
-      Each PR commit is replayed as a real commit with:
-        - author name / email = original contributor (preserved by git)
-        - author date         = original timestamp  (preserved by git)
-        - committer           = repo-local configured identity (Ouroboros fallback)
-
-      GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are injected explicitly
-      from the repo's user.name / user.email config so attribution is
-      deterministic regardless of ambient shell identity.
-
-      GitHub contribution counting is based on author.email, so external
-      contributors receive full graph credit.
-
-    OPTIONAL AUTHOR OVERRIDE (override_author={"name": ..., "email": ...}):
-      When supplied, after each successful cherry-pick a second step
-      `git commit --amend --no-edit --author="Name <email>" --date=<orig>`
-      rewrites the author name+email on the new commit while preserving:
-        - the ORIGINAL author date (captured from the source sha via %aI
-          BEFORE the cherry-pick and passed to --date)
-        - the repo-local committer identity, with Ouroboros fallback
-          (via GIT_COMMITTER_* env)
-      If the amend step fails, the just-added commit is rolled back with
-      `git reset --hard HEAD~1` and the function returns an error with
-      context; earlier successfully-amended commits in the same batch are
-      kept (advisory invalidation still fires).
-
-      The override applies to the ENTIRE batch uniformly — intended for
-      single-author placeholder commit sets (e.g. external contributor
-      ran Ouroboros locally without configuring git user.email). Mixed-
-      author batches will all be rewritten to the same override identity;
-      split the batch by author if that is not desired.
-
-      When override_author is set, the Co-authored-by hint continues to
-      reference the ORIGINAL upstream author (read from the source commit's
-      `%an <%ae>`), NOT the override identity. Rationale: the override is
-      already the canonical author on the amended commit, so putting the
-      same identity in Co-authored-by would be redundant and would erase
-      the real upstream contributor from the merge-commit message.
-
-    stop_on_conflict=True  (default): abort on first conflict, leave repo clean.
-    stop_on_conflict=False: skip conflicting SHAs, continue.
-      Skipped SHAs are explicitly reported — partial ingestion is never silent.
-      Note: amend failures (override_author path) ALWAYS abort the current
-      commit regardless of stop_on_conflict — a failing amend signals a git
-      config problem, not a PR content problem.
-    """
-    # Fail-fast validation of override_author — runs before any git work,
-    # so invalid input returns an error without touching the repo.
     override_error = _validate_override_author(override_author)
     if override_error:
         return override_error
@@ -472,14 +303,11 @@ def _cherry_pick_pr_commits(
             f"Run create_integration_branch first."
         )
 
-    # Validate all SHAs before starting — avoids partial application on typo.
-    # Rejects non-commit objects and tag refs up front via _validate_sha_list.
     resolved_or_error = _validate_sha_list(shas, repo_dir)
     if isinstance(resolved_or_error, str):
         return resolved_or_error
     resolved = resolved_or_error
 
-    # Check clean working tree (tracked files only)
     if (_g(["diff", "--cached", "--name-only"], repo_dir).stdout.strip()
             or _g(["diff", "--name-only"], repo_dir).stdout.strip()):
         return (
@@ -487,7 +315,6 @@ def _cherry_pick_pr_commits(
             "Commit or restore to HEAD before cherry-picking."
         )
 
-    # Build env with explicit committer identity for deterministic attribution
     committer_env = _ouroboros_committer_env(repo_dir)
 
     lock = _acquire_git_lock(ctx)
@@ -496,18 +323,10 @@ def _cherry_pick_pr_commits(
     attribution_lines: List[str] = []
     try:
         for sha in resolved:
-            # Capture original author date BEFORE cherry-pick (we need it for
-            # --date= on the amend step; it's also what the default path
-            # preserves implicitly through git's cherry-pick mechanics).
             orig_date = ""
             if override_author is not None:
                 date_r = _g(["log", "-1", "--format=%aI", sha], repo_dir)
                 if date_r.returncode != 0 or not date_r.stdout.strip():
-                    # Defense-in-depth: the ^{commit} prevalidation makes this
-                    # branch extremely unlikely, but if it ever fires mid-batch
-                    # we must invalidate advisory for any earlier SHAs already
-                    # applied. Otherwise repo history changes silently while
-                    # advisory freshness can remain valid.
                     if applied:
                         _invalidate_advisory(
                             ctx, changed_paths=[], mutation_root=repo_dir,
@@ -522,15 +341,11 @@ def _cherry_pick_pr_commits(
                     )
                 orig_date = date_r.stdout.strip()
 
-            # --no-edit: replay commit as-is, keep original author + date.
-            # committer_env sets GIT_COMMITTER_* explicitly for deterministic identity.
             result = _g(["cherry-pick", "--no-edit", sha], repo_dir, env=committer_env)
             if result.returncode != 0:
                 err = (result.stderr or result.stdout or "").strip()
                 _g(["cherry-pick", "--abort"], repo_dir)
                 if stop_on_conflict:
-                    # Invalidate advisory before returning — some commits may have
-                    # been successfully applied, changing repo history.
                     if applied:
                         _invalidate_advisory(
                             ctx, changed_paths=[], mutation_root=repo_dir,
@@ -544,14 +359,8 @@ def _cherry_pick_pr_commits(
                 skipped.append(sha[:12])
                 continue
 
-            # Cherry-pick succeeded — the new commit is now HEAD of the branch.
             applied.append(sha[:12])
 
-            # If override_author is set, rewrite author via commit --amend.
-            # Helpers keep this function under the 250-line gate. --date on
-            # amend preserves the captured original timestamp. Committer
-            # identity stays as repo-local configured (with Ouroboros
-            # fallback) because committer_env sets GIT_COMMITTER_*.
             if override_author is not None:
                 amend_r = _amend_author_on_head(
                     repo_dir, override_author, orig_date, committer_env,
@@ -560,12 +369,6 @@ def _cherry_pick_pr_commits(
                     return _rollback_failed_amend(
                         ctx, repo_dir, sha, amend_r, applied,
                     )
-            # Capture ORIGINAL author from the source commit for the
-            # Co-authored-by hint on the final merge commit, regardless of
-            # whether author was overridden on amend. In override mode this
-            # ensures the real upstream contributor still gets mentioned in
-            # the merge-commit message even though their identity was rewritten
-            # on the commit itself. In default mode this is the normal path.
             author_r = _g(["log", "-1", "--format=%an <%ae>", sha], repo_dir)
             if author_r.returncode != 0:
                 continue
@@ -613,9 +416,6 @@ def _cherry_pick_pr_commits(
             f"Resolve manually or re-run with those SHAs omitted."
         )
 
-    # Rebuild author_hint with the path-appropriate lead sentence. The hint is
-    # constructed inside the loop from attribution_lines; we just need to swap
-    # the lead paragraph based on override_author.
     if attribution_lines:
         co_lines = "\n".join(f"Co-authored-by: {a}" for a in attribution_lines)
         author_hint = (
@@ -641,30 +441,6 @@ def _cherry_pick_pr_commits(
 
 
 def _stage_adaptations(ctx: ToolContext) -> str:
-    """Stage all current working-tree changes WITHOUT committing.
-
-    Use this to prepare Ouroboros adaptation / fixup work that follows
-    externally-authored cherry-picked commits.  Changes are staged via
-    `git add -A` only — NO git commit is created here.
-
-    IMPORTANT — correct usage sequence:
-      Call stage_pr_merge DIRECTLY after stage_adaptations — do NOT run
-      advisory_pre_review + repo_commit between them.  repo_commit always
-      checks out ctx.branch_dev (ouroboros) first, which drops off the
-      integration branch and discards the staged state.
-
-        stage_adaptations()                     ← stage adaptation edits
-        stage_pr_merge(branch='integrate/pr-N') ← merge + include staged edits
-        advisory_pre_review + repo_commit       ← single merge commit on ouroboros
-
-      The staged adaptation changes survive the stage_pr_merge checkout because
-      stage_pr_merge operates on ouroboros (clean tree); the staged index
-      carries over.  Adaptation changes land in the final merge commit with
-      Ouroboros as the commit author.
-
-    This complies with BIBLE.md P3: every commit passes the review gate.
-    Must be on an integration branch (integrate/pr-*).
-    """
     repo_dir = pathlib.Path(ctx.repo_dir)
 
     head_r = _g(["rev-parse", "--abbrev-ref", "HEAD"], repo_dir)
@@ -701,38 +477,12 @@ def _stage_pr_merge(
     ctx: ToolContext,
     branch: str,
 ) -> str:
-    """Stage a no-fast-forward merge of an integration branch WITHOUT committing.
-
-    Uses `git merge --no-ff --no-commit`, which:
-    - Sets MERGE_HEAD so the resulting commit has both parents (merge commit)
-    - Stages all diff between integration branch and ouroboros
-    - Does NOT create a commit — finalize via advisory_pre_review + repo_commit
-
-    Target branch is always `ouroboros` (ctx.branch_dev).  This is required
-    because repo_commit always begins with `git checkout ctx.branch_dev`; any
-    other target would lose MERGE_HEAD before the commit is created.
-
-    ATTRIBUTION:
-    - The integration branch history (cherry-picked commits) retains original
-      author metadata and is permanently linked as a parent of the merge commit.
-    - GitHub shows contributor graphs correctly for the cherry-picked commits.
-    - Include Co-authored-by in the repo_commit message for additional visibility.
-
-    On merge conflict:
-    - `git merge --no-ff --no-commit` does NOT fully set up merge state in all
-      conflict cases, so `git merge --abort` may not work reliably.
-    - On failure, this function uses `git reset --hard HEAD` to restore both
-      index and worktree to the clean baseline (safe: dirty-tree check confirms
-      HEAD is clean before merge starts).
-    """
     branch = (branch or "").strip()
     if not branch:
         return "⚠️ PR_MERGE_ERROR: branch parameter is required."
     err = _validate_git_ref_arg(branch, "branch")
     if err:
         return f"⚠️ PR_MERGE_ERROR: {err}"
-    # target_branch is always branch_dev (ouroboros).  repo_commit always begins
-    # with `git checkout ctx.branch_dev`, so any other target would lose MERGE_HEAD.
     target_branch = ctx.branch_dev
     if branch == target_branch:
         return (
@@ -745,9 +495,6 @@ def _stage_pr_merge(
     if not _g(["branch", "--list", branch], repo_dir).stdout.strip():
         return f"⚠️ PR_MERGE_ERROR: Branch '{branch}' does not exist."
 
-    # Guard: caller must already be on the integration branch.
-    # We snapshot staged changes from HEAD — if HEAD != branch, the snapshot
-    # would capture wrong-branch state and corrupt the adaptation carry-through.
     head_r = _g(["rev-parse", "--abbrev-ref", "HEAD"], pathlib.Path(ctx.repo_dir))
     current = head_r.stdout.strip() if head_r.returncode == 0 else ""
     if current != branch:
@@ -758,15 +505,6 @@ def _stage_pr_merge(
 
     lock = _acquire_git_lock(ctx)
     try:
-        # Reject any unclean state on the integration branch other than staged
-        # adaptations from stage_adaptations(). Use git status --porcelain so
-        # ALL three states are caught:
-        #   - Unstaged tracked changes (column 2 non-space): lost on checkout.
-        #   - Untracked files (??): survive git checkout and would be swept into
-        #     the merge commit by repo_commit. Must be staged via stage_adaptations()
-        #     for any intentional new file first.
-        # Staged changes (column 1 non-space, column 2 space) are fine — they are
-        # the intended adaptation carry-through path.
         porcelain = _g(["status", "--porcelain"], repo_dir).stdout or ""
         dirty_lines = [
             ln for ln in porcelain.splitlines()
@@ -780,13 +518,6 @@ def _stage_pr_merge(
                 f"Unclean files:\n{sample}"
             )
 
-        # Save staged adaptations as a binary patch before checkout+merge.
-        # `git diff --cached --binary` captures index vs HEAD (the staged changes).
-        # We then hard-reset so BOTH the index AND worktree are clean before
-        # checkout — `git reset HEAD -- .` only un-stages; tracked-file edits
-        # would remain in the worktree and trip the dirty-tree guard on checkout.
-        # On re-apply we use `git apply --index` so both index AND worktree are
-        # updated, keeping them consistent and avoiding a post-apply dirty worktree.
         adaptation_patch: bytes = b""
         adapt_paths: list = []
         staged_before = _g(["diff", "--cached", "--name-only"], repo_dir).stdout.strip()
@@ -795,8 +526,6 @@ def _stage_pr_merge(
                 ["git", "diff", "--cached", "--binary"],
                 cwd=repo_dir, capture_output=True,
             )
-            # Fail-closed: if patch capture fails, abort before destructive reset
-            # so the caller's staged changes are preserved.
             if diff_r.returncode != 0:
                 return (
                     f"⚠️ PR_MERGE_ERROR: Failed to capture staged adaptation patch "
@@ -805,11 +534,9 @@ def _stage_pr_merge(
                 )
             adaptation_patch = diff_r.stdout
             adapt_paths = staged_before.splitlines()
-            # Hard-reset: clears both index and worktree so checkout is clean.
             _g(["reset", "--hard", "HEAD"], repo_dir)
 
         def _restore_on_error() -> None:
-            """Restore the repo to integration branch + re-apply saved adaptations."""
             _g(["checkout", branch], repo_dir)
             if adaptation_patch:
                 subprocess.run(
@@ -819,7 +546,6 @@ def _stage_pr_merge(
 
         co = _g(["checkout", target_branch], repo_dir)
         if co.returncode != 0:
-            # Still on integration branch; re-apply adaptations there.
             if adaptation_patch:
                 subprocess.run(
                     ["git", "apply", "--index", "-"],
@@ -830,7 +556,6 @@ def _stage_pr_merge(
                 f"{_sanitize_git_error((co.stderr or '').strip())}"
             )
 
-        # Reject unstaged tracked changes on the target branch.
         if _g(["diff", "--name-only"], repo_dir).stdout.strip():
             _restore_on_error()
             return (
@@ -841,8 +566,6 @@ def _stage_pr_merge(
         merge = _g(["merge", "--no-ff", "--no-commit", branch], repo_dir)
         if merge.returncode != 0:
             err = (merge.stderr or merge.stdout or "").strip()
-            # `--no-ff --no-commit` may not fully set up merge state on conflict.
-            # Reset hard to clean state, then restore integration branch + adaptations.
             _g(["reset", "--hard", "HEAD"], repo_dir)
             _restore_on_error()
             return (
@@ -850,8 +573,6 @@ def _stage_pr_merge(
                 f"{_sanitize_git_error(err[:500])}"
             )
 
-        # Verify MERGE_HEAD was set — if git returns 0 with "Already up to date.",
-        # no merge state is established and repo_commit would create a plain commit.
         merge_head = _g(["rev-parse", "-q", "--verify", "MERGE_HEAD"], repo_dir)
         if merge_head.returncode != 0:
             _restore_on_error()
@@ -860,9 +581,6 @@ def _stage_pr_merge(
                 f"'{target_branch}' (nothing to merge / already up to date)."
             )
 
-        # Re-apply saved adaptations on top of the merged state so they land
-        # in the final merge commit created by advisory_pre_review + repo_commit.
-        # `--index` updates both index and worktree for consistency.
         if adaptation_patch:
             apply_r = subprocess.run(
                 ["git", "apply", "--index", "-"],
@@ -872,7 +590,6 @@ def _stage_pr_merge(
                 apply_err = (apply_r.stderr or apply_r.stdout or b"").decode(
                     "utf-8", errors="replace"
                 ).strip()
-                # Restore to integration branch before reporting error.
                 _g(["reset", "--hard", "HEAD"], repo_dir)
                 _restore_on_error()
                 return (
@@ -884,7 +601,6 @@ def _stage_pr_merge(
     finally:
         _release_git_lock(lock)
 
-    # Attribution hint from merged branch
     base_r = _g(["merge-base", target_branch, branch], repo_dir)
     authors = []
     if base_r.returncode == 0:

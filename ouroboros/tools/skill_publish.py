@@ -154,26 +154,7 @@ _PROVENANCE_SLUG_MAX = 128
 
 
 def _provenance_hint(skill_dir: pathlib.Path, source: str) -> str:
-    """Return a short ``## Provenance`` Markdown block for marketplace-managed
-    skills, or ``""`` for everything else (including missing/corrupt sidecars).
-
-    Soft fallback: when the sidecar is absent skill_loader reclassifies the
-    skill as ``external`` and submit goes through the existing external flow
-    without a Provenance section — that is the intended behaviour, not a bug.
-
-    Defense-in-depth: although marketplace sidecars are produced by the
-    trusted install pipeline, the slug value still flows into a public PR
-    body. We mirror the secret-scan + safe-escape discipline that ``note``
-    and ``SKILL.md`` already use:
-
-    - reject the block if the slug matches the secret-value heuristic;
-    - strip control characters (``\\n``, ``\\r``, ``\\t``, etc.) so a
-      malicious or corrupted sidecar cannot inject fake Markdown headings
-      into the published PR body;
-    - escape backticks so the slug stays inside the inline-code span;
-    - cap the rendered slug at a reasonable length to keep the block
-      compact regardless of upstream metadata length.
-    """
+    """Return safe marketplace provenance Markdown, or empty for non-managed skills."""
     if source == SKILL_SOURCE_OUROBOROSHUB:
         marker = skill_dir / ".ouroboroshub.json"
         label = "OuroborosHub"
@@ -192,11 +173,9 @@ def _provenance_hint(skill_dir: pathlib.Path, source: str) -> str:
         return ""
     has_secret, _matches = contains_real_secret_value(original)
     if has_secret:
-        # A sidecar slug should never look like a secret; if it does, drop
-        # the Provenance block entirely rather than risk leaking it upstream.
+        # Never leak suspicious sidecar slugs into a public PR body.
         return ""
-    # Collapse anything that could break out of the inline-code span or inject
-    # a fake heading: control chars, newlines, backticks.
+    # Prevent inline-code breakout and fake Markdown headings.
     safe = "".join(ch for ch in original if 0x20 <= ord(ch) != 0x7f)
     safe = safe.replace("`", "").strip()
     if not safe:
@@ -363,7 +342,7 @@ def _generate_pr_body(
     skill_md = ""
     skill_md_path = skill_dir / "SKILL.md"
     try:
-        # Prefer the reviewed manifest body from disk when small; fallback stays valid if unavailable.
+        # Prefer reviewed SKILL.md when small; fallback stays valid if unavailable.
         if skill_md_path.is_file():
             text = skill_md_path.read_text(encoding="utf-8")
             skill_md = text[:8192]
@@ -409,8 +388,7 @@ def _generate_pr_body(
         body = str(response.get("content") or "").strip()
         if not body:
             return fallback
-        # Force-prefix provenance so the marketplace context is never dropped
-        # silently by the LLM narrative. Cheap markdown duplication is fine.
+        # Do not let LLM prose silently drop marketplace provenance.
         if provenance and "## Provenance" not in body:
             body = provenance + body
         return body

@@ -1,14 +1,4 @@
-"""
-Vision Language Model (VLM) tools for Ouroboros.
-
-Allows the agent to analyze screenshots and images using LLM vision capabilities.
-Integrates with the existing browser screenshot workflow:
-  browse_page(output='screenshot') → analyze_screenshot() → insight
-
-Two tools:
-  - analyze_screenshot: analyze the last browser screenshot using VLM
-  - vlm_query: analyze any image (file path, URL, or base64) with a custom prompt
-"""
+"""Vision LLM tools for browser screenshots and uploaded images."""
 
 from __future__ import annotations
 
@@ -24,7 +14,7 @@ _DEFAULT_VLM_MODEL = "anthropic/claude-sonnet-4.6"
 
 
 def _get_vlm_model() -> str:
-    """Get VLM model from env or use default."""
+    """Return configured VLM model or default."""
     return os.environ.get("OUROBOROS_MODEL", _DEFAULT_VLM_MODEL)
 
 
@@ -35,11 +25,7 @@ def _get_llm_client():
 
 
 def _analyze_screenshot(ctx: ToolContext, prompt: str = "Describe what you see in this screenshot. Note any important UI elements, text, errors, or visual issues.", model: str = "") -> str:
-    """
-    Analyze the last browser screenshot using a Vision LLM.
-
-    Requires a prior browse_page(output='screenshot') or browser_action(action='screenshot') call.
-    """
+    """Analyze the last browser screenshot via VLM."""
     b64 = ctx.browser_state.last_screenshot_b64
     if not b64:
         return (
@@ -57,7 +43,6 @@ def _analyze_screenshot(ctx: ToolContext, prompt: str = "Describe what you see i
             model=vlm_model,
         )
 
-        # Emit usage event if event_queue is available
         _emit_usage(ctx, usage, vlm_model)
 
         return text or "(no response from VLM)"
@@ -73,13 +58,11 @@ _IMAGE_MAGIC: List[tuple] = [
     (b'GIF89a', "image/gif"),
 ]
 _IMAGE_WEBP_MAGIC = (b'RIFF', b'WEBP')
-_VLM_MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+_VLM_MAX_FILE_BYTES = 20 * 1024 * 1024
 
 
 def _path_is_under(path: "pathlib.Path", root: "pathlib.Path") -> bool:
-    """Return True if path is root itself or a descendant of root (no symlink escape).
-    Both path and root should already be resolved before calling this.
-    """
+    """Return True if a resolved path is root itself or a descendant."""
     try:
         path.relative_to(root.resolve())
         return True
@@ -98,12 +81,7 @@ def _detect_image_mime_for_vlm(raw: bytes) -> str:
 
 
 def _allowed_file_roots() -> List["pathlib.Path"]:
-    """Return absolute paths that file_path is allowed to resolve under.
-
-    When OUROBOROS_DATA_DIR is set, only that data root's uploads/ is allowed.
-    When absent, falls back to the default ~/Ouroboros/data/uploads.
-    This ensures each runtime instance is isolated to its own configured data directory.
-    """
+    """Return uploads roots allowed for VLM file_path reads."""
     import pathlib
     data_dir = os.environ.get("OUROBOROS_DATA_DIR", "")
     if data_dir:
@@ -112,12 +90,7 @@ def _allowed_file_roots() -> List["pathlib.Path"]:
 
 
 def _vlm_query(ctx: ToolContext, prompt: str, image_url: str = "", image_base64: str = "", image_mime: str = "image/png", file_path: str = "", model: str = "") -> str:
-    """
-    Analyze any image using a Vision LLM.
-    Provide one of: file_path (local file), image_url (public URL), or image_base64.
-    file_path is preferred when the image is already on disk (e.g. data/uploads/).
-    file_path is restricted to the uploads directory (data/uploads/).
-    """
+    """Analyze one image from uploads file_path, public URL, or base64."""
     if not image_url and not image_base64 and not file_path:
         return "⚠️ Provide one of: file_path, image_url, or image_base64."
 
@@ -128,7 +101,6 @@ def _vlm_query(ctx: ToolContext, prompt: str, image_url: str = "", image_base64:
         fp = pathlib.Path(file_path).expanduser().resolve()
         if not fp.exists():
             return f"⚠️ File not found: {file_path}"
-        # Security: reject paths outside the allowed uploads roots
         allowed = _allowed_file_roots()
         if not any(_path_is_under(fp, root) for root in allowed):
             return (
@@ -141,7 +113,7 @@ def _vlm_query(ctx: ToolContext, prompt: str, image_url: str = "", image_base64:
             raw = fp.read_bytes()
         except Exception as e:
             return f"⚠️ Failed to read image file: {e}"
-        # Fail-closed MIME detection: reject non-image files
+        # Fail closed: only recognized image bytes may reach the VLM.
         mime = _detect_image_mime_for_vlm(raw)
         if not mime:
             return (

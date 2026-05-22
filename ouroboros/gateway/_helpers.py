@@ -1,17 +1,14 @@
-"""Shared Starlette HTTP-API plumbing used across ``ouroboros`` route modules.
-
-Pre-v5.15 every API module (``extensions_api``, ``marketplace_api``,
-``file_browser_api``, ``server.py``) carried its own private copies of these
-helpers. Centralising them keeps the API modules thin and lets future helpers
-land in one place instead of being copied into N modules.
-"""
+"""Shared Starlette HTTP-API helpers for thin route modules."""
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from ouroboros.utils import iter_jsonl_objects
 
 
 _TRUE_LITERALS = frozenset({"1", "true", "yes", "on"})
@@ -57,6 +54,18 @@ def coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+async def request_json_or(
+    request: Request,
+    default: Any,
+    *,
+    exceptions: tuple[type[BaseException], ...] = (json.JSONDecodeError, ValueError),
+) -> Any:
+    try:
+        return await request.json()
+    except exceptions:
+        return default
+
+
 def json_error(message: str, status: int = 500, **extra: Any) -> JSONResponse:
     """``JSONResponse({"error": message, **extra}, status_code=status)``."""
     payload: dict[str, Any] = {"error": message}
@@ -64,10 +73,11 @@ def json_error(message: str, status: int = 500, **extra: Any) -> JSONResponse:
     return JSONResponse(payload, status_code=status)
 
 
+def json_exception(exc: BaseException, status: int = 500) -> JSONResponse:
+    return json_error(str(exc), status)
+
+
 __all__ = (
-    "coerce_bool",
-    "coerce_int",
-    "json_error",
-    "request_drive_root",
-    "request_repo_dir",
+    "coerce_bool", "coerce_int", "iter_jsonl_objects", "json_error", "json_exception",
+    "request_json_or", "request_drive_root", "request_repo_dir",
 )

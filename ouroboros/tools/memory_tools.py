@@ -1,10 +1,4 @@
-"""Memory registry tools: metacognitive map of all data sources.
-
-Provides a registry (memory/registry.md) that tracks what data the agent
-has, when it was last updated, what gaps exist, and trust level.
-This enables "knowing what you know" — preventing confabulation from
-cached impressions when the actual source data is missing.
-"""
+"""Memory registry tools for tracking data sources, gaps, and trust."""
 
 import re
 import logging
@@ -37,12 +31,7 @@ def _memory_map(ctx: ToolContext) -> str:
 def _memory_update_registry(
     ctx: ToolContext, source_id: str, updates: str
 ) -> str:
-    """Update or create an entry in the memory registry.
-
-    Args:
-        source_id: Identifier for the data source (e.g. 'user-context')
-        updates: Full content for this entry (markdown lines with - **Key:** value)
-    """
+    """Update or create an entry in the memory registry."""
     if not source_id or not isinstance(source_id, str):
         return "⚠️ source_id must be a non-empty string."
     source_id = source_id.strip()
@@ -52,13 +41,11 @@ def _memory_update_registry(
     path = _registry_file(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing content or start fresh
     if path.exists():
         content = path.read_text(encoding="utf-8")
     else:
         content = "# Memory Registry\n\nMetacognitive map: what I know, what I don't, and where to look.\n\n"
 
-    # Find existing section for this source_id
     pattern = rf'^### {re.escape(source_id)}\s*$'
     lines = content.split("\n")
     start_idx = None
@@ -74,25 +61,19 @@ def _memory_update_registry(
     new_section = f"### {source_id}\n{updates.strip()}\n"
 
     if start_idx is not None:
-        # Replace existing section
         if end_idx is None:
             end_idx = len(lines)
-        # Remove trailing blank lines from section
         while end_idx > start_idx and not lines[end_idx - 1].strip():
             end_idx -= 1
         lines[start_idx:end_idx] = [new_section]
         content = "\n".join(lines)
     else:
-        # Append new section
         if not content.endswith("\n"):
             content += "\n"
         content += "\n" + new_section
 
     path.write_text(content, encoding="utf-8")
     return f"✅ Registry entry '{source_id}' updated."
-
-
-# --- Tool registration ---
 
 def get_tools() -> List[ToolEntry]:
     return [

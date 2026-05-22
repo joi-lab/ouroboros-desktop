@@ -1,4 +1,3 @@
-import { escapeHtml } from './utils.js';
 import {
     LOG_CATEGORIES,
     categorizeLogEvent,
@@ -9,14 +8,9 @@ import {
     prettyLogEvent,
     summarizeLogEvent,
 } from './log_events.js';
+import { escapeHtml } from './utils.js';
 
-// ``hostPage`` defaults to ``'dashboard'`` because the embedded sub-tab
-// migration (v5.7+) put Logs/Costs/Evolution/Updates inside the
-// Dashboard page; the legacy ``'settings'`` value is no longer passed
-// by ``app.js``. Default updated in v5.8.3-rc.5; the legacy
-// ``state.settingsActiveSubtab`` branch has been removed because no
-// caller can reach it anymore.
-export function initLogs({ ws, state, mount = null, embedded = false, hostPage = 'dashboard', hostSubtab = 'logs' }) {
+export function initLogs({ ws, state, mount }) {
     const MAX_LOGS = 500;
     const MAX_TASK_EVENTS = 30;
     const duplicateWindowMs = 5000;
@@ -47,18 +41,15 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
         ? `<button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Очистить</button>`
         : '';
     page.innerHTML = `
-        ${headerBlock}
-        <div class="logs-filters" id="log-filters">${inlineClear}</div>
+        <div class="logs-filters" id="log-filters"><button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Clear</button></div>
         <div id="log-entries"></div>
     `;
-    (mount || document.getElementById('content')).appendChild(page);
+    mount.appendChild(page);
 
     const filtersDiv = page.querySelector('#log-filters');
     const logEntries = page.querySelector('#log-entries');
     function isLogsVisible() {
-        return embedded
-            ? state.activePage === hostPage && state.dashboardActiveSubtab === hostSubtab
-            : state.activePage === 'logs';
+        return state.activePage === 'dashboard' && state.dashboardActiveSubtab === 'logs';
     }
 
     function scrollToLatest() {
@@ -73,9 +64,6 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
     }
 
     function renderFilters() {
-        // v5.7.0: when embedded, the Clear button lives inside .logs-filters
-        // (replacing the duplicate header it used to live in). Preserve any
-        // child element flagged with .logs-inline-clear when rebuilding chips.
         const inlineClear = filtersDiv.querySelector('.logs-inline-clear');
         filtersDiv.innerHTML = '';
         Object.entries(LOG_CATEGORIES).forEach(([key, cat]) => {
@@ -107,6 +95,19 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
     function metaPills(meta) {
         if (!meta.length) return '';
         return `<div class="log-meta">${meta.map((item) => `<span class="log-pill">${escapeHtml(item)}</span>`).join('')}</div>`;
+    }
+
+    function logMainHtml({ ts = '', type = '', phase = 'info', headline = 'Event', repeat = '', attrs = {} }) {
+        const attr = (key) => attrs[key] ? ` ${attrs[key]}` : '';
+        return `
+            <div class="log-main">
+                <span class="log-ts"${attr('ts')}>${escapeHtml(ts)}</span>
+                ${type ? `<span class="log-type ${escapeHtml(type.className || '')}"${attr('type')}>${escapeHtml(type.label || '')}</span>` : ''}
+                <span class="log-phase ${escapeHtml(phase)}"${attr('phase')}>${escapeHtml(phase)}</span>
+                <span class="log-headline"${attr('headline')}>${escapeHtml(headline)}</span>
+                <span class="log-repeat"${attr('repeat')}${repeat ? '' : ' hidden'}>${escapeHtml(repeat)}</span>
+            </div>
+        `;
     }
 
     function bindRawToggle(root) {
@@ -168,13 +169,12 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
             ? `<div class="log-body">${escapeHtml(view.body)}</div>`
             : '';
         entry.innerHTML = `
-            <div class="log-main">
-                <span class="log-ts">${escapeHtml(normalizeLogTs(evt.ts || evt.timestamp))}</span>
-                <span class="log-type ${cat}">${escapeHtml(view.typeLabel)}</span>
-                <span class="log-phase ${escapeHtml(view.phase || 'info')}">${escapeHtml(view.phase || 'info')}</span>
-                <span class="log-headline">${escapeHtml(view.headline || 'Event')}</span>
-                <span class="log-repeat" hidden></span>
-            </div>
+            ${logMainHtml({
+                ts: normalizeLogTs(evt.ts || evt.timestamp),
+                type: { className: cat, label: view.typeLabel },
+                phase: view.phase || 'info',
+                headline: view.headline || 'Event',
+            })}
             ${metaPills(view.meta)}
             ${bodyHtml}
             <div class="log-actions">
@@ -200,13 +200,18 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
         entry.dataset.category = category;
         entry.dataset.taskGroup = groupId;
         entry.innerHTML = `
-            <div class="log-main">
-                <span class="log-ts" data-task-ts></span>
-                <span class="log-type ${escapeHtml(category)}" data-task-kind>${groupId === 'bg-consciousness' ? 'background' : 'task'}</span>
-                <span class="log-phase info" data-task-phase>info</span>
-                <span class="log-headline" data-task-headline>Task activity</span>
-                <span class="log-repeat" data-task-count hidden></span>
-            </div>
+            ${logMainHtml({
+                type: { className: category, label: groupId === 'bg-consciousness' ? 'background' : 'task' },
+                phase: 'info',
+                headline: 'Task activity',
+                attrs: {
+                    ts: 'data-task-ts',
+                    type: 'data-task-kind',
+                    phase: 'data-task-phase',
+                    headline: 'data-task-headline',
+                    repeat: 'data-task-count',
+                },
+            })}
             <div class="log-task-summary" data-task-summary></div>
             <details class="log-task-details">
                 <summary>Хронология</summary>
@@ -233,12 +238,12 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
     function renderTaskTimeline(record) {
         record.timeline.innerHTML = record.recent.map((item) => `
             <div class="log-task-event">
-                <div class="log-main">
-                    <span class="log-ts">${escapeHtml(item.ts)}</span>
-                    <span class="log-phase ${escapeHtml(item.phase || 'info')}">${escapeHtml(item.phase || 'info')}</span>
-                    <span class="log-headline">${escapeHtml(item.headline)}</span>
-                    <span class="log-repeat"${item.count > 1 ? '' : ' hidden'}>${item.count > 1 ? `x${item.count}` : ''}</span>
-                </div>
+                ${logMainHtml({
+                    ts: item.ts,
+                    phase: item.phase || 'info',
+                    headline: item.headline,
+                    repeat: item.count > 1 ? `x${item.count}` : '',
+                })}
                 ${metaPills(item.meta)}
                 ${item.body ? `<div class="log-body">${escapeHtml(item.body)}</div>` : ''}
                 <div class="log-actions">
@@ -330,9 +335,6 @@ export function initLogs({ ws, state, mount = null, embedded = false, hostPage =
         logEntries.innerHTML = '';
     });
 
-    window.addEventListener('ouro:settings-subtab-shown', (event) => {
-        if (event.detail?.tab === 'logs') scrollToLatest();
-    });
     window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
         if (event.detail?.tab === 'logs') scrollToLatest();
     });

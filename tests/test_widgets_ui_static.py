@@ -14,6 +14,10 @@ def _widgets_js() -> str:
     )
 
 
+def _read(rel: str) -> str:
+    return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+
 def test_weather_declarative_paths_match_route_payload():
     plugin = (REPO_ROOT / "skills" / "weather" / "plugin.py").read_text(encoding="utf-8")
     skill = (REPO_ROOT / "skills" / "weather" / "SKILL.md").read_text(encoding="utf-8")
@@ -69,7 +73,7 @@ def test_widgets_media_sources_are_constrained_to_extension_routes_or_data_urls(
     source = _widgets_js()
     assert "function safeMediaSrc" in source
     assert "const route = spec.route || spec.api_route || '';" in source
-    assert "extensionRouteUrl(tab, route, params)" in source
+    assert "extensionRoutePath(tab.skill, route, params)" in source
     assert "data:(image\\/" in source
     assert "parsed.pathname.startsWith(expectedPrefix)" in source
     assert "parsed.origin === window.location.origin" in source
@@ -78,10 +82,12 @@ def test_widgets_media_sources_are_constrained_to_extension_routes_or_data_urls(
 
 def test_widgets_downloads_use_host_handler_not_navigation():
     source = _widgets_js()
+    helper = _read("web/modules/ui_helpers.js")
     assert "data-widget-download-url" in source
     assert "event.preventDefault();" in source
-    assert "download_file_to_downloads" in source
-    assert "URL.createObjectURL(blob)" in source
+    assert "downloadViaHostBridge(" in source
+    assert "download_file_to_downloads" in helper
+    assert "URL.createObjectURL" in helper
     assert "window.location.href" not in source
     assert "window.location.assign" not in source
     assert '<a class="btn btn-default" href' not in source

@@ -1,29 +1,8 @@
-"""Claude Agent SDK gateway.
+"""Claude Agent SDK transport for edit and read-only advisory paths.
 
-Thin adapter wrapping the `claude-agent-sdk` Python package.
-Provides two execution paths:
-  - edit mode: code editing with safety guards (PreToolUse hooks)
-  - read-only mode: advisory review (Read/Grep/Glob only)
-
-This is pure transport — no business logic, no git ops, no validation.
-Orchestration (context loading, git stat, validation) lives in callers.
-
-Safety model:
-  1. SDK-level: allowed_tools, disallowed_tools, permission_mode,
-     PreToolUse hooks for path guards
-  2. Post-edit revert (registry.py) remains as defense-in-depth
-
-Runtime model:
-  The app owns the Claude runtime (bundled SDK + bundled CLI). The
-  SDK's own bundled-CLI-first resolution is preserved — this gateway
-  never overrides CLI path selection. Auth is ANTHROPIC_API_KEY only.
-
-  Full raw stderr from the CLI subprocess is captured via the SDK's
-  ``stderr`` callback and surfaced in ClaudeCodeResult.error on failure.
-
-The claude-agent-sdk package is a required dependency. If it is absent,
-callers receive an ImportError-derived error result with an install hint;
-there is no CLI subprocess fallback path.
+Callers own orchestration and validation. This layer keeps SDK hooks,
+ANTHROPIC_API_KEY auth, bundled CLI resolution, stderr capture, and no
+CLI fallback when the SDK is missing.
 """
 
 from __future__ import annotations
@@ -48,15 +27,12 @@ from ouroboros.runtime_mode_policy import (
 
 log = logging.getLogger(__name__)
 
-# Import SDK eagerly — ImportError surfaces SDK unavailability so callers return an install hint (no CLI fallback)
+# Eager import preserves the no-CLI-fallback install hint path.
 from claude_agent_sdk import (  # noqa: E402
     ClaudeAgentOptions, ClaudeSDKClient, HookMatcher,
     AssistantMessage, ResultMessage,
 )
 
-# ---------------------------------------------------------------------------
-# Stderr capture ring buffer (thread-safe, shared across invocations)
-# ---------------------------------------------------------------------------
 _STDERR_MAX_LINES = 200
 _stderr_lock = threading.Lock()
 _stderr_buffer: collections.deque[str] = collections.deque(maxlen=_STDERR_MAX_LINES)
@@ -64,14 +40,14 @@ DEFAULT_CLAUDE_CODE_MAX_TURNS = 50
 
 
 def _stderr_callback(line: str) -> None:
-    """SDK stderr callback — logs and stores raw CLI output."""
+    """Store raw CLI stderr for failure diagnostics."""
     log.warning("claude-cli stderr: %s", line)
     with _stderr_lock:
         _stderr_buffer.append(line)
 
 
 def get_last_stderr(max_chars: int = 4000) -> str:
-    """Return the most recent stderr output from the CLI subprocess."""
+    """Return recent CLI stderr."""
     with _stderr_lock:
         lines = list(_stderr_buffer)
     if not lines:
@@ -83,20 +59,16 @@ def get_last_stderr(max_chars: int = 4000) -> str:
 
 
 def clear_stderr_buffer() -> None:
-    """Clear the stderr ring buffer (e.g. after a successful run)."""
+    """Clear captured CLI stderr."""
     with _stderr_lock:
         _stderr_buffer.clear()
 
 SAFETY_CRITICAL = SAFETY_CRITICAL_PATHS
 
 
-# ---------------------------------------------------------------------------
-# Result dataclass
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ClaudeCodeResult:
-    """Structured result from a Claude Agent SDK invocation."""
+    """Structured SDK invocation result."""
 
     success: bool
     result_text: str = ""
@@ -105,13 +77,13 @@ class ClaudeCodeResult:
     usage: Dict[str, int] = field(default_factory=dict)
     error: str = ""
     stderr_tail: str = ""
-    # Populated by callers after invocation, not by the gateway
+    # Populated by callers after invocation.
     changed_files: List[str] = field(default_factory=list)
     diff_stat: str = ""
     validation_summary: str = ""
 
     def to_tool_output(self) -> str:
-        """Format as structured JSON for the tool response."""
+        """Return structured JSON for tool output."""
         out: Dict[str, Any] = {
             "success": self.success,
             "result": self.result_text,
@@ -143,13 +115,7 @@ def _coerce_usage_int(value: Any) -> int:
 
 
 def _normalize_sdk_usage(usage: Any) -> Dict[str, Any]:
-    """Normalize Claude Agent SDK usage into the app's standard token keys.
-
-    Claude SDK/Anthropic result messages commonly use Anthropic-style names
-    (``input_tokens``, ``output_tokens``, ``cache_read_input_tokens`` and
-    ``cache_creation_input_tokens``). Budget and log consumers expect the
-    OpenAI/OpenRouter-style keys used elsewhere in Ouroboros.
-    """
+    """Map Anthropic token usage names to Ouroboros budget/log keys."""
     if not isinstance(usage, dict):
         return {}
     normalized = dict(usage)
@@ -168,12 +134,8 @@ def _normalize_sdk_usage(usage: Any) -> Dict[str, Any]:
     return normalized
 
 
-# ---------------------------------------------------------------------------
-# PreToolUse hook: path safety guard
-# ---------------------------------------------------------------------------
-
 def make_path_guard(cwd: str, repo_root: str | None = None):
-    """Create a PreToolUse hook that blocks writes outside cwd and protected paths."""
+    """Block SDK writes outside cwd or runtime-protected paths."""
     cwd_resolved = pathlib.Path(cwd).resolve()
     repo_root_resolved = pathlib.Path(repo_root).resolve() if repo_root else None
 
@@ -181,22 +143,18 @@ def make_path_guard(cwd: str, repo_root: str | None = None):
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
 
-        # Only guard mutating tools
         if tool_name not in ("Edit", "Write", "MultiEdit"):
             return {}
 
-        # Extract file path from tool input
         file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
         if not file_path:
             return {}
 
-        # Resolve the target path
         target = pathlib.Path(file_path)
         if not target.is_absolute():
             target = cwd_resolved / target
         target = target.resolve()
 
-        # Check: outside cwd?
         try:
             target.relative_to(cwd_resolved)
         except ValueError:
@@ -211,10 +169,7 @@ def make_path_guard(cwd: str, repo_root: str | None = None):
                 }
             }
 
-        # Check: protected core/contract/release file.  Prefer repo-root
-        # relative paths when available; cwd may be a subdirectory such as
-        # ``repo/ouroboros`` where cwd-relative ``tools/registry.py`` would not
-        # match the protected-path table.
+        # Prefer repo-root relative paths so subdir cwd still hits protection tables.
         rel = target.relative_to(cwd_resolved).as_posix()
         if repo_root_resolved is not None:
             try:
@@ -264,7 +219,7 @@ def make_path_guard(cwd: str, repo_root: str | None = None):
 
 
 def make_readonly_guard():
-    """Create a PreToolUse hook that denies ALL mutating tools."""
+    """Deny all mutating tools in advisory mode."""
 
     async def readonly_guard(input_data: dict, tool_use_id: str, context: Any) -> dict:
         tool_name = input_data.get("tool_name", "")
@@ -284,10 +239,6 @@ def make_readonly_guard():
     return readonly_guard
 
 
-# ---------------------------------------------------------------------------
-# Core async runners
-# ---------------------------------------------------------------------------
-
 async def _run_edit_async(
     prompt: str,
     cwd: str,
@@ -297,10 +248,7 @@ async def _run_edit_async(
     system_prompt: Optional[str] = None,
     repo_root: Optional[str] = None,
 ) -> ClaudeCodeResult:
-    """Run an edit-mode SDK query with safety hooks.
-
-    Uses ClaudeSDKClient because hooks require the client interface.
-    """
+    """Run edit-mode SDK with safety hooks."""
     path_guard = make_path_guard(cwd, repo_root=repo_root)
     clear_stderr_buffer()
 
@@ -341,7 +289,6 @@ async def _run_edit_async(
                     if subtype and subtype != "success":
                         result.success = False
                         result.error = f"Agent ended with subtype: {subtype}"
-                    # Stop iterating after ResultMessage — CLI subprocess exits here.
                     break
     except Exception as e:
         result.success = False
@@ -360,15 +307,7 @@ async def _run_readonly_async(
     max_turns: int = DEFAULT_CLAUDE_CODE_MAX_TURNS,
     effort: Optional[str] = "high",
 ) -> ClaudeCodeResult:
-    """Run a read-only SDK query for advisory review.
-
-    Uses ClaudeSDKClient, matching the edit path lifecycle. The older
-    ``query()`` async-generator helper could emit ``aclose(): asynchronous
-    generator is already running`` when the stream was stopped at ResultMessage.
-
-    effort: "low" | "medium" | "high" | "max" — controls reasoning depth.
-    Default "high" so advisory reviewer thinks as deeply as blocking reviewers.
-    """
+    """Run read-only advisory SDK with the client lifecycle to avoid stream races."""
     clear_stderr_buffer()
     options_kwargs: Dict[str, Any] = dict(
         cwd=cwd,
@@ -380,25 +319,18 @@ async def _run_readonly_async(
         stderr=_stderr_callback,
     )
     if effort is not None:
-        # Guard against older SDK versions that may not support the 'effort' kwarg.
-        # We probe ClaudeAgentOptions.__init__ signature at call time; if 'effort'
-        # is absent we silently omit it so advisory still runs (just without the
-        # reasoning-depth hint). This keeps pyproject.toml at >=0.1.50 without
-        # coupling to a specific version that first added 'effort'.
+        # Older SDKs may lack effort; omit it rather than failing advisory.
         import inspect as _inspect
         try:
             _sig = _inspect.signature(ClaudeAgentOptions.__init__)
             if "effort" in _sig.parameters:
                 options_kwargs["effort"] = effort
         except (ValueError, TypeError):
-            # Signature introspection failed (e.g. built extension type) — try anyway
-            # and fall through to the except-TypeError below.
             options_kwargs["effort"] = effort
 
     try:
         options = ClaudeAgentOptions(**options_kwargs)
     except TypeError:
-        # SDK version does not accept 'effort' — retry without it
         options_kwargs.pop("effort", None)
         options = ClaudeAgentOptions(**options_kwargs)
 
@@ -422,7 +354,6 @@ async def _run_readonly_async(
                     if subtype and subtype != "success":
                         result.success = False
                         result.error = f"Agent ended with subtype: {subtype}"
-                    # Stop after ResultMessage; the client context owns cleanup.
                     break
     except Exception as e:
         result.success = False
@@ -434,17 +365,8 @@ async def _run_readonly_async(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Synchronous entry points (called from tool handlers)
-# ---------------------------------------------------------------------------
-
 def _run_async(coro):
-    """Run an async coroutine from synchronous tool context.
-
-    Worker processes have their own event loops, so asyncio.run() is safe.
-    If there's already a running loop (unlikely in workers), falls back
-    to creating a new loop in a thread.
-    """
+    """Run async SDK code from synchronous tool handlers."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -468,11 +390,7 @@ def run_edit(
     system_prompt: Optional[str] = None,
     repo_root: Optional[str] = None,
 ) -> ClaudeCodeResult:
-    """Synchronous entry point for edit-mode SDK.
-
-    Raises ImportError if claude-agent-sdk is not installed (caught at
-    module level import above).
-    """
+    """Synchronous edit-mode SDK entry point."""
     return _run_async(_run_edit_async(
         prompt=prompt,
         cwd=cwd,
@@ -485,20 +403,7 @@ def run_edit(
 
 
 def resolve_claude_code_model(default: str = "claude-opus-4-6[1m]") -> str:
-    """Return the configured Claude Code model from env/settings.
-
-    Single source of truth — used by both edit path and advisory path
-    to avoid model drift.  Value comes from ``CLAUDE_CODE_MODEL`` env var
-    (set by config.apply_settings_to_env).  Falls back to *default* which
-    matches the shipped ``SETTINGS_DEFAULTS['CLAUDE_CODE_MODEL']`` in
-    ``ouroboros/config.py``. Keeping the fallback aligned with the shipped
-    default avoids a cross-module drift where code reached before settings
-    are applied would resolve to a different model than fresh installs see
-    in the UI.
-
-    Callers that need the raw string (e.g. to pass to the SDK) should use
-    this function rather than reading the env var directly.
-    """
+    """Return the env/settings Claude Code model, aligned with config defaults."""
     return os.environ.get("CLAUDE_CODE_MODEL", default).strip() or default
 
 
@@ -509,11 +414,7 @@ def run_readonly(
     max_turns: int = DEFAULT_CLAUDE_CODE_MAX_TURNS,
     effort: Optional[str] = "high",
 ) -> ClaudeCodeResult:
-    """Synchronous entry point for read-only advisory review.
-
-    effort: "low" | "medium" | "high" | "max". Default "high" to match
-    the reasoning depth of the downstream blocking reviewers.
-    """
+    """Synchronous read-only advisory entry point."""
     return _run_async(_run_readonly_async(
         prompt=prompt,
         cwd=cwd,

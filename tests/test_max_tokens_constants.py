@@ -54,7 +54,6 @@ def test_summary_and_background_token_budgets():
         "ouroboros/consolidator.py": "max_tokens=16384",
         "ouroboros/reflection.py": "max_tokens=16384",
         "ouroboros/agent_task_pipeline.py": "max_tokens=16384",
-        "ouroboros/tools/core.py": "max_tokens=16384",
         "ouroboros/context_compaction.py": "max_tokens=32768",
         "ouroboros/tools/skill_publish.py": "max_tokens=8192",
         "ouroboros/consciousness.py": "max_tokens=65536",
@@ -101,23 +100,22 @@ def test_claude_code_sdk_only_no_cli_fallback():
 
 def test_review_prompt_token_budget_is_ssot():
     """``review_helpers.REVIEW_PROMPT_TOKEN_BUDGET`` is the single source of
-    truth for the unified scope/plan/deep-review input gate (850K). Bumping
+    truth for the unified scope/plan/deep-review input gate (920K). Bumping
     the constant must move all three call sites in lockstep so the skip
     threshold cannot silently desync between modules.
 
     Note: Claude Opus 4.6 has a 1M context window SHARED between input and
-    output. ``estimate_tokens`` (chars/4) under-counts by ~15%, so at
-    gate=850K actual input is ≈1M tokens and output max_tokens draws from
-    the same 1M ceiling. The skip path is best-effort.
+    output. ``estimate_tokens`` (chars/4) is approximate, so the 920K gate
+    intentionally leaves limited output headroom and remains best-effort.
     """
     from ouroboros.tools.review_helpers import REVIEW_PROMPT_TOKEN_BUDGET
     from ouroboros.tools.scope_review import _SCOPE_BUDGET_TOKEN_LIMIT
     from ouroboros.tools.plan_review import _PLAN_BUDGET_TOKEN_LIMIT
 
-    assert REVIEW_PROMPT_TOKEN_BUDGET == 850_000, (
+    assert REVIEW_PROMPT_TOKEN_BUDGET == 920_000, (
         f"REVIEW_PROMPT_TOKEN_BUDGET drifted to {REVIEW_PROMPT_TOKEN_BUDGET}; "
         "see review_helpers.py docstring before changing — call sites do "
-        "not silently re-pin to 850K."
+        "not silently re-pin to an old budget."
     )
     assert _SCOPE_BUDGET_TOKEN_LIMIT == REVIEW_PROMPT_TOKEN_BUDGET, (
         f"_SCOPE_BUDGET_TOKEN_LIMIT ({_SCOPE_BUDGET_TOKEN_LIMIT}) must equal "
@@ -150,6 +148,9 @@ def test_deep_self_review_budget_uses_ssot():
     # Old hardcoded literals must not survive — drift would silently desync.
     assert "estimated_tokens > 850_000" not in src, (
         "deep_self_review still has the old hardcoded literal; switch to the SSOT constant"
+    )
+    assert "estimated_tokens > 920_000" not in src, (
+        "deep_self_review hardcodes the current budget; use the SSOT constant instead"
     )
     assert "int(stats[\"total_chars\"] / 3.5)" not in src, (
         "deep_self_review must not use its old chars/3.5 estimator"

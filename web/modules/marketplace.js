@@ -1,13 +1,4 @@
-/**
- * Ouroboros ClawHub Marketplace UI (v4.50).
- *
- * Renders inside the ``Marketplace`` sub-tab of the Skills page.
- * Talks to ``/api/marketplace/clawhub/*`` and the existing
- * ``/api/skills/<name>/{toggle,review}`` endpoints. Uses the same
- * design-system primitives (``.btn``, ``.skills-badge``, ``.muted``,
- * ``.field-note``) as the rest of the app so dark/light theme parity
- * is automatic.
- */
+/** ClawHub marketplace UI inside the Skills page. */
 
 import {
     getPending,
@@ -18,15 +9,22 @@ import {
     startLifecyclePoller,
 } from './lifecycle_card.js';
 import { openConfirmDialog } from './confirm_dialog.js';
+import { jsonPost } from './api_client.js';
+import { renderToneBadge } from './ui_helpers.js';
 import {
     boundedText,
     emitSkillLifecycle,
     escapeHtmlAttr as escapeHtml,
     fetchJson,
+    formatCompactNumber,
     grantReady,
     isRateLimitError,
+    renderHubCard,
     renderSkillRepairPrompt,
+    reviewReady,
+    reviewTone,
     safeExternalHrefAttr,
+    topReviewFinding,
 } from './utils.js';
 
 function installErrorCopy(message) {
@@ -36,16 +34,6 @@ function installErrorCopy(message) {
 }
 
 const safeExternalUrl = safeExternalHrefAttr;
-
-
-function formatNumber(value) {
-    const num = Number(value);
-    if (!Number.isFinite(num) || num <= 0) return '—';
-    if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M';
-    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'k';
-    return String(num);
-}
-
 
 const MARKETPLACE_SEARCH_LIMIT = 16;
 
@@ -85,39 +73,11 @@ function statusBadgeForReview(status) {
         : status === 'warnings' ? 'warn'
         : status === 'blockers' ? 'danger'
         : 'muted';
-    return `<span class="skills-badge skills-badge-${tone}">${escapeHtml(status || 'pending')}</span>`;
-}
-
-function reviewReady(installed) {
-    if (installed?.review_gate && typeof installed.review_gate.executable_review === 'boolean') {
-        return installed.review_gate.executable_review && !installed?.review_stale;
-    }
-    return ['clean', 'warnings'].includes(installed?.review_status) && !installed?.review_stale;
-}
-
-function reviewStatusTone(status) {
-    return ['clean', 'warnings'].includes(status) ? 'ok' : 'warn';
-}
-
-function reviewActionTone(status, error = '') {
-    if (error) return 'danger';
-    if (status === 'clean') return 'ok';
-    if (status === 'blockers') return 'danger';
-    return 'warn';
+    return renderToneBadge(status || 'pending', tone);
 }
 
 function hasInstalledUiTab(installed) {
     return installed?.has_ui_tab === true;
-}
-
-function topReviewFinding(installed) {
-    const findings = Array.isArray(installed?.review_findings) ? installed.review_findings : [];
-    if (!findings.length) return '';
-    const first = findings[0] || {};
-    const label = first.item || first.check || first.title || 'finding';
-    const verdict = first.verdict || first.severity || '';
-    const reason = first.reason || first.message || '';
-    return `${verdict ? `${verdict} ` : ''}${label}: ${reason}`.trim();
 }
 
 function lifecycleFor(summary, installed, pending) {
@@ -159,7 +119,7 @@ function lifecycleFor(summary, installed, pending) {
             button: 'Исправить',
         };
     }
-    if (installed.review_status === 'blockers' && !reviewReady(installed)) {
+    if (installed.review_status === 'blockers' && !reviewReady(installed, { requireFresh: true })) {
         const finding = topReviewFinding(installed);
         return {
             tone: 'danger',
@@ -169,7 +129,7 @@ function lifecycleFor(summary, installed, pending) {
             button: 'Исправить',
         };
     }
-    if (!reviewReady(installed)) {
+    if (!reviewReady(installed, { requireFresh: true })) {
         const finding = topReviewFinding(installed);
         return {
             tone: 'warn',
@@ -180,7 +140,10 @@ function lifecycleFor(summary, installed, pending) {
         };
     }
     if (!grantReady(installed)) {
-        const missing = installed.grants?.missing_keys || [];
+        const missing = [
+            ...(installed.grants?.missing_keys || []),
+            ...(installed.grants?.missing_permissions || []),
+        ];
         return {
             tone: 'warn',
             label: 'Требуется разрешение',
@@ -259,8 +222,8 @@ function summaryCard(summary, installedMap, isPlugin) {
         && summary.latest_version
         && installedAtVersion
         && summary.latest_version !== installedAtVersion;
-    const downloads = formatNumber(summary.stats?.downloads);
-    const stars = formatNumber(summary.stats?.stars);
+    const downloads = formatCompactNumber(summary.stats?.downloads);
+    const stars = formatCompactNumber(summary.stats?.stars);
     const license = summary.license || 'no-license';
     const homepageHref = safeExternalUrl(summary.homepage);
     const description = summary.summary || summary.description || '';
@@ -287,7 +250,7 @@ function summaryCard(summary, installedMap, isPlugin) {
         ? `<button class="btn btn-default marketplace-next-action"
                    data-mp-action="${escapeHtml(lifecycle.action)}"
                    data-slug="${escapeHtml(slug)}"
-                   ${lifecycle.disabled ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`
+                   ${lifecycle.disabled || !lifecycle.action ? 'disabled' : ''}>${escapeHtml(lifecycle.button)}</button>`
         : '';
     const secondaryButtons = isPlugin
         ? detailsBtn
@@ -386,21 +349,10 @@ function showStatus(host, message, tone) {
 }
 
 
-// ---------------------------------------------------------------------------
-// Network helpers
-// ---------------------------------------------------------------------------
-//
-// ``fetchJson`` is re-exported from ``utils.js`` and owned by
-// ``api_client.js``. The contract: parsed body always returned; non-2xx
-// throws ``Error`` with ``err.status`` (used here for 429 retry handling)
-// and ``err.body``.
-
-
 async function loadInstalled({ signal: externalSignal } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
-    // v5.7.0: link an external (caller-owned) signal so refresh() can cancel
-    // a stale loadInstalled() when a newer refresh starts in parallel.
+    // Link caller signal so refresh() cancels stale installed-lookups too.
     const onExternalAbort = () => controller.abort();
     if (externalSignal) {
         if (externalSignal.aborted) controller.abort();
@@ -450,11 +402,6 @@ async function runSearch(state, { signal } = {}) {
 }
 
 
-// ---------------------------------------------------------------------------
-// Public init
-// ---------------------------------------------------------------------------
-
-
 export function initMarketplace(pane, controlsHost = null) {
     pane.innerHTML = paneTemplate({ includeControls: !controlsHost });
     if (controlsHost) {
@@ -482,11 +429,7 @@ export function initMarketplace(pane, controlsHost = null) {
     const paginationHost = pane.querySelector('#mp-pagination');
 
     let debounceTimer = null;
-    // v5.7.0: search race control. ``activeController`` is the AbortController
-    // for the in-flight request; the next refresh() aborts it before kicking
-    // off a new fetch. ``refreshToken`` is bumped on each refresh; after the
-    // awaits a stale request bails out before touching state/DOM, so a slow
-    // older response cannot overwrite a fresh newer render.
+    // Abort + token guard prevent slow stale searches from overwriting fresh UI.
     let activeController = null;
     let refreshToken = 0;
 
@@ -501,7 +444,6 @@ export function initMarketplace(pane, controlsHost = null) {
         syncControlsForMode();
         const query = String(state.query || '').trim();
         showStatus(pane, query ? `Поиск «${query}»…` : 'Загрузка ClawHub…', 'muted');
-        // Cancel any prior in-flight refresh and stake a new token.
         if (activeController) {
             try { activeController.abort(); } catch (_) { /* ignore */ }
         }
@@ -513,8 +455,6 @@ export function initMarketplace(pane, controlsHost = null) {
                 runSearch(state, { signal: myController.signal }),
                 loadInstalled({ signal: myController.signal }),
             ]);
-            // Stale response — a newer refresh started; drop the result so
-            // we never overwrite the fresher state with stale data.
             if (myToken !== refreshToken) return;
             state.results = data.results || [];
             state.installedMap = installedMap;
@@ -545,8 +485,6 @@ export function initMarketplace(pane, controlsHost = null) {
                 showStatus(pane, `${state.results.length} навык${state.results.length === 1 ? '' : (state.results.length < 5 ? 'а' : 'ов')} · ${mode}${official} · ${state.registryPath}`, 'muted');
             }
         } catch (err) {
-            // Stale-response abort: silent — a newer refresh is already in
-            // flight (or just rendered) and owns the UI.
             if (err?.name === 'AbortError' || myToken !== refreshToken) return;
             const rawMessage = String(err?.body?.error || err?.message || err || '');
             const firstLine = rawMessage.split('\n').map((line) => line.trim()).filter(Boolean)[0] || 'Ошибка запроса к маркетплейсу';
@@ -580,11 +518,7 @@ export function initMarketplace(pane, controlsHost = null) {
     });
 
     async function toggleInstalledSkill(installed, enabled) {
-        return fetchJson(`/api/skills/${encodeURIComponent(installed.name)}/toggle`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled }),
-        });
+        return jsonPost(`/api/skills/${encodeURIComponent(installed.name)}/toggle`, { enabled });
     }
 
     async function runLifecycleAction(slug, action) {
@@ -609,20 +543,22 @@ export function initMarketplace(pane, controlsHost = null) {
             return;
         }
         if (action === 'grant' && installed) {
-            const keys = installed.grants?.missing_keys || installed.grants?.requested_keys || [];
-            if (!keys.length) throw new Error('Навык не сообщил о ключах доступа.');
+            const items = [
+                ...(installed.grants?.missing_keys || installed.grants?.requested_keys || []),
+                ...(installed.grants?.missing_permissions || installed.grants?.requested_permissions || []),
+            ];
+            if (!items.length) throw new Error('Навык не сообщил о ключах или разрешениях.');
             const ok = await openConfirmDialog({
                 title: `Разрешить доступ для ${installed.name}`,
-                body: `Разрешить навыку ${installed.name} доступ к следующим ключам настроек?\n\n${keys.join('\n')}\n\nВыдавайте разрешения только проверенным навыкам.`,
+                body: `Разрешить навыку ${installed.name} доступ к этим ключам и разрешениям?\n\n${items.join('\n')}\n\nВыдавайте разрешения только проверенным навыкам.`,
                 confirmLabel: 'Разрешить доступ',
             });
             if (!ok) return;
             const bridge = window.pywebview?.api?.request_skill_key_grant;
-            if (!bridge) {
-                throw new Error('Выдача разрешений требует десктопного лаунчера.');
-            }
             setPending(slug, { label: 'Выдача разрешения', tone: 'warn', message: 'Ожидание подтверждения…' });
-            const result = await bridge(installed.name, keys);
+            const result = bridge
+                ? await bridge(installed.name, items)
+                : await jsonPost(`/api/skills/${encodeURIComponent(installed.name)}/grants`, { items });
             if (!result?.ok) throw new Error(result?.error || 'Выдача разрешения отменена.');
             showStatus(pane, `${slug}: разрешение сохранено`, 'ok');
             emitSkillLifecycle('grant', installed.name, result);
@@ -636,15 +572,11 @@ export function initMarketplace(pane, controlsHost = null) {
             });
             if (!ok) return;
             setPending(slug, { label: 'Исправление запрошено', tone: 'warn', message: 'Постановка в очередь…' });
-            await fetchJson('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    cmd: buildHealPrompt(installed, summary),
-                    task_constraint: { mode: 'skill_repair', skill_name: installed.name || '', payload_root: installed.payload_root || '', allow_enable: false, allow_review: true },
-                    visible_text: `Задача исправления поставлена в очередь для ${installed.name || slug}. Ouroboros проверит payload и повторит проверку.`,
-                    visible_task_id: `skill_repair_${installed.name || slug}`,
-                }),
+            await jsonPost('/api/command', {
+                cmd: buildHealPrompt(installed, summary),
+                task_constraint: { mode: 'skill_repair', skill_name: installed.name || '', payload_root: installed.payload_root || '', allow_enable: false, allow_review: true },
+                visible_text: `Задача исправления поставлена в очередь для ${installed.name || slug}. Ouroboros проверит payload и повторит проверку.`,
+                visible_task_id: `skill_repair_${installed.name || slug}`,
             });
             showStatus(pane, `${slug}: задача исправления поставлена в очередь`, 'ok');
             emitSkillLifecycle('repair', installed.name || slug);
@@ -653,15 +585,11 @@ export function initMarketplace(pane, controlsHost = null) {
         }
         if (action === 'review' && installed) {
             setPending(slug, { label: 'Проверка', tone: 'warn', message: 'Запуск проверки навыка…' });
-            const result = await fetchJson(`/api/skills/${encodeURIComponent(installed.name)}/review`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
-            });
+            const result = await jsonPost(`/api/skills/${encodeURIComponent(installed.name)}/review`);
             showStatus(
                 pane,
                 `${slug}: проверка ${result.status}${result.error ? ` — ${result.error}` : ''}`,
-                reviewActionTone(result.status, result.error),
+                reviewTone(result.status, result.error),
             );
             emitSkillLifecycle('review', installed.name, result);
             return;
@@ -673,23 +601,15 @@ export function initMarketplace(pane, controlsHost = null) {
                 message: 'Обновление навыка…',
                 target: installed.name,
             });
-            const result = await fetchJson(`/api/marketplace/clawhub/update/${encodeURIComponent(installed.name)}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
-            });
+            const result = await jsonPost(`/api/marketplace/clawhub/update/${encodeURIComponent(installed.name)}`);
             if (!result.ok) throw new Error(result.error || 'ошибка обновления');
-            showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewStatusTone(result.review_status));
+            showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewTone(result.review_status));
             emitSkillLifecycle('update', installed.name, result);
             return;
         }
         if (action === 'install') {
             setPending(slug, { label: 'Установка', tone: 'warn', message: 'Загрузка, адаптация и проверка…' });
-            const result = await fetchJson('/api/marketplace/clawhub/install', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slug, auto_review: true }),
-            });
+            const result = await jsonPost('/api/marketplace/clawhub/install', { slug, auto_review: true });
             if (!result.ok) throw new Error(result.error || 'ошибка установки');
             const installedName = result.sanitized_name;
             const requestedGrants = result.provenance?.requested_key_grants || [];
@@ -700,7 +620,7 @@ export function initMarketplace(pane, controlsHost = null) {
             } else if (result.review_error) {
                 showStatus(pane, `${slug}: установлен, проверка не завершена: ${result.review_error}`, 'warn');
             } else {
-                showStatus(pane, `${slug}: установлен, проверка ${result.review_status || 'pending'}`, reviewStatusTone(result.review_status));
+                showStatus(pane, `${slug}: установлен, проверка ${result.review_status || 'pending'}`, reviewTone(result.review_status));
             }
             emitSkillLifecycle('install', installedName || slug, result);
         }
@@ -713,9 +633,7 @@ export function initMarketplace(pane, controlsHost = null) {
         scheduleRefresh(false);
     });
     queryInput.addEventListener('keydown', (event) => {
-        // v5.7.0: Enter triggers a search; without this, users instinctively
-        // pressed Enter (no-op) and then clicked Search, which used to
-        // create the typing-debounce + click race the user complained about.
+        // Enter triggers the same immediate search as the button.
         if (event.key === 'Enter') {
             event.preventDefault();
             scheduleRefresh(true);
@@ -728,9 +646,7 @@ export function initMarketplace(pane, controlsHost = null) {
         scheduleRefresh(true);
     });
     searchBtn.addEventListener('click', () => {
-        // v5.7.0: clear cursor history on explicit Search so a user that
-        // paginated through browse mode and then types a query gets a
-        // fresh cursorless first page (matching the input/checkbox flows).
+        // Explicit Search starts from a cursorless first page.
         state.cursor = '';
         state.cursorHistory = [];
         scheduleRefresh(true);
@@ -822,9 +738,7 @@ export function initMarketplace(pane, controlsHost = null) {
             } finally {
                 if (!failedMessage) setPending(slug, null);
                 actionBtn.disabled = false;
-                // v5.7.0: funnel through scheduleRefresh so back-to-back
-                // action completions coalesce into one refresh, sharing
-                // the abort/token guards in refresh().
+                // Coalesce action refreshes through the same abort/token guard.
                 if (!failedMessage) scheduleRefresh(true);
             }
             return;
@@ -839,11 +753,7 @@ export function initMarketplace(pane, controlsHost = null) {
                 updateBtn.disabled = false;
                 return;
             }
-            // Optional: let the operator pick a non-latest target via
-            // a small prompt. The summary already lists every published
-            // version; we offer a freeform prompt seeded with the
-            // registry latest. Empty / cancelled = skip; the install
-            // path treats falsy version as "latest".
+            // Empty version means latest; cancel skips update.
             const summary = state.results.find((s) => s.slug === slug);
             const latest = summary?.latest_version || '';
             const userVersion = window.prompt(
@@ -851,7 +761,6 @@ export function initMarketplace(pane, controlsHost = null) {
                 latest,
             );
             if (userVersion === null) {
-                // operator cancelled
                 updateBtn.disabled = false;
                 return;
             }
@@ -865,15 +774,11 @@ export function initMarketplace(pane, controlsHost = null) {
             });
             try {
                 const body = targetVersion ? { version: targetVersion } : {};
-                const result = await fetchJson(`/api/marketplace/clawhub/update/${encodeURIComponent(sanitized)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
+                const result = await jsonPost(`/api/marketplace/clawhub/update/${encodeURIComponent(sanitized)}`, body);
                 if (!result.ok) {
                     throw new Error(result.error || 'update failed');
                 } else {
-                    showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewStatusTone(result.review_status));
+                    showStatus(pane, `${slug}: обновлён — проверка ${result.review_status}`, reviewTone(result.review_status));
                     setPending(slug, null);
                     emitSkillLifecycle('update', sanitized, result);
                 }
@@ -906,11 +811,7 @@ export function initMarketplace(pane, controlsHost = null) {
             if (!ok) return;
             uninstallBtn.disabled = true;
             try {
-                await fetchJson(`/api/marketplace/clawhub/uninstall/${encodeURIComponent(sanitized)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({}),
-                });
+                await jsonPost(`/api/marketplace/clawhub/uninstall/${encodeURIComponent(sanitized)}`);
                 showStatus(pane, `${slug}: удалён`, 'ok');
                 emitSkillLifecycle('uninstall', sanitized);
             } catch (err) {

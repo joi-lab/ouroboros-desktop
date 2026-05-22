@@ -1,40 +1,7 @@
 #!/usr/bin/env python3
-"""Invoke Ouroboros's actual triad + scope reviewers from outside the runtime.
+"""Dry-run the real triad + scope reviewers against the staged diff.
 
-Use case: developer (or an external orchestrator like an adversarial-review
-loop) wants to dry-run the same multi-model commit-time review pipeline that
-``repo_commit`` would trigger, against a staged diff, before any actual
-commit. Output is the FULL raw response from each reviewer model — no
-truncation, no summarisation — so the operator can read everything the
-gate would see.
-
-This script does NOT commit, does NOT mutate state outside the temporary
-ToolContext fields it owns, and does NOT depend on a live Ouroboros
-server process. It only reads:
-
-- ``~/Ouroboros/data/settings.json`` for OPENROUTER_API_KEY,
-  OUROBOROS_REVIEW_MODELS, OUROBOROS_SCOPE_REVIEW_MODEL, plus model slot
-  defaults (so ``LLMClient`` can route via the same provider lanes).
-- The current ``git diff --cached`` (the staged change set).
-
-Usage:
-    cd ~/Ouroboros/repo
-    git add -A   # stage everything you want reviewed
-    python3 scripts/run_external_review.py \
-        --commit-message "v5.1.2: light skills + elevation ratchet" \
-        --goal "Allow skills in light mode and seal the runtime_mode escalation paths."
-
-Optional flags:
-    --no-color       plain ASCII output (otherwise terse ANSI section headers)
-    --output PATH    also write the full raw output to a file
-
-Note: this script always reviews the staged diff (``git diff --cached``)
-because that is what ``run_parallel_review`` itself reads internally.
-There is no working-tree mode — ``git add`` first.
-
-This script is intentionally minimal — it's a development tool, not part
-of the runtime gate. It prints to stdout in a structure designed for
-direct copy-paste into review-loop summaries.
+Development-only: no commit, no review-state mutation, full raw reviewer output.
 """
 from __future__ import annotations
 
@@ -48,28 +15,31 @@ import time
 from typing import Any, Dict, List
 
 
-# ── Path bootstrap so ``import ouroboros.*`` works outside the package ──────
-
 _REPO_DIR = pathlib.Path(__file__).resolve().parent.parent
 _OUROBOROS_HOME = _REPO_DIR.parent
 _DATA_DIR = _OUROBOROS_HOME / "data"
 _SETTINGS_PATH = _DATA_DIR / "settings.json"
+_SECRET_ENV_KEYS = {
+    "GITHUB_TOKEN",
+    "OUROBOROS_NETWORK_PASSWORD",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_COMPATIBLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLOUDRU_FOUNDATION_MODELS_API_KEY",
+}
 
 if str(_REPO_DIR) not in sys.path:
     sys.path.insert(0, str(_REPO_DIR))
 
 
 def _load_settings_into_env() -> Dict[str, Any]:
-    """Read settings.json and copy everything string-valued into os.environ.
-
-    The actual Ouroboros runtime does this via
-    ``ouroboros.config.apply_settings_to_env``, but that function has a
-    fixed allowlist; we want a broader copy here so reviewer flows
-    (which hit ``LLMClient`` etc.) see the same provider config the live
-    runtime sees. We do NOT call ``apply_settings_to_env`` because it
-    would also resolve provider defaults and mutate the in-memory
-    settings dict, which is unnecessary for a read-only review.
-    """
+    """Populate env from settings.json without printing secret values."""
+    preexisting_secrets = {
+        key: os.environ.get(key, "")
+        for key in _SECRET_ENV_KEYS
+        if os.environ.get(key)
+    }
     if not _SETTINGS_PATH.exists():
         sys.stderr.write(
             f"[run_external_review] settings.json not found at {_SETTINGS_PATH}\n"
@@ -90,13 +60,12 @@ def _load_settings_into_env() -> Dict[str, Any]:
         os.environ.setdefault(key, str(value))
         pushed.append(key)
 
-    # The official allowlist still wins for the keys it knows about (so
-    # apply_settings_to_env semantics remain authoritative if someone adds
-    # extra processing). We also explicitly call it so e.g.
-    # OUROBOROS_REVIEW_MODELS gets the documented default fallback.
     try:
         from ouroboros.config import apply_settings_to_env
         apply_settings_to_env(settings)
+        for key, value in preexisting_secrets.items():
+            if not str(settings.get(key) or "").strip():
+                os.environ[key] = value
     except Exception as exc:
         sys.stderr.write(
             f"[run_external_review] apply_settings_to_env failed (continuing with raw env copy): {exc}\n"
@@ -133,25 +102,22 @@ def _ensure_diff_present() -> str:
 
 
 def _build_ctx() -> Any:
-    """Construct a minimal ToolContext sufficient for parallel_review."""
     from ouroboros.tools.registry import ToolContext
 
-    ctx = ToolContext(
-        repo_dir=_REPO_DIR,
-        drive_root=_DATA_DIR,
-    )
-    # Reviewer code reads / writes these per-call forensic fields. Default
-    # them so attribute access is safe on first use.
-    ctx._review_advisory = []
-    ctx._review_iteration_count = 0
-    ctx._review_history = []
-    ctx._scope_review_history = {}
-    ctx._last_scope_model = ""
-    ctx._last_triad_raw_results = []
-    ctx._last_scope_raw_result = {}
-    ctx._last_review_block_reason = ""
-    ctx._last_review_critical_findings = []
-    ctx._current_review_tool_name = "external_review"
+    ctx = ToolContext(repo_dir=_REPO_DIR, drive_root=_DATA_DIR)
+    for name, value in {
+        "_review_advisory": [],
+        "_review_iteration_count": 0,
+        "_review_history": [],
+        "_scope_review_history": {},
+        "_last_scope_model": "",
+        "_last_triad_raw_results": [],
+        "_last_scope_raw_result": {},
+        "_last_review_block_reason": "",
+        "_last_review_critical_findings": [],
+        "_current_review_tool_name": "external_review",
+    }.items():
+        setattr(ctx, name, value)
     return ctx
 
 
@@ -164,42 +130,14 @@ def _print_section(title: str, body: str, *, use_color: bool = True) -> None:
     print(f"\n{bar}\n{head}\n{bar}\n{body}\n")
 
 
-def _format_triad_actor(actor_record: Dict[str, Any]) -> str:
-    """Pretty-print one reviewer's full raw record without any truncation."""
-    parts = [
-        f"model_id     : {actor_record.get('model_id', '?')}",
-        f"status       : {actor_record.get('status', '?')}",
-        f"tokens_in    : {actor_record.get('tokens_in', 0)}",
-        f"tokens_out   : {actor_record.get('tokens_out', 0)}",
-        f"cost_usd     : {actor_record.get('cost_usd', 0.0)}",
-        f"prompt_chars : {actor_record.get('prompt_chars', 0)}",
-        "",
-        "── raw_text (verbatim, no truncation) ──",
-        actor_record.get("raw_text", "<empty>"),
-        "",
-        "── parsed_items ──",
-        json.dumps(actor_record.get("parsed_items", []), indent=2, ensure_ascii=False),
-    ]
-    return "\n".join(parts)
-
-
-def _format_scope(scope_raw: Dict[str, Any]) -> str:
-    parts = [
-        f"model_id     : {scope_raw.get('model_id', '?')}",
-        f"status       : {scope_raw.get('status', '?')}",
-        f"tokens_in    : {scope_raw.get('tokens_in', 0)}",
-        f"tokens_out   : {scope_raw.get('tokens_out', 0)}",
-        f"cost_usd     : {scope_raw.get('cost_usd', 0.0)}",
-        "",
-        "── raw_text (verbatim, no truncation) ──",
-        scope_raw.get("raw_text", "<empty>"),
-        "",
-        "── critical_findings ──",
-        json.dumps(scope_raw.get("critical_findings", []), indent=2, ensure_ascii=False),
-        "",
-        "── advisory_findings ──",
-        json.dumps(scope_raw.get("advisory_findings", []), indent=2, ensure_ascii=False),
-    ]
+def _format_review_record(record: Dict[str, Any], sections: list[tuple[str, str]]) -> str:
+    parts = [f"{key:<13}: {record.get(key, default)}" for key, default in (
+        ("model_id", "?"), ("status", "?"), ("tokens_in", 0),
+        ("tokens_out", 0), ("cost_usd", 0.0), ("prompt_chars", 0),
+    ) if key in record or key != "prompt_chars"]
+    parts += ["", "── raw_text (verbatim, no truncation) ──", record.get("raw_text", "<empty>")]
+    for title, key in sections:
+        parts += ["", f"── {title} ──", json.dumps(record.get(key, []), indent=2, ensure_ascii=False)]
     return "\n".join(parts)
 
 
@@ -269,13 +207,22 @@ def main() -> int:
         _emit("TRIAD REVIEWERS", "<empty — no actor records produced>")
     else:
         for idx, actor in enumerate(triad_raw):
-            _emit(f"TRIAD REVIEWER {idx + 1}/{len(triad_raw)}", _format_triad_actor(actor))
+            _emit(
+                f"TRIAD REVIEWER {idx + 1}/{len(triad_raw)}",
+                _format_review_record(actor, [("parsed_items", "parsed_items")]),
+            )
 
     scope_raw = getattr(ctx, "_last_scope_raw_result", {}) or {}
     if not scope_raw:
         _emit("SCOPE REVIEWER", "<empty — no scope record produced>")
     else:
-        _emit("SCOPE REVIEWER", _format_scope(scope_raw))
+        _emit(
+            "SCOPE REVIEWER",
+            _format_review_record(scope_raw, [
+                ("critical_findings", "critical_findings"),
+                ("advisory_findings", "advisory_findings"),
+            ]),
+        )
 
     if review_err:
         _emit("TRIAD BLOCK MESSAGE (review_err)", review_err)
@@ -297,7 +244,6 @@ def main() -> int:
         except Exception as exc:
             sys.stderr.write(f"[run_external_review] failed to write --output: {exc}\n")
 
-    # Exit code: 0 always — this is a dry-run reporter, not a gate.
     return 0
 
 

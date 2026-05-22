@@ -1,9 +1,4 @@
-"""
-Ouroboros — LLM client.
-
-The only module that communicates with LLM APIs (OpenRouter, direct providers, + optional local).
-Contract: chat(), default_model(), available_models(), add_usage().
-"""
+"""LLM client for OpenRouter, direct providers, and optional local inference."""
 
 from __future__ import annotations
 
@@ -21,6 +16,7 @@ from ouroboros.provider_models import normalize_anthropic_model_id
 log = logging.getLogger(__name__)
 
 DEFAULT_LIGHT_MODEL = "anthropic/claude-sonnet-4.6"
+_FALSE_LIKE_ENV_VALUES = {"", "0", "false", "no", "off"}
 
 
 class LocalContextTooLargeError(RuntimeError):
@@ -145,12 +141,12 @@ def add_usage(total: Dict[str, Any], usage: Dict[str, Any]) -> None:
         total["cost"] = float(total.get("cost") or 0) + float(usage["cost"])
 
 
-def fetch_openrouter_pricing() -> Dict[str, Tuple[float, float, float]]:
-    """
-    Fetch current pricing from OpenRouter API.
+def fetch_openrouter_pricing() -> Dict[str, Tuple[float, ...]]:
+    """Fetch OpenRouter pricing as model_id -> per-1M prices.
 
-    Returns dict of {model_id: (input_per_1m, cached_per_1m, output_per_1m)}.
-    Returns empty dict on failure.
+    Tuples are ``(input, cached_read, output)`` or
+    ``(input, cached_read, cache_write, output)`` when OpenRouter exposes a
+    provider-specific write price.
     """
     import logging
     log = logging.getLogger("ouroboros.llm")
@@ -169,7 +165,6 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, float, float]]:
         data = resp.json()
         models = data.get("data", [])
 
-        # Prefixes we care about
         prefixes = ("anthropic/", "openai/", "google/", "meta-llama/", "x-ai/", "qwen/")
 
         pricing_dict = {}
@@ -182,26 +177,32 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, float, float]]:
             if not pricing or not pricing.get("prompt"):
                 continue
 
-            # OpenRouter pricing is in dollars per token (raw values)
             raw_prompt = float(pricing.get("prompt", 0))
             raw_completion = float(pricing.get("completion", 0))
             raw_cached_str = pricing.get("input_cache_read")
             raw_cached = float(raw_cached_str) if raw_cached_str else None
+            raw_cache_write_str = pricing.get("input_cache_write")
+            raw_cache_write = float(raw_cache_write_str) if raw_cache_write_str else None
 
-            # Convert to per-million tokens
             prompt_price = round(raw_prompt * 1_000_000, 4)
             completion_price = round(raw_completion * 1_000_000, 4)
             if raw_cached is not None:
                 cached_price = round(raw_cached * 1_000_000, 4)
             else:
-                cached_price = round(prompt_price * 0.1, 4)  # fallback: 10% of prompt
+                cached_price = round(prompt_price * 0.1, 4)  # fallback cache discount
+            cache_write_price = (
+                round(raw_cache_write * 1_000_000, 4)
+                if raw_cache_write is not None else None
+            )
 
-            # Sanity check: skip obviously wrong prices
             if prompt_price > 1000 or completion_price > 1000:
                 log.warning(f"Skipping {model_id}: prices seem wrong (prompt={prompt_price}, completion={completion_price})")
                 continue
 
-            pricing_dict[model_id] = (prompt_price, cached_price, completion_price)
+            if cache_write_price is not None:
+                pricing_dict[model_id] = (prompt_price, cached_price, cache_write_price, completion_price)
+            else:
+                pricing_dict[model_id] = (prompt_price, cached_price, completion_price)
 
         log.info(f"Fetched pricing for {len(pricing_dict)} models from OpenRouter")
         return pricing_dict
@@ -214,11 +215,7 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, float, float]]:
 class LLMClient:
     """LLM API wrapper. Routes calls to OpenRouter or a local llama-cpp-python server."""
 
-    # Per-process cache of OpenRouter model capabilities. Populated lazily on
-    # the first request that needs it, then reused for the lifetime of the
-    # process. A missing entry means "unknown" — callers treat that as broad
-    # support and do NOT strip any parameters (zero-regression fallback when
-    # the capabilities endpoint is unreachable or a model isn't listed).
+    # Missing capabilities mean "unknown": keep kwargs instead of stripping them.
     _SUPPORTED_PARAMS_CACHE: Dict[str, set] = {}
     _SUPPORTED_PARAMS_FETCHED: bool = False
 
@@ -241,13 +238,7 @@ class LLMClient:
 
     @classmethod
     def _fetch_openrouter_capabilities(cls) -> None:
-        """Populate _SUPPORTED_PARAMS_CACHE via OpenRouter's /models endpoint.
-
-        Runs at most once per process. On any failure the cache remains empty,
-        which means every ``_get_supported_parameters`` lookup returns ``None``
-        and callers fall back to the pre-v4.33 behavior of not stripping any
-        kwargs.
-        """
+        """Populate _SUPPORTED_PARAMS_CACHE once from OpenRouter /models."""
         cls._SUPPORTED_PARAMS_FETCHED = True
         try:
             import requests
@@ -271,13 +262,7 @@ class LLMClient:
 
     @classmethod
     def _get_supported_parameters(cls, model_id: str) -> Optional[set]:
-        """Return the set of parameter names the given OpenRouter model accepts.
-
-        Returns ``None`` when we don't know — caller should treat this as broad
-        support (no parameter stripping). The first call triggers a one-shot
-        fetch of every model's capabilities; subsequent calls use the in-memory
-        cache populated by that fetch.
-        """
+        """Return supported parameter names, or None when unknown/no stripping."""
         if not cls._SUPPORTED_PARAMS_FETCHED:
             cls._fetch_openrouter_capabilities()
         return cls._SUPPORTED_PARAMS_CACHE.get(model_id)
@@ -490,22 +475,20 @@ class LLMClient:
         )
         return oa_client, http_client
 
-    @staticmethod
-    def _strip_cache_control(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Strip cache_control from message content blocks (OpenRouter/Anthropic-only).
-
-        For tool-role messages whose content is a list of blocks, also flattens
-        the content back to a plain string, because OpenAI and compatible providers
-        expect tool content as a string (not an array of blocks).
-        """
-        import copy
+    @classmethod
+    def _copy_messages_with_cache_policy(
+        cls,
+        messages: List[Dict[str, Any]],
+        *,
+        allow_message_cache_control: bool,
+        flatten_tool_content_blocks: bool,
+    ) -> List[Dict[str, Any]]:
         cleaned = copy.deepcopy(messages)
         for msg in cleaned:
             content = msg.get("content")
             if not isinstance(content, list):
                 continue
-            if msg.get("role") == "tool":
-                # Flatten back to plain string for providers that require it
+            if msg.get("role") == "tool" and flatten_tool_content_blocks:
                 msg["content"] = "".join(
                     block.get("text", "") if isinstance(block, dict) else str(block)
                     for block in content
@@ -513,15 +496,47 @@ class LLMClient:
             else:
                 for block in content:
                     if isinstance(block, dict):
-                        block.pop("cache_control", None)
+                        if allow_message_cache_control and isinstance(block.get("cache_control"), dict):
+                            block["cache_control"] = {"type": "ephemeral"}
+                        else:
+                            block.pop("cache_control", None)
         return cleaned
+
+    @staticmethod
+    def _strip_openrouter_roundtrip_metadata(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Strip OpenRouter reasoning round-trip fields for providers that reject extra message keys."""
+        cleaned = copy.deepcopy(messages)
+        for msg in cleaned:
+            if msg.get("role") != "assistant":
+                continue
+            msg.pop("reasoning", None)
+            msg.pop("reasoning_details", None)
+            msg.pop("response_id", None)
+        return cleaned
+
+    @classmethod
+    def _prompt_cache_ttl_from_payload(cls, *payload_parts: Any) -> Optional[str]:
+        for part in payload_parts:
+            items = part if isinstance(part, list) else [part]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if isinstance(item.get("cache_control"), dict):
+                    return "default"
+                content = item.get("content")
+                if isinstance(content, list) and any(
+                    isinstance(block, dict) and isinstance(block.get("cache_control"), dict)
+                    for block in content
+                ):
+                    return "default"
+        return None
 
     def _fetch_generation_cost(
         self,
         generation_id: str,
         target: Optional[Dict[str, Any]] = None,
     ) -> Optional[float]:
-        """Fetch cost from OpenRouter Generation API as fallback."""
+        """Fetch cost from OpenRouter Generation API when usage lacks it."""
         active_target = target or self._resolve_remote_target("openrouter::")
         if not active_target.get("supports_generation_cost"):
             return None
@@ -536,7 +551,7 @@ class LLMClient:
                 cost = data.get("total_cost") or data.get("usage", {}).get("cost")
                 if cost is not None:
                     return float(cost)
-            # Generation might not be ready yet — retry once after short delay
+            # Generation cost can lag the chat response; retry once.
             time.sleep(0.5)
             resp = requests.get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=5)
             if resp.status_code == 200:
@@ -561,17 +576,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         no_proxy: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Single LLM call. Returns: (response_message_dict, usage_dict with cost).
-
-        When use_local=True, routes to the local llama-cpp-python server
-        and strips OpenRouter-specific parameters (reasoning, provider, cache_control).
-
-        When no_proxy=True, the underlying httpx transport is built with
-        trust_env=False and an empty mounts map, bypassing OS-level and
-        env-var proxy detection.  Use this in contexts where the process
-        was forked from a multithreaded parent (e.g. macOS app-bundle
-        workers) to avoid a SIGSEGV in SCDynamicStoreCopyProxiesWithOptions.
-        """
+        """Single LLM call returning (message, usage); no_proxy avoids macOS fork proxy crashes."""
         if use_local:
             return self._chat_local(messages, tools, max_tokens, tool_choice)
 
@@ -592,16 +597,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         no_proxy: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Async remote chat used by review/concurrent callers.
-
-        When no_proxy=True, bypasses OS-level and env-var proxy detection via
-        trust_env=False.  This is required in forked worker processes on macOS
-        to avoid a SIGSEGV in SCDynamicStoreCopyProxiesWithOptions.
-
-        Applies to both the Anthropic path (synchronous requests.Session run in
-        a thread) and the OpenAI-compatible async path (httpx.AsyncClient with
-        trust_env=False and empty mounts).
-        """
+        """Async remote chat; no_proxy keeps forked macOS workers off OS proxy APIs."""
         if tools:
             raise ValueError("chat_async does not support tool calls")
         target = self._resolve_remote_target(model)
@@ -623,8 +619,17 @@ class LLMClient:
                 kwargs = self._build_remote_kwargs(
                     target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
                 )
+                prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
+                    kwargs.get("messages"),
+                    kwargs.get("tools"),
+                )
                 resp = await _oa_client.chat.completions.create(**kwargs)
-                return self._normalize_remote_response(resp.model_dump(), target, skip_cost_fetch=True)
+                return self._normalize_remote_response(
+                    resp.model_dump(),
+                    target,
+                    skip_cost_fetch=True,
+                    prompt_cache_ttl=prompt_cache_ttl,
+                )
             finally:
                 try:
                     await _http_client.aclose()
@@ -634,8 +639,16 @@ class LLMClient:
         kwargs = self._build_remote_kwargs(
             target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
         )
+        prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
+            kwargs.get("messages"),
+            kwargs.get("tools"),
+        )
         resp = await client.chat.completions.create(**kwargs)
-        return self._normalize_remote_response(resp.model_dump(), target)
+        return self._normalize_remote_response(
+            resp.model_dump(),
+            target,
+            prompt_cache_ttl=prompt_cache_ttl,
+        )
 
     def _prepare_messages_for_local_context(
         self,
@@ -688,8 +701,13 @@ class LLMClient:
         """Send a chat request to the local llama-cpp-python server."""
         client = self._get_local_client()
 
-        clean_messages = self._strip_cache_control(messages)
-        # Flatten multipart content blocks to plain strings (local server doesn't support arrays)
+        clean_messages = self._strip_openrouter_roundtrip_metadata(
+            self._copy_messages_with_cache_policy(
+                messages,
+                allow_message_cache_control=False,
+                flatten_tool_content_blocks=True,
+            )
+        )
         local_max = min(max_tokens, 2048)
         ctx_len = 0
         try:
@@ -768,29 +786,7 @@ class LLMClient:
 
     @staticmethod
     def _strip_reasoning_wrappers(text: str):
-        """Remove leading reasoning wrapper tags and return (cleaned_text, reasoning_text).
-
-        Strips ``<think>...</think>`` and ``<reasoning>...</reasoning>`` blocks
-        (Qwen3 style) from the **outer envelope** of *text* — i.e. from the
-        portion that precedes the first ``<tool_call>`` block.  This avoids
-        accidentally altering JSON payloads inside ``<tool_call>...</tool_call>``
-        that may themselves contain literal ``<think>`` or ``<reasoning>`` text
-        as argument values.
-
-        Strategy:
-        1. Split *text* at the first ``<tool_call>`` occurrence.
-        2. Strip reasoning wrappers only from the prefix (part before the first
-           ``<tool_call>``).
-        3. Concatenate the stripped prefix with the unchanged tool-call section.
-
-        Returns:
-            (cleaned_text, reasoning_text) where:
-              - cleaned_text is *text* with reasoning wrappers removed from the
-                prefix only, surrounding whitespace stripped.
-              - reasoning_text is the concatenated inner content of all reasoning
-                blocks found in the prefix (stripped), or an empty string when
-                no blocks were found.
-        """
+        """Strip leading think/reasoning wrappers before the first <tool_call> only."""
         # Split at first <tool_call> so we never touch JSON inside tool payloads.
         tool_call_start = re.search(r"<tool_call\b", text, re.IGNORECASE)
         if tool_call_start:
@@ -822,38 +818,18 @@ class LLMClient:
         msg: Dict[str, Any],
         allowed_tool_names: Optional[Set[str]] = None,
     ) -> Dict[str, Any]:
-        """Parse <tool_call> XML tags from content into structured tool_calls.
-
-        Works around llama-cpp-python not parsing Qwen/Hermes-style tool calls
-        (https://github.com/abetlen/llama-cpp-python/issues/1784).
-
-        Qwen3 models with ``enable_thinking=True`` (default) wrap their chain-of-
-        thought in ``<think>...</think>`` before emitting the actual ``<tool_call>``
-        block.  This method strips the reasoning wrapper first, then applies the
-        strict full-match safety guard so responses that contain genuine prose
-        alongside tool call text are still rejected.
-
-        Contract: when tool calls are successfully parsed, ``msg["content"]`` is
-        set to the extracted reasoning text (may be an empty string).  Callers in
-        ``loop.py`` check ``content`` truthiness — non-empty reasoning text will
-        surface as a progress/reasoning note in the UI, which is the intended
-        behaviour for thinking models.
-        """
+        """Parse local <tool_call> XML output after a strict full-match guard."""
         content = str(msg.get("content", "") or "")
         stripped_raw = content.strip()
         if not stripped_raw:
             return msg
 
-        # Phase 1: strip known reasoning wrappers (<think>, <reasoning>).
-        # Only these explicit tag pairs are removed; arbitrary prose is left.
+        # Only explicit reasoning wrappers are removed; arbitrary prose is left.
         stripped, reasoning = LLMClient._strip_reasoning_wrappers(stripped_raw)
         if not stripped:
-            # Content was only reasoning text — nothing actionable.
             return msg
 
-        # Phase 2: Safety guard — only upgrade the response when the remaining
-        # text consists solely of one or more <tool_call> blocks.  Mixed prose
-        # (without a reasoning wrapper) is left as plain text.
+        # Upgrade only pure tool-call output; mixed prose stays plain text.
         full_pattern = re.compile(
             r"^(?:\s*<tool_call>\s*\{.*?\}\s*</tool_call>\s*)+$",
             re.DOTALL,
@@ -904,10 +880,7 @@ class LLMClient:
 
         msg = dict(msg)
         msg["tool_calls"] = tool_calls
-        # Preserve reasoning text in content so loop.py can emit it as a
-        # progress/reasoning note (P1 Continuity).  Empty string when no think
-        # wrapper was present (original behaviour: content was None in that case,
-        # but an empty string is equally falsy for callers that check truthiness).
+        # Preserve reasoning text for loop progress; None/empty remains falsy.
         msg["content"] = reasoning or None
         log.info("Parsed %d local tool call(s) from text output", len(tool_calls))
         return msg
@@ -998,7 +971,7 @@ class LLMClient:
                 if text:
                     normalized = {"type": "text", "text": text}
                     if isinstance(block.get("cache_control"), dict):
-                        normalized["cache_control"] = dict(block.get("cache_control") or {})
+                        normalized["cache_control"] = {"type": "ephemeral"}
                     blocks.append(normalized)
                 continue
             if block_type == "image_url":
@@ -1010,7 +983,7 @@ class LLMClient:
             if block.get("text"):
                 normalized = {"type": "text", "text": str(block.get("text") or "")}
                 if isinstance(block.get("cache_control"), dict):
-                    normalized["cache_control"] = dict(block.get("cache_control") or {})
+                    normalized["cache_control"] = {"type": "ephemeral"}
                 blocks.append(normalized)
         return blocks
 
@@ -1064,12 +1037,13 @@ class LLMClient:
                 if not tool_use_id:
                     raise ValueError("Anthropic direct tool result is missing tool_call_id.")
                 raw_content = msg.get("content")
-                # Anthropic direct API supports list of content blocks (including
-                # cache_control) as tool_result content, so pass through as-is.
-                # For plain strings, pass them directly. Only JSON-serialize
-                # dicts and other non-string non-list values.
+                # Anthropic accepts list tool_result content; stringify only scalars/dicts.
                 if isinstance(raw_content, list):
-                    tool_result_content: Any = raw_content
+                    tool_result_content: Any = self._copy_messages_with_cache_policy(
+                        [{"role": "tool", "content": raw_content}],
+                        allow_message_cache_control=True,
+                        flatten_tool_content_blocks=False,
+                    )[0]["content"]
                 else:
                     tool_result_content = self._stringify_anthropic_content(raw_content)
                 self._coalesce_anthropic_message(
@@ -1085,7 +1059,11 @@ class LLMClient:
         return system_blocks, anthropic_messages
 
     @staticmethod
-    def _build_anthropic_tools(tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def _build_anthropic_tools(
+        tools: Optional[List[Dict[str, Any]]],
+        *,
+        cache_control: bool = False,
+    ) -> List[Dict[str, Any]]:
         anthropic_tools: List[Dict[str, Any]] = []
         for tool in LLMClient._sanitize_chat_completion_tools(tools):
             function = tool.get("function") or {}
@@ -1097,6 +1075,8 @@ class LLMClient:
                 "description": LLMClient._stringify_tool_description(function.get("description")),
                 "input_schema": function.get("parameters") or {"type": "object", "properties": {}},
             })
+        if cache_control and anthropic_tools:
+            anthropic_tools[-1] = {**anthropic_tools[-1], "cache_control": {"type": "ephemeral"}}
         return anthropic_tools
 
     @staticmethod
@@ -1157,6 +1137,7 @@ class LLMClient:
         self,
         resp_dict: Dict[str, Any],
         target: Dict[str, Any],
+        prompt_cache_ttl: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         content_blocks = resp_dict.get("content") or []
         text_parts: List[str] = []
@@ -1188,6 +1169,8 @@ class LLMClient:
             "provider": "anthropic",
             "resolved_model": str(target.get("usage_model") or target.get("resolved_model") or ""),
         }
+        if prompt_cache_ttl:
+            usage["prompt_cache_ttl"] = prompt_cache_ttl
         if usage["prompt_tokens"] or usage["completion_tokens"]:
             from ouroboros.pricing import estimate_cost
 
@@ -1197,9 +1180,11 @@ class LLMClient:
                 usage["completion_tokens"],
                 usage["cached_tokens"],
                 usage["cache_write_tokens"],
+                usage.get("prompt_cache_ttl"),
             )
             if estimated_cost:
                 usage["cost"] = estimated_cost
+                usage["cost_estimated"] = True
 
         message: Dict[str, Any] = {
             "role": "assistant",
@@ -1235,12 +1220,20 @@ class LLMClient:
         if temperature is not None:
             payload["temperature"] = temperature
 
-        anthropic_tools = self._build_anthropic_tools(tools)
+        anthropic_tools = self._build_anthropic_tools(
+            tools,
+            cache_control=True,
+        )
         if anthropic_tools:
             payload["tools"] = anthropic_tools
             anthropic_tool_choice = self._build_anthropic_tool_choice(tool_choice)
             if anthropic_tool_choice:
                 payload["tool_choice"] = anthropic_tool_choice
+        prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
+            payload.get("system"),
+            payload.get("messages"),
+            payload.get("tools"),
+        )
 
         url = f"{str(target.get('base_url') or '').rstrip('/')}/messages"
         headers = {
@@ -1257,7 +1250,11 @@ class LLMClient:
         else:
             response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
-        return self._normalize_anthropic_response(response.json(), target)
+        return self._normalize_anthropic_response(
+            response.json(),
+            target,
+            prompt_cache_ttl=prompt_cache_ttl,
+        )
 
     def _build_remote_kwargs(
         self,
@@ -1274,9 +1271,14 @@ class LLMClient:
         if str(target.get("provider") or "") == "openai" and resolved_model.startswith("gpt-5"):
             token_limit_key = "max_completion_tokens"
         if not target.get("supports_openrouter_extensions"):
-            # Strip cache_control from message content blocks — non-OpenRouter providers
-            # (OpenAI, openai-compatible, Cloud.ru) do not accept this field.
-            clean_messages = self._strip_cache_control(messages)
+            # Non-OpenRouter providers do not accept cache_control.
+            clean_messages = self._strip_openrouter_roundtrip_metadata(
+                self._copy_messages_with_cache_policy(
+                    messages,
+                    allow_message_cache_control=False,
+                    flatten_tool_content_blocks=True,
+                )
+            )
             kwargs: Dict[str, Any] = {
                 "model": resolved_model,
                 "messages": clean_messages,
@@ -1286,45 +1288,59 @@ class LLMClient:
                 kwargs["temperature"] = temperature
             if tools:
                 kwargs["tools"] = [
-                    {k: v for k, v in t.items() if k != "cache_control"}
-                    for t in self._sanitize_chat_completion_tools(tools)
+                    {k: v for k, v in tool.items() if k != "cache_control"}
+                    for tool in self._sanitize_chat_completion_tools(tools)
                 ]
                 kwargs["tool_choice"] = tool_choice
             return kwargs
 
         effort = normalize_reasoning_effort(reasoning_effort)
+        raw_return_reasoning = os.environ.get("OUROBOROS_RETURN_REASONING")
+        return_reasoning = (
+            True if raw_return_reasoning is None
+            else str(raw_return_reasoning).strip().lower() not in _FALSE_LIKE_ENV_VALUES
+        )
+        cache_model = resolved_model.strip().lstrip("~")
+        allow_message_cache = (
+            cache_model.startswith("anthropic/")
+            or cache_model.startswith("google/gemini-")
+        )
 
         extra_body: Dict[str, Any] = {
-            "reasoning": {"effort": effort, "exclude": True},
+            "reasoning": {"effort": effort, "exclude": not return_reasoning},
         }
 
-        if resolved_model.startswith("anthropic/"):
+        if cache_model.startswith("anthropic/"):
             extra_body["provider"] = {
                 "require_parameters": True,
             }
 
         kwargs: Dict[str, Any] = {
             "model": resolved_model,
-            "messages": messages,
+            "messages": self._copy_messages_with_cache_policy(
+                messages,
+                allow_message_cache_control=allow_message_cache,
+                flatten_tool_content_blocks=not allow_message_cache,
+            ),
             "max_tokens": max_tokens,
             "extra_body": extra_body,
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
         if tools:
-            tools_with_cache = self._sanitize_chat_completion_tools(tools)
-            if tools_with_cache:
-                last_tool = {**tools_with_cache[-1]}  # copy last tool
-                last_tool["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
-                tools_with_cache[-1] = last_tool
-            kwargs["tools"] = tools_with_cache
+            prepared_tools = [
+                {k: v for k, v in tool.items() if k != "cache_control"}
+                for tool in self._sanitize_chat_completion_tools(tools)
+            ]
+            if prepared_tools and cache_model.startswith("anthropic/"):
+                last_tool = {**prepared_tools[-1]}
+                last_tool["cache_control"] = {"type": "ephemeral"}
+                prepared_tools[-1] = last_tool
+            kwargs["tools"] = prepared_tools
             kwargs["tool_choice"] = tool_choice
 
-        # Drop kwargs that this model's OpenRouter providers don't list in
-        # `supported_parameters`. Combined with `provider.require_parameters:
-        # true` (set above for anthropic/), unknown params cause a 404
-        # "No endpoints found that can handle the requested parameters".
-        # Capabilities cache returns None for unknown models → no stripping.
+        # With require_parameters, unsupported params cause OpenRouter 404s.
+        # Unknown capabilities mean no stripping.
         supported = self._get_supported_parameters(resolved_model)
         if supported is not None:
             for sampling_param in ("temperature", "top_p", "top_k"):
@@ -1341,36 +1357,21 @@ class LLMClient:
         resp_dict: Dict[str, Any],
         target: Dict[str, Any],
         skip_cost_fetch: bool = False,
+        prompt_cache_ttl: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Normalise a raw OpenAI-compatible response dict into (message, usage).
-
-        skip_cost_fetch=True suppresses the _fetch_generation_cost() call that
-        uses requests.get() with default proxy / OS lookup.  Set this whenever
-        the call was made inside a forked process (no_proxy=True path) to keep
-        the entire call chain free of SCDynamicStore / CFPreferences access.
-        Cost is still estimated from token counts via the local pricing table.
-        """
+        """Normalize an OpenAI-compatible response; skip_cost_fetch keeps no_proxy pure."""
         usage = resp_dict.get("usage") or {}
         choices = resp_dict.get("choices") or [{}]
         msg = (choices[0] if choices else {}).get("message") or {}
+        if resp_dict.get("id") and "response_id" not in msg:
+            msg["response_id"] = resp_dict["id"]
 
         if not usage.get("cached_tokens"):
             prompt_details = usage.get("prompt_tokens_details") or {}
             if isinstance(prompt_details, dict) and prompt_details.get("cached_tokens"):
                 usage["cached_tokens"] = int(prompt_details["cached_tokens"])
-        # NB: LM Studio MLX does NOT emit ``cached_tokens`` anywhere in its
-        # OpenAI-compatible response (verified 2026-05-02 across
-        # ``/v1/chat/completions``, ``/api/v0/chat/completions``, and
-        # streaming with ``stream_options.include_usage=true``). The MLX
-        # backend's prefix-cache stats are written only to LM Studio's
-        # stderr/log output (e.g. ``[cache_wrapper] Prompt cache: using
-        # 70623/70821 tokens from cache``). For LM Studio targets,
-        # ``cached_tokens=0`` in events.jsonl is therefore the *correct*
-        # API-level reading even when the MLX prefix cache is hitting at
-        # >99%. If we ever need cache-hit telemetry for LM Studio, the
-        # right path is the LM Studio native ``/api/v0/chat/completions``
-        # endpoint which exposes ``stats.time_to_first_token`` —
-        # a strong cache-proxy signal — but that is its own follow-up.
+        # LM Studio MLX exposes prefix-cache hits only in stderr/logs, not
+        # OpenAI-compatible usage; cached_tokens=0 is therefore expected.
 
         if not usage.get("cache_write_tokens"):
             prompt_details_for_write = usage.get("prompt_tokens_details") or {}
@@ -1393,6 +1394,8 @@ class LLMClient:
 
         usage["provider"] = str(target.get("provider") or "openrouter")
         usage["resolved_model"] = str(target.get("usage_model") or target.get("resolved_model") or "")
+        if prompt_cache_ttl and not usage.get("prompt_cache_ttl"):
+            usage["prompt_cache_ttl"] = prompt_cache_ttl
         if not usage.get("cost") and (usage.get("prompt_tokens") or usage.get("completion_tokens")):
             from ouroboros.pricing import estimate_cost
 
@@ -1402,9 +1405,11 @@ class LLMClient:
                 int(usage.get("completion_tokens") or 0),
                 int(usage.get("cached_tokens") or 0),
                 int(usage.get("cache_write_tokens") or 0),
+                usage.get("prompt_cache_ttl"),
             )
             if estimated_cost:
                 usage["cost"] = estimated_cost
+                usage["cost_estimated"] = True
 
         return msg, usage
 
@@ -1419,14 +1424,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         no_proxy: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Send a chat request to the resolved remote provider.
-
-        When no_proxy=True a temporary one-shot httpx.Client is built with
-        ``trust_env=False`` and an empty mounts map to bypass macOS fork-safe
-        proxy detection (SCDynamicStoreCopyProxiesWithOptions).  The client is
-        closed in a finally block after the response is received to avoid
-        connection-pool leaks.  This flag does not affect other callers.
-        """
+        """Send remote chat; no_proxy uses a one-shot client and skips OS proxy lookup."""
         if target.get("provider") == "anthropic":
             return self._chat_anthropic(
                 target, messages, tools, reasoning_effort, max_tokens, tool_choice, temperature,
@@ -1439,12 +1437,18 @@ class LLMClient:
                 kwargs = self._build_remote_kwargs(
                     target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
                 )
+                prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
+                    kwargs.get("messages"),
+                    kwargs.get("tools"),
+                )
                 resp = _oa_client.chat.completions.create(**kwargs)
-                # Pass no_proxy=True to _normalize_remote_response so the
-                # _fetch_generation_cost fallback (which uses requests.get with
-                # default proxy / OS lookup) is skipped — it would re-introduce
-                # the same SCDynamicStore code path that causes the SIGSEGV.
-                return self._normalize_remote_response(resp.model_dump(), target, skip_cost_fetch=True)
+                # Skip cost fetch here; it would re-enter OS proxy lookup.
+                return self._normalize_remote_response(
+                    resp.model_dump(),
+                    target,
+                    skip_cost_fetch=True,
+                    prompt_cache_ttl=prompt_cache_ttl,
+                )
             finally:
                 try:
                     _http_client.close()
@@ -1455,8 +1459,16 @@ class LLMClient:
         kwargs = self._build_remote_kwargs(
             target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
         )
+        prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
+            kwargs.get("messages"),
+            kwargs.get("tools"),
+        )
         resp = client.chat.completions.create(**kwargs)
-        return self._normalize_remote_response(resp.model_dump(), target)
+        return self._normalize_remote_response(
+            resp.model_dump(),
+            target,
+            prompt_cache_ttl=prompt_cache_ttl,
+        )
 
     def vision_query(
         self,
@@ -1466,22 +1478,7 @@ class LLMClient:
         max_tokens: int = 32768,
         reasoning_effort: str = "none",
     ) -> Tuple[str, Dict[str, Any]]:
-        """
-        Send a vision query to an LLM. Lightweight — no tools, no loop.
-
-        Args:
-            prompt: Text instruction for the model
-            images: List of image dicts. Each dict must have either:
-                - {"url": "https://..."} — for URL images
-                - {"base64": "<b64>", "mime": "image/png"} — for base64 images
-            model: VLM-capable model ID
-            max_tokens: Max response tokens
-            reasoning_effort: Effort level
-
-        Returns:
-            (text_response, usage_dict)
-        """
-        # Build multipart content
+        """Run a lightweight vision query; image dicts use url or base64+mime."""
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for img in images:
             if "url" in img:

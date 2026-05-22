@@ -1,9 +1,4 @@
-"""
-Ouroboros — LLM tool loop.
-
-Core loop: send messages to LLM, execute tool calls, repeat until final response.
-Extracted from agent.py to keep the agent thin.
-"""
+"""LLM tool loop: call model, execute tools, repeat until final response."""
 
 from __future__ import annotations
 
@@ -32,24 +27,14 @@ from ouroboros.loop_tool_execution import (
 )
 from ouroboros.loop_llm_call import call_llm_with_retry, emit_llm_usage_event, estimate_cost
 
-# Backward-compat alias for source-inspecting and monkeypatched tests
+# Backward-compat alias for source-inspecting/monkeypatched tests.
 _call_llm_with_retry = call_llm_with_retry
 
 log = logging.getLogger(__name__)
 
 
 def _estimate_messages_chars(messages: List[Dict[str, Any]]) -> int:
-    """Estimate the serialised size of a message list in characters.
-
-    Counts all serialised fields that actually reach the provider:
-    - message `content` (string or multipart list)
-    - `tool_calls` (serialised to JSON)
-    - `tool_call_id`
-    This deliberately excludes the static system-prompt block (built once in
-    context.py and amortised across rounds by prompt caching), focusing on
-    the mutable per-round portion of the transcript which is what grows
-    unboundedly during long tasks.
-    """
+    """Estimate mutable transcript size; excludes the static cached system block."""
     total = 0
     for msg in messages:
         content = msg.get("content")
@@ -58,8 +43,7 @@ def _estimate_messages_chars(messages: List[Dict[str, Any]]) -> int:
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
-                    # Serialise the whole block so non-text types (image_url, etc.)
-                    # are counted — not just the "text" field.
+                    # Count whole multipart blocks, including images/cache markers.
                     try:
                         import json as _json2
                         total += len(_json2.dumps(block, ensure_ascii=False))
@@ -189,13 +173,7 @@ def _check_budget_limits(
     task_type: str = "task",
     use_local: bool = False,
 ) -> Optional[Tuple[str, Dict[str, Any], Dict[str, Any]]]:
-    """
-    Check budget limits and handle budget overrun.
-
-    Returns:
-        None if budget is OK (continue loop)
-        (final_text, accumulated_usage, llm_trace) if budget exceeded (stop loop)
-    """
+    """Return a final-response tuple when budget limits require stopping."""
     if budget_remaining_usd is None:
         return None
 
@@ -236,12 +214,7 @@ def _check_budget_limits(
 
 
 def _build_recent_tool_trace(messages: List[Dict[str, Any]], window: int = 15) -> str:
-    """Build a factual trace of recent tool calls for the LLM to evaluate.
-
-    Returns a compact trace string showing the last N tool calls with their
-    names and argument summaries. The LLM uses this to assess whether
-    it is making progress or repeating the same actions (P5 LLM-First).
-    """
+    """Build a compact recent-tool trace for the self-check prompt."""
     all_calls: List[str] = []
     for msg in messages:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
@@ -266,11 +239,7 @@ def _emit_checkpoint_event(
     drive_logs: Optional[pathlib.Path],
     data: Dict[str, Any],
 ) -> None:
-    """Emit a task_checkpoint event for observability.
-
-    Routes via the supervisor event queue when available (which persists to
-    events.jsonl). Falls back to direct append when queue is absent.
-    """
+    """Emit a task_checkpoint via event queue or direct events.jsonl append."""
     from ouroboros.loop_llm_call import _emit_live_log
     payload = {"type": "task_checkpoint", "task_id": task_id, **data}
     if event_queue is not None:
@@ -284,11 +253,7 @@ def _emit_checkpoint_event(
 
 
 def _extract_plain_text_from_content(content: Any) -> str:
-    """Extract plain text from either a string or a multipart content list.
-
-    Used by seal_task_transcript to compute prefix token estimates and to
-    flatten previously-sealed multipart tool messages back to plain strings.
-    """
+    """Extract text from strings or multipart content for transcript sealing."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -358,33 +323,13 @@ def _maybe_inject_self_check(
     task_id: str = "",
     drive_logs: Optional[pathlib.Path] = None,
 ) -> bool:
-    """Inject a periodic self-check user message every REMINDER_INTERVAL rounds.
-
-    Contract: this is a plain `user` message inserted into the transcript carrying
-    round/cost/context summary, the last-N tool-call trace, and a short directed
-    self-check prompt. The next LLM round runs normally — tools remain enabled,
-    reasoning effort is unchanged, and the message flows through normal compaction.
-    There is no structured reflection format, no audit-only mode, and no anomaly
-    classification: the model reads the message like any other user turn and
-    decides whether to continue, narrow scope, or wrap up.
-
-    Rationale for the minimalist design: the previous structured-reflection
-    mechanism (Known/Blocker/Decision/Next four-field contract, tools disabled,
-    effort=xhigh) produced 0 valid reflections and 37 task_checkpoint_anomaly
-    records in production logs before this rewrite — the ceremony competed
-    with the model's actual work without adding usable signal.
-
-    Emits a single task_checkpoint event for observability.
-    Returns True if a checkpoint was injected (caller uses this for logging).
-    """
+    """Inject a normal user-turn self-check and emit one checkpoint event."""
     REMINDER_INTERVAL = 15
     if round_idx <= 1 or round_idx % REMINDER_INTERVAL != 0 or round_idx >= max_rounds:
         return False
 
     ctx_tokens = sum(
-        estimate_tokens(str(m.get("content", "")))
-        if isinstance(m.get("content"), str)
-        else sum(estimate_tokens(str(b.get("text", ""))) for b in m.get("content", []) if isinstance(b, dict))
+        estimate_tokens(_extract_plain_text_from_content(m.get("content")))
         for m in messages
     )
     task_cost = accumulated_usage.get("cost", 0)
@@ -409,21 +354,8 @@ def _maybe_inject_self_check(
         "\nNo special format required — just think, then act."
     )
 
-    # Defense-in-depth against consecutive same-role messages: if the previous
-    # message is already a `user` turn (for example: an owner message drained
-    # by `_drain_incoming_messages` in the same loop iteration), merge the
-    # checkpoint reminder into that turn instead of appending a second user
-    # message. Anthropic's Messages API rejects consecutive user messages
-    # with a 400, and OpenRouter routes Anthropic models through that path —
-    # a bare append could cause a checkpoint round to lose its LLM call.
-    #
-    # When the prior user message carries multipart content (e.g. image_url
-    # blocks from the photo bridge, or cache_control-annotated blocks), we
-    # append a new `{"type": "text", "text": ...}` block to the existing
-    # list instead of flattening to a plain string — flattening would drop
-    # image data and cache markers silently, breaking the implicit message
-    # format contract with `ouroboros/context.py::build_user_content` and
-    # `ouroboros/llm.py::_anthropic_blocks_from_content`.
+    # Merge into a prior user turn to avoid Anthropic consecutive-role 400s,
+    # preserving multipart blocks so images/cache markers survive.
     _append_or_merge_user_message(messages, reminder)
     emit_progress(
         f"Checkpoint {checkpoint_num} at round {round_idx}: "
@@ -446,42 +378,24 @@ def seal_task_transcript(
     keep_active: int = 5,
     min_prefix_tokens: int = 2048,
 ) -> None:
-    """Seal one stable tool-result message with cache_control to improve prompt cache hits.
-
-    Strategy:
-    - First, revert any previously sealed tool message back to a plain string so
-      compaction and later rounds always see normal content (not stale multipart blocks).
-    - Then identify the last tool-result message that falls BEFORE the active recent
-      window (last `keep_active` tool results). That message is the "seal boundary".
-    - If the token estimate for content up to and including that message exceeds
-      `min_prefix_tokens`, mark it with a multipart cache_control block.
-    - Only one sealed boundary exists at a time. Non-Anthropic paths strip
-      cache_control in llm.py before sending, so they are unaffected.
-
-    Mutates `messages` in-place. Returns None.
-    """
-    # Step 1: revert any previously sealed tool messages to plain strings
+    """Mark one stable old tool-result boundary for provider prompt caching."""
     for msg in messages:
         if msg.get("role") != "tool":
             continue
         content = msg.get("content")
         if isinstance(content, list):
-            # Was sealed — flatten back to plain text
+            # Flatten the old sealed boundary before choosing a new one.
             msg["content"] = _extract_plain_text_from_content(content)
 
-    # Step 2: collect indices of all tool-result messages
     tool_indices = [
         i for i, m in enumerate(messages)
         if m.get("role") == "tool"
     ]
     if len(tool_indices) <= keep_active:
-        # Not enough tool rounds for a stable prefix yet
         return
 
-    # The candidate to seal: last tool result before the active window
     seal_candidate_idx = tool_indices[-(keep_active + 1)]
 
-    # Step 3: estimate prefix token count up to and including the candidate
     prefix_text_len = sum(
         len(_extract_plain_text_from_content(m.get("content", "")))
         for m in messages[: seal_candidate_idx + 1]
@@ -491,7 +405,6 @@ def seal_task_transcript(
     if prefix_tokens < min_prefix_tokens:
         return
 
-    # Step 4: seal the candidate message
     candidate = messages[seal_candidate_idx]
     plain_text = str(candidate.get("content", ""))
     candidate["content"] = [
@@ -504,16 +417,7 @@ def seal_task_transcript(
 
 
 def _setup_dynamic_tools(tools_registry, tool_schemas, messages):
-    """
-    Wire tool-discovery handlers onto an existing tool_schemas list.
-
-    Creates closures for list_available_tools / enable_tools, registers them
-    as handler overrides, and injects a system message advertising non-core
-    tools.  Mutates tool_schemas in-place (via list.append) when tools are
-    enabled, so the caller's reference stays live.
-
-    Returns (tool_schemas, enabled_extra_set).
-    """
+    """Attach list/enable tool handlers and mutate the active schema list."""
     enabled_extra: set = set()
     active_tool_names = {
         str(schema.get("function", {}).get("name") or "").strip()
@@ -621,14 +525,7 @@ def run_llm_loop(
     initial_effort: str = "medium",
     drive_root: Optional[pathlib.Path] = None,
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
-    """
-    Core LLM-with-tools loop.
-
-    Sends messages to LLM, executes tool calls, retries on errors.
-    LLM controls model/effort via switch_model tool (LLM-first, Bible P5).
-
-    Returns: (final_text, accumulated_usage, llm_trace)
-    """
+    """Run the LLM-with-tools loop and return final text, usage, and trace."""
     active_model = llm.default_model()
     active_effort = initial_effort
     active_use_local = os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1")
@@ -686,22 +583,8 @@ def run_llm_loop(
 
             _drain_incoming_messages(messages, incoming_messages, drive_root, task_id, event_queue, _owner_msg_seen)
 
-            # Periodic self-check: inject a user message with round/cost/context
-            # summary + recent tool-call trace + a short directed self-check prompt.
-            # Ordering note: injection runs AFTER `_drain_incoming_messages` so
-            # the checkpoint is always the LAST message before the LLM call.
-            # If drain appended a user turn, the merge branch inside
-            # `_maybe_inject_self_check` folds the checkpoint reminder into
-            # that turn with a `\n\n---\n\n` separator — which both avoids
-            # consecutive same-role messages (Anthropic rejects those with 400)
-            # and keeps the self-check visible at the tail of the transcript.
-            # Not a special round — tools and effort are unchanged, the message
-            # flows through the next normal LLM turn. The only coupling with
-            # the rest of the loop is a small compaction skip below: running
-            # the light-model compactor on the same round we just appended a
-            # fresh user message doubles LLM cost for a marginal benefit (the
-            # checkpoint message is already inside `keep_recent=50` so
-            # compaction would not summarize it anyway).
+            # Inject after owner messages so the checkpoint is the LLM-call tail.
+            # It is a normal user turn; only routine compaction is skipped below.
             _checkpoint_injected = _maybe_inject_self_check(
                 round_idx, MAX_ROUNDS, messages, accumulated_usage, emit_progress,
                 event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
@@ -709,45 +592,20 @@ def run_llm_loop(
 
             _compaction_usage = None
             pending_compaction = getattr(tools._ctx, '_pending_compaction', None)
-            # Compaction policy:
-            #
-            # Manual compaction (_pending_compaction) and the remote emergency path
-            # run UNCONDITIONALLY — even on checkpoint rounds.  Only the routine
-            # per-round compaction (local threshold / old "every round > 12" remote
-            # path) is suppressed on checkpoint rounds to avoid paying twice for the
-            # compaction LLM call on the same turn the self-check was injected.
-            #
-            # Remote mode (default): automatic semantic compaction is DISABLED for
-            # routine rounds.  The previous policy called compact_tool_history_llm
-            # every round after round_idx > 12, which meant that once tool-rounds
-            # exceeded keep_recent=50 the compactor ran on EVERY round — destroying
-            # raw tool outputs, breaking cache continuity, and hurting cache hit rate.
-            # Remote models handle large contexts (~400k tokens); preserving exact
-            # history is more valuable than saving tokens.
-            #
-            # Emergency threshold: if the total context grows beyond ~1.2M chars
-            # (~300k tokens) we must compact regardless of mode to stay within
-            # provider context limits.
-            #
-            # Local mode: compact at a lower threshold because local models typically
-            # have small context windows (8k–32k tokens).
-
-            # --- Manual compaction (always runs) ---
+            # Compaction: manual and emergency always run; routine is local-only
+            # and suppressed on checkpoint rounds to avoid a duplicate LLM call.
             if pending_compaction is not None:
                 messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=pending_compaction)
                 tools._ctx._pending_compaction = None
 
-            # --- Emergency compaction (always runs, catches both remote and local) ---
             elif _estimate_messages_chars(messages) > 1_200_000:
                 messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=50)
 
-            # --- Routine compaction (suppressed on checkpoint rounds) ---
             elif not _checkpoint_injected:
                 if active_use_local:
-                    # Local models: compact aggressively to fit small context windows.
                     if round_idx > 6 and len(messages) > 40:
                         messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=20)
-                # Remote: no routine compaction — emergency path above handles overflow.
+                # Remote routine compaction stays off; emergency handles overflow.
             if tools._ctx.messages is not messages:
                 tools._ctx.messages = messages
             if _compaction_usage:
@@ -756,11 +614,12 @@ def run_llm_loop(
                 _cc = float(_compaction_usage.get("cost") or 0) or estimate_cost(
                     _cm, int(_compaction_usage.get("prompt_tokens") or 0),
                     int(_compaction_usage.get("completion_tokens") or 0),
-                    int(_compaction_usage.get("cached_tokens") or 0))
+                    int(_compaction_usage.get("cached_tokens") or 0),
+                    int(_compaction_usage.get("cache_write_tokens") or 0),
+                    _compaction_usage.get("prompt_cache_ttl"))
                 emit_llm_usage_event(event_queue, task_id, _cm, _compaction_usage, _cc, "compaction")
 
-            # Seal one stable tool-result boundary for prompt caching (Anthropic-only path;
-            # non-Anthropic providers strip cache_control in llm.py).
+            # Provider cache boundary; unsupported providers strip cache_control in llm.py.
             seal_task_transcript(messages)
 
             msg, cost = call_llm_with_retry(
@@ -812,7 +671,9 @@ def run_llm_loop(
 
             if getattr(tools._ctx, "_skill_finalization_injected", False):
                 tools._ctx._skill_finalization_injected = False
-            messages.append({"role": "assistant", "content": content or "", "tool_calls": tool_calls})
+            assistant_msg = dict(msg)
+            assistant_msg.setdefault("role", "assistant")
+            messages.append(assistant_msg)
 
             if content and content.strip():
                 emit_progress(content.strip())

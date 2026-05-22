@@ -1,6 +1,4 @@
-/**
- * Utility functions shared across modules.
- */
+/** Shared frontend utilities. */
 
 import { apiFetch } from './api_client.js';
 export { fetchJson } from './api_client.js';
@@ -34,19 +32,7 @@ export function safeExternalUrl(value) {
     }
 }
 
-/**
- * Validate an untrusted URL string for use as an `<a href="...">` attribute
- * value. Unlike ``safeExternalUrl`` (which returns ``#`` for bad input —
- * suitable for inline markdown anchors that always render), this helper
- * returns the empty string so callers can use the result as a truthy gate:
- *
- *     const href = safeExternalHrefAttr(value);
- *     if (href) html += `<a href="${href}" target="_blank" rel="noopener">…</a>`;
- *
- * Only ``http:`` / ``https:`` schemes survive (no ``mailto:``, no
- * ``javascript:`` / ``data:``). The returned string is HTML-attribute
- * escaped so it is safe to interpolate directly into template literals.
- */
+/** Return an escaped http(s) href, or '' so callers can gate unsafe links. */
 export function safeExternalHrefAttr(value) {
     const text = String(value ?? '').trim();
     if (!text) return '';
@@ -55,29 +41,17 @@ export function safeExternalHrefAttr(value) {
         if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
             return escapeHtmlAttr(parsed.toString());
         }
-    } catch {
-        // Not a parseable absolute URL — refuse rather than guessing.
-    }
+    } catch {}
     return '';
 }
 
-/**
- * Truncate untrusted text to ``maxLen`` chars with a visible
- * ``…[truncated]`` marker so downstream consumers (cards, modals,
- * tooltips, log-finding excerpts) cannot smuggle multi-megabyte
- * publisher payloads into the DOM.
- */
+/** Bound untrusted text with a visible marker before it reaches DOM surfaces. */
 export function boundedText(value, maxLen = 1200) {
     const text = String(value ?? '');
     return text.length > maxLen ? `${text.slice(0, maxLen)}…[truncated]` : text;
 }
 
-/**
- * Broadcast a `ouro:skill-lifecycle` CustomEvent. Subscribers (settings.js,
- * skills.js, etc.) listen for this to refresh derived state without polling.
- * Single source of truth so marketplace.js and ouroboroshub.js do not
- * declare slightly-different copies.
- */
+/** Broadcast the shared skill-lifecycle event used by marketplace/settings UI. */
 export function emitSkillLifecycle(action, name, extra = {}) {
     window.dispatchEvent(new CustomEvent('ouro:skill-lifecycle', {
         detail: { action, name, ...extra },
@@ -93,21 +67,89 @@ export function isRateLimitError(message) {
     return text.includes('rate limit') || text.includes('too many requests') || text.includes('http 429');
 }
 
+export function formatCompactNumber(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return '—';
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M';
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'k';
+    return String(num);
+}
+
+export function reviewReady(entity, { requireFresh = false } = {}) {
+    if (entity?.review_gate && typeof entity.review_gate.executable_review === 'boolean') {
+        return entity.review_gate.executable_review && (!requireFresh || !entity.review_stale);
+    }
+    if (typeof entity?.executable_review === 'boolean') {
+        return entity.executable_review && (!requireFresh || !entity.review_stale);
+    }
+    return ['clean', 'warnings'].includes(entity?.review_status) && !entity?.review_stale;
+}
+
+export function reviewTone(status, error = '') {
+    if (error) return 'danger';
+    if (status === 'clean') return 'ok';
+    if (status === 'blockers') return 'danger';
+    return ['warnings', 'pending'].includes(status) ? 'warn' : 'muted';
+}
+
+export function topReviewFinding(entity) {
+    const findings = Array.isArray(entity?.review_findings) ? entity.review_findings : [];
+    if (!findings.length) return '';
+    const first = findings[0] || {};
+    const label = first.item || first.check || first.title || 'finding';
+    const verdict = first.verdict || first.severity || '';
+    const reason = first.reason || first.message || '';
+    return `${verdict ? `${verdict} ` : ''}${label}: ${reason}`.trim();
+}
+
+export function renderHubCard(item, {
+    pending = null,
+    installed = null,
+    lifecycle,
+    primaryHtml = '',
+    secondaryHtml = '',
+    badgesHtml = '',
+    metaHtml = '',
+    official = false,
+} = {}) {
+    const slug = item.slug;
+    const spinner = pending ? '<span class="marketplace-working-spinner" aria-hidden="true"></span>' : '';
+    const lifecycleHint = lifecycle?.hint
+        ? `<div class="marketplace-card-state-hint">${escapeHtmlAttr(lifecycle.hint)}</div>`
+        : '';
+    const status = installed
+        ? `<span class="skills-status-chip skills-status-ok">Installed v${escapeHtmlAttr(installed.version || item.latest_version || '')}</span>`
+        : '';
+    return `
+        <article class="${pending ? 'marketplace-card is-working' : 'marketplace-card'}" data-slug="${escapeHtmlAttr(slug)}">
+            <div class="marketplace-card-head">
+                <div class="marketplace-card-title">
+                    <strong>${escapeHtmlAttr(item.display_name || slug)}</strong>
+                    <span class="muted">${escapeHtmlAttr(slug)} · v${escapeHtmlAttr(item.latest_version || '—')}</span>
+                </div>
+                <div class="marketplace-card-badges">
+                    ${official ? '<span class="skills-badge skills-badge-ok">official</span>' : ''}
+                    ${status}
+                    ${badgesHtml}
+                </div>
+            </div>
+            <div class="marketplace-card-body">${escapeHtmlAttr(item.summary || item.description || '')}</div>
+            <div class="marketplace-card-state marketplace-state-${escapeHtmlAttr(lifecycle?.tone || 'muted')}">
+                <strong>${spinner}${escapeHtmlAttr(lifecycle?.label || '')}</strong>
+                ${lifecycleHint}
+            </div>
+            ${metaHtml ? `<div class="marketplace-card-meta muted">${metaHtml}</div>` : ''}
+            <div class="marketplace-card-actions">
+                <div class="marketplace-primary-action">${primaryHtml}</div>
+                ${secondaryHtml ? `<div class="marketplace-secondary-actions">${secondaryHtml}</div>` : ''}
+            </div>
+        </article>
+    `;
+}
+
 /**
- * Render the skill_repair prompt body shared between Skills (My Skills) and
- * Marketplace (ClawHub) call sites. ``intro`` is the per-surface first
- * sentence; ``diagnosticsJson`` is the JSON.stringify-ed payload of
- * untrusted diagnostic data. The middle "Tool choice" + "untrusted data"
- * narrative is identical between surfaces and lives here in one place.
- *
- * Security: ``diagnosticsJson`` is wrapped inside a Markdown ``` ```json
- * fence. Untrusted diagnostic strings can include literal triple-backticks
- * (e.g. inside a load_error or review_findings.reason captured from skill
- * output) which would otherwise close the fence and inject instructions
- * into the prompt OUTSIDE the data block. We sanitise here so every
- * caller inherits the safety invariant — earlier marketplace.js had a
- * caller-local ``.replace(/`/g, "'")`` workaround; skills.js had no
- * sanitisation at all.
+ * Shared skill_repair prompt body.
+ * Sanitise diagnostic fences so untrusted skill/reviewer text stays data.
  */
 export function renderSkillRepairPrompt(intro, diagnosticsJson) {
     const safeDiagnosticsJson = String(diagnosticsJson ?? '')
@@ -137,21 +179,8 @@ export function renderSkillRepairPrompt(intro, diagnosticsJson) {
 }
 
 /**
- * Render Markdown (via the vendored ``marked``) and run the result
- * through ``DOMPurify`` with a conservative allowlist that bans every
- * script-bearing tag and any ``style``/``src``/``srcset``/``srcdoc``
- * attribute.  Used by extension widgets and the marketplace preview
- * modal — both render publisher-supplied markdown that must NOT be able
- * to ship a tracking-pixel ``<img>``, smuggle a ``<script>``, or pivot
- * to a remote host through ``<iframe>``.
- *
- * If either ``marked`` or ``DOMPurify`` is missing (e.g. the user is on
- * a stale cached ``index.html``), falls back to a plain
- * ``<pre><code>``-escaped rendering — still safe, just unstyled.
- *
- * Options:
- *   ``emptyHtml`` — what to return for empty input (default ``''``).
- *   ``preClass``  — CSS class added to the fallback ``<pre>`` element.
+ * Render publisher markdown through DOMPurify; fallback is escaped <pre><code>.
+ * The allowlist bans script-bearing tags, remote media, style/src/srcdoc attrs.
  */
 export function renderMarkdownSafe(rawMd, { emptyHtml = '', preClass = '' } = {}) {
     const text = String(rawMd ?? '');
@@ -201,28 +230,20 @@ export function formatUsd4(value) {
 
 export function renderMarkdown(text) {
     let html = escapeHtmlText(text);
-    // Code blocks (``` ... ```)
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    // Inline code
     html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-    // Bold
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    // Strikethrough
     html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    // Headers (order matters: ### before ## before #)
+    // Header order matters: ### before ## before #.
     html = html.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>');
     html = html.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>');
     html = html.replace(/^# (.+)$/gm, '<strong class="md-h1">$1</strong>');
-    // Unordered lists
     html = html.replace(/^- (.+)$/gm, '<span class="md-li">\u2022 $1</span>');
-    // Links
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
         const safe = safeExternalUrl(decodeHtmlEntities(url));
         return '<a href="' + escapeHtmlAttr(safe) + '" target="_blank" rel="noopener noreferrer" class="md-link">' + text + '</a>';
     });
-    // Tables: detect header row + separator + data rows
     html = html.replace(/((?:^\|.+\|$\n?)+)/gm, function(block) {
         const rows = block.trim().split('\n').filter(r => r.trim());
         if (rows.length < 2) return block;

@@ -1,9 +1,4 @@
-"""
-Ouroboros — Shared utilities.
-
-Single source for helper functions used across all modules.
-Does not import anything from ouroboros.* (zero dependency level).
-"""
+"""Shared low-level utilities with no ouroboros.* imports."""
 
 from __future__ import annotations
 
@@ -11,19 +6,19 @@ import datetime as _dt
 import hashlib
 import json
 import logging
+import math
 import os
 import pathlib
 import subprocess
 import threading
 import time
 import uuid
+from collections import deque
+from collections.abc import Iterator
 from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Realtime log sink (set by app.py to stream events to the UI)
-# ---------------------------------------------------------------------------
 _log_sink: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
@@ -31,25 +26,8 @@ def set_log_sink(fn: Optional[Callable[[Dict[str, Any]], None]]) -> None:
     global _log_sink
     _log_sink = fn
 
-
-# ---------------------------------------------------------------------------
-# Time
-# ---------------------------------------------------------------------------
-
 def utc_now_iso() -> str:
     return _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
-
-
-# ---------------------------------------------------------------------------
-# Live log emission to the supervisor event queue
-# ---------------------------------------------------------------------------
-#
-# Four call sites (loop_llm_call, loop_tool_execution, agent.py, and
-# consciousness.py) used to maintain near-identical ``_emit_live_log``
-# wrappers — each building the same ``{"type": "log_event", "data": ...}``
-# envelope and swallowing put errors. Consolidated in v5.8.3-rc.5; the
-# wrappers now delegate here so a future change to the envelope shape or
-# the error-handling discipline only happens in one place.
 
 def emit_log_event(
     event_queue: Any,
@@ -58,22 +36,7 @@ def emit_log_event(
     blocking: bool = False,
     log_label: str = "live log",
 ) -> None:
-    """Best-effort publish of a ``log_event`` to the supervisor/UI queue.
-
-    ``event_queue`` may be ``None`` for off-supervisor contexts (worker
-    bootstrap, tests) — in that case this is a no-op.
-
-    ``blocking=False`` (default) uses ``put_nowait`` so a full queue is
-    dropped silently rather than blocking the producer; the agent and
-    consciousness paths pass ``blocking=True`` to keep parity with their
-    pre-consolidation behaviour where a slow UI consumer could not lose
-    events.
-
-    ``payload`` is the already-built ``data`` block. Caller owns the
-    ``ts`` / ``type`` / contextual fields so each producer can keep its
-    own contract (e.g. consciousness pre-fills ``task_id``,
-    ``task_type``).
-    """
+    """Best-effort log_event publish; blocking preserves critical live logs."""
     if event_queue is None:
         return
     try:
@@ -85,18 +48,8 @@ def emit_log_event(
     except Exception:
         log.debug("Failed to emit %s event", log_label, exc_info=True)
 
-
-# ---------------------------------------------------------------------------
-# Hashing
-# ---------------------------------------------------------------------------
-
 def sha256_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# File I/O
-# ---------------------------------------------------------------------------
 
 def read_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -251,19 +204,69 @@ def append_jsonl(path: pathlib.Path, obj: Dict[str, Any]) -> bool:
     return _written
 
 
+def iter_jsonl_objects(
+    path: pathlib.Path,
+    max_entries: Optional[int] = None,
+    tail_bytes: Optional[int] = None,
+    dict_only: bool = True,
+) -> Iterator[Any]:
+    """Yield parseable JSONL entries; max_entries applies to raw tail lines."""
+    path = pathlib.Path(path)
+    if (max_entries is not None and max_entries <= 0) or (tail_bytes is not None and tail_bytes <= 0):
+        return
+    try:
+        with path.open("rb") as handle:
+            if tail_bytes is not None:
+                file_size = path.stat().st_size
+                if file_size > tail_bytes:
+                    start = file_size - tail_bytes
+                    handle.seek(start - 1)
+                    if handle.read(1) != b"\n":
+                        handle.readline()
+            lines = deque(handle, maxlen=max_entries) if max_entries else handle
+            for raw in lines:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not dict_only or isinstance(entry, dict):
+                    yield entry
+    except FileNotFoundError:
+        return
+
+
+def iter_llm_usage_events(
+    path: pathlib.Path,
+    *,
+    max_entries: Optional[int] = None,
+    tail_bytes: Optional[int] = None,
+) -> Iterator[Dict[str, Any]]:
+    for event in iter_jsonl_objects(path, max_entries=max_entries, tail_bytes=tail_bytes):
+        if event.get("type") == "llm_usage":
+            yield event
+
+
+def llm_usage_cost(event: Dict[str, Any]) -> float:
+    usage = event.get("usage")
+    value = event.get("cost")
+    if value is None and isinstance(usage, dict):
+        value = usage.get("cost")
+    try:
+        cost = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return cost if math.isfinite(cost) else 0.0
+
+
 # ---------------------------------------------------------------------------
 # Path safety
 # ---------------------------------------------------------------------------
 
 def safe_relpath(p: str) -> str:
-    """Normalize a relative path and reject path-traversal / control-char
-    payloads. The previous form accepted strings containing NUL bytes and
-    other ASCII control characters. Most Python file ops truncate at NUL —
-    a path like ``"BIBLE.md\\x00.pdf"`` then writes to ``BIBLE.md`` on disk
-    while the safety-critical check (which compares the raw string) sees a
-    different name. Reject any control character below 0x20 except
-    tab/newline/CR.
-    """
+    """Normalize relative paths and reject traversal/NUL/control-char payloads."""
     if not isinstance(p, str):
         raise ValueError("Path must be a string.")
     for ch in p:
@@ -277,11 +280,6 @@ def safe_relpath(p: str) -> str:
     if ".." in pathlib.PurePosixPath(p).parts:
         raise ValueError("Path traversal is not allowed.")
     return p
-
-
-# ---------------------------------------------------------------------------
-# Text helpers
-# ---------------------------------------------------------------------------
 
 def truncate_for_log(s: str, max_chars: int = 4000) -> str:
     if len(s) <= max_chars:
@@ -307,11 +305,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def is_tool_success(result: str) -> bool:
-    """Check whether a tool result indicates success (not an error).
-
-    Shared by presence loop, consciousness, and task loop for outgoing
-    reply capture.  Checks error prefixes and JSON {"ok": false} patterns.
-    """
+    """Return False for error-prefix results and JSON {"ok": false}."""
     _err_prefixes = ("\u26a0\ufe0f", "Error:", "[TIMEOUT", "Failed")
     if result.startswith(_err_prefixes):
         return False
@@ -324,11 +318,6 @@ def is_tool_success(result: str) -> bool:
             pass
     return True
 
-
-# ---------------------------------------------------------------------------
-# Subprocess
-# ---------------------------------------------------------------------------
-
 def run_cmd(cmd: List[str], cwd: Optional[pathlib.Path] = None) -> str:
     res = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
     if res.returncode != 0:
@@ -336,11 +325,6 @@ def run_cmd(cmd: List[str], cwd: Optional[pathlib.Path] = None) -> str:
             f"Command failed: {' '.join(cmd)}\n\nSTDOUT:\n{res.stdout}\n\nSTDERR:\n{res.stderr}"
         )
     return res.stdout.strip()
-
-
-# ---------------------------------------------------------------------------
-# Git helpers
-# ---------------------------------------------------------------------------
 
 def get_git_info(repo_dir: pathlib.Path) -> tuple[str, str]:
     """Best-effort retrieval of (git_branch, git_sha)."""
@@ -368,23 +352,16 @@ def get_git_info(repo_dir: pathlib.Path) -> tuple[str, str]:
         pass
     return branch, sha
 
-
-# ---------------------------------------------------------------------------
-# Sanitization helpers (for logging)
-# ---------------------------------------------------------------------------
-
 def sanitize_task_for_event(
     task: Dict[str, Any], drive_logs: pathlib.Path, threshold: int = 4000,
 ) -> Dict[str, Any]:
-    """Sanitize task dict for event logging: truncate large text, strip base64 images, persist full text."""
+    """Sanitize task event logs while persisting full oversized text."""
     try:
         sanitized = task.copy()
 
-        # Strip all keys ending with _base64 (images, etc.)
         keys_to_strip = [k for k in sanitized.keys() if k.endswith("_base64")]
         for key in keys_to_strip:
             value = sanitized.pop(key)
-            # Record that it was present and its size
             sanitized[f"{key}_present"] = True
             if isinstance(value, str):
                 sanitized[f"{key}_len"] = len(value)
@@ -422,7 +399,6 @@ _SECRET_KEYS = frozenset([
     "token", "api_key", "apikey", "authorization", "secret", "password", "passwd", "passphrase",
 ])
 
-# Patterns that indicate leaked secrets in tool output
 import re as _re
 _SECRET_PATTERNS = _re.compile(
     r'ghp_[A-Za-z0-9]{30,}'       # GitHub personal access token
@@ -607,9 +583,8 @@ async def collect_evolution_metrics(repo_dir: str, data_dir: str | None = None) 
     import asyncio
     import subprocess as sp
 
-    # --- Parse journal files from data_dir for historical interpolation ---
     def _parse_journal(filepath: str, size_key: str) -> list[tuple[_dt.datetime, float]]:
-        """Parse a JSONL journal file into sorted (datetime, size_kb) tuples."""
+        """Parse a JSONL journal into sorted (datetime, size_kb) tuples."""
         entries: list[tuple[_dt.datetime, float]] = []
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -701,7 +676,6 @@ async def collect_evolution_metrics(repo_dir: str, data_dir: str | None = None) 
 
         files = ls_result.stdout.strip().split(chr(10))
 
-        # Count Python LOC (all .py files)
         python_lines = 0
         for f in files:
             if f.endswith(".py"):
@@ -726,7 +700,6 @@ async def collect_evolution_metrics(repo_dir: str, data_dir: str | None = None) 
         bible_kb = get_file_size_kb("BIBLE.md")
         system_kb = get_file_size_kb("prompts/SYSTEM.md")
 
-        # Identity and scratchpad from journal interpolation
         identity_kb = _interpolate_from_journal(identity_journal, date)
         scratchpad_kb = _interpolate_from_journal(scratchpad_journal, date)
         memory_kb = round(identity_kb + scratchpad_kb, 2)
@@ -781,7 +754,7 @@ async def collect_evolution_metrics(repo_dir: str, data_dir: str | None = None) 
         except OSError:
             log.warning("Failed to write evolution metrics cache: %s", cache_path, exc_info=True)
 
-    # Override latest tag's memory with live file sizes (same formula as historical: identity + scratchpad)
+    # Latest tag uses live identity+scratchpad sizes.
     if data_dir and points:
         mem_dir = os.path.join(data_dir, "memory")
         if os.path.isdir(mem_dir):
@@ -800,22 +773,8 @@ async def collect_evolution_metrics(repo_dir: str, data_dir: str | None = None) 
 
     return points
 
-
-# ---------------------------------------------------------------------------
-# Review-artifact preview helper (DEVELOPMENT.md item 2(f) compliance)
-# ---------------------------------------------------------------------------
-
 def truncate_review_artifact(text: str | None, limit: int = 4000) -> str:
-    """Return text or a capped prefix with an explicit OMISSION NOTE.
-
-    Complies with DEVELOPMENT.md item 2(f): review outputs and cognitive
-    artifacts must not be silently clipped with raw [:N] slicing.  Use this
-    helper everywhere a review-output string needs a display-safe preview.
-    An omission note including the original length is appended so nothing is
-    silently lost.
-
-    Accepts None (e.g. JSON null from a reviewer) and coerces it to "".
-    """
+    """Return a display-safe preview with explicit OMISSION NOTE, never silent clipping."""
     text = str(text or "")
     if len(text) <= limit:
         return text
@@ -823,8 +782,5 @@ def truncate_review_artifact(text: str | None, limit: int = 4000) -> str:
 
 
 def truncate_review_reason(text: str, limit: int = 120) -> str:
-    """Compact preview of a single reviewer reason/finding string.
-
-    Uses explicit omission note rather than silent clipping.
-    """
+    """Compact reviewer reason preview with explicit omission note."""
     return truncate_review_artifact(text, limit=limit)

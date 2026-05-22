@@ -38,8 +38,8 @@ def test_build_llm_messages_returns_three_system_blocks():
     assert system_msg["role"] == "system"
     assert isinstance(system_msg["content"], list)
     assert len(system_msg["content"]) == 3
-    assert "cache_control" in system_msg["content"][0]
-    assert "cache_control" in system_msg["content"][1]
+    assert system_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert system_msg["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_msg["content"][2]
 
 
@@ -48,7 +48,10 @@ def test_build_llm_messages_repartitions_stable_vs_dynamic_sections():
 
     tmpdir = pathlib.Path(tempfile.mkdtemp())
     env, memory = _make_env_and_memory(tmpdir)
-    (tmpdir / "drive" / "memory" / "dialogue_summary.md").write_text("dialogue", encoding="utf-8")
+    (tmpdir / "drive" / "memory" / "dialogue_blocks.json").write_text(
+        '[{"content": "dialogue"}]',
+        encoding="utf-8",
+    )
     (tmpdir / "drive" / "memory" / "registry.md").write_text(
         "### source-a\n- **path:** memory/registry.md\n- **updated:** 2026-04-13T10:00:00+00:00\n- **gaps:** none\n",
         encoding="utf-8",
@@ -148,7 +151,7 @@ def test_build_remote_kwargs_marks_last_sorted_tool_for_cache():
 
     assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["alpha_tool", "zeta_tool"]
     assert "cache_control" not in kwargs["tools"][0]
-    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_build_memory_sections_partition_modes():
@@ -156,7 +159,10 @@ def test_build_memory_sections_partition_modes():
 
     tmpdir = pathlib.Path(tempfile.mkdtemp())
     env, memory = _make_env_and_memory(tmpdir)
-    (tmpdir / "drive" / "memory" / "dialogue_summary.md").write_text("dialogue", encoding="utf-8")
+    (tmpdir / "drive" / "memory" / "dialogue_blocks.json").write_text(
+        '[{"content": "dialogue"}]',
+        encoding="utf-8",
+    )
     (tmpdir / "drive" / "memory" / "registry.md").write_text(
         "### source-a\n- **path:** memory/registry.md\n- **updated:** 2026-04-13T10:00:00+00:00\n- **gaps:** none\n",
         encoding="utf-8",
@@ -192,6 +198,7 @@ def test_llm_round_event_exposes_cache_hit_rate(tmp_path):
                 "completion_tokens": 100,
                 "cached_tokens": 750,
                 "cache_write_tokens": 0,
+                "prompt_cache_ttl": "default",
                 "cost": 1.23,
             }
 
@@ -217,6 +224,7 @@ def test_llm_round_event_exposes_cache_hit_rate(tmp_path):
     lines = [line for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     llm_round = next(__import__("json").loads(line) for line in lines if __import__("json").loads(line).get("type") == "llm_round")
     assert llm_round["cache_hit_rate"] == 0.75
+    assert llm_round["prompt_cache_ttl"] == "default"
 
 
 def test_llm_round_event_zero_prompt_tokens_reports_zero_hit_rate(tmp_path):

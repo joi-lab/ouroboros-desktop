@@ -254,7 +254,7 @@ def test_apply_settings_clears_review_enforcement_restores_default(monkeypatch):
 # apply_settings_to_env propagation
 # ---------------------------------------------------------------------------
 
-def test_apply_settings_to_env_includes_effort_keys():
+def test_apply_settings_to_env_includes_effort_keys(monkeypatch, tmp_path):
     """apply_settings_to_env propagates all effort keys."""
     settings = {
         "OUROBOROS_EFFORT_TASK": "low",
@@ -265,6 +265,7 @@ def test_apply_settings_to_env_includes_effort_keys():
         "OUROBOROS_REVIEW_MODELS": "model-a,model-b",
         "OUROBOROS_REVIEW_ENFORCEMENT": "advisory",
         "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS": "true",
+        "OUROBOROS_RETURN_REASONING": "",
     }
     apply_settings_to_env(settings)
     assert os.environ.get("OUROBOROS_EFFORT_TASK") == "low"
@@ -275,10 +276,23 @@ def test_apply_settings_to_env_includes_effort_keys():
     assert os.environ.get("OUROBOROS_REVIEW_MODELS") == "model-a,model-b"
     assert os.environ.get("OUROBOROS_REVIEW_ENFORCEMENT") == "advisory"
     assert os.environ.get("OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS") == "true"
+    assert os.environ.get("OUROBOROS_RETURN_REASONING") == ""
     # cleanup
     for k in ("OUROBOROS_EFFORT_TASK", "OUROBOROS_EFFORT_EVOLUTION",
               "OUROBOROS_EFFORT_REVIEW", "OUROBOROS_EFFORT_SCOPE_REVIEW",
               "OUROBOROS_EFFORT_CONSCIOUSNESS",
               "OUROBOROS_REVIEW_MODELS", "OUROBOROS_REVIEW_ENFORCEMENT",
-              "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS"):
+              "OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS", "OUROBOROS_RETURN_REASONING"):
         os.environ.pop(k, None)
+
+    import ouroboros.config as cfg
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"OUROBOROS_RETURN_REASONING": True}), encoding="utf-8")
+    monkeypatch.setattr(cfg, "SETTINGS_PATH", settings_path, raising=True)
+    monkeypatch.setenv("OUROBOROS_RETURN_REASONING", "")
+
+    loaded = cfg.load_settings()
+    assert loaded["OUROBOROS_RETURN_REASONING"] == ""
+    cfg.apply_settings_to_env(loaded)
+    assert os.environ.get("OUROBOROS_RETURN_REASONING") == ""

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ouroboros"
-version = "5.25.0rc3"
+version = "5.30.0rc1"
 description = "Self-creating AI agent with constitution, background consciousness, and persistent identity"
 readme = "README.md"
 license = {text = "MIT"}
@@ -39,10 +39,7 @@ dependencies = [
     "claude-agent-sdk>=0.1.60",
     "mcp>=1.6,<2.0",
     "PyYAML>=6.0",
-    # Declared explicitly so ``ouroboros/gateway/contracts.py`` can rely on
-    # ``typing_extensions.NotRequired`` on Python 3.10 (``typing.NotRequired``
-    # is only available on 3.11+). In practice many transitive deps already
-    # pull it in, but the frozen contract must not depend on that.
+    # Python 3.10 needs typing_extensions.NotRequired for gateway contracts.
     "typing_extensions>=4.5.0",
 ]
 
@@ -67,9 +64,7 @@ all = ["claude-agent-sdk>=0.1.60", "playwright", "playwright-stealth", "llama-cp
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-# Default local runs exclude the `integration` marker so contributors do not
-# accidentally burn provider tokens on every `pytest`. CI Tier 2.5 opts in
-# explicitly with `pytest -m integration` (the CLI -m overrides addopts -m).
+# Default local pytest excludes token-burning integration/browser suites.
 addopts = "-q --tb=short -m 'not integration and not browser and not ui_browser and not ui_browser_docker and not portable_detail'"
 markers = [
     "integration: requires real provider API keys (OPENROUTER_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / CLOUDRU_FOUNDATION_MODELS_API_KEY); excluded from default local runs, opt in via `pytest -m integration`",

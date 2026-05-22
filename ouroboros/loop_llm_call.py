@@ -93,6 +93,7 @@ def call_llm_with_retry(
             msg = resp_msg
             accumulated_usage.pop("_last_llm_error", None)
 
+            provider_reported_cost = bool(usage.get("cost"))
             cost = float(usage.get("cost") or 0)
             display_model = str(usage.get("resolved_model") or model)
             provider = "local" if use_local else str(usage.get("provider") or "openrouter")
@@ -106,8 +107,10 @@ def call_llm_with_retry(
                     int(usage.get("completion_tokens") or 0),
                     int(usage.get("cached_tokens") or 0),
                     int(usage.get("cache_write_tokens") or 0),
+                    usage.get("prompt_cache_ttl"),
                 )
             usage["cost"] = cost
+            cost_estimated = bool(usage.get("cost_estimated")) or (bool(cost) and not provider_reported_cost)
             add_usage(accumulated_usage, usage)
 
             category = task_type if task_type in ("evolution", "consciousness", "review", "summarize") else "task"
@@ -120,6 +123,7 @@ def call_llm_with_retry(
                 category,
                 provider=provider,
                 source="loop",
+                cost_estimated=cost_estimated,
             )
 
             tool_calls = msg.get("tool_calls") or []
@@ -166,6 +170,7 @@ def call_llm_with_retry(
             completion_tokens = int(usage.get("completion_tokens") or 0)
             cached_tokens = int(usage.get("cached_tokens") or 0)
             cache_write_tokens = int(usage.get("cache_write_tokens") or 0)
+            prompt_cache_ttl = str(usage.get("prompt_cache_ttl") or "")
             cache_hit_rate = (cached_tokens / prompt_tokens) if prompt_tokens > 0 else 0.0
             _round_event = {
                 "ts": utc_now_iso(), "type": "llm_round",
@@ -179,6 +184,7 @@ def call_llm_with_retry(
                 "completion_tokens": completion_tokens,
                 "cached_tokens": cached_tokens,
                 "cache_write_tokens": cache_write_tokens,
+                "prompt_cache_ttl": prompt_cache_ttl,
                 "cache_hit_rate": cache_hit_rate,
                 "cost_usd": cost,
             }
@@ -194,6 +200,7 @@ def call_llm_with_retry(
                 "completion_tokens": _round_event["completion_tokens"],
                 "cached_tokens": _round_event["cached_tokens"],
                 "cache_write_tokens": _round_event["cache_write_tokens"],
+                "prompt_cache_ttl": _round_event["prompt_cache_ttl"],
                 "cost_usd": cost,
                 "response_kind": "tool_calls" if tool_calls else "message",
                 "tool_call_count": len(tool_calls),

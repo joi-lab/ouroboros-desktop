@@ -1,9 +1,4 @@
-/**
- * JSDoc mirror of `ouroboros.gateway.contracts`.
- *
- * This file is intentionally dependency-free: it gives frontend contributors a
- * visible contract surface without adding TypeScript, codegen, or a build step.
- */
+/** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`. */
 
 /**
  * @typedef {Object} StateResponse
@@ -39,6 +34,12 @@
  */
 
 /**
+ * @typedef {Object} SettingsMeta
+ * @property {string[]=} custom_secret_keys
+ * @property {Object=} setup_contract
+ */
+
+/**
  * @typedef {Object} ChatInbound
  * @property {"chat"} type
  * @property {string} content
@@ -61,6 +62,7 @@
  * @property {boolean=} markdown
  * @property {boolean=} is_progress
  * @property {string=} task_id
+ * @property {Object=} lifecycle
  * @property {string=} source
  * @property {string=} sender_label
  * @property {string=} sender_session_id
@@ -84,4 +86,66 @@
  * @property {string} mime
  */
 
-export const GATEWAY_CONTRACT_VERSION = '5.22.0-rc.1';
+/**
+ * @typedef {Object} OwnerRuntimeModeResponse
+ * @property {boolean} ok
+ * @property {string} runtime_mode
+ * @property {boolean} restart_required
+ */
+
+/**
+ * @typedef {Object} OwnerAutoGrantResponse
+ * @property {boolean} ok
+ * @property {boolean} enabled
+ */
+
+/**
+ * @typedef {Object} SkillGrantResponse
+ * @property {boolean} ok
+ * @property {string} skill
+ * @property {string[]=} granted_keys
+ * @property {string[]=} granted_permissions
+ * @property {string=} extension_action
+ * @property {string=} extension_reason
+ * @property {string=} load_error
+ * @property {Object=} grants
+ */
+
+/**
+ * @typedef {Object} TaskCreateResponse
+ * @property {boolean} ok
+ * @property {string} task_id
+ * @property {string} status
+ */
+
+/**
+ * @typedef {Object} TaskEvent
+ * @property {number} seq
+ * @property {string=} source
+ * @property {number=} line
+ * @property {string} type
+ * @property {string} task_id
+ * @property {string=} ts
+ * @property {string=} root
+ * @property {Object=} data
+ */
+
+/**
+ * @typedef {Object} TaskListResponse
+ * @property {Object[]} tasks
+ * @property {Object=} queue
+ */
+
+/**
+ * @typedef {Object} TaskCancelResponse
+ * @property {boolean} ok
+ * @property {string} task_id
+ */
+
+/**
+ * @typedef {Object} LogTailResponse
+ * @property {string} name
+ * @property {Object[]} entries
+ */
+
+export const GATEWAY_CONTRACT_VERSION = '5.30.0-rc.1';

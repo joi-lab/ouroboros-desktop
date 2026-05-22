@@ -1,12 +1,4 @@
-/**
- * Ouroboros Web UI — Main orchestrator.
- *
- * Self-editable: this file lives in REPO_DIR and can be modified by the agent.
- * Vanilla JS, no build step. Uses ES modules for page decomposition.
- *
- * Each page is a module in web/modules/ that exports an init function.
- * This file wires them together with shared state and navigation.
- */
+/** Web UI orchestrator: shared state, navigation, page init, WS startup. */
 
 import { createWS } from './modules/ws.js';
 import { loadVersion, initMatrixRain } from './modules/utils.js';
@@ -27,9 +19,6 @@ import { escapeHtmlAttr, escapeHtmlText } from './modules/utils.js';
 import { initOnboardingOverlay } from './modules/onboarding_overlay.js';
 import { initPwa } from './modules/pwa.js';
 
-// ---------------------------------------------------------------------------
-// Shared State
-// ---------------------------------------------------------------------------
 const state = {
     messages: [],
     logs: [],
@@ -42,9 +31,7 @@ const state = {
     beforePageLeave: null,
 };
 
-// ---------------------------------------------------------------------------
-// WebSocket (created but not yet connected — deferred until after init)
-// ---------------------------------------------------------------------------
+// Connect only after modules register listeners.
 const ws = createWS();
 const beforePageLeaveHandlers = [];
 let settingsControls = null;
@@ -52,9 +39,6 @@ let dashboardControls = null;
 let navWidgetsLoaded = false;
 let activeSidebarWidgetKey = '';
 
-// ---------------------------------------------------------------------------
-// Navigation
-// ---------------------------------------------------------------------------
 async function showPage(name) {
     if (state.activePage === name) return;
     for (const handler of beforePageLeaveHandlers) {
@@ -205,9 +189,6 @@ window.addEventListener('ouro:skill-lifecycle', (event) => {
     }
 });
 
-// ---------------------------------------------------------------------------
-// Initialize All Pages (registers WS listeners before connection opens)
-// ---------------------------------------------------------------------------
 const ctx = {
     ws,
     state,
@@ -229,26 +210,20 @@ initChat(ctx);
 initFiles(ctx);
 settingsControls = initSettings(ctx);
 dashboardControls = initDashboard(ctx);
-initLogs({ ...ctx, mount: document.getElementById('dashboard-panel-logs'), embedded: true, hostPage: 'dashboard', hostSubtab: 'logs' });
-initEvolution({ ...ctx, mount: document.getElementById('dashboard-panel-evolution'), embedded: true, hostPage: 'dashboard', hostSubtab: 'evolution', chartOnly: true });
-initUpdates({ ...ctx, mount: document.getElementById('dashboard-panel-updates'), hostPage: 'dashboard', hostSubtab: 'updates' });
-initCosts({ ...ctx, mount: document.getElementById('dashboard-panel-costs'), embedded: true, hostPage: 'dashboard', hostSubtab: 'costs' });
+initLogs({ ...ctx, mount: document.getElementById('dashboard-panel-logs') });
+initEvolution({ ...ctx, mount: document.getElementById('dashboard-panel-evolution') });
+initUpdates({ ...ctx, mount: document.getElementById('dashboard-panel-updates') });
+initCosts({ ...ctx, mount: document.getElementById('dashboard-panel-costs') });
 initSkills(ctx);
 initWidgets(ctx);
 
 initOnboardingOverlay();
 
-// ---------------------------------------------------------------------------
-// Startup — connect WS only after all modules have registered their listeners
-// ---------------------------------------------------------------------------
 initMatrixRain();
 loadVersion();
 initPwa();
 
-// Visual viewport height — keeps layout above soft keyboard on iOS/Android.
-// Updates a <style> tag (not element.style) to set --vvh without inline styles.
-// Also toggles ``keyboard-open`` so CSS can drop the mobile nav reservation
-// while the soft keyboard is visible.
+// Mobile soft-keyboard handling: --vvh + keyboard-open without inline styles.
 (function () {
     const vvhStyle = document.createElement('style');
     vvhStyle.id = 'runtime-vvh';
@@ -275,9 +250,7 @@ initPwa();
         if (e.touches && e.touches.length) keyboardTouchStartY = e.touches[0].clientY;
     }
 
-    // Keep internal scrollable chat surfaces usable, but stop their top/bottom
-    // overscroll from chaining into document/visualViewport movement while the
-    // keyboard is open.
+    // Stop chat overscroll from moving the document while the keyboard is open.
     function lockBoundaryTouch(e) {
         const touch = e.touches && e.touches.length ? e.touches[0] : null;
         if (touch && keyboardTouchStartY === 0) {

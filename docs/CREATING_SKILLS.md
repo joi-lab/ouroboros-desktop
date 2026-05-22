@@ -311,14 +311,17 @@ consent. The desktop launcher's owner-grant bridge records these grants.
 The Skills UI surfaces missing grants on the skill card. The agent
 can also call `toggle_skill enabled=true` only after grants are
 approved (the tool returns `SKILL_TOGGLE_ERROR: cannot enable until
-requested key grants are approved`). Self-authored markers are
+requested key and permission grants are approved`). Self-authored markers are
 provenance only; they do not auto-grant keys or auto-enable skills.
 
-Owners can enable `OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS` in desktop Settings →
-Behavior → Skills; the launcher asks for native confirmation before saving it.
-When enabled, any completed review verdict (`clean`, `warnings`, or `blockers`)
-grants only the manifest-declared keys and host permissions for the current
-content hash. Editing the skill still invalidates those grants.
+Owners can enable `OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS` in Settings →
+Behavior → Skills; desktop asks for native confirmation and web uses the owner
+endpoint. When enabled, a fresh executable review grants only the
+manifest-declared keys and host permissions for the current content hash. Under
+blocking enforcement, blocker reviews are not executable and do not auto-grant;
+under advisory enforcement, blocker findings may auto-grant only because that
+mode makes the review executable. Editing the skill still invalidates those
+grants.
 
 ## Notifying the owner when work completes
 

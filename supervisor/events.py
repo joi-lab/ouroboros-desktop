@@ -1,9 +1,4 @@
-"""
-Supervisor event dispatcher.
-
-Maps event types from worker EVENT_Q to handler functions.
-Extracted from colab_launcher.py main loop to keep it under 500 lines.
-"""
+"""Dispatch worker EVENT_Q messages to supervisor handlers."""
 
 from __future__ import annotations
 
@@ -22,8 +17,6 @@ from ouroboros.task_results import (
     STATUS_SCHEDULED,
     write_task_result,
 )
-
-# Lazy imports to avoid circular dependencies — everything comes through ctx
 
 log = logging.getLogger(__name__)
 
@@ -64,10 +57,7 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
     usage_raw = evt.get("usage")
     usage: Dict[str, Any] = usage_raw if isinstance(usage_raw, dict) else {}
 
-    # Normalize usage shape across producers:
-    # - loop.py emits `usage` + top-level `cost`
-    # - web_search may provide input/output token names
-    # - claude_code_edit provides top-level `cost`
+    # Normalize usage across loop.py, web_search, and claude_code_edit producers.
     prompt_tokens = int(
         usage.get("prompt_tokens")
         or usage.get("input_tokens")
@@ -90,6 +80,11 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
         or evt.get("cache_write_tokens")
         or 0
     )
+    prompt_cache_ttl = str(
+        usage.get("prompt_cache_ttl")
+        or evt.get("prompt_cache_ttl")
+        or ""
+    )
 
     raw_cost = usage.get("cost")
     if raw_cost is None:
@@ -106,10 +101,10 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
         "completion_tokens": completion_tokens,
         "cached_tokens": cached_tokens,
         "cache_write_tokens": cache_write_tokens,
+        "prompt_cache_ttl": prompt_cache_ttl,
     }
     ctx.update_budget_from_usage(usage_for_budget)
 
-    # Log to events.jsonl for audit trail
     from ouroboros.utils import utc_now_iso, append_jsonl
     try:
         append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
@@ -128,6 +123,7 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
             "completion_tokens": completion_tokens,
             "cached_tokens": cached_tokens,
             "cache_write_tokens": cache_write_tokens,
+            "prompt_cache_ttl": prompt_cache_ttl,
         })
     except Exception:
         log.warning("Failed to log llm_usage event to events.jsonl", exc_info=True)
@@ -198,10 +194,10 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
     task_id = evt.get("task_id")
     task_type = str(evt.get("task_type") or "")
     wid = evt.get("worker_id")
+    meta = ctx.RUNNING.get(str(task_id or ""), {}) if task_id else {}
+    task = meta.get("task") if isinstance(meta, dict) and isinstance(meta.get("task"), dict) else {}
 
-    # Persist task_done to events.jsonl (audit trail).
-    # Previously this was written agent-side in emit_task_results() which
-    # caused it to arrive at the UI *before* send_message (ordering bug).
+    # Persist here so send_message reaches the UI before task_done collapses the card.
     from ouroboros.utils import utc_now_iso, append_jsonl
     try:
         append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
@@ -217,23 +213,17 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
     except Exception:
         log.warning("Failed to log task_done to events.jsonl", exc_info=True)
 
-    # Track evolution task success/failure for circuit breaker
     if task_type == "evolution":
         st = ctx.load_state()
-        # Check if task produced meaningful output (successful evolution)
-        # A successful evolution should have:
-        # - Reasonable cost (not near-zero, indicating actual work)
-        # - Multiple rounds (not just 1 retry)
+        # Meaningful evolution work has non-trivial cost plus at least one round.
         cost = float(evt.get("cost_usd") or 0)
         rounds = int(evt.get("total_rounds") or 0)
 
         evo_cost_threshold = float(os.environ.get("OUROBOROS_EVO_COST_THRESHOLD", "0.10"))
         if cost > evo_cost_threshold and rounds >= 1:
-            # Success: reset failure counter
             st["evolution_consecutive_failures"] = 0
             ctx.save_state(st)
         else:
-            # Likely failure (empty response or minimal work)
             failures = int(st.get("evolution_consecutive_failures") or 0) + 1
             st["evolution_consecutive_failures"] = failures
             ctx.save_state(st)
@@ -250,6 +240,14 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
             )
 
     if task_id:
+        try:
+            from ouroboros.headless import copy_child_task_result, finalize_task_artifacts
+
+            if task:
+                copy_child_task_result(ctx.DRIVE_ROOT, task)
+                finalize_task_artifacts(ctx.DRIVE_ROOT, task)
+        except Exception:
+            log.warning("Failed to finalize headless artifacts for task %s", task_id, exc_info=True)
         ctx.RUNNING.pop(str(task_id), None)
     if wid in ctx.WORKERS and ctx.WORKERS[wid].busy_task_id == task_id:
         ctx.WORKERS[wid].busy_task_id = None
@@ -268,12 +266,10 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
     except Exception:
         log.debug("Failed to forward task_done to live logs", exc_info=True)
 
-    # Store task result for subtask retrieval
     try:
         from pathlib import Path
         results_dir = Path(ctx.DRIVE_ROOT) / "task_results"
         results_dir.mkdir(parents=True, exist_ok=True)
-        # Only write if agent didn't already write (check if file exists)
         result_file = results_dir / f"{task_id}.json"
         if not result_file.exists():
             write_task_result(
@@ -314,7 +310,7 @@ def _handle_deep_self_review_request(evt: Dict[str, Any], ctx: Any) -> None:
 
 def _handle_promote_to_stable(evt: Dict[str, Any], ctx: Any) -> None:
     import subprocess as sp
-    # Local branch promotion (always works)
+    # Local branch promotion always works without a remote.
     try:
         sp.run(
             ["git", "branch", "-f", ctx.BRANCH_STABLE, ctx.BRANCH_DEV],
@@ -330,7 +326,7 @@ def _handle_promote_to_stable(evt: Dict[str, Any], ctx: Any) -> None:
             ctx.send_with_budget(int(st["owner_chat_id"]), f"❌ Failed to promote to stable: {e}")
         return
 
-    # Optional remote push (silently skip if no remote configured)
+    # Optional remote push; local promotion remains authoritative.
     remote_status = ""
     try:
         sp.run(["git", "remote", "get-url", "origin"], cwd=str(ctx.REPO_DIR),
@@ -352,14 +348,7 @@ def _handle_promote_to_stable(evt: Dict[str, Any], ctx: Any) -> None:
 
 
 def _find_duplicate_task(desc: str, task_context: str, pending: list, running: dict) -> Optional[str]:
-    """Check if a semantically similar task already exists using a light LLM call.
-
-    Bible P5 (LLM-First): dedup decisions are cognitive judgments, not hardcoded
-    heuristics.  A cheap/fast model decides whether the new task is a duplicate.
-
-    Returns task_id of the duplicate if found, None otherwise.
-    On any error (API, timeout, import) — returns None (accept the task).
-    """
+    """Use a light LLM to reject only true duplicate active tasks."""
     existing = []
     for task in pending:
         description, context = _extract_task_description_and_context(task)
@@ -410,7 +399,7 @@ def _find_duplicate_task(desc: str, task_context: str, pending: list, running: d
             reasoning_effort="low",
             max_tokens=50,
         )
-        # Track cost — supervisor runs outside task context, update directly.
+        # Supervisor runs outside task context; update budget directly.
         if usage:
             try:
                 from supervisor.state import update_budget_from_usage
@@ -438,8 +427,11 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
     task_context = str(evt.get("context") or "").strip()
     depth = int(evt.get("depth", 0))
     parent_id = evt.get("parent_task_id")
+    root_task_id = str(evt.get("root_task_id") or parent_id or tid)
+    session_id = str(evt.get("session_id") or "")
+    actor_id = str(evt.get("actor_id") or "ouroboros")
+    delegation_role = str(evt.get("delegation_role") or "child")
 
-    # Check depth limit
     if depth > 3:
         log.warning("Rejected task due to depth limit: depth=%d, desc=%s", depth, desc[:100])
         if owner_chat_id:
@@ -447,7 +439,7 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
         return
 
     if owner_chat_id and desc:
-        # --- Task deduplication (Bible P5: LLM-First, not hardcoded heuristics) ---
+        # Bible P5: duplicate judgment stays LLM-first, not hardcoded.
         from supervisor.queue import PENDING, RUNNING
         dup_id = _find_duplicate_task(desc, task_context, PENDING, RUNNING)
         if dup_id:
@@ -458,6 +450,10 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                     tid,
                     STATUS_REJECTED_DUPLICATE,
                     parent_task_id=parent_id,
+                    root_task_id=root_task_id,
+                    session_id=session_id,
+                    actor_id=actor_id,
+                    delegation_role=delegation_role,
                     description=desc,
                     context=task_context,
                     duplicate_of=dup_id,
@@ -480,6 +476,17 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
             "description": desc,
             "context": task_context,
             "depth": depth,
+            "root_task_id": root_task_id,
+            "session_id": session_id,
+            "actor_id": actor_id,
+            "delegation_role": delegation_role,
+            "metadata": {
+                "parent_task_id": parent_id,
+                "root_task_id": root_task_id,
+                "session_id": session_id,
+                "actor_id": actor_id,
+                "delegation_role": delegation_role,
+            },
         }
         if parent_id:
             task["parent_task_id"] = parent_id
@@ -490,6 +497,10 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                 tid,
                 STATUS_SCHEDULED,
                 parent_task_id=parent_id,
+                root_task_id=root_task_id,
+                session_id=session_id,
+                actor_id=actor_id,
+                delegation_role=delegation_role,
                 description=desc,
                 context=task_context,
                 result="Task accepted and scheduled.",
@@ -577,7 +588,7 @@ def _handle_send_photo(evt: Dict[str, Any], ctx: Any) -> None:
 
 
 def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
-    """Log owner_message_injected to events.jsonl for health invariant #5 (duplicate processing)."""
+    """Log owner injections so health checks can detect duplicate processing."""
     from ouroboros.utils import utc_now_iso
     try:
         ctx.append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
@@ -591,14 +602,7 @@ def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
 
 
 def _handle_log_event(evt: Dict[str, Any], ctx: Any) -> None:
-    """Forward worker-emitted live-only timeline events to the UI.
-
-    Most log events are live-only (pushed to the bridge for UI display).
-    The durable event type `task_checkpoint` is also persisted to
-    events.jsonl so self-check signals survive UI reloads and are available
-    for postmortem analysis. (v4.34.0: structured-reflection and anomaly
-    event types were retired — see ouroboros/loop.py::_maybe_inject_self_check.)
-    """
+    """Forward live events; persist durable task checkpoints."""
     data = evt.get("data")
     if not isinstance(data, dict):
         return
@@ -610,7 +614,6 @@ def _handle_log_event(evt: Dict[str, Any], ctx: Any) -> None:
         ctx.bridge.push_log(payload)
     except Exception:
         log.debug("Failed to forward live log event", exc_info=True)
-    # Persist durable checkpoint events to the event log
     if data.get("type") == "task_checkpoint":
         try:
             ctx.append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", payload)
@@ -636,10 +639,6 @@ def _handle_skill_lifecycle(evt: Dict[str, Any], ctx: Any) -> None:
     except Exception:
         log.debug("Failed to publish skill lifecycle event", exc_info=True)
 
-
-# ---------------------------------------------------------------------------
-# Dispatch table
-# ---------------------------------------------------------------------------
 EVENT_HANDLERS = {
     "llm_usage": _handle_llm_usage,
     "task_heartbeat": _handle_task_heartbeat,

@@ -30,7 +30,7 @@ MAX_SUBTASK_DEPTH = 3
 def _request_restart(ctx: ToolContext, reason: str) -> str:
     if str(ctx.current_task_type or "") == "evolution" and not ctx.last_push_succeeded:
         return "⚠️ RESTART_BLOCKED: in evolution mode, commit+push first."
-    # Persist expected SHA for post-restart verification
+    # Persist expected ref for post-restart verification.
     try:
         sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=ctx.repo_dir)
         branch = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ctx.repo_dir)
@@ -48,18 +48,7 @@ def _request_restart(ctx: ToolContext, reason: str) -> str:
 
 
 def _set_tool_timeout(ctx: ToolContext, seconds: int) -> str:
-    """Persist and hot-apply the global tool timeout.
-
-    v5.1.2 hardening: explicitly anchor ``OUROBOROS_RUNTIME_MODE`` to the
-    live ``os.environ`` value before writing so that an out-of-process
-    disk corruption (e.g. ``run_shell python -c "...write_text..."``)
-    cannot ride into ``apply_settings_to_env`` via this tool's
-    ``load_settings → save_settings → apply_settings_to_env`` round-trip.
-    The chokepoint in ``save_settings`` would already refuse a true
-    elevation, but pinning the value here turns the failure mode into a
-    clean save (the corrupted disk gets restored to the legitimate
-    boot-time mode) instead of a tool-call error.
-    """
+    """Persist timeout while pinning owner-only runtime mode to the live env."""
     try:
         timeout_sec = int(seconds)
     except (TypeError, ValueError):
@@ -81,6 +70,12 @@ def _promote_to_stable(ctx: ToolContext, reason: str) -> str:
 
 
 def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent_task_id: str = "") -> str:
+    if bool(getattr(ctx, "is_workspace_mode", lambda: False)()):
+        return (
+            "⚠️ WORKSPACE_MODE_BLOCKED: schedule_task would create a child agent. "
+            "Headless workspace tasks expose task/session metadata for future delegation, "
+            "but v5.29 does not run a swarm scheduler."
+        )
     current_depth = getattr(ctx, 'task_depth', 0)
     new_depth = current_depth + 1
     if new_depth > MAX_SUBTASK_DEPTH:
@@ -99,7 +94,22 @@ def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent
             pass
 
     tid = uuid.uuid4().hex[:8]
-    evt = {"type": "schedule_task", "description": description, "task_id": tid, "depth": new_depth, "ts": utc_now_iso()}
+    metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
+    current_task_id = str(getattr(ctx, "task_id", "") or "")
+    parent_task_id = str(parent_task_id or current_task_id or metadata.get("parent_task_id") or "").strip()
+    root_task_id = str(metadata.get("root_task_id") or current_task_id or tid)
+    session_id = str(metadata.get("session_id") or "")
+    evt = {
+        "type": "schedule_task",
+        "description": description,
+        "task_id": tid,
+        "depth": new_depth,
+        "ts": utc_now_iso(),
+        "root_task_id": root_task_id,
+        "session_id": session_id,
+        "actor_id": "ouroboros",
+        "delegation_role": "child",
+    }
     if context:
         evt["context"] = context
     if parent_task_id:
@@ -111,6 +121,10 @@ def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent
             tid,
             STATUS_REQUESTED,
             parent_task_id=parent_task_id or None,
+            root_task_id=root_task_id,
+            session_id=session_id,
+            actor_id="ouroboros",
+            delegation_role="child",
             description=description,
             context=context,
             result="Task request queued. Awaiting supervisor acceptance.",

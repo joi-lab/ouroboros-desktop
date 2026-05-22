@@ -229,3 +229,114 @@ class TestBuildAdvisoryChangedContextNoDuplicateGitStatus:
         # Explicit paths take precedence — porcelain_text paths should NOT appear
         assert resolved == ["ouroboros/agent.py"]
         assert "ouroboros/loop.py" not in resolved
+
+
+class TestSharedGitReviewHelpers:
+    """Regression coverage for shared review/git parsing helpers."""
+
+    def test_name_status_preflight_preserves_rename_and_copy_semantics(self):
+        from ouroboros.tools.review_helpers import (
+            format_name_status_for_preflight,
+            paths_from_name_status,
+        )
+
+        raw = (
+            "R100\touroboros/old.py\ttools/new.py\n"
+            "C075\touroboros/base.py\touroboros/new_copy.py\n"
+            "D\tREADME.md\n"
+        )
+
+        assert format_name_status_for_preflight(raw) == (
+            "D  ouroboros/old.py\n"
+            "A  tools/new.py\n"
+            "A  ouroboros/new_copy.py\n"
+            "D  README.md"
+        )
+        assert paths_from_name_status(raw) == [
+            "ouroboros/old.py",
+            "tools/new.py",
+            "ouroboros/base.py",
+            "ouroboros/new_copy.py",
+            "README.md",
+        ]
+
+    def test_porcelain_line_helper_can_return_current_or_both_paths(self):
+        from ouroboros.tools.review_helpers import paths_from_porcelain_line
+
+        line = "R  docs/old.py -> ouroboros/new.py"
+
+        assert paths_from_porcelain_line(line) == ["docs/old.py", "ouroboros/new.py"]
+        assert paths_from_porcelain_line(
+            line,
+            include_sources_for_renames=False,
+        ) == ["ouroboros/new.py"]
+
+    def test_porcelain_z_helper_can_include_rename_sources(self):
+        from ouroboros.tools.review_helpers import parse_changed_paths_from_porcelain_z
+
+        raw = b"R  docs/new.py\0docs/old.py\0C  copy.py\0base.py\0M  keep.py\0"
+
+        assert parse_changed_paths_from_porcelain_z(raw) == [
+            "docs/new.py",
+            "copy.py",
+            "keep.py",
+        ]
+        assert parse_changed_paths_from_porcelain_z(
+            raw,
+            include_sources_for_renames=True,
+        ) == [
+            "docs/new.py",
+            "docs/old.py",
+            "copy.py",
+            "base.py",
+            "keep.py",
+        ]
+
+    def test_snapshot_hash_uses_same_rename_paths_as_commit_gate(self, tmp_path):
+        import subprocess
+
+        from ouroboros.review_state import compute_snapshot_hash
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
+        (repo / "old_name.txt").write_text("same\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True)
+        (repo / "old_name.txt").rename(repo / "new_name.txt")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+
+        assert compute_snapshot_hash(repo, "rename") == compute_snapshot_hash(
+            repo,
+            "rename",
+            paths=["old_name.txt", "new_name.txt"],
+        )
+
+    def test_scope_actor_record_preserves_raw_status_and_findings(self):
+        from types import SimpleNamespace
+
+        from ouroboros.tools.review_helpers import build_scope_actor_record
+
+        result = SimpleNamespace(
+            model_id="",
+            status="parse_failure",
+            raw_text="not json",
+            prompt_chars=123,
+            tokens_in=10,
+            tokens_out=2,
+            cost_usd=0.01,
+            critical_findings=[{"item": "intent_alignment"}],
+            advisory_findings=[{"item": "scope_review_skipped"}],
+        )
+
+        record = build_scope_actor_record(result, fallback_model_id="scope-model")
+
+        assert record["model_id"] == "scope-model"
+        assert record["status"] == "parse_failure"
+        assert record["raw_text"] == "not json"
+        assert record["parsed_items"] == [
+            {"item": "intent_alignment"},
+            {"item": "scope_review_skipped"},
+        ]

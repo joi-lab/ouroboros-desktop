@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 from typing import Any, Dict, List, Optional
 
 from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
@@ -16,6 +17,15 @@ STATUS_FAILED = "failed"
 STATUS_INTERRUPTED = "interrupted"
 STATUS_CANCELLED = "cancelled"
 
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def validate_task_id(task_id: Any) -> str:
+    text = str(task_id or "").strip()
+    if not _TASK_ID_RE.fullmatch(text):
+        raise ValueError("task_id must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+    return text
+
 
 def task_results_dir(drive_root: Any) -> pathlib.Path:
     path = pathlib.Path(drive_root) / "task_results"
@@ -24,11 +34,14 @@ def task_results_dir(drive_root: Any) -> pathlib.Path:
 
 
 def task_result_path(drive_root: Any, task_id: str) -> pathlib.Path:
-    return task_results_dir(drive_root) / f"{task_id}.json"
+    return task_results_dir(drive_root) / f"{validate_task_id(task_id)}.json"
 
 
 def load_task_result(drive_root: Any, task_id: str) -> Optional[Dict[str, Any]]:
-    path = task_result_path(drive_root, task_id)
+    try:
+        path = task_result_path(drive_root, task_id)
+    except ValueError:
+        return None
     return read_json_dict(path)
 
 

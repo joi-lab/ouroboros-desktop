@@ -31,6 +31,7 @@ on:
       - 'build_windows.ps1'
       - 'Dockerfile'
       - 'scripts/**'
+      - 'packaging/**'
       - 'VERSION'
       - 'README.md'
       - 'launcher.py'

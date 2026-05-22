@@ -1,21 +1,7 @@
-"""Tri-model skill review (Phase 3).
+"""Tri-model review for one external skill package.
 
-Reuses the same review infrastructure that vets repo commits
-(``_handle_multi_model_review`` in ``ouroboros.tools.review``) but:
-
-- runs against one external skill package, not the staged diff of the
-  self-modifying Ouroboros repo;
-- uses the dedicated ``## Skill Review Checklist`` section in
-  ``docs/CHECKLISTS.md`` instead of the Repo Commit Checklist;
-- persists the verdict to the *skill* state plane
-  (``data/state/skills/<name>/review.json``), not ``advisory_review.json``;
-- never touches ``open_obligations`` or ``commit_readiness_debts`` — the
-  two surfaces are deliberately siloed so a sticky skill finding cannot
-  block repo commits and vice versa.
-
-The module is pure logic: it does not register a tool. The public entry
-point is ``review_skill``; the ``skill_review`` CLI tool (in
-``ouroboros/tools/skill_exec.py``) wraps it.
+Uses the Skill Review Checklist and persists verdicts in skill state, siloed
+from repo commit obligations. Tool registration lives in ``tools/skill_exec.py``.
 """
 
 from __future__ import annotations
@@ -53,34 +39,19 @@ from ouroboros.tools.review_helpers import (
     load_checklist_section,
 )
 from ouroboros.triad_review import emit_review_model_error_events, extract_json_array, parse_model_review_results
-from ouroboros.utils import append_jsonl, atomic_write_json, utc_now_iso
+from ouroboros.utils import append_jsonl, atomic_write_json, iter_jsonl_objects, utc_now_iso
 
 log = logging.getLogger(__name__)
 
 
-# Review-pack contents — per checklist item, cap file reads to avoid
-# pathological skill payloads blowing up the review prompt budget. The
-# hard cap is enforced per individual file; the total prompt budget is
-# enforced by ``_handle_multi_model_review`` downstream.
+# Per-file/file-count caps protect the skill review prompt budget.
 _MAX_SKILL_FILE_BYTES = 64 * 1024
 _MAX_SKILL_FILES = 40
 _MAX_RAW_RESULT_CHARS = 4000
 _SKILL_CHECKLIST_SECTION = "Skill Review Checklist"
 
-# File extensions that represent LOADABLE native code. These are hard-
-# blocked by review because the subprocess can load them via
-# ``ctypes.CDLL`` / ``import _somemodule`` / Node native addons, which
-# would run code the reviewer never saw.
-#
-# v5.7.0 stale-comment fix: the previous comment claimed inert binary
-# assets (``.png``, ``.mp3``, ``.wav``) were "still allowed with a
-# filename+size omission note" — that has not been true since v4.x.
-# ``_read_capped_text`` raises ``_SkillBinaryPayload`` for ANY non-UTF-8
-# file in the runtime-reachable surface, regardless of extension. Phase
-# 3 onwards is text-only. The explicit loadable-binary extension set
-# below is kept around as a belt-and-braces signal so the rejection
-# error surface can name the offending category before the UTF-8
-# decode branch fires; it is NOT an allowlist of "safe" extensions.
+# Loadable native code is unreviewable by LLMs. All non-UTF-8 runtime-reachable
+# files are blocked; this set names common categories early in the error path.
 _LOADABLE_BINARY_EXTENSIONS = frozenset(
     {
         ".so", ".dylib", ".dll",          # native shared libs
@@ -93,10 +64,7 @@ _LOADABLE_BINARY_EXTENSIONS = frozenset(
 
 
 class _SkillPackTooLarge(RuntimeError):
-    """Raised by ``_build_skill_file_pack`` when a skill has more files
-    than the review prompt budget allows. ``review_skill`` translates
-    this into a persisted ``status=pending`` outcome rather than
-    quietly truncating executable payload."""
+    """Raised when a skill has too many runtime-reachable files to review."""
 
     def __init__(self, file_count: int, limit: int) -> None:
         super().__init__(
@@ -107,13 +75,7 @@ class _SkillPackTooLarge(RuntimeError):
 
 
 class _SkillFileUnreadable(RuntimeError):
-    """Raised when a runtime-reachable skill file cannot be read.
-
-    Failing open (returning a placeholder) would let a skill author
-    ship a ``scripts/main.py`` with unreadable permissions — review
-    would PASS over a content hash that also skips the file, and the
-    skill could later execute once permissions change. We fail closed
-    instead: review returns ``status=pending`` with a clear error."""
+    """Raised when a runtime-reachable file cannot be read; review fails closed."""
 
     def __init__(self, relpath: str, err: BaseException) -> None:
         super().__init__(
@@ -124,16 +86,7 @@ class _SkillFileUnreadable(RuntimeError):
 
 
 class _SkillBinaryPayload(RuntimeError):
-    """Raised when a reviewable skill file is not valid UTF-8.
-
-    A binary payload (``.so``, ``.pyc``, native addon, raw bytes the
-    subprocess could ``ctypes.CDLL`` into) is unreviewable by design:
-    the external LLM reviewers cannot inspect its bytes, and letting
-    ``review_skill`` emit a PASS tied to a content hash that included an
-    opaque blob defeats the ARCHITECTURE.md Section 10 invariant 11
-    (review is the primary gate). We therefore refuse review outright
-    and ask the operator to either remove the file or document it as a
-    non-executable data asset via ``assets/``."""
+    """Raised for non-UTF-8 runtime payloads that reviewers cannot inspect."""
 
     def __init__(self, relpath: str, size_bytes: int) -> None:
         super().__init__(
@@ -145,12 +98,7 @@ class _SkillBinaryPayload(RuntimeError):
 
 
 class _SkillFileTooLarge(RuntimeError):
-    """Raised when a single skill file exceeds the per-file byte cap.
-
-    Silently truncating an oversized script would let a malicious author
-    hide code past the truncation boundary and still ship a ``pass``
-    verdict. Review refuses oversized files outright and asks the author
-    to split them."""
+    """Raised when a file exceeds the review cap; truncation is not allowed."""
 
     def __init__(self, relpath: str, size_bytes: int, limit: int) -> None:
         super().__init__(
@@ -163,13 +111,7 @@ class _SkillFileTooLarge(RuntimeError):
 
 
 def _truncate_raw_result(text: str) -> str:
-    """Cap a review's raw response for durable storage using the shared
-    ``ouroboros.utils.truncate_review_artifact`` helper (which emits an
-    explicit OMISSION NOTE and is the SSOT for every cognitive-artifact
-    truncation path across the repo). DEVELOPMENT.md forbids hardcoded
-    ``[:N]`` slicing of review outputs — delegate to the shared helper
-    instead of growing a second divergent implementation here.
-    """
+    """Truncate raw review text through the shared omission-note helper."""
     from ouroboros.utils import truncate_review_artifact
     return truncate_review_artifact(str(text or ""), limit=_MAX_RAW_RESULT_CHARS)
 _SKILL_REVIEW_ITEMS = (
@@ -180,15 +122,8 @@ _SKILL_REVIEW_ITEMS = (
     "env_allowlist",
     "timeout_and_output_discipline",
     "extension_namespace_discipline",
-    # v5.7.0: ``kind: "module"`` widgets ship arbitrary JS that the host
-    # mounts inside a sandboxed ``<iframe srcdoc>`` with a strict CSP.
-    # Reviewers MUST verify the JS does not touch ``document.cookie``,
-    # ``localStorage``/``sessionStorage``, or ``fetch`` URLs outside
-    # ``/api/extensions/<skill>/`` — even though the host CSP also
-    # blocks those, defense-in-depth at review time prevents shipping
-    # code whose intent is to escape the iframe sandbox. Non-module
-    # widgets and non-extension skills MUST be marked ``PASS`` with
-    # reason "Not applicable".
+    # Module widgets are arbitrary JS in a sandboxed iframe; review still checks
+    # for cookie/storage/cross-prefix fetch escape intent.
     "widget_module_safety",
     "inject_chat_minimization",
     "event_subscription_minimization",
@@ -234,46 +169,15 @@ def _apply_auto_grant_outcome(outcome: SkillReviewOutcome, skill: Any, auto_gran
         outcome.auto_flow = True
 
 
-# ---------------------------------------------------------------------------
 # Prompt assembly
-# ---------------------------------------------------------------------------
 
 
 def _read_capped_text(path: pathlib.Path, *, relpath: str = "") -> str:
-    """Read a skill file for the review pack, refusing oversized files.
-
-    Truncating an executable script would let malicious logic hide past
-    the boundary and still ship a PASS verdict tied to the full content
-    hash. If the file exceeds ``_MAX_SKILL_FILE_BYTES`` we raise
-    ``_SkillFileTooLarge``; ``review_skill`` translates that into a
-    persisted ``pending`` outcome with a descriptive error.
-
-    Any non-UTF-8 file in the runtime-reachable skill surface is a
-    hard-block. Rationale: the subprocess runs with ``cwd=skill_dir``
-    and can therefore ``ctypes.CDLL('./payload')`` /
-    ``import _extensionless_module`` / ``Buffer.from(fs.readFileSync(...))``
-    into arbitrary opaque bytes, even if those bytes are disguised as
-    extensionless files or misnamed ``.png``/``.mp3`` blobs. We accept
-    the UX cost — Phase 3 skills must ship text-only payloads — to
-    keep the review-is-primary-gate invariant honest. Media-bearing
-    skills can stash binary assets OUTSIDE the skill checkout (e.g.
-    fetch on demand) or wait for a future phase that adds an
-    explicit manifest-declared binary-asset allowlist.
-
-    The explicit loadable-binary extension denylist
-    (``_LOADABLE_BINARY_EXTENSIONS``) is kept around as a
-    belt-and-braces signal so the rejection error surface can identify
-    such files even before the UTF-8 decode branch runs.
-    """
+    """Read a text skill file; refuse unreadable, oversized, or binary payloads."""
     try:
         data = path.read_bytes()
     except OSError as exc:
-        # Fail CLOSED — see ``_SkillFileUnreadable`` docstring. A
-        # placeholder return value would let review PASS over a file
-        # that was excluded from both the review pack and the content
-        # hash (``compute_content_hash`` similarly skips unreadable
-        # files). ``review_skill`` translates this into ``pending``
-        # with an actionable error.
+        # Fail closed; placeholders would let review pass over missing payload.
         raise _SkillFileUnreadable(relpath or path.name, exc) from exc
     if len(data) > _MAX_SKILL_FILE_BYTES:
         raise _SkillFileTooLarge(
@@ -285,9 +189,7 @@ def _read_capped_text(path: pathlib.Path, *, relpath: str = "") -> str:
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
-        # ANY non-UTF8 byte sequence in the runtime-reachable surface
-        # blocks review. Disguised/extensionless binaries would
-        # otherwise slip through the extension-based check above.
+        # Any non-UTF-8 runtime-reachable file blocks review.
         raise _SkillBinaryPayload(relpath or path.name, len(data)) from exc
 
 
@@ -297,14 +199,7 @@ def _build_skill_file_pack(
     manifest_entry: str = "",
     manifest_scripts: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """Return a fenced-code pack of every reviewable file in the skill dir.
-
-    ``skill_loader._iter_payload_files`` already decides which files count
-    for hashing; the pack here mirrors that set — passing the same
-    ``manifest_entry`` and ``manifest_scripts`` so every file that could
-    actually execute is visible to the reviewer just like it is tracked
-    by the content hash.
-    """
+    """Return a fenced-code pack mirroring the skill content-hash surface."""
     from ouroboros.skill_loader import _iter_payload_files  # pylint: disable=W0212
 
     skill_dir = skill_dir.resolve()
@@ -316,11 +211,7 @@ def _build_skill_file_pack(
     if not files:
         return "(empty skill directory — no manifest, no payload)"
     if len(files) > _MAX_SKILL_FILES:
-        # Silently truncating here would let a pathological skill hide
-        # executable logic in file #41+ and still pass review — the
-        # caller (`review_skill`) must refuse to persist a PASS verdict
-        # when the pack is incomplete. We raise a dedicated sentinel
-        # instead of truncating so the review path short-circuits.
+        # Never truncate the executable review surface.
         raise _SkillPackTooLarge(len(files), _MAX_SKILL_FILES)
     extras = 0
 
@@ -338,25 +229,13 @@ def _load_governance_artifact(
     repo_root: pathlib.Path,
     relpath: str,
 ) -> str:
-    """Thin wrapper around :func:`tools.review_helpers.load_governance_doc`.
-
-    DEVELOPMENT.md 'When adding a new reasoning flow' requires every new
-    flow that reasons about code structure or engineering standards to load
-    ``docs/ARCHITECTURE.md`` (and ``docs/DEVELOPMENT.md`` for
-    engineering-standard checks) as first-class context, with an explicit
-    OMISSION marker when the file is unavailable so the reviewer cannot
-    silently operate on an incomplete surface. The shared helper emits the
-    canonical ``[⚠️ OMISSION: ...]`` marker used everywhere else in the
-    review pipeline.
-    """
+    """Load governance context with an explicit omission marker on failure."""
     from ouroboros.tools.review_helpers import load_governance_doc
 
     return load_governance_doc(repo_root, relpath, on_missing="explicit")
 
 
-# Resolve the repo root from this module's location so the governance
-# loader works both in source checkouts and packaged builds (identical to
-# how ``review_helpers.REPO_ROOT`` is computed).
+# Resolve repo root from this file for source and packaged builds.
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -510,46 +389,29 @@ def _extract_fail_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, str
 
 
 def _load_skill_review_history(drive_root: pathlib.Path, skill_name: str, limit: int = 3) -> List[Dict[str, Any]]:
-    path = _review_history_path(drive_root, skill_name)
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        return list(iter_jsonl_objects(_review_history_path(drive_root, skill_name), max_entries=limit))
     except OSError:
         return []
-    out: List[Dict[str, Any]] = []
-    for line in lines[-limit:]:
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict):
-            out.append(data)
-    return out
 
 
 def _count_attempts_for_content(
     drive_root: pathlib.Path, skill_name: str, content_hash: str,
 ) -> int:
     """Count historical attempts that ran against the same ``content_hash``."""
-    path = _review_history_path(drive_root, skill_name)
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        return sum(
+            1 for data in iter_jsonl_objects(_review_history_path(drive_root, skill_name))
+            if str(data.get("content_hash") or "") == content_hash
+        )
     except OSError:
         return 0
-    n = 0
-    for line in lines:
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and str(data.get("content_hash") or "") == content_hash:
-            n += 1
-    return n
 
 
 def _build_skill_review_history_section(
     history: List[Dict[str, Any]], *, attempt_idx: int = 1,
 ) -> str:
-    """Render review history + shared anti-thrashing rules for the prompt."""
+    """Render skill review history and anti-thrashing rules."""
     if not history:
         return ""
     lines = ["\n## Previous skill review attempts (anti-thrashing context)\n"]
@@ -629,7 +491,7 @@ def render_skill_review_block(
     attempt_idx: int = 1,
     accepted_rebuttals: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """Render the full skill-review markdown shown to the foreground agent."""
+    """Render skill-review markdown for the foreground agent."""
     def _field(name: str, *, alt_dict_key: str = "") -> Any:
         if isinstance(outcome, dict):
             if alt_dict_key and alt_dict_key in outcome:
@@ -810,7 +672,7 @@ def _run_deterministic_preflight(
     *,
     persist: bool,
 ) -> Optional[SkillReviewOutcome]:
-    """Run cheap syntax/schema checks before spending tri-model tokens."""
+    """Run deterministic checks before spending tri-model review tokens."""
     preflight_raw = ""
     try:
         from ouroboros.tools.skill_preflight import _handle_skill_preflight
@@ -1037,20 +899,14 @@ def _emit_skill_advisory_warning(
 
 
 def _run_skill_advisory_pre_review(ctx: Any, *, skill_name: str, file_pack: str) -> Dict[str, Any]:
-    """Best-effort Claude Code advisory notes for a skill payload.
-
-    This deliberately fails open. The tri-model skill review remains the trust
-    gate; advisory notes are extra bug-hunting context when Anthropic/Claude
-    Code is configured, and are skipped silently enough for single-key users.
-    """
+    """Return fail-open Claude Code advisory notes for a skill payload."""
     try:
         import os
         if not os.environ.get("ANTHROPIC_API_KEY", ""):
             return {}
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return {}
-        # Reuse the advisory-review module's routing/dependency surface without
-        # inventing a second persistent advisory state machine for skills.
+        # Reuse advisory routing without adding a second persistent state machine.
         from ouroboros.tools import claude_advisory_review as advisory
         if not hasattr(advisory, "_run_claude_advisory"):
             return {}
@@ -1169,37 +1025,13 @@ def _build_review_prompt_for_attempt(
     ), advisory_evidence
 
 
-# ---------------------------------------------------------------------------
 # Parsing / aggregation
-# ---------------------------------------------------------------------------
 
 
 def _extract_actor_findings(
     result_json: Dict[str, Any],
 ) -> tuple[List[Dict[str, Any]], List[str]]:
-    """Flatten per-reviewer findings and return the set of responsive models.
-
-    ``ouroboros.tools.review._parse_model_response`` flattens each provider
-    response into ``{"model", "provider", "verdict", "text", ...}`` before
-    wrapping them in ``{"results": [...]}``. The ``text`` field holds the
-    raw model output, which is expected to be the JSON array described in
-    the skill review output contract (all ``_SKILL_REVIEW_ITEMS`` covered;
-    multiple FAIL entries for one item may represent distinct root causes).
-
-    Returns ``(findings, responsive_models)``:
-
-    - ``findings``: the concatenated per-item entries from every
-      reviewer that produced a valid, complete response.
-    - ``responsive_models``: the list of reviewer slots that actually met the
-      contract (all checklist items present, each with a PASS/FAIL verdict).
-      The same model may intentionally occupy multiple slots; quorum counts
-      slots, not unique model names. A reviewer that returned only a subset is
-      treated as non-responsive for quorum purposes so a truncated
-      response cannot pass the quorum gate and synthesise a false PASS.
-
-    A top-level ``actor["verdict"] == "ERROR"`` means the provider
-    returned a transport error — we skip those entirely.
-    """
+    """Flatten parseable reviewer findings and return responsive model slots."""
     parsed = parse_model_review_results(result_json, required_items=_SKILL_REVIEW_ITEMS)
     return parsed.findings, parsed.responsive_models
 
@@ -1216,23 +1048,7 @@ def _aggregate_status(
     is_module_widget: bool = False,
     enforcement: Optional[str] = None,
 ) -> str:
-    """Collapse per-reviewer findings into a single status.
-
-    - any critical FAIL on a checklist item that is always-critical
-      (or on ``extension_namespace_discipline`` when ``type==extension``;
-      or on ``widget_module_safety`` for any extension. Reviewers mark it
-      PASS/Not applicable for non-module widgets, but modules can be
-      registered dynamically from plugin.py so manifest-only detection is
-      not enough.)
-      → ``blockers``;
-    - any warning/advisory FAIL without a matching blocker FAIL
-      → ``warnings``;
-    - otherwise → ``clean``.
-
-    If the reviewer pipeline returned zero parseable findings (transport
-    failure, all actors errored), the caller surfaces that as ``error``;
-    this helper is only invoked when we have at least one finding.
-    """
+    """Collapse reviewer findings via the shared skill-review-status policy."""
     return aggregate_skill_review_status(
         findings,
         skill_type,
@@ -1241,9 +1057,7 @@ def _aggregate_status(
     )
 
 
-# ---------------------------------------------------------------------------
 # Public entry point
-# ---------------------------------------------------------------------------
 
 
 def review_skill(
@@ -1253,14 +1067,8 @@ def review_skill(
     persist: bool = True,
     review_rebuttal: str = "",
 ) -> SkillReviewOutcome:
-    """Run tri-model review on one skill and optionally persist the verdict.
-
-    Returns a ``SkillReviewOutcome`` regardless of review outcome. On a
-    transport / infrastructure failure the outcome has ``status="pending"``
-    and ``error`` populated — the caller decides whether to surface it.
-    """
-    # Deferred import because review.py pulls a wide import graph that
-    # skill_review does not need until the tool actually runs.
+    """Run tri-model review on one skill, optionally persisting the verdict."""
+    # Deferred import avoids the wide review.py graph until this tool runs.
     from ouroboros.tools.review import _handle_multi_model_review
     from ouroboros.config import get_review_models
 

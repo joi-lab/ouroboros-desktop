@@ -1,35 +1,14 @@
-"""Phase 4 extension loader — PluginAPI-backed ``type: extension`` support.
+"""Load reviewed in-process ``type: extension`` skills through PluginAPI.
 
-Extensions are full Python modules that run IN-PROCESS inside the
-Ouroboros runtime, unlike ``type: script`` skills which spawn a
-sandboxed subprocess via ``skill_exec``. An extension's ``plugin.py``
-exports a single ``register(api: PluginAPI)`` function that calls the
-narrow PluginAPI surface to attach tools, HTTP routes, and WebSocket
-handlers.
-
-Because extensions share the Ouroboros process address space the
-review gate is stricter than for ``type: script``:
-
-- Every registration is namespaced to provider-safe ``ext_<len>_<token>_<name>``
-  identifiers so a plugin
-  cannot shadow a built-in tool / route / WS message type.
-- The manifest MUST declare a permission for every capability the
-  extension actually uses; the runtime enforces the denylist side of
-  that contract even if review missed the declaration (mirrors the
-  ``_FORBIDDEN_ENV_FORWARD_KEYS`` defense-in-depth pattern from Phase 3).
-- The same skill-review tri-model pipeline vets the plugin source.
-  When ``skill_review_gate`` says the review verdict is not executable the
-  loader refuses to import the plugin,
-  so the process never touches the extension's module namespace.
-
-An extension that is later disabled via ``toggle_skill`` is
-"unregistered" — every tool/route/ws handler it attached gets torn
-down (tracked per-skill in the loader) and the module is purged from
-``sys.modules`` so a subsequent re-enable re-imports cleanly.
+Extensions run inside Ouroboros, so imports are allowed only after a fresh
+executable skill review, manifest permissions, and owner grants pass. All
+registered surfaces are provider-safe namespaced and tracked per skill so
+disable/reload can tear them down and purge modules cleanly.
 """
 
 from __future__ import annotations
 
+import copy
 import importlib
 import importlib.util
 import inspect
@@ -47,38 +26,13 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from ouroboros.contracts.plugin_api import (
-    ExtensionRegistrationError,
-    FORBIDDEN_EXTENSION_SETTINGS,
-    VALID_EXTENSION_PERMISSIONS,
-    VALID_EXTENSION_ROUTE_METHODS,
-)
+from ouroboros.contracts.plugin_api import ExtensionRegistrationError, FORBIDDEN_EXTENSION_SETTINGS, VALID_EXTENSION_PERMISSIONS, VALID_EXTENSION_ROUTE_METHODS
 from ouroboros.event_bus import get_global_event_bus
-from ouroboros.extension_companion import (
-    CompanionDescriptor,
-    get_global_supervisor,
-    is_server_process,
-)
+from ouroboros.extension_companion import CompanionDescriptor, get_global_supervisor, is_server_process
+from ouroboros.extension_ui_validation import _assert_ws_message_type, validate_ui_render as _validate_ui_render
 from ouroboros.gateway.host_service import AUTH_TOKEN_FILENAME
-from ouroboros.extension_isolated_deps import (
-    _isolated_python_site_dirs,
-    async_isolated_site_dirs_scope,
-    isolated_site_dirs_scope,
-    is_skill_cache_path,
-)
-from ouroboros.skill_loader import (
-    _SKILL_DIR_CACHE_NAMES,
-    LoadedSkill,
-    SkillPayloadUnreadable,
-    compute_content_hash,
-    discover_skills,
-    find_skill,
-    grant_status_for_skill,
-    load_skill_grants,
-    requested_core_setting_keys,
-    skill_review_gate,
-    skill_state_dir,
-)
+from ouroboros.extension_isolated_deps import _isolated_python_site_dirs, async_isolated_site_dirs_scope, isolated_site_dirs_scope, is_skill_cache_path
+from ouroboros.skill_loader import _SKILL_DIR_CACHE_NAMES, LoadedSkill, SkillPayloadUnreadable, compute_content_hash, discover_skills, find_skill, grant_status_for_skill, requested_core_setting_keys, skill_review_gate, skill_state_dir
 from ouroboros.skill_token import SkillToken
 from ouroboros.tools.skill_exec import _scrub_env
 from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
@@ -86,14 +40,12 @@ from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Registration bookkeeping
-# ---------------------------------------------------------------------------
+# Registration bookkeeping.
 
 
 @dataclass
 class _ExtensionRegistrations:
-    """Per-extension registry of attached surfaces, for clean unload."""
+    """Attached surfaces owned by one loaded extension."""
 
     tools: List[str] = field(default_factory=list)
     routes: List[str] = field(default_factory=list)
@@ -108,19 +60,6 @@ class _ExtensionRegistrations:
     content_hash: Optional[str] = None
     skill_dir: Optional[str] = None
     import_root: Optional[str] = None
-
-    def is_empty(self) -> bool:
-        return not (
-            self.tools
-            or self.routes
-            or self.settings_sections
-            or self.ws_handlers
-            or self.ui_tabs
-            or self.unload_callbacks
-            or self.event_subscriptions
-            or self.companion_names
-            or self.supervised_futures
-        )
 
 
 @dataclass
@@ -145,8 +84,7 @@ class _PluginAPIConfig:
     dependency_site_dirs_enabled: bool = False
 
 
-# Module-global, lock-guarded registries. Separate dicts make unload
-# O(names_attached_by_extension) rather than O(total_registrations).
+# Lock-guarded registries; per-surface maps keep unload proportional to one extension.
 _lock = threading.RLock()
 _extensions: Dict[str, _ExtensionRegistrations] = {}
 _extension_modules: Dict[str, ModuleType] = {}
@@ -157,9 +95,7 @@ _tools: Dict[str, Any] = {}            # {"ext_<len>_<token>_<name>": ToolEntry-
 _routes: Dict[str, Any] = {}           # {"/api/extensions/<skill>/<path>": handler_spec}
 _ws_handlers: Dict[str, Any] = {}      # {"ext_<len>_<token>_<message_type>": handler}
 _ui_tabs: Dict[str, Any] = {}          # {"<skill>:<tab_id>": tab_spec}
-# v5.7.0: declarative Settings sub-sections registered by extensions.
-# Same shape/discipline as ``_ui_tabs`` (key = "<skill>:<section_id>",
-# value = render spec with declarative components only).
+# Declarative settings sections keyed like UI tabs.
 _settings_sections: Dict[str, Any] = {}
 _ws_broadcaster: Optional[Callable[[dict], None]] = None
 _EXTENSION_NAME_PREFIX = "ext_"
@@ -169,7 +105,7 @@ _EXTENSION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _extension_skill_token(skill_name: str) -> str:
-    """Return a short ASCII token for a skill without changing its identity."""
+    """Return a short ASCII token without changing skill identity."""
     text = str(skill_name or "").strip()
     safe = "".join(ch if (ch.isascii() and (ch.isalnum() or ch in "-_")) else "_" for ch in text)
     safe = re.sub(r"_+", "_", safe).strip("_-")
@@ -183,13 +119,13 @@ def _extension_skill_token(skill_name: str) -> str:
 
 
 def extension_name_prefix(skill_name: str) -> str:
-    """Return the provider-safe prefix for one extension skill."""
+    """Return the provider-safe prefix for one extension."""
     token = _extension_skill_token(skill_name)
     return f"{_EXTENSION_NAME_PREFIX}{len(token)}_{token}_"
 
 
 def extension_surface_name(skill_name: str, short_name: str) -> str:
-    """Return a provider-safe canonical tool/ws registration name."""
+    """Return a provider-safe canonical surface name."""
     full = f"{extension_name_prefix(skill_name)}{short_name}"
     if not _EXTENSION_NAME_RE.match(full):
         raise ExtensionRegistrationError(
@@ -199,12 +135,7 @@ def extension_surface_name(skill_name: str, short_name: str) -> str:
 
 
 def parse_extension_surface_name(name: str) -> tuple[str, str] | None:
-    """Recognise provider-safe extension names.
-
-    The first tuple element is the encoded skill token, not the persisted
-    skill identity. Runtime dispatch gets the real skill from the loader's
-    handler/tool descriptor.
-    """
+    """Return ``(encoded_skill_token, short_name)`` for extension surface names."""
     text = str(name or "").strip()
     if not _EXTENSION_NAME_RE.match(text) or not text.startswith(_EXTENSION_NAME_PREFIX):
         return None
@@ -249,9 +180,7 @@ def _run_unload_callback(skill_name: str, callback: Callable[[], Any], timeout_s
         log.warning("extension %s unload callback failed", skill_name, exc_info=(type(exc), exc, exc.__traceback__))
 
 
-# ---------------------------------------------------------------------------
-# PluginAPI implementation
-# ---------------------------------------------------------------------------
+# PluginAPI implementation.
 
 
 def _assert_namespace_path(path: str) -> str:
@@ -295,22 +224,6 @@ def _widget_span_from_render(render: Dict[str, Any]) -> int:
     return 2 if value >= 2 else 1
 
 
-from ouroboros.extension_ui_validation import validate_ui_render as _validate_ui_render
-def _assert_ws_message_type(message_type: str) -> str:
-    candidate = str(message_type or "").strip()
-    if not candidate:
-        raise ExtensionRegistrationError("ws message_type must be non-empty")
-    if len(candidate) > _EXTENSION_SHORT_MAX:
-        raise ExtensionRegistrationError(
-            f"ws message_type must be <= {_EXTENSION_SHORT_MAX} characters: {candidate!r}"
-        )
-    if not candidate.replace("_", "").isalnum():
-        raise ExtensionRegistrationError(
-            f"ws message_type must be alnum/underscore only: {candidate!r}"
-        )
-    return candidate
-
-
 def set_ws_broadcaster(broadcaster: Callable[[dict], None] | None) -> None:
     """Install the host WebSocket broadcaster used by PluginAPI.send_ws_message."""
     global _ws_broadcaster
@@ -319,12 +232,7 @@ def set_ws_broadcaster(broadcaster: Callable[[dict], None] | None) -> None:
 
 
 class PluginAPIImpl:
-    """Concrete ``PluginAPI`` the loader hands to ``register(api)``.
-
-    Each instance is bound to exactly one skill name + manifest
-    permission set + state dir so the bindings cannot escape the
-    calling extension's scope.
-    """
+    """PluginAPI bound to one skill, permission set, and state dir."""
 
     def __init__(self, config: _PluginAPIConfig | None = None, **legacy: Any) -> None:
         if config is None:
@@ -340,8 +248,7 @@ class PluginAPIImpl:
             for item in (config.companion_processes or [])
             if isinstance(item, dict) and str(item.get("name") or "").strip()
         }
-        # v5.7.0: store the skill payload directory so get_runtime_info()
-        # can return it without re-doing manifest discovery.
+        # Keep runtime_info cheap and tied to the loaded payload.
         self._skill_dir = pathlib.Path(config.skill_dir) if config.skill_dir is not None else None
         self._runtime_skill_dir = pathlib.Path(config.runtime_skill_dir) if config.runtime_skill_dir is not None else self._skill_dir
         self._dependency_site_dirs_enabled = bool(config.dependency_site_dirs_enabled)
@@ -350,15 +257,8 @@ class PluginAPIImpl:
         self._runtime_closing = False
         self._runtime_closed = False
         self._api_lock = threading.RLock()
-        # v5.2.2: extensions may receive forbidden / "core" settings keys
-        # (e.g. ``OPENROUTER_API_KEY``) when an owner grant has been
-        # captured through the desktop launcher native confirmation
-        # bridge. The grant is recorded against the current content
-        # hash + manifest-requested set; the loader passes the granted
-        # subset into ``PluginAPIImpl`` at load time so ``get_settings``
-        # can honour it without re-reading the grants file on every
-        # call. Without a grant, the forbidden denylist still drops the
-        # value silently — same defense-in-depth as the script flow.
+        # Core settings are exposed only when a content-hash-bound owner grant
+        # was already verified; otherwise the denylist silently drops them.
         self._granted_upper = frozenset(
             str(k).strip().upper() for k in (config.granted_keys or []) if str(k).strip()
         )
@@ -405,6 +305,20 @@ class PluginAPIImpl:
 
         return _wrapped
 
+    def _register_surface_locked(
+        self,
+        registry: Dict[str, Any],
+        key: str,
+        value: Dict[str, Any],
+        bundle_attr: str,
+        label: str,
+    ) -> None:
+        self._require_open_locked()
+        if key in registry:
+            raise ExtensionRegistrationError(f"{label} {key!r} already registered")
+        registry[key] = value
+        getattr(_extensions.setdefault(self._skill, _ExtensionRegistrations()), bundle_attr).append(key)
+
     # --- registration ---
 
     def register_tool(
@@ -420,20 +334,14 @@ class PluginAPIImpl:
         short = _assert_tool_name(name)
         full = extension_surface_name(self._skill, short)
         with _lock:
-            self._require_open_locked()
-            if full in _tools:
-                raise ExtensionRegistrationError(
-                    f"tool {full!r} already registered"
-                )
-            _tools[full] = {
+            self._register_surface_locked(_tools, full, {
                 "name": full,
                 "handler": self._wrap_runtime_handler(handler),
                 "description": str(description or ""),
                 "schema": dict(schema or {}),
                 "timeout_sec": max(1, int(timeout_sec)),
                 "skill": self._skill,
-            }
-            _extensions.setdefault(self._skill, _ExtensionRegistrations()).tools.append(full)
+            }, "tools", "tool")
 
     def register_route(
         self,
@@ -462,18 +370,12 @@ class PluginAPIImpl:
             )
         mount = f"/api/extensions/{self._skill}/{rel}"
         with _lock:
-            self._require_open_locked()
-            if mount in _routes:
-                raise ExtensionRegistrationError(
-                    f"route {mount!r} already registered"
-                )
-            _routes[mount] = {
+            self._register_surface_locked(_routes, mount, {
                 "path": mount,
                 "handler": self._wrap_runtime_handler(handler),
                 "methods": norm_methods,
                 "skill": self._skill,
-            }
-            _extensions.setdefault(self._skill, _ExtensionRegistrations()).routes.append(mount)
+            }, "routes", "route")
 
     def register_ws_handler(
         self,
@@ -484,17 +386,11 @@ class PluginAPIImpl:
         short = _assert_ws_message_type(message_type)
         full = extension_surface_name(self._skill, short)
         with _lock:
-            self._require_open_locked()
-            if full in _ws_handlers:
-                raise ExtensionRegistrationError(
-                    f"ws handler {full!r} already registered"
-                )
-            _ws_handlers[full] = {
+            self._register_surface_locked(_ws_handlers, full, {
                 "type": full,
                 "handler": self._wrap_runtime_handler(handler),
                 "skill": self._skill,
-            }
-            _extensions.setdefault(self._skill, _ExtensionRegistrations()).ws_handlers.append(full)
+            }, "ws_handlers", "ws handler")
 
     def register_ui_tab(
         self,
@@ -507,15 +403,10 @@ class PluginAPIImpl:
         self._require("widget")
         clean_tab = _assert_tool_name(tab_id)  # same syntax rules
         key = f"{self._skill}:{clean_tab}"
-        validated_render = _validate_ui_render(dict(render or {}))
+        validated_render = _validate_ui_render({} if render is None else render)
         span = _widget_span_from_render(validated_render)
         with _lock:
-            self._require_open_locked()
-            if key in _ui_tabs:
-                raise ExtensionRegistrationError(
-                    f"ui tab {key!r} already registered"
-                )
-            _ui_tabs[key] = {
+            self._register_surface_locked(_ui_tabs, key, {
                 "skill": self._skill,
                 "tab_id": clean_tab,
                 "title": str(title or clean_tab),
@@ -525,8 +416,7 @@ class PluginAPIImpl:
                 "span": span,
                 "grid_span": span,
                 "ui_host_pending": True,
-            }
-            _extensions.setdefault(self._skill, _ExtensionRegistrations()).ui_tabs.append(key)
+            }, "ui_tabs", "ui tab")
 
     def register_settings_section(
         self,
@@ -535,23 +425,12 @@ class PluginAPIImpl:
         *,
         schema: Dict[str, Any],
     ) -> None:
-        """Implementation of ``PluginAPI.register_settings_section`` (v5.7.0).
-
-        Validates the schema using the same declarative-render checker
-        the widget surface already uses, then stores the section in
-        ``_settings_sections`` for the host UI to fetch.
-        """
-        # Sections share the widget surface's permission gate (``widget``)
-        # because they reuse the declarative render schema and end up in
-        # the same host-rendered UI surface.
+        """Validate and register a declarative Settings UI section."""
+        # Settings sections share the widget permission and host-rendered schema.
         self._require("widget")
         clean_id = _assert_tool_name(section_id)
         key = f"{self._skill}:{clean_id}"
-        # Settings sections are declarative-only, never iframe/module.
-        # They intentionally expose a narrower subset than Widgets: forms /
-        # actions for saving configuration and markdown/json for explanation
-        # or diagnostics. This keeps Settings predictable and avoids moving
-        # media/stream/kanban-style widget semantics into configuration UI.
+        # Settings stay declarative-only and narrower than widgets.
         allowed = {"form", "action", "markdown", "json"}
         components = list((schema or {}).get("components") or [])
         for idx, component in enumerate(components):
@@ -571,18 +450,12 @@ class PluginAPIImpl:
             "components": components,
         })
         with _lock:
-            self._require_open_locked()
-            if key in _settings_sections:
-                raise ExtensionRegistrationError(
-                    f"settings section {key!r} already registered"
-                )
-            _settings_sections[key] = {
+            self._register_surface_locked(_settings_sections, key, {
                 "skill": self._skill,
                 "section_id": clean_id,
                 "title": str(title or clean_id),
                 "render": validated,
-            }
-            _extensions.setdefault(self._skill, _ExtensionRegistrations()).settings_sections.append(key)
+            }, "settings_sections", "settings section")
 
     def register_supervised_task(
         self,
@@ -593,11 +466,7 @@ class PluginAPIImpl:
         max_restarts: int = 5,
         backoff_seconds: float = 2.0,
     ) -> None:
-        """Record a supervised task declaration.
-
-        Actual task scheduling is wired in the server process once the
-        companion/task supervisor is initialized. Workers intentionally no-op.
-        """
+        """Declare a server-owned supervised task; workers only record it."""
         self._require("supervised_task")
         clean_name = _assert_tool_name(name)
         future = None
@@ -771,9 +640,7 @@ class PluginAPIImpl:
                 if self._runtime_closing or self._runtime_closed or self._skill in _unloading:
                     return {}
             if "read_settings" not in self._permissions:
-                # Read without the permission → empty dict (fail silent for
-                # forward-compat, but never leak). Reviewer catches the
-                # missing permission.
+                # Missing permission fails closed without leaking key presence.
                 return {}
             settings = self._settings_reader() or {}
             with _lock:
@@ -788,9 +655,7 @@ class PluginAPIImpl:
                 if not key:
                     continue
                 if canonical in protected_upper and canonical not in self._granted_upper:
-                    # Forbidden / "core" key without an owner grant — drop
-                    # silently so a malicious or buggy plugin cannot probe
-                    # for its presence by ``get_settings`` length.
+                    # Do not reveal forbidden/core key presence without a grant.
                     continue
                 if key not in self._env_allow and canonical not in self._env_allow_upper:
                     continue
@@ -844,11 +709,7 @@ class PluginAPIImpl:
         return SkillToken(token)
 
     def get_runtime_info(self) -> Dict[str, Any]:
-        """Return a read-only runtime snapshot for the calling extension.
-
-        See ``ouroboros.contracts.plugin_api.PluginAPI.get_runtime_info``
-        for the schema. Cheap to call (no I/O); pulls everything from
-        process-local globals."""
+        """Return the PluginAPI runtime-info snapshot without manifest I/O."""
         try:
             from ouroboros.config import (
                 get_runtime_mode as _get_runtime_mode,
@@ -877,9 +738,6 @@ class PluginAPIImpl:
                 server_port = int(_agent_port)
         except Exception:
             server_port = 0
-        # Resolve skill_dir lazily — the loader knows it via the per-skill
-        # registration record. We bind it during PluginAPIImpl construction
-        # in v5.7.0 so this stays an O(1) attribute lookup.
         skill_dir = str(getattr(self, "_skill_dir", "") or "")
         return {
             "runtime_mode": runtime_mode,
@@ -891,13 +749,11 @@ class PluginAPIImpl:
         }
 
 
-# ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
+# Loader.
 
 
 def _plugin_entry_path(skill: LoadedSkill) -> Optional[pathlib.Path]:
-    """Return the plugin.py path the manifest declared, or None."""
+    """Resolve manifest.entry inside the skill directory."""
     entry = str(skill.manifest.entry or "").strip()
     if not entry:
         return None
@@ -915,7 +771,7 @@ def _module_key(skill_name: str) -> str:
 
 
 def _purge_extension_bytecode(skill_dir: pathlib.Path) -> None:
-    """Drop cached bytecode so rapid in-place edits reload fresh source."""
+    """Drop bytecode so rapid edits reload fresh source."""
     for pycache in skill_dir.rglob("__pycache__"):
         if pycache.is_dir():
             shutil.rmtree(pycache, ignore_errors=True)
@@ -927,13 +783,7 @@ def _stage_extension_import_tree(
     state_dir: pathlib.Path,
     entry_path: pathlib.Path,
 ) -> tuple[pathlib.Path, pathlib.Path]:
-    """Copy one extension tree to a fresh import root for cache-safe reloads.
-
-    Python's import machinery can reuse stale source/bytecode for rapid same-path
-    in-place edits even after ``sys.modules`` and ``__pycache__`` are purged.
-    Loading from a fresh staged directory gives each reload a unique import path,
-    so both the entry module and any relative imports resolve from fresh source.
-    """
+    """Stage an extension under a fresh import root to avoid stale module reuse."""
     resolved_root = skill.skill_dir.resolve()
     relative_entry = entry_path.relative_to(resolved_root)
     for path in sorted(skill.skill_dir.rglob("*")):
@@ -968,11 +818,7 @@ def _sweep_stale_extension_imports(
     *,
     keep: Sequence[pathlib.Path] = (),
 ) -> None:
-    """Remove orphan staged import trees for one skill.
-
-    Bounded cleanup only touches ``state/skills/<skill>/__extension_imports``.
-    It does not delete grants/review/enabled/jobs/assets or payload files.
-    """
+    """Remove orphan staged import trees without touching skill state/payload."""
     root = skill_state_dir(drive_root, skill_name) / "__extension_imports"
     if not root.exists() or not root.is_dir():
         return
@@ -1005,7 +851,7 @@ def _extension_runtime_state(
     *,
     current_hash: str | None = None,
 ) -> Dict[str, Any]:
-    """Return the single source of truth for whether an extension may be live."""
+    """Return the liveness authority for one extension."""
     from ouroboros.config import get_runtime_mode
 
     hash_now = current_hash or skill.content_hash
@@ -1041,9 +887,7 @@ def _extension_runtime_state(
     elif not review_gate["executable_review"]:
         desired_live = False
         reason = review_gate["blocking_reason"]
-    # v5.1.2 Frame A: light no longer blocks extensions. Skills (script
-    # AND extension) are owner-approved capabilities — light gates only
-    # repo self-modification and the runtime_mode escalation ratchet.
+    # Light mode allows reviewed skills; it only gates repo mutation/escalation.
     elif matched_failure:
         reason = "load_error"
 
@@ -1066,13 +910,7 @@ def _extension_runtime_state(
 
 
 def _deps_block_reason(drive_root: pathlib.Path, skill: LoadedSkill) -> str:
-    """Return ``deps_missing`` / ``deps_failed`` / ``deps_stale`` when an
-    installed skill's isolated dependencies are not ready, else ``""``.
-
-    This is the extension-liveness authority: review/toggle entrypoints can
-    install deps, but live dispatch must also refuse to load/reload an already
-    enabled extension when deps later become stale/corrupt/failed.
-    """
+    """Return the dependency block reason, if live dispatch must refuse load."""
     try:
         from ouroboros.marketplace.install_specs import install_specs_hash
         from ouroboros.marketplace.isolated_deps import read_deps_state
@@ -1081,9 +919,11 @@ def _deps_block_reason(drive_root: pathlib.Path, skill: LoadedSkill) -> str:
         auto_specs = auto_install_specs_for_skill(drive_root, skill)
         if not auto_specs:
             return ""
-        deps_state = read_deps_state(drive_root, skill.name)
+        deps_state = read_deps_state(drive_root, skill.name, skill.skill_dir)
         status = str(deps_state.get("status") or "")
         if status != "installed":
+            if status == "stale":
+                return "deps_stale"
             return "deps_failed" if status == "failed" else "deps_missing"
         if deps_state.get("specs_hash") != install_specs_hash(auto_specs):
             return "deps_stale"
@@ -1091,6 +931,14 @@ def _deps_block_reason(drive_root: pathlib.Path, skill: LoadedSkill) -> str:
     except Exception:
         log.debug("extension deps readiness probe failed", exc_info=True)
         return ""
+
+
+def _apply_deps_block(state: Dict[str, Any], drive_root: pathlib.Path, skill: LoadedSkill) -> Dict[str, Any]:
+    if state.get("desired_live"):
+        deps_reason = _deps_block_reason(pathlib.Path(drive_root), skill)
+        if deps_reason:
+            state.update(desired_live=False, reason=deps_reason, load_error=deps_reason)
+    return state
 
 
 def runtime_state_for_skill_name(
@@ -1120,34 +968,13 @@ def runtime_state_for_skill_name(
             "loaded_matches_current": False,
             "reason": "missing",
         }
-    state = _extension_runtime_state(skill)
-    if state.get("desired_live"):
-        deps_reason = _deps_block_reason(pathlib.Path(drive_root), skill)
-        if deps_reason:
-            state["desired_live"] = False
-            state["reason"] = deps_reason
-            state["load_error"] = deps_reason
-    return state
+    return _apply_deps_block(_extension_runtime_state(skill), pathlib.Path(drive_root), skill)
 
 
 def runtime_state_for_loaded_skill(skill: "LoadedSkill", drive_root: pathlib.Path | None = None) -> Dict[str, Any]:
-    """Same as ``runtime_state_for_skill_name`` but accepts an already-
-    discovered ``LoadedSkill``. Skips the second ``discover_skills`` walk.
-
-    v5.7.0: ``api_extensions_index`` previously called
-    ``runtime_state_for_skill_name`` once per extension, which itself
-    called ``find_skill`` -> ``discover_skills`` (full FS walk). With K
-    extensions and N total skills on disk that produced 1+K full walks
-    per page render, stalling the Widgets/Skills surfaces on every
-    refresh. Using this helper collapses that to exactly one walk."""
+    """Runtime state for an already-discovered skill; avoids repeated FS walks."""
     state = _extension_runtime_state(skill)
-    if drive_root is not None and state.get("desired_live"):
-        deps_reason = _deps_block_reason(pathlib.Path(drive_root), skill)
-        if deps_reason:
-            state["desired_live"] = False
-            state["reason"] = deps_reason
-            state["load_error"] = deps_reason
-    return state
+    return _apply_deps_block(state, pathlib.Path(drive_root), skill) if drive_root is not None else state
 
 
 def is_extension_live(
@@ -1168,7 +995,7 @@ def reconcile_extension(
     repo_path: str | None = None,
     retry_load_error: bool = False,
 ) -> Dict[str, Any]:
-    """Unload/load one extension so every surface sees the same live state."""
+    """Reconcile one extension's desired and actual live state."""
     lifecycle_lock = _lifecycle_lock_for(skill_name)
     with lifecycle_lock:
         state = runtime_state_for_skill_name(skill_name, drive_root, repo_path=repo_path)
@@ -1236,18 +1063,10 @@ def load_extension(
     *,
     drive_root: Optional[pathlib.Path] = None,
 ) -> Optional[str]:
-    """Load one ``type: extension`` skill into the runtime.
+    """Load a fresh-reviewed enabled extension, returning a UI-safe error.
 
-    Returns ``None`` on success, or an error string suitable for
-    surfacing to the operator via the Skills UI on failure. The skill
-    must be (a) ``type: extension``, (b) ``enabled=True``, (c) review
-    executable review verdict with fresh content hash — otherwise the loader
-    refuses silently.
-
-    ``drive_root`` is mandatory and must be the same Ouroboros data-plane
-    root used by ``find_skill`` / ``discover_skills``. Silent fallback to
-    ``~/Ouroboros/data`` is forbidden because it pollutes real owner state
-    during tests and alternate-drive runtimes.
+    ``drive_root`` must be explicit; defaulting to owner data would pollute
+    tests and alternate-drive runtimes.
     """
     if drive_root is None:
         raise TypeError("load_extension requires explicit drive_root")
@@ -1269,9 +1088,7 @@ def load_extension(
             f"{exc}. Fix filesystem state and re-enable."
         )
     runtime_state = _extension_runtime_state(skill, current_hash=current_hash)
-    # v5.1.2 Frame A: the previous ``runtime_mode_light`` short-circuit
-    # is removed — light no longer blocks extensions. Stale reviews and
-    # other gates remain.
+    # Light mode permits reviewed extensions; stale review and other gates remain.
     gate = runtime_state.get("review_gate") or skill_review_gate(
         skill.review.status,
         stale=skill.review.content_hash != current_hash,
@@ -1307,8 +1124,7 @@ def load_extension(
         if deps_reason:
             return f"skill {skill.name!r} cannot load until isolated dependencies are ready: {deps_reason}"
 
-    # Grants: extensions may request core settings and privileged host
-    # capabilities. Both are content-hash-bound before load.
+    # Core settings and privileged host capabilities require hash-bound grants.
     grant_status = grant_status_for_skill(pathlib.Path(drive_root), skill)
     if not grant_status.get("all_granted", True):
         missing_bits = []
@@ -1320,25 +1136,7 @@ def load_extension(
             f"skill {skill.name!r} is missing owner grants for "
             f"{', '.join(missing_bits)}. Grant access from the Skills tab."
         )
-    requested_core = requested_core_setting_keys(list(skill.manifest.env_from_settings or []))
-    granted_core: List[str] = []
-    if requested_core:
-        grants_file = load_skill_grants(drive_root, skill.name)
-        grant_hash_ok = str(grants_file.get("content_hash") or "") == str(current_hash or "")
-        grant_request_ok = sorted(grants_file.get("requested_keys") or []) == sorted(requested_core)
-        persisted = (
-            set(grants_file.get("granted_keys") or [])
-            if grant_hash_ok and grant_request_ok
-            else set()
-        )
-        granted_core = [key for key in requested_core if key in persisted]
-        missing_grants = [key for key in requested_core if key not in set(granted_core)]
-        if missing_grants:
-            return (
-                f"skill {skill.name!r} requests core settings keys "
-                f"{requested_core}; missing owner grants for "
-                f"{missing_grants}. Grant access from the Skills tab."
-            )
+    granted_core = list(grant_status.get("granted_keys") or [])
     staged_import_root: Optional[pathlib.Path] = None
     module_key = _module_key(skill.name)
     try:
@@ -1348,11 +1146,7 @@ def load_extension(
             state_dir=state_dir,
             entry_path=entry_path,
         )
-        # Build a package-style spec so a multi-file extension can use
-        # intra-package imports (``from .helper import X``) without
-        # manual ``sys.path`` wiring. The package root must be the
-        # staged entry file's parent so nested ``entry: pkg/plugin.py`` layouts
-        # resolve siblings from ``pkg/`` rather than the skill root.
+        # Package-style spec preserves relative imports from the staged entry dir.
         spec = importlib.util.spec_from_file_location(
             module_key,
             entry_path,
@@ -1366,10 +1160,7 @@ def load_extension(
             spec.loader.exec_module(module)
             register = getattr(module, "register", None)
             if not callable(register):
-                # ``plugin.py`` may have imported sibling modules during
-                # ``exec_module`` — use ``unload_extension`` so every
-                # ``ouroboros._extensions.<skill>.*`` entry is purged, not
-                # just the top-level module.
+                # Sibling imports may already be in sys.modules; purge the package.
                 unload_extension(skill.name)
                 return (
                     f"skill {skill.name!r} plugin.py does not export a "
@@ -1402,8 +1193,7 @@ def load_extension(
             register(api)
             api._close_registration()
     except ExtensionRegistrationError as exc:
-        # Tear down any partial registrations the plugin managed before
-        # the error.
+        # Registration may be partial; always tear it down.
         unload_extension(skill.name)
         return f"skill {skill.name!r} registration error: {exc}"
     except Exception as exc:
@@ -1424,16 +1214,7 @@ def unload_extension(skill_name: str) -> None:
 
 
 def _unload_extension_locked(skill_name: str) -> None:
-    """Remove every registration attached by ``skill_name`` + drop the
-    module (and every submodule) from ``sys.modules`` so a subsequent
-    load re-imports cleanly.
-
-    Phase 4 uses ``submodule_search_locations`` so an extension can do
-    ``from .helper import X``. Those child modules live in
-    ``sys.modules`` under the same ``ouroboros._extensions.<skill>.*``
-    prefix — we purge every key matching the prefix, not just the
-    top-level entry.
-    """
+    """Remove one extension's surfaces and purge its package from sys.modules."""
     with _lock:
         bundle = _extensions.pop(skill_name, None)
         _extension_modules.pop(skill_name, None)
@@ -1478,7 +1259,7 @@ def _unload_extension_locked(skill_name: str) -> None:
         for callback in callbacks:
             _run_unload_callback(skill_name, callback)
         prefix = _module_key(skill_name)
-        # Iterate over a copy so we can mutate ``sys.modules`` safely.
+        # Copy keys before mutating sys.modules.
         for mod_name in list(sys.modules.keys()):
             if mod_name == prefix or mod_name.startswith(prefix + "."):
                 sys.modules.pop(mod_name, None)
@@ -1495,14 +1276,9 @@ def reload_all(
     *,
     repo_path: str | None = None,
 ) -> Dict[str, Any]:
-    """Discover skills, tear down stale extensions, load any that qualify.
-
-    Returns a ``{skill_name: error_or_None}`` map; ``None`` means the
-    extension is now active.
-    """
+    """Refresh all extension liveness and return ``skill: error_or_None``."""
     skills = discover_skills(drive_root, repo_path=repo_path)
     skill_names = {s.name for s in skills if s.manifest.is_extension()}
-    # Tear down extensions that disappeared or were disabled.
     with _lock:
         loaded_names = set(_extensions.keys())
     for gone in loaded_names - skill_names:
@@ -1525,30 +1301,28 @@ def reload_all(
 
 
 def snapshot() -> Dict[str, Any]:
-    """Return a read-only snapshot of currently-registered surfaces.
-
-    Used by ``/api/state`` and the Skills UI to surface what's live.
-    UI tabs are hostable by the Widgets page once the extension is live.
-    """
+    """Return a read-only snapshot of live extension surfaces."""
     with _lock:
         return {
             "extensions": sorted(_extensions.keys()),
             "tools": sorted(_tools.keys()),
             "routes": sorted(_routes.keys()),
             "ws_handlers": sorted(_ws_handlers.keys()),
-            "ui_tabs": [dict(value, key=key) for key, value in sorted(_ui_tabs.items())],
+            "ui_tabs": [
+                dict(copy.deepcopy(value), key=key)
+                for key, value in sorted(_ui_tabs.items())
+            ],
             "ui_tabs_pending": [],
-            # v5.7.0: settings sections registered by extensions, surfaced
-            # the same way ui_tabs are. Each entry carries skill / section_id
-            # / title / render schema so the Settings UI can host them.
+            # Settings sections follow the same host-surfaced shape as UI tabs.
             "settings_sections": [
-                dict(value, key=key) for key, value in sorted(_settings_sections.items())
+                dict(copy.deepcopy(value), key=key)
+                for key, value in sorted(_settings_sections.items())
             ],
         }
 
 
 def get_tool(name: str) -> Optional[Dict[str, Any]]:
-    """Return the tool dict registered for ``name``, or None."""
+    """Return the registered extension tool, if any."""
     with _lock:
         return dict(_tools.get(name) or {}) or None
 
@@ -1564,15 +1338,7 @@ def list_routes() -> Dict[str, Any]:
 
 
 __all__ = [
-    "PluginAPIImpl",
-    "is_extension_live",
-    "load_extension",
-    "reconcile_extension",
-    "unload_extension",
-    "reload_all",
-    "runtime_state_for_skill_name",
-    "snapshot",
-    "get_tool",
-    "list_ws_handlers",
-    "list_routes",
+    "PluginAPIImpl", "is_extension_live", "load_extension", "reconcile_extension",
+    "unload_extension", "reload_all", "runtime_state_for_skill_name", "snapshot",
+    "get_tool", "list_ws_handlers", "list_routes",
 ]
