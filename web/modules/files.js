@@ -511,7 +511,7 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (!state.clipboard) return;
         if (!(await canLeaveEditor())) return;
 
-        const data = await jsonPost('/api/files/transfer', {
+        const resp = await jsonPost('/api/files/transfer', {
             source_path: state.clipboard.path,
             destination_dir: destinationPath || '.',
             mode: state.clipboard.mode,

@@ -1,7 +1,7 @@
 import { apiFetch } from './api_client.js';
 import { escapeHtmlText, formatUsd2 } from './utils.js';
 
-export function initEvolution({ ws, state, mount }) {
+export function initEvolution({ ws, state, mount = null, embedded = false, chartOnly = false, hostPage = 'dashboard', hostSubtab = 'evolution' }) {
     const page = document.createElement('div');
     page.id = 'page-evolution';
     page.className = embedded ? 'settings-embedded-content settings-evolution-panel' : 'page';
@@ -50,10 +50,12 @@ export function initEvolution({ ws, state, mount }) {
             <div id="evo-tags-list" class="evo-tags-list"></div>
         </div>
     `;
-    mount.appendChild(page);
+    (mount || document.getElementById('content')).appendChild(page);
 
     function isEvolutionVisible() {
-        return state.activePage === 'dashboard' && state.dashboardActiveSubtab === 'evolution';
+        return embedded
+            ? state.activePage === hostPage && state.dashboardActiveSubtab === hostSubtab
+            : state.activePage === 'evolution';
     }
 
     // -----------------------------------------------------------------------

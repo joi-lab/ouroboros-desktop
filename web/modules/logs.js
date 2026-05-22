@@ -10,7 +10,7 @@ import {
 } from './log_events.js';
 import { escapeHtml } from './utils.js';
 
-export function initLogs({ ws, state, mount }) {
+export function initLogs({ ws, state, mount = null, embedded = false, hostPage = 'dashboard', hostSubtab = 'logs' }) {
     const MAX_LOGS = 500;
     const MAX_TASK_EVENTS = 30;
     const duplicateWindowMs = 5000;
@@ -41,15 +41,18 @@ export function initLogs({ ws, state, mount }) {
         ? `<button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Очистить</button>`
         : '';
     page.innerHTML = `
-        <div class="logs-filters" id="log-filters"><button class="btn btn-default logs-inline-clear" id="btn-clear-logs">Clear</button></div>
+        ${headerBlock}
+        <div class="logs-filters" id="log-filters">${inlineClear}</div>
         <div id="log-entries"></div>
     `;
-    mount.appendChild(page);
+    (mount || document.getElementById('content')).appendChild(page);
 
     const filtersDiv = page.querySelector('#log-filters');
     const logEntries = page.querySelector('#log-entries');
     function isLogsVisible() {
-        return state.activePage === 'dashboard' && state.dashboardActiveSubtab === 'logs';
+        return embedded
+            ? state.activePage === hostPage && state.dashboardActiveSubtab === hostSubtab
+            : state.activePage === 'logs';
     }
 
     function scrollToLatest() {
