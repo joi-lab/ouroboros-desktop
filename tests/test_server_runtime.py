@@ -134,23 +134,37 @@ def test_apply_runtime_provider_defaults_keeps_explicit_official_openai_review_m
     assert normalized["OUROBOROS_REVIEW_MODELS"] == "openai::gpt-5.5,openai::gpt-5.5-mini"
 
 
-def test_apply_runtime_provider_defaults_refreshes_retired_opus_defaults_with_openrouter():
-    old_openrouter = "anthropic/claude-opus-" + "4.7"
-    old_claude_code = "claude-opus-" + "4-7[1m]"
+def test_apply_runtime_provider_defaults_keeps_opus_47():
+    from ouroboros.provider_models import migrate_model_value
+
+    assert migrate_model_value("anthropic", "anthropic/claude-opus-4.7") == "anthropic::claude-opus-4-7"
+    assert migrate_model_value("anthropic", "anthropic::claude-opus-4.7") == "anthropic::claude-opus-4-7"
+
     normalized, changed, changed_keys = apply_runtime_provider_defaults({
         "OPENROUTER_API_KEY": "sk-or",
-        "OUROBOROS_MODEL": old_openrouter,
-        "OUROBOROS_MODEL_CODE": old_openrouter,
-        "OUROBOROS_REVIEW_MODELS": f"openai/gpt-5.5,{old_openrouter}",
-        "CLAUDE_CODE_MODEL": old_claude_code,
+        "OUROBOROS_MODEL": "anthropic/claude-opus-4.7",
+        "OUROBOROS_MODEL_CODE": "anthropic/claude-opus-4.7",
+        "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,anthropic/claude-opus-4.7",
+        "CLAUDE_CODE_MODEL": "claude-opus-4-7[1m]",
     })
 
-    assert changed
-    assert "OUROBOROS_MODEL" in changed_keys
-    assert normalized["OUROBOROS_MODEL"] == "anthropic/claude-opus-4.6"
-    assert normalized["OUROBOROS_MODEL_CODE"] == "anthropic/claude-opus-4.6"
-    assert normalized["OUROBOROS_REVIEW_MODELS"] == "openai/gpt-5.5,anthropic/claude-opus-4.6"
-    assert normalized["CLAUDE_CODE_MODEL"] == "claude-opus-4-6[1m]"
+    assert not changed
+    assert changed_keys == []
+    assert normalized["OUROBOROS_MODEL"] == "anthropic/claude-opus-4.7"
+
+    normalized_direct, changed_direct, changed_keys_direct = apply_runtime_provider_defaults({
+        "ANTHROPIC_API_KEY": "sk-ant",
+        "OUROBOROS_MODEL": "anthropic/claude-opus-4.7",
+        "OUROBOROS_MODEL_CODE": "anthropic::claude-opus-4.7",
+        "OUROBOROS_REVIEW_MODELS": "anthropic::claude-opus-4.7",
+    })
+
+    assert changed_direct
+    assert "OUROBOROS_MODEL" in changed_keys_direct
+    assert "OUROBOROS_MODEL_CODE" in changed_keys_direct
+    assert normalized_direct["OUROBOROS_MODEL"] == "anthropic::claude-opus-4-7"
+    assert normalized_direct["OUROBOROS_MODEL_CODE"] == "anthropic::claude-opus-4-7"
+    assert "anthropic::claude-opus-4-7" in normalized_direct["OUROBOROS_REVIEW_MODELS"]
 
 
 def test_apply_runtime_provider_defaults_refreshes_retired_gpt54_defaults():

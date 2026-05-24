@@ -31,6 +31,8 @@ _LEGACY_GEMINI_3_PRO_PREVIEW = "google/gemini-" + "3-pro-preview"
 MODEL_PRICING_STATIC = {
     "anthropic/claude-opus-4.6": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4-6": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4.7": (15.0, 1.5, 75.0),
+    "anthropic/claude-opus-4-7": (15.0, 1.5, 75.0),
     "anthropic/claude-opus-4": (15.0, 1.5, 75.0),
     "anthropic/claude-sonnet-4": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),

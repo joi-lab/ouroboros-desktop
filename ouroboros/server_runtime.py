@@ -68,9 +68,6 @@ _SCOPE_REVIEW_LEGACY_DEFAULTS = frozenset({
     "openai::gpt-" + "5.4-mini",
 })
 _RETIRED_MODEL_DEFAULT_REPLACEMENTS = {
-    "anthropic/claude-opus-" + "4.7": "anthropic/claude-opus-4.6",
-    "anthropic::claude-opus-" + "4-7": "anthropic::claude-opus-4-6",
-    "claude-opus-" + "4-7[1m]": "claude-opus-4-6[1m]",
     "openai/gpt-" + "5.4": "openai/gpt-5.5",
     "openai::gpt-" + "5.4": "openai::gpt-5.5",
     "openai/gpt-" + "5.4-pro": "openai/gpt-5.5-pro",

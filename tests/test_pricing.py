@@ -139,6 +139,10 @@ class TestEstimateCost:
         assert MODEL_PRICING_STATIC["google/gemini-3.1-flash-lite"] == (0.25, 0.025, 1.50)
         assert MODEL_PRICING_STATIC["google/gemini-3-flash-preview"] == (0.15, 0.015, 0.60)
 
+    def test_opus_47_static_pricing_is_registered(self):
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4.7"] == (15.0, 1.5, 75.0)
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4-7"] == (15.0, 1.5, 75.0)
+
 
 # --- infer_api_key_type ---
 

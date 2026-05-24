@@ -258,11 +258,13 @@ function collectSecretValue(id, body) {
 const SETTINGS_FALLBACK_MODELS = [
     'google/gemini-3.5-flash',
     'anthropic/claude-sonnet-4.6',
+    'anthropic::claude-opus-4-7',
     'anthropic::claude-opus-4-6',
     'anthropic::claude-sonnet-4-6',
     'openai::gpt-5.5',
     'openai::gpt-5.5-mini',
     'openai/gpt-5.5',
+    'anthropic/claude-opus-4.7',
     'anthropic/claude-opus-4.6',
 ];
 
