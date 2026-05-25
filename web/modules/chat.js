@@ -81,7 +81,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 <button class="chat-attach-btn" id="chat-attach" type="button" title="Attach file">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                 </button>
-                <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*">
+                <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*" multiple>
                 <textarea id="chat-input" placeholder="Message Ouroboros..." rows="1" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
                 <div class="chat-send-group">
                     <button class="chat-send-inline" id="chat-send" title="Send message">Send</button>
@@ -118,37 +118,59 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     const attachBtn = document.getElementById('chat-attach');
     const fileInput = document.getElementById('chat-file-input');
     const attachmentPreview = document.getElementById('chat-attachment-preview');
-    let pendingAttachment = null;
+    let pendingAttachments = [];
 
     // Shared paperclip/paste stager; upload still happens only on Send.
     function stagePendingFile(file) {
         if (!file) return;
-        pendingAttachment = { file, display_name: file.name };
-        attachmentPreview.classList.add('visible');
-        attachmentPreview.innerHTML = `
-            <span class="attach-badge">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                <span class="attach-name">${escapeHtml(file.name)}</span>
-                <button class="attach-remove" type="button" title="Remove">×</button>
-            </span>
-        `;
-        requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
-        attachmentPreview.querySelector('.attach-remove').addEventListener('click', () => {
-            pendingAttachment = null;
+
+        // Prevent duplicate files with exact same properties if already staged
+        if (pendingAttachments.some(att => att.file.name === file.name && att.file.size === file.size && att.file.lastModified === file.lastModified)) {
+            return;
+        }
+
+        const id = 'attach-' + Math.random().toString(36).substr(2, 9);
+        const att = { id, file, display_name: file.name };
+        pendingAttachments.push(att);
+
+        renderAttachments();
+    }
+
+    function renderAttachments() {
+        if (pendingAttachments.length === 0) {
             attachmentPreview.classList.remove('visible');
             attachmentPreview.innerHTML = '';
-            requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
-        });
+        } else {
+            attachmentPreview.classList.add('visible');
+            attachmentPreview.innerHTML = pendingAttachments.map(att => `
+                <span class="attach-badge" data-id="${att.id}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                    <span class="attach-name">${escapeHtml(att.file.name)}</span>
+                    <button class="attach-remove" type="button" title="Remove">×</button>
+                </span>
+            `).join('');
+
+            attachmentPreview.querySelectorAll('.attach-badge').forEach(badge => {
+                const id = badge.getAttribute('data-id');
+                badge.querySelector('.attach-remove').addEventListener('click', () => {
+                    pendingAttachments = pendingAttachments.filter(att => att.id !== id);
+                    renderAttachments();
+                });
+            });
+        }
+        requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
     }
 
     attachBtn.addEventListener('click', () => fileInput.click());
 
     // Local-only staging avoids orphan uploads and fast-send races.
     fileInput.addEventListener('change', () => {
-        const file = fileInput.files[0];
-        if (!file) return;
+        const files = fileInput.files;
+        if (!files || files.length === 0) return;
+        for (let i = 0; i < files.length; i += 1) {
+            stagePendingFile(files[i]);
+        }
         fileInput.value = '';
-        stagePendingFile(file);
     });
 
     // Image paste uses the same stager; only image matches call preventDefault().
@@ -156,19 +178,22 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     input.addEventListener('paste', (e) => {
         const items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
+        let prevented = false;
         for (let i = 0; i < items.length; i += 1) {
             const item = items[i];
             if (item && item.kind === 'file' && typeof item.type === 'string' && item.type.startsWith('image/')) {
                 const blob = item.getAsFile();
                 if (!blob) continue;
-                e.preventDefault();
+                if (!prevented) {
+                    e.preventDefault();
+                    prevented = true;
+                }
                 const ext = (item.type.split('/')[1] || 'png').split(';')[0].trim() || 'png';
-                const ts = Date.now();
+                const ts = Date.now() + '-' + i;
                 const safeBlob = blob instanceof File
                     ? new File([blob], `clipboard-${ts}.${ext}`, { type: blob.type })
                     : new File([blob], `clipboard-${ts}.${ext}`, { type: item.type });
                 stagePendingFile(safeBlob);
-                return;
             }
         }
     });
@@ -1279,35 +1304,51 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     async function sendMessage(planMode = false) {
         if (sendBtn.disabled) return;  // guard against Enter re-entry during async upload
         let text = input.value.trim();
-        if (!text && !pendingAttachment) return;
-        if (pendingAttachment) {
+        if (!text && pendingAttachments.length === 0) return;
+        if (pendingAttachments.length > 0) {
             // Upload immediately before send; offline queueing would orphan files.
             if (ws.ws?.readyState !== WebSocket.OPEN) {
-                showToast('Cannot attach file while offline. Reconnect and try again.', 'error');
+                showToast('Cannot attach files while offline. Reconnect and try again.', 'error');
                 return;
             }
-            const staged = pendingAttachment;
             setSendBusy(true, 'Uploading');
-            try {
-                const formData = new FormData();
-                formData.append('file', staged.file);
-                const resp = await apiFetch('/api/chat/upload', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (!resp.ok || !data.ok) {
-                    showToast('Upload failed: ' + (data.error || resp.statusText), 'error');
-                    return;  // pendingAttachment and preview remain — user can retry
+            const uploadedSpecs = [];
+            const failedToUpload = [];
+
+            for (const att of [...pendingAttachments]) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', att.file);
+                    const resp = await apiFetch('/api/chat/upload', { method: 'POST', body: formData });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.ok) {
+                        showToast(`Upload failed for ${att.file.name}: ` + (data.error || resp.statusText), 'error');
+                        failedToUpload.push(att);
+                        continue;
+                    }
+                    uploadedSpecs.push({
+                        name: data.display_name || att.display_name,
+                        path: data.path
+                    });
+                    // Successfully uploaded, remove from pending array
+                    pendingAttachments = pendingAttachments.filter(a => a.id !== att.id);
+                } catch (e) {
+                    showToast(`Upload error for ${att.file.name}: ` + e.message, 'error');
+                    failedToUpload.push(att);
                 }
-                pendingAttachment = null;
-                attachmentPreview.classList.remove('visible');
-                attachmentPreview.innerHTML = '';
-                requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
-                text += (text ? '\n\n' : '') + `[Attached file: ${data.display_name || staged.display_name} saved to ${data.path}]`;
-            } catch (e) {
-                showToast('Upload error: ' + e.message, 'error');
-                return;  // pendingAttachment and preview remain — user can retry
-            } finally {
-                setSendBusy(false);
             }
+
+            renderAttachments(); // refresh preview area (keeps only failed ones if any)
+
+            if (failedToUpload.length > 0) {
+                setSendBusy(false);
+                return; // User can fix errors and retry
+            }
+
+            for (const spec of uploadedSpecs) {
+                text += (text ? '\n\n' : '') + `[Attached file: ${spec.name} saved to ${spec.path}]`;
+            }
+            setSendBusy(false);
         }
         if (!text) return;
         rememberInput(text);
