@@ -31,21 +31,21 @@ _LEGACY_GEMINI_3_PRO_PREVIEW = "google/gemini-" + "3-pro-preview"
 MODEL_PRICING_STATIC = {
     "anthropic/claude-opus-4.6": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4-6": (5.0, 0.5, 25.0),
-    "anthropic/claude-opus-4.7": (15.0, 1.5, 75.0),
-    "anthropic/claude-opus-4-7": (15.0, 1.5, 75.0),
+    "anthropic/claude-opus-4.7": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4-7": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4": (15.0, 1.5, 75.0),
     "anthropic/claude-sonnet-4": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4-6": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4.5": (3.0, 0.30, 15.0),
     "openai/o3": (2.0, 0.50, 8.0),
-    "openai/o3-pro": (20.0, 1.0, 80.0),
+    "openai/o3-pro": (20.0, 20.0, 80.0),
     "openai/o4-mini": (1.10, 0.275, 4.40),
     "openai/gpt-4.1": (2.0, 0.50, 8.0),
     # Mirrors latest available GPT-5 family pricing until live OpenRouter
     # pricing is fetched.
     "openai/gpt-5.5": (1.75, 0.175, 14.0),
-    "openai/gpt-5.5-pro": (1.75, 0.175, 14.0),
+    "openai/gpt-5.5-pro": (30.0, 30.0, 180.0),
     # Mirrors the previous static mini lane until live OpenRouter pricing is fetched.
     "openai/gpt-5.5-mini": (0.75, 0.075, 4.50),
     "openai/gpt-5.2": (1.75, 0.175, 14.0),
@@ -57,7 +57,7 @@ MODEL_PRICING_STATIC = {
     _LEGACY_GEMINI_31_PRO_PREVIEW: (2.0, 0.20, 12.0),
     _LEGACY_GEMINI_31_FLASH_LITE: (0.25, 0.025, 1.50),
     _LEGACY_GEMINI_3_FLASH_PREVIEW: (0.15, 0.015, 0.60),
-    "x-ai/grok-3-mini": (0.30, 0.03, 0.50),
+    "x-ai/grok-3-mini": (0.30, 0.075, 0.50),
     "qwen/qwen3.5-plus-02-15": (0.40, 0.04, 2.40),
 }
 
@@ -100,6 +100,7 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
                   cached_tokens: int = 0, cache_write_tokens: int = 0,
                   prompt_cache_ttl: Optional[str] = None) -> float:
     """Estimate cost from token counts using known pricing. Returns 0 if model unknown."""
+    model = normalize_model_identity(model)
     model_pricing = get_pricing()
     # Try exact match first
     pricing = model_pricing.get(model)

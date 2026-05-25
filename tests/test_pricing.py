@@ -47,10 +47,10 @@ class TestEstimateCost:
 
     def test_cache_write_tokens_are_subtracted_from_regular_input(self):
         with patch("ouroboros.pricing.get_pricing", return_value={
-            "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
+            "anthropic/claude-sonnet-4-6": (3.0, 0.30, 15.0),
         }):
             cost = estimate_cost(
-                "anthropic/claude-sonnet-4.6",
+                "anthropic/claude-sonnet-4-6",
                 prompt_tokens=10000, completion_tokens=1000,
                 cached_tokens=3000, cache_write_tokens=2000,
             )
@@ -60,10 +60,10 @@ class TestEstimateCost:
 
     def test_anthropic_one_hour_cache_write_multiplier(self):
         with patch("ouroboros.pricing.get_pricing", return_value={
-            "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
+            "anthropic/claude-sonnet-4-6": (3.0, 0.30, 15.0),
         }):
             cost = estimate_cost(
-                "anthropic/claude-sonnet-4.6",
+                "anthropic/claude-sonnet-4-6",
                 prompt_tokens=2000, completion_tokens=0,
                 cached_tokens=0, cache_write_tokens=2000,
                 prompt_cache_ttl="1h",
@@ -132,7 +132,7 @@ class TestEstimateCost:
 
     def test_gpt_55_static_pricing_is_registered(self):
         assert MODEL_PRICING_STATIC["openai/gpt-5.5"] == (1.75, 0.175, 14.0)
-        assert MODEL_PRICING_STATIC["openai/gpt-5.5-pro"] == (1.75, 0.175, 14.0)
+        assert MODEL_PRICING_STATIC["openai/gpt-5.5-pro"] == (30.0, 30.0, 180.0)
         assert MODEL_PRICING_STATIC["openai/gpt-5.5-mini"] == (0.75, 0.075, 4.50)
         assert MODEL_PRICING_STATIC["google/gemini-3.5-flash"] == (1.50, 0.15, 9.00)
         assert MODEL_PRICING_STATIC["google/gemini-3.1-pro-preview"] == (2.0, 0.20, 12.0)
@@ -140,8 +140,18 @@ class TestEstimateCost:
         assert MODEL_PRICING_STATIC["google/gemini-3-flash-preview"] == (0.15, 0.015, 0.60)
 
     def test_opus_47_static_pricing_is_registered(self):
-        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4.7"] == (15.0, 1.5, 75.0)
-        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4-7"] == (15.0, 1.5, 75.0)
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4.7"] == (5.0, 0.5, 25.0)
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4-7"] == (5.0, 0.5, 25.0)
+
+    def test_additional_static_pricing_is_registered(self):
+        assert MODEL_PRICING_STATIC["openai/o3-pro"] == (20.0, 20.0, 80.0)
+        assert MODEL_PRICING_STATIC["x-ai/grok-3-mini"] == (0.30, 0.075, 0.50)
+
+    def test_estimate_cost_normalizes_model_identity(self):
+        cost_normal = estimate_cost("anthropic/claude-opus-4-7", 1000, 100)
+        cost_denormal = estimate_cost("anthropic::claude-opus-4-7", 1000, 100)
+        assert cost_normal > 0.0
+        assert cost_normal == cost_denormal
 
 
 # --- infer_api_key_type ---

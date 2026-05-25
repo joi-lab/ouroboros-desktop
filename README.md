@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 5.33.0-rc.7](https://img.shields.io/badge/version-5.33.0--rc.7-green.svg)](VERSION)
+[![Version 5.33.0-rc.8](https://img.shields.io/badge/version-5.33.0--rc.8-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -473,11 +473,11 @@ not paraphrase it.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 5.33.0-rc.8 | 2026-05-24 | **rc(pricing): correct pricing rates and support normalization.** Fixes static pricing rates for gpt-5.5-pro, o3-pro, grok-3-mini, and claude-opus-4.7, and ensures model identity normalization in estimate_cost. |
 | 5.33.0-rc.7 | 2026-05-24 | **rc(runtime): remove automatic Opus 4.7 downgrade mapping.** Allows direct usage of the `claude-opus-4.7` model without automatically rewriting it to `4.6` in settings normalization, and preserves direct-provider routing. Includes testing verification. |
 | 5.33.0-rc.6 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Introduces a typed ChatUploadPayloadTooLarge exception class to isolate file-size 413 blocks from connection cuts and form-parse faults, returning a standard 400 with original message for ASGI/socket errors. Includes focused test coverage. |
 | 5.33.0-rc.5 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Refactors the chat upload ASGI stream wrapper to verify if caught exceptions are indeed the 'oversized' signal before returning a 413, returning a 400 with the original error message for connection cuts and malformed formats. |
 | 5.33.0-rc.4 | 2026-05-24 | **rc(accessibility): attach aria-disabled state to submit buttons.** Adds explicit accessibility annotations to clickable-disabled card options so both visual rendering and assistive device readouts correctly convey blocked submission context. |
-| 5.33.0-rc.3 | 2026-05-24 | **rc(skills): provide explicit toast warnings on disabled hub submissions.** Replaces native button disabled attributes on OuroborosHub card options to catch all clicks, displaying actionable warnings explaining exact review or check conditions rather than silent dropdown closures. |
 Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.30.0-rc.1 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
 
 ---
