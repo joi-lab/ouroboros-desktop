@@ -28,6 +28,9 @@ const NUMBER_FIELDS = [
     ['s-tool-timeout', 'OUROBOROS_TOOL_TIMEOUT_SEC', 120], ['s-local-port', 'LOCAL_MODEL_PORT', 8766], ['s-local-gpu-layers', 'LOCAL_MODEL_N_GPU_LAYERS', -1, true],
     ['s-local-ctx', 'LOCAL_MODEL_CONTEXT_LENGTH', 16384],
 ];
+const FLOAT_FIELDS = [
+    ['s-total-budget', 'TOTAL_BUDGET', 10.0], ['s-per-task-cost', 'OUROBOROS_PER_TASK_COST_USD', 20.0],
+];
 
 function setupModelSlots() {
     return Array.isArray(setupContract.modelSlots) ? setupContract.modelSlots : [];
@@ -58,6 +61,11 @@ function setStatus(text, tone = 'ok') {
 
 function readInt(id, fallback) {
     const value = parseInt(byId(id).value, 10);
+    return Number.isNaN(value) ? fallback : value;
+}
+
+function readFloat(id, fallback) {
+    const value = parseFloat(byId(id).value);
     return Number.isNaN(value) ? fallback : value;
 }
 
@@ -464,6 +472,11 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
             if (allowFalsy ? value !== null && value !== undefined : value) byId(id).value = value;
             else byId(id).value = fallback;
         });
+        FLOAT_FIELDS.forEach(([id, key, fallback, allowFalsy]) => {
+            const value = s[key];
+            if (allowFalsy ? value !== null && value !== undefined : value) byId(id).value = value;
+            else byId(id).value = fallback;
+        });
         applyMcpSettings(s);
         resetSecretClearFlags(page);
         syncEffortSegments(page);
@@ -577,6 +590,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
             .filter(([, key]) => key !== 'OUROBOROS_RUNTIME_MODE')
             .forEach(([id, key]) => { body[key] = fieldValue(id); });
         NUMBER_FIELDS.forEach(([id, key, fallback]) => { body[key] = readInt(id, fallback); });
+        FLOAT_FIELDS.forEach(([id, key, fallback]) => { body[key] = readFloat(id, fallback); });
 
         page.querySelectorAll('[data-secret-setting]').forEach((input) => {
             collectSecretValue(input.id, body);

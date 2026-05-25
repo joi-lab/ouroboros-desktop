@@ -1682,5 +1682,10 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     ws.on('close', () => {
         hideTyping();
         setStatus('offline', 'Reconnecting...');
+        // Clear/re-sync budget UI on disconnect to avoid showing stale cached values
+        const budgetText = document.getElementById('chat-budget-text');
+        const budgetFill = document.getElementById('chat-budget-bar-fill');
+        if (budgetText) budgetText.textContent = 'Connecting...';
+        if (budgetFill) budgetFill.style.width = '0%';
     });
 }
