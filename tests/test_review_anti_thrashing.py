@@ -409,7 +409,7 @@ def test_scope_build_prompt_loads_obligations_from_drive_root(tmp_path, monkeypa
     monkeypatch.setattr(
         scope_review_mod,
         "_gather_scope_packs",
-        lambda _rd, _paths: "(full repo pack)",
+        lambda _rd, _paths, fixed_prompt_tokens=0: "(generated scope atlas)",
     )
     monkeypatch.setattr(
         scope_review_mod,

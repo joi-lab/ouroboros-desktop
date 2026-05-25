@@ -10,6 +10,7 @@ from ouroboros.tools.release_sync import (
     detect_numeric_claims,
     run_release_preflight,
     sync_release_metadata,
+    version_carrier_desyncs,
 )
 from ouroboros.tools.release_sync import (  # noqa: E402 — private helpers under test
     _normalize_pep440,
@@ -26,11 +27,17 @@ from ouroboros.tools.release_sync import (  # noqa: E402 — private helpers und
 # ---------------------------------------------------------------------------
 
 def _make_repo(tmp_path: Path, version: str = "4.99.1") -> Path:
-    """Create a minimal fake repo with all four version-carrier files."""
+    """Create a minimal fake repo with all version-carrier files."""
     (tmp_path / "VERSION").write_text(version + "\n", encoding="utf-8")
 
     (tmp_path / "pyproject.toml").write_text(
         '[tool.poetry]\nname = "ouroboros"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package.json").write_text(
+        '{\n  "name": "ouroboros-web",\n  "version": "0.0.0"\n}\n',
         encoding="utf-8",
     )
 
@@ -78,6 +85,26 @@ class TestSyncReleaseMetadata:
         text = (repo / "README.md").read_text()
         assert "Version 1.2.3" in text
         assert "version-1.2.3-green" in text
+
+    def test_syncs_web_package_json(self, tmp_path):
+        repo = _make_repo(tmp_path, "1.2.3-rc.4")
+        changed = sync_release_metadata(str(repo))
+        assert "web/package.json" in changed
+        text = (repo / "web" / "package.json").read_text()
+        assert '"version": "1.2.3-rc.4"' in text
+
+    def test_web_package_json_participates_in_desync_checks(self, tmp_path):
+        repo = _make_repo(tmp_path, "1.2.3-rc.4")
+        sync_release_metadata(str(repo))
+        (repo / "web" / "package.json").write_text('{"version": "1.2.3-rc.3"}', encoding="utf-8")
+
+        desync = version_carrier_desyncs(
+            "1.2.3-rc.4",
+            web_package_text=(repo / "web" / "package.json").read_text(encoding="utf-8"),
+            detailed=True,
+        )
+
+        assert desync == ['web/package.json (expected "version": "1.2.3-rc.4")']
 
     def test_syncs_architecture_header(self, tmp_path):
         repo = _make_repo(tmp_path, "1.2.3")

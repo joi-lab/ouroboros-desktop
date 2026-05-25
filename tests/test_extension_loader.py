@@ -2238,6 +2238,66 @@ def test_reload_all_tears_down_stale_extensions(tmp_path):
     assert "staleish" not in extension_loader.snapshot()["extensions"]
 
 
+def test_reload_all_continues_after_one_extension_exception(tmp_path, monkeypatch, caplog):
+    """A reconcile bug in one extension must not block later extensions."""
+    import logging
+
+    repo_root = tmp_path / "skills"
+    drive_root = tmp_path / "drive"
+    drive_root.mkdir()
+    plugin = (
+        "def register(api):\n"
+        "    api.register_tool('t', lambda ctx: 'ok', description='', schema={})\n"
+    )
+    for name in ("a_bad", "z_good"):
+        _write_ext_skill(repo_root, name, plugin_body=plugin, permissions=["tool"])
+        loaded = find_skill(drive_root, name, repo_path=str(repo_root))
+        assert loaded is not None
+        save_enabled(drive_root, name, True)
+        save_review_state(drive_root, name, SkillReviewState(status="pass", content_hash=loaded.content_hash))
+
+    original_reconcile = extension_loader.reconcile_extension
+
+    def flaky_reconcile(skill_name, *args, **kwargs):
+        if skill_name == "a_bad":
+            raise RuntimeError("boom")
+        return original_reconcile(skill_name, *args, **kwargs)
+
+    monkeypatch.setattr(extension_loader, "reconcile_extension", flaky_reconcile)
+
+    with caplog.at_level(logging.ERROR):
+        results = extension_loader.reload_all(drive_root, lambda: {}, repo_path=str(repo_root))
+
+    assert "RuntimeError: boom" in results["a_bad"]
+    assert results["z_good"] is None
+    assert "z_good" in extension_loader.snapshot()["extensions"]
+    assert any("Extension reload failed for a_bad; continuing" in rec.message for rec in caplog.records)
+
+
+def test_reload_all_logs_per_extension_load_error(tmp_path, caplog):
+    import logging
+
+    repo_root = tmp_path / "skills"
+    drive_root = tmp_path / "drive"
+    drive_root.mkdir()
+    _write_ext_skill(
+        repo_root,
+        "bad_register",
+        plugin_body="def register(api):\n    raise RuntimeError('register failed')\n",
+        permissions=[],
+    )
+    loaded = find_skill(drive_root, "bad_register", repo_path=str(repo_root))
+    assert loaded is not None
+    save_enabled(drive_root, "bad_register", True)
+    save_review_state(drive_root, "bad_register", SkillReviewState(status="pass", content_hash=loaded.content_hash))
+
+    with caplog.at_level(logging.ERROR):
+        results = extension_loader.reload_all(drive_root, lambda: {}, repo_path=str(repo_root))
+
+    assert "register failed" in str(results["bad_register"])
+    assert any("Extension reload failed for bad_register" in rec.message for rec in caplog.records)
+
+
 def test_unload_clears_child_module_cache(tmp_path):
     """Phase 4 round 3 regression: unload must purge EVERY
     ``ouroboros._extensions.<skill>.*`` entry from sys.modules, not

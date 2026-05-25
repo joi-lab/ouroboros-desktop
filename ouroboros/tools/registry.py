@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
 import os
 import pathlib
 import re
-import shlex
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -22,7 +22,21 @@ from ouroboros.runtime_mode_policy import (
     protected_paths_in,
     protected_write_block_message,
 )
-from ouroboros.tool_capabilities import CORE_TOOL_NAMES
+from ouroboros.tool_capabilities import (
+    CORE_TOOL_NAMES,
+    LOCAL_READONLY_SUBAGENT_MODE,
+    LOCAL_READONLY_SUBAGENT_TOOL_NAMES,
+    META_TOOL_NAMES,
+)
+from ouroboros.tools.shell_parse import (
+    EMBEDDED_ABSOLUTE_PATH_RE,
+    shell_argv,
+    shell_argv_with_inline,
+    shell_command_string,
+    strip_leading_env_assignments,
+    sudo_noninteractive_violation,
+    unwrap_env_argv,
+)
 from ouroboros.utils import safe_relpath
 from ouroboros.contracts.task_constraint import TaskConstraint, normalize_task_constraint, resolve_payload_path
 from ouroboros.contracts.skill_payload_policy import (
@@ -94,55 +108,6 @@ def _detect_runtime_mode_elevation(text_lower: str) -> bool:
     return (has_save and has_mode_key) or has_dotted_path
 
 
-def _shell_argv(raw_cmd: Any) -> List[str]:
-    if isinstance(raw_cmd, list):
-        return [str(x) for x in raw_cmd if str(x).strip()]
-    try:
-        return [str(x) for x in shlex.split(str(raw_cmd or "")) if str(x).strip()]
-    except ValueError:
-        return [str(x) for x in str(raw_cmd or "").split() if str(x).strip()]
-
-
-def _unwrap_env_argv(argv: List[str]) -> List[str]:
-    if not argv or pathlib.PurePath(argv[0]).name.lower() != "env":
-        return argv
-    idx = 1
-    options_with_arg = {"-u", "--unset", "-C", "--chdir", "--argv0"}
-    while idx < len(argv):
-        token = argv[idx]
-        if token == "--":
-            idx += 1
-            break
-        if token == "-S" and idx + 1 < len(argv):
-            return _shell_argv(argv[idx + 1])
-        if token.startswith("--split-string="):
-            return _shell_argv(token.split("=", 1)[1])
-        if token in options_with_arg:
-            idx += 2; continue
-        if (
-            any(token.startswith(prefix + "=") for prefix in ("--unset", "--chdir", "--argv0"))
-            or token.startswith("-")
-            or ("=" in token and not token.startswith("="))
-        ):
-            idx += 1; continue
-        break
-    return argv[idx:] if idx < len(argv) else []
-
-
-def _strip_leading_env_assignments(argv: List[str]) -> List[str]:
-    idx = 0
-    while idx < len(argv) and "=" in argv[idx] and not argv[idx].startswith("="):
-        idx += 1
-    return argv[idx:]
-
-
-def _shell_command_string(argv: List[str]) -> str:
-    for idx, arg in enumerate(argv[1:], start=1):
-        if arg == "-c" or (arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]):
-            return argv[idx + 1] if idx + 1 < len(argv) else ""
-    return ""
-
-
 def _candidate_path_inside(root: pathlib.Path, work_dir: pathlib.Path, path_text: str) -> bool:
     """Return whether ``path_text`` resolves inside ``root``."""
     text = str(path_text or "").strip()
@@ -205,12 +170,12 @@ def _writer_targets_repo(argv: List[str], *, repo_dir: pathlib.Path, cwd: str = 
 
 
 def _shell_writer_targets_protected(raw_cmd: Any) -> bool:
-    argv = _strip_leading_env_assignments(_unwrap_env_argv(_shell_argv(raw_cmd)))
+    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
     if not argv:
         return False
     executable = pathlib.PurePath(argv[0]).name.lower()
     if executable in {"bash", "sh", "zsh"}:
-        inline = _shell_command_string(argv)
+        inline = shell_command_string(argv)
         return bool(inline and _shell_writer_targets_protected(inline))
     if executable not in _LIGHT_SHELL_WRITER_COMMANDS:
         return False
@@ -220,21 +185,21 @@ def _shell_writer_targets_protected(raw_cmd: Any) -> bool:
 
 def _light_shell_repo_mutation(raw_cmd: Any, *, repo_dir: pathlib.Path, cwd: str = "") -> bool:
     """Detect simple shell writer commands that target the repo in light mode."""
-    argv = _shell_argv(raw_cmd)
+    argv = shell_argv(raw_cmd)
     if not argv:
         return False
     cmd_lower = " ".join(argv).lower()
 
-    unwrapped = _unwrap_env_argv(argv)
+    unwrapped = unwrap_env_argv(argv)
     if unwrapped != argv:
         return _light_shell_repo_mutation(unwrapped, repo_dir=repo_dir, cwd=cwd)
-    argv = _strip_leading_env_assignments(argv)
+    argv = strip_leading_env_assignments(argv)
     if not argv:
         return False
     executable = pathlib.PurePath(argv[0]).name.lower()
 
     if executable in {"bash", "sh", "zsh"}:
-        inline = _shell_command_string(argv)
+        inline = shell_command_string(argv)
         if inline:
             return _light_shell_repo_mutation(inline, repo_dir=repo_dir, cwd=cwd)
 
@@ -282,6 +247,7 @@ _DETACHED_PROCESS_MARKERS = (
     "preexec_fn",
     "nohup",
 )
+EMBEDDED_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_.-])/[^\s'\"\\),;\]]+")
 
 
 def _mentions_skill_owner_state(text_lower: str) -> bool:
@@ -471,7 +437,7 @@ def _extract_git_subcommand(cmd_parts: list) -> str:
     """Extract the git subcommand after global git options."""
     if not cmd_parts:
         return ""
-    parts = _strip_leading_env_assignments([str(p) for p in cmd_parts])
+    parts = strip_leading_env_assignments([str(p) for p in cmd_parts])
     if not parts or pathlib.PurePath(parts[0]).name.lower() != "git":
         return ""
     i = 1
@@ -488,14 +454,14 @@ def _extract_git_subcommand(cmd_parts: list) -> str:
 
 
 def _extract_run_shell_git_subcommand(raw_cmd: Any) -> str:
-    parts = _strip_leading_env_assignments(_unwrap_env_argv(_shell_argv(raw_cmd)))
+    parts = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
     if not parts:
         return ""
     first = pathlib.PurePath(parts[0]).name.lower()
     if first == "git":
         return _extract_git_subcommand(parts)
     if first in {"bash", "sh", "zsh"}:
-        inline = _shell_command_string(parts)
+        inline = shell_command_string(parts)
         if inline:
             return _extract_run_shell_git_subcommand(inline)
     return ""
@@ -503,29 +469,30 @@ def _extract_run_shell_git_subcommand(raw_cmd: Any) -> str:
 
 def _workspace_git_safety_violation(raw_cmd: Any, *, active_root: pathlib.Path, cwd: str = "") -> str:
     root = pathlib.Path(active_root).resolve(strict=False)
-    base = root
-    if cwd and str(cwd).strip() not in ("", ".", "./"):
-        try:
-            base = (root / safe_relpath(str(cwd))).resolve(strict=False)
-            base.relative_to(root)
-        except Exception:
-            base = root
-    argv = _strip_leading_env_assignments(_unwrap_env_argv(_shell_argv(raw_cmd)))
+    base = _resolve_workspace_shell_cwd(root, cwd)
+    try:
+        base.relative_to(root)
+        base_inside_root = True
+    except Exception:
+        base_inside_root = False
+    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
     if not argv:
         return ""
     first = pathlib.PurePath(argv[0]).name.lower()
     if first in {"bash", "sh", "zsh"}:
-        inline = _shell_command_string(argv)
-        return _workspace_git_safety_violation(inline, active_root=root, cwd=str(base.relative_to(root)) if inline else "") if inline else ""
+        inline = shell_command_string(argv)
+        return _workspace_git_safety_violation(inline, active_root=root, cwd=str(base) if inline else "") if inline else ""
     for idx, token in enumerate(argv):
         if pathlib.PurePath(str(token)).name.lower() != "git":
             continue
         parts = argv[idx:]
         subcmd = ""
+        saw_root_selector = False
         j = 1
         while j < len(parts):
             part = parts[j]
             if part in {"-C", "--git-dir", "--work-tree"} and j + 1 < len(parts):
+                saw_root_selector = True
                 try:
                     target = pathlib.Path(parts[j + 1])
                     if not target.is_absolute():
@@ -536,6 +503,7 @@ def _workspace_git_safety_violation(raw_cmd: Any, *, active_root: pathlib.Path, 
                 j += 2
                 continue
             if part.startswith("--git-dir=") or part.startswith("--work-tree="):
+                saw_root_selector = True
                 value = part.split("=", 1)[1]
                 try:
                     target = pathlib.Path(value)
@@ -554,9 +522,19 @@ def _workspace_git_safety_violation(raw_cmd: Any, *, active_root: pathlib.Path, 
                 continue
             subcmd = part
             break
+        if not base_inside_root and not saw_root_selector:
+            return "git cwd escapes the active workspace"
         if subcmd and subcmd.lower() not in _GIT_READONLY_SUBCOMMANDS:
             return f"git {subcmd}"
     return ""
+
+
+def _resolve_workspace_shell_cwd(active_root: pathlib.Path, cwd: str = "") -> pathlib.Path:
+    root = pathlib.Path(active_root).resolve(strict=False)
+    if cwd and str(cwd).strip() not in ("", ".", "./"):
+        raw = pathlib.Path(str(cwd)).expanduser()
+        return raw.resolve(strict=False) if raw.is_absolute() else (root / safe_relpath(str(cwd))).resolve(strict=False)
+    return root
 
 
 @dataclass
@@ -645,6 +623,14 @@ class ToolContext:
     def drive_logs(self) -> pathlib.Path:
         return (self.drive_root / "logs").resolve()
 
+    def task_drive_root(self) -> pathlib.Path:
+        if self.is_workspace_mode():
+            for key in ("drive_root", "child_drive_root", "headless_child_drive_root"):
+                text = str(self.task_metadata.get(key) or "").strip()
+                if text:
+                    return pathlib.Path(text).resolve(strict=False)
+        return pathlib.Path(self.drive_root).resolve(strict=False)
+
 
 @dataclass
 class ToolEntry:
@@ -712,28 +698,60 @@ class ToolRegistry:
 
     # Contract.
 
+    def _is_local_readonly_subagent(self) -> bool:
+        task_constraint = normalize_task_constraint(getattr(self._ctx, "task_constraint", None))
+        return bool(task_constraint and task_constraint.mode == LOCAL_READONLY_SUBAGENT_MODE)
+
+    def initial_tool_names(self) -> frozenset[str]:
+        if self._is_local_readonly_subagent():
+            return LOCAL_READONLY_SUBAGENT_TOOL_NAMES
+        return frozenset(set(CORE_TOOL_NAMES) | set(META_TOOL_NAMES))
+
     def available_tools(self) -> List[str]:
         workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
+        local_readonly_subagent = self._is_local_readonly_subagent()
         return [
             e.name
             for e in self._entries.values()
             if not workspace_mode or e.name in _WORKSPACE_ALLOWED_TOOLS
+            if not local_readonly_subagent or e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
         ]
 
     def _schema_for_entry(self, entry: ToolEntry) -> Dict[str, Any]:
-        return {"type": "function", "function": entry.schema}
+        schema = entry.schema
+        if self._is_local_readonly_subagent() and entry.name in {"browse_page", "browser_action"}:
+            schema = copy.deepcopy(entry.schema)
+            if entry.name == "browse_page":
+                schema["description"] = ("Open an external HTTP(S) URL in headless browser. Returns page content as text, html, markdown, or screenshot (base64 PNG). "
+                                         "Local, loopback, private-network, and non-HTTP URLs are blocked for subagents. Use analyze_screenshot to inspect screenshots. "
+                                         "Use viewport to test mobile layouts (e.g. '375x812').")
+            if entry.name == "browser_action":
+                schema["description"] = ("Perform action on current external browser page. Actions: click (selector), fill (selector + value), select (selector + value), "
+                                         "screenshot (base64 PNG), scroll (value: up/down/top/bottom). JavaScript evaluate is unavailable to local-readonly subagents.")
+                props = schema.get("parameters", {}).get("properties", {})
+                action_schema = props.get("action", {})
+                if isinstance(action_schema.get("enum"), list):
+                    action_schema["enum"] = [name for name in action_schema["enum"] if name != "evaluate"]
+                value_schema = props.get("value", {})
+                if isinstance(value_schema, dict):
+                    value_schema["description"] = "Value for fill/select or direction for scroll"
+        return {"type": "function", "function": schema}
 
     def _schemas_for_entry(self, entry: ToolEntry) -> List[Dict[str, Any]]:
         return [self._schema_for_entry(entry)]
 
     def schemas(self, core_only: bool = False) -> List[Dict[str, Any]]:
         workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
+        local_readonly_subagent = self._is_local_readonly_subagent()
         built_in = [
             schema
             for entry in self._entries.values()
             if not workspace_mode or entry.name in _WORKSPACE_ALLOWED_TOOLS
+            if not local_readonly_subagent or entry.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
             for schema in self._schemas_for_entry(entry)
         ]
+        if local_readonly_subagent:
+            return built_in
         # Include live extension tool schemas in normal tool discovery.
         try:
             from ouroboros.extension_loader import (
@@ -754,7 +772,7 @@ class ToolRegistry:
                     for tool in _ext_tools.values()
                     if _ext_is_live(str(tool.get("skill") or ""), pathlib.Path(self._ctx.drive_root))
                 ]
-            if workspace_mode:
+            if workspace_mode or local_readonly_subagent:
                 extension_schemas = []
         except Exception:
             extension_schemas = []
@@ -777,7 +795,7 @@ class ToolRegistry:
                     }
                     for tool in _mcp_get_manager().list_tools_for_registry()
                 ]
-                if workspace_mode:
+                if workspace_mode or local_readonly_subagent:
                     mcp_schemas = []
             except Exception:
                 mcp_schemas = []
@@ -787,16 +805,25 @@ class ToolRegistry:
         for e in self._entries.values():
             if workspace_mode and not e.name in _WORKSPACE_ALLOWED_TOOLS:
                 continue
-            if e.name in CORE_TOOL_NAMES or e.name in ("list_available_tools", "enable_tools"):
+            if local_readonly_subagent and e.name not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
+                continue
+            if (
+                (local_readonly_subagent and e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES)
+                or e.name in CORE_TOOL_NAMES
+                or e.name in ("list_available_tools", "enable_tools")
+            ):
                 result.extend(self._schemas_for_entry(e))
         # Extension tools are discoverable in core-mode; MCP stays opt-in.
-        return result + extension_schemas
+        return result + ([] if local_readonly_subagent else extension_schemas)
 
     def get_schema_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Return the full schema for a specific tool."""
         requested = str(name or "").strip()
         workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
+        local_readonly_subagent = self._is_local_readonly_subagent()
         if workspace_mode and not requested in _WORKSPACE_ALLOWED_TOOLS:
+            return None
+        if local_readonly_subagent and requested not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
             return None
         entry = self._entries.get(requested)
         if entry:
@@ -811,7 +838,12 @@ class ToolRegistry:
                 ext_tool = _ext_get_tool(name)
             except Exception:
                 ext_tool = None
-            if ext_tool and not workspace_mode and _ext_is_live(str(ext_tool.get("skill") or ""), pathlib.Path(self._ctx.drive_root)):
+            if (
+                ext_tool
+                and not workspace_mode
+                and not local_readonly_subagent
+                and _ext_is_live(str(ext_tool.get("skill") or ""), pathlib.Path(self._ctx.drive_root))
+            ):
                 return {
                     "type": "function",
                     "function": {
@@ -830,7 +862,7 @@ class ToolRegistry:
         except Exception:
             _mcp_get_manager = None
             _mcp_is_name = None
-        if not workspace_mode and _mcp_get_manager and _mcp_is_name and _mcp_is_name(requested):
+        if not workspace_mode and not local_readonly_subagent and _mcp_get_manager and _mcp_is_name and _mcp_is_name(requested):
             mcp_tool = _mcp_get_manager().get_tool(requested)
             if mcp_tool:
                 return {
@@ -977,6 +1009,13 @@ class ToolRegistry:
         """Pre-execution run_shell filter; returns a block message or ``None``."""
         raw_cmd = args.get("cmd", args.get("command", ""))
         workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
+        argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
+        if sudo_noninteractive_violation(argv):
+            return (
+                "⚠️ SUDO_INTERACTIVE_BLOCKED: sudo must be noninteractive. "
+                "Use sudo -n for commands that can run without a password; "
+                "if sudo -n fails, report validation/install blocked by environment."
+            )
         if isinstance(raw_cmd, list):
             cmd_lower = " ".join(str(x) for x in raw_cmd).lower()
         else:
@@ -984,13 +1023,14 @@ class ToolRegistry:
         cmd_path_lower = cmd_lower.replace("\\", "/")
         while "//" in cmd_path_lower:
             cmd_path_lower = cmd_path_lower.replace("//", "/")
-        argv_for_write = _strip_leading_env_assignments(_unwrap_env_argv(_shell_argv(raw_cmd)))
+        argv_for_write = argv
         writeish = any(w in cmd_lower for w in _SHELL_WRITE_INDICATORS) or (
             bool(argv_for_write) and pathlib.PurePath(argv_for_write[0]).name.lower() in _LIGHT_SHELL_WRITER_COMMANDS
         )
         if workspace_mode and writeish:
             active_root = active_repo_dir_for(self._ctx).resolve(strict=False)
-            if "../" in cmd_path_lower or cmd_path_lower.startswith(".."):
+            pro_workspace_passthrough = str(runtime_mode or "").strip().lower() == "pro"
+            if not pro_workspace_passthrough and ("../" in cmd_path_lower or cmd_path_lower.startswith("..")):
                 return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell commands may not target paths outside the active workspace."
             protected_roots = [getattr(self._ctx, "system_repo_dir", None) or getattr(self._ctx, "repo_dir", None)]
             try:
@@ -998,6 +1038,9 @@ class ToolRegistry:
                 protected_roots.append(_PARENT_DATA_DIR)
             except Exception:
                 pass
+            meta = getattr(self._ctx, "task_metadata", {}) if isinstance(getattr(self._ctx, "task_metadata", {}), dict) else {}
+            if meta.get("budget_drive_root"):
+                protected_roots.append(meta.get("budget_drive_root"))
             for root_value in protected_roots:
                 try:
                     root_path = pathlib.Path(root_value).resolve(strict=False)
@@ -1011,14 +1054,34 @@ class ToolRegistry:
                 root_text = str(root_path).replace("\\", "/").lower()
                 if root_text and root_text in cmd_path_lower:
                     return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell command mentions Ouroboros system/data paths."
-            for token in _shell_argv(raw_cmd):
+            protected_paths = []
+            for root_value in protected_roots:
+                try:
+                    protected_paths.append(pathlib.Path(root_value).resolve(strict=False))
+                except Exception:
+                    continue
+            for token in shell_argv_with_inline(raw_cmd):
                 candidates = [str(token)] if str(token).startswith("/") else []
-                candidates.extend(re.findall(r"/[^\s'\"\\),;\]]+", str(token)))
+                if str(token).startswith(("./", "../")):
+                    candidates.append(str(token))
+                else:
+                    candidates.extend(EMBEDDED_ABSOLUTE_PATH_RE.findall(str(token)))
                 for candidate in candidates:
+                    if candidate == "/dev/null":
+                        continue
+                    candidate_path = pathlib.Path(candidate)
+                    resolved = candidate_path.resolve(strict=False) if candidate_path.is_absolute() else (active_root / candidate_path).resolve(strict=False)
+                    for protected_path in protected_paths:
+                        try:
+                            resolved.relative_to(protected_path)
+                            return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell command mentions Ouroboros system/data paths."
+                        except Exception:
+                            pass
                     try:
-                        pathlib.Path(candidate).resolve(strict=False).relative_to(active_root)
+                        resolved.relative_to(active_root)
                     except Exception:
-                        return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell commands may not target absolute paths outside the active workspace."
+                        if not pro_workspace_passthrough:
+                            return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell commands may not target absolute paths outside the active workspace."
 
         # Elevation pattern: blocked in all modes.
         if _detect_runtime_mode_elevation(cmd_lower):
@@ -1094,9 +1157,10 @@ class ToolRegistry:
                     )
 
         # GitHub repo create/delete/auth.
-        if "gh repo create" in cmd_lower or "gh repo delete" in cmd_lower:
+        cmd_words = re.sub(r"\s+", " ", cmd_lower)
+        if "gh repo create" in cmd_words or "gh repo delete" in cmd_words:
             return "⚠️ SAFETY_VIOLATION: Creating/deleting GitHub repositories requires admin approval."
-        if "gh auth" in cmd_lower:
+        if "gh auth" in cmd_words:
             return "⚠️ SAFETY_VIOLATION: Modifying GitHub authentication is not permitted."
 
         # Direct git mutative ban via shell.
@@ -1218,12 +1282,24 @@ class ToolRegistry:
     def execute(self, name: str, args: Dict[str, Any]) -> str:
         name = str(name or "").strip()
         args = dict(args or {})
+        task_constraint = normalize_task_constraint(getattr(self._ctx, "task_constraint", None))
+        local_readonly_subagent = bool(task_constraint and task_constraint.mode == LOCAL_READONLY_SUBAGENT_MODE)
+        if local_readonly_subagent and name not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
+            return (
+                "⚠️ LOCAL_READONLY_SUBAGENT_BLOCKED: this subagent may inspect "
+                "local repo/data/history plus web/browser surfaces, but may not "
+                f"call {name!r}. Parent tasks must perform writes, commits, "
+                "review gates, tool expansion, runtime control, skills, MCP, "
+                "extensions, shell, and further delegation."
+            )
         entry = self._entries.get(name)
         ext_tool = None
-        try:
-            from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
-        except Exception:
-            _ext_parse_name = None
+        _ext_parse_name = None
+        if not local_readonly_subagent:
+            try:
+                from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
+            except Exception:
+                _ext_parse_name = None
         if entry is None and _ext_parse_name and _ext_parse_name(name):
             try:
                 from ouroboros.extension_loader import get_tool as _ext_get_tool
@@ -1231,14 +1307,17 @@ class ToolRegistry:
             except Exception:
                 ext_tool = None
 
-        try:
-            from ouroboros.mcp_client import (
-                ensure_configured_from_settings as _mcp_ensure_configured,
-                is_mcp_tool_name as _mcp_is_name,
-            )
-            _mcp_ensure_configured(refresh=False)
-        except Exception:
+        if local_readonly_subagent:
             _mcp_is_name = None
+        else:
+            try:
+                from ouroboros.mcp_client import (
+                    ensure_configured_from_settings as _mcp_ensure_configured,
+                    is_mcp_tool_name as _mcp_is_name,
+                )
+                _mcp_ensure_configured(refresh=False)
+            except Exception:
+                _mcp_is_name = None
         is_mcp = bool(_mcp_is_name and _mcp_is_name(name))
 
         workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
@@ -1246,10 +1325,9 @@ class ToolRegistry:
             workspace = str(getattr(self._ctx, "workspace_root", "") or "")
             return (
                 "⚠️ WORKSPACE_MODE_BLOCKED: this task is running against an external "
-                f"workspace ({workspace}). Tool {name!r} is outside the v5.29 "
-                "workspace allowlist. Leave workspace changes as files or a patch artifact."
+                f"workspace ({workspace}). Tool {name!r} is outside the workspace "
+                "allowlist. Leave workspace changes as files or a patch artifact."
             )
-
         # Hardcoded sandbox: light blocks repo mutation; advanced protects
         # core/contracts/release; pro still relies on commit review.
         try:
@@ -1258,7 +1336,6 @@ class ToolRegistry:
         except Exception:
             _runtime_mode = "advanced"
 
-        task_constraint = normalize_task_constraint(getattr(self._ctx, "task_constraint", None))
         heal_no_enable = bool(task_constraint and task_constraint.mode == "skill_repair")
         if heal_no_enable:
             heal_skill = task_constraint.skill_name if task_constraint else ""

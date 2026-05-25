@@ -1,4 +1,4 @@
-"""Pre-implementation full-codebase design review tool."""
+"""Pre-implementation Atlas-backed design review tool."""
 
 from __future__ import annotations
 
@@ -9,8 +9,11 @@ import logging
 
 from ouroboros.llm import LLMClient
 from ouroboros.tools.registry import ToolContext, ToolEntry
+from ouroboros.tools.review_context_atlas import (
+    ReviewContextAtlasRequest,
+    compile_review_context_atlas,
+)
 from ouroboros.tools.review_helpers import (
-    build_full_repo_pack,
     build_head_snapshot_section,
     emit_review_usage,
     load_governance_doc,
@@ -35,9 +38,9 @@ def get_tools():
             schema={
                 "name": "plan_task",
                 "description": (
-                    "Run a pre-implementation design review of a proposed plan using 2–3 parallel full-codebase "
+                    "Run a pre-implementation design review of a proposed plan using 2–3 parallel Atlas-backed "
                     "reviewers. Call this BEFORE writing any code for non-trivial tasks (>2 files or >50 lines "
-                    "of changes). Each reviewer sees the entire repository plus your plan description and the "
+                    "of changes). Each reviewer sees a generated repository Atlas plus your plan description and the "
                     "files you plan to touch. They will identify forgotten touchpoints, implicit contract "
                     "violations, simpler alternatives, and Bible/architecture compliance issues — before you've "
                     "written a single line. Uses the reviewer slots configured in OUROBOROS_REVIEW_MODELS (same "
@@ -114,8 +117,7 @@ async def _run_plan_review_async(
             "ERROR: plan_task requires at least 2 reviewer slots for "
             f"review coordination. Got {len(resolved_models)} "
             f"model(s) from {resolved_models!r}. Fix OUROBOROS_REVIEW_MODELS "
-            "in settings (example: 'openai/gpt-5.5,"
-            "google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6')."
+            f"in settings (example: {_cfg.SETTINGS_DEFAULTS['OUROBOROS_REVIEW_MODELS']!r})."
         )
 
     models = _get_review_models()
@@ -126,32 +128,50 @@ async def _run_plan_review_async(
     arch_md = _load_doc(repo_dir, "docs/ARCHITECTURE.md")
     checklists_md = _load_doc(repo_dir, "docs/CHECKLISTS.md")
 
-    ctx.emit_progress_fn("📐 plan_task: building full repo pack…")
+    ctx.emit_progress_fn("📐 plan_task: reading planned-touch file snapshots…")
     canonical_docs = {
         "BIBLE.md",
         "docs/DEVELOPMENT.md",
         "docs/ARCHITECTURE.md",
         "docs/CHECKLISTS.md",
     }
-    try:
-        repo_pack, omitted = build_full_repo_pack(
-            repo_dir,
-            exclude_paths=set(files_to_touch) | canonical_docs,
-        )
-    except Exception as e:
-        return f"ERROR: Failed to build repo pack: {e}"
-
-    omitted_note = ""
-    if omitted:
-        omitted_note = f"\n\n## OMITTED FILES\n" + "\n".join(f"- {p}" for p in omitted)
-
-    ctx.emit_progress_fn(f"📐 plan_task: reading {len(files_to_touch)} planned-touch file(s)…")
     head_snapshots = ""
     if files_to_touch:
         head_snapshots = build_head_snapshot_section(repo_dir, files_to_touch)
 
     system_prompt = _build_system_prompt(checklist, bible_text, dev_md, arch_md, checklists_md)
-    user_content = _build_user_content(plan, goal, files_to_touch, head_snapshots, repo_pack, omitted_note)
+    placeholder = "__GENERATED_PLAN_ATLAS_PENDING__"
+    user_content = _build_user_content(plan, goal, files_to_touch, head_snapshots, placeholder, "")
+    fixed_prompt_tokens = estimate_tokens(system_prompt + user_content)
+    ctx.emit_progress_fn("📐 plan_task: building Generated Plan Review Atlas…")
+    try:
+        atlas = compile_review_context_atlas(
+            ReviewContextAtlasRequest(
+                repo_dir=repo_dir,
+                anchors=tuple(files_to_touch),
+                already_included=frozenset(set(files_to_touch) | canonical_docs),
+                fixed_prompt_tokens=fixed_prompt_tokens,
+                target_total_tokens=850_000,
+                hard_total_tokens=_PLAN_BUDGET_TOKEN_LIMIT,
+                include_tests=False,
+                title="Generated Plan Review Atlas",
+            )
+        )
+    except Exception as e:
+        return f"ERROR: Failed to build review context atlas: {e}"
+
+    if atlas.status == "budget_exceeded":
+        estimated = int((atlas.manifest or {}).get("estimated_total_tokens") or 0)
+        return (
+            f"⚠️ PLAN_REVIEW_SKIPPED: generated repository atlas exceeded hard budget"
+            + (f" ({estimated:,} estimated tokens)" if estimated else "")
+            + ". Split the plan into a smaller scope or reduce protected context size."
+        )
+
+    head, sep, tail = user_content.rpartition(placeholder)
+    if not sep:
+        return "ERROR: Failed to build review context atlas: placeholder missing."
+    user_content = head + atlas.text + tail
 
     estimated_tokens = estimate_tokens(system_prompt + user_content)
     if estimated_tokens > _PLAN_BUDGET_TOKEN_LIMIT:
@@ -367,13 +387,13 @@ def _build_system_prompt(
         "You are a senior design reviewer for Ouroboros, a self-creating AI agent.\n"
         "Your job is to review a proposed implementation plan BEFORE any code is written.\n"
         "You are validating a concrete candidate plan, not brainstorming from zero. If the plan is weak, say exactly why and what boundary or contract was missed.\n"
-        "You have full access to the entire codebase to find issues that the implementer may have missed.\n\n"
+        "You have broad Atlas-backed repository access to find issues that the implementer may have missed.\n\n"
         "## Review stance — GENERATIVE, not audit\n\n"
-        "Your primary job is to CONTRIBUTE ideas the implementer may not see, using full repo access.\n"
+        "Your primary job is to CONTRIBUTE ideas the implementer may not see, using broad Atlas-backed repo access.\n"
         "Finding defects in the plan is secondary; proposing concrete alternatives, surfacing existing surfaces that already solve the goal, and flagging subtle contract breaks is primary.\n"
         "Assume the implementer has already thought through the first-pass design — you are a design PARTNER who contributes, not an auditor who rubber-stamps.\n\n"
         "## Required output structure (follow exactly)\n\n"
-        "1. **Your own approach** (1-2 sentences). State what YOU would do with full repo access: the concrete alternative path, the existing file/function you would reuse, or the simpler route. If after real effort you see no better approach, say so explicitly.\n"
+        "1. **Your own approach** (1-2 sentences). State what YOU would do with broad Atlas-backed repo access: the concrete alternative path, the existing file/function you would reuse, or the simpler route. If after real effort you see no better approach, say so explicitly.\n"
         "2. **`## PROPOSALS` section** (top 1-2 ideas). Each proposal is one of:\n   - An existing function/module that already solves this (named exactly).\n   - A subtle contract break or shared-state interaction the plan likely missed.\n   - A simpler path with less surface area preserving the goal.\n   - A risk pattern visible from codebase history in your context.\n   - A BIBLE.md alignment issue with a specific principle cited.\n"
         "3. **Per-item verdicts**. For each checklist item below:\n   - **verdict**: PASS | RISK | FAIL\n   - **explanation**: 2-5 sentences describing what you found (or why it's fine)\n   - **concrete fix** (if RISK or FAIL): exact file, function, or line to address\n   - **alternative approaches** (if applicable): 1-2 more elegant solutions\n"
         "4. **Final line** (exactly one of):\n   - `AGGREGATE: GREEN` — no critical issues, implementer can proceed\n   - `AGGREGATE: REVIEW_REQUIRED` — risks or minor concerns, implementer should consider adjustments\n   - `AGGREGATE: REVISE_PLAN` — critical structural issues, plan must be revised before coding\n\n"
@@ -423,7 +443,7 @@ def _build_user_content(
         parts.append(f"## Current State of Planned-Touch Files (HEAD)\n\n{head_snapshots}\n")
 
     if repo_pack:
-        parts.append(f"## Full Repository Code (for cross-module analysis)\n\n{repo_pack}")
+        parts.append(f"## Generated Repository Atlas (for cross-module analysis)\n\n{repo_pack}")
 
     if omitted_note:
         parts.append(omitted_note)
@@ -491,7 +511,7 @@ def _get_review_models() -> list[str]:
 
     models = list(_cfg.get_review_models() or [])
     if not models:
-        main = os.environ.get("OUROBOROS_MODEL", "anthropic/claude-opus-4.6")
+        main = os.environ.get("OUROBOROS_MODEL", _cfg.SETTINGS_DEFAULTS["OUROBOROS_MODEL"])
         models = [main]
 
     return models[:3]  # cap at 3

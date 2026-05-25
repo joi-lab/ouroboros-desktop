@@ -11,15 +11,32 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 
 from ouroboros.gateway._helpers import coerce_int, json_error, json_exception, request_drive_root, request_json_or, request_repo_dir
-from ouroboros.headless import ARTIFACTS_DIR, HEADLESS_TASKS_DIR, prepare_task_drive
+from ouroboros.headless import (
+    ARTIFACTS_DIR,
+    ARTIFACT_STATUS_FAILED,
+    ARTIFACT_STATUS_FINALIZING,
+    ARTIFACT_STATUS_PENDING,
+    ARTIFACT_STATUS_READY,
+    HEADLESS_TASKS_DIR,
+    prepare_task_drive,
+    task_artifacts_dir,
+    write_workspace_preflight_artifact,
+)
+from ouroboros.platform_layer import bootstrap_process_path
 from ouroboros.task_results import STATUS_SCHEDULED, list_task_results, load_task_result, validate_task_id, write_task_result
 from ouroboros.utils import iter_jsonl_objects, utc_now_iso
+from ouroboros.workspace_preflight import (
+    collect_workspace_preflight,
+    render_workspace_preflight_summary,
+    summarize_workspace_preflight,
+)
 
 
 _FINAL_STATUSES = {"completed", "failed", "cancelled", "rejected_duplicate"}
+_ARTIFACT_TERMINAL_STATUSES = {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}
 _LOG_SOURCES = (
     ("progress", ("logs", "progress.jsonl")),
     ("chat", ("logs", "chat.jsonl")),
@@ -88,14 +105,29 @@ async def api_tasks_create(request: Request) -> JSONResponse:
     metadata.setdefault("task_id", task_id)
     metadata.setdefault("parent_task_id", parent_task_id or "")
     metadata.setdefault("root_task_id", root_task_id)
+    artifacts: List[Dict[str, Any]] = []
+    workspace_preflight_summary: Dict[str, Any] = {}
     if workspace_root:
         metadata["workspace_root"] = str(workspace_root)
+        try:
+            preflight = collect_workspace_preflight(workspace_root)
+            workspace_preflight_summary = summarize_workspace_preflight(preflight)
+            metadata["workspace_preflight"] = workspace_preflight_summary
+            artifacts.append(write_workspace_preflight_artifact(drive_root, task_id, preflight))
+        except Exception as exc:
+            workspace_preflight_summary = {
+                "schema_version": 1,
+                "workspace_root": str(workspace_root),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            metadata["workspace_preflight"] = workspace_preflight_summary
 
     task_text = _compose_task_text(
         description,
         workspace_root=workspace_root,
         workspace_mode=workspace_mode,
         memory_mode=memory_mode,
+        workspace_preflight=workspace_preflight_summary,
         attachments=body.get("attachments"),
     )
     task = {
@@ -137,6 +169,9 @@ async def api_tasks_create(request: Request) -> JSONResponse:
         memory_mode=memory_mode,
         child_drive_root=str(child_drive or ""),
         budget_drive_root=str(drive_root) if child_drive is not None else "",
+        artifacts=artifacts,
+        artifact_status=ARTIFACT_STATUS_PENDING if workspace_root else "",
+        metadata=metadata,
         result="Task accepted and scheduled.",
     )
     try:
@@ -161,6 +196,9 @@ async def api_tasks_create(request: Request) -> JSONResponse:
             memory_mode=memory_mode,
             child_drive_root=str(child_drive or ""),
             budget_drive_root=str(drive_root) if child_drive is not None else "",
+            artifacts=artifacts,
+            artifact_status=ARTIFACT_STATUS_FAILED if workspace_root else "",
+            metadata=metadata,
             result=f"Failed to enqueue task: {exc}",
         )
         return json_exception(exc, 503)
@@ -193,6 +231,34 @@ async def api_task_get(request: Request) -> JSONResponse:
     if not data:
         return json_error("task not found", 404)
     return JSONResponse(data)
+
+
+async def api_task_artifact(request: Request):
+    try:
+        task_id = validate_task_id(request.path_params.get("task_id"))
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    name = str(request.path_params.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name or name in {".", ".."} or ".." in pathlib.PurePosixPath(name).parts:
+        return json_error("artifact name must be a simple filename", 400)
+    drive_root = request_drive_root(request)
+    result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+    if not result:
+        return json_error("task not found", 404)
+    artifact = _artifact_by_name(result, name)
+    if artifact is None:
+        return json_error("artifact not found", 404, task_id=task_id, artifact=name)
+    base = task_artifacts_dir(drive_root, task_id).resolve(strict=False)
+    path = pathlib.Path(str(artifact.get("path") or "")).resolve(strict=False)
+    if path.name != name:
+        return json_error("artifact metadata path does not match requested name", 500)
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return json_error("artifact path is outside task artifact directory", 500)
+    if not path.is_file():
+        return json_error("artifact file is missing", 404, task_id=task_id, artifact=name)
+    return FileResponse(path)
 
 
 async def api_task_cancel(request: Request) -> JSONResponse:
@@ -269,6 +335,10 @@ def iter_task_events(drive_root: pathlib.Path, task_id: str) -> List[Dict[str, A
     rows: List[Dict[str, Any]] = []
     roots = [pathlib.Path(drive_root)]
     result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+    suppress_task_done = _is_workspace_result(result) and str(result.get("artifact_status") or "").lower() in {
+        ARTIFACT_STATUS_PENDING,
+        ARTIFACT_STATUS_FINALIZING,
+    }
     child = str(result.get("child_drive_root") or result.get("headless_child_drive_root") or "").strip()
     if child:
         roots.append(pathlib.Path(child))
@@ -278,7 +348,10 @@ def iter_task_events(drive_root: pathlib.Path, task_id: str) -> List[Dict[str, A
             for line_no, entry in enumerate(iter_jsonl_objects(path), 1):
                 if str(entry.get("task_id") or "") != task_id:
                     continue
-                rows.append(_event_from_log_entry(source, line_no, entry, root))
+                event = _event_from_log_entry(source, line_no, entry, root)
+                if suppress_task_done and event.get("type") == "task_done":
+                    continue
+                rows.append(event)
     if result:
         rows.append({
             "source": "task_result",
@@ -326,8 +399,14 @@ def _effective_task_result(drive_root: pathlib.Path, result: Dict[str, Any]) -> 
     merged = dict(result)
     parent_status = str(result.get("status") or "").lower()
     child_status = str(child_result.get("status") or "").lower()
+    result_child_status = str(result.get("child_status") or "").lower()
+    copied_child_terminal = (
+        _is_workspace_result(result)
+        and result_child_status in _FINAL_STATUSES
+        and parent_status == result_child_status
+    )
     preserve_parent_terminal = (
-        parent_status in {"failed", "cancelled", "rejected_duplicate"}
+        (parent_status in {"failed", "cancelled", "rejected_duplicate"} and not copied_child_terminal)
         or (parent_status in _FINAL_STATUSES and child_status not in _FINAL_STATUSES)
     )
     parent_terminal_fields = {"status", "result", "error", "ts"} if preserve_parent_terminal else set()
@@ -338,6 +417,16 @@ def _effective_task_result(drive_root: pathlib.Path, result: Dict[str, Any]) -> 
             continue
         merged[key] = value
     merged.setdefault("child_drive_root", child_text)
+    if (
+        _is_workspace_result(merged)
+        and child_status in _FINAL_STATUSES
+        and (parent_status not in {"failed", "cancelled", "rejected_duplicate"} or copied_child_terminal)
+    ):
+        artifact_status = str(merged.get("artifact_status") or "").lower()
+        if artifact_status not in _ARTIFACT_TERMINAL_STATUSES:
+            merged["child_status"] = child_status
+            merged["status"] = "running"
+            merged["artifact_status"] = ARTIFACT_STATUS_FINALIZING
     return merged
 
 
@@ -363,6 +452,7 @@ def _resolve_workspace_root(
     root = pathlib.Path(text).expanduser().resolve(strict=False)
     if not root.exists() or not root.is_dir():
         raise ValueError(f"workspace_root is not a directory: {text}")
+    bootstrap_process_path()
     system_repo = pathlib.Path(system_repo_dir).resolve(strict=False)
     drive = pathlib.Path(drive_root).resolve(strict=False)
     for protected_root, label in ((system_repo, "Ouroboros system repo"), (drive, "Ouroboros data drive")):
@@ -421,24 +511,46 @@ def _compose_task_text(
     workspace_root: Optional[pathlib.Path],
     workspace_mode: str,
     memory_mode: str,
+    workspace_preflight: Dict[str, Any],
     attachments: Any,
 ) -> str:
     parts = [description]
     if workspace_root is not None:
-        parts.append(
-            "\n\n[HEADLESS_WORKSPACE]\n"
+        workspace_lines = (
             f"workspace_root: {workspace_root}\n"
             f"workspace_mode: {workspace_mode or 'external'}\n"
             f"memory_mode: {memory_mode}\n"
-            "Use repo_read, repo_write, repo_list, code_search, and run_shell against this active workspace.\n"
+            "Use repo_read, repo_write, repo_list, code_search, git_status, git_diff, and run_shell against this target workspace, not the Ouroboros system repo.\n"
+            f"{render_workspace_preflight_summary(workspace_preflight)}\n"
+            "Before editing, account for target-repo docs or root-level instructions if present.\n"
+            "Project-local dependency installs are allowed in external workspace tasks; system/global installs are for runtime_mode=pro only and must be noninteractive.\n"
+            "Final summaries belong in the final answer, not new repo markdown files unless requested.\n"
             "Do not commit in the workspace. Leave changes as a patch artifact for the caller.\n"
-            "[END_HEADLESS_WORKSPACE]"
         )
+        if "[HEADLESS_WORKSPACE]" in description and "[END_HEADLESS_WORKSPACE]" in description:
+            marker = "[END_HEADLESS_WORKSPACE]"
+            idx = description.rfind(marker)
+            parts = [description[:idx].rstrip(), "\n", workspace_lines, description[idx:]]
+        else:
+            parts.append(f"\n\n[HEADLESS_WORKSPACE]\n{workspace_lines}[END_HEADLESS_WORKSPACE]")
     normalized = _normalize_attachments(attachments)
     if normalized:
         rendered = "\n".join(f"- {item['label']}: {item['path']}" for item in normalized)
         parts.append(f"\n\n[ATTACHMENTS]\n{rendered}\n[END_ATTACHMENTS]")
     return "".join(parts)
+
+
+def _is_workspace_result(result: Dict[str, Any]) -> bool:
+    return bool(str(result.get("workspace_root") or "").strip() or str(result.get("workspace_mode") or "").strip())
+
+
+def _artifact_by_name(result: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
+    for artifact in result.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        if str(artifact.get("name") or pathlib.Path(str(artifact.get("path") or "")).name) == name:
+            return artifact
+    return None
 
 
 def _queue_snapshot(drive_root: pathlib.Path) -> Dict[str, Any]:
@@ -466,6 +578,7 @@ def _supervisor_ready_error(request: Request) -> Optional[JSONResponse]:
 
 
 __all__ = [
+    "api_task_artifact",
     "api_task_cancel",
     "api_task_events",
     "api_task_get",

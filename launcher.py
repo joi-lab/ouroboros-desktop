@@ -37,6 +37,7 @@ from ouroboros.launcher_bootstrap import (
     bootstrap_repo as _bootstrap_repo,
     check_git as _check_git,
     install_deps as _install_deps_impl,
+    python_bytecode_env,
     sync_existing_repo_from_bundle as _sync_existing_repo_from_bundle_impl,
     verify_claude_runtime as _verify_claude_runtime,
 )
@@ -394,7 +395,7 @@ def start_agent(port: int = AGENT_SERVER_PORT) -> subprocess.Popen:
 
     settings = _load_settings()
     _apply_settings_to_env(settings)
-    env = os.environ.copy()
+    env = python_bytecode_env(DATA_DIR, os.environ.copy())
     env["PYTHONPATH"] = str(REPO_DIR)
     saved_host = str(settings.get("OUROBOROS_SERVER_HOST") or "").strip()
     if saved_host:

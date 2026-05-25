@@ -73,14 +73,14 @@ class TestEstimateCost:
 
     def test_non_anthropic_cache_write_defaults_to_input_price(self):
         with patch("ouroboros.pricing.get_pricing", return_value={
-            "google/gemini-3-flash-preview": (0.15, 0.015, 0.60),
+            "google/gemini-3.5-flash": (1.50, 0.15, 9.00),
         }):
             cost = estimate_cost(
-                "google/gemini-3-flash-preview",
+                "google/gemini-3.5-flash",
                 prompt_tokens=2000, completion_tokens=0,
                 cached_tokens=0, cache_write_tokens=1000,
             )
-        expected = (1000 * 0.15 + 1000 * 0.15) / 1e6
+        expected = (1000 * 1.50 + 1000 * 1.50) / 1e6
         assert abs(cost - expected) < 1e-6
 
     def test_explicit_cache_write_price_overrides_fallback(self):
@@ -134,6 +134,10 @@ class TestEstimateCost:
         assert MODEL_PRICING_STATIC["openai/gpt-5.5"] == (1.75, 0.175, 14.0)
         assert MODEL_PRICING_STATIC["openai/gpt-5.5-pro"] == (1.75, 0.175, 14.0)
         assert MODEL_PRICING_STATIC["openai/gpt-5.5-mini"] == (0.75, 0.075, 4.50)
+        assert MODEL_PRICING_STATIC["google/gemini-3.5-flash"] == (1.50, 0.15, 9.00)
+        assert MODEL_PRICING_STATIC["google/gemini-3.1-pro-preview"] == (2.0, 0.20, 12.0)
+        assert MODEL_PRICING_STATIC["google/gemini-3.1-flash-lite"] == (0.25, 0.025, 1.50)
+        assert MODEL_PRICING_STATIC["google/gemini-3-flash-preview"] == (0.15, 0.015, 0.60)
 
 
 # --- infer_api_key_type ---
@@ -142,7 +146,7 @@ class TestInferApiKeyType:
 
     @pytest.mark.parametrize("model,expected", [
         ("anthropic/claude-sonnet-4.6", "openrouter"),
-        ("google/gemini-3-flash-preview", "openrouter"),
+        ("google/gemini-3.5-flash", "openrouter"),
         ("openai/gpt-5.2", "openrouter"),
         ("x-ai/grok-3-mini", "openrouter"),
         ("qwen/qwen3.5-plus-02-15", "openrouter"),
@@ -175,12 +179,12 @@ class TestInferModelCategory:
             assert infer_model_category("anthropic/claude-sonnet-4.6") == "main"
 
     def test_matches_light_model(self):
-        with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3-flash-preview"}):
-            assert infer_model_category("google/gemini-3-flash-preview") == "light"
+        with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3.5-flash"}, clear=True):
+            assert infer_model_category("google/gemini-3.5-flash") == "light"
 
     def test_matches_local_usage_suffix(self):
-        with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3-flash-preview"}):
-            assert infer_model_category("google/gemini-3-flash-preview (local)") == "light"
+        with patch.dict(os.environ, {"OUROBOROS_MODEL_LIGHT": "google/gemini-3.5-flash"}, clear=True):
+            assert infer_model_category("google/gemini-3.5-flash (local)") == "light"
 
     def test_matches_openai_double_colon_against_resolved_usage_name(self):
         with patch.dict(os.environ, {"OUROBOROS_MODEL": "openai::gpt-5.2"}):

@@ -10,7 +10,10 @@ import os
 import pathlib
 import shutil
 import subprocess
-from typing import Any, Dict, Iterable, List, Optional
+import tempfile
+import threading
+from hashlib import sha256
+from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ouroboros.task_results import load_task_result, validate_task_id, write_task_result
 from ouroboros.utils import atomic_write_json, utc_now_iso
@@ -18,6 +21,29 @@ from ouroboros.utils import atomic_write_json, utc_now_iso
 
 HEADLESS_TASKS_DIR = pathlib.Path("state") / "headless_tasks"
 ARTIFACTS_DIR = pathlib.Path("task_results") / "artifacts"
+ARTIFACT_STATUS_PENDING = "pending"
+ARTIFACT_STATUS_FINALIZING = "finalizing"
+ARTIFACT_STATUS_READY = "ready"
+ARTIFACT_STATUS_FAILED = "failed"
+
+_FINAL_STATUSES = {"completed", "failed", "cancelled", "rejected_duplicate"}
+_PATCH_EXCLUDE_RULES_VERSION = 1
+_TOP_LEVEL_EXCLUDE_DIRS = {".ouroboros", ".venv", "venv", "env"}
+_ANY_SEGMENT_EXCLUDE_DIRS = {
+    ".cache",
+    ".mypy_cache",
+    ".npm",
+    ".pnpm-store",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".yarn",
+    "__pycache__",
+    "node_modules",
+}
+_SENSITIVE_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+_SENSITIVE_KEY_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+_SENSITIVE_FILENAMES = {"credentials.json", "secrets.json", "token.json"}
 
 
 def task_state_dir(drive_root: pathlib.Path, task_id: str) -> pathlib.Path:
@@ -28,6 +54,27 @@ def task_artifacts_dir(drive_root: pathlib.Path, task_id: str) -> pathlib.Path:
     path = pathlib.Path(drive_root) / ARTIFACTS_DIR / validate_task_id(task_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def write_workspace_preflight_artifact(
+    parent_drive_root: pathlib.Path,
+    task_id: str,
+    preflight: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Persist the full workspace preflight report as a task artifact."""
+
+    artifact_dir = task_artifacts_dir(parent_drive_root, task_id)
+    path = artifact_dir / "workspace_preflight.json"
+    atomic_write_json(path, preflight, trailing_newline=True)
+    raw = path.read_bytes() if path.exists() else b""
+    return {
+        "kind": "workspace_preflight",
+        "name": "workspace_preflight.json",
+        "path": str(path),
+        "size": len(raw),
+        "sha256": sha256(raw).hexdigest() if raw else "",
+        "workspace_root": str(preflight.get("workspace_root") or ""),
+    }
 
 
 def prepare_task_drive(parent_drive_root: pathlib.Path, task_id: str, memory_mode: str) -> Optional[pathlib.Path]:
@@ -79,10 +126,16 @@ def copy_child_task_result(parent_drive_root: pathlib.Path, task: Dict[str, Any]
         if key not in {"task_id", "status"}
     }
     payload.setdefault("headless_child_drive_root", str(child_drive))
+    child_status = str(child_result.get("status") or "completed")
+    if _workspace_root_from_task(task) is not None and child_status in _FINAL_STATUSES:
+        existing = load_task_result(parent_drive_root, task_id) or {}
+        if str(existing.get("artifact_status") or "") not in {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}:
+            payload["artifact_status"] = ARTIFACT_STATUS_FINALIZING
+        payload["child_status"] = child_status
     return write_task_result(
         parent_drive_root,
         task_id,
-        str(child_result.get("status") or "completed"),
+        child_status,
         **payload,
     )
 
@@ -97,37 +150,83 @@ def finalize_task_artifacts(parent_drive_root: pathlib.Path, task: Dict[str, Any
 
     artifact_dir = task_artifacts_dir(parent_drive_root, task_id)
     workspace_root = _workspace_root_from_task(task)
+    existing = load_task_result(parent_drive_root, task_id) or {}
+    status = str(existing.get("status") or "completed")
+    artifact_status = ARTIFACT_STATUS_READY
+    artifact_error = ""
     if workspace_root is not None:
-        patch_text = build_workspace_patch(workspace_root)
-        patch_path = artifact_dir / "workspace.patch"
-        patch_path.write_text(patch_text, encoding="utf-8")
-        artifacts.append({
-            "kind": "workspace_patch",
-            "path": str(patch_path),
-            "size": len(patch_text.encode("utf-8")),
-            "workspace_root": str(workspace_root),
-        })
-
-    child_drive = _child_drive_from_task(task)
-    if child_drive is not None:
-        export_path = artifact_dir / "memory_export.json"
-        atomic_write_json(export_path, build_memory_export(child_drive, task), trailing_newline=True)
-        artifacts.append({
-            "kind": "memory_export",
-            "path": str(export_path),
-            "size": export_path.stat().st_size if export_path.exists() else 0,
-            "memory_mode": str(task.get("memory_mode") or ""),
-        })
-
-    if artifacts:
-        existing = load_task_result(parent_drive_root, task_id) or {}
-        merged = list(existing.get("artifacts") or [])
-        merged.extend(artifacts)
         write_task_result(
             parent_drive_root,
             task_id,
-            str(existing.get("status") or "completed"),
-            artifacts=merged,
+            status,
+            artifact_status=ARTIFACT_STATUS_FINALIZING,
+        )
+        try:
+            patch_artifacts, manifest = write_workspace_patch_artifacts(
+                workspace_root,
+                artifact_dir,
+                task=task,
+            )
+            artifacts.extend(patch_artifacts)
+            if manifest.get("status") == ARTIFACT_STATUS_FAILED:
+                artifact_status = ARTIFACT_STATUS_FAILED
+                artifact_error = "; ".join(str(err.get("message") or err) for err in manifest.get("errors") or [])[:1000]
+        except Exception as exc:
+            artifact_status = ARTIFACT_STATUS_FAILED
+            artifact_error = f"{type(exc).__name__}: {exc}"
+            manifest_path = artifact_dir / "workspace_patch.json"
+            manifest = _empty_patch_manifest(
+                workspace_root,
+                status=ARTIFACT_STATUS_FAILED,
+                errors=[{"type": "exception", "message": artifact_error}],
+            )
+            atomic_write_json(
+                manifest_path,
+                manifest,
+                trailing_newline=True,
+            )
+            artifacts.append({
+                "kind": "workspace_patch_manifest",
+                "name": "workspace_patch.json",
+                "path": str(manifest_path),
+                "size": manifest_path.stat().st_size if manifest_path.exists() else 0,
+                "workspace_root": str(workspace_root),
+            })
+
+    child_drive = _child_drive_from_task(task)
+    if child_drive is not None:
+        try:
+            export_path = artifact_dir / "memory_export.json"
+            atomic_write_json(export_path, build_memory_export(child_drive, task), trailing_newline=True)
+            artifacts.append({
+                "kind": "memory_export",
+                "name": "memory_export.json",
+                "path": str(export_path),
+                "size": export_path.stat().st_size if export_path.exists() else 0,
+                "memory_mode": str(task.get("memory_mode") or ""),
+            })
+        except Exception as exc:
+            if workspace_root is not None:
+                artifact_status = ARTIFACT_STATUS_FAILED
+            message = f"{type(exc).__name__}: {exc}"
+            artifact_error = f"{artifact_error}; {message}" if artifact_error else message
+
+    if artifacts or workspace_root is not None:
+        existing = load_task_result(parent_drive_root, task_id) or {}
+        drop_kinds = {"workspace_patch"} if workspace_root is not None and artifact_status == ARTIFACT_STATUS_FAILED else set()
+        merged = _merge_artifacts(list(existing.get("artifacts") or []), artifacts, drop_kinds=drop_kinds)
+        fields: Dict[str, Any] = {
+            "artifacts": merged,
+            "artifact_status": artifact_status if workspace_root is not None else str(existing.get("artifact_status") or ""),
+            "artifact_finalized_at": utc_now_iso(),
+        }
+        if artifact_error:
+            fields["artifact_error"] = artifact_error
+        write_task_result(
+            parent_drive_root,
+            task_id,
+            str(existing.get("status") or status or "completed"),
+            **fields,
         )
     return artifacts
 
@@ -135,17 +234,176 @@ def finalize_task_artifacts(parent_drive_root: pathlib.Path, task: Dict[str, Any
 def build_workspace_patch(workspace_root: pathlib.Path) -> str:
     """Return a git patch for tracked changes plus untracked files."""
 
-    root = pathlib.Path(workspace_root)
-    if not root.exists() or not root.is_dir():
-        return ""
-    tracked = _git_stdout(["git", "diff", "--binary", "HEAD", "--"], root)
-    untracked_parts = []
-    for rel in _untracked_files(root):
-        diff = _git_stdout(["git", "diff", "--no-index", "--binary", "--", os.devnull, rel], root, allow_rc={0, 1})
-        if diff.strip():
-            untracked_parts.append(diff)
-    parts = [part for part in [tracked, *untracked_parts] if part.strip()]
-    return "\n".join(parts)
+    with tempfile.TemporaryDirectory() as tmp:
+        artifacts, manifest = write_workspace_patch_artifacts(
+            pathlib.Path(workspace_root),
+            pathlib.Path(tmp),
+            task={},
+        )
+        if manifest.get("status") == ARTIFACT_STATUS_FAILED:
+            return ""
+        for artifact in artifacts:
+            if artifact.get("kind") == "workspace_patch":
+                path = pathlib.Path(str(artifact.get("path") or ""))
+                return path.read_text(encoding="utf-8") if path.is_file() else ""
+    return ""
+
+
+def write_workspace_patch_artifacts(
+    workspace_root: pathlib.Path,
+    artifact_dir: pathlib.Path,
+    *,
+    task: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Stream workspace patch and manifest artifacts into ``artifact_dir``."""
+
+    root = pathlib.Path(workspace_root).resolve(strict=False)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    patch_path = artifact_dir / "workspace.patch"
+    manifest_path = artifact_dir / "workspace_patch.json"
+    errors: List[Dict[str, Any]] = []
+    diagnostics: List[Dict[str, Any]] = []
+    excluded: List[Dict[str, str]] = []
+    sensitive: List[Dict[str, str]] = []
+    included_untracked: List[str] = []
+    changed_tracked = _git_path_list(
+        ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-color", "HEAD", "--"],
+        root,
+        errors,
+    )
+    diffstat = _git_stdout(
+        ["git", "diff", "--stat", "--no-ext-diff", "--no-color", "HEAD", "--"],
+        root,
+        allow_rc={0},
+        errors=errors,
+    )
+    untracked = _untracked_files(root, errors)
+    for rel in untracked:
+        sensitive_reason = _sensitive_untracked_reason(rel)
+        if sensitive_reason:
+            sensitive.append({"path": rel, "reason": sensitive_reason})
+            continue
+        reason = _patch_exclude_reason(rel)
+        if reason:
+            excluded.append({"path": rel, "reason": reason})
+            continue
+        included_untracked.append(rel)
+    if sensitive:
+        errors.append({
+            "type": "sensitive_untracked_files",
+            "message": "untracked sensitive-looking files are not included in workspace patch",
+            "paths": [item["path"] for item in sensitive],
+        })
+
+    hasher = sha256()
+    total_size = 0
+    with patch_path.open("wb") as fh:
+        if not errors:
+            total_size += _append_git_output(
+                ["git", "diff", "--binary", "--no-ext-diff", "--no-color", "HEAD", "--"],
+                root,
+                fh,
+                hasher,
+                allow_rc={0},
+                errors=errors,
+                diagnostics=diagnostics,
+            )
+            for rel in included_untracked:
+                if total_size:
+                    total_size += _write_patch_separator(fh, hasher)
+                total_size += _append_git_output(
+                    ["git", "diff", "--no-index", "--binary", "--no-ext-diff", "--no-color", "--", os.devnull, rel],
+                    root,
+                    fh,
+                    hasher,
+                    allow_rc={0, 1},
+                    errors=errors,
+                    diagnostics=diagnostics,
+                )
+    if errors:
+        try:
+            patch_path.unlink()
+        except OSError:
+            pass
+        total_size = 0
+        digest = ""
+    else:
+        digest = hasher.hexdigest()
+
+    head_error: Dict[str, Any] | None = None
+    expected_head = _preflight_head_from_task(task)
+    head_errors: List[Dict[str, Any]] = []
+    current_head = _git_stdout(["git", "rev-parse", "HEAD"], root, allow_rc={0}, errors=head_errors).strip()
+    if expected_head and not current_head:
+        errors.extend(head_errors)
+        head_error = {
+            "type": "workspace_head_unverified",
+            "message": "workspace HEAD could not be verified at artifact finalization",
+            "expected_head": expected_head,
+            "current_head": "",
+        }
+        errors.append(head_error)
+    elif expected_head and current_head != expected_head:
+        head_error = {
+            "type": "workspace_head_changed",
+            "message": "workspace HEAD changed during task execution; patch artifact is invalid",
+            "expected_head": expected_head,
+            "current_head": current_head,
+        }
+        errors.append(head_error)
+    if head_error:
+        try:
+            patch_path.unlink()
+        except OSError:
+            pass
+        total_size = 0
+        digest = ""
+
+    status = ARTIFACT_STATUS_FAILED if errors else ARTIFACT_STATUS_READY
+    manifest = {
+        "schema_version": 1,
+        "created_at": utc_now_iso(),
+        "status": status,
+        "workspace_root": str(root),
+        "patch_name": "workspace.patch",
+        "manifest_name": "workspace_patch.json",
+        "patch_size": total_size,
+        "sha256": digest,
+        "diffstat": diffstat,
+        "counts": {
+            "tracked_changed": len(changed_tracked),
+            "untracked_included": len(included_untracked),
+            "untracked_excluded": len(excluded),
+            "sensitive_blocked": len(sensitive),
+        },
+        "tracked_changed": changed_tracked,
+        "untracked_included": included_untracked,
+        "untracked_excluded": excluded,
+        "sensitive_blocked": sensitive,
+        "exclude_rules_version": _PATCH_EXCLUDE_RULES_VERSION,
+        "diagnostics": diagnostics,
+        "errors": errors,
+    }
+    atomic_write_json(manifest_path, manifest, trailing_newline=True)
+    artifacts = [
+        {
+            "kind": "workspace_patch_manifest",
+            "name": "workspace_patch.json",
+            "path": str(manifest_path),
+            "size": manifest_path.stat().st_size if manifest_path.exists() else 0,
+            "workspace_root": str(root),
+        }
+    ]
+    if status == ARTIFACT_STATUS_READY:
+        artifacts.insert(0, {
+            "kind": "workspace_patch",
+            "name": "workspace.patch",
+            "path": str(patch_path),
+            "size": total_size,
+            "sha256": digest,
+            "workspace_root": str(root),
+        })
+    return artifacts, manifest
 
 
 def build_memory_export(child_drive_root: pathlib.Path, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -202,32 +460,271 @@ def _workspace_root_from_task(task: Dict[str, Any]) -> Optional[pathlib.Path]:
 
 
 def _git_stdout(
-    cmd: List[str],
+    cmd: Sequence[str],
     cwd: pathlib.Path,
     *,
     allow_rc: Iterable[int] = (0,),
+    errors: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     try:
         result = subprocess.run(
-            cmd,
+            list(cmd),
             cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=30,
         )
-    except Exception:
+    except subprocess.TimeoutExpired:
+        if errors is not None:
+            errors.append({"type": "git_timeout", "command": list(cmd), "message": "git command timed out"})
+        return ""
+    except Exception as exc:
+        if errors is not None:
+            errors.append({"type": "git_exception", "command": list(cmd), "message": f"{type(exc).__name__}: {exc}"})
         return ""
     if result.returncode not in set(allow_rc):
+        if errors is not None:
+            errors.append({
+                "type": "git_error",
+                "command": list(cmd),
+                "returncode": result.returncode,
+                "stderr": (result.stderr or "")[-2000:],
+            })
         return ""
     return result.stdout or ""
 
 
-def _untracked_files(root: pathlib.Path) -> List[str]:
-    output = _git_stdout(["git", "ls-files", "--others", "--exclude-standard"], root)
-    return [line.strip() for line in output.splitlines() if line.strip()]
+def _git_lines(cmd: Sequence[str], root: pathlib.Path, errors: List[Dict[str, Any]]) -> List[str]:
+    return [line.strip() for line in _git_stdout(cmd, root, errors=errors).splitlines() if line.strip()]
+
+
+def _untracked_files(root: pathlib.Path, errors: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    return _git_path_list(["git", "ls-files", "-z", "--others", "--exclude-standard"], root, errors)
+
+
+def _git_path_list(cmd: Sequence[str], root: pathlib.Path, errors: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    output = _git_bytes(cmd, root, errors=errors)
+    if not output:
+        return []
+    return [part.decode("utf-8", errors="replace") for part in output.split(b"\0") if part]
+
+
+def _git_bytes(
+    cmd: Sequence[str],
+    cwd: pathlib.Path,
+    *,
+    allow_rc: Iterable[int] = (0,),
+    errors: Optional[List[Dict[str, Any]]] = None,
+) -> bytes:
+    try:
+        result = subprocess.run(
+            list(cmd),
+            cwd=str(cwd),
+            capture_output=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        if errors is not None:
+            errors.append({"type": "git_timeout", "command": list(cmd), "message": "git command timed out"})
+        return b""
+    except Exception as exc:
+        if errors is not None:
+            errors.append({"type": "git_exception", "command": list(cmd), "message": f"{type(exc).__name__}: {exc}"})
+        return b""
+    if result.returncode not in set(allow_rc):
+        if errors is not None:
+            errors.append({
+                "type": "git_error",
+                "command": list(cmd),
+                "returncode": result.returncode,
+                "stderr": (result.stderr or b"").decode("utf-8", errors="replace")[-2000:],
+            })
+        return b""
+    return result.stdout or b""
+
+
+def _append_git_output(
+    cmd: Sequence[str],
+    cwd: pathlib.Path,
+    fh: BinaryIO,
+    hasher: Any,
+    *,
+    allow_rc: set[int],
+    errors: List[Dict[str, Any]],
+    diagnostics: List[Dict[str, Any]],
+) -> int:
+    written_box = {"value": 0}
+    read_errors: List[str] = []
+    try:
+        with tempfile.TemporaryFile() as stderr_fh:
+            proc = subprocess.Popen(
+                list(cmd),
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=stderr_fh,
+            )
+            assert proc.stdout is not None
+
+            def _reader() -> None:
+                try:
+                    while True:
+                        chunk = proc.stdout.read(1024 * 128)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        hasher.update(chunk)
+                        written_box["value"] += len(chunk)
+                except Exception as exc:
+                    read_errors.append(f"{type(exc).__name__}: {exc}")
+
+            reader = threading.Thread(target=_reader, name="workspace-patch-git-stdout", daemon=True)
+            reader.start()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                reader.join(timeout=5)
+                if reader.is_alive():
+                    errors.append({"type": "git_timeout", "command": list(cmd), "message": "git stdout reader timed out"})
+                errors.append({"type": "git_timeout", "command": list(cmd), "message": "git command timed out"})
+                return int(written_box["value"])
+            reader.join(timeout=5)
+            if reader.is_alive():
+                errors.append({"type": "git_timeout", "command": list(cmd), "message": "git stdout reader timed out"})
+            for read_error in read_errors:
+                errors.append({"type": "git_exception", "command": list(cmd), "message": read_error})
+            stderr_fh.seek(0)
+            stderr = stderr_fh.read() or b""
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+        errors.append({"type": "git_timeout", "command": list(cmd), "message": "git command timed out"})
+        return int(written_box["value"])
+    except Exception as exc:
+        errors.append({"type": "git_exception", "command": list(cmd), "message": f"{type(exc).__name__}: {exc}"})
+        return int(written_box["value"])
+    if proc.returncode not in allow_rc:
+        errors.append({
+            "type": "git_error",
+            "command": list(cmd),
+            "returncode": proc.returncode,
+            "stderr": stderr.decode("utf-8", errors="replace")[-2000:],
+        })
+    written = int(written_box["value"])
+    diagnostics.append({"command": list(cmd), "returncode": proc.returncode, "bytes": written})
+    return written
+
+
+def _write_patch_separator(fh: BinaryIO, hasher: Any) -> int:
+    data = b"\n"
+    fh.write(data)
+    hasher.update(data)
+    return len(data)
+
+
+def _patch_exclude_reason(rel: str) -> str:
+    parts = pathlib.PurePosixPath(str(rel).replace("\\", "/")).parts
+    if not parts:
+        return ""
+    if parts[0] in _TOP_LEVEL_EXCLUDE_DIRS:
+        return f"top-level env/cache directory: {parts[0]}"
+    for part in parts:
+        if part in _ANY_SEGMENT_EXCLUDE_DIRS:
+            return f"env/cache directory segment: {part}"
+    return ""
+
+
+def _sensitive_untracked_reason(rel: str) -> str:
+    name = pathlib.PurePosixPath(str(rel).replace("\\", "/")).name
+    lower = name.lower()
+    if lower.startswith(".env") and not lower.endswith(_SENSITIVE_EXAMPLE_SUFFIXES):
+        return "dotenv secret"
+    if lower in _SENSITIVE_KEY_NAMES or lower in _SENSITIVE_FILENAMES:
+        return "credential filename"
+    if lower.endswith((".pem", ".key", ".p12", ".pfx")):
+        return "private key or certificate"
+    return ""
+
+
+def _preflight_head_from_task(task: Dict[str, Any]) -> str:
+    meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    preflight = meta.get("workspace_preflight") if isinstance(meta.get("workspace_preflight"), dict) else {}
+    git = preflight.get("git") if isinstance(preflight.get("git"), dict) else {}
+    return str(git.get("head") or "")
+
+
+def _empty_patch_manifest(
+    workspace_root: pathlib.Path,
+    *,
+    status: str,
+    errors: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "created_at": utc_now_iso(),
+        "status": status,
+        "workspace_root": str(workspace_root),
+        "patch_name": "workspace.patch",
+        "manifest_name": "workspace_patch.json",
+        "patch_size": 0,
+        "sha256": "",
+        "diffstat": "",
+        "counts": {
+            "tracked_changed": 0,
+            "untracked_included": 0,
+            "untracked_excluded": 0,
+            "sensitive_blocked": 0,
+        },
+        "tracked_changed": [],
+        "untracked_included": [],
+        "untracked_excluded": [],
+        "sensitive_blocked": [],
+        "exclude_rules_version": _PATCH_EXCLUDE_RULES_VERSION,
+        "diagnostics": [],
+        "errors": errors,
+    }
+
+
+def _merge_artifacts(
+    existing: List[Dict[str, Any]],
+    new_items: List[Dict[str, Any]],
+    *,
+    drop_kinds: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    drop = drop_kinds or set()
+    keys = {_artifact_merge_key(item) for item in new_items if isinstance(item, dict)}
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        key = _artifact_merge_key(item)
+        if key[0] not in drop and key not in keys:
+            merged.append(item)
+    merged.extend(new_items)
+    return merged
+
+
+def _artifact_merge_key(item: Dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(item.get("kind") or ""),
+        str(item.get("name") or pathlib.Path(str(item.get("path") or "")).name),
+    )
 
 
 __all__ = [
+    "ARTIFACT_STATUS_FAILED",
+    "ARTIFACT_STATUS_FINALIZING",
+    "ARTIFACT_STATUS_PENDING",
+    "ARTIFACT_STATUS_READY",
     "build_memory_export",
     "build_workspace_patch",
     "copy_child_task_result",
@@ -235,4 +732,6 @@ __all__ = [
     "prepare_task_drive",
     "task_artifacts_dir",
     "task_state_dir",
+    "write_workspace_patch_artifacts",
+    "write_workspace_preflight_artifact",
 ]

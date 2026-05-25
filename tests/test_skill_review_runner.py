@@ -426,7 +426,7 @@ def test_lifecycle_finish_writes_full_markdown_to_chat_jsonl(tmp_path, monkeypat
             skill_name=skill_name,
             status="fail",
             content_hash=content_hash,
-            reviewer_models=["openai/gpt-5.5", "google/gemini-3.1-pro-preview"],
+            reviewer_models=["openai/gpt-5.5", "google/gemini-3.5-flash"],
             findings=[
                 {
                     "item": "companion_process_safety",
@@ -440,7 +440,7 @@ def test_lifecycle_finish_writes_full_markdown_to_chat_jsonl(tmp_path, monkeypat
                     "verdict": "PASS",
                     "severity": "critical",
                     "reason": "Transient subprocess in handler scope.",
-                    "model": "google/gemini-3.1-pro-preview",
+                    "model": "google/gemini-3.5-flash",
                 },
             ],
             raw_actor_records=[{
@@ -486,7 +486,7 @@ def test_lifecycle_finish_writes_full_markdown_to_chat_jsonl(tmp_path, monkeypat
     assert long_reason in row["text"]
     assert raw_failure in row["text"]
     assert "Reviewer: openai/gpt-5.5" in row["text"]
-    assert "Reviewer: google/gemini-3.1-pro-preview" in row["text"]
+    assert "Reviewer: google/gemini-3.5-flash" in row["text"]
 
 
 def test_lifecycle_finish_writes_raw_only_review_to_chat_jsonl(tmp_path, monkeypatch):

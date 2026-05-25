@@ -1224,19 +1224,42 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
     return result + ci_note
 
 
-def _git_status(ctx: ToolContext) -> str:
+def _limit_git_output(text: str, max_chars: int = 0) -> str:
+    limit = int(max_chars or 0)
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + f"\n⚠️ OUTPUT_TRUNCATED: git output limited to {limit} characters by max_chars."
+
+
+def _git_status(ctx: ToolContext, path: str = "", max_chars: int = 0) -> str:
     try:
-        return run_cmd(["git", "status", "--porcelain"], cwd=active_repo_dir_for(ctx))
+        cmd = ["git", "status", "--porcelain"]
+        if str(path or "").strip():
+            cmd.extend(["--", safe_relpath(str(path))])
+        return _limit_git_output(run_cmd(cmd, cwd=active_repo_dir_for(ctx)), max_chars)
     except Exception as e:
         return f"⚠️ GIT_ERROR: {_sanitize_git_error(str(e))}"
 
 
-def _git_diff(ctx: ToolContext, staged: bool = False) -> str:
+def _git_diff(
+    ctx: ToolContext,
+    staged: bool = False,
+    path: str = "",
+    stat: bool = False,
+    name_only: bool = False,
+    max_chars: int = 0,
+) -> str:
     try:
         cmd = ["git", "diff"]
         if staged:
             cmd.append("--staged")
-        return run_cmd(cmd, cwd=active_repo_dir_for(ctx))
+        if name_only:
+            cmd.append("--name-only")
+        elif stat:
+            cmd.append("--stat")
+        if str(path or "").strip():
+            cmd.extend(["--", safe_relpath(str(path))])
+        return _limit_git_output(run_cmd(cmd, cwd=active_repo_dir_for(ctx)), max_chars)
     except Exception as e:
         return f"⚠️ GIT_ERROR: {_sanitize_git_error(str(e))}"
 
@@ -1522,14 +1545,21 @@ def get_tools() -> List[ToolEntry]:
         }, _repo_commit_push, is_code_tool=True),
         ToolEntry("git_status", {
             "name": "git_status",
-            "description": "git status --porcelain",
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "description": "git status --porcelain for the active repo/workspace",
+            "parameters": {"type": "object", "properties": {
+                "path": {"type": "string", "default": "", "description": "Optional path filter relative to the active repo/workspace"},
+                "max_chars": {"type": "integer", "default": 0, "description": "Optional output character limit; 0 means no explicit limit"},
+            }, "required": []},
         }, _git_status, is_code_tool=True),
         ToolEntry("git_diff", {
             "name": "git_diff",
-            "description": "git diff (use staged=true to see staged changes after git add)",
+            "description": "git diff for the active repo/workspace (use staged=true to see staged changes after git add)",
             "parameters": {"type": "object", "properties": {
                 "staged": {"type": "boolean", "default": False, "description": "If true, show staged changes (--staged)"},
+                "path": {"type": "string", "default": "", "description": "Optional path filter relative to the active repo/workspace"},
+                "stat": {"type": "boolean", "default": False, "description": "If true, show --stat output"},
+                "name_only": {"type": "boolean", "default": False, "description": "If true, show --name-only output"},
+                "max_chars": {"type": "integer", "default": 0, "description": "Optional output character limit; 0 means no explicit limit"},
             }, "required": []},
         }, _git_diff, is_code_tool=True),
         ToolEntry("pull_from_remote", {

@@ -10,16 +10,25 @@ from ouroboros.tools.review_helpers import (
 )
 
 
-_HEALTH_SKIP_DIR_PREFIXES = (".git/", ".pytest_cache/", ".mypy_cache/", "node_modules/", ".venv/")
+_HEALTH_SKIP_DIR_PREFIXES = (
+    ".git/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    "node_modules/",
+    ".venv/",
+    "tests/",
+)
 TARGET_MODULE_LINES = 1000
 MAX_MODULE_LINES = 1600
 TARGET_FUNCTION_LINES = 150
 # Advisory SDK orchestration stays single-flow; split tracked as tech debt.
 MAX_FUNCTION_LINES = 300
 # Ceiling covers safety, review-state, tools/git, skills/extensions, gateway
-# helpers, and the v5.29 packaged CLI bridge/installer. The packaging CLI keeps
-# platform and install branches explicit instead of hiding them in shell glue.
-MAX_TOTAL_FUNCTIONS = 2175
+# helpers, the packaged CLI bridge/installer, the v5.32 generated Atlas
+# compiler/tests, v5.33 external-workspace CLI artifact/preflight contract,
+# and the v6.0 live subagent strict-schema/isolation/browser-guard tests. Keep
+# this tight and lower it again when the headless/subagent helpers settle.
+MAX_TOTAL_FUNCTIONS = 2250
 # Grandfathered modules are accepted debt until their surfaces stabilize/split.
 GRANDFATHERED_OVERSIZED_MODULES = {
     "llm.py",

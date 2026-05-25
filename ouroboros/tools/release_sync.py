@@ -1,7 +1,8 @@
 """Deterministic release metadata sync and P9 preflight helpers.
 
 VERSION remains canonical for author-facing carriers; pyproject receives PEP
-440 spelling, README badge URL escapes hyphens, and changelog prose stays manual.
+440 spelling, web/package.json keeps VERSION spelling, README badge URL escapes
+hyphens, and changelog prose stays manual.
 """
 
 from __future__ import annotations
@@ -111,6 +112,7 @@ def version_carrier_desyncs(
     version: str,
     *,
     pyproject_text: str = "",
+    web_package_text: str = "",
     readme_text: str = "",
     arch_text: str = "",
     detailed: bool = False,
@@ -125,6 +127,10 @@ def version_carrier_desyncs(
         expected = _normalize_pep440(version)
         if not match or match.group(1).strip() != expected:
             desync.append(f'pyproject.toml (expected version = "{expected}")' if detailed else "pyproject.toml")
+    if web_package_text:
+        match = re.search(r'"version"\s*:\s*"([^"]+)"', web_package_text)
+        if not match or match.group(1).strip() != version:
+            desync.append(f'web/package.json (expected "version": "{version}")' if detailed else "web/package.json")
     if readme_text:
         badge_token = f"version-{_shields_escape(version)}-green"
         if extract_readme_badge_version(readme_text) != version or badge_token not in readme_text:
@@ -135,7 +141,7 @@ def version_carrier_desyncs(
 
 
 def sync_release_metadata(repo_dir: str) -> List[str]:
-    """Sync VERSION into pyproject, README badge, and ARCHITECTURE header."""
+    """Sync VERSION into pyproject, web package, README badge, and ARCHITECTURE header."""
     root = Path(repo_dir)
     version_file = root / "VERSION"
     if not version_file.exists():
@@ -163,6 +169,19 @@ def sync_release_metadata(repo_dir: str) -> List[str]:
         if new_text != text:
             pyproject.write_text(new_text, encoding="utf-8")
             changed.append("pyproject.toml")
+
+    web_package = root / "web" / "package.json"
+    if web_package.exists():
+        text = web_package.read_text(encoding="utf-8")
+        new_text = re.sub(
+            r'^(\s*"version"\s*:\s*")[^"]*(")',
+            lambda m: f'{m.group(1)}{version}{m.group(2)}',
+            text,
+            flags=re.MULTILINE,
+        )
+        if new_text != text:
+            web_package.write_text(new_text, encoding="utf-8")
+            changed.append("web/package.json")
 
     readme = root / "README.md"
     if readme.exists():

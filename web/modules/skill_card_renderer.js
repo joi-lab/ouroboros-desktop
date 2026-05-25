@@ -127,13 +127,16 @@ export function renderInstalledSkillCard(skill, reviewingSkills = new Set(), rep
     const lockReason = !skill.enabled && ((skill.review_gate?.executable_review === false && (skill.review_gate.summary || skill.review_gate.blocking_reason)) || (skill.review_stale ? 'review is stale — re-review the skill first' : ''));
     const source = (skill.source || 'native').toLowerCase();
     const market = source === 'clawhub' || source === 'ouroboroshub';
+    const payloadRoot = skill.payload_root || '';
+    const localDelete = (source === 'self_authored' || source === 'external') && payloadRoot.startsWith('skills/external/');
     const prov = market ? skill.provenance : null;
     const submit = submitHubReady(skill, Boolean(options.githubTokenConfigured));
-    const menu = (market || !reviewInProgress || submit.visible)
+    const menu = (market || localDelete || !reviewInProgress || submit.visible)
         ? `<div class="skills-card-menu"><button type="button" class="skills-card-menu-trigger" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-skill-menu-trigger>⋮</button><dialog class="skills-card-menu-dialog" role="menu">
             ${!reviewInProgress ? `<button type="button" role="menuitem" class="skills-menu-item skills-review" data-skill="${safeName}">${skill.review_status === 'pending' ? 'Review' : (skill.review_stale ? 'Re-review' : 'Review again')}</button>` : ''}
-            ${submit.visible ? `<button type="button" role="menuitem" class="skills-menu-item skills-submit-hub" data-skill="${safeName}" ${submit.disabled ? 'disabled' : ''} title="${escapeHtml(submit.reason)}">Submit to OuroborosHub</button>` : ''}
+            ${submit.visible ? `<button type="button" role="menuitem" class="skills-menu-item skills-submit-hub ${submit.disabled ? 'is-disabled' : ''}" data-skill="${safeName}" title="${escapeHtml(submit.reason)}" data-submit-disabled="${submit.disabled ? 'true' : 'false'}" data-submit-reason="${escapeHtml(submit.reason)}" aria-disabled="${submit.disabled ? 'true' : 'false'}">Submit to OuroborosHub</button>` : ''}
             ${market ? `<button type="button" role="menuitem" class="skills-menu-item skills-update" data-skill="${safeName}" data-source="${escapeHtml(source)}">Update</button><button type="button" role="menuitem" class="skills-menu-item skills-uninstall" data-skill="${safeName}" data-source="${escapeHtml(source)}">Uninstall</button>` : ''}
+            ${localDelete ? `<button type="button" role="menuitem" class="skills-menu-item skills-delete-local" data-skill="${safeName}" data-payload-root="${escapeHtml(payloadRoot)}">Delete</button>` : ''}
         </dialog></div>` : '';
     const primary = action.action ? `<button type="button" class="btn btn-primary skills-primary-action" data-skill="${safeName}" data-skill-action="${escapeHtml(action.action)}" ${action.keys ? `data-keys="${escapeHtml(action.keys)}"` : ''} ${action.disabled ? 'disabled' : ''}>${escapeHtml(action.label)}</button>` : '';
     const toggle = skill.lifecycle_virtual ? '' : `<label class="skills-switch ${lockReason ? 'is-locked' : ''}" ${lockReason && action.action ? actionAttrs : ''} title="${escapeHtml(lockReason ? `Locked: ${lockReason}` : (skill.enabled ? 'Turn skill off' : 'Turn skill on'))}">

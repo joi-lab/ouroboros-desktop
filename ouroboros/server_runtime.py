@@ -31,11 +31,26 @@ _DIRECT_PROVIDER_AUTO_DEFAULTS = {
 }
 _DIRECT_PROVIDER_LEGACY_DEFAULTS = {
     "openai": {
-        "OUROBOROS_MODEL_LIGHT": {"openai::gpt-4.1"},
-        "OUROBOROS_MODEL_FALLBACK": {"openai::gpt-4.1"},
+        "OUROBOROS_MODEL": {"anthropic/claude-opus-4.6"},
+        "OUROBOROS_MODEL_CODE": {"anthropic/claude-opus-4.6"},
+        "OUROBOROS_MODEL_LIGHT": {"anthropic/claude-sonnet-4.6"},
+        "OUROBOROS_MODEL_FALLBACK": {"anthropic/claude-sonnet-4.6"},
     },
-    "anthropic": {},
+    "anthropic": {
+        "OUROBOROS_MODEL": {"anthropic/claude-opus-4.6"},
+        "OUROBOROS_MODEL_CODE": {"anthropic/claude-opus-4.6"},
+        "OUROBOROS_MODEL_LIGHT": {"anthropic/claude-sonnet-4.6"},
+        "OUROBOROS_MODEL_FALLBACK": {"anthropic/claude-sonnet-4.6"},
+    },
 }
+_DIRECT_PROVIDER_LEGACY_DEFAULTS["openai"]["OUROBOROS_MODEL_LIGHT"].add("openai::gpt-4.1")
+_DIRECT_PROVIDER_LEGACY_DEFAULTS["openai"]["OUROBOROS_MODEL_FALLBACK"].add("openai::gpt-4.1")
+_LEGACY_GEMINI_31_FLASH_LITE = "google/gemini-" + "3.1-flash-lite"
+_LEGACY_GEMINI_31_PRO_PREVIEW = "google/gemini-" + "3.1-pro-preview"
+_LEGACY_GEMINI_3_FLASH_PREVIEW = "google/gemini-" + "3-flash-preview"
+for _legacy_defaults in _DIRECT_PROVIDER_LEGACY_DEFAULTS.values():
+    for _slot in ("OUROBOROS_MODEL", "OUROBOROS_MODEL_CODE", "OUROBOROS_MODEL_LIGHT"):
+        _legacy_defaults[_slot].add(_LEGACY_GEMINI_31_FLASH_LITE)
 _ALL_MODEL_SLOT_KEYS = tuple(_DIRECT_PROVIDER_AUTO_DEFAULTS["openai"].keys())
 _SCOPE_REVIEW_LEGACY_DEFAULTS = frozenset({
     "",
@@ -62,6 +77,9 @@ _RETIRED_MODEL_DEFAULT_REPLACEMENTS = {
     "openai::gpt-" + "5.4-pro": "openai::gpt-5.5-pro",
     "openai/gpt-" + "5.4-mini": "openai/gpt-5.5-mini",
     "openai::gpt-" + "5.4-mini": "openai::gpt-5.5-mini",
+    _LEGACY_GEMINI_31_FLASH_LITE: "google/gemini-3.5-flash",
+    _LEGACY_GEMINI_31_PRO_PREVIEW: "google/gemini-3.5-flash",
+    _LEGACY_GEMINI_3_FLASH_PREVIEW: "google/gemini-3.5-flash",
 }
 
 
@@ -79,6 +97,10 @@ def _parse_model_list(value: str) -> list[str]:
 
 def _serialize_model_list(models: list[str]) -> str:
     return ",".join(model.strip() for model in models if str(model or "").strip())
+
+
+def _unique_changed_keys(keys: list[str]) -> list[str]:
+    return list(dict.fromkeys(keys))
 
 
 def _refresh_retired_model_defaults(settings: dict) -> tuple[dict, list[str]]:
@@ -108,7 +130,7 @@ def _refresh_retired_model_defaults(settings: dict) -> tuple[dict, list[str]]:
         if serialized != review_value:
             normalized["OUROBOROS_REVIEW_MODELS"] = serialized
             changed.append("OUROBOROS_REVIEW_MODELS")
-    return normalized, changed
+    return normalized, _unique_changed_keys(changed)
 
 
 def _provider_prefix(provider: str) -> str:
@@ -270,6 +292,7 @@ def apply_runtime_provider_defaults(settings: dict) -> tuple[dict, bool, list[st
         normalized["OUROBOROS_SCOPE_REVIEW_MODEL"] = scope_review_model
         changed_keys.append("OUROBOROS_SCOPE_REVIEW_MODEL")
 
+    changed_keys = _unique_changed_keys(changed_keys)
     return normalized, bool(changed_keys), changed_keys
 
 

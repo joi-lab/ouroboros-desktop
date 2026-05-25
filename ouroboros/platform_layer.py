@@ -23,6 +23,7 @@ PATH_SEP = ";" if IS_WINDOWS else ":"
 _SUBPROCESS_NO_WINDOW = (
     getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if IS_WINDOWS else 0
 )
+_PATH_BOOTSTRAPPED = False
 
 
 def is_container_env() -> bool:
@@ -33,6 +34,69 @@ def is_container_env() -> bool:
     if IS_LINUX and pathlib.Path("/.dockerenv").exists():
         return True
     return False
+
+
+def bootstrap_process_path() -> list[str]:
+    """Add existing common user tool directories to this process PATH once."""
+
+    global _PATH_BOOTSTRAPPED
+    if _PATH_BOOTSTRAPPED:
+        return []
+    _PATH_BOOTSTRAPPED = True
+
+    candidates: list[pathlib.Path] = []
+    home = pathlib.Path.home()
+    if IS_MACOS or IS_LINUX:
+        candidates.extend([
+            pathlib.Path("/opt/homebrew/bin"),
+            pathlib.Path("/opt/homebrew/sbin"),
+            pathlib.Path("/usr/local/bin"),
+            pathlib.Path("/usr/local/sbin"),
+            pathlib.Path("/opt/local/bin"),
+            home / ".local" / "bin",
+            home / ".cargo" / "bin",
+            home / ".npm-global" / "bin",
+            home / "go" / "bin",
+        ])
+    if IS_WINDOWS:
+        def _env_path(name: str, default: str = "") -> pathlib.Path | None:
+            text = os.environ.get(name, default)
+            if not text:
+                return None
+            path = pathlib.Path(text)
+            return path if path.is_absolute() else None
+
+        program_files = _env_path("ProgramFiles", r"C:\Program Files")
+        local_app_data = _env_path("LOCALAPPDATA")
+        app_data = _env_path("APPDATA")
+        user_profile = _env_path("USERPROFILE")
+        if program_files:
+            candidates.extend([program_files / "Git" / "cmd", program_files / "nodejs"])
+        if local_app_data:
+            candidates.append(local_app_data / "Programs" / "Git" / "cmd")
+        if app_data:
+            candidates.append(app_data / "npm")
+        if user_profile:
+            candidates.append(user_profile / ".cargo" / "bin")
+
+    existing = [part for part in os.environ.get("PATH", "").split(PATH_SEP) if part]
+    existing_norm = {str(pathlib.Path(part)).lower() if IS_WINDOWS else str(pathlib.Path(part)) for part in existing}
+    added: list[str] = []
+    for candidate in candidates:
+        try:
+            if not candidate.is_dir():
+                continue
+            text = str(candidate)
+            norm = text.lower() if IS_WINDOWS else text
+            if norm in existing_norm:
+                continue
+            existing_norm.add(norm)
+            added.append(text)
+        except OSError:
+            continue
+    if added:
+        os.environ["PATH"] = PATH_SEP.join([*added, *existing])
+    return added
 
 
 def acquire_exclusive_file_lock(

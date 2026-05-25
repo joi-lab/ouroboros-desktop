@@ -1,6 +1,6 @@
-"""Enforcement-aware whole-codebase scope reviewer for the commit pipeline.
+"""Enforcement-aware Atlas-backed scope reviewer for the commit pipeline.
 
-Runs beside triad review and sees full repo context. Critical findings follow
+Runs beside triad review and sees touched context plus a generated repo atlas. Critical findings follow
 ``OUROBOROS_REVIEW_ENFORCEMENT``: blocking enforcement blocks, advisory
 enforcement reports them without blocking. Infrastructure failures such as
 model errors, empty output, parse failures, and touched-context errors still
@@ -10,6 +10,7 @@ fail closed; oversized prompts are the explicit non-blocking skip path.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import pathlib
@@ -18,8 +19,11 @@ from typing import List, Optional
 
 from ouroboros.llm import LLMClient
 from ouroboros.tools.registry import ToolContext
+from ouroboros.tools.review_context_atlas import (
+    ReviewContextAtlasRequest,
+    compile_review_context_atlas,
+)
 from ouroboros.tools.review_helpers import (
-    build_full_repo_pack,
     build_goal_section,
     build_rebuttal_section as _shared_build_rebuttal_section,
     build_scope_section,
@@ -58,6 +62,22 @@ _SCOPE_BUDGET_TOKEN_LIMIT = _REVIEW_BUDGET
 # Defense-in-depth cap for deleted-file HEAD content inlined into the prompt.
 _DELETED_INLINE_MAX_BYTES = 1_048_576  # 1 MB
 
+_SCOPE_CONTEXT_MANIFEST = contextvars.ContextVar("scope_context_manifest", default={})
+
+
+class _ScopeAtlasBudgetExceeded(RuntimeError):
+    def __init__(self, manifest: dict):
+        self.manifest = dict(manifest or {})
+        token_count = int(self.manifest.get("estimated_total_tokens") or 0)
+        super().__init__(
+            f"Generated Scope Atlas exceeded hard budget"
+            + (f" (~{token_count:,} estimated tokens)" if token_count else "")
+        )
+
+
+def _current_scope_context_manifest() -> dict:
+    return dict(_SCOPE_CONTEXT_MANIFEST.get({}) or {})
+
 
 @dataclass
 class ScopeReviewResult:
@@ -74,6 +94,7 @@ class ScopeReviewResult:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    context_manifest: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -240,23 +261,37 @@ def _compute_touched_status(
     return None
 
 
-def _gather_scope_packs(repo_dir: pathlib.Path, all_touched_paths: list) -> str:
-    """Collect the wider repository pack, failing closed on git errors."""
-    # Canonical docs are injected explicitly; avoid duplicating them in full pack.
-    exclude_set = set(all_touched_paths) | set(_CANONICAL_CONTEXT_DOCS)
+def _gather_scope_packs(
+    repo_dir: pathlib.Path,
+    all_touched_paths: list,
+    fixed_prompt_tokens: int = 0,
+) -> str:
+    """Collect the bounded wider repository atlas, failing closed on git errors."""
+    # Canonical docs and touched files are injected explicitly; avoid duplicating them.
+    already_included = frozenset(set(all_touched_paths) | set(_CANONICAL_CONTEXT_DOCS))
     try:
-        full_pack, _repo_omitted = build_full_repo_pack(repo_dir, exclude_paths=exclude_set)
-        repo_pack_section = full_pack
-        if _repo_omitted:
-            repo_pack_section += (
-                f"\n\n*(Omitted {len(_repo_omitted)} file(s): binary, vendored, sensitive, or >1MB)*\n"
+        atlas = compile_review_context_atlas(
+            ReviewContextAtlasRequest(
+                repo_dir=repo_dir,
+                anchors=tuple(all_touched_paths),
+                already_included=already_included,
+                fixed_prompt_tokens=fixed_prompt_tokens,
+                target_total_tokens=850_000,
+                hard_total_tokens=_SCOPE_BUDGET_TOKEN_LIMIT,
+                include_tests=False,
+                title="Generated Scope Atlas",
             )
-        if not repo_pack_section.strip():
-            repo_pack_section = "(no additional repo files)"
+        )
+        _SCOPE_CONTEXT_MANIFEST.set(atlas.manifest)
+        if atlas.status == "budget_exceeded":
+            raise _ScopeAtlasBudgetExceeded(atlas.manifest)
+        repo_pack_section = atlas.text or "(no additional repo files)"
+    except _ScopeAtlasBudgetExceeded:
+        raise
     except RuntimeError:
         raise
     except Exception as exc:
-        raise RuntimeError(f"build_full_repo_pack error: {exc}") from exc
+        raise RuntimeError(f"review_context_atlas error: {exc}") from exc
 
     return repo_pack_section
 
@@ -313,6 +348,7 @@ def _build_scope_prompt(
     drive_root: Optional[pathlib.Path] = None,
 ) -> tuple:
     """Build the scope prompt or a touched-context/budget status sentinel."""
+    _SCOPE_CONTEXT_MANIFEST.set({})
     try:
         scope_checklist = load_checklist_section("Intent / Scope Review Checklist")
     except Exception:
@@ -396,14 +432,15 @@ def _build_scope_prompt(
     if touched_status is not None:
         return None, touched_status
 
-    repo_pack_section = _gather_scope_packs(repo_dir, all_touched_paths)
+    repo_pack_placeholder = "__GENERATED_SCOPE_ATLAS_PENDING__"
+    repo_pack_section = repo_pack_placeholder
 
     prompt = f"""\
 {REVIEW_PREAMBLE}
 
 ## Your role
 
-You are the whole-codebase reviewer. Diff reviewers cover line-level mistakes;
+You are the Atlas-backed whole-repository reviewer. Diff reviewers cover line-level mistakes;
 you cover cross-module contracts, forgotten touchpoints, hidden regressions,
 prompt/doc sync, architecture fit, and end-to-end intent completeness.
 
@@ -497,6 +534,22 @@ section — the staged diff below already shows every `-` line.
 
 {repo_pack_section}
 """
+    fixed_prompt_tokens = estimate_tokens(prompt)
+    try:
+        repo_pack_section = _gather_scope_packs(
+            repo_dir,
+            all_touched_paths,
+            fixed_prompt_tokens=fixed_prompt_tokens,
+        )
+    except _ScopeAtlasBudgetExceeded as exc:
+        return None, _TouchedContextStatus(
+            status="budget_exceeded",
+            token_count=int(exc.manifest.get("estimated_total_tokens") or 0),
+        )
+    head, sep, tail = prompt.rpartition(repo_pack_placeholder)
+    if not sep:
+        raise RuntimeError("scope review atlas placeholder missing")
+    prompt = head + repo_pack_section + tail
     prompt_tokens = estimate_tokens(prompt)
     if prompt_tokens > _SCOPE_BUDGET_TOKEN_LIMIT:
         return None, _TouchedContextStatus(
@@ -746,12 +799,14 @@ def run_scope_review(
             ),
             model_id=scope_model_id,
             status="error",
+            context_manifest=_current_scope_context_manifest(),
         )
 
     signal_result = _handle_prompt_signals(prompt, context_status)
     if signal_result is not None:
         # Keep _handle_prompt_signals as the status SSOT for early exits.
         signal_result.model_id = scope_model_id
+        signal_result.context_manifest = _current_scope_context_manifest()
         return signal_result
 
     _prompt_chars = len(prompt)  # type: ignore[arg-type]
@@ -766,6 +821,7 @@ def run_scope_review(
             model_id=scope_model_id,
             status="error",
             prompt_chars=_prompt_chars,
+            context_manifest=_current_scope_context_manifest(),
         )
     if usage:
         _emit_usage(ctx, scope_model_id, usage or {})
@@ -784,6 +840,7 @@ def run_scope_review(
             tokens_in=_tokens_in,
             tokens_out=_tokens_out,
             cost_usd=_cost_usd,
+            context_manifest=_current_scope_context_manifest(),
         )
 
     items = extract_json_array(raw_text, normalize=True)
@@ -801,6 +858,7 @@ def run_scope_review(
             tokens_in=_tokens_in,
             tokens_out=_tokens_out,
             cost_usd=_cost_usd,
+            context_manifest=_current_scope_context_manifest(),
         )
 
     critical_findings, advisory_findings = _classify_scope_findings(items)
@@ -826,6 +884,7 @@ def run_scope_review(
                 tokens_in=_tokens_in,
                 tokens_out=_tokens_out,
                 cost_usd=_cost_usd,
+                context_manifest=_current_scope_context_manifest(),
             )
         # Parallel review aggregates advisory findings on the main thread.
 
@@ -840,4 +899,5 @@ def run_scope_review(
         tokens_in=_tokens_in,
         tokens_out=_tokens_out,
         cost_usd=_cost_usd,
+        context_manifest=_current_scope_context_manifest(),
     )

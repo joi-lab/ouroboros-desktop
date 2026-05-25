@@ -1281,22 +1281,44 @@ def reload_all(
     skill_names = {s.name for s in skills if s.manifest.is_extension()}
     with _lock:
         loaded_names = set(_extensions.keys())
-    for gone in loaded_names - skill_names:
-        unload_extension(gone)
-        _sweep_stale_extension_imports(drive_root, gone)
     results: Dict[str, Any] = {}
+    for gone in loaded_names - skill_names:
+        try:
+            unload_extension(gone)
+            _sweep_stale_extension_imports(drive_root, gone)
+        except Exception as exc:
+            log.exception("Extension reload cleanup failed for %s; continuing", gone)
+            results[gone] = f"{type(exc).__name__}: {exc}"
     for skill in skills:
         if not skill.manifest.is_extension():
             continue
-        _sweep_stale_extension_imports(drive_root, skill.name)
-        state = reconcile_extension(
-            skill.name,
-            drive_root,
-            settings_reader,
-            repo_path=repo_path,
-            retry_load_error=True,
-        )
-        results[skill.name] = state.get("load_error") or (None if state.get("desired_live") else state.get("reason"))
+        try:
+            _sweep_stale_extension_imports(drive_root, skill.name)
+            state = reconcile_extension(
+                skill.name,
+                drive_root,
+                settings_reader,
+                repo_path=repo_path,
+                retry_load_error=True,
+            )
+            load_error = state.get("load_error")
+            if load_error:
+                log.error("Extension reload failed for %s: %s", skill.name, load_error)
+            results[skill.name] = load_error or (None if state.get("desired_live") else state.get("reason"))
+        except Exception as exc:
+            log.exception("Extension reload failed for %s; continuing", skill.name)
+            error = f"{type(exc).__name__}: {exc}"
+            try:
+                skill_dir = str(skill.skill_dir.resolve())
+            except OSError:
+                skill_dir = str(skill.skill_dir)
+            with _lock:
+                _load_failures[skill.name] = _ExtensionLoadFailure(
+                    content_hash=skill.content_hash,
+                    skill_dir=skill_dir,
+                    error=error,
+                )
+            results[skill.name] = error
     return results
 
 

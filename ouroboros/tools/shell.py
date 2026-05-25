@@ -16,7 +16,7 @@ import threading
 from subprocess import Popen, CompletedProcess
 from typing import Any, Dict, List
 
-from ouroboros.platform_layer import IS_WINDOWS, kill_process_tree, subprocess_new_group_kwargs
+from ouroboros.platform_layer import IS_WINDOWS, bootstrap_process_path, kill_process_tree, subprocess_new_group_kwargs
 from ouroboros.config import load_settings
 from ouroboros.tools.commit_gate import _invalidate_advisory
 from ouroboros.tools.registry import ToolContext, ToolEntry, active_repo_dir_for
@@ -125,6 +125,14 @@ def _format_process_failure(prefix: str, action: str, res: CompletedProcess) -> 
         f"{prefix}: {action} with {_describe_returncode(res.returncode)}.\n\n"
         f"{_format_process_output(res.stdout or '', res.stderr or '')}"
     )
+
+
+def _path_is_relative_to(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        pathlib.Path(path).resolve(strict=False).relative_to(pathlib.Path(root).resolve(strict=False))
+        return True
+    except ValueError:
+        return False
 
 
 def _resolve_git_root(path: pathlib.Path) -> pathlib.Path | None:
@@ -317,11 +325,15 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
     work_dir = pathlib.Path(active_root)
     if cwd and cwd.strip() not in ("", ".", "./"):
         cwd_text = str(cwd).strip()
-        if bool(getattr(ctx, "is_workspace_mode", lambda: False)()) and pathlib.Path(cwd_text).is_absolute():
-            return "⚠️ SHELL_CWD_BLOCKED: absolute cwd is not allowed in workspace mode."
         try:
-            candidate = (active_root / safe_relpath(cwd_text)).resolve(strict=False)
-            candidate.relative_to(active_root)
+            raw_cwd = pathlib.Path(cwd_text).expanduser()
+            candidate = raw_cwd.resolve(strict=False) if raw_cwd.is_absolute() else (active_root / safe_relpath(cwd_text)).resolve(strict=False)
+            allowed_roots = [active_root]
+            if bool(getattr(ctx, "is_workspace_mode", lambda: False)()):
+                task_drive_root = ctx.task_drive_root() if hasattr(ctx, "task_drive_root") else pathlib.Path(ctx.drive_root).resolve(strict=False)
+                allowed_roots.append(task_drive_root)
+            if not any(_path_is_relative_to(candidate, root) for root in allowed_roots):
+                raise ValueError("cwd is outside active workspace/repo and task drive")
         except (OSError, ValueError) as exc:
             return f"⚠️ SHELL_CWD_BLOCKED: cwd escapes active workspace/repo: {exc}"
         if not candidate.exists() or not candidate.is_dir():
@@ -331,6 +343,7 @@ def _run_shell(ctx: ToolContext, cmd, cwd: str = "") -> str:
     before_changed = _status_snapshot(repo_root)
 
     timeout_sec = _resolve_effective_timeout(_RUN_SHELL_DEFAULT_TIMEOUT_SEC)
+    bootstrap_process_path()
     try:
         res = _tracked_subprocess_run(
             cmd, cwd=str(work_dir),
@@ -670,7 +683,9 @@ def get_tools() -> List[ToolEntry]:
                 "cwd": {
                     "type": "string", "default": "",
                     "description": (
-                        "Working directory relative to the repo root. Use "
+                        "Working directory relative to the active repo/workspace root. "
+                        "External workspace tasks may also use an absolute cwd under "
+                        "the workspace or task drive. Use "
                         "this instead of `cd` (which is a shell builtin "
                         "and is rejected)."
                     ),

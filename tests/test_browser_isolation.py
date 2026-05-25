@@ -5,6 +5,7 @@ import types
 
 import pytest
 
+from ouroboros.contracts.task_constraint import TaskConstraint
 import ouroboros.tools.browser as browser_mod
 from ouroboros.tools.browser import _is_infrastructure_error, cleanup_browser
 
@@ -38,7 +39,11 @@ class TestBrowserModuleState:
     # imports is trivially true.
 
     def test_ensure_browser_tolerates_missing_thread_id(self, monkeypatch):
-        fake_page = types.SimpleNamespace(set_default_timeout=lambda timeout: None)
+        routes = []
+        fake_page = types.SimpleNamespace(
+            set_default_timeout=lambda timeout: None,
+            route=lambda pattern, handler: routes.append((pattern, handler)),
+        )
 
         def _new_page(**kwargs):
             return fake_page
@@ -54,7 +59,7 @@ class TestBrowserModuleState:
             sync_playwright=lambda: types.SimpleNamespace(start=lambda: fake_playwright)
         )
         monkeypatch.setattr(browser_mod, "_HAS_STEALTH", False)
-        monkeypatch.setattr(browser_mod, "_ensure_playwright_installed", lambda: None)
+        monkeypatch.setattr(browser_mod, "_ensure_playwright_installed", lambda *args, **kwargs: None)
         monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
 
         ctx = types.SimpleNamespace(
@@ -70,6 +75,48 @@ class TestBrowserModuleState:
 
         assert page is fake_page
         assert getattr(ctx.browser_state, "_thread_id", None) is not None
+        assert routes == []
+
+        subagent_ctx = types.SimpleNamespace(
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+            browser_state=types.SimpleNamespace(
+                page=None,
+                browser=None,
+                pw_instance=None,
+                last_screenshot_b64=None,
+            )
+        )
+        assert browser_mod._ensure_browser(subagent_ctx) is fake_page
+        assert routes and routes[-1][0] == "**/*"
+        events = []
+        route = types.SimpleNamespace(
+            request=types.SimpleNamespace(url="http://127.0.0.1:8765/api/settings"),
+            abort=lambda: events.append("abort"),
+            continue_=lambda: events.append("continue"),
+        )
+        routes[-1][1](route)
+        route.request.url = "http://192.168.1.1/admin"
+        routes[-1][1](route)
+        route.request.url = "http://169.254.1.1/"
+        routes[-1][1](route)
+        route.request.url = "http://[::]/"
+        routes[-1][1](route)
+        route.request.url = "https://example.com/"
+        routes[-1][1](route)
+        assert events == ["abort", "abort", "abort", "abort", "continue"]
+
+    def test_subagent_screenshot_text_does_not_reference_blocked_send_photo(self):
+        fake_page = types.SimpleNamespace(screenshot=lambda **_kwargs: b"png")
+        ctx = types.SimpleNamespace(
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+            browser_state=types.SimpleNamespace(last_screenshot_b64=None),
+        )
+
+        result = browser_mod._extract_page_output(fake_page, "screenshot", ctx)
+
+        assert "send_photo" not in result
+        assert "analyze_screenshot" in result
+        assert ctx.browser_state.last_screenshot_b64
 
     def test_aliases_arm64_browser_cache_for_missing_x64_binary(self, monkeypatch, tmp_path):
         monkeypatch.setattr(browser_mod.sys, "platform", "darwin", raising=False)
@@ -86,6 +133,16 @@ class TestBrowserModuleState:
         alias_dir = missing_binary.parent
         assert alias_dir.is_symlink()
         assert pathlib.Path(alias_dir.resolve()) == arm_dir.resolve()
+
+        arm_dir_2 = root / "chrome-headless-shell-mac-arm64-copy"
+        arm_dir_2.mkdir(parents=True)
+        (arm_dir_2 / "chrome-headless-shell").write_text("stub", encoding="utf-8")
+        missing_binary_2 = root / "chrome-headless-shell-mac-x64-copy" / "chrome-headless-shell"
+        err2 = RuntimeError(f"BrowserType.launch: Executable doesn't exist at {missing_binary_2}")
+        fake_pw = types.SimpleNamespace(chromium=types.SimpleNamespace(launch=lambda **_kwargs: (_ for _ in ()).throw(err2)))
+        with pytest.raises(RuntimeError):
+            browser_mod._launch_browser_with_fallback(fake_pw, allow_cache_write=False)
+        assert not missing_binary_2.parent.exists()
 
 
 class TestHasPlatformChromium:
@@ -240,6 +297,35 @@ class TestSetPlaywrightBrowsersPathIfBundled:
         # calling the function directly tests the same code path without side effects)
         bmod._set_playwright_browsers_path_if_bundled()
         assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0"
+
+    def test_browser_install_uses_data_cache_when_zero_has_no_browser(self, monkeypatch, tmp_path):
+        import os
+        import ouroboros.tools.browser as bmod
+
+        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+        monkeypatch.setenv("OUROBOROS_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setattr(bmod, "_playwright_ready", False)
+        calls = []
+        monkeypatch.setattr(bmod.subprocess, "check_call", lambda cmd: calls.append(cmd))
+        fake_pw = types.SimpleNamespace(__file__=str(tmp_path / "playwright" / "__init__.py"))
+        monkeypatch.setitem(sys.modules, "playwright", fake_pw)
+        fake_sync = types.ModuleType("playwright.sync_api")
+
+        class FakeSyncPlaywright:
+            def __enter__(self):
+                chromium = types.SimpleNamespace(executable_path=str(tmp_path / "missing-chromium"))
+                return types.SimpleNamespace(chromium=chromium)
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_sync.sync_playwright = lambda: FakeSyncPlaywright()
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync)
+
+        bmod._ensure_playwright_installed()
+
+        assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "data" / "playwright-browsers")
+        assert calls[-1][-3:] == ["playwright", "install", "chromium"]
 
 
 class TestCleanupBrowser:

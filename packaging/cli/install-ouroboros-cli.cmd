@@ -18,5 +18,14 @@ if exist "%ROOT%\python-standalone\python.exe" (
 set "PYTHONPATH=%ROOT%"
 set "OUROBOROS_PACKAGED_BUNDLE_ROOT=%ROOT%"
 set "OUROBOROS_PACKAGED_CLI_WRAPPER=%ROOT%\bin\ouroboros.cmd"
+set "PYTHONDONTWRITEBYTECODE=1"
+if not defined PYTHONPYCACHEPREFIX (
+  if defined LOCALAPPDATA (
+    set "PYTHONPYCACHEPREFIX=%LOCALAPPDATA%\Ouroboros\pycache"
+  ) else (
+    set "PYTHONPYCACHEPREFIX=%USERPROFILE%\Ouroboros\pycache"
+  )
+)
+if defined PYTHONPYCACHEPREFIX if not exist "%PYTHONPYCACHEPREFIX%" mkdir "%PYTHONPYCACHEPREFIX%" >nul 2>nul
 "%PY%" -m ouroboros.packaged_cli_install %*
 exit /b %ERRORLEVEL%

@@ -1,4 +1,4 @@
-# Ouroboros v5.30.0-rc.1 — Architecture & Reference
+# Ouroboros v6.0.0 — Architecture & Reference
 
 This file is NOT a changelog. Version history lives in README.md, git tags, and commit log.
 
@@ -52,9 +52,10 @@ server.py (Starlette+uvicorn) ← HTTP + WebSocket on configurable host:port (de
       ├── context.py           ← LLM context builder (public API for consciousness)
       ├── context_compaction.py ← Context trimming and summarization helpers
       ├── headless.py          ← Headless task child-drive isolation, workspace patch artifacts, and memory export helpers
+      ├── workspace_preflight.py ← Read-only external-workspace git/manifest/toolchain snapshot used by gateway task creation
       ├── local_model.py       ← Local LLM lifecycle (llama-cpp-python)
       ├── local_model_autostart.py ← Local model startup helper
-      ├── deep_self_review.py   ← Deep self-review: full git-tracked pack + memory → 1M-context model
+      ├── deep_self_review.py   ← Deep self-review: Generated Scope Atlas repository context + full memory whitelist → 1M-context model
       ├── review.py            ← Code collection, complexity metrics, pre-commit review
       ├── review_state.py      ← Durable advisory pre-review state (advisory_review.json)
       ├── triad_review.py      ← Shared multi-model review primitives: JSON-array extraction is reused by repo + skill review; per-actor records, quorum/degraded accounting, and model-error events power the skill-review path
@@ -112,13 +113,14 @@ server.py (Starlette+uvicorn) ← HTTP + WebSocket on configurable host:port (de
       │   ├── control.py       ← reset, command, git/update, and evolution-data handlers
       │   ├── files.py         ← File Browser + chat upload endpoints
       │   ├── models.py        ← model catalog + local-model lifecycle endpoints
-      │   ├── extensions.py    ← extensions/skills HTTP surface (GET /api/extensions, GET /api/extensions/<skill>/manifest, ALL /api/extensions/<skill>/<rest:path>, POST /api/skills/<skill>/toggle, POST /api/skills/<skill>/review, POST /api/skills/<skill>/grants)
+      │   ├── extensions.py    ← extensions/skills HTTP surface (GET /api/extensions, GET /api/extensions/<skill>/manifest, ALL /api/extensions/<skill>/<rest:path>, POST /api/skills/<skill>/toggle, POST /api/skills/<skill>/delete, POST /api/skills/<skill>/review, POST /api/skills/<skill>/grants)
       │   ├── marketplace.py   ← ClawHub + OuroborosHub HTTP surface
       │   ├── mcp.py           ← MCP Settings API surface backed by the shared MCPManager
       │   ├── host_service.py  ← Loopback-only Host Service API for reviewed skill callbacks
       │   ├── history.py       ← Chat history + cost breakdown endpoint factories
       │   └── _helpers.py      ← shared HTTP request root helpers, coercion, and JSON error envelope
       ├── tools/               ← Auto-discovered tool plugins
+      │   ├── shell_parse.py     ← Shared shell argv/cwd helpers for registry safety checks and run_shell validation
       │   ├── release_sync.py    ← Release-metadata sync library; advisory_pre_review uses sync_release_metadata before provider spend when VERSION is in scope; _preflight_check uses check_history_limit for P9 row caps; agents can also call it directly for version-carrier sync
       │   ├── review_synthesis.py ← LLM-based claim synthesis (Phase 1): deduplicates raw multi-reviewer findings into canonical issues before durable obligations are created; called from commit_gate._record_commit_attempt; fail-open (returns original on any error)
       │   ├── ci.py              ← CI trigger and monitoring (GitHub Actions API)
@@ -129,9 +131,10 @@ server.py (Starlette+uvicorn) ← HTTP + WebSocket on configurable host:port (de
       │   ├── git_pr.py          ← PR integration tools: fetch_pr_ref, create_integration_branch, cherry_pick_pr_commits, stage_adaptations, stage_pr_merge (non-core, require enable_tools)
       │   ├── github.py          ← GitHub integration: issues (list/get/comment/close) + PR tools: list_github_prs, get_github_pr, comment_on_pr (non-core; github.py is in _FROZEN_TOOL_MODULES so PR inspection/comment tools work in packaged builds)
       │   ├── parallel_review.py ← Parallel triad+scope orchestration and verdict aggregation (extracted from git.py)
-      │   ├── plan_review.py     ← Pre-implementation design review (2–3 parallel full-codebase reviewer slots, duplicate model IDs allowed, plan_task tool)
+      │   ├── plan_review.py     ← Pre-implementation design review (2–3 parallel Atlas-backed reviewer slots, duplicate model IDs allowed, plan_task tool)
       │   ├── review.py          ← Triad diff review (>=2 reviewer models in parallel against CHECKLISTS.md; ships with 3, capped at 10)
-      │   ├── review_helpers.py  ← Shared review helpers (section loader, file packs, intent, pytest preflight via agent interpreter)
+      │   ├── review_context_atlas.py ← Deterministic bounded-context compiler for scope_review, plan_task, and deep_self_review; raw-inlines selected files and accounts for every tracked path in the manifest
+      │   ├── review_helpers.py  ← Shared review helpers (section loader, touched/head packs, intent, pytest preflight via agent interpreter)
       │   ├── review_revalidation.py ← Reviewed-commit fingerprint revalidation helpers (blocks when staged diff changes after review)
       │   ├── scope_review.py   ← Scope reviewer (enforcement-aware, budget-aware)
       │   ├── skill_exec.py      ← Phase 3 external-skill surface: list_skills, review_skill, toggle_skill, skill_exec (subprocess runner with cwd confinement, env scrubbing, timeout, runtime allowlist python/python3/bash/node/deno/ruby/go; gated by enabled + fresh executable review + fresh content hash — v5.1.2 Frame A: runtime_mode no longer blocks execution)
@@ -182,9 +185,11 @@ present for the core browser-facing envelopes.
 `ouroboros.cli` is the second first-class interface to the same runtime. It is a
 thin HTTP/SSE client over the gateway, not a benchmark-only harness and not a
 parallel scheduler. `POST /api/tasks` creates managed queue tasks, `GET
-/api/tasks/<id>` reads durable results, and `GET /api/tasks/<id>/events`
+/api/tasks/<id>` reads durable results, `GET /api/tasks/<id>/events`
 replays task-scoped events from the existing logs before following live SSE
-updates. For task streaming commands such as `run` and `tasks watch`, stdout is
+updates, and `GET /api/tasks/<id>/artifacts/<name>` serves declared task
+artifacts from the task artifact directory only. For task streaming commands
+such as `run` and `tasks watch`, stdout is
 reserved for final machine-consumable output (or JSONL when requested) while
 progress goes to stderr; status and admin wrappers may print human summaries.
 
@@ -208,8 +213,10 @@ runtime control, skill lifecycle, extension/MCP execution, commit/review, and
 delegation tools are hidden and hard-blocked. The target workspace is left dirty
 by design and exported as a patch artifact; Ouroboros does not commit inside
 external repositories, and shell execution reports a hard warning if git refs move.
-The v1 CLI reads patch artifacts from server-local paths, so `--patch` and
-`--patch-out` are intentionally limited to local/same-filesystem gateway use.
+The CLI downloads patch artifacts through the task artifact endpoint, waits for
+artifact finalization in `--patch` / `--patch-out` mode, and fails nonzero when
+the patch is missing, empty, or failed. `--no-stream` suppresses live progress
+but still waits; `--detach` is the explicit create-and-return mode.
 Benchmark helper scripts likewise require clean per-instance local checkouts;
 they do not reset or commit benchmark workspaces.
 
@@ -217,17 +224,58 @@ Workspace mode is a tool-routing and blast-radius guard, not an OS sandbox.
 Like OpenClaw's host workspace mode, absolute host paths are not a hard security
 boundary unless a future Docker/SSH/remote sandbox is added around tool
 execution. Do not grow ad-hoc shell parsing to approximate that sandbox.
+Project-local dependency installs are ordinary workspace work. In
+`runtime_mode=pro`, system/global dependency installs may be attempted through
+`run_shell` and the safety supervisor when needed by the external workspace;
+sudo must be noninteractive (`sudo -n`) and password-prompting sudo is blocked.
 
 Headless memory isolation is implemented as a per-task child drive under
 `data/state/headless_tasks/<task_id>/data`. `forked` mode copies stable memory
 seed files (`identity.md`, `WORLD.md`, `registry.md`, and `knowledge/`) without
 dialogue/task history; `empty` mode starts from a fresh child drive; `shared` is
-reserved for self/local tasks and is rejected for external workspaces. Completed
-external runs produce explicit `workspace.patch` and `memory_export.json` artifacts under
-`data/task_results/artifacts/<task_id>/` and never auto-merge memory back into
-the parent drive. Swarm readiness in v1 is contractual only: task metadata
-normalizes `parent_task_id`, `root_task_id`, `session_id`, `actor_id`, and
-`delegation_role`, but no child-agent scheduler or delegation runtime exists yet.
+reserved for self/local tasks and is rejected for external workspaces. External
+runs produce explicit artifacts under `data/task_results/artifacts/<task_id>/`:
+`workspace_preflight.json`, `workspace_patch.json`, and `memory_export.json`;
+successful patch finalization also produces `workspace.patch`, while failed
+patch finalization records `artifact_status=failed` and the manifest only.
+`workspace_patch.json` records patch size, sha256, diffstat, included/excluded
+untracked paths, git diagnostics, and artifact errors. The parent result carries `artifact_status`
+(`pending`/`finalizing`/`ready`/`failed`) so headless clients cannot observe a
+terminal workspace result before artifacts are ready or explicitly failed.
+Headless runs never auto-merge memory back into the parent drive. Swarm
+readiness in v1 is implemented as live child tasks over the existing queue:
+`schedule_task` emits a normal `schedule_task` event, the supervisor enqueues it
+as a child task, and an existing worker executes it. There is no separate
+scheduler, dashboard, endpoint, or settings surface. Child lineage is inferred
+from the active `ToolContext` and persisted as `parent_task_id`, `root_task_id`,
+`session_id`, `actor_id`, `delegation_role`, `role`, `memory_mode`,
+`drive_root`, `budget_drive_root`, and `task_constraint`.
+
+Live subagents run with deterministic
+`task_constraint.mode="local_readonly_subagent"`. The registry filters their
+visible tool schemas to repo/data/history reads plus web/browser inspection and
+also blocks forbidden calls at execute time, including local writes, commits,
+review mutation, runtime control, tool expansion, skills, MCP/extensions, shell,
+and further `schedule_task` recursion. Generic `data_read`/`data_list` behavior
+is unchanged for normal tasks, but subagents additionally deny known
+secret/control files such as `settings.json`, token/credential/key files, and
+secret-like owner-state paths. Browser tools remain available for remote-page
+inspection, but subagents fail closed instead of auto-installing browser
+dependencies and cannot browse or act on loopback/local or non-HTTP URLs, make
+browser subrequests to loopback/local URLs, or run arbitrary browser JavaScript.
+
+`memory_mode=forked` is the default and uses the same child-drive mechanism as
+headless workspaces: copy stable memory seed files only (`identity.md`,
+`WORLD.md`, `registry.md`, `knowledge/`) into
+`data/state/headless_tasks/<task_id>/data`, without dialogue history, scratchpad
+blocks, task history, or auto-merge. `empty` creates a blank child drive.
+`shared` keeps the parent drive and should be used only when shared local state
+is an explicit parent decision. On completion, only the child task result is
+copied back to the parent drive; identity, scratchpad, registry, knowledge,
+dialogue blocks, and `memory_export` are never merged or exported
+automatically. v1 subagents are leaf workers: the schema and execute-time gate
+hide and block `schedule_task`, while the supervisor keeps a structural depth
+cap of 2 and a maximum of 3 active child tasks per `root_task_id`.
 
 ### Two-process model
 
@@ -275,6 +323,7 @@ normalizes `parent_task_id`, `root_task_id`, `session_id`, `actor_id`, and
 │   │   ├── server_port ← Active HTTP port used by the launcher/browser handoff
 │   │   ├── server_process.json ← Launcher-owned server PID/process-group identity record for relaunch cleanup
 │   │   ├── advisory_review.json ← Durable advisory/review ledger (runs, attempts, obligations, commit-readiness debts)
+│   │   ├── deep_self_review_context.json ← Last deep self-review Generated Scope Atlas manifest and model metadata
 │   │   ├── evolution_metrics_cache.json ← Cached per-tag Evolution metrics (schema 1; regenerated by `/api/evolution-data` / `collect_evolution_metrics`)
 │   │   ├── queue_snapshot.json
 │   │   ├── extension_companions.json ← Runtime snapshot for live extension companion processes
@@ -508,6 +557,7 @@ The executable route SSOT is `ouroboros/gateway/router.py`; file-browser routes 
 | GET | `/api/extensions/{skill}/settings_section` | `gateway.extensions.api_extension_settings_section` |
 | ANY | `/api/extensions/{skill}/{rest:path}` | `gateway.extensions.api_extension_dispatch` |
 | POST | `/api/skills/{skill}/toggle` | `gateway.extensions.api_skill_toggle` |
+| POST | `/api/skills/{skill}/delete` | `gateway.extensions.api_skill_delete` |
 | GET | `/api/skills/lifecycle-queue` | `gateway.extensions.api_skill_lifecycle_queue` |
 | POST | `/api/skills/{skill}/review` | `gateway.extensions.api_skill_review` |
 | POST | `/api/skills/{skill}/grants` | `gateway.extensions.api_skill_grants` |
@@ -546,6 +596,7 @@ The executable route SSOT is `ouroboros/gateway/router.py`; file-browser routes 
 | GET | `/api/tasks` | `gateway.tasks.api_tasks_list` |
 | GET | `/api/tasks/{task_id}` | `gateway.tasks.api_task_get` |
 | GET | `/api/tasks/{task_id}/events` | `gateway.tasks.api_task_events` |
+| GET | `/api/tasks/{task_id}/artifacts/{name}` | `gateway.tasks.api_task_artifact` |
 | POST | `/api/tasks/{task_id}/cancel` | `gateway.tasks.api_task_cancel` |
 | POST | `/api/command` | `gateway.control.api_command` |
 | POST | `/api/reset` | `gateway.control.api_reset` |
@@ -587,6 +638,7 @@ Security/behavioral endpoint contracts not obvious from route names:
 - `POST /api/owner/runtime-mode` persists the next-boot owner runtime mode and returns `restart_required=true`; it does not mutate the current boot baseline or process env.
 - `POST /api/owner/auto-grant` persists the owner auto-grant toggle outside generic `/api/settings`.
 - `POST /api/skills/{skill}/grants` is a dedicated owner grant path for manifest-declared keys and host permissions. It requires a fresh executable review under the current enforcement mode, content-hash-bound grant state, and script/extension skill type; desktop may still use the native bridge first, while web uses this endpoint after UI confirmation.
+- `POST /api/skills/{skill}/delete` is limited to direct `data/skills/external/<name>` payloads. It unloads live extension surfaces, removes the local payload, and removes `data/state/skills/<name>`; marketplace skills keep using their hub-specific uninstall endpoints.
 - `GET /api/update/status` is passive/read-only. It must not fetch, rewrite remotes, or mutate `.git`; explicit update checks/apply flows own network/git mutation.
 
 ## 5. Supervisor Loop
@@ -686,20 +738,21 @@ Rationale: commit review is the immune system's blocking feedback loop. The stag
 
 - Advisory pre-review (`claude_advisory_review.py`) is mandatory freshness coverage before commit. It is staleness-aware and auditable; bypass is explicit and logged.
 - Triad diff review (`tools/review.py`) asks configured reviewer slots to cover the Repo Commit Checklist with JSON findings. At least two parseable reviewers are required for quorum.
-- Scope review (`tools/scope_review.py`) sees the full repo pack plus touched context and checks intent/scope/coupling. It is fail-closed on unreadable touched files and budget-aware on oversized full prompts; whether findings block or downgrade to advisory follows `OUROBOROS_REVIEW_ENFORCEMENT`.
+- Scope review (`tools/scope_review.py`) sees touched context plus a Generated Scope Atlas and checks intent/scope/coupling. The Atlas target is an 850K estimated-token assembled prompt under the 920K hard review budget; it raw-inlines selected protected/central files and accounts for every tracked path as full, already included, manifest-only, excluded, sensitive, binary/media, vendored/minified, oversized, read-error, or budget-omitted. Scope review is fail-closed on unreadable touched files and budget-aware on oversized prompts; whether findings block or downgrade to advisory follows `OUROBOROS_REVIEW_ENFORCEMENT`.
 - Parallel orchestration (`tools/parallel_review.py`) launches triad and scope concurrently so the agent receives all findings in one round.
 - Shared helpers (`review_helpers.py`, `triad_review.py`) own pack building, checklist loading, JSON extraction, usage events, obligations/history prompt scaffolding, and reviewer actor records.
 
 Rationale: diff reviewers catch line-level mistakes; scope reviewer catches cross-module contracts and forgotten touchpoints. Running both on the same staged snapshot prevents one reviewer result from hiding the other.
 
-The shared prompt-size SSOT is `REVIEW_PROMPT_TOKEN_BUDGET = 920_000` in
-`ouroboros/tools/review_helpers.py`. Scope review, plan review, and deep
-self-review all consume this constant so oversized-context behavior cannot
-drift between review entry points.
+The shared hard prompt-size SSOT is `REVIEW_PROMPT_TOKEN_BUDGET = 920_000` in
+`ouroboros/tools/review_helpers.py`. `review_context_atlas.py` targets 850K
+estimated total prompt tokens for scope review, plan review, and deep
+self-review, then leaves the final 920K gate in each caller as the hard stop so
+oversized-context behavior cannot drift between review entry points.
 
 ### Planning, deep review, reflection, memory
 
-`plan_review.py` runs multi-model full-repo review before large implementation plans. `deep_self_review.py` runs a direct full-pack self-review without the tool loop. `reflection.py` records process lessons; `consolidator.py` compacts dialogue/scratchpad through explicit summaries; `context.py` assembles static, semi-stable, and dynamic context sections.
+`plan_review.py` runs multi-model Atlas-backed review before large implementation plans. `deep_self_review.py` runs a direct Atlas-backed self-review without the tool loop while keeping the memory whitelist full. `reflection.py` records process lessons; `consolidator.py` compacts dialogue/scratchpad through explicit summaries; `context.py` assembles static, semi-stable, and dynamic context sections.
 
 Rationale: Ouroboros learns from attempts, not just final answers. Compression must preserve what was tried, what changed, and why conclusions were reached.
 
@@ -777,9 +830,9 @@ Runtime floors:
 | OUROBOROS_NETWORK_PASSWORD | "" | Optional. Enables the non-loopback auth gate when set; empty still allows open bind, but startup logs a warning |
 | OUROBOROS_SERVER_HOST | 127.0.0.1 | Server bind host. Use `0.0.0.0` for LAN/Docker access; restart required. |
 | OUROBOROS_TRUST_NONLOCAL_BIND_WITHOUT_PASSWORD | unset | Env-only Docker/Kubernetes escape hatch. When set to `1`, Settings may save ordinary changes while a wildcard/non-localhost bind has no `OUROBOROS_NETWORK_PASSWORD`; use only behind ingress auth, VPN, private networking, or an auth proxy. |
-| OUROBOROS_MODEL | anthropic/claude-opus-4.6 | Main reasoning model |
-| OUROBOROS_MODEL_CODE | anthropic/claude-opus-4.6 | Code editing model |
-| OUROBOROS_MODEL_LIGHT | anthropic/claude-sonnet-4.6 | Fast/cheap model (safety, consciousness) |
+| OUROBOROS_MODEL | google/gemini-3.5-flash | Main reasoning model |
+| OUROBOROS_MODEL_CODE | google/gemini-3.5-flash | Code editing model |
+| OUROBOROS_MODEL_LIGHT | google/gemini-3.5-flash | Fast/cheap model (safety, consciousness) |
 | OUROBOROS_MODEL_FALLBACK | anthropic/claude-sonnet-4.6 | Fallback when primary fails |
 | CLAUDE_CODE_MODEL | claude-opus-4-6[1m] | Anthropic model for Claude Agent SDK tools (`claude_code_edit`, `advisory_pre_review`; values: sonnet, opus, `claude-opus-4-6[1m]`, or full model name; the `[1m]` suffix is a Claude Code selector that requests the 1M-context extended mode) |
 | OUROBOROS_MAX_WORKERS | 5 | Worker process pool size |
@@ -787,7 +840,7 @@ Runtime floors:
 | OUROBOROS_PER_TASK_COST_USD | 20.0 | Per-task soft threshold in USD |
 | OUROBOROS_TOOL_TIMEOUT_SEC | 600 | Global tool timeout override (read live from settings.json on each tool call) |
 | OUROBOROS_WEBSEARCH_MODEL | gpt-5.2 | Official OpenAI Responses model for `web_search` when `OPENAI_BASE_URL` is empty |
-| OUROBOROS_REVIEW_MODELS | openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6 | Comma-separated OpenRouter model IDs for pre-commit review (min 2 for quorum) |
+| OUROBOROS_REVIEW_MODELS | openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6 | Comma-separated OpenRouter model IDs for pre-commit review (min 2 for quorum) |
 | OUROBOROS_REVIEW_MODEL_TIMEOUT_SEC | 600 | Env-only override read directly by `ouroboros.tools.review`. Per-reviewer model call timeout for multi-model review; timed-out reviewers become ERROR actors and quorum still requires at least two parseable reviewers. |
 | OUROBOROS_REVIEW_ENFORCEMENT | advisory | Review enforcement: `blocking` blocks commit critical findings, fresh-advisory open obligations/debts, and skill `blockers`; `advisory` downgrades those to warnings by operator choice. Fresh advisory with open obligations/debts writes `advisory_obligations_acknowledged`; stale advisory still blocks. Skill `warnings` do not block execution in either mode. |
 | OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS | false | Owner-confirmed setting. When enabled, a fresh executable skill review grants only the manifest-declared settings keys and host permissions for that exact content hash so closed-loop skill development can run without repeated manual grants. Under `blocking`, blocker reviews are not executable and do not auto-grant; under `advisory`, blocker findings may auto-grant only because the current enforcement mode makes the review executable. Plain `/api/settings` POST drops this key; desktop uses the launcher confirmation bridge and web uses `/api/owner/auto-grant`. |
@@ -853,6 +906,7 @@ Rationale: normal self-modification needs fast feedback, but release tags must p
 
 `build.sh`, `build_linux.sh`, `build_windows.ps1`, and `scripts/build_repo_bundle.py` are release-invariant surfaces. Changes to them must update README install/build notes and architecture rationale in the same commit.
 Release tag prerequisite: platform build scripts delegate repo-bundle creation to `scripts/build_repo_bundle.py`; that Python bundler is the release-tag SSOT and verifies the annotated `v$(cat VERSION)` tag points at `HEAD` before packaged artifacts are produced. This catches untagged release builds locally instead of publishing artifacts whose version carriers disagree with git history.
+Packaged Python bytecode policy: platform build scripts set `PYTHONDONTWRITEBYTECODE=1`, direct build-time pycache to a temp prefix, and remove `__pycache__` / `.pyc` from final payloads before signing or archiving. Runtime launcher and packaged CLI entrypoints set the same bytecode guard with an external data/cache prefix so normal imports do not write new bytecode inside signed app bundles.
 
 ### Docker
 
@@ -944,9 +998,9 @@ automatically on completion or via `kill_all_tracked_subprocesses()` on panic.
 
 1. **Never delete BIBLE.md. Never physically delete `identity.md` file.**
    (`identity.md` content is intentionally mutable and may be radically rewritten.)
-2. **Release carriers stay in sync**: `VERSION`, the README badge, the ARCHITECTURE header,
-   and the latest release git tag use the same author-facing spelling (for example
-   `4.50.0-rc.2` / `v4.50.0-rc.2`), while `pyproject.toml` stores the PEP 440-canonical form
+2. **Release carriers stay in sync**: `VERSION`, `web/package.json`, the README badge,
+   the ARCHITECTURE header, and the latest release git tag use the same author-facing spelling
+   (for example `4.50.0-rc.2` / `v4.50.0-rc.2`), while `pyproject.toml` stores the PEP 440-canonical form
    (for example `4.50.0rc2`). For packaged builds, `repo_bundle_manifest.json` pins that same
    release via `app_version`, `release_tag`, `source_sha`, and the embedded bundle hash for the
    first launcher-managed bootstrap before normal managed-remote updates resume.

@@ -151,11 +151,12 @@ Used by `repo_commit` for all changes to the Ouroboros repository.
 | 14 | cross_platform | Does the diff use platform-specific APIs (`os.kill`, `os.setsid`, `os.killpg`, `os.getpgid`, `fcntl`, `msvcrt`, `signal.SIGKILL`, `signal.SIGTERM`, `subprocess` with `start_new_session`/`creationflags`, hardcoded `/` or `\\` in filesystem paths) outside of `ouroboros/platform_layer.py`? Does it import Unix-only or Windows-only modules (`fcntl`, `msvcrt`, `winreg`, `resource`) at any level without a platform guard (`sys.platform`/`IS_WINDOWS` check)? | critical |
 | 15 | changelog_accuracy | Do the exact wording, test counts, and minor description details in the README Version History row match what the diff actually does? Wording drift, off-by-one test counts, minor inaccuracies in descriptive prose — these belong here, NOT in `self_consistency` or `changelog_and_badge`. This item exists so reviewers have a dedicated advisory bucket for prose-level changelog imprecision that does not affect release metadata, runtime behavior, or safety contracts. | advisory |
 | 16 | gateway_parity | If the diff changes any browser-facing endpoint, WebSocket message, or frontend API call, are `ouroboros/gateway/contracts.py`, `ouroboros/gateway/router.py`, `web/modules/api_client.js`, `web/modules/api_types.js`, and `tests/test_gateway_parity.py` still aligned? Missing alignment is advisory unless it also breaks a frozen contract, safety guard, release metadata, or runtime behavior. | advisory |
+| 17 | subagent_isolation | If the diff changes `schedule_task`, child-task queueing, task constraints, tool discovery/execution, data reads, or memory handoff, does it preserve the accepted live-subagent contract: strict `objective` + `expected_output` schema, inferred lineage, `local_readonly_subagent` schema and execute-time allowlist, subagent-scoped secret/control-file denial for data tools, no grandchildren, no local writes/commits/review/runtime/tool-expansion/skills/MCP/shell, full task-result handoff, and tests for both allowed and blocked paths? | critical |
 
 ### Severity rules
 
 - Items 1-5 are always critical.
-- Items 6-10, 14 are conditionally critical: FAIL only when the condition applies.
+- Items 6-10, 14, and 17 are conditionally critical: FAIL only when the condition applies.
   If the condition does not apply, write verdict PASS with a short reason
   (e.g. "Not applicable — no code logic change").
 - Items 11-12 and 15-16 are advisory: FAIL produces a warning but does not block.
@@ -538,11 +539,12 @@ block repo commits and vice versa.
 ## Plan Review Checklist
 
 Used by `plan_task` for pre-implementation design reviews, BEFORE any code is written.
-Reviewers see the entire repository (full repo pack) plus the proposed plan and HEAD
-snapshots of files planned to be touched.
+Reviewers see the proposed plan, HEAD snapshots of files planned to be touched,
+and a Generated Plan Review Atlas that raw-inlines selected protected/central files
+while accounting for every tracked path in its manifest.
 
 **Reviewer role is GENERATIVE, not audit.** The primary job is to contribute
-ideas the implementer may not see, using full repo access. Finding defects in
+ideas the implementer may not see, using broad Atlas-backed repo access. Finding defects in
 the plan is secondary; proposing concrete alternatives, surfacing existing
 surfaces that already solve the goal, and flagging subtle contract breaks the
 implementer missed is primary.
@@ -552,7 +554,7 @@ implementer missed is primary.
 Reviewers must structure their response in this order:
 
 1. **Your own approach** (1-2 sentences). State what YOU would do if this goal
-   came to you with full repo access: the concrete alternative path, the
+   came to you with broad Atlas-backed repo access: the concrete alternative path, the
    existing file/function you would reuse, or the simpler route. If after real
    effort you genuinely see no better approach, say so explicitly.
 2. **`## PROPOSALS` section** (top 1-2 contributions). The highest-value thing
@@ -619,10 +621,11 @@ Reviewers must end with exactly one of `AGGREGATE: GREEN`,
 
 ## Intent / Scope Review Checklist
 
-Used by the full-codebase scope reviewer, which runs IN PARALLEL with the triad diff review.
-Unlike triad reviewers who see only the diff, the scope reviewer sees the ENTIRE repository.
-Its unique advantage is finding cross-module bugs, broken implicit contracts, and hidden
-regressions that diff-only reviewers cannot see.
+Used by the Atlas-backed scope reviewer, which runs IN PARALLEL with the triad diff review.
+Unlike triad reviewers who see only the diff, the scope reviewer sees touched files plus
+a Generated Scope Atlas that accounts for the ENTIRE repository. Its unique advantage
+is finding cross-module bugs, broken implicit contracts, and hidden regressions that
+diff-only reviewers cannot see.
 
 **Output contract (v4.34.0):** the scope reviewer returns a JSON array that covers every
 item below (8 items total). PASS entries are mandatory for items with no problems and must

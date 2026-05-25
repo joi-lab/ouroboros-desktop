@@ -6,6 +6,11 @@ $ErrorActionPreference = "Stop"
 $Version = (Get-Content VERSION).Trim()
 $ArchiveName = "Ouroboros-${Version}-windows-x64.zip"
 $ManagedSourceBranch = if ($env:OUROBOROS_MANAGED_SOURCE_BRANCH) { $env:OUROBOROS_MANAGED_SOURCE_BRANCH } else { "ouroboros" }
+$env:PYTHONDONTWRITEBYTECODE = "1"
+if (-not $env:PYTHONPYCACHEPREFIX) {
+    $env:PYTHONPYCACHEPREFIX = Join-Path ([System.IO.Path]::GetTempPath()) "OuroborosBuildPycache"
+}
+New-Item -ItemType Directory -Force -Path $env:PYTHONPYCACHEPREFIX | Out-Null
 
 Write-Host "=== Building Ouroboros for Windows (v${Version}) ==="
 
@@ -60,6 +65,10 @@ Write-Host "--- Installing packaged CLI wrappers ---"
 New-Item -ItemType Directory -Force -Path "dist\Ouroboros\bin" | Out-Null
 Copy-Item "packaging\cli\ouroboros.cmd" "dist\Ouroboros\bin\ouroboros.cmd" -Force
 Copy-Item "packaging\cli\install-ouroboros-cli.cmd" "dist\Ouroboros\bin\install-ouroboros-cli.cmd" -Force
+
+Write-Host "--- Removing Python bytecode caches from archive payload ---"
+Get-ChildItem -Path "dist\Ouroboros" -Recurse -Force -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+Get-ChildItem -Path "dist\Ouroboros" -Recurse -Force -File -Filter "*.pyc" | Remove-Item -Force
 
 Write-Host "--- Checking Windows archive path lengths ---"
 $TooLong = Get-ChildItem -Path "dist\Ouroboros" -Recurse -Force | Where-Object {

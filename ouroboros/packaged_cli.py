@@ -19,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from ouroboros.launcher_bootstrap import BootstrapContext, bootstrap_repo, check_git
+from ouroboros.launcher_bootstrap import BootstrapContext, bootstrap_repo, check_git, python_bytecode_env
 from ouroboros.platform_layer import IS_MACOS, IS_WINDOWS, embedded_python_candidates, git_install_hint
 
 
@@ -213,7 +213,7 @@ def _inner_cli_env(runtime: PackagedRuntime) -> dict[str, str]:
             "OUROBOROS_PACKAGED_CLI": "1",
         }
     )
-    return keep
+    return python_bytecode_env(runtime.data_dir, keep)
 
 
 def _prepare_start_if_requested(args: list[str], runtime: PackagedRuntime) -> list[str]:
@@ -255,6 +255,7 @@ def _run_start_index(args: Sequence[str], command_idx: int) -> int | None:
         "--memory-mode",
         "--attach",
         "--patch-out",
+        "--timeout",
         "--actor-id",
         "--delegation-role",
     }

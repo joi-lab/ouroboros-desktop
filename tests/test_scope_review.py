@@ -428,12 +428,61 @@ class TestScopeReviewModule:
         source = inspect.getsource(mod._build_scope_prompt)
         assert "Intent / Scope Review Checklist" in source
 
-    def test_scope_prompt_includes_full_repo_pack(self):
-        # scope_review now uses build_full_repo_pack (DRY, no char cap)
-        # The call is in _gather_scope_packs which _build_scope_prompt delegates to
+    def test_scope_prompt_includes_generated_scope_atlas(self):
+        # scope_review now uses the bounded generated Atlas instead of the legacy full pack.
+        # The call is in _gather_scope_packs which _build_scope_prompt delegates to.
         mod = _get_module("ouroboros.tools.scope_review")
         source = inspect.getsource(mod._gather_scope_packs)
-        assert "build_full_repo_pack" in source
+        assert "compile_review_context_atlas" in source
+        assert "ReviewContextAtlasRequest" in source
+        assert "fixed_prompt_tokens" in source
+
+    def test_scope_prompt_fails_closed_on_atlas_inventory_error(self, tmp_path, monkeypatch):
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "docs" / "CHECKLISTS.md").write_text(
+            "## Intent / Scope Review Checklist\n\nplaceholder\n", encoding="utf-8"
+        )
+        (tmp_path / "docs" / "DEVELOPMENT.md").write_text("dev guide\n", encoding="utf-8")
+        (tmp_path / "a.py").write_text("aaa", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@o", "-c", "user.name=T", "commit", "-m", "init"],
+            cwd=str(tmp_path), capture_output=True,
+        )
+        (tmp_path / "a.py").write_text("bbb", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+
+        mod = _get_module("ouroboros.tools.scope_review")
+        monkeypatch.setattr(
+            mod,
+            "compile_review_context_atlas",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("inventory failed")),
+        )
+        with pytest.raises(RuntimeError, match="inventory failed"):
+            mod._build_scope_prompt(tmp_path, "test msg")
+
+    def test_scope_prompt_keeps_literal_atlas_placeholder_in_touched_content(self, tmp_path):
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "docs" / "CHECKLISTS.md").write_text(
+            "## Intent / Scope Review Checklist\n\nplaceholder\n", encoding="utf-8"
+        )
+        (tmp_path / "docs" / "DEVELOPMENT.md").write_text("dev guide\n", encoding="utf-8")
+        (tmp_path / "a.py").write_text("aaa", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@o", "-c", "user.name=T", "commit", "-m", "init"],
+            cwd=str(tmp_path), capture_output=True,
+        )
+        (tmp_path / "a.py").write_text("print('__GENERATED_SCOPE_ATLAS_PENDING__')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+
+        mod = _get_module("ouroboros.tools.scope_review")
+        prompt, status = mod._build_scope_prompt(tmp_path, "test msg")
+        assert status is None
+        current_section = prompt[prompt.index("## Current touched files"):prompt.index("## Wider repository context")]
+        assert "__GENERATED_SCOPE_ATLAS_PENDING__" in current_section
 
 
 # ---------------------------------------------------------------------------
@@ -1244,4 +1293,3 @@ class TestTriadPromptAntiPatternLock:
         # Accept any casing — "different concern class" / "DIFFERENT concern class"
         assert "concern class" in flat.lower()
         assert "second pass" in flat.lower()
-

@@ -140,8 +140,20 @@ class OuroborosAgent:
                 str(task.get("id") or ""),
                 STATUS_RUNNING,
                 parent_task_id=task.get("parent_task_id"),
+                root_task_id=task.get("root_task_id"),
+                session_id=task.get("session_id"),
+                actor_id=task.get("actor_id"),
+                delegation_role=task.get("delegation_role"),
+                role=task.get("role"),
                 description=task.get("description"),
+                objective=task.get("objective") or task.get("description"),
+                expected_output=task.get("expected_output"),
+                constraints=task.get("constraints"),
                 context=task.get("context"),
+                memory_mode=task.get("memory_mode"),
+                drive_root=task.get("drive_root"),
+                budget_drive_root=task.get("budget_drive_root"),
+                task_constraint=task.get("task_constraint"),
                 result="Task is running.",
             )
         except Exception:
@@ -151,6 +163,27 @@ class OuroborosAgent:
             task_id=str(task.get("id") or ""),
             task_type=str(task.get("type") or ""),
         )
+        if str(task.get("delegation_role") or "") == "subagent" and self._event_queue is not None and self._current_chat_id is not None:
+            try:
+                self._event_queue.put({
+                    "type": "send_message",
+                    "chat_id": self._current_chat_id,
+                    "text": f"▶️ Subagent {task.get('id')} running ({task.get('role') or 'researcher'}).",
+                    "format": "markdown",
+                    "is_progress": True,
+                    "task_id": str(task.get("id") or ""),
+                    "progress_meta": {
+                        "subagent_event": "running",
+                        "subagent_task_id": str(task.get("id") or ""),
+                        "root_task_id": str(task.get("root_task_id") or ""),
+                        "parent_task_id": str(task.get("parent_task_id") or ""),
+                        "delegation_role": "subagent",
+                        "subagent_role": str(task.get("role") or ""),
+                    },
+                    "ts": utc_now_iso(),
+                })
+            except Exception:
+                log.debug("Failed to emit subagent running progress", exc_info=True)
 
         task_metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
         for key in (
@@ -159,6 +192,7 @@ class OuroborosAgent:
             "session_id",
             "actor_id",
             "delegation_role",
+            "role",
             "workspace_root",
             "workspace_mode",
             "memory_mode",

@@ -14,6 +14,9 @@ fi
 ENTITLEMENTS="entitlements.plist"
 SIGN_MODE="${OUROBOROS_SIGN:-1}"
 MANAGED_SOURCE_BRANCH="${OUROBOROS_MANAGED_SOURCE_BRANCH:-ouroboros}"
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-${TMPDIR:-/tmp}/ouroboros-build-pycache}"
+mkdir -p "$PYTHONPYCACHEPREFIX"
 
 APP_PATH="dist/Ouroboros.app"
 DMG_NAME="Ouroboros-$(cat VERSION | tr -d '[:space:]').dmg"
@@ -89,6 +92,11 @@ mkdir -p "$CLI_BIN_DIR"
 cp packaging/cli/ouroboros "$CLI_BIN_DIR/ouroboros"
 cp packaging/cli/install-ouroboros-cli "$CLI_BIN_DIR/install-ouroboros-cli"
 chmod +x "$CLI_BIN_DIR/ouroboros" "$CLI_BIN_DIR/install-ouroboros-cli"
+
+echo "--- Removing Python bytecode caches from app bundle ---"
+# PyInstaller may duplicate resource trees with symlinks; remove cache dirs and links before signing.
+find "$APP_PATH" -name "__pycache__" -prune -exec rm -rf {} +
+find "$APP_PATH" -name "*.pyc" -type f -delete
 
 if [ "$SIGN_MODE" != "0" ]; then
     echo ""

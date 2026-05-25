@@ -634,7 +634,7 @@ async def api_settings_post(request: Request) -> JSONResponse:
                         repo_path=new_path or None,
                     )
         except Exception:
-            log.warning("Extension reload after settings change failed", exc_info=True)
+            log.error("Extension reload after settings change failed", exc_info=True)
 
         try:
             from supervisor.state import refresh_budget_from_settings

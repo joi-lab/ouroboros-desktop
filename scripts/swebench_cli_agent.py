@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,11 @@ def main() -> int:
     parser.add_argument("--input", required=True, help="JSONL instances")
     parser.add_argument("--output", required=True, help="predictions JSONL")
     parser.add_argument("--model-name", default="ouroboros-cli")
+    parser.add_argument("--cli", default="", help="optional Ouroboros CLI command prefix, e.g. 'ouroboros'")
+    parser.add_argument("--timeout", type=int, default=7200, help="per-instance Ouroboros CLI timeout seconds")
+    parser.add_argument("--continue-on-error", action="store_true", help="continue after failed instances and write errors JSONL")
+    parser.add_argument("--errors-output", default="", help="errors JSONL path; defaults to <output>.errors.jsonl when continuing")
+    parser.add_argument("--logs-dir", default="", help="optional directory for per-instance stdout/stderr logs")
     parser.add_argument(
         "--workspaces-root",
         default="",
@@ -29,6 +35,7 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = []
+    errors = []
     for raw in Path(args.input).read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
@@ -68,28 +75,62 @@ def main() -> int:
         )
         if status.returncode != 0 or status.stdout.strip():
             raise ValueError(f"workspace must be clean before SWE-bench run for {instance_id}")
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "ouroboros.cli",
-                "run",
-                "--workspace",
-                str(workspace_path),
-                "--memory-mode",
-                "empty",
-                "--patch",
-                prompt,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=7200,
-        )
+        cli_prefix = shlex.split(args.cli) if args.cli else [sys.executable, "-m", "ouroboros.cli"]
+        cmd = [
+            *cli_prefix,
+            "run",
+            "--workspace",
+            str(workspace_path),
+            "--memory-mode",
+            "empty",
+            "--timeout",
+            str(int(args.timeout)),
+            "--patch",
+            prompt,
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(args.timeout) + 60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", errors="replace")
+            stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", errors="replace")
+            if args.logs_dir:
+                log_dir = Path(args.logs_dir).expanduser() / instance_id
+                log_dir.mkdir(parents=True, exist_ok=True)
+                (log_dir / "ouroboros.stdout").write_text(stdout, encoding="utf-8")
+                (log_dir / "ouroboros.stderr").write_text(stderr, encoding="utf-8")
+            error_row = {
+                "instance_id": instance_id,
+                "returncode": 124,
+                "error": f"ouroboros run timed out after {int(args.timeout)}s",
+                "timeout": True,
+            }
+            if not args.continue_on_error:
+                raise RuntimeError(error_row["error"]) from exc
+            errors.append(error_row)
+            continue
+        if args.logs_dir:
+            log_dir = Path(args.logs_dir).expanduser() / instance_id
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "ouroboros.stdout").write_text(result.stdout, encoding="utf-8")
+            (log_dir / "ouroboros.stderr").write_text(result.stderr, encoding="utf-8")
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
             if len(details) > 4000:
                 details = details[:4000] + "\n...[truncated]"
-            raise RuntimeError(details or f"ouroboros run exited {result.returncode}")
+            error_row = {
+                "instance_id": instance_id,
+                "returncode": result.returncode,
+                "error": details or f"ouroboros run exited {result.returncode}",
+            }
+            if not args.continue_on_error:
+                raise RuntimeError(error_row["error"])
+            errors.append(error_row)
+            continue
         rows.append({
             "instance_id": instance_id,
             "model_name_or_path": args.model_name,
@@ -99,6 +140,12 @@ def main() -> int:
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else ""),
         encoding="utf-8",
     )
+    if errors:
+        error_path = Path(args.errors_output).expanduser() if args.errors_output else Path(str(args.output) + ".errors.jsonl")
+        error_path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in errors) + "\n",
+            encoding="utf-8",
+        )
     return 0
 
 

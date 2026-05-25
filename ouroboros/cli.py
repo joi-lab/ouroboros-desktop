@@ -23,6 +23,14 @@ class CLIError(RuntimeError):
     pass
 
 
+class PatchCLIError(CLIError):
+    pass
+
+
+class TaskTimeoutCLIError(CLIError):
+    pass
+
+
 class ConnectionCLIError(CLIError):
     pass
 
@@ -32,7 +40,14 @@ class OuroborosHTTPClient:
         self.base_url = (base_url or _default_base_url()).rstrip("/")
         self.timeout = timeout
 
-    def request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+        *,
+        timeout: Optional[float] = None,
+    ) -> Any:
         data = None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -45,7 +60,7 @@ class OuroborosHTTPClient:
             method=method.upper(),
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout if timeout is None else timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -57,12 +72,30 @@ class OuroborosHTTPClient:
             raise CLIError(f"HTTP {exc.code}: {message}") from exc
         except urllib.error.URLError as exc:
             raise ConnectionCLIError(f"cannot reach Ouroboros server at {self.base_url}: {exc}") from exc
+        except TimeoutError as exc:
+            raise ConnectionCLIError(f"request to Ouroboros server timed out at {self.base_url}") from exc
         if not raw.strip():
             return {}
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             return raw
+
+    def get_bytes(self, path: str) -> bytes:
+        req = urllib.request.Request(self.base_url + path, headers={"Accept": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw)
+                message = payload.get("error") or raw
+            except Exception:
+                message = raw or str(exc)
+            raise CLIError(f"HTTP {exc.code}: {message}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionCLIError(f"cannot download from Ouroboros server at {self.base_url}: {exc}") from exc
 
     def stream_sse(self, path: str, timeout: float = 120.0) -> Iterator[Dict[str, Any]]:
         req = urllib.request.Request(self.base_url + path, headers={"Accept": "text/event-stream"})
@@ -108,8 +141,6 @@ def _run_command(args: argparse.Namespace) -> int:
     prompt = " ".join(args.prompt).strip()
     if not prompt:
         raise CLIError("run requires a prompt")
-    if args.no_stream and not args.jsonl:
-        raise CLIError("--no-stream requires --jsonl so stdout remains reserved for final output")
     client = _client(args, start=args.start)
     attachments = [{"path": str(pathlib.Path(p).expanduser())} for p in args.attach]
     body = {
@@ -124,23 +155,32 @@ def _run_command(args: argparse.Namespace) -> int:
     task_id = str(created.get("task_id") or "")
     if not task_id:
         raise CLIError(f"task creation did not return task_id: {created}")
+    if args.detach:
+        if args.jsonl:
+            print(json.dumps({"type": "task_created", "task_id": task_id, "data": created}, ensure_ascii=False))
+        else:
+            print(task_id)
+        return 0
+    timeout = float(args.timeout or 0)
     if args.no_stream:
         if args.jsonl:
             print(json.dumps({"type": "task_created", "task_id": task_id, "data": created}, ensure_ascii=False))
-        return 0
-    _watch_task(client, task_id, jsonl=args.jsonl, quiet=args.quiet)
-    result = client.request("GET", f"/api/tasks/{urllib.parse.quote(task_id)}")
+        result = _wait_task(client, task_id, timeout_sec=timeout)
+    else:
+        _watch_task(client, task_id, jsonl=args.jsonl, quiet=args.quiet, timeout_sec=timeout)
+        result = client.request("GET", f"/api/tasks/{urllib.parse.quote(task_id)}")
+    exit_code = 0 if _is_terminal_success(result) else 1
     if args.patch_out:
-        pathlib.Path(args.patch_out).expanduser().write_text(_patch_from_result(result), encoding="utf-8")
+        patch = _patch_from_result(client, task_id, result, strict=True)
+        pathlib.Path(args.patch_out).expanduser().write_text(patch, encoding="utf-8")
     if args.jsonl:
         print(json.dumps({"type": "final", "task_id": task_id, "result": result}, ensure_ascii=False))
     elif args.patch:
-        patch = _patch_from_result(result)
-        if patch:
-            print(patch, end="" if patch.endswith("\n") else "\n")
+        patch = _patch_from_result(client, task_id, result, strict=True)
+        print(patch, end="" if patch.endswith("\n") else "\n")
     else:
         print(str(result.get("result") or ""))
-    return 0 if str(result.get("status") or "") == "completed" else 1
+    return exit_code
 
 
 def _tasks_list_command(args: argparse.Namespace) -> int:
@@ -163,7 +203,7 @@ def _tasks_cancel_command(args: argparse.Namespace) -> int:
 
 
 def _tasks_watch_command(args: argparse.Namespace) -> int:
-    _watch_task(_client(args), args.task_id, jsonl=args.jsonl, quiet=False)
+    _watch_task(_client(args), args.task_id, jsonl=args.jsonl, quiet=False, timeout_sec=0)
     return 0
 
 
@@ -338,6 +378,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--jsonl", action="store_true")
     run.add_argument("--quiet", action="store_true")
     run.add_argument("--no-stream", action="store_true")
+    run.add_argument("--detach", action="store_true", help="create the task and print its task id without waiting")
+    run.add_argument("--timeout", type=float, default=0.0, help="maximum seconds to wait for task completion (0 = no limit)")
     run.add_argument("--patch", action="store_true", help="print workspace patch instead of final answer")
     run.add_argument("--patch-out", default="", help="write workspace patch to this path")
     run.add_argument("--actor-id", default="cli")
@@ -541,13 +583,31 @@ def _start_local_server(base_url: str) -> None:
     )
 
 
-def _watch_task(client: OuroborosHTTPClient, task_id: str, *, jsonl: bool, quiet: bool) -> None:
+def _watch_task(
+    client: OuroborosHTTPClient,
+    task_id: str,
+    *,
+    jsonl: bool,
+    quiet: bool,
+    timeout_sec: float,
+) -> None:
     cursor = 0
     final = False
+    deadline = time.time() + timeout_sec if timeout_sec and timeout_sec > 0 else None
     while not final:
-        path = f"/api/tasks/{urllib.parse.quote(task_id)}/events?cursor={cursor}&wait=30"
+        wait_param = 30
+        request_timeout = 40.0
+        if deadline is not None and time.time() >= deadline:
+            raise TaskTimeoutCLIError(f"task {task_id} did not finish within {timeout_sec:g}s")
+        if deadline is not None:
+            remaining = max(0.0, deadline - time.time())
+            wait_param = max(0, min(30, int(remaining)))
+            request_timeout = max(1.0, min(40.0, remaining + 1.0))
+        path = f"/api/tasks/{urllib.parse.quote(task_id)}/events?cursor={cursor}&wait={wait_param}"
         saw_event = False
-        for event in client.stream_sse(path, timeout=40):
+        for event in client.stream_sse(path, timeout=request_timeout):
+            if deadline is not None and time.time() >= deadline:
+                raise TaskTimeoutCLIError(f"task {task_id} did not finish within {timeout_sec:g}s")
             saw_event = True
             cursor = max(cursor, int(event.get("seq") or cursor))
             if jsonl:
@@ -557,10 +617,35 @@ def _watch_task(client: OuroborosHTTPClient, task_id: str, *, jsonl: bool, quiet
                 if rendered:
                     print(rendered, file=sys.stderr, flush=True)
             if event.get("type") == "task_result":
-                status = str((event.get("data") or {}).get("status") or "")
-                final = status in {"completed", "failed", "cancelled", "rejected_duplicate"}
+                final = _is_terminal_result((event.get("data") or {}))
         if not saw_event:
             time.sleep(0.5)
+
+
+def _wait_task(client: OuroborosHTTPClient, task_id: str, *, timeout_sec: float) -> Dict[str, Any]:
+    deadline = time.time() + timeout_sec if timeout_sec and timeout_sec > 0 else None
+    while True:
+        request_timeout: Optional[float] = None
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TaskTimeoutCLIError(f"task {task_id} did not finish within {timeout_sec:g}s")
+            request_timeout = min(client.timeout, remaining)
+        try:
+            result = client.request("GET", f"/api/tasks/{urllib.parse.quote(task_id)}", timeout=request_timeout)
+        except ConnectionCLIError:
+            if deadline is not None and time.time() >= deadline:
+                raise TaskTimeoutCLIError(f"task {task_id} did not finish within {timeout_sec:g}s")
+            raise
+        if _is_terminal_result(result):
+            return result
+        if deadline is not None and time.time() >= deadline:
+            raise TaskTimeoutCLIError(f"task {task_id} did not finish within {timeout_sec:g}s")
+        sleep_for = 1.0
+        if deadline is not None:
+            sleep_for = max(0.0, min(1.0, deadline - time.time()))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
 
 
 def _parse_sse_lines(resp: Iterable[bytes]) -> Iterator[Dict[str, Any]]:
@@ -592,17 +677,39 @@ def _render_event_for_stderr(event: Dict[str, Any]) -> str:
     return ""
 
 
-def _patch_from_result(result: Dict[str, Any]) -> str:
+def _patch_from_result(
+    client: OuroborosHTTPClient,
+    task_id: str,
+    result: Dict[str, Any],
+    *,
+    strict: bool,
+) -> str:
+    artifact_status = str(result.get("artifact_status") or "").lower()
+    if artifact_status == "failed":
+        raise PatchCLIError(str(result.get("artifact_error") or "workspace patch artifact failed"))
+    if artifact_status in {"pending", "finalizing"}:
+        raise PatchCLIError(f"workspace patch artifact is not finalized (artifact_status={artifact_status})")
     for artifact in result.get("artifacts") or []:
         if isinstance(artifact, dict) and artifact.get("kind") == "workspace_patch":
-            path = pathlib.Path(str(artifact.get("path") or ""))
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
-            raise CLIError(
-                "workspace patch artifact is stored as a server-local path; "
-                "--patch/--patch-out require same-filesystem access to the gateway host"
-            )
+            name = str(artifact.get("name") or pathlib.Path(str(artifact.get("path") or "")).name or "workspace.patch")
+            raw = client.get_bytes(f"/api/tasks/{urllib.parse.quote(task_id)}/artifacts/{urllib.parse.quote(name)}")
+            if strict and not raw:
+                raise PatchCLIError("workspace patch artifact is empty")
+            return raw.decode("utf-8", errors="replace")
+    if strict:
+        raise PatchCLIError("workspace patch artifact is missing")
     return ""
+
+
+def _is_terminal_result(result: Dict[str, Any]) -> bool:
+    status = str(result.get("status") or "").lower()
+    if status not in {"completed", "failed", "cancelled", "rejected_duplicate"}:
+        return False
+    return str(result.get("artifact_status") or "").lower() not in {"pending", "finalizing"}
+
+
+def _is_terminal_success(result: Dict[str, Any]) -> bool:
+    return str(result.get("status") or "").lower() == "completed"
 
 
 def _print_json(data: Any) -> None:
@@ -617,6 +724,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return int(args.func(args))
+    except PatchCLIError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except TaskTimeoutCLIError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except CLIError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

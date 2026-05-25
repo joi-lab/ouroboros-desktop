@@ -105,10 +105,18 @@ def test_marketplace_does_not_redeclare_shared_helpers():
 def test_skills_does_not_redeclare_shared_helpers():
     src = _read("skills.js")
     renderer = _read("skill_card_renderer.js")
+    api_client = _read("api_client.js")
     assert "boundedText" in src
     assert "safeExternalHrefAttr as safeExternalUrl" in renderer
     assert "function boundedText(" not in src
     assert "function safeExternalUrl(" not in src + renderer
+    assert "source === 'self_authored' || source === 'external'" in renderer
+    assert "payloadRoot.startsWith('skills/external/')" in renderer
+    assert "skills-delete-local" in renderer
+    assert "apiClient.deleteSkill(name, payloadRoot)" in src
+    assert "/api/skills/${encodeURIComponent(skill)}/delete" in api_client
+    assert "payload_root: payloadRoot" in api_client
+    assert "data/state/skills/${name}" in src
 
 
 def test_widgets_uses_shared_render_markdown():
@@ -139,7 +147,7 @@ def test_accent_tokens_have_concrete_rgba_values():
     self-reference forms an invalid CSS cycle and the entire crimson
     accent system silently fails to apply at computed-value time).
 
-    Triad reviewers (gpt-5.5, gemini-3.1-pro, claude-opus-4.6) caught
+    Triad reviewers (gpt-5.5, gemini-3.5-flash, claude-opus-4.6) caught
     this exact regression in the first dry-run of v5.8.3-rc.5: a
     file-wide sed swap had also rewritten the :root definitions
     themselves, leaving every ``--accent-04: var(--accent-04);``-style

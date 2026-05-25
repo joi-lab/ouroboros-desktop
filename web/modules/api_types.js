@@ -63,6 +63,13 @@
  * @property {boolean=} is_progress
  * @property {string=} task_id
  * @property {Object=} lifecycle
+ * @property {string=} subagent_event
+ * @property {string=} subagent_task_id
+ * @property {string=} root_task_id
+ * @property {string=} parent_task_id
+ * @property {string=} delegation_role
+ * @property {string=} subagent_role
+ * @property {boolean=} worker_saturation_warning
  * @property {string=} source
  * @property {string=} sender_label
  * @property {string=} sender_session_id
@@ -148,4 +155,16 @@
  * @property {Object[]} entries
  */
 
-export const GATEWAY_CONTRACT_VERSION = '5.30.0-rc.1';
+/**
+ * @typedef {Object} SkillDeleteResponse
+ * @property {boolean} ok
+ * @property {string} skill
+ * @property {string} source
+ * @property {string} deleted_payload_root
+ * @property {boolean} deleted_state
+ * @property {string} extension_action
+ * @property {string} extension_reason
+ * @property {string=} error
+ */
+
+export const GATEWAY_CONTRACT_VERSION = '6.0.0';

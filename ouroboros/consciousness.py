@@ -488,7 +488,7 @@ class BackgroundConsciousness:
         "update_identity", "set_next_wakeup",
         "knowledge_read", "knowledge_write", "knowledge_list",
         "web_search", "repo_read", "repo_list", "data_read", "data_list",
-        "chat_history",
+        "chat_history", "get_task_result", "wait_for_task",
         "list_github_issues", "get_github_issue",
     })
 
@@ -541,6 +541,14 @@ class BackgroundConsciousness:
         chat_id = self._owner_chat_id_fn()
         self._registry._ctx.current_chat_id = chat_id
         self._registry._ctx.pending_events = []
+        self._registry._ctx.event_queue = self._event_queue
+        self._registry._ctx.task_id = "bg-consciousness"
+        self._registry._ctx.task_metadata = {
+            "root_task_id": "bg-consciousness",
+            "session_id": "background-consciousness",
+            "actor_id": "background-consciousness",
+            "delegation_role": "background",
+        }
 
         timeout_sec = self._registry.get_timeout(fn_name)
         result = None

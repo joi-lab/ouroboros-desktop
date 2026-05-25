@@ -140,12 +140,15 @@ def persist_queue_snapshot(reason: str = "") -> None:
                 "id": t.get("id"), "type": t.get("type"), "chat_id": t.get("chat_id"),
                 "text": t.get("text"), "priority": t.get("priority"),
                 "depth": t.get("depth"), "description": t.get("description"),
+                "objective": t.get("objective"), "expected_output": t.get("expected_output"),
+                "constraints": t.get("constraints"), "role": t.get("role"),
                 "context": t.get("context"), "parent_task_id": t.get("parent_task_id"),
                 "root_task_id": t.get("root_task_id"), "session_id": t.get("session_id"),
                 "actor_id": t.get("actor_id"), "delegation_role": t.get("delegation_role"),
                 "workspace_root": t.get("workspace_root"), "workspace_mode": t.get("workspace_mode"),
                 "memory_mode": t.get("memory_mode"), "drive_root": t.get("drive_root"),
                 "budget_drive_root": t.get("budget_drive_root"),
+                "task_constraint": t.get("task_constraint"),
                 "metadata": t.get("metadata"),
                 "_attempt": t.get("_attempt"), "review_reason": t.get("review_reason"),
                 "review_source_task_id": t.get("review_source_task_id"),
@@ -337,21 +340,31 @@ def enforce_task_timeouts() -> None:
                 log.warning("Failed to terminate worker %d during hard timeout", worker_id, exc_info=True)
             workers.respawn_worker(worker_id)
 
+        will_retry = attempt <= QUEUE_MAX_RETRIES and isinstance(task, dict)
         try:
-            from ouroboros.task_results import STATUS_FAILED, write_task_result
+            from ouroboros.task_results import STATUS_FAILED, STATUS_INTERRUPTED, write_task_result
             write_task_result(
-                DRIVE_ROOT, task_id, STATUS_FAILED,
-                result=f"Task killed by hard timeout after {int(runtime_sec)}s.",
+                DRIVE_ROOT,
+                task_id,
+                STATUS_INTERRUPTED if will_retry else STATUS_FAILED,
+                result=(
+                    f"Task killed by hard timeout after {int(runtime_sec)}s. Retrying."
+                    if will_retry
+                    else f"Task killed by hard timeout after {int(runtime_sec)}s."
+                ),
             )
         except Exception:
             pass
 
         requeued = False
         new_attempt = attempt
-        if attempt <= QUEUE_MAX_RETRIES and isinstance(task, dict):
+        if will_retry:
             retried = dict(task)
             retried["original_task_id"] = task_id
-            retried["id"] = uuid.uuid4().hex[:8]
+            if str(task.get("delegation_role") or "") != "subagent":
+                retried["id"] = uuid.uuid4().hex[:8]
+            else:
+                retried["id"] = task_id
             retried["_attempt"] = attempt + 1
             retried["timeout_retry_from"] = task_id
             retried["timeout_retry_at"] = utc_now_iso()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ class OuroborosTerminalBenchAgent(BaseAgent):  # type: ignore[misc, valid-type]
         workspace_root: str = "",
         model_name: str = "ouroboros-cli",
         timeout_sec: int = 7200,
+        cli: str = "",
         **kwargs: Any,
     ) -> None:
         try:
@@ -34,6 +36,7 @@ class OuroborosTerminalBenchAgent(BaseAgent):  # type: ignore[misc, valid-type]
         self.workspace_root = workspace_root or os.environ.get("OUROBOROS_TBENCH_WORKSPACE_ROOT", "")
         self.model_name = model_name
         self.timeout_sec = int(timeout_sec)
+        self.cli = cli or os.environ.get("OUROBOROS_CLI", "")
 
     @staticmethod
     def name() -> str:
@@ -58,19 +61,20 @@ class OuroborosTerminalBenchAgent(BaseAgent):  # type: ignore[misc, valid-type]
                 return {"success": False, "output": "workspace_root must be a clean git checkout"}
             return AgentResult(failure_mode=FailureMode.UNKNOWN_AGENT_ERROR)
         prompt = self._render_instruction(task_description) if hasattr(self, "_render_instruction") else task_description
+        cli_prefix = shlex.split(self.cli) if self.cli else [sys.executable, "-m", "ouroboros.cli"]
         cmd = [
-            sys.executable,
-            "-m",
-            "ouroboros.cli",
+            *cli_prefix,
             "run",
             "--workspace",
             str(workspace),
             "--memory-mode",
             "empty",
+            "--timeout",
+            str(self.timeout_sec),
             prompt,
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_sec)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_sec + 60)
             final = result.stdout.strip()
             if logging_dir is not None:
                 Path(logging_dir).mkdir(parents=True, exist_ok=True)

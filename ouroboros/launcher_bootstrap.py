@@ -37,6 +37,20 @@ class BootstrapContext:
     log: Any
 
 
+def python_bytecode_env(data_dir: pathlib.Path, base: dict[str, str] | None = None) -> dict[str, str]:
+    """Return env defaults that keep bytecode caches outside packaged bundles."""
+    env = dict(os.environ if base is None else base)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if not str(env.get("PYTHONPYCACHEPREFIX") or "").strip():
+        pycache_dir = pathlib.Path(data_dir) / "state" / "pycache"
+        try:
+            pycache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        env["PYTHONPYCACHEPREFIX"] = str(pycache_dir)
+    return env
+
+
 def check_git(is_windows: bool) -> bool:
     if shutil.which("git") is not None:
         return True
@@ -362,6 +376,7 @@ def install_deps(context: BootstrapContext) -> None:
         if requirements.exists():
             context.hidden_run(
                 [context.embedded_python, "-m", "pip", "install", "-r", str(requirements)],
+                env=python_bytecode_env(context.data_dir),
                 timeout=240,
                 capture_output=True,
             )
@@ -404,6 +419,7 @@ def verify_claude_runtime(context: BootstrapContext) -> bool:
              f"cli = Path(claude_agent_sdk.__file__).parent / '_bundled' / '{cli_name}'; "
              "ver = _m.version('claude-agent-sdk'); "
              "print('ok|' + ver if cli.exists() else 'no_cli|' + ver)"],
+            env=python_bytecode_env(context.data_dir),
             capture_output=True, text=True, timeout=30,
         )
         stdout = (result.stdout or "").strip()
@@ -428,6 +444,7 @@ def verify_claude_runtime(context: BootstrapContext) -> bool:
     try:
         repair = context.hidden_run(
             [context.embedded_python, "-m", "pip", "install", "--upgrade", _CLAUDE_SDK_BASELINE],
+            env=python_bytecode_env(context.data_dir),
             timeout=120,
             capture_output=True,
         )
@@ -703,7 +720,7 @@ def bootstrap_repo(context: BootstrapContext) -> None:
                     f"from ouroboros.world_profiler import generate_world_profile; "
                     f"generate_world_profile('{world_path}')",
                 ],
-                env=env,
+                env=python_bytecode_env(context.data_dir, env),
                 timeout=30,
                 capture_output=True,
             )

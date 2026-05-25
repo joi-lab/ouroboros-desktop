@@ -70,6 +70,10 @@ export const apiClient = {
     ownerAutoGrant: (enabled) => jsonPost('/api/owner/auto-grant', { enabled: Boolean(enabled) }),
     extensions: () => fetchJson('/api/extensions', { cache: 'no-store' }),
     skillLifecycleQueue: () => fetchJson('/api/skills/lifecycle-queue', { cache: 'no-store' }),
+    /** @returns {Promise<import('./api_types.js').SkillDeleteResponse>} */
+    deleteSkill: (skill, payloadRoot) => jsonPost(`/api/skills/${encodeURIComponent(skill)}/delete`, {
+        payload_root: payloadRoot,
+    }),
     skillGrants: (skill, items) => jsonPost(`/api/skills/${encodeURIComponent(skill)}/grants`, { items }),
     chatHistory: (limit = 1000) => fetchJson(`/api/chat/history?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' }),
 };

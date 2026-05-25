@@ -23,7 +23,7 @@ const SKILLS_TABS = [
     { value: 'ouroboroshub', label: 'OuroborosHub', pillId: 'skills-tab-pill-ouroboroshub', pillClass: 'skills-tab-pill' },
 ];
 
-/** Installed skills UI: review, grant, enable, repair, update, uninstall. */
+/** Installed skills UI: review, grant, enable, repair, update, uninstall, delete. */
 
 function skillsPageTemplate() {
     return `
@@ -1146,6 +1146,10 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                     result.ok ? 'ok' : 'danger',
                 );
             } else if (target.classList.contains('skills-submit-hub')) {
+                if (target.dataset.submitDisabled === 'true') {
+                    showToast(`${name}: submit disabled — ${target.dataset.submitReason || 'unknown reason'}`, 'warn');
+                    return;
+                }
                 await triggerSkillAction(name, 'submit_hub');
             } else if (target.classList.contains('skills-uninstall')) {
                 const source = target.dataset.source === 'ouroboroshub' ? 'ouroboroshub' : 'clawhub';
@@ -1167,6 +1171,23 @@ function attachActionHandlers(container, renderFn, reviewingSkills, repairingSki
                     result.ok ? 'ok' : 'danger',
                 );
                 if (result.ok) emitSkillLifecycle('uninstall', name, result);
+            } else if (target.classList.contains('skills-delete-local')) {
+                const payloadRoot = target.dataset.payloadRoot || `skills/external/${name}`;
+                const ok = await openConfirmDialog({
+                    title: `Delete ${name}`,
+                    body: `Delete ${name}? This deletes data/${payloadRoot}/ and data/state/skills/${name}/.`,
+                    confirmLabel: 'Delete',
+                    danger: true,
+                });
+                if (!ok) {
+                    return;
+                }
+                const result = await apiClient.deleteSkill(name, payloadRoot);
+                showToast(
+                    result.ok ? `${name}: deleted` : `${name}: delete failed — ${result.error}`,
+                    result.ok ? 'ok' : 'danger',
+                );
+                if (result.ok) emitSkillLifecycle('delete', name, result);
             }
         } catch (err) {
             showToast(`${name}: ${err.message || err}`, 'danger');

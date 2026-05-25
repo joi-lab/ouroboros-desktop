@@ -10,6 +10,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 def test_version_file_and_pyproject_are_synced():
     version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    package_json = (REPO / "web" / "package.json").read_text(encoding="utf-8")
 
     # ``VERSION`` holds the author-facing spelling (``4.50.0-rc.1`` /
     # ``4.50.0``); ``pyproject.toml`` must carry the PEP 440-canonical
@@ -19,6 +20,7 @@ def test_version_file_and_pyproject_are_synced():
     # separators.
     pyproject_version = _normalize_pep440(version)
     assert f'version = "{pyproject_version}"' in pyproject
+    assert f'"version": "{version}"' in package_json
 
 
 def test_readme_version_history_contains_current_version_row():
@@ -155,6 +157,7 @@ def test_architecture_module_tree_lists_all_live_extension_http_endpoints():
     assert tree_idx != -1
     tree_line = architecture[tree_idx : architecture.find("\n", tree_idx)]
     assert "POST /api/skills/<skill>/toggle" in tree_line
+    assert "POST /api/skills/<skill>/delete" in tree_line
     assert "POST /api/skills/<skill>/review" in tree_line
 
 

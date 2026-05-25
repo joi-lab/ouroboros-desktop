@@ -51,8 +51,8 @@ def test_task_summary_keeps_openrouter_model_when_key_present(monkeypatch):
     monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "openai::gpt-5.5-mini")
 
     assert (
-        pipeline._resolve_task_summary_model("google/gemini-3-flash-preview")
-        == "google/gemini-3-flash-preview"
+        pipeline._resolve_task_summary_model("google/gemini-3.5-flash")
+        == "google/gemini-3.5-flash"
     )
 
 
@@ -74,9 +74,10 @@ def test_task_summary_accepts_openai_compatible_when_legacy_base_url_is_present(
 
 def test_emit_task_results_queues_restart_after_final_events(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "_store_task_result", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pipeline, "_run_chat_consolidation", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pipeline, "_run_post_task_processing_async", lambda *args, **kwargs: None)
+    memory_calls = []
+    monkeypatch.setattr(pipeline, "_run_chat_consolidation", lambda *args, **kwargs: memory_calls.append("chat"))
+    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", lambda *args, **kwargs: memory_calls.append("scratchpad"))
+    monkeypatch.setattr(pipeline, "_run_post_task_processing_async", lambda *args, **kwargs: memory_calls.append("post_task"))
 
     pending_events = []
     ctx = SimpleNamespace(pending_restart_reason="apply timeout fix")
@@ -106,6 +107,25 @@ def test_emit_task_results_queues_restart_after_final_events(tmp_path, monkeypat
     ]
     assert pending_events[-1]["reason"] == "apply timeout fix"
     assert ctx.pending_restart_reason is None
+    assert memory_calls == ["chat", "scratchpad", "post_task"]
+
+    pending_events.clear()
+    memory_calls.clear()
+    pipeline.emit_task_results(
+        env=env,
+        memory=object(),
+        llm=object(),
+        pending_events=pending_events,
+        task={"id": "child-1", "type": "task", "chat_id": 1, "text": "inspect", "delegation_role": "subagent", "memory_mode": "shared"},
+        text="summary",
+        usage={"rounds": 2, "cost": 0.2},
+        llm_trace={"tool_calls": [], "reasoning_notes": []},
+        start_time=0.0,
+        drive_logs=drive_logs,
+        ctx=SimpleNamespace(pending_restart_reason=""),
+    )
+    assert [evt["type"] for evt in pending_events] == ["send_message", "task_metrics", "task_done"]
+    assert memory_calls == []
 
 
 def test_build_trace_summary_shows_structured_failure_facts():

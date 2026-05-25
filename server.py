@@ -736,7 +736,7 @@ async def lifespan(app):
         else:
             _reload_extensions(lifespan_drive_root, _load_settings, repo_path=repo_path or None)
     except Exception:
-        log.warning("Extension reload_all at startup failed", exc_info=True)
+        log.error("Extension reload_all at startup failed", exc_info=True)
 
     try:
         from ouroboros.mcp_client import (

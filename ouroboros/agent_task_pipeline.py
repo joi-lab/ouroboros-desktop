@@ -272,12 +272,13 @@ def emit_task_results(
         except Exception:
             pass
 
-    _run_chat_consolidation(env, memory, llm, task, drive_logs)
-    _run_scratchpad_consolidation(env, memory, llm)
-    # LLM-heavy memory work stays off the reply critical path.
-    _run_post_task_processing_async(
-        env, task, usage, llm_trace, review_evidence, drive_logs,
-    )
+    if str(task.get("delegation_role") or "") != "subagent":
+        _run_chat_consolidation(env, memory, llm, task, drive_logs)
+        _run_scratchpad_consolidation(env, memory, llm)
+        # LLM-heavy memory work stays off the reply critical path.
+        _run_post_task_processing_async(
+            env, task, usage, llm_trace, review_evidence, drive_logs,
+        )
 
 
 def _store_task_result(env: Any, task: Dict[str, Any], text: str,

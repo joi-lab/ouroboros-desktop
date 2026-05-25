@@ -47,9 +47,9 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_NETWORK_PASSWORD": "",
     "OUROBOROS_SERVER_HOST": "127.0.0.1",
     "OUROBOROS_HOST_SERVICE_PORT": 8767,
-    "OUROBOROS_MODEL": "anthropic/claude-opus-4.6",
-    "OUROBOROS_MODEL_CODE": "anthropic/claude-opus-4.6",
-    "OUROBOROS_MODEL_LIGHT": "anthropic/claude-sonnet-4.6",
+    "OUROBOROS_MODEL": "google/gemini-3.5-flash",
+    "OUROBOROS_MODEL_CODE": "google/gemini-3.5-flash",
+    "OUROBOROS_MODEL_LIGHT": "google/gemini-3.5-flash",
     "OUROBOROS_MODEL_FALLBACK": "anthropic/claude-sonnet-4.6",
     "CLAUDE_CODE_MODEL": "claude-opus-4-6[1m]",
     "OUROBOROS_MAX_WORKERS": 5,
@@ -64,7 +64,7 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_EVO_COST_THRESHOLD": 0.10,
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5.2",
     # Pre-commit review: comma-separated provider-tagged model list
-    "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6",
+    "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6",
     # Pre-commit review enforcement: advisory | blocking
     "OUROBOROS_REVIEW_ENFORCEMENT": "advisory",
     # Optional auto-grants remain bound to the reviewed content hash.

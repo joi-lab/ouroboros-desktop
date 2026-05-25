@@ -146,5 +146,56 @@ class TestBackgroundContext(unittest.TestCase):
         self.assertIn("Reduce recurring task friction around REVIEW_BLOCKED", text)
 
 
+class TestBackgroundSubagentTools(unittest.TestCase):
+    def test_schedule_task_has_live_queue_lineage_and_result_handoff_tools(self):
+        from ouroboros.consciousness import BackgroundConsciousness
+
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        drive_root = tmpdir / "drive"
+        repo_dir = tmpdir / "repo"
+        (drive_root / "logs").mkdir(parents=True, exist_ok=True)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        eq = queue.Queue()
+
+        bc = BackgroundConsciousness(
+            drive_root=drive_root,
+            repo_dir=repo_dir,
+            event_queue=eq,
+            owner_chat_id_fn=lambda: 42,
+        )
+
+        schema_names = {s.get("function", {}).get("name") for s in bc._tool_schemas()}
+        self.assertIn("schedule_task", schema_names)
+        self.assertIn("get_task_result", schema_names)
+        self.assertIn("wait_for_task", schema_names)
+
+        pending_events = []
+        result = bc._execute_tool(
+            {
+                "function": {
+                    "name": "schedule_task",
+                    "arguments": json.dumps({
+                        "objective": "Inspect background handoff",
+                        "expected_output": "A concise result",
+                    }),
+                }
+            },
+            pending_events,
+        )
+
+        self.assertIn("Subagent request queued", result)
+        self.assertEqual(pending_events, [])
+        queued = []
+        while not eq.empty():
+            queued.append(eq.get_nowait())
+        schedule_events = [evt for evt in queued if evt.get("type") == "schedule_task"]
+        self.assertEqual(len(schedule_events), 1)
+        evt = schedule_events[0]
+        self.assertEqual(evt["chat_id"], 42)
+        self.assertEqual(evt["parent_task_id"], "bg-consciousness")
+        self.assertEqual(evt["root_task_id"], "bg-consciousness")
+        self.assertEqual(evt["session_id"], "background-consciousness")
+
+
 if __name__ == "__main__":
     unittest.main()

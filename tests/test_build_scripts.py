@@ -96,14 +96,32 @@ class TestBuildSh:
     def test_packaged_cli_wrappers_are_copied_before_signing_and_dmg(self):
         src = _read("build.sh")
         wrapper_pos = src.find("Installing packaged CLI wrappers")
+        cleanup_pos = src.find("Removing Python bytecode caches from app bundle")
         sign_pos = src.find("=== Signing Ouroboros.app ===")
         dmg_pos = src.find("=== Creating DMG ===")
         assert wrapper_pos != -1
         assert "Contents/Resources/bin" in src
         assert "packaging/cli/ouroboros" in src
         assert "packaging/cli/install-ouroboros-cli" in src
+        assert "PYTHONDONTWRITEBYTECODE=1" in src
+        assert "PYTHONPYCACHEPREFIX" in src
+        assert 'find "$APP_PATH" -name "__pycache__"' in src
+        assert 'find "$APP_PATH" -name "*.pyc"' in src
         assert sign_pos != -1 and wrapper_pos < sign_pos
+        assert cleanup_pos != -1 and cleanup_pos < sign_pos
         assert dmg_pos != -1 and wrapper_pos < dmg_pos
+
+    def test_pycache_cleanup_includes_symlink_entries_before_signing(self):
+        src = _read("build.sh")
+        cleanup_lines = [
+            line.strip()
+            for line in src.splitlines()
+            if 'find "$APP_PATH" -name "__pycache__"' in line
+        ]
+        assert cleanup_lines
+        assert all("-type d" not in line for line in cleanup_lines), (
+            "build.sh must remove __pycache__ symlinks as well as directories before codesign"
+        )
 
     def test_macos_dmg_includes_install_cli_command(self):
         src = _read("build.sh")
@@ -184,11 +202,17 @@ class TestBuildLinuxSh:
     def test_linux_archive_includes_packaged_cli_bin(self):
         src = _read("build_linux.sh")
         wrapper_pos = src.find("Installing packaged CLI wrappers")
+        cleanup_pos = src.find("Removing Python bytecode caches from archive payload")
         archive_pos = src.find("=== Creating archive ===")
         assert wrapper_pos != -1
         assert "dist/Ouroboros/bin" in src
         assert "packaging/cli/ouroboros" in src
         assert "packaging/cli/install-ouroboros-cli" in src
+        assert "PYTHONDONTWRITEBYTECODE=1" in src
+        assert "PYTHONPYCACHEPREFIX" in src
+        assert 'find dist/Ouroboros -name "__pycache__"' in src
+        assert 'find dist/Ouroboros -name "*.pyc"' in src
+        assert cleanup_pos != -1 and cleanup_pos < archive_pos
         assert archive_pos != -1 and wrapper_pos < archive_pos
 
     def test_posix_cli_wrappers_search_pyinstaller_internal_root_without_env_trust(self):
@@ -262,12 +286,19 @@ class TestBuildWindowsPs1:
     def test_windows_archive_includes_packaged_cli_bin(self):
         src = _read("build_windows.ps1")
         wrapper_pos = src.find("Installing packaged CLI wrappers")
+        cleanup_pos = src.find("Removing Python bytecode caches from archive payload")
         length_pos = src.find("Checking Windows archive path lengths")
+        archive_pos = src.find("=== Creating archive ===")
         assert wrapper_pos != -1
         assert "dist\\Ouroboros\\bin" in src
         assert "packaging\\cli\\ouroboros.cmd" in src
         assert "packaging\\cli\\install-ouroboros-cli.cmd" in src
+        assert "PYTHONDONTWRITEBYTECODE" in src
+        assert "PYTHONPYCACHEPREFIX" in src
+        assert 'Filter "__pycache__"' in src
+        assert 'Filter "*.pyc"' in src
         assert length_pos != -1 and wrapper_pos < length_pos
+        assert cleanup_pos != -1 and archive_pos != -1 and cleanup_pos < archive_pos
 
     def test_windows_cli_wrappers_search_pyinstaller_internal_root(self):
         for name in ("packaging/cli/ouroboros.cmd", "packaging/cli/install-ouroboros-cli.cmd"):

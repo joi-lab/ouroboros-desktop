@@ -6,7 +6,7 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 5.30.0-rc.1](https://img.shields.io/badge/version-5.30.0--rc.1-green.svg)](VERSION)
+[![Version 6.0.0](https://img.shields.io/badge/version-6.0.0-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -125,8 +125,10 @@ resolve contextual repo tools against the active workspace, expose only the
 workspace-safe tool allowlist, and export workspace changes as patch artifacts
 instead of committing in the target repo. A workspace must be a separate git
 worktree root; it may not overlap Ouroboros's system repo or data drive.
-`--patch` and `--patch-out` read the artifact from the gateway host filesystem,
-so use them with a local/same-filesystem server.
+`--patch` and `--patch-out` wait for finalized patch artifacts, download them
+through the task artifact endpoint, and fail nonzero on missing, empty, or
+failed patches. `--no-stream` waits without progress output; `--detach` returns
+the task id immediately.
 Benchmark helpers under `scripts/` expect clean, local, per-instance checkouts;
 they do not reset or commit target repositories.
 
@@ -273,6 +275,9 @@ git tag -a "v$(tr -d '[:space:]' < VERSION)" -m "Release v$(tr -d '[:space:]' < 
 
 If the tag is missing, the build script fails with a clear error instead
 of producing a bundle tagged with a synthetic/placeholder value.
+Builds also disable Python bytecode writes and remove `__pycache__` / `.pyc`
+files from packaged payloads before signing or archiving so normal launches do
+not mutate signed app resources just by importing modules.
 
 ### macOS (.dmg)
 
@@ -397,9 +402,9 @@ All keys are configured through the **Settings** page in the UI or during the fi
 
 | Slot | Default | Purpose |
 |------|---------|---------|
-| Main | `anthropic/claude-opus-4.6` | Primary reasoning |
-| Code | `anthropic/claude-opus-4.6` | Code editing |
-| Light | `anthropic/claude-sonnet-4.6` | Safety checks, consciousness, fast tasks |
+| Main | `google/gemini-3.5-flash` | Primary reasoning |
+| Code | `google/gemini-3.5-flash` | Code editing |
+| Light | `google/gemini-3.5-flash` | Safety checks, consciousness, fast tasks |
 | Fallback | `anthropic/claude-sonnet-4.6` | When primary model fails |
 | Claude Agent SDK | `claude-opus-4-6[1m]` | Anthropic model for Claude Agent SDK tools (`claude_code_edit`, `advisory_pre_review`); the `[1m]` suffix is a Claude Code selector that requests the 1M-context extended mode |
 | Scope Review | `openai/gpt-5.5` | Single-model scope reviewer; blocking/advisory behavior follows review enforcement |
@@ -445,7 +450,7 @@ Available in the chat interface:
 | `/restart` | Soft restart. Saves state, kills workers, re-launches. |
 | `/status` | Shows active workers, task queue, and budget breakdown. |
 | `/evolve` | Toggle autonomous evolution mode (on/off). |
-| `/review` | Queue a deep self-review: sends all agent code, prompts, docs, and core memory artifacts (identity, scratchpad, registry, WORLD, knowledge index, patterns, improvement-backlog) to a 1M-context model for Constitution-grounded analysis. Excludes vendored libraries and operational logs. Rejected with an explicit error if the assembled prompt (system + pack) exceeds ~920K estimated tokens — on 1M-context models the window is shared between input and output. |
+| `/review` | Queue a deep self-review: sends a generated repository atlas plus full core memory artifacts (identity, scratchpad, registry, WORLD, knowledge index, patterns, improvement-backlog) to a 1M-context model for Constitution-grounded analysis. The atlas raw-inlines selected protected/central files, accounts for every tracked path in its manifest, and excludes vendored libraries and operational logs. Rejected with an explicit error if the assembled prompt exceeds ~920K estimated tokens — on 1M-context models the window is shared between input and output. |
 | `/bg` | Toggle background consciousness loop (start/stop/status). |
 
 The same runtime actions are also exposed as compact buttons in the Chat header. All other messages are sent directly to the LLM.
@@ -468,12 +473,12 @@ not paraphrase it.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.30.0-rc.1 | 2026-05-21 | **rc(llm): preserve OpenRouter reasoning continuity and split prompt-cache capabilities.** Keeps opaque reasoning payloads across tool-call rounds, fixes checkpoint handling for assistant `content: null`, routes cache markers only to supported Anthropic/Gemini surfaces without TTL, and accounts for cache reads/writes in usage telemetry and costs. |
-| 5.29.0-rc.3 | 2026-05-21 | **rc(packaging): make packaged CLI release CI portable.** Keeps the packaged CLI wrapper/installer release and fixes Windows test fixtures for `python-standalone` layout and macOS path detection before publishing artifacts. |
-| 5.29.0-rc.2 | 2026-05-21 | **rc(packaging): add packaged CLI install path.** Ships desktop artifact CLI wrappers and user-local installers, routes packaged `run --start` through the launcher-managed runtime, and documents packaged versus source CLI setup without adding a second runtime. |
-| 5.29.0-rc.1 | 2026-05-20 | **rc(headless): add CLI and external workspace task mode.** Adds gateway-backed task APIs, SSE task event replay, a multi-command CLI, isolated external workspace memory modes, patch artifacts, and tiny benchmark adapter scripts without adding file-manager or public commit/review CLI surfaces. |
-| 5.28.0 | 2026-05-20 | **release(stability): harden skills, owner parity, and relaunch cleanup.** Adds structured skill lifecycle recovery state, web owner endpoints for runtime mode/auto-grant/grants, process-group server cleanup for desktop relaunches, best-effort isolated-deps cleanup, and a 920K review prompt budget. |
-Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.27.0-rc.1 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
+| 6.0.0 | 2026-05-25 | **major(runtime): add live local-readonly subagents.** Upgrades `schedule_task` to a strict child-task contract, runs leaf subagents through the existing queue and workers with forked memory by default, enforces schema and execute-time local-readonly isolation, preserves full task-result handoff, and documents the delegation review rules. |
+| 5.33.0-rc.6 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Introduces a typed ChatUploadPayloadTooLarge exception class to isolate file-size 413 blocks from connection cuts and form-parse faults, returning a standard 400 with original message for ASGI/socket errors. Includes focused test coverage. |
+| 5.33.0-rc.5 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Refactors the chat upload ASGI stream wrapper to verify if caught exceptions are indeed the 'oversized' signal before returning a 413, returning a 400 with the original error message for connection cuts and malformed formats. |
+| 5.33.0-rc.4 | 2026-05-24 | **rc(accessibility): attach aria-disabled state to submit buttons.** Adds explicit accessibility annotations to clickable-disabled card options so both visual rendering and assistive device readouts correctly convey blocked submission context. |
+| 5.33.0-rc.3 | 2026-05-24 | **rc(skills): provide explicit toast warnings on disabled hub submissions.** Replaces native button disabled attributes on OuroborosHub card options to catch all clicks, displaying actionable warnings explaining exact review or check conditions rather than silent dropdown closures. |
+Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.33.0-rc.2 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
 
 ---
 

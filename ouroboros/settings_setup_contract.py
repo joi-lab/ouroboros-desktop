@@ -94,7 +94,7 @@ _LOCAL_PRESETS: Dict[str, Dict[str, Any]] = {
     "qwen3-32b": {"label": "Qwen3-32B Instruct Q4_K_M", "source": "Qwen/Qwen3-32B-GGUF", "filename": "Qwen3-32B-Q4_K_M.gguf", "contextLength": 32768, "chatFormat": ""},
 }
 
-_MODEL_SUGGESTIONS = list(dict.fromkeys(("anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic::claude-opus-4-6", "anthropic::claude-sonnet-4-6", "google/gemini-3.1-pro-preview", "google/gemini-3-flash-preview", "openai/gpt-5.5", "openai::gpt-5.5", "openai::gpt-5.5-mini", "openai-compatible::meta-llama/compatible", "cloudru::zai-org/GLM-4.7")))
+_MODEL_SUGGESTIONS = list(dict.fromkeys(("google/gemini-3.5-flash", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "anthropic::claude-opus-4-6", "anthropic::claude-sonnet-4-6", "openai/gpt-5.5", "openai::gpt-5.5", "openai::gpt-5.5-mini", "openai-compatible::meta-llama/compatible", "cloudru::zai-org/GLM-4.7")))
 
 
 def _string(value: Any) -> str:

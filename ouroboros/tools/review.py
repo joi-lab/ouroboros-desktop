@@ -509,11 +509,13 @@ def _preflight_check(commit_message: str, staged_files: str,
             version_str = _git_show_staged(repo_dir, "VERSION").strip()
             if is_release_version(version_str):
                 pyproject_text = _git_show_staged(repo_dir, "pyproject.toml")
+                web_package_text = _git_show_staged(repo_dir, "web/package.json")
                 readme_text = _git_show_staged(repo_dir, "README.md")
                 arch_text = _git_show_staged(repo_dir, "docs/ARCHITECTURE.md")
                 desync = version_carrier_desyncs(
                     version_str,
                     pyproject_text=pyproject_text,
+                    web_package_text=web_package_text,
                     readme_text=readme_text,
                     arch_text=arch_text,
                     detailed=True,

@@ -29,6 +29,8 @@ class TestCacheHitRateInvariant:
         (tmp_path / "repo" / "docs").mkdir(parents=True, exist_ok=True)
         (tmp_path / "repo" / "VERSION").write_text("1.2.3", encoding="utf-8")
         (tmp_path / "repo" / "pyproject.toml").write_text('version = "1.2.3"', encoding="utf-8")
+        (tmp_path / "repo" / "web").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "repo" / "web" / "package.json").write_text('{"version": "1.2.3"}', encoding="utf-8")
         (tmp_path / "repo" / "README.md").write_text('version-1.2.3', encoding="utf-8")
         (tmp_path / "repo" / "docs" / "ARCHITECTURE.md").write_text('# Ouroboros v1.2.3', encoding="utf-8")
         (tmp_path / "repo" / "docs" / "DEVELOPMENT.md").write_text('# Dev', encoding="utf-8")
@@ -76,6 +78,8 @@ def _make_health_env(tmp_path, events_lines=None):
     (tmp_path / "archive" / "rescue").mkdir(parents=True, exist_ok=True)
     (tmp_path / "repo" / "VERSION").write_text("1.2.3", encoding="utf-8")
     (tmp_path / "repo" / "pyproject.toml").write_text('version = "1.2.3"', encoding="utf-8")
+    (tmp_path / "repo" / "web").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repo" / "web" / "package.json").write_text('{"version": "1.2.3"}', encoding="utf-8")
     (tmp_path / "repo" / "README.md").write_text('version-1.2.3', encoding="utf-8")
     (tmp_path / "repo" / "docs" / "ARCHITECTURE.md").write_text('# Ouroboros v1.2.3', encoding="utf-8")
     (tmp_path / "repo" / "docs" / "DEVELOPMENT.md").write_text('# Dev', encoding="utf-8")
@@ -175,10 +179,19 @@ class TestAdditionalHealthInvariantCoverage:
         assert "VERSION DESYNC" in result
         assert "pyproject.toml=1.2.4" in result
 
+    def test_web_package_version_desync_warning(self, tmp_path):
+        env = _make_health_env(tmp_path)
+        (tmp_path / "repo" / "web" / "package.json").write_text('{"version": "1.2.4"}', encoding="utf-8")
+
+        result = build_health_invariants(env)
+        assert "VERSION DESYNC" in result
+        assert "web/package.json=1.2.4" in result
+
     def test_rc_pep440_pyproject_does_not_warn(self, tmp_path):
         env = _make_health_env(tmp_path)
         (tmp_path / "repo" / "VERSION").write_text("4.50.0-rc.2", encoding="utf-8")
         (tmp_path / "repo" / "pyproject.toml").write_text('version = "4.50.0rc2"', encoding="utf-8")
+        (tmp_path / "repo" / "web" / "package.json").write_text('{"version": "4.50.0-rc.2"}', encoding="utf-8")
         (tmp_path / "repo" / "README.md").write_text(
             "[![Version 4.50.0-rc.2](https://img.shields.io/badge/version-4.50.0--rc.2-green.svg)](VERSION)",
             encoding="utf-8",
@@ -195,6 +208,7 @@ class TestAdditionalHealthInvariantCoverage:
         env = _make_health_env(tmp_path)
         (tmp_path / "repo" / "VERSION").write_text("4.50.0-rc.2", encoding="utf-8")
         (tmp_path / "repo" / "pyproject.toml").write_text('version = "4.50.0rc2"', encoding="utf-8")
+        (tmp_path / "repo" / "web" / "package.json").write_text('{"version": "4.50.0-rc.2"}', encoding="utf-8")
         (tmp_path / "repo" / "README.md").write_text(
             "[![Version 4.50.0-rc.2](https://img.shields.io/badge/version-4.50.0-rc.2-green.svg)](VERSION)",
             encoding="utf-8",

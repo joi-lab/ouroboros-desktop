@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Dict, List, Tuple
 
 from ouroboros.tools.registry import ToolContext, ToolEntry, active_repo_dir_for
+from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_MODE
 from ouroboros.utils import atomic_write_json, read_text, safe_relpath, utc_now_iso
 from ouroboros.contracts.task_constraint import normalize_task_constraint, resolve_payload_path
 from ouroboros.contracts.skill_payload_policy import (
@@ -143,6 +144,158 @@ def _list_dir(root: pathlib.Path, rel: str, max_entries: int = 500) -> List[str]
     return items
 
 
+_SUBAGENT_SECRET_FILE_NAMES = frozenset({
+    ".env",
+    ".netrc",
+    "auth.json",
+    "credentials",
+    "credentials.json",
+    "keys.json",
+    "secret.json",
+    "secrets.json",
+    "settings.json",
+    "settings.json.lock",
+    "token.json",
+    "tokens.json",
+})
+
+
+def _is_local_readonly_subagent(ctx: ToolContext) -> bool:
+    task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
+    return bool(task_constraint and task_constraint.mode == LOCAL_READONLY_SUBAGENT_MODE)
+
+
+def _is_subagent_secret_data_path(norm: str) -> bool:
+    text = str(norm or "").replace("\\", "/").strip()
+    while text.startswith("./"):
+        text = text[2:]
+    if not text:
+        return False
+    parts = [part.lower() for part in text.split("/") if part and part != "."]
+    if not parts:
+        return False
+    if any(part in {"auth", "credentials", "secrets", "tokens"} for part in parts):
+        return True
+    name = parts[-1]
+    normalized_names = {name, name.lstrip(".")}
+    if name.lstrip(".") == "settings.tmp":
+        normalized_names.add("settings.json")
+    for protected_name in (_SUBAGENT_SECRET_FILE_NAMES | _SKILL_OWNER_STATE_FILENAMES):
+        bare = name.lstrip(".")
+        if bare.startswith(f"{protected_name}.tmp") or bare.startswith(f"{protected_name}.lock"):
+            normalized_names.add(protected_name)
+    if normalized_names & (_SUBAGENT_SECRET_FILE_NAMES | _SKILL_OWNER_STATE_FILENAMES):
+        return True
+    if name.startswith(".env") or name.endswith(".env") or ".env." in name:
+        return True
+    if name.endswith((".key", ".pem", ".p12", ".pfx")):
+        return True
+    return bool(re.search(r"(?:^|[._-])(api[_-]?key|credential|password|secret|token)(?:[._-]|$)", name))
+
+
+def _is_subagent_secret_repo_path(norm: str) -> bool:
+    text = str(norm or "").replace("\\", "/").strip()
+    while text.startswith("./"):
+        text = text[2:]
+    parts = [part.lower() for part in text.split("/") if part and part != "."]
+    if ".git" in parts or any(part in {"auth", "credentials", "secrets", "tokens"} for part in parts):
+        return True
+    if not parts:
+        return False
+    name = parts[-1]
+    if name in _SUBAGENT_SECRET_FILE_NAMES or name == "settings.tmp":
+        return True
+    if name.startswith(".env") or name.endswith(".env") or ".env." in name:
+        return True
+    if name.endswith((".key", ".pem", ".p12", ".pfx")):
+        return True
+    if re.search(r"(?:^|[._-])(api[_-]?key|credential|password|secret|token)(?:[._-]|$)", name):
+        suffix = pathlib.PurePosixPath(name).suffix.lower()
+        return suffix in {"", ".json", ".env", ".key", ".pem", ".p12", ".pfx", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".conf"}
+    return False
+
+
+def _is_subagent_secret_repo_target(target: pathlib.Path, repo_root: pathlib.Path) -> bool:
+    root = pathlib.Path(repo_root).resolve(strict=False)
+    try:
+        rel = str(pathlib.Path(target).resolve(strict=False).relative_to(root)).replace(os.sep, "/")
+    except (OSError, ValueError):
+        rel = str(target).replace(os.sep, "/")
+    if _is_subagent_secret_repo_path(rel):
+        return True
+    secret_candidates = [
+        root / ".git" / "credentials",
+        root / ".git" / "config",
+    ]
+    try:
+        secret_candidates.extend(
+            candidate
+            for candidate in root.iterdir()
+            if candidate.is_file() and _is_subagent_secret_repo_path(candidate.name)
+        )
+    except OSError:
+        pass
+    return any(
+        candidate.is_file()
+        and target.exists()
+        and target.samefile(candidate)
+        for candidate in secret_candidates
+    )
+
+
+def _filter_subagent_secret_repo_listing(items: List[str], repo_root: pathlib.Path) -> List[str]:
+    filtered: List[str] = []
+    redacted = 0
+    root = pathlib.Path(repo_root).resolve(strict=False)
+    for item in items:
+        marker = item.rstrip("/")
+        if marker.startswith("⚠️") or marker.startswith("...("):
+            filtered.append(item)
+            continue
+        if _is_subagent_secret_repo_path(marker) or _is_subagent_secret_repo_target(root / marker, root):
+            redacted += 1
+            continue
+        filtered.append(item)
+    if redacted:
+        filtered.append(f"⚠️ {redacted} secret/control entr{'y' if redacted == 1 else 'ies'} hidden from local_readonly_subagent.")
+    return filtered
+
+
+def _filter_subagent_secret_listing(items: List[str], data_root: pathlib.Path) -> List[str]:
+    filtered: List[str] = []
+    redacted = 0
+    root = pathlib.Path(data_root).resolve(strict=False)
+    for item in items:
+        marker = item.rstrip("/")
+        if marker.startswith("⚠️") or marker.startswith("...("):
+            filtered.append(item)
+            continue
+        target = root / marker
+        try:
+            resolved_rel = str(pathlib.Path(target).resolve(strict=False).relative_to(root)).replace(os.sep, "/")
+        except (OSError, ValueError):
+            resolved_rel = marker
+        if (
+            _is_subagent_secret_data_path(marker)
+            or _is_subagent_secret_data_path(resolved_rel)
+            or _is_skill_owner_state_target(target, root)
+            or is_skill_owner_state_alias(target, root)
+            or any(
+                candidate.is_file()
+                and _is_subagent_secret_data_path(candidate.name)
+                and target.exists()
+                and target.samefile(candidate)
+                for candidate in root.iterdir()
+            )
+        ):
+            redacted += 1
+            continue
+        filtered.append(item)
+    if redacted:
+        filtered.append(f"⚠️ {redacted} secret/control entr{'y' if redacted == 1 else 'ies'} hidden from local_readonly_subagent.")
+    return filtered
+
+
 _MEMORY_AT_DRIVE_MEMORY = frozenset({
     "identity.md", "scratchpad.md", "dialogue_summary.md",
     "dialogue_blocks.json", "registry.md", "deep_review.md",
@@ -152,8 +305,11 @@ _MEMORY_AT_DRIVE_MEMORY = frozenset({
 
 def _repo_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: int = 1) -> str:
     """Read a repo file; root-level memory names return a data_read hint."""
+    target = ctx.repo_path(path)
+    if _is_local_readonly_subagent(ctx) and _is_subagent_secret_repo_target(target, active_repo_dir_for(ctx)):
+        return "⚠️ REPO_READ_BLOCKED: local_readonly_subagent cannot read repo secret or control files."
     try:
-        content = read_text(ctx.repo_path(path))
+        content = read_text(target)
     except FileNotFoundError:
         norm = path.strip().lstrip("./").replace("\\", "/")
         base = norm.rsplit("/", 1)[-1]
@@ -172,7 +328,18 @@ def _repo_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
 
 
 def _repo_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
-    return json.dumps(_list_dir(active_repo_dir_for(ctx), dir, max_entries), ensure_ascii=False, indent=2)
+    repo_root = active_repo_dir_for(ctx)
+    target = ctx.repo_path(dir)
+    if _is_local_readonly_subagent(ctx) and _is_subagent_secret_repo_target(target, repo_root):
+        return json.dumps(
+            ["⚠️ REPO_LIST_BLOCKED: local_readonly_subagent cannot list repo secret or control paths."],
+            ensure_ascii=False,
+            indent=2,
+        )
+    items = _list_dir(repo_root, dir, max_entries)
+    if _is_local_readonly_subagent(ctx):
+        items = _filter_subagent_secret_repo_listing(items, repo_root)
+    return json.dumps(items, ensure_ascii=False, indent=2)
 
 
 def _normalize_data_read_path(ctx: ToolContext, path: str) -> str:
@@ -202,6 +369,8 @@ def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
     """Read a drive text file; duplicate drive_root prefixes are stripped."""
     task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
     norm = _normalize_data_read_path(ctx, path)
+    if _is_local_readonly_subagent(ctx) and _is_subagent_secret_data_path(norm):
+        return "⚠️ DATA_READ_BLOCKED: local_readonly_subagent cannot read secret or owner-control data files."
     if task_constraint and task_constraint.mode == "skill_repair" and task_constraint.payload_root:
         try:
             target = resolve_payload_path(pathlib.Path(ctx.drive_root), task_constraint, norm)
@@ -209,6 +378,25 @@ def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
             return f"⚠️ DATA_READ_BLOCKED: {e}"
     else:
         target = ctx.drive_path(norm)
+    if _is_local_readonly_subagent(ctx):
+        root = pathlib.Path(ctx.drive_root).resolve(strict=False)
+        try:
+            resolved_rel = str(pathlib.Path(target).resolve(strict=False).relative_to(root)).replace(os.sep, "/")
+        except (OSError, ValueError):
+            resolved_rel = norm
+        if (
+            _is_subagent_secret_data_path(resolved_rel)
+            or _is_skill_owner_state_target(target, root)
+            or is_skill_owner_state_alias(target, root)
+            or any(
+                candidate.is_file()
+                and _is_subagent_secret_data_path(candidate.name)
+                and pathlib.Path(target).exists()
+                and pathlib.Path(target).samefile(candidate)
+                for candidate in root.iterdir()
+            )
+        ):
+            return "⚠️ DATA_READ_BLOCKED: local_readonly_subagent cannot read secret or owner-control data files."
     if (
         _is_skill_owner_state_target(target, pathlib.Path(ctx.drive_root))
         and target.name.lower() != "review.json"
@@ -242,13 +430,36 @@ def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
 
 def _data_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
     task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
+    norm_dir = _normalize_data_read_path(ctx, dir)
+    if _is_local_readonly_subagent(ctx) and _is_subagent_secret_data_path(norm_dir):
+        return json.dumps(
+            ["⚠️ DATA_LIST_BLOCKED: local_readonly_subagent cannot list secret or owner-control data paths."],
+            ensure_ascii=False,
+            indent=2,
+        )
+    if _is_local_readonly_subagent(ctx):
+        try:
+            list_target = ctx.drive_path(norm_dir)
+        except ValueError as e:
+            return json.dumps([f"⚠️ DATA_LIST_BLOCKED: {e}"], ensure_ascii=False, indent=2)
+        root = pathlib.Path(ctx.drive_root).resolve(strict=False)
+        if _is_skill_owner_state_target(list_target, root) or is_skill_owner_state_alias(list_target, root):
+            return json.dumps(
+                ["⚠️ DATA_LIST_BLOCKED: local_readonly_subagent cannot list secret or owner-control data paths."],
+                ensure_ascii=False,
+                indent=2,
+            )
     if task_constraint and task_constraint.mode == "skill_repair" and task_constraint.payload_root:
         try:
             root = resolve_payload_path(pathlib.Path(ctx.drive_root), task_constraint, dir)
         except ValueError as e:
             return json.dumps([f"⚠️ DATA_LIST_BLOCKED: {e}"], ensure_ascii=False, indent=2)
-        return json.dumps(_list_dir(root, ".", max_entries), ensure_ascii=False, indent=2)
-    return json.dumps(_list_dir(ctx.drive_root, dir, max_entries), ensure_ascii=False, indent=2)
+        items = _list_dir(root, ".", max_entries)
+        return json.dumps(items, ensure_ascii=False, indent=2)
+    items = _list_dir(ctx.drive_root, dir, max_entries)
+    if _is_local_readonly_subagent(ctx):
+        items = _filter_subagent_secret_listing(items, pathlib.Path(ctx.drive_root))
+    return json.dumps(items, ensure_ascii=False, indent=2)
 
 
 def _data_write(
@@ -507,6 +718,9 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
     search_root = (root / safe_relpath(path)).resolve()
     if not search_root.exists():
         return f"⚠️ SEARCH_ERROR: path not found: {path}"
+    subagent_readonly = _is_local_readonly_subagent(ctx)
+    if subagent_readonly and _is_subagent_secret_repo_target(search_root, root):
+        return "⚠️ SEARCH_BLOCKED: local_readonly_subagent cannot search repo secret or control paths."
 
     try:
         if regex:
@@ -523,11 +737,19 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
     for dirpath, dirnames, filenames in os.walk(str(search_root)):
         # Prune skipped dirs in-place.
         dirnames[:] = [d for d in sorted(dirnames) if d not in _SEARCH_SKIP_DIRS]
+        if subagent_readonly:
+            dirnames[:] = [
+                d for d in dirnames
+                if not _is_subagent_secret_repo_target(pathlib.Path(dirpath) / d, root)
+            ]
 
         for fname in sorted(filenames):
             fp = pathlib.Path(dirpath) / fname
 
             if include and not fnmatch.fnmatch(fname, include):
+                continue
+
+            if subagent_readonly and _is_subagent_secret_repo_target(fp, root):
                 continue
 
             if _is_search_skippable(fp):
@@ -587,6 +809,7 @@ def _extract_python_symbols(file_path: pathlib.Path) -> Tuple[List[str], List[st
 def _codebase_digest(ctx: ToolContext) -> str:
     """Generate a compact file/symbol digest for the codebase."""
     repo_dir = active_repo_dir_for(ctx)
+    subagent_readonly = _is_local_readonly_subagent(ctx)
     py_files: List[pathlib.Path] = []
     md_files: List[pathlib.Path] = []
     other_files: List[pathlib.Path] = []
@@ -594,9 +817,16 @@ def _codebase_digest(ctx: ToolContext) -> str:
     for dirpath, dirnames, filenames in os.walk(str(repo_dir)):
         # Skip excluded directories
         dirnames[:] = [d for d in sorted(dirnames) if d not in _SKIP_DIRS]
+        if subagent_readonly:
+            dirnames[:] = [
+                d for d in dirnames
+                if not _is_subagent_secret_repo_target(pathlib.Path(dirpath) / d, repo_dir)
+            ]
         for fn in sorted(filenames):
             p = pathlib.Path(dirpath) / fn
             if not p.is_file():
+                continue
+            if subagent_readonly and _is_subagent_secret_repo_target(p, repo_dir):
                 continue
             if p.suffix == ".py":
                 py_files.append(p)

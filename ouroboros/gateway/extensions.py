@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import logging
 import pathlib
+import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -36,17 +37,11 @@ from ouroboros.skill_loader import (
     review_status_allows_execution,
     save_skill_grants,
     skill_review_gate,
+    _sanitize_skill_name,
 )
 from ouroboros.utils import append_jsonl, utc_now_iso
 
 log = logging.getLogger(__name__)
-
-
-def _coerce_bool_arg(value: Any) -> bool | None:
-    """Tri-state bool coercion; ``None`` means unparseable/absent."""
-    sentinel = object()
-    coerced = coerce_bool(value, default=sentinel)  # type: ignore[arg-type]
-    return None if coerced is sentinel else coerced
 
 
 def _review_fields(loaded: Any, *, stale: bool | None = None, gate: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -459,8 +454,9 @@ async def api_skill_toggle(request: Request) -> JSONResponse:
     if not skill_name:
         return json_error("missing skill name", 400)
     body = await request_json_or(request, {}, exceptions=(Exception,))
-    enabled = _coerce_bool_arg(body.get("enabled"))
-    if enabled is None:
+    bool_sentinel = object()
+    enabled = coerce_bool(body.get("enabled"), default=bool_sentinel)
+    if enabled is bool_sentinel:
         return json_error("'enabled' must be a boolean", 400)
 
     drive_root = _request_drive_root(request)
@@ -822,12 +818,106 @@ async def api_skill_reconcile(request: Request) -> JSONResponse:
     )
 
 
+async def api_skill_delete(request: Request) -> JSONResponse:
+    """Delete a local data-plane skill payload and its durable state."""
+    from ouroboros.config import get_skills_repo_path
+    from ouroboros import extension_loader
+
+    skill_name = _sanitize_skill_name(str(request.path_params.get("skill") or "").strip())
+    if not skill_name or skill_name == "_unnamed":
+        return json_error("missing skill name", 400)
+    body = await request_json_or(request, {}, exceptions=(Exception,))
+
+    drive_root = _request_drive_root(request)
+    repo_path = get_skills_repo_path()
+
+    def _run_delete_sync() -> dict[str, Any]:
+        requested_root = str(body.get("payload_root") or f"skills/external/{skill_name}").strip()
+        root_parts = pathlib.PurePosixPath(requested_root).parts
+        if len(root_parts) != 3 or root_parts[:2] != ("skills", "external"):
+            return {"error": "local skill delete requires payload_root=skills/external/<name>", "status_code": 403}
+
+        drive_root_path = pathlib.Path(drive_root).absolute()
+        skills_root = drive_root_path / "skills"
+        external_root = skills_root / "external"
+        payload_dir = external_root / root_parts[2]
+        if skills_root.is_symlink() or external_root.is_symlink() or payload_dir.is_symlink():
+            return {"error": "local skill delete refuses symlinked data/skills/external payloads", "status_code": 403}
+
+        skills = discover_skills(drive_root, repo_path=repo_path)
+        loaded = next((item for item in skills if pathlib.Path(item.skill_dir).absolute() == payload_dir), None)
+        if loaded is None:
+            return {"error": f"skill {skill_name!r} not found at {requested_root}", "status_code": 404}
+        if loaded.name != skill_name or loaded.source not in {"self_authored", "external"}:
+            return {"error": "local skill delete is limited to self-authored/external skills", "status_code": 403}
+        if any(item.name == skill_name and pathlib.Path(item.skill_dir).absolute() != payload_dir for item in skills):
+            return {
+                "error": (
+                    "refusing to delete a local skill while another skill uses the same sanitized name; "
+                    "rename one of the colliding skills first"
+                ),
+                "status_code": 409,
+            }
+
+        state_root = (drive_root_path / "state" / "skills").absolute()
+        state_dir = state_root / loaded.name
+        if state_root.is_symlink() or state_dir.is_symlink():
+            return {"error": f"refusing to delete unsafe state path for {loaded.name!r}", "status_code": 500}
+        try:
+            state_dir.relative_to(state_root)
+        except ValueError:
+            return {"error": f"refusing to delete unsafe state path for {loaded.name!r}", "status_code": 500}
+
+        extension_loader.unload_extension(loaded.name)
+        shutil.rmtree(payload_dir)
+        deleted_state = state_dir.exists()
+        if deleted_state:
+            shutil.rmtree(state_dir)
+        if payload_dir.exists() or state_dir.exists():
+            return {"error": f"failed to fully delete local skill {loaded.name!r}", "status_code": 500}
+        return {
+            "ok": True,
+            "skill": loaded.name,
+            "source": loaded.source,
+            "deleted_payload_root": f"skills/external/{root_parts[2]}",
+            "deleted_state": deleted_state,
+            "extension_action": "extension_unloaded",
+            "extension_reason": "deleted",
+        }
+
+    queued = await run_lifecycle_job(
+        kind="delete",
+        target=skill_name,
+        source="external",
+        message=f"Deleting {skill_name}",
+        runner=lambda: run_blocking_preserving_cancellation(
+            _run_delete_sync,
+            log_label="local skill delete lifecycle operation",
+        ),
+        options=LifecycleJobOptions(
+            drive_root=drive_root,
+            result_message=lambda item: item.get("error", "") or f"Deleted {item.get('skill', skill_name)}",
+            result_error=lambda item: item.get("error", ""),
+        ),
+    )
+    if queued.get("error"):
+        return JSONResponse(queued, status_code=int(queued.get("status_code") or 400))
+    _broadcast_extension_lifecycle(
+        request,
+        str(queued.get("skill") or skill_name),
+        queued.get("extension_action"),
+        queued.get("extension_reason"),
+    )
+    return JSONResponse(queued)
+
+
 __all__ = [
     "api_extensions_index",
     "api_extension_manifest",
     "api_extension_module",
     "api_extension_settings_section",
     "api_extension_dispatch",
+    "api_skill_delete",
     "api_skill_toggle",
     "api_skill_review",
     "api_skill_grants",

@@ -389,6 +389,125 @@ def test_api_skill_toggle_enables_and_loads_extension(tmp_path, monkeypatch):
         _stop_patches(patches)
 
 
+def test_api_skill_delete_removes_external_payload_state_and_unloads(client_env):
+    from ouroboros import extension_loader
+    from ouroboros.skill_loader import SkillReviewState, compute_content_hash, save_review_state
+
+    client, drive_root = client_env
+    skill_dir = _write_ext(
+        drive_root / "skills" / "external",
+        "local_delete",
+        permissions=["tool"],
+        plugin="def register(api):\n    api.register_tool('t', lambda ctx: 'ok', description='', schema={})\n",
+    )
+    content_hash = compute_content_hash(skill_dir, manifest_entry="plugin.py")
+    save_review_state(drive_root, "local_delete", SkillReviewState(status="pass", content_hash=content_hash))
+
+    enabled = client.post("/api/skills/local_delete/toggle", json={"enabled": True})
+    assert enabled.status_code == 200, enabled.text
+    assert "local_delete" in extension_loader.snapshot()["extensions"]
+    assert (drive_root / "state" / "skills" / "local_delete").is_dir()
+
+    resp = client.post("/api/skills/local_delete/delete", json={"payload_root": "skills/external/local_delete"})
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["deleted_payload_root"] == "skills/external/local_delete"
+    assert not skill_dir.exists()
+    assert not (drive_root / "state" / "skills" / "local_delete").exists()
+    assert "local_delete" not in extension_loader.snapshot()["extensions"]
+
+    hub_skill_dir = _write_ext(
+        drive_root / "skills" / "clawhub",
+        "hub_delete",
+        permissions=[],
+        plugin="def register(api):\n    pass\n",
+    )
+    (hub_skill_dir / ".clawhub.json").write_text("{}", encoding="utf-8")
+
+    resp = client.post("/api/skills/hub_delete/delete", json={"payload_root": "skills/clawhub/hub_delete"})
+
+    assert resp.status_code == 403
+    assert hub_skill_dir.exists()
+
+
+def test_api_skill_delete_rejects_external_symlink_bucket(client_env, tmp_path):
+    client, drive_root = client_env
+    external_target = tmp_path / "outside-external"
+    _write_ext(
+        external_target,
+        "symlink_delete",
+        permissions=[],
+        plugin="def register(api):\n    pass\n",
+    )
+    skills_root = drive_root / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    try:
+        (skills_root / "external").symlink_to(external_target, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlinks unavailable in this environment: {exc}")
+
+    resp = client.post(
+        "/api/skills/symlink_delete/delete",
+        json={"payload_root": "skills/external/symlink_delete"},
+    )
+
+    assert resp.status_code == 403
+    assert (external_target / "symlink_delete").exists()
+
+
+def test_api_skill_delete_rejects_name_collision_before_state_delete(client_env):
+    client, drive_root = client_env
+    external_dir = _write_ext(
+        drive_root / "skills" / "external",
+        "collide_delete",
+        permissions=[],
+        plugin="def register(api):\n    pass\n",
+    )
+    native_dir = _write_ext(
+        drive_root / "skills" / "native",
+        "collide_delete",
+        permissions=[],
+        plugin="def register(api):\n    pass\n",
+    )
+    state_dir = drive_root / "state" / "skills" / "collide_delete"
+    state_dir.mkdir(parents=True)
+    (state_dir / "enabled.json").write_text('{"enabled": true}', encoding="utf-8")
+
+    resp = client.post(
+        "/api/skills/collide_delete/delete",
+        json={"payload_root": "skills/external/collide_delete"},
+    )
+
+    assert resp.status_code == 409
+    assert external_dir.exists()
+    assert native_dir.exists()
+    assert state_dir.exists()
+
+
+def test_api_skill_delete_accepts_unsanitized_external_directory_leaf(client_env):
+    client, drive_root = client_env
+    skill_dir = _write_ext(
+        drive_root / "skills" / "external",
+        "hello world",
+        permissions=[],
+        plugin="def register(api):\n    pass\n",
+    )
+    state_dir = drive_root / "state" / "skills" / "hello_world"
+    state_dir.mkdir(parents=True)
+
+    resp = client.post(
+        "/api/skills/hello_world/delete",
+        json={"payload_root": "skills/external/hello world"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted_payload_root"] == "skills/external/hello world"
+    assert not skill_dir.exists()
+    assert not state_dir.exists()
+
+
 def test_api_skill_toggle_allows_warnings_review(tmp_path, monkeypatch):
     from ouroboros import extension_loader
     from ouroboros.skill_loader import SkillReviewState, save_review_state

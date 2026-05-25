@@ -186,7 +186,7 @@ def _release_metadata_preflight(
         return (
             "⚠️ PREFLIGHT_BLOCKED: Changed files are present but VERSION is not in scope.\n"
             "  BIBLE.md P9 requires every commit to bump VERSION and sync release artifacts.\n"
-            "  Stage or include VERSION plus pyproject.toml, README.md, and docs/ARCHITECTURE.md before advisory review.\n"
+            "  Stage or include VERSION plus pyproject.toml, web/package.json, README.md, and docs/ARCHITECTURE.md before advisory review.\n"
             f"  Currently changed/in-scope: {', '.join(sorted(touched)) or '(none)'}"
         )
     if not version_in_scope:
@@ -200,16 +200,19 @@ def _release_metadata_preflight(
         version_path = repo_dir / "VERSION"
         readme_path = repo_dir / "README.md"
         pyproject_path = repo_dir / "pyproject.toml"
+        web_package_path = repo_dir / "web" / "package.json"
         arch_path = repo_dir / "docs" / "ARCHITECTURE.md"
         version_str = version_path.read_text(encoding="utf-8").strip()
         if not is_release_version(version_str):
             return None
         pyproject_text = pyproject_path.read_text(encoding="utf-8") if pyproject_path.exists() else ""
+        web_package_text = web_package_path.read_text(encoding="utf-8") if web_package_path.exists() else ""
         readme_text = readme_path.read_text(encoding="utf-8") if readme_path.exists() else ""
         arch_text = arch_path.read_text(encoding="utf-8") if arch_path.exists() else ""
         desync = version_carrier_desyncs(
             version_str,
             pyproject_text=pyproject_text,
+            web_package_text=web_package_text,
             readme_text=readme_text,
             arch_text=arch_text,
             detailed=True,

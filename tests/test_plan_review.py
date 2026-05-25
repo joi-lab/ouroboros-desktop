@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import pathlib
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -105,12 +106,12 @@ class TestPlanReviewModels(unittest.TestCase):
 
     def test_returns_configured_models(self):
         from ouroboros.tools.plan_review import _get_review_models
-        configured = "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6"
+        configured = "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6"
         with patch.dict(os.environ, {"OUROBOROS_REVIEW_MODELS": configured}, clear=False):
             models = _get_review_models()
         self.assertEqual(models, [
             "openai/gpt-5.5",
-            "google/gemini-3.1-pro-preview",
+            "google/gemini-3.5-flash",
             "anthropic/claude-opus-4.6",
         ])
 
@@ -151,7 +152,7 @@ class TestPlanReviewModels(unittest.TestCase):
         # main is anthropic::..., but the reviewer list is still the default
         # OpenRouter-style set (so none match the anthropic:: prefix).
         env = {
-            "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6",
+            "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6",
             "OUROBOROS_MODEL": "anthropic::claude-opus-4-6",
             "OUROBOROS_MODEL_LIGHT": "anthropic::claude-sonnet-4-6",
             "OPENROUTER_API_KEY": "",
@@ -401,9 +402,10 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
 
         ctx = _make_ctx()
         ctx.repo_dir = pathlib.Path(".")
+        atlas = SimpleNamespace(text="x" * 1_000_000, manifest={}, status="budget_constrained")
 
         with (
-            patch.object(pr, "build_full_repo_pack", return_value=("x" * 1_000_000, [])),
+            patch.object(pr, "compile_review_context_atlas", return_value=atlas),
             patch.object(pr, "build_head_snapshot_section", return_value=""),
             patch.object(pr, "_load_plan_checklist", return_value="checklist"),
             patch.object(pr, "_load_bible", return_value=""),
@@ -423,6 +425,27 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("PLAN_REVIEW_SKIPPED", result)
 
+        atlas = SimpleNamespace(
+            text="small atlas",
+            manifest={"estimated_total_tokens": 950_000},
+            status="budget_exceeded",
+        )
+        with (
+            patch.object(pr, "compile_review_context_atlas", return_value=atlas),
+            patch.object(pr, "build_head_snapshot_section", return_value=""),
+            patch.object(pr, "_load_plan_checklist", return_value="checklist"),
+            patch.object(pr, "_load_bible", return_value=""),
+            patch.object(pr, "_load_doc", return_value=""),
+            patch("ouroboros.config.get_review_models",
+                  return_value=["model-a", "model-b"]),
+            patch.object(pr, "_get_review_models", return_value=["model-a", "model-b"]),
+            patch("ouroboros.tools.plan_review.estimate_tokens", return_value=10_000),
+        ):
+            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [])
+
+        self.assertIn("PLAN_REVIEW_SKIPPED", result)
+        self.assertIn("generated repository atlas exceeded hard budget", result)
+
     async def test_proceeds_when_within_budget(self):
         """When prompt is within budget, reviewers are called."""
         from ouroboros.tools import plan_review as pr
@@ -437,9 +460,10 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
             "tokens_in": 100,
             "tokens_out": 50,
         }
+        atlas = SimpleNamespace(text="small atlas", manifest={}, status="ok")
 
         with (
-            patch.object(pr, "build_full_repo_pack", return_value=("small pack", [])),
+            patch.object(pr, "compile_review_context_atlas", return_value=atlas),
             patch.object(pr, "build_head_snapshot_section", return_value=""),
             patch.object(pr, "_load_plan_checklist", return_value="checklist"),
             patch.object(pr, "_load_bible", return_value=""),
@@ -562,7 +586,7 @@ class TestClassifyReviewerError(unittest.TestCase):
         """The user should not think it's a JSON format issue in our code."""
         import json
         exc = json.JSONDecodeError("Expecting value", "doc", 902)
-        msg = self.classify(exc, "google/gemini-3.1-pro-preview")
+        msg = self.classify(exc, "google/gemini-3.5-flash")
         # Should NOT say things like "JSON format" or "checklist formatting"
         self.assertNotIn("format", msg.lower().replace("non-JSON", ""))
 

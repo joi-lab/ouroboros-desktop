@@ -6,16 +6,12 @@ import logging
 import os
 from typing import Any, Dict, List
 
+from ouroboros.config import SETTINGS_DEFAULTS
 from ouroboros.tools.registry import ToolContext, ToolEntry
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_VLM_MODEL = "anthropic/claude-sonnet-4.6"
-
-
-def _get_vlm_model() -> str:
-    """Return configured VLM model or default."""
-    return os.environ.get("OUROBOROS_MODEL", _DEFAULT_VLM_MODEL)
+_DEFAULT_VLM_MODEL = SETTINGS_DEFAULTS["OUROBOROS_MODEL"]
 
 
 def _get_llm_client():
@@ -33,7 +29,7 @@ def _analyze_screenshot(ctx: ToolContext, prompt: str = "Describe what you see i
             "First call browse_page(output='screenshot') or browser_action(action='screenshot')."
         )
 
-    vlm_model = model or _get_vlm_model()
+    vlm_model = model or os.environ.get("OUROBOROS_MODEL", _DEFAULT_VLM_MODEL)
 
     try:
         client = _get_llm_client()
@@ -126,7 +122,7 @@ def _vlm_query(ctx: ToolContext, prompt: str, image_url: str = "", image_base64:
     else:
         images.append({"base64": image_base64, "mime": image_mime})
 
-    vlm_model = model or _get_vlm_model()
+    vlm_model = model or os.environ.get("OUROBOROS_MODEL", _DEFAULT_VLM_MODEL)
 
     try:
         client = _get_llm_client()

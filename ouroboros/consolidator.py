@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 BLOCK_SIZE = 100                          # Messages per consolidation block
 MAX_SUMMARY_BLOCKS = 10                   # Compress into era when exceeded
 ERA_COMPRESS_COUNT = 4                    # Oldest blocks to compress per era
-CONSOLIDATION_MODEL = "google/gemini-3-flash-preview"
+CONSOLIDATION_MODEL = "google/gemini-3.5-flash"
 CONSOLIDATION_REASONING_EFFORT = "medium"
 
 def should_consolidate(

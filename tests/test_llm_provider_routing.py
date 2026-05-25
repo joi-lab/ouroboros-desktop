@@ -244,7 +244,7 @@ def test_openrouter_gemini_preserves_message_cache_blocks_and_strips_tool_cache(
     }]
 
     kwargs = client._build_remote_kwargs(
-        client._resolve_remote_target("google/gemini-3-flash-preview"),
+        client._resolve_remote_target("google/gemini-3.5-flash"),
         messages,
         "medium",
         512,

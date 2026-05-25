@@ -15,6 +15,16 @@ from ouroboros.utils import iter_llm_usage_events, llm_usage_cost, utc_now_iso
 
 log = logging.getLogger(__name__)
 
+_PROGRESS_META_FIELDS = (
+    "subagent_event",
+    "subagent_task_id",
+    "root_task_id",
+    "parent_task_id",
+    "delegation_role",
+    "subagent_role",
+    "worker_saturation_warning",
+)
+
 
 def make_cost_breakdown_endpoint(data_dir: pathlib.Path):
     async def api_cost_breakdown(_request: Request) -> JSONResponse:
@@ -176,6 +186,9 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
                 }
                 if isinstance(entry.get("lifecycle"), dict):
                     rec["lifecycle"] = dict(entry.get("lifecycle") or {})
+                for field in _PROGRESS_META_FIELDS:
+                    if field in entry:
+                        rec[field] = entry[field]
                 combined.append(rec)
         except Exception as exc:
             log.warning("Failed to read progress log: %s", exc)

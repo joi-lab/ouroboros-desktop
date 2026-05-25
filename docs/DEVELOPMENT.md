@@ -95,6 +95,18 @@ Not every layer is required for every operation. Simple cases (e.g., `repo_read`
 - Workspace-mode tasks must use an explicit allowlist, reject system-repo/data
   overlap, require a git worktree root, and return patch artifacts instead of
   committing in the target repository.
+- External workspace completion must be gated on explicit artifact finalization:
+  `workspace.patch` is served through the task artifact endpoint, strict patch
+  CLI modes fail on missing/empty/failed artifacts, and `workspace_patch.json`
+  records diagnostics instead of silently treating patch-builder failures as
+  empty diffs.
+- Workspace preflight belongs in the headless task create flow as read-only
+  facts: compact summary in task metadata/prompt, full
+  `workspace_preflight.json` as an artifact. Do not dump full manifests into
+  the prompt and do not add benchmark-specific instructions.
+- Dependency installation guidance is workspace-scoped: project-local installs
+  are allowed for external tasks, while system/global installs are pro-mode
+  safety-reviewed attempts. `sudo` must be noninteractive (`sudo -n`).
 - Treat workspace mode as routing plus guardrails, not an OS sandbox. If stronger
   isolation becomes required, add a real Docker/SSH/remote tool-execution layer
   instead of expanding shell-command heuristics.
@@ -111,7 +123,7 @@ Derived from P7 (Minimalism): entire codebase fits in one context window.
 - Module hard gate: 1600 lines for non-grandfathered modules in `tests/test_smoke.py`. Grandfathered (`GRANDFATHERED_OVERSIZED_MODULES` in `ouroboros/review.py`): `llm.py`, `claude_advisory_review.py`, `review_state.py`, `server.py`, and temporary v5.7.1 debt `git.py` — split deferred until each surface stabilises, with `git.py` expected to pay down in the next tools pass.
 - Method target: <150 lines. Crossing that line is a decomposition signal, not an automatic failure by itself.
 - Method hard gate: 300 lines in `tests/test_smoke.py`.
-- Codebase-wide function-count hard gate: enforced by `tests/test_smoke.py` against the value defined in `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` (currently 2175; single source of truth — bump the constant when adding a feature with an explicit comment justifying the increase).
+- Codebase-wide function-count hard gate: enforced by `tests/test_smoke.py` against the value defined in `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` (currently 2250; single source of truth — bump the constant when adding a feature with an explicit comment justifying the increase).
 - Function parameters: <8.
 - Net complexity growth per cycle approaches zero.
 - If a feature is not used in the current cycle — it is premature.
@@ -138,8 +150,9 @@ Concrete requirements:
 | ↳ Anti-thrashing (v4.35.1) | — | — | Open obligations loaded from `review_state` via `load_state(drive_root)` + `make_repo_key(repo_dir)`, injected unconditionally into `_build_review_history_section` prompt context. Same mechanism in `scope_review.py::_build_scope_prompt` (best-effort when `drive_root` available). |
 | Background consciousness (`consciousness.py`) | ✅ full | ✅ full | — (not yet required) |
 | Advisory pre-review (`tools/claude_advisory_review.py`) | ✅ via `_load_doc` | ✅ via `_load_doc` | ✅ via `_load_doc` |
-| Scope review (`tools/scope_review.py`) | via full repo pack | via full repo pack | via full repo pack |
-| Deep self-review (`deep_self_review.py`) | via full repo pack | via full repo pack | via full repo pack |
+| Scope review (`tools/scope_review.py`) | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting |
+| Plan review (`tools/plan_review.py`) | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting |
+| Deep self-review (`deep_self_review.py`) | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting | full canonical doc + Atlas accounting |
 
 ### Invariant: No silent truncation
 
@@ -197,8 +210,8 @@ Reviewed commits now have an explicit **two-step gate**:
      diff against `docs/CHECKLISTS.md`. Quorum requires at least 2 responded
      actors (`_run_unified_review`).
    - **Scope review** (`ouroboros/tools/scope_review.py`): one model reviews
-     completeness and cross-module consistency with full-repo context
-     (`build_full_repo_pack`).
+     completeness and cross-module consistency with touched context plus a
+     generated repository Atlas (`review_context_atlas.compile_review_context_atlas`).
 
 Triad and scope reviewers run concurrently via `concurrent.futures.ThreadPoolExecutor`
 (orchestrated in `ouroboros/tools/parallel_review.py`). The caller receives one
@@ -239,7 +252,7 @@ Before every commit, verify the following:
 #### Module Size & Complexity
 - [ ] Module stays near one context window (~1000 lines target; 1600 hard gate unless explicitly grandfathered debt)
 - [ ] No method exceeds the practical target (150 lines) or the hard gate (300 lines)
-- [ ] Total Python function count stays under the current smoke hard gate (currently 2175; consult `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` for the active value; bump with a comment if a feature requires more headroom)
+- [ ] Total Python function count stays under the current smoke hard gate (currently 2250; consult `ouroboros/review.py::MAX_TOTAL_FUNCTIONS` for the active value; bump with a comment if a feature requires more headroom)
 - [ ] No function has more than 8 parameters
 - [ ] No gratuitous abstract layers (Bible P7)
 
@@ -255,6 +268,26 @@ Before every commit, verify the following:
 - Finish repair with `skill_preflight` and `review_skill`; grants and enablement stay owner-controlled.
 - Repair mode is a stricter UI lane, not the only path for skill authoring. In `runtime_mode=light`, ordinary chat tasks may edit explicit `data/skills/{external,clawhub,ouroboroshub}/<skill>/...` payload paths via `str_replace_editor`, `data_write`, or `claude_code_edit`. As a second short-form, those three tools also accept optional `bucket` + `skill_name` args; when both are supplied (and `bucket` is not `native`), a short relative `path`/`cwd` (e.g. `plugin.py`, `lib/utils.py`, or `.`) resolves under an existing `data/skills/<bucket>/<skill_name>/` via `decide_payload_short_form` / `synthesize_payload_constraint` in `ouroboros.contracts.skill_payload_policy` — the same `skill_repair`-mode resolution is reused, no new task-constraint mode is introduced. Explicit repo/data paths keep their own address space and ignore stale short-form args. Core/repo paths, `data/skills/native/*`, `data/state/skills/*`, marketplace/provenance sidecars, and direct `run_shell` writes to repo targets remain blocked.
 - New path checks for skill edits must use `ouroboros.contracts.skill_payload_policy` rather than reimplementing bucket/path traversal logic in each tool.
+
+#### Live Subagent Task Constraints
+- Live subagents are scheduled only through the existing `schedule_task` tool.
+  Its public schema is strict: `objective` and `expected_output` are required;
+  `role`, `context`, `constraints`, and `memory_mode` are optional. Do not
+  reintroduce public `parent_task_id` or `description` arguments; lineage comes
+  from `ToolContext`.
+- `task_constraint.mode="local_readonly_subagent"` must be enforced twice:
+  schema discovery exposes only the local-readonly allowlist, and registry
+  execution rejects forbidden calls even when invoked manually.
+- Subagent changes must keep writes, commits, review mutation, runtime control,
+  tool expansion, skills, MCP/extensions, shell, and further `schedule_task`
+  recursion blocked unless a later accepted design explicitly changes the
+  permission model.
+- `data_read` and `data_list` secret/control-file denials are subagent-scoped.
+  Do not broaden generic data-tool behavior for normal tasks while fixing
+  subagent isolation.
+- Handoff is the full task result. Do not add shared ledgers, automatic memory
+  merges, or new settings/endpoints unless the accepted plan explicitly calls
+  for them.
 
 #### Page Header Layout
 - Top-level page chrome (`renderPageHeader`, tab strips, primary actions) must sit outside the scrolling content region.

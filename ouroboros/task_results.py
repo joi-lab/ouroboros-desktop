@@ -63,13 +63,13 @@ def list_task_results(
 
 
 def write_task_result(
-    drive_root: Any,
+    results_drive_root: Any,
     task_id: str,
     status: str,
     **fields: Any,
 ) -> Dict[str, Any]:
-    path = task_result_path(drive_root, task_id)
-    existing = load_task_result(drive_root, task_id) or {}
+    path = task_result_path(results_drive_root, task_id)
+    existing = load_task_result(results_drive_root, task_id) or {}
 
     ts = str(fields.pop("ts", "") or existing.get("ts") or utc_now_iso())
     payload = {

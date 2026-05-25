@@ -314,6 +314,218 @@ def test_schedule_task_not_in_initial_schemas():
     )
 
 
+def test_local_readonly_subagent_initial_schemas_are_allowlisted(tmp_path):
+    from ouroboros.contracts.task_constraint import TaskConstraint
+    from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_TOOL_NAMES
+    from ouroboros.tool_policy import initial_tool_schemas, list_non_core_tools
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
+
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    registry.set_context(
+        ToolContext(
+            repo_dir=tmp_path,
+            drive_root=tmp_path,
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+        )
+    )
+
+    names = {s["function"]["name"] for s in initial_tool_schemas(registry)}
+    assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES <= names
+    assert "enable_tools" not in names
+    assert "schedule_task" not in names
+    assert "repo_write" not in names
+    assert "run_shell" not in names
+    assert "browse_page" in names
+    assert "browser_action" in names
+    schemas = {s["function"]["name"]: s["function"] for s in initial_tool_schemas(registry)}
+    action_schema = schemas["browser_action"]["parameters"]["properties"]["action"]
+    assert "evaluate" not in action_schema["enum"]
+    assert "send_photo" not in schemas["browse_page"]["description"]
+    assert "analyze_screenshot" in schemas["browse_page"]["description"]
+    assert list_non_core_tools(registry) == []
+
+
+def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkeypatch):
+    from ouroboros.contracts.task_constraint import TaskConstraint
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
+    import ouroboros.mcp_client as mcp_client
+
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    registry.set_context(
+        ToolContext(
+            repo_dir=tmp_path,
+            drive_root=tmp_path,
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+        )
+    )
+
+    assert registry.get_schema_by_name("repo_write") is None
+    assert registry.get_schema_by_name("enable_tools") is None
+    assert registry.get_schema_by_name("schedule_task") is None
+    monkeypatch.setattr(mcp_client, "ensure_configured_from_settings", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("MCP touched")))
+    assert "LOCAL_READONLY_SUBAGENT_BLOCKED" not in registry.execute("repo_list", {"path": "."})
+    blocked_tools = [
+        "repo_write",
+        "str_replace_editor",
+        "claude_code_edit",
+        "data_write",
+        "knowledge_write",
+        "update_scratchpad",
+        "update_identity",
+        "repo_commit",
+        "advisory_pre_review",
+        "multi_model_review",
+        "review_skill",
+        "request_restart",
+        "switch_model",
+        "enable_tools",
+        "schedule_task",
+        "run_shell",
+        "skill_exec",
+        "list_skills",
+        "ext_4_demo_tool",
+        "mcp_demo_tool",
+    ]
+    for name in blocked_tools:
+        assert registry.get_schema_by_name(name) is None
+        assert "LOCAL_READONLY_SUBAGENT_BLOCKED" in registry.execute(name, {})
+
+
+def test_local_readonly_subagent_data_read_denies_secret_files(tmp_path):
+    from ouroboros.contracts.task_constraint import TaskConstraint
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
+
+    (tmp_path / "settings.json").write_text('{"OPENROUTER_API_KEY":"secret"}', encoding="utf-8")
+    (tmp_path / "settings.tmp").write_text('{"OPENROUTER_API_KEY":"secret"}', encoding="utf-8")
+    (tmp_path / ".settings.json.tmp.123").write_text('{"OPENROUTER_API_KEY":"secret"}', encoding="utf-8")
+    (tmp_path / ".env.local").write_text("TOKEN=secret", encoding="utf-8")
+    (tmp_path / "prod.env").write_text("TOKEN=secret", encoding="utf-8")
+    (tmp_path / "state" / "skills" / "weather").mkdir(parents=True)
+    (tmp_path / "state" / "skills" / "weather" / "grants.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "state" / "skills" / "weather" / ".grants.json.tmp.123").write_text("{}", encoding="utf-8")
+    (tmp_path / "state" / "skills" / "weather" / "review.json.lock").write_text("{}", encoding="utf-8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "events.jsonl").write_text("{}", encoding="utf-8")
+    try:
+        os.symlink("settings.json", tmp_path / "alias.txt")
+    except (OSError, NotImplementedError):
+        pass
+    try:
+        os.link(tmp_path / "settings.json", tmp_path / "hardlink.txt")
+    except (OSError, NotImplementedError):
+        pass
+
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    registry.set_context(
+        ToolContext(
+            repo_dir=tmp_path,
+            drive_root=tmp_path,
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+        )
+    )
+
+    blocked = registry.execute("data_read", {"path": "settings.json"})
+    assert "DATA_READ_BLOCKED" in blocked
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": "settings.tmp"})
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": ".settings.json.tmp.123"})
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": ".env.local"})
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": "prod.env"})
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": "state/skills/weather/.grants.json.tmp.123"})
+    assert "DATA_READ_BLOCKED" in registry.execute("data_read", {"path": "state/skills/weather/review.json.lock"})
+    alias_result = registry.execute("data_read", {"path": "alias.txt"})
+    if (tmp_path / "alias.txt").exists():
+        assert "DATA_READ_BLOCKED" in alias_result
+    hardlink_result = registry.execute("data_read", {"path": "hardlink.txt"})
+    if (tmp_path / "hardlink.txt").exists():
+        assert "DATA_READ_BLOCKED" in hardlink_result
+    listing = registry.execute("data_list", {"dir": "."})
+    assert "settings.json" not in listing
+    assert "settings.tmp" not in listing
+    assert ".settings.json.tmp.123" not in listing
+    assert ".env.local" not in listing
+    assert "prod.env" not in listing
+    assert "alias.txt" not in listing
+    assert "hardlink.txt" not in listing
+    assert "secret/control" in listing
+    skill_state_listing = registry.execute("data_list", {"dir": "state/skills/weather"})
+    assert "grants.json" not in skill_state_listing
+    assert ".grants.json.tmp.123" not in skill_state_listing
+    assert "review.json.lock" not in skill_state_listing
+    assert "secret/control" in skill_state_listing
+    assert "DATA_LIST_BLOCKED" in registry.execute("data_list", {"dir": "state/skills/weather/grants.json"})
+    assert "DATA_LIST_BLOCKED" in registry.execute("data_list", {"dir": "state/skills/weather/.grants.json.tmp.123"})
+    readable = registry.execute("data_read", {"path": "logs/events.jsonl"})
+    assert "{}" in readable
+
+
+def test_local_readonly_subagent_repo_read_denies_secret_files(tmp_path):
+    from ouroboros.contracts.task_constraint import TaskConstraint
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
+
+    repo = tmp_path / "repo"
+    data = tmp_path / "data"
+    (repo / ".git").mkdir(parents=True)
+    data.mkdir()
+    (repo / ".git" / "credentials").write_text("https://token@example.invalid\n", encoding="utf-8")
+    (repo / ".git" / "config").write_text("[credential]\n", encoding="utf-8")
+    (repo / ".env.local").write_text("TOKEN=secret\nLEAK_MARKER=env\n", encoding="utf-8")
+    (repo / "auth_token.json").write_text('{"token":"TOKEN_LEAK"}\n', encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "public.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / "src" / "skill_token.py").write_text("TOKEN_NAME = 'safe source symbol'\n", encoding="utf-8")
+    try:
+        os.symlink(".git/credentials", repo / "alias.txt")
+    except (OSError, NotImplementedError):
+        pass
+    try:
+        os.link(repo / ".git" / "credentials", repo / "hardlink.txt")
+    except (OSError, NotImplementedError):
+        pass
+
+    registry = ToolRegistry(repo_dir=repo, drive_root=data)
+    registry.set_context(
+        ToolContext(
+            repo_dir=repo,
+            drive_root=data,
+            task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+        )
+    )
+
+    assert "REPO_READ_BLOCKED" in registry.execute("repo_read", {"path": ".git/credentials"})
+    assert "REPO_READ_BLOCKED" in registry.execute("repo_read", {"path": ".git/config"})
+    assert "REPO_READ_BLOCKED" in registry.execute("repo_read", {"path": ".env.local"})
+    assert "REPO_READ_BLOCKED" in registry.execute("repo_read", {"path": "auth_token.json"})
+    alias_result = registry.execute("repo_read", {"path": "alias.txt"})
+    if (repo / "alias.txt").exists():
+        assert "REPO_READ_BLOCKED" in alias_result
+    hardlink_result = registry.execute("repo_read", {"path": "hardlink.txt"})
+    if (repo / "hardlink.txt").exists():
+        assert "REPO_READ_BLOCKED" in hardlink_result
+    listing = registry.execute("repo_list", {"dir": "."})
+    assert ".git/" not in listing
+    assert ".env.local" not in listing
+    assert "auth_token.json" not in listing
+    assert "alias.txt" not in listing
+    assert "hardlink.txt" not in listing
+    assert "src/" in listing
+    assert "secret/control" in listing
+    assert "REPO_LIST_BLOCKED" in registry.execute("repo_list", {"dir": ".git"})
+    readable = registry.execute("repo_read", {"path": "src/public.py"})
+    assert "print('ok')" in readable
+    source_with_token_name = registry.execute("repo_read", {"path": "src/skill_token.py"})
+    assert "safe source symbol" in source_with_token_name
+    secret_search = registry.execute("code_search", {"query": "TOKEN_LEAK"})
+    assert "No matches found" in secret_search
+    assert "auth_token.json:" not in secret_search
+    assert "SEARCH_BLOCKED" in registry.execute("code_search", {"query": "TOKEN_LEAK", "path": "auth_token.json"})
+    public_search = registry.execute("code_search", {"query": "safe source symbol"})
+    assert "src/skill_token.py" in public_search
+    digest = registry.execute("codebase_digest", {})
+    assert "auth_token.json" not in digest
+    assert ".env.local" not in digest
+    assert "src/skill_token.py" in digest
+
+
 # ---------------------------------------------------------------------------
 # Discovery path drift test
 # ---------------------------------------------------------------------------

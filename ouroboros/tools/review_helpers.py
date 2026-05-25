@@ -169,7 +169,7 @@ BINARY_EXTENSIONS = frozenset({
 
 _FILE_SIZE_LIMIT = 1_048_576  # 1 MB
 
-# build_full_repo_pack constants shared with deep self-review.
+# File-classification constants shared by legacy pack helpers and generated atlases.
 _SENSITIVE_EXTENSIONS = frozenset({
     ".env", ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore",
     # Credential vaults / encrypted blobs.
@@ -714,6 +714,7 @@ def build_scope_actor_record(scope_result: object, *, fallback_model_id: str = "
         "tokens_in": getattr(scope_result, "tokens_in", 0),
         "tokens_out": getattr(scope_result, "tokens_out", 0),
         "cost_usd": getattr(scope_result, "cost_usd", 0.0),
+        "context_manifest": getattr(scope_result, "context_manifest", {}) or {},
         "parsed_items": critical_findings + advisory_findings,  # scope has one reviewer; match triad shape.
         "critical_findings": critical_findings,
         "advisory_findings": advisory_findings,
@@ -1250,11 +1251,13 @@ def check_worktree_version_sync(repo_dir) -> str:
         if not is_release_version(version_str):
             return ""
         pyproject = repo_dir / "pyproject.toml"
+        web_package = repo_dir / "web" / "package.json"
         readme = repo_dir / "README.md"
         arch = repo_dir / "docs" / "ARCHITECTURE.md"
         desync = version_carrier_desyncs(
             version_str,
             pyproject_text=pyproject.read_text(encoding="utf-8") if pyproject.exists() else "",
+            web_package_text=web_package.read_text(encoding="utf-8") if web_package.exists() else "",
             readme_text=readme.read_text(encoding="utf-8") if readme.exists() else "",
             arch_text=arch.read_text(encoding="utf-8") if arch.exists() else "",
         )

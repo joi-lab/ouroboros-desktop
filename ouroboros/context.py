@@ -499,6 +499,14 @@ def build_health_invariants(env: Any) -> str:
         if is_release_version(ver_file) and pyproject_ver and _normalize_pep440(ver_file) != pyproject_ver:
             desync_parts.append(f"pyproject.toml={pyproject_ver}")
         try:
+            web_package = read_text(env.repo_path("web/package.json"))
+            web_match = re.search(r'"version"\s*:\s*"([^"]+)"', web_package)
+            web_ver = str(web_match.group(1) or "").strip() if web_match else ""
+            if is_release_version(ver_file) and web_ver and web_ver != ver_file:
+                desync_parts.append(f"web/package.json={web_ver}")
+        except Exception:
+            pass
+        try:
             readme = read_text(env.repo_path("README.md"))
             badge_ver = extract_readme_badge_version(readme)
             rm = None if badge_ver else re.search(r'\*\*Version:\*\*\s*([^\s]+)', readme)

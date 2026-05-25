@@ -31,6 +31,20 @@ META_TOOL_NAMES: frozenset[str] = frozenset({
     "list_available_tools", "enable_tools",
 })
 
+LOCAL_READONLY_SUBAGENT_MODE: str = "local_readonly_subagent"
+MAX_SUBTASK_DEPTH: int = 2
+
+# V1 subagents are read-only against local Ouroboros state. Browser interaction
+# remains available by explicit product decision, so this mode is not a remote
+# website sandbox.
+LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
+    "repo_read", "repo_list", "code_search", "codebase_digest",
+    "git_status", "git_diff",
+    "data_read", "data_list",
+    "chat_history", "recent_tasks", "get_task_result", "wait_for_task",
+    "web_search", "browse_page", "browser_action", "analyze_screenshot",
+})
+
 READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
     "repo_read", "repo_list",
     "data_read", "data_list",
@@ -50,6 +64,8 @@ UNTRUNCATED_TOOL_RESULTS: frozenset[str] = frozenset({
     "advisory_pre_review",
     "review_skill",
     "review_status",
+    "get_task_result",
+    "wait_for_task",
 })
 
 # Cognitive artifacts must not be truncated.

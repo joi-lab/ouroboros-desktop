@@ -174,6 +174,14 @@ def test_review_status_results_never_truncated():
     assert _truncate_tool_result(big, "review_status") == big
 
 
+def test_child_task_handoff_results_never_truncated():
+    """Child-task handoff tools must return the full result to the parent."""
+    from ouroboros.loop_tool_execution import _truncate_tool_result
+    big = "c" * 90000
+    assert _truncate_tool_result(big, "get_task_result") == big
+    assert _truncate_tool_result(big, "wait_for_task") == big
+
+
 # ---------------------------------------------------------------------------
 # Core governance artifact invariants
 # ---------------------------------------------------------------------------

@@ -503,7 +503,11 @@ def sanitize_tool_result_for_log(result: str) -> str:
     """Redact potential secrets from tool result before logging."""
     if not isinstance(result, str) or len(result) < 20:
         return result
-    return _SECRET_PATTERNS.sub("***REDACTED***", result)
+    redacted = _SECRET_PATTERNS.sub("***REDACTED***", result)
+    return _SECRET_URL_CREDENTIAL_RE.sub(
+        lambda match: match.group(0).split("://", 1)[0] + "://***REDACTED***@",
+        redacted,
+    )
 
 
 def contains_real_secret_value(text: str) -> tuple[bool, List[str]]:

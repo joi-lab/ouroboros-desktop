@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
 from ouroboros.config import apply_settings_to_env, load_settings, save_settings
+from ouroboros.headless import prepare_task_drive
 from ouroboros.task_results import (
     STATUS_CANCELLED,
     STATUS_COMPLETED,
@@ -19,12 +21,28 @@ from ouroboros.task_results import (
     load_task_result,
     write_task_result,
 )
+from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_MODE, MAX_SUBTASK_DEPTH
 from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.utils import atomic_write_json, utc_now_iso, run_cmd
 
 log = logging.getLogger(__name__)
 
-MAX_SUBTASK_DEPTH = 3
+VALID_SUBTASK_MEMORY_MODES = frozenset({"forked", "empty", "shared"})
+
+
+def _emit_control_event(ctx: ToolContext, evt: Dict[str, Any]) -> str:
+    """Emit a control event live when possible, preserving legacy fallback."""
+    event_queue = getattr(ctx, "event_queue", None)
+    if event_queue is not None:
+        try:
+            event_queue.put_nowait(dict(evt))
+            return "live"
+        except (AttributeError, queue.Full):
+            pass
+        except Exception:
+            log.warning("Live control event emission failed; falling back to pending_events", exc_info=True)
+    ctx.pending_events.append(evt)
+    return "deferred"
 
 
 def _request_restart(ctx: ToolContext, reason: str) -> str:
@@ -69,13 +87,43 @@ def _promote_to_stable(ctx: ToolContext, reason: str) -> str:
     return f"Promote to stable requested: {reason}"
 
 
-def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent_task_id: str = "") -> str:
+def _schedule_task(
+    ctx: ToolContext,
+    objective: str = "",
+    expected_output: str = "",
+    role: str = "",
+    context: str = "",
+    constraints: str = "",
+    memory_mode: str = "forked",
+    **legacy_or_unknown: Any,
+) -> str:
     if bool(getattr(ctx, "is_workspace_mode", lambda: False)()):
         return (
             "⚠️ WORKSPACE_MODE_BLOCKED: schedule_task would create a child agent. "
             "Headless workspace tasks expose task/session metadata for future delegation, "
-            "but v5.29 does not run a swarm scheduler."
+            "but local live subagents are intentionally disabled in workspace mode."
         )
+    if legacy_or_unknown:
+        bad = ", ".join(sorted(str(key) for key in legacy_or_unknown.keys()))
+        return (
+            "⚠️ TOOL_ARG_ERROR (schedule_task): unsupported argument(s): "
+            f"{bad}. Use the v6 strict schema: objective, expected_output, "
+            "optional role/context/constraints/memory_mode."
+        )
+    objective = str(objective or "").strip()
+    expected_output = str(expected_output or "").strip()
+    role = str(role or "researcher").strip() or "researcher"
+    context = str(context or "").strip()
+    constraints = str(constraints or "").strip()
+    memory_mode = str(memory_mode or "forked").strip().lower()
+    if not objective:
+        return "⚠️ TOOL_ARG_ERROR (schedule_task): objective is required."
+    if not expected_output:
+        return "⚠️ TOOL_ARG_ERROR (schedule_task): expected_output is required."
+    if memory_mode not in VALID_SUBTASK_MEMORY_MODES:
+        allowed = ", ".join(sorted(VALID_SUBTASK_MEMORY_MODES))
+        return f"⚠️ TOOL_ARG_ERROR (schedule_task): memory_mode must be one of: {allowed}."
+
     current_depth = getattr(ctx, 'task_depth', 0)
     new_depth = current_depth + 1
     if new_depth > MAX_SUBTASK_DEPTH:
@@ -87,7 +135,7 @@ def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent
             append_jsonl(ctx.drive_logs() / "events.jsonl", {
                 "ts": utc_now_iso(),
                 "type": "schedule_task_from_direct_chat",
-                "description": description[:200],
+                "description": objective[:200],
                 "warning": "schedule_task called from direct chat context — potential duplicate work",
             })
         except Exception:
@@ -96,25 +144,52 @@ def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent
     tid = uuid.uuid4().hex[:8]
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     current_task_id = str(getattr(ctx, "task_id", "") or "")
-    parent_task_id = str(parent_task_id or current_task_id or metadata.get("parent_task_id") or "").strip()
+    parent_task_id = str(current_task_id or metadata.get("parent_task_id") or "").strip()
     root_task_id = str(metadata.get("root_task_id") or current_task_id or tid)
     session_id = str(metadata.get("session_id") or "")
+    try:
+        current_chat_id = int(getattr(ctx, "current_chat_id", None) or 0)
+    except (TypeError, ValueError):
+        current_chat_id = 0
+    child_drive = None
+    if memory_mode in {"forked", "empty"}:
+        try:
+            child_drive = prepare_task_drive(Path(ctx.drive_root), tid, memory_mode)
+        except Exception as exc:
+            log.warning("Failed to prepare child drive for subtask %s", tid, exc_info=True)
+            return f"⚠️ SUBTASK_DRIVE_ERROR: failed to prepare {memory_mode} child drive: {exc}"
+
+    task_constraint = {
+        "mode": LOCAL_READONLY_SUBAGENT_MODE,
+        "allow_enable": False,
+        "allow_review": False,
+    }
     evt = {
         "type": "schedule_task",
-        "description": description,
+        "description": objective,
+        "objective": objective,
+        "expected_output": expected_output,
+        "constraints": constraints,
+        "role": role,
         "task_id": tid,
         "depth": new_depth,
         "ts": utc_now_iso(),
         "root_task_id": root_task_id,
         "session_id": session_id,
-        "actor_id": "ouroboros",
-        "delegation_role": "child",
+        "actor_id": f"subagent:{role}",
+        "delegation_role": "subagent",
+        "memory_mode": memory_mode,
+        "budget_drive_root": str(ctx.drive_root),
+        "task_constraint": task_constraint,
     }
+    if current_chat_id:
+        evt["chat_id"] = current_chat_id
+    if child_drive is not None:
+        evt["drive_root"] = str(child_drive)
     if context:
         evt["context"] = context
     if parent_task_id:
         evt["parent_task_id"] = parent_task_id
-    ctx.pending_events.append(evt)
     try:
         write_task_result(
             ctx.drive_root,
@@ -123,15 +198,29 @@ def _schedule_task(ctx: ToolContext, description: str, context: str = "", parent
             parent_task_id=parent_task_id or None,
             root_task_id=root_task_id,
             session_id=session_id,
-            actor_id="ouroboros",
-            delegation_role="child",
-            description=description,
+            actor_id=f"subagent:{role}",
+            delegation_role="subagent",
+            role=role,
+            description=objective,
+            objective=objective,
+            expected_output=expected_output,
+            constraints=constraints,
             context=context,
-            result="Task request queued. Awaiting supervisor acceptance.",
+            chat_id=current_chat_id or None,
+            memory_mode=memory_mode,
+            drive_root=str(child_drive) if child_drive is not None else "",
+            budget_drive_root=str(ctx.drive_root),
+            task_constraint=task_constraint,
+            result="Subagent request queued. Awaiting supervisor acceptance.",
         )
     except Exception:
         log.warning("Failed to persist requested task status for %s", tid, exc_info=True)
-    return f"Task request queued {tid}: {description}"
+        return f"⚠️ SUBTASK_STATUS_ERROR: failed to persist requested status for {tid}; subagent was not scheduled."
+    emitted = _emit_control_event(ctx, evt)
+    worker_note = ""
+    if emitted == "live":
+        worker_note = " (live queue emission requested)"
+    return f"Subagent request queued {tid}: {objective}{worker_note}"
 
 
 def _cancel_task(ctx: ToolContext, task_id: str) -> str:
@@ -349,12 +438,24 @@ def get_tools() -> List[ToolEntry]:
         }, _promote_to_stable),
         ToolEntry("schedule_task", {
             "name": "schedule_task",
-            "description": "Schedule a background task. Returns task_id for later retrieval. For complex tasks, decompose into focused subtasks with clear scope.",
+            "description": (
+                "Schedule a live local_readonly subagent. Returns task_id for later retrieval. "
+                "Use only for genuinely parallel work. The child can inspect local repo/data/history "
+                "and web/browser surfaces, but cannot write local state, commit, enable tools, "
+                "or schedule further subagents."
+            ),
             "parameters": {"type": "object", "properties": {
-                "description": {"type": "string", "description": "Task description — be specific about scope and expected deliverable"},
-                "context": {"type": "string", "description": "Optional context from parent task: background info, constraints, style guide, etc."},
-                "parent_task_id": {"type": "string", "description": "Optional parent task ID for tracking lineage"},
-            }, "required": ["description"]},
+                "objective": {"type": "string", "description": "Focused child objective. Be specific about scope."},
+                "expected_output": {"type": "string", "description": "Concrete handoff expected from the child."},
+                "role": {"type": "string", "description": "Optional freeform role label for lineage/UI, e.g. architecture-reviewer."},
+                "context": {"type": "string", "description": "Optional parent reference material. It is injected as context, not instructions."},
+                "constraints": {"type": "string", "description": "Optional constraints/non-goals for the child."},
+                "memory_mode": {
+                    "type": "string",
+                    "enum": ["forked", "empty", "shared"],
+                    "description": "Child memory mode. Default forked copies stable memory only; shared uses parent drive.",
+                },
+            }, "required": ["objective", "expected_output"], "additionalProperties": False},
         }, _schedule_task),
         ToolEntry("cancel_task", {
             "name": "cancel_task",
@@ -363,7 +464,7 @@ def get_tools() -> List[ToolEntry]:
         }, _cancel_task),
         ToolEntry("request_deep_self_review", {
             "name": "request_deep_self_review",
-            "description": "Request a deep self-review of the entire Ouroboros project. Uses a 1M-context model to review all code, docs, and memory against the Constitution. Results go to chat and memory. Requires OPENROUTER_API_KEY or OPENAI_API_KEY.",
+            "description": "Request an Atlas-backed deep self-review of the entire Ouroboros project. Uses a large-context model with full core memory whitelist and manifest accounting for every tracked repo path against the Constitution. Results go to chat and memory. Requires OPENROUTER_API_KEY or OPENAI_API_KEY.",
             "parameters": {"type": "object", "properties": {
                 "reason": {"type": "string", "description": "Why you want a review (context for the reviewer)"},
             }, "required": ["reason"]},

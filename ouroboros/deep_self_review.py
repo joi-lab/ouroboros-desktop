@@ -1,4 +1,4 @@
-"""Full-pack deep self-review against BIBLE.md using a large-context model."""
+"""Atlas-backed deep self-review against BIBLE.md using a large-context model."""
 
 from __future__ import annotations
 
@@ -10,13 +10,16 @@ from typing import Any, Callable, Dict, Optional, Tuple
 log = logging.getLogger(__name__)
 
 # Pack filtering is shared with scope review.
+from ouroboros.tools.review_context_atlas import (  # noqa: E402
+    ReviewContextAtlasRequest,
+    compile_review_context_atlas,
+)
 from ouroboros.tools.review_helpers import (  # noqa: E402
     _BINARY_SNIFF_BYTES,
     _MAX_FULL_REPO_FILE_BYTES,
     _is_probably_binary,
-    iter_repo_pack_entries,
 )
-from ouroboros.utils import estimate_tokens  # noqa: E402
+from ouroboros.utils import atomic_write_json, estimate_tokens, utc_now_iso  # noqa: E402
 
 # Non-agent visual assets.
 _SKIP_DIR_PREFIXES = (
@@ -44,8 +47,10 @@ BIBLE.md violations (P0–P12), contradictions between code and docs,
 security gaps, dead code, missing error handling, architectural issues,
 known error patterns from patterns.md that remain unfixed, and ideas how to improve Ouroboros to work better and better comply with the Bible.
 
-How to work: Read every file systematically. Cross-reference interactions
-between modules. Prioritize: CRITICAL > IMPORTANT > ADVISORY.
+How to work: Use the generated atlas coverage manifest systematically. Raw code is
+included for selected functional/protected surfaces; every tracked file is still
+accounted for by hash, size, classification, and omission/manifest disposition.
+Cross-reference interactions between modules. Prioritize: CRITICAL > IMPORTANT > ADVISORY.
 
 Output: Structured report with prioritized findings, each citing the
 specific file, line/section, the problem, and the proposed fix."""
@@ -99,8 +104,8 @@ def _append_omission_section(parts: list[str], skipped: list[str]) -> None:
         "## OMITTED FILES (not included in review pack)",
         "These files were excluded. Reasons: sensitive=secrets/keys, "
         "vendored/minified=third-party bundled asset, binary/media=images/fonts/compiled blobs, "
-        "excluded_dir=non-agent-logic directory (assets/), "
-        "too_large=>1MB, read_error=unreadable.",
+        "excluded_dir=non-agent-logic directory, excluded_test=wider tests excluded, "
+        "oversized=>1MB, read_error=unreadable, budget_omitted=required atlas file did not fit.",
         "",
     ]
     omission_lines.extend(f"  - {entry}" for entry in skipped)
@@ -110,21 +115,44 @@ def _append_omission_section(parts: list[str], skipped: list[str]) -> None:
 def build_review_pack(
     repo_dir: pathlib.Path,
     drive_root: pathlib.Path,
+    fixed_prompt_tokens: int = 0,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Build tracked-file + memory whitelist pack with no chunking/truncation."""
+    """Build bounded repo atlas + full memory whitelist pack."""
     tracked, fatal = _dulwich_tracked_paths(repo_dir)
     if fatal:
         return "", {"file_count": 0, "total_chars": 0, "skipped": fatal}
 
-    entries, skipped = iter_repo_pack_entries(
-        repo_dir,
-        tracked_paths=tracked,
-        skip_dir_prefixes=_SKIP_DIR_PREFIXES,
-        include_oversized_placeholder=True,
+    skipped: list[str] = []
+    memory_parts: list[str] = []
+    memory_count = _append_memory_whitelist(memory_parts, skipped, drive_root=drive_root)
+    memory_text = "\n".join(memory_parts)
+    atlas_fixed_tokens = int(fixed_prompt_tokens) + estimate_tokens(memory_text)
+    atlas = compile_review_context_atlas(
+        ReviewContextAtlasRequest(
+            repo_dir=repo_dir,
+            tracked_paths=tuple(tracked),
+            fixed_prompt_tokens=atlas_fixed_tokens,
+            target_total_tokens=850_000,
+            hard_total_tokens=920_000,
+            include_tests=False,
+            title="Generated Deep Self-Review Atlas",
+        )
     )
-    parts = [f"## FILE: {rel}\n{content}\n" for rel, content, _lang, _note in entries]
-    file_count = sum(1 for _rel, content, _lang, _note in entries if not content.startswith("[SKIPPED:"))
-    file_count += _append_memory_whitelist(parts, skipped, drive_root=drive_root)
+    if atlas.status == "budget_exceeded":
+        return "", {
+            "file_count": 0,
+            "total_chars": 0,
+            "skipped": ["FATAL: generated repository atlas exceeded hard budget"],
+            "context_manifest": atlas.manifest,
+        }
+    skipped.extend(
+        f"{record.rel_path} ({record.disposition}: {record.reason})"
+        for record in atlas.omitted
+        if record.disposition not in {"already_included", "manifest_only"}
+    )
+    parts = [atlas.text]
+    parts.extend(memory_parts)
+    file_count = len(atlas.selected) + memory_count
     _append_omission_section(parts, skipped)
 
     pack_text = "\n".join(parts)
@@ -132,6 +160,7 @@ def build_review_pack(
         "file_count": file_count,
         "total_chars": len(pack_text),
         "skipped": skipped,
+        "context_manifest": atlas.manifest,
     }
     return pack_text, stats
 
@@ -159,8 +188,12 @@ def run_deep_self_review(
     client with trust_env=False in llm.py; regular task calls are unaffected.
     """
     try:
-        emit_progress("Building review pack (reading all tracked files)...")
-        pack_text, stats = build_review_pack(repo_dir, drive_root)
+        emit_progress("Building generated review atlas and memory pack...")
+        pack_text, stats = build_review_pack(
+            repo_dir,
+            drive_root,
+            fixed_prompt_tokens=estimate_tokens(_SYSTEM_PROMPT),
+        )
         if not pack_text and stats.get("skipped"):
             return f"❌ Failed to build review pack: {stats['skipped'][0]}", {}
 
@@ -186,6 +219,20 @@ def run_deep_self_review(
             available, model = is_review_available()
             if not available:
                 return "❌ Deep self-review unavailable: no OPENROUTER_API_KEY or OPENAI_API_KEY configured.", {}
+
+        if stats.get("context_manifest"):
+            try:
+                atomic_write_json(
+                    drive_root / "state" / "deep_self_review_context.json",
+                    {
+                        "ts": utc_now_iso(),
+                        "model": model,
+                        "context_manifest": stats["context_manifest"],
+                    },
+                    trailing_newline=True,
+                )
+            except Exception:
+                log.warning("Failed to persist deep self-review context manifest", exc_info=True)
 
         emit_progress(f"Sending to {model} (~{estimated_tokens:,} tokens). This may take several minutes...")
 

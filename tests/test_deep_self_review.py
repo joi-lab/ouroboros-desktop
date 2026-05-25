@@ -57,10 +57,26 @@ class TestBuildReviewPack:
         with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "lib.py"])):
             pack, stats = build_review_pack(tmp_repo, tmp_drive)
 
-        assert "## FILE: main.py" in pack
-        assert "## FILE: lib.py" in pack
+        assert "### main.py" in pack
+        assert "### lib.py" in pack
         assert "print('hello')" in pack
         assert stats["file_count"] >= 2
+
+        atlas = mock.Mock(
+            status="budget_exceeded",
+            manifest={"estimated_total_tokens": 950_000},
+            omitted=(),
+            selected=(),
+            text="small atlas",
+        )
+        with (
+            mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])),
+            mock.patch("ouroboros.deep_self_review.compile_review_context_atlas", return_value=atlas),
+        ):
+            pack, stats = build_review_pack(tmp_repo, tmp_drive)
+        assert pack == ""
+        assert "exceeded hard budget" in stats["skipped"][0]
+        assert stats["context_manifest"]["estimated_total_tokens"] == 950_000
 
     def test_includes_memory_whitelist(self, tmp_repo, tmp_drive):
         """Memory whitelist files from drive_root are included."""
@@ -163,7 +179,7 @@ class TestVendoredFilesExcluded:
         with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "lib.min.js"])):
             pack, stats = build_review_pack(tmp_repo, tmp_drive)
 
-        assert "lib.min.js" not in pack or "vendored/minified" in str(stats["skipped"])
+        assert "vendored_minified" in str(stats["skipped"])
         assert "## FILE: lib.min.js" not in pack
 
     def test_chart_umd_skipped(self, tmp_repo, tmp_drive):
@@ -193,7 +209,8 @@ class TestVendoredFilesExcluded:
         with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "app.js"])):
             pack, stats = build_review_pack(tmp_repo, tmp_drive)
 
-        assert "## FILE: app.js" in pack
+        assert "### app.js" in pack
+        assert "console.log('hello');" in pack
         assert not any("app.js" in s for s in stats["skipped"])
 
     def test_omission_section_after_memory_whitelist(self, tmp_repo, tmp_drive):
@@ -335,7 +352,7 @@ class TestBinaryFilesExcluded:
         with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])):
             pack, stats = build_review_pack(tmp_repo, tmp_drive)
 
-        assert "## FILE: main.py" in pack
+        assert "### main.py" in pack
 
 
 class TestSkipDirPrefixes:
@@ -352,7 +369,7 @@ class TestSkipDirPrefixes:
         assert "## FILE: assets/logo.jpg" not in pack
         assert any("assets/chat.png" in s for s in stats["skipped"])
         assert any("assets/logo.jpg" in s for s in stats["skipped"])
-        assert "## FILE: main.py" in pack  # non-assets file still present
+        assert "### main.py" in pack  # non-assets file still present
 
     def test_web_dir_not_excluded(self, tmp_repo, tmp_drive):
         """Files under web/ (SPA modules) are NOT excluded."""
@@ -362,7 +379,7 @@ class TestSkipDirPrefixes:
         with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "web/modules/chat.js"])):
             pack, stats = build_review_pack(tmp_repo, tmp_drive)
 
-        assert "## FILE: web/modules/chat.js" in pack
+        assert "### web/modules/chat.js" in pack
         assert not any("web/modules/chat.js" in s for s in stats["skipped"])
 
 
@@ -543,12 +560,21 @@ class TestNoProxyLlmChat:
         """run_deep_self_review passes no_proxy=True to llm.chat."""
         from ouroboros.deep_self_review import run_deep_self_review
         small_pack = "x" * 100
+        manifest = {"status": "ok", "selected_count": 1}
         mock_llm = mock.Mock()
         mock_llm.chat.return_value = ({"content": "Review result."}, {"cost": 0.01})
 
         with mock.patch(
             "ouroboros.deep_self_review.build_review_pack",
-            return_value=(small_pack, {"file_count": 1, "total_chars": len(small_pack), "skipped": []}),
+            return_value=(
+                small_pack,
+                {
+                    "file_count": 1,
+                    "total_chars": len(small_pack),
+                    "skipped": [],
+                    "context_manifest": manifest,
+                },
+            ),
         ):
             result, usage = run_deep_self_review(
                 repo_dir=tmp_repo,
@@ -563,6 +589,10 @@ class TestNoProxyLlmChat:
         mock_llm.chat.assert_called_once()
         _, kwargs = mock_llm.chat.call_args
         assert kwargs.get("no_proxy") is True, "llm.chat must be called with no_proxy=True"
+        sidecar = tmp_drive / "state" / "deep_self_review_context.json"
+        assert sidecar.is_file()
+        assert '"context_manifest"' in sidecar.read_text(encoding="utf-8")
+        assert '"selected_count": 1' in sidecar.read_text(encoding="utf-8")
 
 
 class TestReviewPackOverflow:

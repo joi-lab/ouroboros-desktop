@@ -30,6 +30,7 @@ def collect_routes(
         api_extension_module,
         api_extension_settings_section,
         api_extensions_index,
+        api_skill_delete,
         api_skill_grants,
         api_skill_lifecycle_queue,
         api_skill_reconcile,
@@ -80,6 +81,7 @@ def collect_routes(
     )
     from ouroboros.gateway.state import api_health, api_state
     from ouroboros.gateway.tasks import (
+        api_task_artifact,
         api_task_cancel,
         api_task_events,
         api_task_get,
@@ -121,6 +123,7 @@ def collect_routes(
             methods=["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"],
         ),
         Route("/api/skills/{skill}/toggle", endpoint=api_skill_toggle, methods=["POST"]),
+        Route("/api/skills/{skill}/delete", endpoint=api_skill_delete, methods=["POST"]),
         Route("/api/skills/lifecycle-queue", endpoint=api_skill_lifecycle_queue, methods=["GET"]),
         Route("/api/skills/{skill}/review", endpoint=api_skill_review, methods=["POST"]),
         Route("/api/skills/{skill}/grants", endpoint=api_skill_grants, methods=["POST"]),
@@ -161,6 +164,7 @@ def collect_routes(
         Route("/api/model-catalog", endpoint=api_model_catalog),
         Route("/api/tasks", endpoint=api_tasks_create, methods=["POST"]),
         Route("/api/tasks", endpoint=api_tasks_list, methods=["GET"]),
+        Route("/api/tasks/{task_id}/artifacts/{name}", endpoint=api_task_artifact, methods=["GET"]),
         Route("/api/tasks/{task_id}", endpoint=api_task_get, methods=["GET"]),
         Route("/api/tasks/{task_id}/events", endpoint=api_task_events, methods=["GET"]),
         Route("/api/tasks/{task_id}/cancel", endpoint=api_task_cancel, methods=["POST"]),

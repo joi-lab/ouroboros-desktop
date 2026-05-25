@@ -129,6 +129,8 @@ def test_packaged_cli_inner_env_ignores_inherited_repo_and_data(tmp_path, monkey
     assert env["OUROBOROS_REPO_DIR"] == str(runtime.repo_dir)
     assert env["OUROBOROS_DATA_DIR"] == str(runtime.data_dir)
     assert env["OUROBOROS_URL"] == "http://127.0.0.1:9000"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTHONPYCACHEPREFIX"] == str(runtime.data_dir / "state" / "pycache")
 
 
 def test_installer_plan_chooses_user_local_path_dir(tmp_path, monkeypatch):
@@ -222,7 +224,9 @@ def test_posix_wrapper_ignores_poisoned_env_and_finds_internal_root(tmp_path, mo
     (python_dir / "python3").write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$OUROBOROS_PACKAGED_BUNDLE_ROOT\" > {log}\n"
-        f"printf '%s\\n' \"$*\" >> {log}\n",
+        f"printf '%s\\n' \"$*\" >> {log}\n"
+        f"printf '%s\\n' \"$PYTHONDONTWRITEBYTECODE\" >> {log}\n"
+        f"printf '%s\\n' \"$PYTHONPYCACHEPREFIX\" >> {log}\n",
         encoding="utf-8",
     )
     os.chmod(python_dir / "python3", 0o755)
@@ -233,12 +237,15 @@ def test_posix_wrapper_ignores_poisoned_env_and_finds_internal_root(tmp_path, mo
     (poisoned / "python-standalone" / "bin" / "python3").write_text("exit 9\n", encoding="utf-8")
     os.chmod(poisoned / "python-standalone" / "bin" / "python3", 0o755)
     monkeypatch.setenv("OUROBOROS_PACKAGED_BUNDLE_ROOT", str(poisoned))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
     subprocess.run([str(bin_dir / "ouroboros"), "status"], cwd=tmp_path, check=True)
 
     lines = log.read_text(encoding="utf-8").splitlines()
     assert lines[0] == str(internal)
     assert lines[1] == "-m ouroboros.packaged_cli status"
+    assert lines[2] == "1"
+    assert lines[3] == str(tmp_path / "cache" / "ouroboros" / "pycache")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell wrapper test")

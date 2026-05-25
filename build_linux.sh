@@ -4,6 +4,9 @@ set -e
 VERSION=$(tr -d '[:space:]' < VERSION)
 ARCHIVE_NAME="Ouroboros-${VERSION}-linux-$(uname -m).tar.gz"
 MANAGED_SOURCE_BRANCH="${OUROBOROS_MANAGED_SOURCE_BRANCH:-ouroboros}"
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-${TMPDIR:-/tmp}/ouroboros-build-pycache}"
+mkdir -p "$PYTHONPYCACHEPREFIX"
 
 PYTHON_CMD="${PYTHON_CMD:-python3}"
 if ! command -v "$PYTHON_CMD" >/dev/null 2>&1; then
@@ -43,6 +46,10 @@ mkdir -p dist/Ouroboros/bin
 cp packaging/cli/ouroboros dist/Ouroboros/bin/ouroboros
 cp packaging/cli/install-ouroboros-cli dist/Ouroboros/bin/install-ouroboros-cli
 chmod +x dist/Ouroboros/bin/ouroboros dist/Ouroboros/bin/install-ouroboros-cli
+
+echo "--- Removing Python bytecode caches from archive payload ---"
+find dist/Ouroboros -name "__pycache__" -type d -prune -exec rm -rf {} +
+find dist/Ouroboros -name "*.pyc" -type f -delete
 
 echo ""
 echo "=== Creating archive ==="

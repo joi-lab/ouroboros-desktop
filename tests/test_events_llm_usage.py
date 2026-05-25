@@ -61,7 +61,7 @@ def test_cost_breakdown_aggregates_cache_tokens_and_ttl(tmp_path):
         "\n".join([
             json.dumps({
                 "type": "llm_usage",
-                "model": "google/gemini-3-flash-preview",
+                "model": "google/gemini-3.5-flash",
                 "api_key_type": "openrouter",
                 "model_category": "light",
                 "category": "task",
@@ -96,7 +96,7 @@ def test_cost_breakdown_aggregates_cache_tokens_and_ttl(tmp_path):
     assert payload["total_cached_tokens"] == 600
     assert payload["total_cache_write_tokens"] == 200
     assert payload["prompt_cache_ttls"] == {"default": 1}
-    by_model = payload["by_model"]["google/gemini-3-flash-preview"]
+    by_model = payload["by_model"]["google/gemini-3.5-flash"]
     assert by_model["cached_tokens"] == 600
     assert by_model["cache_write_tokens"] == 200
     assert by_model["prompt_cache_ttls"] == {"default": 1}

@@ -69,6 +69,13 @@ class ChatOutbound(TypedDict):
     is_progress: NotRequired[bool]
     task_id: NotRequired[str]
     lifecycle: NotRequired[Dict[str, Any]]
+    subagent_event: NotRequired[str]
+    subagent_task_id: NotRequired[str]
+    root_task_id: NotRequired[str]
+    parent_task_id: NotRequired[str]
+    delegation_role: NotRequired[str]
+    subagent_role: NotRequired[str]
+    worker_saturation_warning: NotRequired[bool]
     source: NotRequired[str]
     sender_label: NotRequired[str]
     sender_session_id: NotRequired[str]
@@ -246,6 +253,17 @@ class SkillGrantResponse(TypedDict, total=False):
     error: str
 
 
+class SkillDeleteResponse(TypedDict, total=False):
+    ok: bool
+    skill: str
+    source: str
+    deleted_payload_root: str
+    deleted_state: bool
+    extension_action: str
+    extension_reason: str
+    error: str
+
+
 class GitLogResponse(TypedDict):
     commits: list[Dict[str, Any]]
     tags: list[str]
@@ -377,6 +395,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "POST /api/tasks",
     "GET /api/tasks",
     "GET /api/tasks/{task_id}",
+    "GET /api/tasks/{task_id}/artifacts/{name}",
     "GET /api/tasks/{task_id}/events",
     "POST /api/tasks/{task_id}/cancel",
     "POST /api/command",
@@ -407,6 +426,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/extensions/{skill}/settings_section",
     "ANY /api/extensions/{skill}/{rest:path}",
     "POST /api/skills/{skill}/toggle",
+    "POST /api/skills/{skill}/delete",
     "GET /api/skills/lifecycle-queue",
     "POST /api/skills/{skill}/review",
     "POST /api/skills/{skill}/grants",
@@ -473,6 +493,7 @@ __all__ = [
     "OwnerRuntimeModeResponse",
     "OwnerAutoGrantResponse",
     "SkillGrantResponse",
+    "SkillDeleteResponse",
     "GitLogResponse",
     "EvolutionDataResponse",
     "UploadResponse",

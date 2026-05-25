@@ -130,7 +130,7 @@ def test_get_review_models_falls_back_to_main_light_light_in_openai_only_mode(mo
     monkeypatch.setenv("OUROBOROS_MODEL", "openai::gpt-5.5")
     monkeypatch.setenv(
         "OUROBOROS_REVIEW_MODELS",
-        "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6",
+        "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6",
     )
 
     models = get_review_models()
@@ -171,7 +171,7 @@ def test_get_review_models_falls_back_to_main_light_light_in_anthropic_only_mode
     monkeypatch.setenv("OUROBOROS_MODEL", "anthropic::claude-opus-4-6")
     monkeypatch.setenv(
         "OUROBOROS_REVIEW_MODELS",
-        "openai/gpt-5.5,google/gemini-3.1-pro-preview,anthropic/claude-opus-4.6",
+        "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.6",
     )
 
     models = get_review_models()

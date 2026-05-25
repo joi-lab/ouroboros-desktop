@@ -22,7 +22,7 @@ _MIN_CLAIMS_FOR_SYNTHESIS = 2
 
 _SYNTHESIS_PROMPT_TEMPLATE = (
     "You are a code-review claim synthesizer. You receive a list of raw findings\n"
-    "from multiple independent reviewers (triad diff-reviewers + one full-codebase\n"
+    "from multiple independent reviewers (triad diff-reviewers + one Atlas-backed\n"
     "scope reviewer). Your job is to produce a deduplicated canonical list.\n"
     "\n"
     "## Rules\n"

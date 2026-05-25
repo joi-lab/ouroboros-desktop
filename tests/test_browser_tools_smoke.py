@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from ouroboros.tools.browser import _browse_page, _browser_action, cleanup_browser
+from ouroboros.contracts.task_constraint import TaskConstraint
 from ouroboros.tools.registry import ToolContext
 
 
@@ -39,7 +40,35 @@ def static_page_url():
         server.server_close()
 
 
-def test_browser_tools_launch_real_chromium(tmp_path, static_page_url):
+def test_browser_tools_launch_real_chromium(tmp_path, static_page_url, monkeypatch):
+    from ouroboros.tools import browser as browser_mod
+
+    subagent_ctx = ToolContext(
+        repo_dir=tmp_path,
+        drive_root=tmp_path,
+        task_constraint=TaskConstraint(mode="local_readonly_subagent", allow_enable=False),
+    )
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url="http://127.0.0.1:8765")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url="http://192.168.1.1")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url="http://10.0.0.1")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url="http://169.254.1.1")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url="http://[::]/")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browse_page(subagent_ctx, url=f"file://{tmp_path / 'settings.json'}")
+    assert "BROWSER_LOCAL_READONLY_BLOCKED" in _browser_action(subagent_ctx, action="evaluate", value="1 + 1")
+
+    install_flags = []
+
+    def fake_ensure_playwright_installed(*, allow_install=True):
+        install_flags.append(allow_install)
+        raise RuntimeError("missing browser")
+
+    with monkeypatch.context() as m:
+        m.setattr(browser_mod, "_playwright_ready", False)
+        m.setattr(browser_mod, "_ensure_playwright_installed", fake_ensure_playwright_installed)
+        with pytest.raises(RuntimeError, match="missing browser"):
+            browser_mod._ensure_browser(subagent_ctx)
+    assert install_flags == [False]
+
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path)
     try:

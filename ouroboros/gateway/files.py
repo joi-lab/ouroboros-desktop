@@ -54,6 +54,10 @@ class FileBrowserPayloadTooLarge(ValueError):
     """Upload exceeded the configured limit."""
 
 
+class ChatUploadPayloadTooLarge(ValueError):
+    """Chat upload exceeded the configured limit."""
+
+
 def _request_is_local(request: Request) -> bool:
     host = request.client.host if request.client else None
     return is_loopback_host(host)
@@ -798,15 +802,17 @@ async def api_chat_upload(request: Request) -> JSONResponse:
         msg = await _original_receive()
         _body_bytes += len(msg.get("body", b""))
         if _body_bytes > _CHAT_UPLOAD_MAX_BYTES + 8192:
-            raise Exception("oversized")
+            raise ChatUploadPayloadTooLarge("File exceeds 50 MB limit")
         return msg
 
     request._receive = _size_limited_receive
     try:
         form = await request.form()
-    except Exception:
+    except Exception as e:
         request._receive = _original_receive
-        return JSONResponse({"ok": False, "error": "File exceeds 50 MB limit"}, status_code=413)
+        if isinstance(e, ChatUploadPayloadTooLarge):
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=413)
+        return JSONResponse({"ok": False, "error": f"Upload failed: {str(e)}"}, status_code=400)
     finally:
         request._receive = _original_receive
 

@@ -118,7 +118,7 @@ class TestScopeOnlyRetryPath:
         monkeypatch.setattr(mod, "_load_dev_guide", lambda rd: "(dev guide)")
         monkeypatch.setattr(
             mod, "_gather_scope_packs",
-            lambda repo_dir, all_touched_paths: "(scope pack)",
+            lambda repo_dir, all_touched_paths, fixed_prompt_tokens=0: "(scope pack)",
         )
         monkeypatch.setattr(
             "ouroboros.tools.review_helpers.load_checklist_section",

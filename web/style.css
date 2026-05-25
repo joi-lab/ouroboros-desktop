@@ -3820,6 +3820,18 @@ body {
   font-size: 12px;
 }
 
+.skills-menu-item:disabled,
+.skills-menu-item.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.skills-menu-item:disabled:hover,
+.skills-menu-item.is-disabled:hover {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
 .skills-menu-item:hover {
   background: var(--accent-10);
   color: var(--text-primary);

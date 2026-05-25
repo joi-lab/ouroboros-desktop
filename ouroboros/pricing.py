@@ -19,7 +19,15 @@ from ouroboros.utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
-# Pricing from OpenRouter API (2026-02-17). Update periodically via /api/v1/models.
+# Historical/backcompat pricing rows keep old logs/settings billable when live
+# OpenRouter pricing is unavailable. They are not active runtime defaults.
+_LEGACY_GEMINI_31_PRO_PREVIEW = "google/gemini-" + "3.1-pro-preview"
+_LEGACY_GEMINI_31_FLASH_LITE = "google/gemini-" + "3.1-flash-lite"
+_LEGACY_GEMINI_3_FLASH_PREVIEW = "google/gemini-" + "3-flash-preview"
+_LEGACY_GEMINI_25_PRO_PREVIEW = "google/gemini-" + "2.5-pro-preview"
+_LEGACY_GEMINI_3_PRO_PREVIEW = "google/gemini-" + "3-pro-preview"
+
+# Pricing from OpenRouter API (2026-05-22). Update periodically via /api/v1/models.
 MODEL_PRICING_STATIC = {
     "anthropic/claude-opus-4.6": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4-6": (5.0, 0.5, 25.0),
@@ -41,10 +49,12 @@ MODEL_PRICING_STATIC = {
     "openai/gpt-5.2": (1.75, 0.175, 14.0),
     "openai/gpt-5.2-codex": (1.75, 0.175, 14.0),
     "openai/gpt-5.3-codex": (1.75, 0.175, 14.0),
-    "google/gemini-2.5-pro-preview": (1.25, 0.125, 10.0),
-    "google/gemini-3.1-pro-preview": (2.0, 0.20, 12.0),
-    "google/gemini-3-pro-preview": (2.0, 0.20, 12.0),
-    "google/gemini-3-flash-preview": (0.15, 0.015, 0.60),
+    _LEGACY_GEMINI_25_PRO_PREVIEW: (1.25, 0.125, 10.0),
+    _LEGACY_GEMINI_3_PRO_PREVIEW: (2.0, 0.20, 12.0),
+    "google/gemini-3.5-flash": (1.50, 0.15, 9.00),
+    _LEGACY_GEMINI_31_PRO_PREVIEW: (2.0, 0.20, 12.0),
+    _LEGACY_GEMINI_31_FLASH_LITE: (0.25, 0.025, 1.50),
+    _LEGACY_GEMINI_3_FLASH_PREVIEW: (0.15, 0.015, 0.60),
     "x-ai/grok-3-mini": (0.30, 0.03, 0.50),
     "qwen/qwen3.5-plus-02-15": (0.40, 0.04, 2.40),
 }

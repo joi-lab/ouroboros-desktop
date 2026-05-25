@@ -525,6 +525,7 @@ def test_start_agent_windows_assigns_job_before_resume_and_records(monkeypatch, 
 
     def fake_popen(_cmd, **kwargs):
         calls.append(("popen_flags", kwargs.get("creationflags")))
+        calls.append(("popen_env", kwargs.get("env", {})))
         return FakeProcess()
 
     monkeypatch.setattr(launcher, "IS_WINDOWS", True)
@@ -543,7 +544,11 @@ def test_start_agent_windows_assigns_job_before_resume_and_records(monkeypatch, 
     proc = launcher.start_agent(port=8765)
 
     assert proc.pid == 54321
-    assert calls[:4] == [
+    env = next(value for key, value in calls if key == "popen_env")
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTHONPYCACHEPREFIX"] == str(data_dir / "state" / "pycache")
+    lifecycle_calls = [call for call in calls if call[0] != "popen_env"]
+    assert lifecycle_calls[:4] == [
         ("popen_flags", 0x204),
         ("create_job", None),
         ("assign", ("job", 54321)),

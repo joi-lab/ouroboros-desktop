@@ -120,7 +120,7 @@ class TestPlanReviewUsageEmit:
     def _make_raw_results(self):
         return [
             {"model": "openai/gpt-5.5", "tokens_in": 100, "tokens_out": 50, "error": None},
-            {"model": "google/gemini-3.1-pro", "tokens_in": 120, "tokens_out": 60, "error": None},
+            {"model": "google/gemini-3.5-flash", "tokens_in": 120, "tokens_out": 60, "error": None},
             {"model": "anthropic/claude-opus-4.6", "tokens_in": 90, "tokens_out": 40, "error": None},
         ]
 
@@ -196,7 +196,7 @@ class TestPlanReviewUsageEmit:
     ("openai-compatible::my-model", "openai-compatible"),
     ("cloudru::GigaChat-2-Max", "cloudru"),
     ("anthropic/claude-opus-4.6", "openrouter"),  # unprefixed → OpenRouter
-    ("google/gemini-3.1-pro-preview", "openrouter"),
+    ("google/gemini-3.5-flash", "openrouter"),
     ("", "openrouter"),
 ])
 def test_infer_provider_from_model(model, expected_provider):
