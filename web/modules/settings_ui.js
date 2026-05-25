@@ -517,7 +517,7 @@ export function renderSettingsPage() {
                             </div>
                             <div class="form-field">
                                 <label>Per-Task Soft Threshold (USD)</label>
-                                <input id="s-per-task-cost" type="number" step="any" min="0.01" value="20.0">
+                                <input id="s-settings-per-task-cost" type="number" step="any" min="0.01" value="20.0">
                             </div>
                         </div>
                     </div>

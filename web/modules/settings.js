@@ -29,7 +29,7 @@ const NUMBER_FIELDS = [
     ['s-local-ctx', 'LOCAL_MODEL_CONTEXT_LENGTH', 16384],
 ];
 const FLOAT_FIELDS = [
-    ['s-total-budget', 'TOTAL_BUDGET', 10.0], ['s-per-task-cost', 'OUROBOROS_PER_TASK_COST_USD', 20.0],
+    ['s-total-budget', 'TOTAL_BUDGET', 10.0], ['s-settings-per-task-cost', 'OUROBOROS_PER_TASK_COST_USD', 20.0],
 ];
 
 function setupModelSlots() {

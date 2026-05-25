@@ -473,7 +473,7 @@ not paraphrase it.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 5.33.0-rc.10 | 2026-05-25 | **rc(settings): resolve budget resetting and transient cache anomalies.** Adds explicit float configuration fields for Total Budget and Per-Task Cost to the main Settings card, and resets the budget display to a connecting state during WebSocket disconnect. |
+| 5.33.0-rc.10 | 2026-05-25 | **rc(settings): resolve budget resetting and transient cache anomalies.** Adds explicit float configuration fields for Total Budget and Per-Task Cost to the Settings Advanced Runtime Limits section, and resets the budget display to a connecting state during WebSocket disconnect. |
 | 5.33.0-rc.9 | 2026-05-25 | **rc(ux): allow pasting and uploading multiple media attachments simultaneously.** Updates clipboard paste loop to parse all items, adds multiple file input selection, and iterates sequential file uploads in sendMessage. |
 | 5.33.0-rc.8 | 2026-05-24 | **rc(pricing): correct pricing rates and support normalization.** Fixes static pricing rates for gpt-5.5-pro, o3-pro, grok-3-mini, and claude-opus-4.7, and ensures model identity normalization in estimate_cost. |
 | 5.33.0-rc.7 | 2026-05-24 | **rc(runtime): remove automatic Opus 4.7 downgrade mapping.** Allows direct usage of the `claude-opus-4.7` model without automatically rewriting it to `4.6` in settings normalization, and preserves direct-provider routing. Includes testing verification. |
