@@ -1315,7 +1315,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             const uploadedSpecs = [];
             const failedToUpload = [];
 
-            for (const att of [...pendingAttachments]) {
+            for (const att of pendingAttachments) {
                 try {
                     const formData = new FormData();
                     formData.append('file', att.file);
@@ -1330,20 +1330,19 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                         name: data.display_name || att.display_name,
                         path: data.path
                     });
-                    // Successfully uploaded, remove from pending array
-                    pendingAttachments = pendingAttachments.filter(a => a.id !== att.id);
                 } catch (e) {
                     showToast(`Upload error for ${att.file.name}: ` + e.message, 'error');
                     failedToUpload.push(att);
                 }
             }
 
-            renderAttachments(); // refresh preview area (keeps only failed ones if any)
-
             if (failedToUpload.length > 0) {
                 setSendBusy(false);
-                return; // User can fix errors and retry
+                return; // User can fix errors and retry; pendingAttachments remains intact
             }
+
+            pendingAttachments = [];
+            renderAttachments(); // refresh preview area to empty
 
             for (const spec of uploadedSpecs) {
                 text += (text ? '\n\n' : '') + `[Attached file: ${spec.name} saved to ${spec.path}]`;

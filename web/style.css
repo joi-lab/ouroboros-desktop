@@ -1722,12 +1722,14 @@ body {
 
 .chat-attachment-preview {
     display: none;
-    padding: 4px 8px 2px;
+    padding: 6px 12px 6px;
 }
 
 .chat-attachment-preview.visible {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    gap: 8px;
 }
 
 .attach-badge {
