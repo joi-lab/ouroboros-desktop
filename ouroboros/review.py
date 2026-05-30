@@ -43,7 +43,12 @@ MAX_FUNCTION_LINES = 300
 # (_build_opener), and the schedule pool-unavailable guard
 # (_reject_schedule_pool_unavailable). v6.7.1 adds the out-of-process extension
 # runner and proxy validation helpers. Keep the headroom narrow.
-MAX_TOTAL_FUNCTIONS = 2485
+# GigaChat provider adds the native gigachat:: execution path helpers in llm.py
+# (_get_gigachat_client, _gigachat_text, _gigachat_function_result,
+# _gigachat_messages, _gigachat_functions, _gigachat_sanitize_schema,
+# _chat_gigachat, _normalize_gigachat_response) plus the gateway catalog fetcher
+# (_fetch_gigachat_model_catalog). Keep the headroom narrow.
+MAX_TOTAL_FUNCTIONS = 2500
 # Grandfathered modules are accepted debt until their surfaces stabilize/split.
 GRANDFATHERED_OVERSIZED_MODULES = {
     "llm.py",
