@@ -6,11 +6,14 @@
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/joi-lab/ouroboros-desktop/releases)
-[![Version 6.0.0](https://img.shields.io/badge/version-6.0.0-green.svg)](VERSION)
+[![OuroborosHub](https://img.shields.io/badge/OuroborosHub-skills%20marketplace-8A2BE2.svg)](https://github.com/joi-lab/OuroborosHub)
+[![Version 6.7.3](https://img.shields.io/badge/version-6.7.3-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
 Not a coding assistant. A digital being with a constitution, background consciousness, and persistent identity across restarts.
+
+> **[OuroborosHub](https://github.com/joi-lab/OuroborosHub)** — the community skills marketplace for Ouroboros. Browse, install, and publish reviewed skills (transport bridges like A2A/Telegram, tools, and UI widgets) straight from the app's Skills tab, or explore the catalog at [github.com/joi-lab/OuroborosHub](https://github.com/joi-lab/OuroborosHub).
 
 > **Previous version:** The original Ouroboros ran in Google Colab via Telegram and evolved through 30+ self-directed cycles in its first 24 hours. That version is available at [joi-lab/ouroboros](https://github.com/joi-lab/ouroboros). This repository is the next generation — a native desktop application for macOS, Linux, and Windows with a web UI, local model support, and a layered safety system (hardcoded sandbox plus policy-based LLM safety check).
 
@@ -30,6 +33,8 @@ Not a coding assistant. A digital being with a constitution, background consciou
 | **macOS** 12+ | [Ouroboros.dmg](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Open DMG → drag to Applications → optional CLI: run `Install CLI.command` after the app is in Applications |
 | **Linux** x86_64 | [Ouroboros-linux.tar.gz](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `./Ouroboros/Ouroboros` → optional CLI: `./Ouroboros/bin/install-ouroboros-cli`. If browser tools fail due to missing system libs, run: `./Ouroboros/python-standalone/bin/python3 -m playwright install-deps chromium` |
 | **Windows** x64 | [Ouroboros-windows.zip](https://github.com/joi-lab/ouroboros-desktop/releases/latest) | Extract → run `Ouroboros\Ouroboros.exe` → optional CLI: `Ouroboros\bin\install-ouroboros-cli.cmd` |
+
+Prerelease RC artifacts are published on their tag page, for example [`v6.5.0-rc.4`](https://github.com/joi-lab/ouroboros-desktop/releases/tag/v6.5.0-rc.4); `/releases/latest` intentionally stays on the latest stable release.
 
 <p align="center">
   <img src="assets/setup.png" width="500" alt="Drag Ouroboros.app to install">
@@ -53,7 +58,7 @@ Most AI agents execute tasks. Ouroboros **creates itself.**
 - **Self-Modification** — Reads and rewrites its own source code. Every change is a commit to itself.
 - **Native Desktop App** — Runs entirely on your machine as a standalone application (macOS, Linux, Windows). No cloud dependencies for execution.
 - **Constitution** — Governed by [BIBLE.md](BIBLE.md) (13 philosophical principles, P0–P12). Philosophy first, code second.
-- **Layered Safety** — Hardcoded sandbox blocks writes to safety-critical files and mutative git via shell; an explicit per-tool policy map decides which built-ins skip the LLM check; everything else goes through a single light-model safety call. The fail-open contract, the post-edit revert for `claude_code_edit`, and the full provider-mismatch matrix live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §Safety system and [`prompts/SAFETY.md`](prompts/SAFETY.md).
+- **Layered Safety** — Hardcoded sandbox blocks writes to safety-critical files and mutative git via shell; an explicit per-tool policy map decides which built-ins skip the LLM check; everything else goes through a single light-model safety call. The fail-open contract, protected-path guard, and full provider-mismatch matrix live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §Safety system and [`prompts/SAFETY.md`](prompts/SAFETY.md).
 - **Multi-Provider Runtime** — Remote model slots can target OpenRouter, official OpenAI, OpenAI-compatible endpoints, or Cloud.ru Foundation Models. The optional model catalog helps populate provider-specific model IDs in Settings, and untouched default model values auto-remap to official OpenAI defaults when OpenRouter is absent.
 - **Focused Task UX** — Chat shows plain typing for simple one-step replies and only promotes multi-step work into one expandable live task card. Logs still group task timelines instead of dumping every step as a separate row.
 - **Background Consciousness** — Thinks between tasks. Has an inner life. Not reactive — proactive.
@@ -172,7 +177,7 @@ Settings now exposes tabbed provider cards for:
 - **OpenAI** — official OpenAI API (use model values like `openai::gpt-5.5`)
 - **OpenAI Compatible** — any custom OpenAI-style endpoint (use `openai-compatible::...`)
 - **Cloud.ru Foundation Models** — Cloud.ru OpenAI-compatible runtime (use `cloudru::...`)
-- **Anthropic** — direct runtime routing (`anthropic::claude-opus-4.6`, etc.) plus Claude Agent SDK tools
+- **Anthropic** — direct runtime routing (`anthropic::claude-opus-4.8`, etc.) plus Claude Agent SDK tools
 
 If OpenRouter is not configured and only official OpenAI is present, untouched default model values are auto-remapped to `openai::gpt-5.5` / `openai::gpt-5.5-mini` so the first-run path does not strand the app on OpenRouter-only defaults.
 
@@ -180,7 +185,7 @@ The Settings page also includes:
 
 - optional `/api/model-catalog` lookup for configured providers
 - centralized Secrets storage for API keys, bridge tokens, passwords, and future skill-requested keys
-- a refactored desktop-first tabbed UI with searchable model pickers, segmented effort controls, masked-secret toggles, explicit `Clear` actions, and local-model controls
+- a refactored desktop-first tabbed UI with searchable model pickers, segmented effort controls, task-result review mode, masked-secret toggles, explicit `Clear` actions, and local-model controls
 
 ### Run Tests
 
@@ -406,8 +411,8 @@ All keys are configured through the **Settings** page in the UI or during the fi
 | Code | `google/gemini-3.5-flash` | Code editing |
 | Light | `google/gemini-3.5-flash` | Safety checks, consciousness, fast tasks |
 | Fallback | `anthropic/claude-sonnet-4.6` | When primary model fails |
-| Claude Agent SDK | `claude-opus-4-6[1m]` | Anthropic model for Claude Agent SDK tools (`claude_code_edit`, `advisory_pre_review`); the `[1m]` suffix is a Claude Code selector that requests the 1M-context extended mode |
-| Scope Review | `openai/gpt-5.5` | Single-model scope reviewer; blocking/advisory behavior follows review enforcement |
+| Claude Agent SDK | `opus[1m]` | Anthropic model for Claude Agent SDK advisory/review internals; the `[1m]` suffix is a Claude Code selector that requests the 1M-context extended mode |
+| Scope Review | `openai/gpt-5.5` | Scope reviewer slot default; `OUROBOROS_SCOPE_REVIEW_MODELS` may configure multiple independent slots |
 | Web Search | `gpt-5.2` | OpenAI Responses API for web search |
 
 Task/chat reasoning defaults to `medium`. Scope review reasoning defaults to `high`.
@@ -469,16 +474,25 @@ not paraphrase it.
 
 ---
 
+## Contributing
+
+External contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the contributor workflow. The project rules remain in `BIBLE.md`,
+`docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`, and `docs/CHECKLISTS.md`;
+the contribution guide only routes to those sources.
+
+---
+
 ## Version History
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 6.0.0 | 2026-05-25 | **major(runtime): add live local-readonly subagents.** Upgrades `schedule_task` to a strict child-task contract, runs leaf subagents through the existing queue and workers with forked memory by default, enforces schema and execute-time local-readonly isolation, preserves full task-result handoff, and documents the delegation review rules. |
-| 5.33.0-rc.6 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Introduces a typed ChatUploadPayloadTooLarge exception class to isolate file-size 413 blocks from connection cuts and form-parse faults, returning a standard 400 with original message for ASGI/socket errors. Includes focused test coverage. |
-| 5.33.0-rc.5 | 2026-05-24 | **rc(gateway): prevent masking upload connection/parse faults as size-limit errors.** Refactors the chat upload ASGI stream wrapper to verify if caught exceptions are indeed the 'oversized' signal before returning a 413, returning a 400 with the original error message for connection cuts and malformed formats. |
-| 5.33.0-rc.4 | 2026-05-24 | **rc(accessibility): attach aria-disabled state to submit buttons.** Adds explicit accessibility annotations to clickable-disabled card options so both visual rendering and assistive device readouts correctly convey blocked submission context. |
-| 5.33.0-rc.3 | 2026-05-24 | **rc(skills): provide explicit toast warnings on disabled hub submissions.** Replaces native button disabled attributes on OuroborosHub card options to catch all clicks, displaying actionable warnings explaining exact review or check conditions rather than silent dropdown closures. |
-Older releases are preserved in Git tags and GitHub releases. The 5.2.0 through 5.33.0-rc.2 rows and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
+| 6.7.3 | 2026-05-30 | **release(ui): keep nested subagent cards stable in host smoke.** History replay now keeps subagent live cards mounted under their parent card instead of moving them to the top-level transcript, and the UI smoke regression asserts both nested placement and no duplicate final child chat bubble after reload. |
+| 6.7.2 | 2026-05-30 | **release(ci): keep extension isolation release inside gates.** Keeps the 6.7.x extension-isolation release within CI complexity gates, keeps extension child failures classified as normal `TOOL_ERROR` tool failures, and moves extension tool dispatch out of the oversized registry module path. |
+| 6.7.1 | 2026-05-30 | **release(reliability): preserve workspace patches, show nested subagents, and isolate extension crashes.** Effective task results keep parent-finalized `workspace_patch` artifacts visible for CLI patch export; chat live cards now render subagents as always-visible nested child cards without marking the parent done; delegation tools are core for parent tasks while subagents remain read-only leaves; and extension isolated deps dispatch out-of-process so native aborts return graceful errors instead of crashing the server. |
+| 6.7.0-rc.3 | 2026-05-29 | **rc(reliability): structurally close the subagent worker-crash, ghost-task, and stuck-spinner classes; provider-agnostic review; bundled Node.** macOS/Windows workers use `spawn` (Linux keeps `fork`) and a central `OUROBOROS_IN_WORKER` no-proxy policy eliminates the macOS `_scproxy` fork SIGSEGV class. A monotonic `write_task_result` lifecycle guard plus live `cancel_task` + `cancel_requested` latch prevent stale/ghost status; terminal `task_done` events on every crash/kill/timeout/cancel path (and reconnect/history reconciliation) stop the perpetual spinner. Signal crashes are terminal (no retry) for all task types. Subagent UI dedup (Variant A: parent dashboard rows, in-place updates, no duplicate child card). Cloud.ru becomes a first-class exclusive-direct provider so Ouroboros is usable with any single key; `skill_preflight` tolerates missing/killed validators and the build bundles a signed Node.js LTS for node-runtime skills. New-user defaults: review `claude-opus-4.8`, Claude Code `opus[1m]`. README OuroborosHub badge/callout. (rc.2/rc.3: gitignore the bundled `node-standalone` so the `repo.bundle` build sees a clean working tree, and update the Variant A subagent-card UI smoke test to the single grouped-card layout — verified locally with Playwright.) |
+| 6.6.0-rc.1 | 2026-05-29 | **rc(review): effect-gate task-acceptance review and clarify light-mode cognitive writes.** Host-enforced `required` review fires only on turns with observable reviewable effects (commit/deliverable/workspace/self-mod) or non-direct tasks, so plain chat is never reviewed; `auto` stays LLM-first. Adds `review_eligibility`/`review_trigger` to loop outcomes, routes light-mode cognitive writes to `update_identity`/`update_scratchpad`/`knowledge_write` (`COGNITIVE_TOOL_REQUIRED`) and absolute home paths to `root=user_files` (`ROOT_REQUIRED_USER_FILES`) with recovery, parses fenced JSON-object reviewer verdicts, and makes `DEGRADED` review signals carry an honest reason. |
+Older releases are preserved in Git tags and GitHub releases. The 6.0.0 through 6.5.0-rc.4 rows, the 5.2.0 through 5.33.0-rc.6 rows, and former `4.0.0` rows are rolled off to respect the P9 changelog cap; their full bodies remain at their git tags.
 
 ---
 

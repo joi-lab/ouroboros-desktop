@@ -20,6 +20,12 @@ if (-not (Test-Path "python-standalone\python.exe")) {
     exit 1
 }
 
+# Bundle the official Node.js runtime so node-runtime skills work out of the box.
+if (-not (Test-Path "node-standalone\node.exe")) {
+    Write-Host "--- Downloading bundled Node.js runtime ---"
+    powershell -ExecutionPolicy Bypass -File scripts/download_node_standalone.ps1
+}
+
 Write-Host "--- Installing launcher dependencies ---"
 python -m pip install -q -r requirements-launcher.txt
 

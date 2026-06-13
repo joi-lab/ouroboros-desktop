@@ -1306,7 +1306,7 @@ def test_render_skill_review_block_emits_self_verification_at_attempt_two():
     assert "Self-verification required" not in markdown_first
 
     markdown_second = render_skill_review_block(outcome, attempt_idx=2)
-    assert "Self-verification required before next review_skill" in markdown_second
+    assert "Self-verification required before next skill_review" in markdown_second
     assert "Status: addressed / rebutted / pending" in markdown_second
     assert "Circuit-breaker hint" not in markdown_second
 

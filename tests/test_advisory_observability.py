@@ -31,7 +31,7 @@ def _get_advisory_module():
     "case_id,env_value,expected",
     [
         ("returns_env_value", "sonnet", "sonnet"),
-        ("falls_back_to_shipped_default", None, "claude-opus-4-6[1m]"),
+        ("falls_back_to_shipped_default", None, "opus[1m]"),
         ("strips_whitespace", "  claude-opus-4.6  ", "claude-opus-4.6"),
     ],
 )
@@ -428,7 +428,7 @@ def test_next_step_guidance_for_skipped_advisory():
     assert "skip" in msg.lower() or "budget" in msg.lower(), (
         "skipped advisory must produce a distinct message, not the generic fresh-pass message"
     )
-    assert "repo_commit" in msg, "message should still indicate commit can proceed"
+    assert "commit_reviewed" in msg, "message should still indicate commit can proceed"
 
 
 def test_next_step_guidance_requires_reaudit_when_obligations_remain():

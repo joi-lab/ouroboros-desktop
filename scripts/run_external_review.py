@@ -28,6 +28,11 @@ _SECRET_ENV_KEYS = {
     "ANTHROPIC_API_KEY",
     "CLOUDRU_FOUNDATION_MODELS_API_KEY",
 }
+_EXPLICIT_ENV_OVERRIDE_KEYS = {
+    "OUROBOROS_REVIEW_MODELS",
+    "OUROBOROS_SCOPE_REVIEW_MODELS",
+    "OUROBOROS_SCOPE_REVIEW_MODEL",
+}
 
 if str(_REPO_DIR) not in sys.path:
     sys.path.insert(0, str(_REPO_DIR))
@@ -38,6 +43,11 @@ def _load_settings_into_env() -> Dict[str, Any]:
     preexisting_secrets = {
         key: os.environ.get(key, "")
         for key in _SECRET_ENV_KEYS
+        if os.environ.get(key)
+    }
+    preexisting_overrides = {
+        key: os.environ.get(key, "")
+        for key in _EXPLICIT_ENV_OVERRIDE_KEYS
         if os.environ.get(key)
     }
     if not _SETTINGS_PATH.exists():
@@ -66,6 +76,8 @@ def _load_settings_into_env() -> Dict[str, Any]:
         for key, value in preexisting_secrets.items():
             if not str(settings.get(key) or "").strip():
                 os.environ[key] = value
+        for key, value in preexisting_overrides.items():
+            os.environ[key] = value
     except Exception as exc:
         sys.stderr.write(
             f"[run_external_review] apply_settings_to_env failed (continuing with raw env copy): {exc}\n"
@@ -147,12 +159,20 @@ def main() -> int:
     parser.add_argument("--goal", default="", help="Optional goal/intent string passed to scope reviewer")
     parser.add_argument("--scope", default="", help="Optional scope hint passed to scope reviewer")
     parser.add_argument("--review-rebuttal", default="", help="Optional rebuttal text (for rerun scenarios)")
+    parser.add_argument("--review-models", default="", help="Override OUROBOROS_REVIEW_MODELS for this dry-run")
+    parser.add_argument("--scope-review-models", default="", help="Override OUROBOROS_SCOPE_REVIEW_MODELS for this dry-run")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors in section headers")
     parser.add_argument("--output", help="Also write full raw output to this file")
     args = parser.parse_args()
 
     use_color = not args.no_color
     _load_settings_into_env()
+    if args.review_models:
+        os.environ["OUROBOROS_REVIEW_MODELS"] = args.review_models
+        sys.stderr.write("[run_external_review] using explicit reviewer slots override\n")
+    if args.scope_review_models:
+        os.environ["OUROBOROS_SCOPE_REVIEW_MODELS"] = args.scope_review_models
+        sys.stderr.write("[run_external_review] using explicit scope reviewer slots override\n")
     diff = _ensure_diff_present()
     sys.stderr.write(f"[run_external_review] diff size: {len(diff)} chars\n")
 

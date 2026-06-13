@@ -3,26 +3,24 @@
 from __future__ import annotations
 
 CORE_TOOL_NAMES: frozenset[str] = frozenset({
-    "repo_read", "repo_list", "repo_write", "repo_commit",
-    "str_replace_editor",
-    "data_read", "data_list", "data_write",
-    "code_search",
-    "run_shell", "claude_code_edit",
-    "git_status", "git_diff",
-    "restore_to_head", "revert_commit",
-    "pull_from_remote", "rollback_to_target",
-    # schedule_task/wait/get_result remain opt-in via enable_tools.
+    "read_file", "list_files", "write_file", "edit_text",
+    "search_code",
+    "run_command", "claude_code_edit", "run_script",
+    "start_service", "service_status", "service_logs", "stop_service",
+    "vcs_status", "vcs_diff", "vcs_commit_reviewed", "commit_reviewed",
+    "vcs_restore", "vcs_revert", "vcs_pull_ff", "vcs_rollback",
+    "schedule_subagent", "wait_task", "wait_tasks", "get_task_result",
     "update_scratchpad", "update_identity",
     "chat_history", "recent_tasks",
     "knowledge_read", "knowledge_write", "knowledge_list",
     "web_search",
     "browse_page", "browser_action", "analyze_screenshot",
-    "send_user_message", "send_photo",
+    "send_user_message", "send_photo", "send_video",
     "switch_model",
     "request_restart", "promote_to_stable",
-    "advisory_pre_review", "review_status",
+    "advisory_review", "review_status", "task_acceptance_review",
     # Heal mode blocks enable_tools, so repair/review tools must be core.
-    "list_skills", "review_skill", "skill_preflight",
+    "list_skills", "skill_review", "skill_preflight",
     "submit_skill_to_hub",
 })
 
@@ -38,18 +36,17 @@ MAX_SUBTASK_DEPTH: int = 2
 # remains available by explicit product decision, so this mode is not a remote
 # website sandbox.
 LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
-    "repo_read", "repo_list", "code_search", "codebase_digest",
-    "git_status", "git_diff",
-    "data_read", "data_list",
-    "chat_history", "recent_tasks", "get_task_result", "wait_for_task",
+    "read_file", "list_files", "search_code", "codebase_digest",
+    "vcs_status", "vcs_diff",
+    "chat_history", "recent_tasks", "get_task_result", "wait_task", "wait_tasks",
     "web_search", "browse_page", "browser_action", "analyze_screenshot",
 })
 
 READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
-    "repo_read", "repo_list",
-    "data_read", "data_list",
-    "code_search", "recent_tasks",
+    "read_file", "list_files",
+    "search_code", "recent_tasks",
     "web_search", "codebase_digest", "chat_history",
+    "vcs_status", "vcs_diff", "service_status", "service_logs",
 })
 
 # Stateful browser tools need the thread-sticky executor.
@@ -59,13 +56,16 @@ STATEFUL_BROWSER_TOOLS: frozenset[str] = frozenset({
 
 # Full outputs are semantic (review verdicts, advisory findings, status).
 UNTRUNCATED_TOOL_RESULTS: frozenset[str] = frozenset({
-    "repo_commit",
-    "multi_model_review",
-    "advisory_pre_review",
-    "review_skill",
+    "commit_reviewed",
+    "vcs_commit_reviewed",
+    "plan_task",
+    "task_acceptance_review",
+    "advisory_review",
+    "skill_review",
     "review_status",
     "get_task_result",
-    "wait_for_task",
+    "wait_task",
+    "wait_tasks",
 })
 
 # Cognitive artifacts must not be truncated.
@@ -79,12 +79,14 @@ UNTRUNCATED_REPO_READ_PATHS: frozenset[str] = frozenset({
 
 # Per-tool char caps; omitted tools use DEFAULT_TOOL_RESULT_LIMIT.
 TOOL_RESULT_LIMITS: dict[str, int] = {
-    "repo_read": 80_000,
-    "data_read": 80_000,
+    "read_file": 80_000,
     "recent_tasks": 80_000,
     "knowledge_read": 80_000,
-    "run_shell": 80_000,
-    "code_search": 80_000,
+    "claude_code_edit": 80_000,
+    "run_command": 80_000,
+    "run_script": 80_000,
+    "search_code": 80_000,
+    "service_logs": 80_000,
     # skill_exec wraps stdout/stderr; keep the full capped payload visible.
     "skill_exec": 300_000,
 }
@@ -93,5 +95,12 @@ DEFAULT_TOOL_RESULT_LIMIT: int = 15_000
 
 # Reviewed mutative tools must not end with ambiguous executor timeouts.
 REVIEWED_MUTATIVE_TOOLS: frozenset[str] = frozenset({
-    "repo_commit",
+    "commit_reviewed",
+    "vcs_commit_reviewed",
+})
+
+# Foreground mutative tools may keep editing files after Python future timeout;
+# the loop must wait for terminal completion instead of returning while they run.
+FOREGROUND_MUTATIVE_TOOLS: frozenset[str] = frozenset({
+    "claude_code_edit",
 })

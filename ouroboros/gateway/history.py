@@ -22,6 +22,12 @@ _PROGRESS_META_FIELDS = (
     "parent_task_id",
     "delegation_role",
     "subagent_role",
+    "status",
+    "cost_usd",
+    "result",
+    "trace_summary",
+    "error",
+    "artifact_status",
     "worker_saturation_warning",
 )
 
@@ -163,6 +169,10 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
                         rec["tool_calls"] = int(entry["tool_calls"])
                     if "rounds" in entry:
                         rec["rounds"] = int(entry["rounds"])
+                    if "result_status" in entry:
+                        rec["result_status"] = str(entry.get("result_status") or "")
+                    if "reason_code" in entry:
+                        rec["reason_code"] = str(entry.get("reason_code") or "")
                 combined.append(rec)
         except Exception as exc:
             log.warning("Failed to read chat history: %s", exc)
@@ -218,6 +228,39 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
                 })
         except Exception as exc:
             log.debug("Failed to synthesize active lifecycle history: %s", exc)
+
+        # Annotate progress messages whose task already reached a terminal (or
+        # cancel-intent) status on disk. Tasks torn down by crash storm, hard
+        # timeout, or cancellation emit a live task_done but never write a
+        # task_summary, so on reload/reconnect the client would otherwise replay
+        # their progress and re-inflate a "Working" spinner that never resolves.
+        try:
+            from ouroboros.task_results import load_task_result
+            from ouroboros.task_status import FINAL_STATUSES
+
+            progress_task_ids = {
+                str(m.get("task_id") or "")
+                for m in combined
+                if m.get("is_progress") and m.get("task_id")
+            }
+            terminal_status_by_task: Dict[str, str] = {}
+            for tid in progress_task_ids:
+                try:
+                    res = load_task_result(data_dir, tid)
+                except Exception:
+                    res = None
+                status = str((res or {}).get("status") or "")
+                if status in FINAL_STATUSES:
+                    terminal_status_by_task[tid] = status
+            if terminal_status_by_task:
+                for m in combined:
+                    if not m.get("is_progress"):
+                        continue
+                    status = terminal_status_by_task.get(str(m.get("task_id") or ""))
+                    if status:
+                        m["task_terminal_status"] = status
+        except Exception as exc:
+            log.debug("Failed to annotate terminal task status in history: %s", exc)
 
         combined.sort(key=lambda m: m.get("ts", ""))
         messages = combined[-limit:] if len(combined) > limit else combined

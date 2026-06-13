@@ -84,6 +84,13 @@ def execute_panic_stop(
         pass
 
     try:
+        from ouroboros.tools.services import kill_all_services
+
+        kill_all_services(wait=False)
+    except Exception:
+        pass
+
+    try:
         from ouroboros.extension_companion import panic_kill_all
 
         panic_kill_all()
@@ -91,7 +98,7 @@ def execute_panic_stop(
         pass
 
     try:
-        kill_workers_fn(force=True)
+        kill_workers_fn(force=True, archive_service_logs=False)
     except Exception:
         pass
 

@@ -8,7 +8,7 @@ from typing import Optional
 
 from ouroboros.utils import run_cmd
 from ouroboros.tools.review_helpers import build_scope_actor_record, format_review_history_entry
-from ouroboros.tools.scope_review import run_scope_review, _get_scope_model
+from ouroboros.tools.scope_review import ScopeReviewResult, run_scope_review, _get_scope_model
 
 log = logging.getLogger(__name__)
 
@@ -87,16 +87,63 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
 
     def _run_scope():
         try:
-            ctx._last_scope_model = _get_scope_model()
-            return run_scope_review(
-                ctx, commit_message, goal=goal, scope=scope,
-                review_rebuttal=review_rebuttal,
-                review_history=_history_snapshot,
-                scope_review_history=_scope_history,
+            try:
+                from ouroboros.config import get_scope_review_models
+
+                scope_models = get_scope_review_models()
+            except Exception:
+                scope_models = [_get_scope_model()]
+            scope_models = scope_models or [_get_scope_model()]
+            ctx._last_scope_model = ",".join(scope_models)
+            def _run_one_scope(model: str):
+                return run_scope_review(
+                    ctx, commit_message, goal=goal, scope=scope,
+                    review_rebuttal=review_rebuttal,
+                    review_history=_history_snapshot,
+                    scope_review_history=_scope_history,
+                    scope_model=model,
+                )
+
+            with _cf.ThreadPoolExecutor(max_workers=min(len(scope_models), 4)) as scope_pool:
+                futures = [scope_pool.submit(_run_one_scope, model) for model in scope_models]
+                results = [future.result() for future in futures]
+            ctx._last_scope_raw_results = [
+                build_scope_actor_record(
+                    result,
+                    fallback_model_id=getattr(result, "model_id", "") or model,
+                    slot_id=f"scope_slot_{idx + 1}",
+                )
+                for idx, (result, model) in enumerate(zip(results, scope_models))
+            ]
+            if len(results) == 1:
+                return results[0]
+            critical = []
+            advisory = []
+            blocked_messages = []
+            statuses = []
+            for result in results:
+                statuses.append(getattr(result, "status", ""))
+                critical.extend(result.critical_findings or [])
+                advisory.extend(result.advisory_findings or [])
+                if result.blocked and result.block_message:
+                    blocked_messages.append(result.block_message)
+            blocked = bool(blocked_messages)
+            return ScopeReviewResult(
+                blocked=blocked,
+                block_message="\n\n".join(blocked_messages),
+                critical_findings=critical,
+                advisory_findings=advisory,
+                raw_text="\n\n".join(str(r.raw_text or "") for r in results),
+                model_id=",".join(scope_models),
+                status="blocked" if blocked else ("responded" if any(s == "responded" for s in statuses) else ",".join(statuses)),
+                prompt_chars=sum(int(r.prompt_chars or 0) for r in results),
+                tokens_in=sum(int(r.tokens_in or 0) for r in results),
+                tokens_out=sum(int(r.tokens_out or 0) for r in results),
+                cost_usd=sum(float(r.cost_usd or 0.0) for r in results),
+                context_manifest={"scope_models": scope_models, "actor_count": len(results)},
             )
         except Exception as e:
             log.warning("Scope review raised unexpected exception: %s", e)
-            from ouroboros.tools.scope_review import ScopeReviewResult
             return ScopeReviewResult(blocked=True, block_message=(
                 f"⚠️ SCOPE_REVIEW_BLOCKED: Scope review failed — {e}\nFix the issue and retry."
             ))
@@ -135,10 +182,21 @@ def run_parallel_review(ctx, commit_message, *, goal="", scope="", review_rebutt
         existing[snapshot_key] = updated
         ctx._scope_review_history = existing
         # Canonical scope actor record for durable CommitAttemptRecord persistence.
-        ctx._last_scope_raw_result = build_scope_actor_record(
-            scope_result,
-            fallback_model_id=getattr(ctx, "_last_scope_model", ""),
-        )
+        raw_results = list(getattr(ctx, "_last_scope_raw_results", []) or [])
+        if raw_results:
+            ctx._last_scope_raw_result = {
+                "status": getattr(scope_result, "status", ""),
+                "model_id": getattr(scope_result, "model_id", "") or getattr(ctx, "_last_scope_model", ""),
+                "raw_results": raw_results,
+                "raw_text": getattr(scope_result, "raw_text", ""),
+                "critical_findings": getattr(scope_result, "critical_findings", []) or [],
+                "advisory_findings": getattr(scope_result, "advisory_findings", []) or [],
+            }
+        else:
+            ctx._last_scope_raw_result = build_scope_actor_record(
+                scope_result,
+                fallback_model_id=getattr(ctx, "_last_scope_model", ""),
+            )
     else:
         ctx._last_scope_raw_result = {}
 

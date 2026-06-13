@@ -245,7 +245,13 @@ def generate_reflection(
 
     light_model = get_light_model()
     try:
-        resp_msg, refl_usage = llm_client.chat(
+        from ouroboros.llm_observability import chat_observed
+
+        resp_msg, refl_usage = chat_observed(
+            llm_client,
+            drive_root=pathlib.Path(str(task.get("drive_root") or "../data")),
+            task_id=str(task.get("id") or task.get("task_id") or "reflection"),
+            call_type="task_reflection",
             messages=[{"role": "user", "content": prompt}],
             model=light_model,
             reasoning_effort="low",
@@ -394,7 +400,13 @@ def _update_patterns(drive_root: pathlib.Path, entry: Dict[str, Any]) -> None:
 
     light_model = get_light_model()
     client = LLMClient()
-    resp_msg, patterns_usage = client.chat(
+    from ouroboros.llm_observability import chat_observed
+
+    resp_msg, patterns_usage = chat_observed(
+        client,
+        drive_root=drive_root,
+        task_id=str(entry.get("task_id") or entry.get("id") or "patterns"),
+        call_type="pattern_register_update",
         messages=[{"role": "user", "content": prompt}],
         model=light_model,
         reasoning_effort="low",

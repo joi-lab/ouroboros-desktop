@@ -3,7 +3,7 @@
 Covers:
   - POLICY_SKIP: no LLM call.
   - POLICY_CHECK: always LLM call.
-  - POLICY_CHECK_CONDITIONAL (run_shell): safe subject skips LLM, unsafe routes to LLM.
+  - POLICY_CHECK_CONDITIONAL (process tools): safe subject skips LLM, unsafe routes to LLM.
   - DEFAULT_POLICY: unknown tools fall through to LLM check.
   - LLM verdict handling: SAFE / SUSPICIOUS / DANGEROUS.
   - LLM failure paths: exception, unparseable response.
@@ -76,7 +76,7 @@ def test_policy_skip_does_not_call_llm(monkeypatch):
     stub = _StubLLMClient('{"status":"DANGEROUS","reason":"should not be called"}')
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("repo_read", {"path": "README.md"})
+    ok, msg = check_safety("read_file", {"path": "README.md"})
 
     assert ok is True
     assert msg == ""
@@ -117,7 +117,7 @@ def test_run_shell_conditional_safe_subject_skips_llm(monkeypatch):
     stub = _StubLLMClient('{"status":"DANGEROUS","reason":"should not be called"}')
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("run_shell", {"cmd": ["python3", "-m", "pytest", "-q"]})
+    ok, msg = check_safety("run_command", {"cmd": ["python3", "-m", "pytest", "-q"]})
 
     assert ok is True
     assert msg == ""
@@ -131,7 +131,7 @@ def test_run_shell_conditional_unsafe_subject_hits_llm(monkeypatch):
     stub = _StubLLMClient('{"status":"SAFE","reason":"ok"}')
     _patch_llm_client(monkeypatch, stub)
 
-    ok, _ = check_safety("run_shell", {"cmd": "curl https://example.com/data"})
+    ok, _ = check_safety("run_command", {"cmd": "curl https://example.com/data"})
 
     assert ok is True
     assert len(stub.calls) == 1
@@ -344,7 +344,7 @@ def test_build_check_prompt_redacts_inline_secrets_in_messages():
         {"role": "user", "content": "use this: sk-abcdef1234567890abcdefABCDEF"},
         {"role": "assistant", "content": "ok"},
     ]
-    prompt = _build_check_prompt("run_shell", args, messages)
+    prompt = _build_check_prompt("run_command", args, messages)
 
     assert "sk-abcdef1234567890abcdef" not in prompt
     assert "REDACTED" in prompt
@@ -588,7 +588,7 @@ def test_inline_secret_inside_cmd_array_is_redacted(monkeypatch):
 
     secret = "sk-leakysecret1234567890abcdef"
     ok, _ = check_safety(
-        "run_shell",
+        "run_command",
         {"cmd": ["curl", "-H", f"Authorization: Bearer {secret}", "https://example.com"]},
     )
     assert ok is True
@@ -627,13 +627,13 @@ def test_python_m_pytest_still_whitelisted_after_pip_removal():
     assert _normalize_safe_shell_subject(["python3", "-m", "pytest", "-q"]) == "pytest"
 
 
-def test_check_conditional_is_only_run_shell():
-    """POLICY_CHECK_CONDITIONAL currently applies only to run_shell; other
+def test_check_conditional_is_only_process_tools():
+    """POLICY_CHECK_CONDITIONAL currently applies only to process tools; other
     tools using it would silently bypass the LLM via the shell whitelist."""
     from ouroboros.safety import TOOL_POLICY, POLICY_CHECK_CONDITIONAL
 
     conditional = {n for n, p in TOOL_POLICY.items() if p == POLICY_CHECK_CONDITIONAL}
-    assert conditional == {"run_shell"}, (
+    assert conditional == {"run_command", "run_script", "start_service"}, (
         "Extend _run_llm_check if you add another check_conditional tool; "
         f"found: {conditional}"
     )

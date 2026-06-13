@@ -125,7 +125,7 @@ def skill_review_gate(status: str, *, stale: bool = False, enforcement: Optional
     elif stale:
         executable = False
         reason = "review_stale"
-        summary = "Review is stale for the current skill content; re-run review_skill."
+        summary = "Review is stale for the current skill content; re-run skill_review."
     elif raw_status == STATUS_CLEAN:
         executable = True
         reason = "ready"
@@ -146,7 +146,7 @@ def skill_review_gate(status: str, *, stale: bool = False, enforcement: Optional
     else:
         executable = False
         reason = "review_missing_or_unknown"
-        summary = "Review status is missing or unknown; run review_skill."
+        summary = "Review status is missing or unknown; run skill_review."
     return {
         "status": raw_status or STATUS_PENDING,
         "stale": bool(stale),

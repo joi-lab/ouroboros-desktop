@@ -87,7 +87,8 @@ def _make_fake_registry(messages, pending_compaction=None):
 
 
 def _run_loop(messages, *, use_local=False, pending_compaction=None,
-              rounds_before_stop=1, checkpoint_on_round=None):
+              rounds_before_stop=1, checkpoint_on_round=None,
+              checkpoint_persist_ok=True):
     """
     Drive run_llm_loop with mocked LLM and tools.
 
@@ -99,6 +100,8 @@ def _run_loop(messages, *, use_local=False, pending_compaction=None,
     checkpoint_on_round:
         If set, _maybe_inject_self_check returns True only on that round
         number (simulating a checkpoint injection).
+    checkpoint_persist_ok:
+        Whether the forensic pre-compaction checkpoint write succeeds.
 
     Returns
     -------
@@ -152,6 +155,7 @@ def _run_loop(messages, *, use_local=False, pending_compaction=None,
          patch.object(loop_mod, "call_llm_with_retry", side_effect=fake_llm_call), \
          patch.object(loop_mod, "_drain_incoming_messages", return_value=None), \
          patch.object(loop_mod, "_maybe_inject_self_check", side_effect=fake_self_check), \
+         patch.object(loop_mod, "_persist_compaction_checkpoint", return_value=checkpoint_persist_ok), \
          patch.object(loop_mod, "seal_task_transcript", return_value=None), \
          patch.object(loop_mod, "initial_tool_schemas", return_value=[]), \
          patch.object(loop_mod, "_setup_dynamic_tools",
@@ -274,6 +278,22 @@ class TestCompactionPolicyRemote(unittest.TestCase):
         self.assertTrue(
             any(c["keep_recent"] == 50 for c in calls),
             "Emergency compaction must fire when image_url content pushes size over threshold",
+        )
+
+    def test_emergency_compaction_skips_when_checkpoint_persist_fails(self):
+        """Compaction is fail-closed: pre-compaction transcript must be durable."""
+        messages = _make_tool_rounds(5, content_size=50)
+        messages.append({"role": "user", "content": "x" * 1_300_000})
+        calls = _run_loop(
+            messages,
+            use_local=False,
+            rounds_before_stop=1,
+            checkpoint_persist_ok=False,
+        )
+        self.assertEqual(
+            calls,
+            [],
+            "Compaction must not mutate context when the forensic checkpoint write fails",
         )
 
 

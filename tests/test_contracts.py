@@ -165,10 +165,10 @@ def test_every_registered_tool_matches_protocol():
 
 
 def test_api_v1_declares_core_ws_message_types():
-    """api_v1 must declare at least chat, photo, typing, log."""
+    """api_v1 must declare the core chat/media/status WS envelopes."""
     from ouroboros.contracts import api_v1
 
-    for name in ("ChatInbound", "ChatOutbound", "PhotoOutbound", "TypingOutbound", "LogOutbound"):
+    for name in ("ChatInbound", "ChatOutbound", "PhotoOutbound", "VideoOutbound", "TypingOutbound", "LogOutbound"):
         assert hasattr(api_v1, name), f"api_v1 missing {name}"
 
 
@@ -219,8 +219,56 @@ def _collect_dict_literals_with_type(
     return matches
 
 
+def _collect_literal_progress_meta_keys(source_path: pathlib.Path) -> set[str]:
+    """Collect literal progress_meta keys that can reach ChatOutbound frames."""
+
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    keys: set[str] = set()
+    meta_helper_names = {"_subagent_rejection_meta", "_subagent_progress_meta"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "progress_meta" and isinstance(node.value, ast.Dict):
+            literal_keys, unknown = _dict_literal_keys(node.value)
+            assert not unknown, f"progress_meta literal in {source_path.name} has dynamic keys: {unknown}"
+            keys.update(literal_keys)
+        elif isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == "progress_meta" for target in node.targets) and isinstance(node.value, ast.Dict):
+                literal_keys, unknown = _dict_literal_keys(node.value)
+                assert not unknown, f"progress_meta assignment in {source_path.name} has dynamic keys: {unknown}"
+                keys.update(literal_keys)
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "progress_meta"
+                    and isinstance(target.slice, ast.Constant)
+                    and isinstance(target.slice.value, str)
+                ):
+                    keys.add(target.slice.value)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "update"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "progress_meta"
+                and node.args
+                and isinstance(node.args[0], ast.Dict)
+            ):
+                literal_keys, unknown = _dict_literal_keys(node.args[0])
+                assert not unknown, f"progress_meta.update in {source_path.name} has dynamic keys: {unknown}"
+                keys.update(literal_keys)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in meta_helper_names:
+            for child in ast.walk(node):
+                if isinstance(child, ast.Return) and isinstance(child.value, ast.Dict):
+                    literal_keys, unknown = _dict_literal_keys(child.value)
+                    assert not unknown, f"{node.name} return in {source_path.name} has dynamic keys: {unknown}"
+                    keys.update(literal_keys)
+    return keys
+
+
 _CHAT_OUTBOUND_REQUIRED = frozenset({"type", "role", "content", "ts"})
 _PHOTO_OUTBOUND_REQUIRED = frozenset({"type", "role", "image_base64", "mime", "ts"})
+_VIDEO_OUTBOUND_REQUIRED = frozenset({"type", "role", "video_base64", "mime", "ts"})
 _TYPING_OUTBOUND_REQUIRED = frozenset({"type", "action"})
 _LOG_OUTBOUND_REQUIRED = frozenset({"type", "data"})
 
@@ -307,6 +355,35 @@ def test_chat_outbound_matches_message_bus_sends():
         )
 
 
+def test_chat_outbound_declares_progress_meta_keys_used_by_runtime():
+    """Progress metadata is merged into ChatOutbound frames by message_bus."""
+
+    from ouroboros.gateway.contracts import ChatOutbound
+
+    declared = set(ChatOutbound.__annotations__)
+    progress_keys: set[str] = set()
+    for rel in (
+        "supervisor/events.py",
+        "ouroboros/agent.py",
+        "ouroboros/skill_lifecycle_queue.py",
+    ):
+        progress_keys.update(_collect_literal_progress_meta_keys(REPO_ROOT / rel))
+
+    assert progress_keys, "no literal progress_meta keys found"
+    assert progress_keys <= declared, (
+        "progress_meta emits keys not declared in ChatOutbound: "
+        f"{sorted(progress_keys - declared)}"
+    )
+
+    js_types = (REPO_ROOT / "web" / "modules" / "api_types.js").read_text(encoding="utf-8")
+    missing_js = [
+        key
+        for key in sorted(progress_keys)
+        if not re.search(rf"@property \{{[^}}]+=\}} {re.escape(key)}\b", js_types)
+    ]
+    assert not missing_js, f"api_types.js ChatOutbound missing progress_meta keys: {missing_js}"
+
+
 def test_photo_outbound_matches_message_bus_sends():
     """PhotoOutbound TypedDict must match every photo envelope emitted."""
     from ouroboros.gateway.contracts import PhotoOutbound
@@ -322,6 +399,24 @@ def test_photo_outbound_matches_message_bus_sends():
         declared_keys=declared,
         required_keys=_PHOTO_OUTBOUND_REQUIRED,
         envelope_name="PhotoOutbound",
+    )
+
+
+def test_video_outbound_matches_message_bus_sends():
+    """VideoOutbound TypedDict must match every video envelope emitted."""
+    from ouroboros.gateway.contracts import VideoOutbound
+
+    declared = set(VideoOutbound.__annotations__.keys())
+    assert _VIDEO_OUTBOUND_REQUIRED <= declared, (
+        "VideoOutbound lost a required key: "
+        f"{_VIDEO_OUTBOUND_REQUIRED - declared}"
+    )
+    _assert_envelope_parity(
+        REPO_ROOT / "supervisor" / "message_bus.py",
+        discriminator="video",
+        declared_keys=declared,
+        required_keys=_VIDEO_OUTBOUND_REQUIRED,
+        envelope_name="VideoOutbound",
     )
 
 

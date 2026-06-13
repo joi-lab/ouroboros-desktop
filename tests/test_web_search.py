@@ -53,6 +53,12 @@ def ctx():
     c = MagicMock()
     c.pending_events = []
     c.emit_progress_fn = MagicMock()
+    c.task_id = "task-web"
+    c.task_metadata = {
+        "root_task_id": "root-web",
+        "parent_task_id": "parent-web",
+        "delegation_role": "subagent",
+    }
     return c
 
 
@@ -136,7 +142,7 @@ def test_web_search_uses_official_openai_responses(monkeypatch):
         search_module._web_search(request_ctx, "latest news", model="gpt-5.2")
     )
 
-    assert result == {"answer": "fresh answer"}
+    assert result == {"answer": "fresh answer", "sources": []}
     assert calls["api_key"] == "openai-key"
     assert calls["base_url"] is None
     assert calls["kwargs"]["model"] == "gpt-5.2"
@@ -193,7 +199,115 @@ def test_streaming_cost_tracking(ctx, patch_env, mock_openai):
     assert ev["prompt_tokens"] == 500
     assert ev["completion_tokens"] == 100
     assert ev["model_category"] == "websearch"
+    assert ev["task_id"] == "task-web"
+    assert ev["root_task_id"] == "root-web"
+    assert ev["parent_task_id"] == "parent-web"
+    assert ev["delegation_role"] == "subagent"
+    assert ev["source"] == "web_search"
     assert ev["cost"] > 0
+
+
+def test_streaming_returns_cited_sources(ctx, patch_env, mock_openai):
+    class _Usage:
+        def model_dump(self):
+            return {"input_tokens": 50, "output_tokens": 10}
+
+    class _CompletedResponse:
+        usage = _Usage()
+
+        def model_dump(self):
+            return {
+                "output": [{
+                    "content": [{
+                        "type": "output_text",
+                        "annotations": [{
+                            "type": "url_citation",
+                            "url": "https://example.com/article",
+                            "title": "Example Article",
+                            "snippet": "Short source summary",
+                        }],
+                    }],
+                }]
+            }
+
+    events = [
+        _make_event("response.output_text.delta", delta="Answer", content_index=0,
+                    item_id="m1", output_index=0, sequence_number=1, logprobs=[]),
+        _make_event("response.completed", response=_CompletedResponse(), sequence_number=2),
+    ]
+    mock_openai.responses.create.return_value = _FakeStream(events)
+
+    result = json.loads(_web_search(ctx, "source test"))
+
+    assert result["answer"] == "Answer"
+    assert result["sources"] == [{
+        "url": "https://example.com/article",
+        "title": "Example Article",
+        "snippet": "Short source summary",
+    }]
+
+
+def test_streaming_sanitizes_progress_and_cited_sources(ctx, patch_env, mock_openai):
+    leaked_secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+
+    class _Usage:
+        def model_dump(self):
+            return {"input_tokens": 50, "output_tokens": 10}
+
+    class _CompletedResponse:
+        usage = _Usage()
+
+        def model_dump(self):
+            return {
+                "output": [{
+                    "content": [{
+                        "type": "output_text",
+                        "annotations": [{
+                            "type": "url_citation",
+                            "url": f"https://user:{leaked_secret}@example.com/article?token={leaked_secret}",
+                            "title": f"Leaked {leaked_secret}",
+                            "snippet": f"Snippet {leaked_secret}",
+                        }],
+                    }],
+                }]
+            }
+
+    events = [
+        _make_event("response.web_search_call.searching", item_id="ws1", output_index=0, sequence_number=1),
+        _make_event("response.output_text.delta", delta="Answer", content_index=0,
+                    item_id="m1", output_index=0, sequence_number=2, logprobs=[]),
+        _make_event("response.completed", response=_CompletedResponse(), sequence_number=3),
+    ]
+    mock_openai.responses.create.return_value = _FakeStream(events)
+
+    result = json.loads(_web_search(ctx, f"query {leaked_secret}"))
+
+    progress_text = ctx.emit_progress_fn.call_args[0][0]
+    serialized = json.dumps(result)
+    assert leaked_secret not in progress_text
+    assert leaked_secret not in serialized
+    assert "***REDACTED***" in progress_text
+    assert "***REDACTED***" in serialized
+
+
+def test_web_search_sanitizes_provider_errors(ctx, patch_env, monkeypatch):
+    leaked_secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+
+    class _Responses:
+        def create(self, **_kwargs):
+            raise RuntimeError(f"provider rejected Authorization: Bearer {leaked_secret}")
+
+    class _Client:
+        def __init__(self, api_key=None, base_url=None):
+            self.responses = _Responses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+
+    result = json.loads(_web_search(ctx, "error query"))
+
+    assert result["error"].startswith("OpenAI web search failed (RuntimeError):")
+    assert leaked_secret not in result["error"]
+    assert "***REDACTED***" in result["error"]
 
 
 def test_streaming_no_progress_without_search_events(ctx, patch_env, mock_openai):

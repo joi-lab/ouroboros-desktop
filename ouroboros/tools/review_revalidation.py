@@ -33,14 +33,14 @@ def _build_revalidation_failure(
             f"before={before.get('fingerprint', '')[:12]}, "
             f"after={str((after or {}).get('fingerprint', ''))[:12]}. "
             "The reviewed findings were invalidated and were NOT carried forward. "
-            "Re-run advisory_pre_review and repo_commit on the final staged diff."
+            "Re-run advisory_review and commit_reviewed on the final staged diff."
         )
     detail = before.get("reason") or (after or {}).get("reason") or "fingerprint unavailable"
     return (
         "⚠️ REVIEW_REVALIDATION_FAILED: could not fingerprint the staged diff "
         f"for reviewed-commit revalidation ({detail}). "
         "The attempt was recorded as degraded and reviewed findings were NOT carried forward. "
-        "Fix the git diff issue, then re-run advisory_pre_review and repo_commit."
+        "Fix the git diff issue, then re-run advisory_review and commit_reviewed."
     )
 
 
@@ -92,4 +92,3 @@ def handle_revalidation_failure(
         scope_raw_result=getattr(ctx, "_last_scope_raw_result", {}),
     )
     return msg
-

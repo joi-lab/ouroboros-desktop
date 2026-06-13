@@ -15,8 +15,9 @@ log = logging.getLogger(__name__)
 CHAT_OUTBOUND = "chat.outbound"
 CHAT_TYPING = "chat.typing"
 CHAT_PHOTO = "chat.photo"
+CHAT_VIDEO = "chat.video"
 SKILL_LIFECYCLE = "skill.lifecycle"
-VALID_TOPICS = frozenset({CHAT_OUTBOUND, CHAT_TYPING, CHAT_PHOTO, SKILL_LIFECYCLE})
+VALID_TOPICS = frozenset({CHAT_OUTBOUND, CHAT_TYPING, CHAT_PHOTO, CHAT_VIDEO, SKILL_LIFECYCLE})
 
 
 @dataclass
@@ -109,6 +110,7 @@ __all__ = [
     "CHAT_OUTBOUND",
     "CHAT_PHOTO",
     "CHAT_TYPING",
+    "CHAT_VIDEO",
     "EventBus",
     "SKILL_LIFECYCLE",
     "VALID_TOPICS",

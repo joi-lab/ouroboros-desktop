@@ -83,18 +83,18 @@ def review_ctx(tmp_path):
 
 class TestRepoWriteRegistration:
     def test_repo_write_registered(self):
-        git_mod = _get_git_module()
-        names = [t.name for t in git_mod.get_tools()]
-        assert "repo_write" in names
+        from ouroboros.tools import core as core_mod
+        names = [t.name for t in core_mod.get_tools()]
+        assert "write_file" in names
 
     def test_repo_write_in_core_tool_names(self):
         registry = _get_registry_module()
-        assert "repo_write" in registry.CORE_TOOL_NAMES
+        assert "write_file" in registry.CORE_TOOL_NAMES
 
     def test_repo_write_schema_has_files_param(self):
-        git_mod = _get_git_module()
-        tools = git_mod.get_tools()
-        rw = next(t for t in tools if t.name == "repo_write")
+        from ouroboros.tools import core as core_mod
+        tools = core_mod.get_tools()
+        rw = next(t for t in tools if t.name == "write_file")
         props = rw.schema["parameters"]["properties"]
         assert "files" in props
         assert props["files"]["type"] == "array"
@@ -102,7 +102,7 @@ class TestRepoWriteRegistration:
     def test_repo_commit_has_review_rebuttal(self):
         git_mod = _get_git_module()
         tools = git_mod.get_tools()
-        rc = next(t for t in tools if t.name == "repo_commit")
+        rc = next(t for t in tools if t.name == "commit_reviewed")
         props = rc.schema["parameters"]["properties"]
         assert "review_rebuttal" in props
 
@@ -151,7 +151,8 @@ class TestRepoWriteMultiFile:
         result = git_mod._repo_write(ctx, files=[{"path": "", "content": "x"}])
         assert "WRITE_ERROR" in result
 
-    def test_multi_file_blocks_safety_critical(self, git_ctx):
+    def test_multi_file_blocks_safety_critical(self, git_ctx, monkeypatch):
+        monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
         git_mod, ctx = git_ctx
         result = git_mod._repo_write(ctx, files=[
             {"path": "ok.py", "content": "x"},
@@ -768,7 +769,7 @@ class TestSandboxCoversRepoWrite:
     def test_sandbox_mentions_repo_write(self):
         registry = _get_registry_module()
         source = inspect.getsource(registry.ToolRegistry.execute)
-        assert "repo_write" in source
+        assert "write_file" in source
 
     def test_sandbox_checks_files_param(self):
         """Sandbox must check files array for safety-critical paths."""
@@ -1067,7 +1068,7 @@ class TestAdvisorySkipTests:
         """advisory_pre_review tool schema must expose skip_tests parameter."""
         from ouroboros.tools.claude_advisory_review import get_tools
         tools = get_tools()
-        advisory_tool = next(t for t in tools if t.name == "advisory_pre_review")
+        advisory_tool = next(t for t in tools if t.name == "advisory_review")
         props = advisory_tool.schema["parameters"]["properties"]
         assert "skip_tests" in props, "skip_tests must be in advisory_pre_review schema"
         assert props["skip_tests"]["type"] == "boolean"
@@ -1142,9 +1143,9 @@ class TestAdvisorySkipTests:
         # We accept "advisory is stale", "re-run", or similar stale-path messaging.
         # The _next_step_guidance tests_preflight_blocked branch fires only when
         # stale_from_edit=False AND hash matches — here hash diverged, so it won't.
-        assert "advisory_pre_review" in next_step2.lower() or "stale" in next_step2.lower() \
+        assert "advisory_review" in next_step2.lower() or "stale" in next_step2.lower() \
             or "re-run" in next_step2.lower() or "rerun" in next_step2.lower() \
-            or "repo_commit" in next_step2.lower(), \
+            or "commit_reviewed" in next_step2.lower(), \
             f"Expected stale-path guidance after hash mismatch, got: {next_step2!r}"
 
     def test_next_step_guidance_tests_preflight_blocked(self):

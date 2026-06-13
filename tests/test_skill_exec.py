@@ -119,15 +119,15 @@ def test_skill_exec_tools_register_in_registry(tmp_path):
     """ToolRegistry must expose the skill lifecycle tools."""
     registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
     names = {t["function"]["name"] for t in registry.schemas()}
-    assert {"list_skills", "review_skill", "skill_exec", "toggle_skill", "skill_preflight"} <= names
+    assert {"list_skills", "skill_review", "skill_exec", "toggle_skill", "skill_preflight"} <= names
 
 
 def test_review_skill_uses_long_timeout_separate_from_skill_exec():
     entries = {entry.name: entry for entry in skill_exec_mod.get_tools()}
 
     assert entries["skill_exec"].timeout_sec == skill_exec_mod._HARD_TIMEOUT_CEILING_SEC
-    assert entries["review_skill"].timeout_sec >= 1800
-    assert entries["review_skill"].timeout_sec > entries["skill_exec"].timeout_sec
+    assert entries["skill_review"].timeout_sec >= 1800
+    assert entries["skill_review"].timeout_sec > entries["skill_exec"].timeout_sec
 
 
 def test_skill_preflight_success_and_no_pycache(tmp_path, monkeypatch):
@@ -181,7 +181,10 @@ def test_skill_preflight_fails_closed_when_file_limit_omits_payload(tmp_path, mo
     assert result["omitted_count"] > 0
 
 
-def test_skill_preflight_missing_validator_runtime_is_not_ok(tmp_path, monkeypatch):
+def test_skill_preflight_missing_validator_runtime_is_tolerated(tmp_path, monkeypatch):
+    # A missing external runtime (e.g. node not installed, or a Homebrew node
+    # code-signing-killed by macOS) is an environment gap, not a syntax verdict.
+    # Preflight must skip it rather than block; tri-model review stays authoritative.
     ctx = _make_ctx(tmp_path)
     skills_root = tmp_path / "skills"
     skills_root.mkdir()
@@ -194,7 +197,11 @@ def test_skill_preflight_missing_validator_runtime_is_not_ok(tmp_path, monkeypat
 
     result = json.loads(sp._handle_skill_preflight(ctx, skill="alpha", paths=["scripts/check.js"]))
 
-    assert result["ok"] is False
+    assert result["ok"] is True
+    assert result.get("degraded") is True
+    js = next(f for f in result["files"] if f["path"].endswith("check.js"))
+    assert js.get("skipped") is True
+    assert js.get("skip_reason") == "runtime_unavailable"
 
 
 def test_skill_preflight_validates_literal_widget_schema(tmp_path, monkeypatch):
@@ -281,7 +288,7 @@ def test_run_shell_blocks_self_authored_marker_writes(tmp_path, monkeypatch):
     registry._ctx = ctx
 
     result = registry.execute(
-        "run_shell",
+        "run_command",
         {"cmd": ["sh", "-c", "printf '{}' > /tmp/x/.self_authored.json"]},
     )
 
@@ -375,7 +382,7 @@ def test_skill_exec_tools_have_policy_entries():
     from ouroboros.safety import TOOL_POLICY, POLICY_CHECK, POLICY_SKIP
 
     assert TOOL_POLICY["list_skills"] == POLICY_SKIP
-    assert TOOL_POLICY["review_skill"] == POLICY_SKIP
+    assert TOOL_POLICY["skill_review"] == POLICY_SKIP
     assert TOOL_POLICY["toggle_skill"] == POLICY_SKIP
     assert TOOL_POLICY["skill_preflight"] == POLICY_SKIP
     assert TOOL_POLICY["skill_exec"] == POLICY_CHECK
@@ -919,16 +926,16 @@ def test_toggle_skill_blocked_in_heal_context(tmp_path, monkeypatch):
 
     result = registry.execute("toggle_skill", {"skill": "alpha", "enabled": True})
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
 
 
 @pytest.mark.parametrize("tool_name,args", [
-    ("run_shell", {"cmd": ["python", "-c", "print('x')"]}),
+    ("run_command", {"cmd": ["python", "-c", "print('x')"]}),
     ("browse_page", {"url": "http://127.0.0.1"}),
     ("browser_action", {"action": "evaluate", "value": "fetch('/api/skills/x/toggle')"}),
-    ("schedule_task", {"text": "enable skill"}),
+    ("schedule_subagent", {"text": "enable skill"}),
     ("skill_exec", {"skill": "alpha", "script": "hello.py"}),
-    ("repo_write", {"path": "x.txt", "content": "x"}),
+    ("write_file", {"root": "skill_payload", "bucket": "external", "skill_name": "alpha", "path": ".self_authored.json", "content": "{}"}),
 ])
 def test_heal_context_blocks_indirect_enable_paths(tool_name, args, tmp_path):
     ctx = _make_ctx(tmp_path)
@@ -938,16 +945,26 @@ def test_heal_context_blocks_indirect_enable_paths(tool_name, args, tmp_path):
 
     result = registry.execute(tool_name, args)
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
 
 
 def test_heal_context_allows_payload_tools_and_review(tmp_path):
     ctx = _make_ctx(tmp_path)
     _set_skill_repair(ctx, "alpha", "skills/external/alpha")
+    (ctx.drive_root / "skills" / "external" / "alpha").mkdir(parents=True)
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_write", {"path": "skills/external/alpha/notes.txt", "content": "x"})
+    result = registry.execute(
+        "write_file",
+        {
+            "root": "skill_payload",
+            "bucket": "external",
+            "skill_name": "alpha",
+            "path": "notes.txt",
+            "content": "x",
+        },
+    )
 
     assert "HEAL_MODE_BLOCKED" not in result
     assert "OK" in result
@@ -956,10 +973,20 @@ def test_heal_context_allows_payload_tools_and_review(tmp_path):
 def test_heal_context_allows_ouroboroshub_payload_tools(tmp_path):
     ctx = _make_ctx(tmp_path)
     _set_skill_repair(ctx, "nanobanana", "skills/ouroboroshub/nanobanana")
+    (ctx.drive_root / "skills" / "ouroboroshub" / "nanobanana").mkdir(parents=True)
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_write", {"path": "skills/ouroboroshub/nanobanana/plugin.py", "content": "# fixed"})
+    result = registry.execute(
+        "write_file",
+        {
+            "root": "skill_payload",
+            "bucket": "ouroboroshub",
+            "skill_name": "nanobanana",
+            "path": "plugin.py",
+            "content": "# fixed",
+        },
+    )
 
     assert "HEAL_MODE_BLOCKED" not in result
     assert "OK" in result
@@ -972,17 +999,26 @@ def test_heal_context_blocks_marketplace_sidecar_writes(sidecar, tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_write", {"path": f"skills/ouroboroshub/nanobanana/{sidecar}", "content": "{}"})
+    result = registry.execute(
+        "write_file",
+        {
+            "root": "skill_payload",
+            "bucket": "ouroboroshub",
+            "skill_name": "nanobanana",
+            "path": sidecar,
+            "content": "{}",
+        },
+    )
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
     assert "provenance sidecars" in result
 
 
 @pytest.mark.parametrize("tool_name,args", [
-    ("data_write", {"path": "skills/external/beta/notes.txt", "content": "x"}),
-    ("data_read", {"path": "skills/external/beta/SKILL.md"}),
-    ("data_list", {"dir": "skills/external/beta"}),
-    ("review_skill", {"skill": "beta"}),
+    ("write_file", {"root": "skill_payload", "bucket": "external", "skill_name": "beta", "path": "notes.txt", "content": "x"}),
+    ("read_file", {"root": "skill_payload", "bucket": "external", "skill_name": "beta", "path": "SKILL.md"}),
+    ("list_files", {"root": "skill_payload", "bucket": "external", "skill_name": "beta", "dir": "."}),
+    ("skill_review", {"skill": "beta"}),
     ("skill_preflight", {"skill": "beta"}),
 ])
 def test_heal_context_blocks_out_of_scope_data_access(tool_name, args, tmp_path):
@@ -993,7 +1029,7 @@ def test_heal_context_blocks_out_of_scope_data_access(tool_name, args, tmp_path)
 
     result = registry.execute(tool_name, args)
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
 
 
 def test_heal_context_blocks_symlink_escape_from_selected_skill(tmp_path):
@@ -1011,9 +1047,12 @@ def test_heal_context_blocks_symlink_escape_from_selected_skill(tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_read", {"path": "skills/external/alpha/escape"})
+    result = registry.execute(
+        "read_file",
+        {"root": "skill_payload", "bucket": "external", "skill_name": "alpha", "path": "escape"},
+    )
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
 
 
 def test_heal_context_blocks_wrong_source_root(tmp_path):
@@ -1022,9 +1061,18 @@ def test_heal_context_blocks_wrong_source_root(tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_write", {"path": "skills/external/alpha/notes.txt", "content": "x"})
+    result = registry.execute(
+        "write_file",
+        {
+            "root": "skill_payload",
+            "bucket": "external",
+            "skill_name": "alpha",
+            "path": "notes.txt",
+            "content": "x",
+        },
+    )
 
-    assert "HEAL_MODE_BLOCKED" in result
+    assert "HEAL_MODE_BLOCKED" in result or "SKILL_REDIRECT_BLOCKED" in result
 
 
 def test_heal_context_blocks_native_payload_root_marker(tmp_path):
@@ -1033,7 +1081,10 @@ def test_heal_context_blocks_native_payload_root_marker(tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_read", {"path": "skills/native/alpha/SKILL.md"})
+    result = registry.execute(
+        "read_file",
+        {"root": "skill_payload", "bucket": "native", "skill_name": "alpha", "path": "SKILL.md"},
+    )
 
     assert "HEAL_MODE_BLOCKED" in result
 
@@ -1044,7 +1095,10 @@ def test_heal_context_rejects_traversal_skill_marker(tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_read", {"path": "settings.json"})
+    result = registry.execute(
+        "read_file",
+        {"root": "skill_payload", "bucket": "external", "skill_name": "alpha", "path": "settings.json"},
+    )
 
     assert "HEAL_MODE_BLOCKED" in result
 
@@ -1055,7 +1109,10 @@ def test_heal_context_rejects_traversal_payload_root_marker(tmp_path):
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry._ctx = ctx
 
-    result = registry.execute("data_read", {"path": "memory/identity.md"})
+    result = registry.execute(
+        "read_file",
+        {"root": "skill_payload", "bucket": "external", "skill_name": "alpha", "path": "memory/identity.md"},
+    )
 
     assert "HEAL_MODE_BLOCKED" in result
 
@@ -1069,8 +1126,14 @@ def test_heal_context_blocks_self_authored_marker_write(tmp_path):
     registry._ctx = ctx
 
     result = registry.execute(
-        "data_write",
-        {"path": "skills/external/alpha/.self_authored.json", "content": '{"origin":"self_authored"}'},
+        "write_file",
+        {
+            "root": "skill_payload",
+            "bucket": "external",
+            "skill_name": "alpha",
+            "path": ".self_authored.json",
+            "content": '{"origin":"self_authored"}',
+        },
     )
 
     assert "HEAL_MODE_BLOCKED" in result

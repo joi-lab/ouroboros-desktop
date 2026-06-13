@@ -1,4 +1,5 @@
-from ouroboros.event_bus import CHAT_OUTBOUND, SKILL_LIFECYCLE, EventBus
+from ouroboros.event_bus import CHAT_OUTBOUND, CHAT_VIDEO, SKILL_LIFECYCLE, EventBus
+import base64
 import asyncio
 import json
 from types import SimpleNamespace
@@ -73,14 +74,27 @@ def test_supervisor_dispatches_skill_lifecycle_to_log_and_event_bus(tmp_path, mo
 
     pushed = []
     published = []
+    sent_video = []
     ctx = SimpleNamespace(
         DRIVE_ROOT=tmp_path,
         append_jsonl=append_jsonl,
-        bridge=SimpleNamespace(push_log=pushed.append),
+        bridge=SimpleNamespace(
+            push_log=pushed.append,
+            send_video=lambda chat_id, video_bytes, caption="", mime="": (
+                sent_video.append((chat_id, video_bytes, caption, mime)) or (True, "ok")
+            ),
+        ),
     )
     monkeypatch.setattr("ouroboros.event_bus.publish_event", lambda topic, payload: published.append((topic, payload)))
 
     dispatch_event({"type": "skill_exec_finished", "skill": "demo", "exit_code": 0}, ctx)
+    dispatch_event({
+        "type": "send_video",
+        "chat_id": 0,
+        "video_base64": base64.b64encode(b"vid").decode("ascii"),
+        "caption": "zero",
+        "mime": "video/mp4",
+    }, ctx)
 
     event_log = tmp_path / "logs" / "events.jsonl"
     records = [json.loads(line) for line in event_log.read_text(encoding="utf-8").splitlines()]
@@ -88,3 +102,4 @@ def test_supervisor_dispatches_skill_lifecycle_to_log_and_event_bus(tmp_path, mo
     assert pushed[-1]["skill"] == "demo"
     assert published[-1][0] == SKILL_LIFECYCLE
     assert published[-1][1]["skill"] == "demo"
+    assert sent_video == [(0, b"vid", "zero", "video/mp4")]

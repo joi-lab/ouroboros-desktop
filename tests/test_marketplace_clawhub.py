@@ -33,11 +33,12 @@ def _mock_response(body: bytes, *, status: int = 200, headers: dict | None = Non
 
 
 def _patch_opener(body, *, status=200, headers=None):
-    return mock.patch.object(
-        clawhub_mod._OPENER,
-        "open",
-        return_value=_mock_response(body, status=status, headers=headers),
-    )
+    # Openers are now built lazily and selected by process role via
+    # _active_opener(); patch that selector to return a fake opener so the test
+    # does not depend on a module-level opener being pre-built.
+    fake = mock.Mock()
+    fake.open.return_value = _mock_response(body, status=status, headers=headers)
+    return mock.patch.object(clawhub_mod, "_active_opener", return_value=fake)
 
 
 # ---------------------------------------------------------------------------

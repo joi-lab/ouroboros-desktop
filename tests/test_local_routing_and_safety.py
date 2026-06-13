@@ -163,7 +163,7 @@ def test_repo_commit_policy_is_skip():
     """Trusted reviewed-mutative built-ins must be marked skip, not recheck."""
     from ouroboros.safety import TOOL_POLICY, POLICY_SKIP
 
-    assert TOOL_POLICY["repo_commit"] == POLICY_SKIP
+    assert TOOL_POLICY["commit_reviewed"] == POLICY_SKIP
 
 
 

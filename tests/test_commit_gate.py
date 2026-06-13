@@ -43,7 +43,7 @@ def _get_git_ops_module():
 
 # --- Tool registration tests ---
 
-@pytest.mark.parametrize("tool_name", ["pull_from_remote", "restore_to_head", "revert_commit"])
+@pytest.mark.parametrize("tool_name", ["vcs_pull_ff", "vcs_restore", "vcs_revert"])
 def test_tool_registered(tool_name):
     git_mod = _get_git_module()
     names = [t.name for t in git_mod.get_tools()]
@@ -215,7 +215,7 @@ def test_configure_remote_uses_clean_url():
 
 def test_new_tools_in_core_tool_names():
     registry = _get_registry_module()
-    for name in ("pull_from_remote", "restore_to_head", "revert_commit"):
+    for name in ("vcs_pull_ff", "vcs_restore", "vcs_revert"):
         assert name in registry.CORE_TOOL_NAMES, (
             f"{name} must be in CORE_TOOL_NAMES"
         )
@@ -355,7 +355,7 @@ def test_advisory_pre_review_registered():
     """advisory_pre_review must be registered as a tool."""
     adv_mod = _get_advisory_module()
     names = [t.name for t in adv_mod.get_tools()]
-    assert "advisory_pre_review" in names
+    assert "advisory_review" in names
 
 
 def test_review_status_registered():
@@ -721,7 +721,7 @@ def test_snapshot_hash_stable_on_message_change(tmp_path):
 
 
 def test_bypass_is_audited(tmp_path):
-    """Bypassing advisory gate must write advisory_pre_review_bypassed to events.jsonl."""
+    """Bypassing advisory gate must write advisory_review_bypassed to events.jsonl."""
     import json
     import subprocess
     git_mod = _get_git_module()
@@ -744,28 +744,28 @@ def test_bypass_is_audited(tmp_path):
     events_path = tmp_path / "logs" / "events.jsonl"
     assert events_path.exists(), "events.jsonl must exist after bypass"
     events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
-    bypass_events = [e for e in events if e.get("type") == "advisory_pre_review_bypassed"]
+    bypass_events = [e for e in events if e.get("type") == "advisory_review_bypassed"]
     assert len(bypass_events) == 1, "Exactly one bypass event must be logged"
     assert bypass_events[0]["task_id"] == "bypass-task"
 
 
 def test_advisory_pre_review_tool_schema_has_skip_param():
-    """advisory_pre_review schema must expose skip_advisory_pre_review param."""
+    """advisory_review schema must expose skip_advisory_review param."""
     adv_mod = _get_advisory_module()
     tools = adv_mod.get_tools()
-    adv_tool = next(t for t in tools if t.name == "advisory_pre_review")
+    adv_tool = next(t for t in tools if t.name == "advisory_review")
     props = adv_tool.schema["parameters"]["properties"]
-    assert "skip_advisory_pre_review" in props
-    assert props["skip_advisory_pre_review"].get("default") is False
+    assert "skip_advisory_review" in props
+    assert props["skip_advisory_review"].get("default") is False
 
 
 def test_repo_commit_schema_has_skip_advisory_param():
-    """repo_commit schema must expose skip_advisory_pre_review param."""
+    """commit_reviewed schema must expose skip_advisory_review param."""
     git_mod = _get_git_module()
     tools = git_mod.get_tools()
-    commit_tool = next(t for t in tools if t.name == "repo_commit")
+    commit_tool = next(t for t in tools if t.name == "commit_reviewed")
     props = commit_tool.schema["parameters"]["properties"]
-    assert "skip_advisory_pre_review" in props
+    assert "skip_advisory_review" in props
 
 
 def test_advisory_auto_bypass_on_missing_key(tmp_path, monkeypatch):
@@ -812,7 +812,7 @@ def test_advisory_auto_bypass_on_missing_key(tmp_path, monkeypatch):
     events_path = drive_root / "logs" / "events.jsonl"
     assert events_path.exists(), "events.jsonl must exist after auto-bypass"
     events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
-    bypass_events = [e for e in events if e.get("type") == "advisory_pre_review_bypassed"]
+    bypass_events = [e for e in events if e.get("type") == "advisory_review_bypassed"]
     assert len(bypass_events) == 1
     assert "ANTHROPIC_API_KEY" in bypass_events[0]["bypass_reason"]
 
@@ -1154,4 +1154,3 @@ def test_advisory_prompt_contains_obligation_targeting_instructions(tmp_path):
         assert "will NOT resolve" in prompt or "will not resolve" in prompt.lower(), (
             "Prompt must warn that generic item-name PASS won't resolve all same-item obligations"
         )
-

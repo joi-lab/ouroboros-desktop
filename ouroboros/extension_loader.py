@@ -104,6 +104,181 @@ _EXTENSION_SHORT_MAX = 24
 _EXTENSION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+def _out_of_process_handler_proxy(*_args: Any, **_kwargs: Any) -> Any:
+    raise RuntimeError("extension surface is configured for out-of-process dispatch")
+
+
+def _reject_extension_child_side_effect(capability: str) -> None:
+    if os.environ.get("OUROBOROS_EXTENSION_PROCESS_CHILD") == "1":
+        raise ExtensionRegistrationError(
+            f"{capability} is not supported for isolated-dep out-of-process extensions; "
+            "use tool, HTTP route, WS handler, UI tab, or settings-section proxy surfaces"
+        )
+
+
+def _validate_child_catalog_namespace(skill_name: str, surface_kind: str, value: str) -> None:
+    """Re-check child catalog namespaces at the host trust boundary."""
+
+    if surface_kind in {"tool", "ws handler"}:
+        expected = extension_name_prefix(skill_name)
+    elif surface_kind == "route":
+        expected = f"/api/extensions/{skill_name}/"
+    elif surface_kind in {"ui tab", "settings section"}:
+        expected = f"{skill_name}:"
+    else:
+        expected = ""
+    if expected and not value.startswith(expected):
+        raise ExtensionRegistrationError(
+            f"out-of-process {surface_kind} {value!r} escaped extension namespace {expected!r}"
+        )
+
+
+def _validate_child_tool_descriptor(skill_name: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    name = str(item.get("name") or "")
+    _validate_child_catalog_namespace(skill_name, "tool", name)
+    if not _EXTENSION_NAME_RE.match(name):
+        raise ExtensionRegistrationError(f"out-of-process tool {name!r} is not provider-safe")
+    if not isinstance(item.get("schema", {}), dict):
+        raise ExtensionRegistrationError(f"out-of-process tool {name!r} schema must be an object")
+    item["schema"] = dict(item.get("schema") or {})
+    item["description"] = str(item.get("description") or "")
+    try:
+        item["timeout_sec"] = max(1, int(item.get("timeout_sec") or 60))
+    except (TypeError, ValueError) as exc:
+        raise ExtensionRegistrationError(f"out-of-process tool {name!r} timeout_sec must be an integer") from exc
+    return item
+
+
+def _validate_child_route_descriptor(skill_name: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    path = str(item.get("path") or "")
+    _validate_child_catalog_namespace(skill_name, "route", path)
+    methods_iter = item.get("methods") or ("GET",)
+    if isinstance(methods_iter, str):
+        methods_iter = (methods_iter,)
+    methods = tuple(dict.fromkeys(str(method).strip().upper() for method in methods_iter if str(method).strip()))
+    if not methods:
+        raise ExtensionRegistrationError(f"out-of-process route {path!r} methods must be non-empty")
+    invalid = [method for method in methods if method not in VALID_EXTENSION_ROUTE_METHODS]
+    if invalid:
+        raise ExtensionRegistrationError(
+            f"out-of-process route {path!r} methods {invalid!r} are unsupported; "
+            f"expected subset of {sorted(VALID_EXTENSION_ROUTE_METHODS)}"
+        )
+    item["methods"] = methods
+    return item
+
+
+def _validate_child_ws_descriptor(skill_name: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    msg_type = str(item.get("type") or "")
+    _validate_child_catalog_namespace(skill_name, "ws handler", msg_type)
+    if not _EXTENSION_NAME_RE.match(msg_type):
+        raise ExtensionRegistrationError(f"out-of-process ws handler {msg_type!r} is not provider-safe")
+    return item
+
+
+def _validate_child_ui_descriptor(skill_name: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    key = str(item.get("key") or "")
+    _validate_child_catalog_namespace(skill_name, "ui tab", key)
+    if not isinstance(item.get("render", {}), dict):
+        raise ExtensionRegistrationError(f"out-of-process ui tab {key!r} render must be an object")
+    render = _validate_ui_render(dict(item.get("render") or {}))
+    item["render"] = render
+    span = _widget_span_from_render(render)
+    item["span"] = span
+    item["grid_span"] = span
+    return item
+
+
+def _validate_child_settings_descriptor(skill_name: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    key = str(item.get("key") or "")
+    _validate_child_catalog_namespace(skill_name, "settings section", key)
+    if not isinstance(item.get("render", {}), dict):
+        raise ExtensionRegistrationError(f"out-of-process settings section {key!r} render must be an object")
+    item["render"] = _validate_ui_render(dict(item.get("render") or {}))
+    return item
+
+
+def _register_out_of_process_surfaces(
+    skill: LoadedSkill,
+    *,
+    current_hash: str,
+    catalog: Dict[str, Any],
+) -> None:
+    """Install proxy surface descriptors returned by a child catalog run."""
+
+    with _lock:
+        bundle = _extensions.get(skill.name)
+        if bundle is None:
+            bundle = _ExtensionRegistrations()
+            _extensions[skill.name] = bundle
+        bundle.content_hash = current_hash
+        bundle.skill_dir = str(skill.skill_dir.resolve())
+        bundle.import_root = None
+        _load_failures.pop(skill.name, None)
+
+        for raw in catalog.get("tools") or []:
+            item = _validate_child_tool_descriptor(skill.name, dict(raw or {}))
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            if name in _tools:
+                raise ExtensionRegistrationError(f"tool {name!r} already registered")
+            item["handler"] = _out_of_process_handler_proxy
+            item["skill"] = skill.name
+            item["out_of_process"] = True
+            item["skills_repo_path"] = str(skill.skill_dir.parent)
+            _tools[name] = item
+            bundle.tools.append(name)
+
+        for raw in catalog.get("routes") or []:
+            item = _validate_child_route_descriptor(skill.name, dict(raw or {}))
+            path = str(item.get("path") or "")
+            if not path:
+                continue
+            if path in _routes:
+                raise ExtensionRegistrationError(f"route {path!r} already registered")
+            item["handler"] = _out_of_process_handler_proxy
+            item["skill"] = skill.name
+            item["out_of_process"] = True
+            item["skills_repo_path"] = str(skill.skill_dir.parent)
+            _routes[path] = item
+            bundle.routes.append(path)
+
+        for raw in catalog.get("ws_handlers") or []:
+            item = _validate_child_ws_descriptor(skill.name, dict(raw or {}))
+            msg_type = str(item.get("type") or "")
+            if not msg_type:
+                continue
+            if msg_type in _ws_handlers:
+                raise ExtensionRegistrationError(f"ws handler {msg_type!r} already registered")
+            item["handler"] = _out_of_process_handler_proxy
+            item["skill"] = skill.name
+            item["out_of_process"] = True
+            item["skills_repo_path"] = str(skill.skill_dir.parent)
+            _ws_handlers[msg_type] = item
+            bundle.ws_handlers.append(msg_type)
+
+        for raw in catalog.get("ui_tabs") or []:
+            item = _validate_child_ui_descriptor(skill.name, dict(raw or {}))
+            key = str(item.pop("key", "") or "")
+            if not key:
+                continue
+            if key in _ui_tabs:
+                raise ExtensionRegistrationError(f"ui tab {key!r} already registered")
+            _ui_tabs[key] = item
+            bundle.ui_tabs.append(key)
+
+        for raw in catalog.get("settings_sections") or []:
+            item = _validate_child_settings_descriptor(skill.name, dict(raw or {}))
+            key = str(item.pop("key", "") or "")
+            if not key:
+                continue
+            if key in _settings_sections:
+                raise ExtensionRegistrationError(f"settings section {key!r} already registered")
+            _settings_sections[key] = item
+            bundle.settings_sections.append(key)
+
+
 def _extension_skill_token(skill_name: str) -> str:
     """Return a short ASCII token without changing skill identity."""
     text = str(skill_name or "").strip()
@@ -467,6 +642,7 @@ class PluginAPIImpl:
         backoff_seconds: float = 2.0,
     ) -> None:
         """Declare a server-owned supervised task; workers only record it."""
+        _reject_extension_child_side_effect("register_supervised_task")
         self._require("supervised_task")
         clean_name = _assert_tool_name(name)
         future = None
@@ -504,6 +680,7 @@ class PluginAPIImpl:
         self,
         name: str,
     ) -> None:
+        _reject_extension_child_side_effect("register_companion_process")
         self._require("companion_process")
         clean_name = _assert_tool_name(name)
         spec = self._companion_specs.get(clean_name)
@@ -566,6 +743,7 @@ class PluginAPIImpl:
             _extensions.setdefault(self._skill, _ExtensionRegistrations()).companion_names.append(clean_name)
 
     def subscribe_event(self, topic: str, handler: Callable[[Dict[str, Any]], Any]) -> str:
+        _reject_extension_child_side_effect("subscribe_event")
         self._require("subscribe_event")
         topic = str(topic or "").strip()
         if topic not in self._subscribe_events:
@@ -578,6 +756,7 @@ class PluginAPIImpl:
         return sub_id
 
     def send_ws_message(self, message_type: str, data: Dict[str, Any]) -> None:
+        _reject_extension_child_side_effect("send_ws_message")
         if "ws_handler" not in self._permissions:
             raise ExtensionRegistrationError(
                 f"skill {self._skill!r} cannot 'ws_handler' "
@@ -600,6 +779,7 @@ class PluginAPIImpl:
                 log.warning("extension %s WS broadcast failed for %s", self._skill, full, exc_info=True)
 
     def on_unload(self, callback: Callable[[], Any]) -> None:
+        _reject_extension_child_side_effect("on_unload")
         if not callable(callback):
             raise ExtensionRegistrationError("on_unload callback must be callable")
         with _lock:
@@ -798,7 +978,11 @@ def _stage_extension_import_tree(
             raise RuntimeError(
                 f"extension {skill.name!r} contains a symlink that resolves outside the skill tree: {path}"
             ) from exc
-    import_root = state_dir / "__extension_imports" / uuid.uuid4().hex
+    child_import_base = os.environ.get("OUROBOROS_EXTENSION_IMPORT_ROOT_BASE", "")
+    if os.environ.get("OUROBOROS_EXTENSION_PROCESS_CHILD") == "1" and child_import_base:
+        import_root = pathlib.Path(child_import_base) / uuid.uuid4().hex
+    else:
+        import_root = state_dir / "__extension_imports" / uuid.uuid4().hex
     staged_skill_dir = import_root / "skill"
     import_root.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
@@ -1062,6 +1246,7 @@ def load_extension(
     settings_reader: Callable[[], Dict[str, Any]],
     *,
     drive_root: Optional[pathlib.Path] = None,
+    _force_in_process: bool = False,
 ) -> Optional[str]:
     """Load a fresh-reviewed enabled extension, returning a UI-safe error.
 
@@ -1111,7 +1296,9 @@ def load_extension(
 
     drive_root = pathlib.Path(drive_root)
     state_dir = skill_state_dir(drive_root, skill.name)
-    _sweep_stale_extension_imports(drive_root, skill.name)
+    child_in_process_load = _force_in_process and os.environ.get("OUROBOROS_EXTENSION_PROCESS_CHILD") == "1"
+    if not child_in_process_load:
+        _sweep_stale_extension_imports(drive_root, skill.name)
     try:
         from ouroboros.skill_dependencies import auto_install_specs_for_skill
 
@@ -1137,6 +1324,26 @@ def load_extension(
             f"{', '.join(missing_bits)}. Grant access from the Skills tab."
         )
     granted_core = list(grant_status.get("granted_keys") or [])
+    if not _force_in_process:
+        try:
+            from ouroboros.extension_process_runner import (
+                catalog_extension_surfaces,
+                extension_requires_process_isolation,
+            )
+
+            if extension_requires_process_isolation(skill.skill_dir, bool(auto_specs)):
+                catalog = catalog_extension_surfaces(
+                    skill,
+                    drive_root=pathlib.Path(drive_root),
+                    repo_dir=pathlib.Path(__file__).resolve().parents[1],
+                    skills_repo_path=skill.skill_dir.parent,
+                )
+                _register_out_of_process_surfaces(skill, current_hash=current_hash, catalog=catalog)
+                return None
+        except Exception as exc:
+            unload_extension(skill.name)
+            log.exception("extension %s failed to catalog out-of-process", skill.name)
+            return f"skill {skill.name!r} out-of-process catalog failure: {type(exc).__name__}: {exc}"
     staged_import_root: Optional[pathlib.Path] = None
     module_key = _module_key(skill.name)
     try:

@@ -32,7 +32,7 @@ There are three skill types:
 |------|---------------|-------------|
 | `instruction` | Markdown-only `SKILL.md` (no code). | Pure prompts / playbooks for the agent. |
 | `script` | One or more scripts under `scripts/` plus a manifest. | Heavy / batch work that runs as a subprocess. |
-| `extension` | A `plugin.py` that registers tools/routes/widgets via `PluginAPI`. | Long-lived in-process capabilities, including widgets and chat-driven tools. |
+| `extension` | A `plugin.py` that registers tools/routes/widgets via `PluginAPI`. | Host-integrated capabilities, including widgets and chat-driven tools; native-risk isolated deps dispatch in short-lived child processes. |
 
 The **runtime ownership** of an installed skill is also tagged:
 
@@ -114,8 +114,8 @@ runtime; otherwise `skill_exec` fails closed with a clear error.
 
 ```mermaid
 flowchart LR
-    install[install] --> review[review_skill]
-    review --> triad[tri-model skill review]
+    install[install] --> review[skill_review]
+    review --> triad[reviewer-slot skill review]
     triad -- PASS --> deps
     deps --> enable[owner toggles enabled=true]
     enable --> execute[skill_exec / dispatch]
@@ -139,7 +139,10 @@ flowchart LR
   Skills UI surfaces a toggle; agents can also call `toggle_skill`.
   Self-authored provenance does not change the enablement path.
 - **Execute**: `skill_exec` runs `type: script` skills as
-  subprocess; `type: extension` runs in-process via the loader.
+  subprocess. `type: extension` skills without isolated deps normally run
+  through the in-process loader; extensions with reviewed isolated deps are
+  cataloged and dispatched in short-lived child processes so a dependency crash
+  or Rust/C abort cannot crash the server.
 
 ## Data layout for stateful skills
 
@@ -187,6 +190,20 @@ executable review and only under the skill's `.ouroboros_env` directory.
 Global package-manager or arbitrary-download specs remain manual setup
 guidance.
 
+For `type: extension`, any reviewed isolated dependency env is kept out of
+`server.py`: `plugin.py` cataloging and tool/route/WS handlers run in a
+short-lived child process with the skill's payload and isolated env. Child
+crashes surface as tool errors, HTTP 502 responses, or WebSocket log messages;
+the server and WebSocket stay alive. Opaque native files shipped directly in the
+payload are still review-sensitive; if such a marker exists, the runtime also
+uses child dispatch defensively, but this guide does not make native payload
+binaries broadly acceptable.
+Out-of-process extensions may proxy tools, HTTP routes, WS handlers, UI tabs,
+and settings sections. PluginAPI side effects that require a live host object
+(`send_ws_message`, event subscriptions, supervised tasks, companion processes,
+and unload callbacks) are rejected during child cataloging until a dedicated
+host-relay contract exists.
+
 ## The `skill_preflight` tool
 
 When you are writing a skill (or repairing one in heal mode),
@@ -215,36 +232,35 @@ skill and payload root, so repair tools use payload-relative paths:
 
 | Tool | Repair path example | Use when |
 |------|---------------------|----------|
-| `data_read` / `data_list` | `plugin.py`, `scripts/main.py` | Inspect payload files. |
-| `str_replace_editor` | `plugin.py` | One exact replacement in an existing file. |
-| `claude_code_edit` | `cwd="."` or omitted | Coordinated multi-hunk edits; cwd is forced to the payload root. |
-| `data_write` | `new_module.py` | New files or intentional full-file rewrites. |
+| `read_file` / `list_files` with `root=skill_payload` | `plugin.py`, `scripts/main.py` | Inspect payload files. |
+| `edit_text` with `root=skill_payload` | `plugin.py` | One exact replacement in an existing file. |
+| `write_file` with `root=skill_payload` | `new_module.py` | New files or intentional full-file rewrites. |
 | `skill_preflight` | `skill="weather"` | Cheap read-only syntax/schema check before LLM review. |
-| `review_skill` | `skill="weather"` | Required final tri-model review. |
+| `skill_review` | `skill="weather"` | Required final reviewer-slot review. |
 
 Repair mode blocks shell, browser/search, scheduling, skill execution,
 repo commits, extension tools, key grants, and enable/disable flows. Finish
-with `skill_preflight` and `review_skill`; the owner enables or grants access
+with `skill_preflight` and `skill_review`; the owner enables or grants access
 after a fresh executable review.
 
 ### Light-mode short-form authoring (no repair constraint)
 
-Under `runtime_mode=light` without a `skill_repair` task constraint, the
-same three edit tools (`data_write`, `str_replace_editor`, `claude_code_edit`)
-accept two optional args — `bucket` (one of `external` / `clawhub` /
-`ouroboroshub`; `native` is excluded) and `skill_name`. When both are
-supplied, a short relative `path` / `cwd` (e.g. `plugin.py`, `lib/utils.py`,
-or `.`) resolves under `data/skills/<bucket>/<skill_name>/`, the same payload
-root the repair flow would pick. Supply both args together — passing only
-one returns a clear `bucket and skill_name must be supplied together` error
-instead of silently writing into the drive root.
+Under `runtime_mode=light` without a `skill_repair` task constraint,
+`write_file` and `edit_text` can target skill payloads with
+`root=skill_payload`, `bucket` (one of `external` / `clawhub` /
+`ouroboroshub`; `native` is excluded), and `skill_name`. A short relative
+`path` such as `plugin.py` or `lib/utils.py` resolves under
+`data/skills/<bucket>/<skill_name>/`, the same payload root the repair flow
+would pick. Supply both args together — passing only one returns a clear
+`bucket and skill_name must be supplied together` error instead of silently
+writing into the drive root.
 
 Equivalent ways to address `data/skills/external/weather/plugin.py` under
 light:
 
 ```text
-data_write(path="data/skills/external/weather/plugin.py", content=...)
-data_write(path="plugin.py", content=..., bucket="external", skill_name="weather")
+write_file(root="runtime_data", path="skills/external/weather/plugin.py", content=...)
+write_file(root="skill_payload", path="plugin.py", content=..., bucket="external", skill_name="weather")
 ```
 
 Control-plane sidecars (`.clawhub.json`, `.ouroboroshub.json`,
@@ -259,16 +275,15 @@ about a few thousand lines of code, depending on the model and prompt
 overhead. Two reliable strategies when a generated payload exceeds that
 ceiling:
 
-1. **`data_write(mode="append")` in chunks.** Each call appends the next
+1. **`write_file(mode="append")` in chunks.** Each call appends the next
    slice; the file lands intact across multiple turns. Useful for
    structured assets (CSV, JSONL, prose corpora) the agent itself is
    generating.
-2. **`claude_code_edit`.** The Agent SDK gateway subdivides large writes
-   into many small `Write` / `Edit` operations inside its own loop, so a
-   single call can produce a payload that no single `data_write` could
-   fit. Pair with `validate=True` to run smoke tests in the same call.
+2. **Split files deliberately.** Prefer smaller modules/assets and append
+   generated bulk data in deterministic chunks; this keeps each tool call
+   reviewable and avoids hidden editor loops.
 
-`run_shell` heredoc is **not** a workaround — every byte of a heredoc body
+`run_command` heredoc is **not** a workaround — every byte of a heredoc body
 still passes through the same LLM output budget, so it offers no real
 bypass and is harder to review.
 
@@ -348,7 +363,7 @@ The recommended closed-loop workflow is:
 1. Edit the skill payload under `data/skills/external/<name>/`,
    `data/skills/clawhub/<name>/`, or `data/skills/ouroboroshub/<name>/`.
 2. Run `skill_preflight(skill="<name>")` for cheap syntax/manifest checks.
-3. Run `review_skill(skill="<name>")` and address every critical finding.
+3. Run `skill_review(skill="<name>")` and address every critical finding.
 4. If `OUROBOROS_REVIEW_ENFORCEMENT=advisory`, inspect each advisory finding
    and either fix it or record why it is accepted for now.
 5. Enable the skill, grant required keys/permissions (or use the auto-grant
@@ -531,7 +546,7 @@ You can read their full source under
 from. The normal publishing path is agent-driven:
 
 1. Finish the local skill under `data/skills/<bucket>/<slug>/`.
-2. Run `skill_preflight` and `review_skill`; submission requires a
+2. Run `skill_preflight` and `skill_review`; submission requires a
    fresh `clean` review whose stored `content_hash` matches the current
    payload.
 3. Configure `GITHUB_TOKEN` in Settings → Secrets.
@@ -574,10 +589,10 @@ def register(api):
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `SKILL_EXEC_BLOCKED: review status is 'pending'` | Run `review_skill` for this skill. |
-| `SKILL_TOGGLE_ERROR: dependency fingerprint is stale` | Re-run `review_skill`; post-review deps reconciliation will reinstall. |
+| `SKILL_EXEC_BLOCKED: review status is 'pending'` | Run `skill_review` for this skill. |
+| `SKILL_TOGGLE_ERROR: dependency fingerprint is stale` | Re-run `skill_review`; post-review deps reconciliation will reinstall. |
 | `EXTENSION_NOT_LIVE` on tool dispatch | The skill is disabled or the loader had a load_error — check the Skills UI. |
-| `HEAL_MODE_BLOCKED: ...` | The Repair task tried to call a tool the internal heal-mode allowlist does not permit; finish the Repair flow with `review_skill` and exit. |
+| `HEAL_MODE_BLOCKED: ...` | The Repair task tried to call a tool the internal heal-mode allowlist does not permit; finish the Repair flow with `skill_review` and exit. |
 | `PluginAPI.register_*` raises `ExtensionRegistrationError` | The skill is missing the matching permission in its manifest. |
 | Reviewer marks `widget_module_safety: FAIL` | `widget.js` is touching `document.cookie` / `localStorage` / cross-origin `fetch`. Move the data through `/api/extensions/<skill>/` routes. |
 

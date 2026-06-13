@@ -29,10 +29,36 @@ def test_normalize_task_constraint_from_command_payload():
     assert constraint.payload_root == "skills/external/target"
     assert constraint.allow_enable is False
 
+
+def test_normalize_task_constraint_strict_bool_and_local_readonly_canonicalization():
+    repair = normalize_task_constraint({
+        "mode": "skill_repair",
+        "skill_name": "target",
+        "payload_root": "skills/external/target",
+        "allow_enable": "false",
+        "allow_review": "0",
+    })
+    assert repair.allow_enable is False
+    assert repair.allow_review is False
+
+    readonly = normalize_task_constraint({
+        "mode": "local_readonly_subagent",
+        "skill_name": "ignored",
+        "payload_root": "skills/external/ignored",
+        "allow_enable": "true",
+        "allow_review": "true",
+    })
+    assert readonly.mode == "local_readonly_subagent"
+    assert readonly.skill_name == ""
+    assert readonly.payload_root == ""
+    assert readonly.allow_enable is False
+    assert readonly.allow_review is False
+
+
 def test_long_tool_args_log_as_placeholder_not_content_object():
     args = {"path": "skills/external/demo/plugin.py", "content": "x" * 4000}
 
-    sanitized = sanitize_tool_args_for_log("data_write", args, threshold=100)
+    sanitized = sanitize_tool_args_for_log("write_file", args, threshold=100)
 
     assert isinstance(sanitized["content"], str)
     assert sanitized["content"].startswith("<TRUNCATED:content:")

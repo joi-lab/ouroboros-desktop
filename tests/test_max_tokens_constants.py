@@ -183,7 +183,7 @@ def test_tool_timeout_settings_wins_when_higher():
             return 360  # default per-tool
 
     with patch.object(mod, "load_settings", return_value={"OUROBOROS_TOOL_TIMEOUT_SEC": 900}):
-        result = mod._get_tool_timeout(FakeTools(), "run_shell")
+        result = mod._get_tool_timeout(FakeTools(), "run_command")
     assert result == 900, f"Expected 900 (settings), got {result}"
 
 
@@ -214,20 +214,20 @@ def test_review_evidence_no_obligation_cap():
     assert default is None, f"Expected None, got {default}"
 
 
-def test_claude_code_edit_timeout_1200():
-    """claude_code_edit ToolEntry must declare timeout_sec=1200."""
+def test_run_script_timeout_360():
+    """run_script ToolEntry must stay foreground-bounded like run_command."""
     from ouroboros.tools.shell import get_tools
     entries = get_tools()
-    cce = [e for e in entries if e.name == "claude_code_edit"]
-    assert cce, "claude_code_edit not found in shell.get_tools()"
-    assert cce[0].timeout_sec == 1200
+    rs = [e for e in entries if e.name == "run_script"]
+    assert rs, "run_script not found in shell.get_tools()"
+    assert rs[0].timeout_sec == 360
 
 
 def test_advisory_pre_review_timeout_1200():
     """advisory_pre_review ToolEntry must declare timeout_sec=1200."""
     from ouroboros.tools.claude_advisory_review import get_tools
     entries = get_tools()
-    apr = [e for e in entries if e.name == "advisory_pre_review"]
+    apr = [e for e in entries if e.name == "advisory_review"]
     assert apr, "advisory_pre_review not found"
     assert apr[0].timeout_sec == 1200
 

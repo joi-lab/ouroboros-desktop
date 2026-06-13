@@ -45,7 +45,7 @@ def _make_commit_attempt(findings: List[Dict[str, Any]]) -> Any:
     ca.critical_findings = findings
     ca.advisory_findings = []
     ca.readiness_warnings = []
-    ca.tool_name = "repo_commit"
+    ca.tool_name = "commit_reviewed"
     ca.attempt = 1
     ca.phase = "blocking_review"
     ca.blocked = True
@@ -239,7 +239,7 @@ class TestFormatStatusSection:
                 ts=f"2026-04-0{i+1}T00:00:00",
                 commit_message=f"attempt msg {i}",
                 status="succeeded",
-                tool_name="repo_commit",
+                tool_name="commit_reviewed",
                 attempt=i + 1,
                 repo_key="",
             )
@@ -668,7 +668,7 @@ class TestHandleReviewStatusNotTruncated:
             ca.ts = f"2026-04-08T00:{i:02d}:00"
             ca.commit_message = f"fix: attempt {i}"
             ca.repo_key = ""
-            ca.tool_name = "repo_commit"
+            ca.tool_name = "commit_reviewed"
             ca.task_id = "t"
             ca.attempt = i
             state.attempts.append(ca)
@@ -746,7 +746,7 @@ class TestPersistencePathNotTruncated:
         ca.critical_findings = [{"item": "code_quality", "severity": "critical", "reason": "r"}]
         ca.advisory_findings = []
         ca.readiness_warnings = []
-        ca.tool_name = "repo_commit"
+        ca.tool_name = "commit_reviewed"
         ca.attempt = 1
         ca.phase = "blocking_review"
         ca.blocked = True
@@ -898,7 +898,7 @@ class TestReviewEvidenceOmissionBudget:
         ca = CommitAttemptRecord(
             ts="2026-01-01T00:00:00",
             commit_message="test commit",
-            tool_name="repo_commit",
+            tool_name="commit_reviewed",
             attempt=1,
             status="succeeded",
             duration_sec=42.5,

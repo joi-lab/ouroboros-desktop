@@ -11,7 +11,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 
 from ouroboros.llm import LLMClient, normalize_reasoning_effort, add_usage
-from ouroboros.config import get_light_model
+from ouroboros.config import get_light_model, get_task_review_mode, resolve_effort
+from ouroboros.outcomes import turn_has_reviewable_effects
+from ouroboros.observability import new_call_id, persist_call
 from ouroboros.tool_policy import initial_tool_schemas, list_non_core_tools
 from ouroboros.tools.registry import ToolRegistry
 from ouroboros.context import build_user_content
@@ -96,13 +98,30 @@ def _handle_text_response(
     return (content or ""), accumulated_usage, llm_trace
 
 
+def _final_text_acknowledges_incomplete_children(content: Any, children: List[Dict[str, Any]]) -> bool:
+    text = str(content or "").lower()
+    if not text.strip():
+        return False
+    incomplete_words = ("incomplete", "pending", "running", "scheduled", "not complete", "still")
+    if not any(word in text for word in incomplete_words):
+        return False
+    for child in children:
+        task_id = str(child.get("task_id") or child.get("id") or "").strip().lower()
+        status = str(child.get("status") or "").strip().lower()
+        if task_id and task_id not in text:
+            return False
+        if status and status not in text:
+            return False
+    return True
+
+
 def _skill_names_touched_by_trace(llm_trace: Dict[str, Any]) -> List[str]:
     names: List[str] = []
     for call in llm_trace.get("tool_calls") or []:
         if not isinstance(call, dict):
             continue
         tool = str(call.get("tool") or "")
-        if tool not in {"data_write", "claude_code_edit", "str_replace_editor"}:
+        if tool not in {"write_file", "edit_text", "claude_code_edit"}:
             continue
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
         bucket = str(args.get("bucket") or "").strip().lower()
@@ -152,7 +171,7 @@ def _skill_finalization_message(drive_root: pathlib.Path, llm_trace: Dict[str, A
         return ""
     return (
         "⚠️ SKILL_NOT_FINALIZED: You edited self-authored skill payloads but "
-        "they are not ready yet. Call review_skill for each skill before "
+        "they are not ready yet. Call skill_review for each skill before "
         "declaring the task done. Current blockers: " + "; ".join(blockers)
     )
 
@@ -181,6 +200,8 @@ def _check_budget_limits(
 
     if budget_remaining_usd <= 0:
         finish_reason = f"🚫 Task rejected. Total budget exhausted. Please increase TOTAL_BUDGET in settings."
+        accumulated_usage["result_status"] = "failed"
+        accumulated_usage["reason_code"] = "budget_exhausted"
         return finish_reason, accumulated_usage, llm_trace
 
     budget_pct = task_cost / budget_remaining_usd if budget_remaining_usd > 0 else 1.0
@@ -201,11 +222,15 @@ def _check_budget_limits(
                 max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
                 use_local=use_local,
             )
+            accumulated_usage["result_status"] = "failed"
+            accumulated_usage["reason_code"] = "budget_exhausted"
             if final_msg:
                 return (final_msg.get("content") or finish_reason), accumulated_usage, llm_trace
             return finish_reason, accumulated_usage, llm_trace
         except Exception:
             log.warning("Failed to get final response after budget limit", exc_info=True)
+            accumulated_usage["result_status"] = "failed"
+            accumulated_usage["reason_code"] = "budget_exhausted"
             return finish_reason, accumulated_usage, llm_trace
     elif budget_pct > 0.3 and round_idx % 10 == 0:
         _append_or_merge_user_message(messages, f"[INFO] Task spent ${task_cost:.3f} of ${budget_remaining_usd:.2f}. Wrap up if possible.")
@@ -238,7 +263,7 @@ def _emit_checkpoint_event(
     task_id: str,
     drive_logs: Optional[pathlib.Path],
     data: Dict[str, Any],
-) -> None:
+) -> bool:
     """Emit a task_checkpoint via event queue or direct events.jsonl append."""
     from ouroboros.loop_llm_call import _emit_live_log
     payload = {"type": "task_checkpoint", "task_id": task_id, **data}
@@ -250,6 +275,58 @@ def _emit_checkpoint_event(
             append_jsonl(drive_logs / "events.jsonl", {"ts": utc_now_iso(), **payload})
         except Exception:
             pass
+
+
+def _persist_compaction_checkpoint(
+    messages: List[Dict[str, Any]],
+    *,
+    drive_root: Optional[pathlib.Path],
+    drive_logs: pathlib.Path,
+    task_id: str,
+    reason: str,
+    keep_recent: int,
+    round_idx: int,
+    event_queue: Optional[queue.Queue],
+) -> None:
+    """Persist the pre-compaction transcript so compaction is only a view."""
+    root = pathlib.Path(drive_root) if drive_root is not None else pathlib.Path(drive_logs).parent
+    call_id = new_call_id("compaction_checkpoint")
+    try:
+        ref = persist_call(
+            root,
+            task_id=task_id,
+            call_id=call_id,
+            call_type="compaction_checkpoint",
+            payload={
+                "reason": reason,
+                "keep_recent": keep_recent,
+                "round": round_idx,
+                "messages": messages,
+            },
+            manifest={
+                "round": round_idx,
+                "reason": reason,
+                "keep_recent": keep_recent,
+            },
+        )
+        _emit_checkpoint_event(event_queue, task_id, drive_logs, {
+            "checkpoint_kind": "pre_compaction_transcript",
+            "round": round_idx,
+            "reason": reason,
+            "keep_recent": keep_recent,
+            "checkpoint_ref": ref.get("manifest_ref"),
+        })
+        return True
+    except Exception:
+        log.debug("Failed to persist pre-compaction transcript checkpoint", exc_info=True)
+        _emit_checkpoint_event(event_queue, task_id, drive_logs, {
+            "checkpoint_kind": "pre_compaction_transcript",
+            "round": round_idx,
+            "reason": reason,
+            "keep_recent": keep_recent,
+            "checkpoint_status": "failed",
+        })
+        return False
 
 
 def _extract_plain_text_from_content(content: Any) -> str:
@@ -310,6 +387,139 @@ def _owner_marked_content(content: Any) -> Any:
                 return blocks
         return [{"type": "text", "text": prefix.rstrip()}] + blocks
     return prefix + str(content or "")
+
+
+def _task_acceptance_eligible(mode: str, llm_trace: Dict[str, Any], is_direct_chat: bool) -> tuple[bool, str]:
+    """Return ``(host_should_review, trigger_reason)``.
+
+    ``required`` is effect-gated: the host enforces review only when the turn
+    produced reviewable work (commit / deliverable / repo / workspace / skill
+    write) or the task is not a direct-chat turn (queued / headless / scheduled).
+    Pure conversation with no reviewable effect is not reviewed even in
+    ``required``. ``auto`` stays LLM-first (the agent elects via the visible
+    task_acceptance_review tool); ``off`` never reviews. This gates on observable
+    runtime effects (P3 immune gate), not on message content (no P5 violation).
+    """
+    if mode == "off":
+        return False, "off"
+    if mode == "required":
+        if turn_has_reviewable_effects(llm_trace):
+            return True, "required_effect"
+        if not is_direct_chat:
+            return True, "required_nondirect"
+        return False, "skipped_conversation"
+    return False, "skipped_auto"
+
+
+def _run_task_acceptance_review_once(
+    *,
+    tools: ToolRegistry,
+    content: str,
+    task_id: str,
+    task_type: str,
+    llm_trace: Dict[str, Any],
+    drive_root: Optional[pathlib.Path],
+    messages: List[Dict[str, Any]],
+    emit_progress: Callable[[str], None],
+) -> bool:
+    mode = get_task_review_mode()
+    if getattr(tools._ctx, "_task_acceptance_reviewed", False):
+        return False
+    is_direct_chat = bool(getattr(tools._ctx, "is_direct_chat", False))
+    eligible, trigger = _task_acceptance_eligible(mode, llm_trace, is_direct_chat)
+    agent_called = any(
+        isinstance(c, dict) and str(c.get("tool") or "") == "task_acceptance_review"
+        for c in (llm_trace.get("tool_calls") or [])
+    )
+    if agent_called:
+        llm_trace["review_decision"] = {"eligibility": "eligible", "trigger": "agent_called_tool"}
+    else:
+        llm_trace["review_decision"] = {
+            "eligibility": "eligible" if eligible else "not_eligible",
+            "trigger": trigger,
+        }
+    if not eligible:
+        return False
+    try:
+        from ouroboros.review_substrate import ReviewRequest, reviewer_slots, run_review_request
+
+        tools._ctx._task_acceptance_reviewed = True
+        evidence = {
+            "task_id": task_id,
+            "task_type": task_type,
+            "tool_calls": llm_trace.get("tool_calls") or [],
+            "reasoning_notes": llm_trace.get("reasoning_notes") or [],
+        }
+        slots = reviewer_slots(effort=resolve_effort("review"), role_hint="task acceptance")
+        min_successful = 2 if len(slots) >= 3 else max(1, len(slots))
+        request = ReviewRequest(
+            surface="task_acceptance",
+            goal=_extract_plain_text_from_content(messages[1].get("content")) if len(messages) > 1 else "",
+            subject=str(content or ""),
+            evidence=evidence,
+            checklist=(
+                "Check whether the claimed result follows from the tool trace, "
+                "whether errors/timeouts/artifacts were handled honestly, and "
+                "whether the final response should be changed before release."
+            ),
+            policy={
+                "verdict_is_advisory": True,
+                "full_output_enters_context": True,
+                "min_successful_slots": min_successful,
+                "fail_closed_on_errors": True,
+            },
+            task_id=task_id,
+        )
+        result = run_review_request(
+            request,
+            slots=slots,
+            drive_root=pathlib.Path(drive_root) if drive_root is not None else pathlib.Path(tools._ctx.drive_root),
+            usage_ctx=tools._ctx,
+        )
+        payload = json.dumps(result.__dict__, ensure_ascii=False, indent=2, default=str)
+        messages.append({"role": "assistant", "content": content or ""})
+        _append_or_merge_user_message(
+            messages,
+            "[TASK ACCEPTANCE REVIEW]\n"
+            "The following full reviewer output is advisory. Deliver your actual answer/result to the "
+            "user, revised only if a finding is valid; if a finding is wrong, reject it with evidence. "
+            "Do NOT replace your user-facing answer with a status report about this review unless the "
+            "user explicitly asked for one.\n\n"
+            f"{payload}",
+        )
+        llm_trace.setdefault("review_runs", []).append(result.__dict__)
+        emit_progress("Task acceptance review completed; reviewer output injected before final response.")
+        return True
+    except Exception as exc:
+        if mode == "required":
+            tools._ctx._task_acceptance_reviewed = True
+            safe_error = _extract_plain_text_from_content(str(exc))[:2000]
+            degraded_result = {
+                "request": {"surface": "task_acceptance", "task_id": task_id},
+                "actors": [],
+                "parsed_findings": [{
+                    "severity": "critical",
+                    "item": "task_acceptance_infra_failure",
+                    "evidence": f"{type(exc).__name__}: {safe_error}",
+                    "recommendation": "Do not report semantic success unless the failure is explicitly accounted for.",
+                }],
+                "aggregate_signal": "DEGRADED",
+                "degraded": True,
+                "degraded_reasons": [f"{type(exc).__name__}: {safe_error}"],
+            }
+            llm_trace.setdefault("review_runs", []).append(degraded_result)
+            messages.append({"role": "assistant", "content": content or ""})
+            _append_or_merge_user_message(
+                messages,
+                "[TASK ACCEPTANCE REVIEW DEGRADED]\n"
+                "Required task acceptance review failed before reviewers returned. "
+                "This degraded review record is part of the task evidence; do not finalize "
+                "as clean success unless you explicitly account for it.\n\n"
+                f"{json.dumps(degraded_result, ensure_ascii=False, indent=2)}",
+            )
+            return True
+        log.debug("Task acceptance review skipped after failure", exc_info=True)
+        return False
 
 
 def _maybe_inject_self_check(
@@ -555,7 +765,7 @@ def run_llm_loop(
             round_idx += 1
 
             if round_idx > MAX_ROUNDS:
-                finish_reason = f"⚠️ Task exceeded MAX_ROUNDS ({MAX_ROUNDS}). Consider decomposing into subtasks via schedule_task."
+                finish_reason = f"⚠️ Task exceeded MAX_ROUNDS ({MAX_ROUNDS}). Consider decomposing into subtasks via schedule_subagent."
                 _append_or_merge_user_message(messages, f"[ROUND_LIMIT] {finish_reason}")
                 try:
                     final_msg, final_cost = call_llm_with_retry(
@@ -563,11 +773,15 @@ def run_llm_loop(
                         max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
                         use_local=active_use_local,
                     )
+                    accumulated_usage["result_status"] = "failed"
+                    accumulated_usage["reason_code"] = "round_limit"
                     if final_msg:
                         return (final_msg.get("content") or finish_reason), accumulated_usage, llm_trace
                     return finish_reason, accumulated_usage, llm_trace
                 except Exception:
                     log.warning("Failed to get final response after round limit", exc_info=True)
+                    accumulated_usage["result_status"] = "failed"
+                    accumulated_usage["reason_code"] = "round_limit"
                     return finish_reason, accumulated_usage, llm_trace
 
             ctx = tools._ctx
@@ -595,16 +809,50 @@ def run_llm_loop(
             # Compaction: manual and emergency always run; routine is local-only
             # and suppressed on checkpoint rounds to avoid a duplicate LLM call.
             if pending_compaction is not None:
-                messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=pending_compaction)
-                tools._ctx._pending_compaction = None
+                if _persist_compaction_checkpoint(
+                    messages,
+                    drive_root=drive_root,
+                    drive_logs=drive_logs,
+                    task_id=task_id,
+                    reason="manual",
+                    keep_recent=int(pending_compaction),
+                    round_idx=round_idx,
+                    event_queue=event_queue,
+                ):
+                    messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=pending_compaction)
+                    tools._ctx._pending_compaction = None
+                else:
+                    emit_progress("⚠️ Context compaction skipped: forensic checkpoint could not be persisted.")
 
             elif _estimate_messages_chars(messages) > 1_200_000:
-                messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=50)
+                if _persist_compaction_checkpoint(
+                    messages,
+                    drive_root=drive_root,
+                    drive_logs=drive_logs,
+                    task_id=task_id,
+                    reason="emergency_context_size",
+                    keep_recent=50,
+                    round_idx=round_idx,
+                    event_queue=event_queue,
+                ):
+                    messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=50)
+                else:
+                    emit_progress("⚠️ Emergency compaction skipped: forensic checkpoint could not be persisted.")
 
             elif not _checkpoint_injected:
                 if active_use_local:
                     if round_idx > 6 and len(messages) > 40:
-                        messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=20)
+                        if _persist_compaction_checkpoint(
+                            messages,
+                            drive_root=drive_root,
+                            drive_logs=drive_logs,
+                            task_id=task_id,
+                            reason="local_routine",
+                            keep_recent=20,
+                            round_idx=round_idx,
+                            event_queue=event_queue,
+                        ):
+                            messages, _compaction_usage = compact_tool_history_llm(messages, keep_recent=20)
                 # Remote routine compaction stays off; emergency handles overflow.
             if tools._ctx.messages is not messages:
                 tools._ctx.messages = messages
@@ -627,6 +875,7 @@ def run_llm_loop(
                 max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
                 use_local=active_use_local,
             )
+            tools._ctx._current_llm_call_meta = dict(accumulated_usage.get("_last_llm_call_meta") or {})
 
             if msg is None:
                 fallback_model = os.environ.get("OUROBOROS_MODEL_FALLBACK", "").strip()
@@ -658,6 +907,40 @@ def run_llm_loop(
             tool_calls = msg.get("tool_calls") or []
             content = msg.get("content")
             if not tool_calls:
+                handoff_msg = ""
+                if drive_root is not None and task_id:
+                    try:
+                        from ouroboros.task_status import FINAL_STATUSES, find_child_tasks, format_handoff_message
+
+                        metadata = getattr(tools._ctx, "task_metadata", {}) if isinstance(getattr(tools._ctx, "task_metadata", {}), dict) else {}
+                        children = find_child_tasks(
+                            drive_root,
+                            parent_task_id=task_id,
+                            root_task_id=str(metadata.get("root_task_id") or task_id),
+                            exclude_task_id=task_id,
+                        )
+                        signature = "|".join(
+                            f"{child.get('task_id') or child.get('id')}:{child.get('status')}:{len(str(child.get('result') or ''))}"
+                            for child in children
+                        )
+                        previous = getattr(tools._ctx, "_subagent_handoff_signature", "")
+                        nonterminal_children = [
+                            child for child in children
+                            if str(child.get("status") or "").strip().lower() not in FINAL_STATUSES
+                        ]
+                        needs_incomplete_ack = bool(nonterminal_children) and not _final_text_acknowledges_incomplete_children(content, nonterminal_children)
+                        if children and signature and (signature != previous or needs_incomplete_ack):
+                            tools._ctx._subagent_handoff_signature = signature
+                            handoff_msg = format_handoff_message(children)
+                    except Exception:
+                        log.debug("Failed to build subagent handoff reminder", exc_info=True)
+                if handoff_msg:
+                    if content and content.strip():
+                        messages.append({"role": "assistant", "content": content})
+                    _append_or_merge_user_message(messages, f"[SYSTEM REMINDER]\n{handoff_msg}")
+                    emit_progress("Subagent handoff status refreshed before final response.")
+                    llm_trace["reasoning_notes"].append("Subagent handoff status refreshed before final response.")
+                    continue
                 finalization_msg = _skill_finalization_message(drive_root, llm_trace) if drive_root is not None else ""
                 if finalization_msg and not getattr(tools._ctx, "_skill_finalization_injected", False):
                     tools._ctx._skill_finalization_injected = True
@@ -666,6 +949,17 @@ def run_llm_loop(
                     _append_or_merge_user_message(messages, f"[SYSTEM REMINDER]\n{finalization_msg}")
                     emit_progress(finalization_msg)
                     llm_trace["reasoning_notes"].append(finalization_msg)
+                    continue
+                if _run_task_acceptance_review_once(
+                    tools=tools,
+                    content=content or "",
+                    task_id=task_id,
+                    task_type=task_type,
+                    llm_trace=llm_trace,
+                    drive_root=drive_root,
+                    messages=messages,
+                    emit_progress=emit_progress,
+                ):
                     continue
                 return _handle_text_response(content, llm_trace, accumulated_usage)
 
@@ -704,6 +998,21 @@ def run_llm_loop(
             except Exception:
                 log.warning("Failed to shutdown stateful executor", exc_info=True)
         if drive_root is not None and task_id:
+            try:
+                from ouroboros.tools.services import stop_task_services
+
+                stopped_services = stop_task_services(tools._ctx)
+                if stopped_services:
+                    _emit_checkpoint_event(event_queue, task_id, drive_logs, {
+                        "checkpoint_kind": "services_stopped",
+                        "services": stopped_services,
+                    })
+                    llm_trace.setdefault("verification_events", []).append({
+                        "kind": "services_stopped",
+                        "services": stopped_services,
+                    })
+            except Exception:
+                log.debug("Failed to stop task services", exc_info=True)
             try:
                 from ouroboros.owner_inject import cleanup_task_mailbox
                 cleanup_task_mailbox(drive_root, task_id)

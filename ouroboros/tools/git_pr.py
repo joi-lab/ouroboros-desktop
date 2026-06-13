@@ -201,7 +201,7 @@ def _create_integration_branch(
         f"                                              original author attribution\n"
         f"  2. stage_adaptations()                   ← optional: stage Ouroboros\n"
         f"                                              adaptation changes (no commit)\n"
-        f"  3. stage_pr_merge(branch='{branch_name}') → advisory_pre_review → repo_commit\n"
+        f"  3. stage_pr_merge(branch='{branch_name}') → advisory_review → commit_reviewed\n"
         f"     (staged adaptations from step 2 land in the final merge commit)"
     )
 
@@ -420,7 +420,7 @@ def _cherry_pick_pr_commits(
         co_lines = "\n".join(f"Co-authored-by: {a}" for a in attribution_lines)
         author_hint = (
             f"\n\n{hint_lead}\n"
-            f"Include in your final repo_commit (merge) message:\n{co_lines}"
+            f"Include in your final commit_reviewed (merge) message:\n{co_lines}"
         )
     else:
         author_hint = ""
@@ -432,7 +432,7 @@ def _cherry_pick_pr_commits(
         + f"\n\nNext:\n"
           f"  stage_adaptations()                      ← optional: stage Ouroboros\n"
           f"                                              adaptation changes (no commit)\n"
-          f"  stage_pr_merge(branch='{current_branch}') → advisory_pre_review → repo_commit\n"
+          f"  stage_pr_merge(branch='{current_branch}') → advisory_review → commit_reviewed\n"
           f"  (staged adaptations land in the merge commit — no intermediate commit needed)"
         + override_note
         + author_hint
@@ -614,18 +614,18 @@ def _stage_pr_merge(
 
     co_authored = "\n".join(f"Co-authored-by: {a}" for a in authors) if authors else ""
     author_hint = (
-        f"\n\nAttribution — include in repo_commit message:\n{co_authored}"
+        f"\n\nAttribution — include in commit_reviewed message:\n{co_authored}"
         if co_authored else ""
     )
 
     return (
         f"✅ Staged merge '{branch}' → '{target_branch}' (NOT committed)\n"
-        f"  MERGE_HEAD is set — repo_commit will create a proper merge commit\n"
+        f"  MERGE_HEAD is set — commit_reviewed will create a proper merge commit\n"
         f"  with both parents, preserving integration branch history.\n"
         f"  Branch '{branch}' left intact.\n\n"
         f"Next:\n"
-        f"  advisory_pre_review(commit_message='...')\n"
-        f"  repo_commit(commit_message='...')"
+        f"  advisory_review(commit_message='...')\n"
+        f"  commit_reviewed(commit_message='...')"
         + author_hint
     )
 
@@ -710,8 +710,8 @@ def get_tools() -> List[ToolEntry]:
             "description": (
                 "Stage all current working-tree changes on the integration branch WITHOUT "
                 "committing (git add -A only). Use after cherry_pick_pr_commits to prepare "
-                "Ouroboros adaptation/fixup changes. Finalize via advisory_pre_review + "
-                "repo_commit to comply with BIBLE.md P3 (all commits must pass review). "
+                "Ouroboros adaptation/fixup changes. Finalize via advisory_review + "
+                "commit_reviewed to comply with BIBLE.md P3 (all commits must pass review). "
                 "Must be on an integrate/pr-N branch."
             ),
             "parameters": {"type": "object", "properties": {}},
@@ -722,11 +722,11 @@ def get_tools() -> List[ToolEntry]:
             "description": (
                 "Stage a no-fast-forward merge of an integration branch into ouroboros "
                 "WITHOUT committing (git merge --no-ff --no-commit). Sets MERGE_HEAD so "
-                "repo_commit creates a proper merge commit with both parents. Target is "
-                "always ouroboros (repo_commit always checks out branch_dev before "
+                "commit_reviewed creates a proper merge commit with both parents. Target is "
+                "always ouroboros (commit_reviewed always checks out branch_dev before "
                 "committing — any other target would lose MERGE_HEAD). The "
                 "integration-branch history (with original author commits) is permanently "
-                "linked. Finalize via advisory_pre_review + repo_commit."
+                "linked. Finalize via advisory_review + commit_reviewed."
             ),
             "parameters": {"type": "object", "properties": {
                 "branch": {"type": "string",

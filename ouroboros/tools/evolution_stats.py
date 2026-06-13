@@ -132,6 +132,8 @@ def _push_to_github(data: dict[str, Any]) -> str:
     import base64
     import requests
 
+    from ouroboros.utils import in_worker_process
+
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
         return "error: GITHUB_TOKEN not found"
@@ -148,23 +150,26 @@ def _push_to_github(data: dict[str, Any]) -> str:
         "Accept": "application/vnd.github.v3+json",
     }
 
-    sha = None
-    r = requests.get(url, headers=headers, timeout=15)
-    if r.status_code == 200:
-        sha = r.json().get("sha")
+    with requests.Session() as session:
+        if in_worker_process():
+            session.trust_env = False  # fork-safe: skip system proxy lookup
+        sha = None
+        r = session.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
 
-    content_str = json.dumps(data, ensure_ascii=False, indent=2)
-    content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+        content_str = json.dumps(data, ensure_ascii=False, indent=2)
+        content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
 
-    payload = {
-        "message": f"evolution: {len(data.get('points', []))} data points",
-        "content": content_b64,
-        "branch": branch,
-    }
-    if sha:
-        payload["sha"] = sha
+        payload = {
+            "message": f"evolution: {len(data.get('points', []))} data points",
+            "content": content_b64,
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
 
-    put_r = requests.put(url, headers=headers, json=payload, timeout=15)
+        put_r = session.put(url, headers=headers, json=payload, timeout=15)
     if put_r.status_code in [200, 201]:
         return f"pushed {len(data.get('points', []))} points to {file_path}"
     return f"error: {put_r.status_code} — {put_r.text[:200]}"

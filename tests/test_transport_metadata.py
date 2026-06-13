@@ -24,6 +24,7 @@ def test_outbound_events_include_remembered_transport_metadata(monkeypatch):
     bridge.send_message(77, "reply")
     bridge.send_chat_action(77, "typing")
     bridge.send_photo(77, b"img", caption="photo")
+    bridge.send_video(77, b"vid", caption="video", mime="video/mp4")
 
     assert all(payload.get("transport", {}).get("conversation_id") == "abc" for _topic, payload in events)
 

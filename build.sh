@@ -30,6 +30,14 @@ if [ ! -f "python-standalone/bin/python3" ]; then
     exit 1
 fi
 
+# Bundle the official notarized Node.js runtime so node-runtime skills work in
+# the packaged app (Homebrew node is code-signing-killed by macOS). The signing
+# pass below re-signs node-standalone/bin/node under the hardened runtime.
+if [ ! -f "node-standalone/bin/node" ]; then
+    echo "--- Downloading bundled Node.js runtime ---"
+    bash scripts/download_node_standalone.sh
+fi
+
 echo "--- Installing launcher dependencies ---"
 pip install -q -r requirements-launcher.txt
 

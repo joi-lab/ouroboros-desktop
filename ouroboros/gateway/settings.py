@@ -31,7 +31,11 @@ from ouroboros.server_runtime import (
     has_startup_ready_provider,
     has_supervisor_provider,
 )
-from ouroboros.settings_setup_contract import build_setup_contract
+from ouroboros.settings_setup_contract import (
+    BUDGET_SETTING_KEYS,
+    build_setup_contract,
+    parse_budget_setting,
+)
 from ouroboros.utils import append_jsonl, atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
@@ -514,6 +518,20 @@ async def api_claude_code_install(request: Request) -> JSONResponse:
 async def api_settings_post(request: Request) -> JSONResponse:
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            return json_error("JSON body must be an object.", 400)
+        parsed_budget: dict[str, float] = {}
+        for budget_key in BUDGET_SETTING_KEYS:
+            if budget_key not in body:
+                continue
+            budget_value, budget_error = parse_budget_setting(budget_key, body.get(budget_key))
+            if budget_error:
+                return json_error(budget_error, 400)
+            if budget_value is not None:
+                parsed_budget[budget_key] = budget_value
+        if parsed_budget:
+            body = dict(body)
+            body.update(parsed_budget)
         old_settings = load_settings()
         from ouroboros.config import get_runtime_mode, normalize_runtime_mode as _norm_runtime_mode
 
@@ -596,15 +614,16 @@ async def api_settings_post(request: Request) -> JSONResponse:
         _apply_settings_to_env(current)
         _start_supervisor_if_needed_for_request(request, current)
 
-        try:
-            from ouroboros.mcp_client import (
-                reconfigure_from_settings as _mcp_reconfigure,
-                refresh_all_background as _mcp_refresh_background,
-            )
-            _mcp_reconfigure(current)
-            _mcp_refresh_background(reason="settings")
-        except Exception:
-            log.warning("MCP reconfigure after settings change failed", exc_info=True)
+        if any(k in all_changed for k in ("MCP_ENABLED", "MCP_SERVERS", "MCP_TOOL_TIMEOUT_SEC")):
+            try:
+                from ouroboros.mcp_client import (
+                    reconfigure_from_settings as _mcp_reconfigure,
+                    refresh_all_background as _mcp_refresh_background,
+                )
+                _mcp_reconfigure(current)
+                _mcp_refresh_background(reason="settings")
+            except Exception:
+                log.warning("MCP reconfigure after settings change failed", exc_info=True)
 
         # Skills repo/runtime changes require extension loader reconciliation.
         try:
@@ -686,7 +705,7 @@ async def api_settings_post(request: Request) -> JSONResponse:
             pass
         _repo_slug = current.get("GITHUB_REPO", "")
         _gh_token = current.get("GITHUB_TOKEN", "")
-        if _repo_slug and _gh_token:
+        if _repo_slug and _gh_token and any(k in all_changed for k in ("GITHUB_REPO", "GITHUB_TOKEN")):
             from supervisor.git_ops import configure_remote
             remote_ok, remote_msg = configure_remote(_repo_slug, _gh_token)
             if not remote_ok:

@@ -11,6 +11,7 @@ of the SPA page-chrome layer:
 from __future__ import annotations
 
 import pathlib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -102,13 +103,17 @@ def test_evolution_page_supports_refresh_and_runtime_state():
     assert "bg_consciousness_state" in source
 
 
-def test_server_and_navigation_expose_runtime_refresh_hooks():
+def test_server_navigation_and_chat_static_contracts():
     server_source = _read("server.py")
     state_source = _read("ouroboros/gateway/state.py")
     control_source = _read("ouroboros/gateway/control.py")
     app_source = _read("web/app.js")
     evo_source = _read("web/modules/evolution.js")
     chat_source = _read("web/modules/chat.js")
+    css = _read("web/style.css")
+    ui = _read("web/modules/settings_ui.js")
+    settings = _read("web/modules/settings.js")
+    costs = _read("web/modules/costs.js")
 
     assert "def _describe_bg_consciousness_state(requested_enabled: bool) -> dict:" in server_source
     assert '"evolution_state": evolution_state,' in state_source
@@ -118,3 +123,39 @@ def test_server_and_navigation_expose_runtime_refresh_hooks():
     assert "evo-runtime-detail" in evo_source
     assert "data?.evolution_state?.detail" in chat_source
     assert "data?.bg_consciousness_state?.detail" in chat_source
+    assert re.search(r'<input[^>]+id="chat-file-input"[^>]+multiple', chat_source)
+    assert "MAX_PENDING_ATTACHMENTS = 10" in chat_source
+    assert "MAX_ATTACHMENT_FILE_BYTES = 50 * 1024 * 1024" in chat_source
+    assert "MAX_PENDING_ATTACHMENT_BYTES = 100 * 1024 * 1024" in chat_source
+    assert "pendingAttachments" in chat_source
+    assert "attachmentsUploading" in chat_source
+    assert "setAttachmentUploadState" in chat_source
+    assert "attachBtn.classList.toggle('uploading', uploading)" in chat_source
+    assert "input.disabled = uploading;" in chat_source
+    assert "cleanupUploadedAttachments" in chat_source
+    assert "method: 'DELETE'" in chat_source
+    assert "await cleanupUploadedAttachments(uploaded);" in chat_source
+    assert "await cleanupUploadedAttachments(uploadedAttachments);" in chat_source
+    assert "ws.send({" in chat_source and "{ queue: false }" in chat_source
+    assert "result?.status !== 'sent'" in chat_source
+    assert "data-attachment-remove" in chat_source
+    assert "Promise.allSettled" in chat_source
+    assert "budget_text: 'Connecting...'" in chat_source
+    assert "send(msg, options = {})" in _read("web/modules/ws.js")
+    assert "options.queue === false" in _read("web/modules/ws.js")
+    assert ".chat-attachment-preview" in css and "flex-wrap" in css
+    assert 'id="s-total-budget"' in ui
+    assert 'id="s-settings-per-task-cost"' in ui
+    assert "setupContract.budgetFields" in settings
+    assert "'anthropic/claude-opus-4.7'" in settings
+    assert "'anthropic::claude-opus-4-7'" in settings
+    assert "currentSettings?.[field.settingKey]" in settings
+    assert "window.addEventListener('ouro:settings-updated'" in settings
+    assert "source: 'settings'" in settings
+    assert "Budget values must be at least 0.01." in costs
+    assert "COST_BUDGET_INPUTS" in costs
+    assert "s?._meta?.setup_contract?.budgetFields" in costs
+    assert "const MIN_BUDGET_VALUE" not in costs
+    assert "new CustomEvent('ouro:settings-updated'" in costs
+    assert "source: 'costs'" in costs
+    assert "event.detail?.source === 'costs'" in costs

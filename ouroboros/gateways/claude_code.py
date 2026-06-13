@@ -15,7 +15,7 @@ import os
 import pathlib
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ouroboros.config import get_runtime_mode
 from ouroboros.runtime_mode_policy import (
@@ -134,7 +134,13 @@ def _normalize_sdk_usage(usage: Any) -> Dict[str, Any]:
     return normalized
 
 
-def make_path_guard(cwd: str, repo_root: str | None = None):
+def make_path_guard(
+    cwd: str,
+    repo_root: str | None = None,
+    *,
+    protect_runtime_paths: bool = True,
+    write_path_blocker: Callable[[pathlib.Path], str] | None = None,
+):
     """Block SDK writes outside cwd or runtime-protected paths."""
     cwd_resolved = pathlib.Path(cwd).resolve()
     repo_root_resolved = pathlib.Path(repo_root).resolve() if repo_root else None
@@ -168,6 +174,19 @@ def make_path_guard(cwd: str, repo_root: str | None = None):
                     ),
                 }
             }
+        if write_path_blocker is not None:
+            block_reason = write_path_blocker(target)
+            if block_reason:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "SAFETY: Write blocked — target path "
+                            f"'{file_path}' is not allowed for this edit root: {block_reason}."
+                        ),
+                    }
+                }
 
         # Prefer repo-root relative paths so subdir cwd still hits protection tables.
         rel = target.relative_to(cwd_resolved).as_posix()
@@ -198,7 +217,7 @@ def make_path_guard(cwd: str, repo_root: str | None = None):
             runtime_mode = get_runtime_mode()
         except Exception:
             runtime_mode = "advanced"
-        if is_protected_runtime_path(rel) and not mode_allows_protected_write(runtime_mode):
+        if protect_runtime_paths and is_protected_runtime_path(rel) and not mode_allows_protected_write(runtime_mode):
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -247,16 +266,23 @@ async def _run_edit_async(
     budget: Optional[float] = None,
     system_prompt: Optional[str] = None,
     repo_root: Optional[str] = None,
+    protect_runtime_paths: bool = True,
+    write_path_blocker: Callable[[pathlib.Path], str] | None = None,
 ) -> ClaudeCodeResult:
     """Run edit-mode SDK with safety hooks."""
-    path_guard = make_path_guard(cwd, repo_root=repo_root)
+    path_guard = make_path_guard(
+        cwd,
+        repo_root=repo_root,
+        protect_runtime_paths=protect_runtime_paths,
+        write_path_blocker=write_path_blocker,
+    )
     clear_stderr_buffer()
 
     options = ClaudeAgentOptions(
         cwd=cwd,
         model=model,
         permission_mode="acceptEdits",
-        allowed_tools=["Read", "Edit", "Grep", "Glob"],
+        allowed_tools=["Read", "Edit", "Write", "Grep", "Glob"],
         disallowed_tools=["Bash", "MultiEdit"],
         max_turns=max_turns,
         max_budget_usd=budget,
@@ -384,11 +410,13 @@ def _run_async(coro):
 def run_edit(
     prompt: str,
     cwd: str,
-    model: str = "claude-opus-4-6[1m]",
+    model: str = "opus[1m]",
     max_turns: int = DEFAULT_CLAUDE_CODE_MAX_TURNS,
     budget: Optional[float] = None,
     system_prompt: Optional[str] = None,
     repo_root: Optional[str] = None,
+    protect_runtime_paths: bool = True,
+    write_path_blocker: Callable[[pathlib.Path], str] | None = None,
 ) -> ClaudeCodeResult:
     """Synchronous edit-mode SDK entry point."""
     return _run_async(_run_edit_async(
@@ -399,10 +427,12 @@ def run_edit(
         budget=budget,
         system_prompt=system_prompt,
         repo_root=repo_root,
+        protect_runtime_paths=protect_runtime_paths,
+        write_path_blocker=write_path_blocker,
     ))
 
 
-def resolve_claude_code_model(default: str = "claude-opus-4-6[1m]") -> str:
+def resolve_claude_code_model(default: str = "opus[1m]") -> str:
     """Return the env/settings Claude Code model, aligned with config defaults."""
     return os.environ.get("CLAUDE_CODE_MODEL", default).strip() or default
 
@@ -410,7 +440,7 @@ def resolve_claude_code_model(default: str = "claude-opus-4-6[1m]") -> str:
 def run_readonly(
     prompt: str,
     cwd: str,
-    model: str = "claude-opus-4-6[1m]",
+    model: str = "opus[1m]",
     max_turns: int = DEFAULT_CLAUDE_CODE_MAX_TURNS,
     effort: Optional[str] = "high",
 ) -> ClaudeCodeResult:

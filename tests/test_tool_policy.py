@@ -16,6 +16,7 @@ def _build_registry() -> ToolRegistry:
 
 def test_core_surface_includes_user_message_and_media():
     assert "send_photo" in CORE_TOOL_NAMES
+    assert "send_video" in CORE_TOOL_NAMES
     assert "send_user_message" in CORE_TOOL_NAMES
 
 
@@ -31,7 +32,7 @@ def test_non_core_listing_excludes_core_media_tools():
     registry = _build_registry()
     names = {entry["name"] for entry in list_non_core_tools(registry)}
     assert "send_photo" not in names
-    assert "multi_model_review" in names
+    assert "plan_task" in names
 
 
 def test_loop_bootstraps_from_tool_policy():
@@ -41,31 +42,31 @@ def test_loop_bootstraps_from_tool_policy():
 
 
 def test_advisory_tools_in_core_tool_names():
-    """advisory_pre_review and review_status must be core tools."""
-    assert "advisory_pre_review" in CORE_TOOL_NAMES
+    """advisory_review and review_status must be core tools."""
+    assert "advisory_review" in CORE_TOOL_NAMES
     assert "review_status" in CORE_TOOL_NAMES
 
 
 def test_advisory_tools_in_initial_schemas():
-    """advisory_pre_review and review_status must appear in initial tool schemas."""
+    """advisory_review and review_status must appear in initial tool schemas."""
     registry = _build_registry()
     names = {schema["function"]["name"] for schema in initial_tool_schemas(registry)}
-    assert "advisory_pre_review" in names
+    assert "advisory_review" in names
     assert "review_status" in names
 
 
 def test_heal_skill_tools_are_core_visible_in_initial_schemas():
-    """v5.7.0 heal prompts must be able to call review_skill and
+    """Heal prompts must be able to call skill_review and
     skill_preflight without enable_tools (enable_tools is blocked in heal
     mode). Pin both the tool_policy SSOT and registry.core_only fallback."""
-    assert "review_skill" in CORE_TOOL_NAMES
+    assert "skill_review" in CORE_TOOL_NAMES
     assert "skill_preflight" in CORE_TOOL_NAMES
     registry = _build_registry()
     names = {schema["function"]["name"] for schema in initial_tool_schemas(registry)}
-    assert "review_skill" in names
+    assert "skill_review" in names
     assert "skill_preflight" in names
     core_only_names = {schema["function"]["name"] for schema in registry.schemas(core_only=True)}
-    assert "review_skill" in core_only_names
+    assert "skill_review" in core_only_names
     assert "skill_preflight" in core_only_names
 
 
@@ -75,19 +76,19 @@ def test_enable_tools_does_not_duplicate_active_tool_schemas():
     messages = []
     tool_schemas, _enabled_extra = loop_mod._setup_dynamic_tools(registry, tool_schemas, messages)
 
-    core_result = registry.execute("enable_tools", {"tools": "advisory_pre_review"})
+    core_result = registry.execute("enable_tools", {"tools": "advisory_review"})
     names_after_core = [schema["function"]["name"] for schema in tool_schemas]
-    assert names_after_core.count("advisory_pre_review") == 1
+    assert names_after_core.count("advisory_review") == 1
     assert "already active" in core_result
 
-    extra_result = registry.execute("enable_tools", {"tools": "multi_model_review"})
+    extra_result = registry.execute("enable_tools", {"tools": "plan_task"})
     names_after_extra = [schema["function"]["name"] for schema in tool_schemas]
-    assert names_after_extra.count("multi_model_review") == 1
-    assert "Enabled: multi_model_review" in extra_result
+    assert names_after_extra.count("plan_task") == 1
+    assert "Enabled: plan_task" in extra_result
 
-    extra_again_result = registry.execute("enable_tools", {"tools": "multi_model_review"})
+    extra_again_result = registry.execute("enable_tools", {"tools": "plan_task"})
     names_after_extra_again = [schema["function"]["name"] for schema in tool_schemas]
-    assert names_after_extra_again.count("multi_model_review") == 1
+    assert names_after_extra_again.count("plan_task") == 1
     assert "already active" in extra_again_result
 
 
@@ -98,11 +99,11 @@ def test_list_available_tools_hides_enabled_extra_tools():
     loop_mod._setup_dynamic_tools(registry, tool_schemas, messages)
 
     before = registry.execute("list_available_tools", {})
-    assert "multi_model_review" in before
+    assert "plan_task" in before
 
-    registry.execute("enable_tools", {"tools": "multi_model_review"})
+    registry.execute("enable_tools", {"tools": "plan_task"})
     after = registry.execute("list_available_tools", {})
-    assert "multi_model_review" not in after
+    assert "plan_task" not in after
 
 
 def test_live_extension_tools_are_initial_not_non_core(monkeypatch):

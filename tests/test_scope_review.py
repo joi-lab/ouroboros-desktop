@@ -398,7 +398,9 @@ class TestScopeReviewModule:
         mod = _get_module("ouroboros.tools.scope_review")
         import os
         old = os.environ.get("OUROBOROS_SCOPE_REVIEW_MODEL")
+        old_plural = os.environ.get("OUROBOROS_SCOPE_REVIEW_MODELS")
         try:
+            os.environ.pop("OUROBOROS_SCOPE_REVIEW_MODELS", None)
             os.environ["OUROBOROS_SCOPE_REVIEW_MODEL"] = "google/gemini-2.5-pro"
             assert mod._get_scope_model() == "google/gemini-2.5-pro"
         finally:
@@ -406,6 +408,10 @@ class TestScopeReviewModule:
                 os.environ.pop("OUROBOROS_SCOPE_REVIEW_MODEL", None)
             else:
                 os.environ["OUROBOROS_SCOPE_REVIEW_MODEL"] = old
+            if old_plural is None:
+                os.environ.pop("OUROBOROS_SCOPE_REVIEW_MODELS", None)
+            else:
+                os.environ["OUROBOROS_SCOPE_REVIEW_MODELS"] = old_plural
 
     def test_scope_review_effort_configurable(self):
         """OUROBOROS_EFFORT_SCOPE_REVIEW should resolve via resolve_effort."""
@@ -572,7 +578,7 @@ class TestGitWiring:
     def test_repo_commit_schema_has_goal_scope(self):
         git = _get_module("ouroboros.tools.git")
         tools = git.get_tools()
-        commit = next(t for t in tools if t.name == "repo_commit")
+        commit = next(t for t in tools if t.name == "commit_reviewed")
         props = commit.schema["parameters"]["properties"]
         assert "goal" in props
         assert "scope" in props
@@ -1173,7 +1179,7 @@ class TestAdvisorySchemaEnriched:
     def test_advisory_schema_has_goal_scope_paths(self):
         adv = _get_module("ouroboros.tools.claude_advisory_review")
         tools = adv.get_tools()
-        adv_tool = next(t for t in tools if t.name == "advisory_pre_review")
+        adv_tool = next(t for t in tools if t.name == "advisory_review")
         props = adv_tool.schema["parameters"]["properties"]
         assert "goal" in props
         assert "scope" in props

@@ -10,7 +10,7 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
-from ouroboros.event_bus import CHAT_OUTBOUND, CHAT_PHOTO, CHAT_TYPING, publish_event
+from ouroboros.event_bus import CHAT_OUTBOUND, CHAT_PHOTO, CHAT_TYPING, CHAT_VIDEO, publish_event
 from supervisor.state import append_jsonl, load_state, save_state
 from ouroboros.utils import utc_now_iso
 
@@ -324,6 +324,39 @@ class LocalChatBridge:
             "transport": photo_transport,
             "caption": str(caption or ""),
             "image_base64": b64_str,
+            "mime": str(mime or ""),
+            "ts": msg["ts"],
+        })
+        return True, "ok"
+
+    def send_video(
+        self,
+        chat_id: int,
+        video_bytes: bytes,
+        caption: str = "",
+        mime: str = "video/mp4",
+    ) -> Tuple[bool, str]:
+        """Send video to UI and host event subscribers."""
+        if is_a2a_chat_id(chat_id):
+            return True, "ok"
+        b64_str = base64.b64encode(video_bytes).decode("ascii")
+        msg = {
+            "type": "video",
+            "role": "assistant",
+            "video_base64": b64_str,
+            "mime": mime,
+            "caption": caption,
+            "ts": utc_now_iso(),
+        }
+        self._outbox.put(msg)
+        if self._broadcast_fn:
+            self._broadcast_fn(msg)
+        video_transport = dict(self._chat_transports.get(int(chat_id or 0), {}) or {})
+        publish_event(CHAT_VIDEO, {
+            "chat_id": int(chat_id or 0),
+            "transport": video_transport,
+            "caption": str(caption or ""),
+            "video_base64": b64_str,
             "mime": str(mime or ""),
             "ts": msg["ts"],
         })

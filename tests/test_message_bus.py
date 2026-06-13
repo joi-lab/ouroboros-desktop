@@ -58,3 +58,19 @@ def test_send_photo_publishes_transport_event_with_payload(monkeypatch):
     assert payload["caption"] == "caption"
     assert payload["mime"] == "image/png"
 
+
+def test_send_video_publishes_transport_event_with_payload(monkeypatch):
+    bridge = _make_bridge(monkeypatch)
+    events = []
+    monkeypatch.setattr(event_bus, "publish_event", lambda topic, data: events.append((topic, data)))
+    monkeypatch.setattr(message_bus, "publish_event", lambda topic, data: events.append((topic, data)))
+
+    ok, _ = bridge.send_video(123, b"vid", caption="trailer", mime="video/mp4")
+
+    assert ok is True
+    topic, payload = events[-1]
+    assert topic == event_bus.CHAT_VIDEO
+    assert payload["video_base64"]
+    assert payload["caption"] == "trailer"
+    assert payload["mime"] == "video/mp4"
+

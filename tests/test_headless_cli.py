@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 from starlette.applications import Starlette
@@ -13,6 +16,7 @@ from starlette.testclient import TestClient
 
 from ouroboros.gateway.tasks import (
     _compose_task_text,
+    _resolve_workspace_root,
     api_task_artifact,
     api_task_events,
     api_task_get,
@@ -26,6 +30,8 @@ from ouroboros.headless import (
     build_memory_export,
     build_workspace_patch,
     finalize_task_artifacts,
+    prune_headless_task_drives,
+    prune_task_drives,
     task_artifacts_dir,
     write_workspace_patch_artifacts,
 )
@@ -79,6 +85,12 @@ def test_task_api_enqueue_workspace_creates_child_drive(tmp_path, monkeypatch):
             "description": "fix it",
             "workspace_root": str(workspace),
             "memory_mode": "forked",
+            "metadata": {
+                "root_task_id": "forged-root",
+                "parent_task_id": "forged-parent",
+                "delegation_role": "root",
+                "child_drive_root": "/tmp/forged-child",
+            },
         },
     )
 
@@ -93,6 +105,14 @@ def test_task_api_enqueue_workspace_creates_child_drive(tmp_path, monkeypatch):
     assert "seed identity" in (data / "state" / "headless_tasks" / payload["task_id"] / "data" / "memory" / "identity.md").read_text(encoding="utf-8")
     result = json.loads((data / "task_results" / f"{payload['task_id']}.json").read_text(encoding="utf-8"))
     assert result["artifact_status"] == "pending"
+    assert captured[0]["root_task_id"] == payload["task_id"]
+    assert captured[0]["parent_task_id"] is None
+    assert captured[0]["delegation_role"] == "root"
+    assert result["metadata"]["root_task_id"] == payload["task_id"]
+    assert result["metadata"]["parent_task_id"] == ""
+    assert result["metadata"]["delegation_role"] == "root"
+    assert result["metadata"]["child_drive_root"] == captured[0]["child_drive_root"]
+    assert "/tmp/forged-child" not in json.dumps(result["metadata"])
     assert result["metadata"]["workspace_preflight"]["git"]["head"] == ""
     assert any(item["kind"] == "workspace_preflight" for item in result["artifacts"])
     assert "workspace_preflight:" in captured[0]["text"]
@@ -152,6 +172,119 @@ def test_task_api_rejects_unsafe_task_id_and_system_workspace(tmp_path, monkeypa
     assert typed.status_code == 400
 
 
+def test_resolve_workspace_root_blocks_case_variant_control_plane(tmp_path):
+    system_repo = tmp_path / "Ouroboros" / "repo"
+    drive = tmp_path / "Ouroboros" / "data"
+    workspace_repo_case = tmp_path / "ouroboros" / "repo"
+    workspace_data_case = tmp_path / "ouroboros" / "data" / "workspace"
+    for path in (system_repo, drive / "workspace"):
+        path.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="Ouroboros system repo"):
+        _resolve_workspace_root(workspace_repo_case, system_repo_dir=system_repo, drive_root=drive)
+    with pytest.raises(ValueError, match="Ouroboros data drive"):
+        _resolve_workspace_root(workspace_data_case, system_repo_dir=system_repo, drive_root=drive)
+
+
+def test_task_api_rejects_forged_subagent_without_child_drive_side_effect(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr("supervisor.queue.enqueue_task", lambda task: pytest.fail("forged subagent enqueued"))
+    monkeypatch.setattr("supervisor.queue.persist_queue_snapshot", lambda reason="": None)
+
+    app = Starlette(routes=[Route("/api/tasks", endpoint=api_tasks_create, methods=["POST"])])
+    app.state.drive_root = data
+    app.state.repo_dir = repo
+    client = TestClient(app)
+
+    top_level = client.post(
+        "/api/tasks",
+        json={"description": "x", "task_id": "forged1", "workspace_root": str(workspace), "delegation_role": "subagent"},
+    )
+    metadata = client.post(
+        "/api/tasks",
+        json={"description": "x", "task_id": "forged2", "workspace_root": str(workspace), "metadata": {"delegation_role": "subagent"}},
+    )
+
+    assert top_level.status_code == 400
+    assert metadata.status_code == 400
+    assert "internal schedule_subagent" in top_level.json()["error"]
+    assert not (data / "state" / "headless_tasks" / "forged1").exists()
+    assert not (data / "state" / "headless_tasks" / "forged2").exists()
+
+
+def test_task_api_rejects_external_lineage_forgery(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr("supervisor.queue.enqueue_task", lambda task: pytest.fail("forged lineage enqueued"))
+    monkeypatch.setattr("supervisor.queue.persist_queue_snapshot", lambda reason="": None)
+
+    app = Starlette(routes=[Route("/api/tasks", endpoint=api_tasks_create, methods=["POST"])])
+    app.state.drive_root = data
+    app.state.repo_dir = repo
+
+    response = TestClient(app).post(
+        "/api/tasks",
+        json={
+            "description": "x",
+            "workspace_root": str(workspace),
+            "parent_task_id": "parent1",
+            "root_task_id": "root1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "internal lineage fields" in response.json()["error"]
+    assert not list((data / "task_results").glob("*.json"))
+
+
+def test_task_api_preserves_top_level_actor_id_after_metadata_sanitization(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    captured = []
+    monkeypatch.setattr("supervisor.queue.enqueue_task", lambda task: captured.append(dict(task)) or task)
+    monkeypatch.setattr("supervisor.queue.persist_queue_snapshot", lambda reason="": None)
+
+    app = Starlette(routes=[Route("/api/tasks", endpoint=api_tasks_create, methods=["POST"])])
+    app.state.drive_root = data
+    app.state.repo_dir = repo
+
+    response = TestClient(app).post(
+        "/api/tasks",
+        json={
+            "description": "x",
+            "workspace_root": str(workspace),
+            "memory_mode": "forked",
+            "actor_id": "operator-1",
+            "metadata": {"actor_id": "forged-metadata"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured[0]["actor_id"] == "operator-1"
+    result = json.loads((data / "task_results" / f"{response.json()['task_id']}.json").read_text(encoding="utf-8"))
+    assert result["metadata"]["actor_id"] == "operator-1"
+    assert "forged-metadata" not in json.dumps(result)
+
+
 def test_task_event_replay_uses_existing_logs_and_result(tmp_path):
     data = tmp_path / "data"
     logs = data / "logs"
@@ -173,6 +306,84 @@ def test_task_event_replay_uses_existing_logs_and_result(tmp_path):
     assert [event["type"] for event in events] == ["progress", "task_result"]
     assert events[0]["seq"] == 1
     assert events[1]["data"]["result"] == "done"
+
+
+def test_task_event_replay_parent_includes_child_lineage_events(tmp_path):
+    data = tmp_path / "data"
+    logs = data / "logs"
+    logs.mkdir(parents=True)
+    parent_id = "parent1"
+    child_id = "child1"
+    (logs / "progress.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": "2026-01-01T00:00:00Z", "task_id": parent_id, "content": "parent"}),
+            json.dumps({
+                "ts": "2026-01-01T00:00:01Z",
+                "task_id": child_id,
+                "parent_task_id": parent_id,
+                "root_task_id": parent_id,
+                "delegation_role": "subagent",
+                "subagent_task_id": child_id,
+                "content": "child progress",
+            }),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    write_task_result(
+        data,
+        parent_id,
+        "running",
+        result="parent pending",
+        ts="2026-01-01T00:00:00Z",
+    )
+    write_task_result(
+        data,
+        child_id,
+        "running",
+        result="child pending",
+        parent_task_id=parent_id,
+        root_task_id=parent_id,
+        delegation_role="subagent",
+        ts="2026-01-01T00:00:01Z",
+    )
+
+    events = iter_task_events(data, parent_id)
+
+    progress_events = [event for event in events if event["type"] == "progress"]
+    assert [event["task_id"] for event in progress_events] == [parent_id, child_id]
+    assert progress_events[1]["data"]["content"] == "child progress"
+
+
+def test_logs_tail_parent_filter_includes_child_lineage_events(tmp_path):
+    from ouroboros.gateway.logs import api_logs_tail
+
+    data = tmp_path / "data"
+    logs = data / "logs"
+    logs.mkdir(parents=True)
+    (logs / "progress.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": "2026-01-01T00:00:00Z", "task_id": "parent1", "content": "parent"}),
+            json.dumps({
+                "ts": "2026-01-01T00:00:01Z",
+                "task_id": "child1",
+                "subagent_task_id": "child1",
+                "parent_task_id": "parent1",
+                "root_task_id": "parent1",
+                "delegation_role": "subagent",
+                "content": "child",
+            }),
+            json.dumps({"ts": "2026-01-01T00:00:02Z", "task_id": "other", "content": "other"}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    app = Starlette(routes=[Route("/api/logs/{name}", endpoint=api_logs_tail, methods=["GET"])])
+    app.state.drive_root = data
+
+    response = TestClient(app).get("/api/logs/progress?task_id=parent1&limit=10")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert [row["content"] for row in payload["entries"]] == ["parent", "child"]
 
 
 def test_workspace_event_replay_suppresses_task_done_until_artifacts_terminal(tmp_path):
@@ -351,21 +562,22 @@ def test_workspace_context_routes_repo_tools_and_blocks_self_commit(tmp_path):
     assert "workspace" in _repo_read(ctx, "README.md")
     registry = ToolRegistry(repo_dir=system_repo, drive_root=data)
     registry.set_context(ctx)
-    assert "WORKSPACE_MODE_BLOCKED" in registry.execute("repo_commit", {"commit_message": "nope"})
-    assert registry.get_schema_by_name("repo_commit") is None
+    assert "WORKSPACE_MODE_BLOCKED" in registry.execute("commit_reviewed", {"commit_message": "nope"})
+    assert registry.get_schema_by_name("commit_reviewed") is None
     assert registry.get_schema_by_name("request_restart") is None
     assert "WORKSPACE_MODE_BLOCKED" in registry.execute("request_restart", {"reason": "nope"})
-    assert "Written" in registry.execute("repo_write", {"path": "BIBLE.md", "content": "external edit"})
+    assert "Written" in registry.execute("write_file", {"path": "BIBLE.md", "content": "external edit"})
     assert (workspace / "BIBLE.md").read_text(encoding="utf-8") == "external edit"
     replaced = registry.execute(
-        "str_replace_editor",
+        "edit_text",
         {"path": "README.md", "old_str": "workspace", "new_str": "workspace edited"},
     )
     assert "Replaced" in replaced
     assert (workspace / "README.md").read_text(encoding="utf-8") == "workspace edited"
 
 
-def test_workspace_run_shell_blocks_escaping_cwd(tmp_path):
+def test_workspace_run_shell_blocks_escaping_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     system_repo = tmp_path / "system"
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside"
@@ -381,17 +593,17 @@ def test_workspace_run_shell_blocks_escaping_cwd(tmp_path):
     registry = ToolRegistry(repo_dir=system_repo, drive_root=data)
     registry.set_context(ctx)
 
-    result = registry.execute("run_shell", {"cmd": ["pwd"], "cwd": str(outside)})
+    result = registry.execute("run_command", {"cmd": ["pwd"], "cwd": str(outside)})
 
     assert "SHELL_CWD_BLOCKED" in result
-    git_escape = registry.execute("run_shell", {"cmd": ["git", "-C", str(system_repo), "status"]})
+    git_escape = registry.execute("run_command", {"cmd": ["git", "-C", str(system_repo), "status"]})
     assert "WORKSPACE_GIT_BLOCKED" in git_escape
-    git_chain = registry.execute("run_shell", {"cmd": ["sh", "-c", "true && git commit -m nope"]})
+    git_chain = registry.execute("run_command", {"cmd": ["sh", "-c", "true && git commit -m nope"]})
     assert "WORKSPACE_GIT_BLOCKED" in git_chain
-    outside_write = registry.execute("run_shell", {"cmd": ["touch", str(system_repo / "README.md")]})
+    outside_write = registry.execute("run_command", {"cmd": ["touch", str(system_repo / "README.md")]})
     assert "WORKSPACE_SHELL_BLOCKED" in outside_write
     embedded_outside_write = registry.execute(
-        "run_shell",
+        "run_command",
         {"cmd": ["python", "-c", "open('/tmp/ouroboros-outside.txt','w').write('x')"]},
     )
     assert "WORKSPACE_SHELL_BLOCKED" in embedded_outside_write
@@ -402,14 +614,16 @@ def test_workspace_run_shell_allows_absolute_cwd_under_workspace_and_child_drive
     workspace = tmp_path / "workspace"
     parent_data = tmp_path / "data"
     child_drive = tmp_path / "child-data"
-    child_dir = child_drive / "scratch"
-    for path in (system_repo, workspace, parent_data / "logs", child_dir):
+    child_dir = child_drive / "task_drives" / "task-workspace" / "scratch"
+    child_control_dir = child_drive / "memory"
+    for path in (system_repo, workspace, parent_data / "logs", child_dir, child_control_dir):
         path.mkdir(parents=True)
     ctx = ToolContext(
         repo_dir=system_repo,
         drive_root=parent_data,
         workspace_root=workspace,
         workspace_mode="external",
+        task_id="task-workspace",
         task_metadata={"drive_root": str(child_drive), "budget_drive_root": str(parent_data)},
     )
     registry = ToolRegistry(repo_dir=system_repo, drive_root=parent_data)
@@ -417,7 +631,7 @@ def test_workspace_run_shell_allows_absolute_cwd_under_workspace_and_child_drive
 
     def assert_python_cwd(path):
         output = registry.execute(
-            "run_shell",
+            "run_command",
             {"cmd": [sys.executable, "-c", "import os; print(os.getcwd())"], "cwd": str(path)},
         )
         assert "exit_code=0" in output
@@ -426,7 +640,9 @@ def test_workspace_run_shell_allows_absolute_cwd_under_workspace_and_child_drive
 
     assert_python_cwd(workspace)
     assert_python_cwd(child_dir)
-    blocked = registry.execute("run_shell", {"cmd": ["pwd"], "cwd": str(parent_data / "logs")})
+    child_control = registry.execute("run_command", {"cmd": ["pwd"], "cwd": str(child_control_dir)})
+    assert "SHELL_CWD_BLOCKED" in child_control
+    blocked = registry.execute("run_command", {"cmd": ["pwd"], "cwd": str(parent_data / "logs")})
     assert "SHELL_CWD_BLOCKED" in blocked
     git_escape = registry._run_shell_safety_check(
         {"cmd": ["git", "-C", "../other-repo", "status"], "cwd": str(child_dir)},
@@ -626,6 +842,134 @@ def test_finalize_workspace_patch_fails_when_head_changed(tmp_path):
     assert manifest["errors"][-1]["type"] == "workspace_head_changed"
 
 
+def test_effective_result_preserves_failed_workspace_artifact_status_with_child_drive(tmp_path):
+    from ouroboros.headless import copy_child_task_result
+    from ouroboros.task_results import STATUS_COMPLETED
+    from ouroboros.task_status import load_effective_task_result
+
+    parent = tmp_path / "data"
+    child = tmp_path / "child"
+    repo = tmp_path / "repo"
+    parent.mkdir()
+    child.mkdir()
+    _init_repo_with_file(repo)
+    old_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "tracked.txt").write_text("new\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-m", "move"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    task_id = "patchfail"
+    write_task_result(
+        child,
+        task_id,
+        STATUS_COMPLETED,
+        result="child done",
+        artifact_status=ARTIFACT_STATUS_READY,
+        artifact_bundle={"status": ARTIFACT_STATUS_READY, "artifacts": [], "errors": []},
+        ts="2026-01-01T00:00:02Z",
+    )
+    write_task_result(
+        parent,
+        task_id,
+        STATUS_COMPLETED,
+        result="child done",
+        workspace_root=str(repo),
+        child_drive_root=str(child),
+        artifact_status="finalizing",
+        child_status=STATUS_COMPLETED,
+    )
+
+    finalize_task_artifacts(
+        parent,
+        {
+            "id": task_id,
+            "workspace_root": str(repo),
+            "drive_root": str(child),
+            "metadata": {"workspace_preflight": {"git": {"head": old_head}}},
+        },
+    )
+
+    effective = load_effective_task_result(parent, task_id)
+    assert effective["artifact_status"] == ARTIFACT_STATUS_FAILED
+    assert "workspace HEAD changed" in effective["artifact_error"]
+    assert effective["artifact_bundle"]["status"] == ARTIFACT_STATUS_FAILED
+
+    copied = copy_child_task_result(parent, {"id": task_id, "workspace_root": str(repo), "drive_root": str(child)})
+    assert copied is not None
+    assert copied["artifact_status"] == ARTIFACT_STATUS_FAILED
+    assert "workspace HEAD changed" in copied["artifact_error"]
+    assert copied["artifact_bundle"]["status"] == ARTIFACT_STATUS_FAILED
+
+
+def test_effective_result_preserves_workspace_patch_kind_with_child_drive(tmp_path):
+    from ouroboros.artifacts import copy_file_to_task_artifacts
+    from ouroboros.cli import _patch_from_result
+    from ouroboros.task_results import STATUS_COMPLETED
+    from ouroboros.task_status import load_effective_task_result
+
+    parent = tmp_path / "data"
+    child = tmp_path / "child"
+    repo = tmp_path / "repo"
+    parent.mkdir()
+    child.mkdir()
+    _init_repo_with_file(repo)
+    (repo / "tracked.txt").write_text("new\n", encoding="utf-8")
+
+    task_id = "patchkind"
+    report = tmp_path / "report.html"
+    report.write_text("<h1>done</h1>", encoding="utf-8")
+    child_record = copy_file_to_task_artifacts(SimpleNamespace(drive_root=child, task_id=task_id), report, kind="user_file")
+    assert child_record is not None
+    write_task_result(
+        child,
+        task_id,
+        STATUS_COMPLETED,
+        result="child done",
+        artifacts=[child_record],
+        artifact_status=ARTIFACT_STATUS_READY,
+        ts="2026-01-01T00:00:02Z",
+    )
+    write_task_result(
+        parent,
+        task_id,
+        STATUS_COMPLETED,
+        result="child done",
+        workspace_root=str(repo),
+        child_drive_root=str(child),
+        artifacts=[child_record],
+        artifact_status="finalizing",
+        child_status=STATUS_COMPLETED,
+    )
+
+    finalize_task_artifacts(parent, {"id": task_id, "workspace_root": str(repo), "drive_root": str(child)})
+
+    effective = load_effective_task_result(parent, task_id)
+    patch_artifacts = [
+        item
+        for item in effective.get("artifacts") or []
+        if isinstance(item, dict) and item.get("name") == "workspace.patch"
+    ]
+    assert patch_artifacts
+    assert patch_artifacts[0]["kind"] == "workspace_patch"
+    assert any(item.get("kind") == "user_file" for item in effective.get("artifacts") or [] if isinstance(item, dict))
+
+    class FakeClient:
+        def __init__(self):
+            self.paths = []
+
+        def get_bytes(self, path):
+            self.paths.append(path)
+            return b"diff --git a/tracked.txt b/tracked.txt\n"
+
+    client = FakeClient()
+    assert _patch_from_result(client, task_id, effective, strict=True).startswith("diff --git")
+    assert client.paths == [f"/api/tasks/{task_id}/artifacts/workspace.patch"]
+
+
 def test_task_artifact_endpoint_serves_only_declared_artifacts(tmp_path):
     data = tmp_path / "data"
     artifact_dir = task_artifacts_dir(data, "task-artifact")
@@ -645,6 +989,77 @@ def test_task_artifact_endpoint_serves_only_declared_artifacts(tmp_path):
     assert client.get("/api/tasks/task-artifact/artifacts/workspace.patch").text.startswith("diff --git")
     assert client.get("/api/tasks/task-artifact/artifacts/missing.patch").status_code == 404
     assert client.get("/api/tasks/task-artifact/artifacts/bad%5Cname").status_code == 400
+
+
+def test_task_artifact_endpoint_serves_manifest_artifact_after_status_repair(tmp_path):
+    from ouroboros.artifacts import copy_file_to_task_artifacts
+
+    data = tmp_path / "data"
+    source_dir = tmp_path / "Desktop"
+    source_dir.mkdir()
+    source = source_dir / "report.html"
+    source.write_text("<h1>ok</h1>", encoding="utf-8")
+    copy_file_to_task_artifacts(SimpleNamespace(drive_root=data, task_id="orphaned"), source, kind="user_file")
+    write_task_result(
+        data,
+        "orphaned",
+        "running",
+        result_status="infra_failed",
+        reason_code="provider_failure",
+        result="provider failed before normal finalization",
+    )
+    (data / "state").mkdir(parents=True, exist_ok=True)
+    (data / "state" / "queue_snapshot.json").write_text('{"pending": [], "running": []}', encoding="utf-8")
+    app = Starlette(routes=[Route("/api/tasks/{task_id}/artifacts/{name}", endpoint=api_task_artifact, methods=["GET"])])
+    app.state.drive_root = data
+
+    response = TestClient(app).get("/api/tasks/orphaned/artifacts/report.html")
+
+    assert response.status_code == 200
+    assert response.text == "<h1>ok</h1>"
+
+
+def test_task_artifact_endpoint_rebases_child_drive_artifact_after_status_repair(tmp_path):
+    from ouroboros.artifacts import collect_task_artifact_records, copy_file_to_task_artifacts
+
+    data = tmp_path / "data"
+    child = tmp_path / "child"
+    source_dir = tmp_path / "Desktop"
+    source_dir.mkdir()
+    source = source_dir / "report.html"
+    source.write_text("<h1>child</h1>", encoding="utf-8")
+    copy_file_to_task_artifacts(SimpleNamespace(drive_root=child, task_id="childart"), source, kind="user_file")
+    child_artifacts = collect_task_artifact_records(child, "childart")
+    write_task_result(
+        child,
+        "childart",
+        "completed",
+        result="done",
+        artifacts=child_artifacts,
+        artifact_status="ready",
+        ts="2026-01-01T00:00:02Z",
+    )
+    write_task_result(
+        data,
+        "childart",
+        "running",
+        child_drive_root=str(child),
+        workspace_root=str(tmp_path / "workspace"),
+        result_status="infra_failed",
+        reason_code="provider_failure",
+        result="provider failed before normal finalization",
+    )
+    (data / "state").mkdir(parents=True, exist_ok=True)
+    (data / "state" / "queue_snapshot.json").write_text('{"pending": [], "running": []}', encoding="utf-8")
+    app = Starlette(routes=[Route("/api/tasks/{task_id}/artifacts/{name}", endpoint=api_task_artifact, methods=["GET"])])
+    app.state.drive_root = data
+
+    response = TestClient(app).get("/api/tasks/childart/artifacts/report.html")
+
+    parent_artifact = task_artifacts_dir(data, "childart", create=False) / "report.html"
+    assert response.status_code == 200
+    assert response.text == "<h1>child</h1>"
+    assert parent_artifact.read_text(encoding="utf-8") == "<h1>child</h1>"
 
 
 def test_task_artifact_endpoint_rejects_metadata_name_path_mismatch(tmp_path):
@@ -677,6 +1092,110 @@ def test_memory_export_includes_nested_memory_files(tmp_path):
 
     assert export["files"]["identity.md"] == "id\n"
     assert export["files"]["knowledge/patterns/cli.md"] == "pattern\n"
+
+
+def test_startup_prune_removes_only_old_terminal_child_drives(tmp_path):
+    data = tmp_path / "data"
+    terminal_dir = data / "state" / "headless_tasks" / "oldterminal"
+    pending_dir = data / "state" / "headless_tasks" / "oldpending"
+    fresh_timestamp_dir = data / "state" / "headless_tasks" / "freshresult"
+    terminal_drive = terminal_dir / "data"
+    pending_drive = pending_dir / "data"
+    fresh_timestamp_drive = fresh_timestamp_dir / "data"
+    terminal_drive.mkdir(parents=True)
+    pending_drive.mkdir(parents=True)
+    fresh_timestamp_drive.mkdir(parents=True)
+
+    now = time.time()
+    old = now - (8 * 86400)
+    old_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(old))
+    fresh_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now))
+    write_task_result(data, "oldterminal", "completed", child_drive_root=str(terminal_drive), artifact_status="ready", result="done", ts=old_iso)
+    write_task_result(data, "oldpending", "scheduled", child_drive_root=str(pending_drive), result="queued")
+    write_task_result(data, "freshresult", "completed", child_drive_root=str(fresh_timestamp_drive), artifact_status="ready", result="done", ts=fresh_iso)
+    os.utime(terminal_dir, (old, old))
+    os.utime(pending_dir, (old, old))
+    os.utime(fresh_timestamp_dir, (old, old))
+
+    report = prune_headless_task_drives(data, retention_days=7, now=now)
+
+    assert [item["task_id"] for item in report["pruned"]] == ["oldterminal"]
+    assert not terminal_dir.exists()
+    assert pending_dir.exists()
+    assert fresh_timestamp_dir.exists()
+    assert any(item["task_id"] == "oldpending" and item["reason"] == "parent_not_terminal" for item in report["skipped"])
+    assert any(item["task_id"] == "freshresult" and item["reason"] == "younger_than_retention" for item in report["skipped"])
+
+
+def test_startup_prune_uses_effective_terminal_status(tmp_path):
+    data = tmp_path / "data"
+    task_drive = data / "task_drives" / "stalerun"
+    child_dir = data / "state" / "headless_tasks" / "stalechild"
+    child_drive = child_dir / "data"
+    task_drive.mkdir(parents=True)
+    child_drive.mkdir(parents=True)
+    (task_drive / "scratch.txt").write_text("scratch", encoding="utf-8")
+    (child_drive / "scratch.txt").write_text("child", encoding="utf-8")
+    (data / "state").mkdir(parents=True, exist_ok=True)
+    (data / "state" / "queue_snapshot.json").write_text('{"pending": [], "running": []}', encoding="utf-8")
+
+    now = time.time()
+    old = now - (8 * 86400)
+    old_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(old))
+    for task_id, extra in (
+        ("stalerun", {}),
+        ("stalechild", {"child_drive_root": str(child_drive)}),
+    ):
+        write_task_result(
+            data,
+            task_id,
+            "running",
+            result_status="infra_failed",
+            reason_code="provider_failure",
+            result="provider failed",
+            ts=old_iso,
+            **extra,
+        )
+    os.utime(task_drive, (old, old))
+    os.utime(child_dir, (old, old))
+
+    direct_report = prune_task_drives(data, retention_days=7, now=now)
+    child_report = prune_headless_task_drives(data, retention_days=7, now=now)
+
+    assert [item["task_id"] for item in direct_report["pruned"]] == ["stalerun"]
+    assert [item["task_id"] for item in child_report["pruned"]] == ["stalechild"]
+    assert not task_drive.exists()
+    assert not child_dir.exists()
+
+
+def test_startup_prune_removes_only_old_terminal_task_scratch(tmp_path):
+    data = tmp_path / "data"
+    old_terminal = data / "task_drives" / "oldterminal"
+    old_pending = data / "task_drives" / "oldpending"
+    fresh_terminal = data / "task_drives" / "freshterminal"
+    for path in (old_terminal, old_pending, fresh_terminal):
+        path.mkdir(parents=True)
+        (path / "scratch.txt").write_text("scratch", encoding="utf-8")
+
+    now = time.time()
+    old = now - (8 * 86400)
+    old_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(old))
+    fresh_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now))
+    write_task_result(data, "oldterminal", "completed", result="done", ts=old_iso)
+    write_task_result(data, "oldpending", "running", result="running")
+    write_task_result(data, "freshterminal", "completed", result="done", ts=fresh_iso)
+    os.utime(old_terminal, (old, old))
+    os.utime(old_pending, (old, old))
+    os.utime(fresh_terminal, (old, old))
+
+    report = prune_task_drives(data, retention_days=7, now=now)
+
+    assert [item["task_id"] for item in report["pruned"]] == ["oldterminal"]
+    assert not old_terminal.exists()
+    assert old_pending.exists()
+    assert fresh_terminal.exists()
+    assert any(item["task_id"] == "oldpending" and item["reason"] == "task_not_terminal" for item in report["skipped"])
+    assert any(item["task_id"] == "freshterminal" and item["reason"] == "younger_than_retention" for item in report["skipped"])
 
 
 def test_external_child_task_budget_uses_parent_drive_state(tmp_path, monkeypatch):
@@ -722,6 +1241,24 @@ def test_cli_patch_downloads_http_artifact():
 
     client = FakeClient()
     result = {"artifact_status": "ready", "artifacts": [{"kind": "workspace_patch", "name": "workspace.patch"}]}
+
+    assert _patch_from_result(client, "task-1", result, strict=True).startswith("diff --git")
+    assert client.paths == ["/api/tasks/task-1/artifacts/workspace.patch"]
+
+
+def test_cli_patch_falls_back_to_workspace_patch_name():
+    from ouroboros.cli import _patch_from_result
+
+    class FakeClient:
+        def __init__(self):
+            self.paths = []
+
+        def get_bytes(self, path):
+            self.paths.append(path)
+            return b"diff --git a/a b/a\n"
+
+    client = FakeClient()
+    result = {"artifact_status": "ready", "artifacts": [{"kind": "task_artifact", "name": "workspace.patch"}]}
 
     assert _patch_from_result(client, "task-1", result, strict=True).startswith("diff --git")
     assert client.paths == ["/api/tasks/task-1/artifacts/workspace.patch"]
@@ -803,6 +1340,39 @@ def test_cli_run_detach_prints_task_id_without_waiting(monkeypatch, capsys):
     assert cli.main(["run", "--detach", "hello"]) == 0
     captured = capsys.readouterr()
     assert captured.out.strip() == "abc123"
+
+
+def test_cli_run_actor_id_is_sent_as_gateway_root_field(monkeypatch, capsys):
+    from ouroboros import cli
+
+    captured = {}
+
+    class FakeClient:
+        def request(self, method, path, body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["body"] = body
+            return {"task_id": "abc123"}
+
+    monkeypatch.setattr(cli, "_client", lambda args, start=False: FakeClient())
+    monkeypatch.setattr(cli, "_watch_task", lambda *args, **kwargs: pytest.fail("detach should not watch"))
+
+    assert cli.main(["run", "--detach", "--actor-id", "operator-1", "hello"]) == 0
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/tasks"
+    assert captured["body"]["actor_id"] == "operator-1"
+    assert "actor_id" not in captured["body"]["metadata"]
+    assert capsys.readouterr().out.strip() == "abc123"
+
+
+def test_cli_run_rejects_forged_subagent_role_before_request(monkeypatch):
+    from ouroboros import cli
+
+    monkeypatch.setattr(cli, "_client", lambda *args, **kwargs: pytest.fail("client should not be created"))
+
+    args = SimpleNamespace(prompt=["hello"], delegation_role="subagent")
+    with pytest.raises(cli.CLIError, match="internal schedule_subagent"):
+        cli._run_command(args)
 
 
 def test_cli_watch_caps_sse_wait_by_timeout(monkeypatch):
@@ -892,6 +1462,31 @@ def test_swebench_helper_records_cli_timeout_with_continue(tmp_path, monkeypatch
     assert '"timeout": true' in errors
     assert (logs_dir / "inst1" / "ouroboros.stdout").read_text(encoding="utf-8") == "partial-out"
     assert (logs_dir / "inst1" / "ouroboros.stderr").read_text(encoding="utf-8") == "partial-err"
+
+
+def test_terminal_bench_helper_refuses_dirty_git_workspace(tmp_path):
+    script_path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "terminal_bench_cli_agent.py"
+    spec = importlib.util.spec_from_file_location("terminal_bench_cli_agent_test", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    workspace = tmp_path / "workspace"
+    _init_repo_with_file(workspace)
+    (workspace / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+    logs_dir = tmp_path / "logs"
+
+    agent = module.OuroborosTerminalBenchAgent(
+        workspace_root=str(workspace),
+        cli=f"{sys.executable} -c 'raise SystemExit(99)'",
+    )
+    result = agent.perform_task("fix", SimpleNamespace(), logging_dir=logs_dir)
+
+    if isinstance(result, dict):
+        assert result["success"] is False
+        assert "dirty_git_workspace" in result["output"]
+    summary = json.loads((logs_dir / "ouroboros-agent-result.json").read_text(encoding="utf-8"))
+    assert summary["failure_mode"] == "dirty_git_workspace"
 
 
 def test_queue_restore_accepts_headless_chat_zero(tmp_path, monkeypatch):

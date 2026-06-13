@@ -253,7 +253,13 @@ class BackgroundConsciousness:
                     reasoning_effort="low",
                     use_local=bool(_use_local_light),
                 )
-                msg, usage = self._llm.chat(
+                from ouroboros.llm_observability import chat_observed
+
+                msg, usage = chat_observed(
+                    self._llm,
+                    drive_root=self._drive_root,
+                    task_id="consciousness",
+                    call_type="consciousness_round",
                     messages=messages,
                     model=model,
                     tools=tools,
@@ -484,11 +490,11 @@ class BackgroundConsciousness:
         return full_text
 
     _BG_TOOL_WHITELIST = frozenset({
-        "send_user_message", "schedule_task", "update_scratchpad",
+        "send_user_message", "schedule_subagent", "update_scratchpad",
         "update_identity", "set_next_wakeup",
         "knowledge_read", "knowledge_write", "knowledge_list",
-        "web_search", "repo_read", "repo_list", "data_read", "data_list",
-        "chat_history", "get_task_result", "wait_for_task",
+        "web_search", "read_file", "list_files",
+        "chat_history", "get_task_result", "wait_task", "wait_tasks",
         "list_github_issues", "get_github_issue",
     })
 

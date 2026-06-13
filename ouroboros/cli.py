@@ -141,6 +141,8 @@ def _run_command(args: argparse.Namespace) -> int:
     prompt = " ".join(args.prompt).strip()
     if not prompt:
         raise CLIError("run requires a prompt")
+    if str(args.delegation_role or "root").strip().lower() != "root":
+        raise CLIError("delegation_role=subagent is only allowed through the internal schedule_subagent tool")
     client = _client(args, start=args.start)
     attachments = [{"path": str(pathlib.Path(p).expanduser())} for p in args.attach]
     body = {
@@ -149,7 +151,8 @@ def _run_command(args: argparse.Namespace) -> int:
         "workspace_mode": "external" if args.workspace else "",
         "memory_mode": args.memory_mode or ("forked" if args.workspace else "shared"),
         "attachments": attachments,
-        "metadata": {"actor_id": args.actor_id, "delegation_role": args.delegation_role},
+        "actor_id": args.actor_id,
+        "metadata": {"delegation_role": args.delegation_role},
     }
     created = client.request("POST", "/api/tasks", body)
     task_id = str(created.get("task_id") or "")
@@ -173,6 +176,11 @@ def _run_command(args: argparse.Namespace) -> int:
     if args.patch_out:
         patch = _patch_from_result(client, task_id, result, strict=True)
         pathlib.Path(args.patch_out).expanduser().write_text(patch, encoding="utf-8")
+    if args.result_json_out:
+        pathlib.Path(args.result_json_out).expanduser().write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if args.jsonl:
         print(json.dumps({"type": "final", "task_id": task_id, "result": result}, ensure_ascii=False))
     elif args.patch:
@@ -382,6 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=float, default=0.0, help="maximum seconds to wait for task completion (0 = no limit)")
     run.add_argument("--patch", action="store_true", help="print workspace patch instead of final answer")
     run.add_argument("--patch-out", default="", help="write workspace patch to this path")
+    run.add_argument("--result-json-out", default="", help="write final task result JSON to this path")
     run.add_argument("--actor-id", default="cli")
     run.add_argument("--delegation-role", default="root")
     run.add_argument("prompt", nargs=argparse.REMAINDER)
@@ -689,13 +698,20 @@ def _patch_from_result(
         raise PatchCLIError(str(result.get("artifact_error") or "workspace patch artifact failed"))
     if artifact_status in {"pending", "finalizing"}:
         raise PatchCLIError(f"workspace patch artifact is not finalized (artifact_status={artifact_status})")
-    for artifact in result.get("artifacts") or []:
-        if isinstance(artifact, dict) and artifact.get("kind") == "workspace_patch":
-            name = str(artifact.get("name") or pathlib.Path(str(artifact.get("path") or "")).name or "workspace.patch")
-            raw = client.get_bytes(f"/api/tasks/{urllib.parse.quote(task_id)}/artifacts/{urllib.parse.quote(name)}")
-            if strict and not raw:
-                raise PatchCLIError("workspace patch artifact is empty")
-            return raw.decode("utf-8", errors="replace")
+    artifacts = [artifact for artifact in result.get("artifacts") or [] if isinstance(artifact, dict)]
+    patch_artifact = next((artifact for artifact in artifacts if artifact.get("kind") == "workspace_patch"), None)
+    if patch_artifact is None:
+        patch_artifact = next((
+            artifact
+            for artifact in artifacts
+            if str(artifact.get("name") or pathlib.Path(str(artifact.get("path") or "")).name) == "workspace.patch"
+        ), None)
+    if patch_artifact is not None:
+        name = str(patch_artifact.get("name") or pathlib.Path(str(patch_artifact.get("path") or "")).name or "workspace.patch")
+        raw = client.get_bytes(f"/api/tasks/{urllib.parse.quote(task_id)}/artifacts/{urllib.parse.quote(name)}")
+        if strict and not raw:
+            raise PatchCLIError("workspace patch artifact is empty")
+        return raw.decode("utf-8", errors="replace")
     if strict:
         raise PatchCLIError("workspace patch artifact is missing")
     return ""
@@ -709,7 +725,15 @@ def _is_terminal_result(result: Dict[str, Any]) -> bool:
 
 
 def _is_terminal_success(result: Dict[str, Any]) -> bool:
-    return str(result.get("status") or "").lower() == "completed"
+    if str(result.get("status") or "").lower() != "completed":
+        return False
+    artifact_status = str(result.get("artifact_status") or "").lower()
+    bundle = result.get("artifact_bundle") if isinstance(result.get("artifact_bundle"), dict) else {}
+    bundle_status = str(bundle.get("status") or "").lower()
+    if artifact_status in {"failed", "pending", "finalizing"} or bundle_status in {"failed", "pending", "finalizing"}:
+        return False
+    result_status = str(result.get("result_status") or "succeeded").lower()
+    return result_status in {"", "succeeded"}
 
 
 def _print_json(data: Any) -> None:

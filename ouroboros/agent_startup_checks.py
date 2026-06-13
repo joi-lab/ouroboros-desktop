@@ -331,7 +331,7 @@ def inject_crash_report(env: Any) -> None:
 
     The file is NOT deleted — it stays so that build_health_invariants()
     shows CRITICAL: RECENT CRASH ROLLBACK on every task until the issue
-    is investigated and removed via run_shell (LLM-first, P5).
+    is investigated and removed via run_command (LLM-first, P5).
     """
     try:
         crash_path = env.drive_path("state") / "crash_report.json"

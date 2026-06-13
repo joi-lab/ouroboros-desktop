@@ -10,7 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros.gateway._helpers import coerce_int, json_error, request_drive_root
-from ouroboros.task_results import load_task_result
+from ouroboros.task_status import find_child_tasks, load_effective_task_result
 
 
 _ALLOWED_LOGS = {
@@ -31,11 +31,19 @@ async def api_logs_tail(request: Request) -> JSONResponse:
     task_id = str(request.query_params.get("task_id") or "").strip()
     drive_root = request_drive_root(request)
     roots = [drive_root]
+    task_filter_ids = {task_id} if task_id else set()
     if task_id:
-        result = load_task_result(drive_root, task_id) or {}
+        result = load_effective_task_result(drive_root, task_id)
         child = str(result.get("child_drive_root") or result.get("headless_child_drive_root") or "").strip()
         if child:
             roots.append(pathlib.Path(child))
+        for child_row in find_child_tasks(drive_root, parent_task_id=task_id, root_task_id=task_id):
+            child_id = str(child_row.get("task_id") or child_row.get("id") or "").strip()
+            if child_id:
+                task_filter_ids.add(child_id)
+            child_root = str(child_row.get("child_drive_root") or child_row.get("headless_child_drive_root") or "").strip()
+            if child_root:
+                roots.append(pathlib.Path(child_root))
     rows: List[Dict[str, Any]] = []
     for root in roots:
         path = pathlib.Path(root) / "logs" / filename
@@ -52,8 +60,18 @@ async def api_logs_tail(request: Request) -> JSONResponse:
                 continue
             if not isinstance(entry, dict):
                 continue
-            if task_id and str(entry.get("task_id") or "") != task_id:
-                continue
+            if task_id:
+                entry_task = str(entry.get("task_id") or "")
+                entry_subagent = str(entry.get("subagent_task_id") or "")
+                entry_parent = str(entry.get("parent_task_id") or "")
+                entry_root = str(entry.get("root_task_id") or "")
+                if (
+                    entry_task not in task_filter_ids
+                    and entry_subagent not in task_filter_ids
+                    and entry_parent != task_id
+                    and entry_root != task_id
+                ):
+                    continue
             item = dict(entry)
             item.setdefault("_source_root", str(root))
             item.setdefault("_line", line_no)

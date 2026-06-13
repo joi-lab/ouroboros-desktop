@@ -16,7 +16,7 @@ import os
 import pathlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -421,7 +421,7 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
             # estimate_tokens returns a large number
             patch("ouroboros.tools.plan_review.estimate_tokens", return_value=1_100_000),
         ):
-            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [])
+            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [], context_level="constitutional")
 
         self.assertIn("PLAN_REVIEW_SKIPPED", result)
 
@@ -441,7 +441,7 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
             patch.object(pr, "_get_review_models", return_value=["model-a", "model-b"]),
             patch("ouroboros.tools.plan_review.estimate_tokens", return_value=10_000),
         ):
-            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [])
+            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [], context_level="constitutional")
 
         self.assertIn("PLAN_REVIEW_SKIPPED", result)
         self.assertIn("generated repository atlas exceeded hard budget", result)
@@ -476,12 +476,28 @@ class TestPlanReviewBudgetGate(unittest.IsolatedAsyncioTestCase):
                   return_value=["model-a", "model-b"]),
             patch.object(pr, "_get_review_models", return_value=["model-a", "model-b"]),
             patch("ouroboros.tools.plan_review.estimate_tokens", return_value=10_000),
-            patch.object(pr, "_query_reviewer", return_value=mock_result),
+            patch.object(pr, "_run_plan_review_slots", new=AsyncMock(return_value=[mock_result, mock_result])),
         ):
-            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [])
+            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [], context_level="localized")
 
         self.assertIn("Plan Review Results", result)
         self.assertIn("GREEN", result)
+
+    async def test_context_level_must_be_agent_chosen_explicitly(self):
+        """plan_task must not use host-side auto heuristics for context selection."""
+        from ouroboros.tools import plan_review as pr
+
+        ctx = _make_ctx()
+        with (
+            patch("ouroboros.config.get_review_models",
+                  return_value=["model-a", "model-b"]),
+            patch.object(pr, "_get_review_models", return_value=["model-a", "model-b"]),
+        ):
+            result = await pr._run_plan_review_async(ctx, "my plan", "my goal", [])
+
+        self.assertIn("ERROR", result)
+        self.assertIn("explicit context_level", result)
+        self.assertIn("host-side auto", result)
 
 
 class TestParseAggregateSignal(unittest.TestCase):
@@ -538,7 +554,9 @@ class TestPlanReviewToolRegistration(unittest.TestCase):
         self.assertIn("plan", params)
         self.assertIn("goal", params)
         self.assertIn("files_to_touch", params)
-        self.assertEqual(tool.schema["parameters"]["required"], ["plan", "goal"])
+        self.assertIn("context_level", params)
+        self.assertEqual(tool.schema["parameters"]["required"], ["plan", "goal", "context_level"])
+        self.assertNotIn("auto", params["context_level"].get("enum", []))
 
     def test_plan_review_deduplicates_canonical_docs_from_repo_pack(self):
         import inspect

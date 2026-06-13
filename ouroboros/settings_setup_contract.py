@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Tuple
 
 from ouroboros.config import SETTINGS_DEFAULTS, VALID_RUNTIME_MODES
@@ -84,9 +85,33 @@ _LOCAL_ROUTING_MODES = _rows(("value", "buttonLabel", "label", "flags"), (
 ))
 
 _BUDGET_FIELDS = [
-    {"stateKey": "totalBudget", "settingKey": "TOTAL_BUDGET", "inputId": "total-budget", "title": "Общий бюджет", "label": "Общий бюджет (USD)", "note": "Глобальный бюджет расходов для всей среды. Оставляйте редактируемым даже после настройки.", "default": float(SETTINGS_DEFAULTS["TOTAL_BUDGET"])},
-    {"stateKey": "perTaskCostUsd", "settingKey": "OUROBOROS_PER_TASK_COST_USD", "inputId": "per-task-budget", "title": "Мягкий порог на задачу", "label": "Лимит затрат на задачу (USD)", "note": "Не останавливает задачу жёстко. Вставляет напоминание о бюджете, когда задача начинает становиться дорогой.", "default": float(SETTINGS_DEFAULTS.get("OUROBOROS_PER_TASK_COST_USD", 20.0))},
+    {
+        "stateKey": "totalBudget",
+        "settingKey": "TOTAL_BUDGET",
+        "inputId": "total-budget",
+        "settingsInputId": "s-total-budget",
+        "title": "Общий бюджет",
+        "label": "Общий бюджет (USD)",
+        "note": "Глобальный бюджет расходов для всей среды. Оставляйте редактируемым даже после настройки.",
+        "default": float(SETTINGS_DEFAULTS["TOTAL_BUDGET"]),
+        "min": "0.01",
+        "step": "any",
+    },
+    {
+        "stateKey": "perTaskCostUsd",
+        "settingKey": "OUROBOROS_PER_TASK_COST_USD",
+        "inputId": "per-task-budget",
+        "settingsInputId": "s-settings-per-task-cost",
+        "title": "Мягкий порог на задачу",
+        "label": "Лимит затрат на задачу (USD)",
+        "note": "Не останавливает задачу жёстко. Вставляет напоминание о бюджете, когда задача начинает становиться дорогой.",
+        "default": float(SETTINGS_DEFAULTS.get("OUROBOROS_PER_TASK_COST_USD", 20.0)),
+        "min": "0.01",
+        "step": "any",
+    },
 ]
+_BUDGET_FIELDS_BY_KEY = {field["settingKey"]: field for field in _BUDGET_FIELDS}
+BUDGET_SETTING_KEYS = tuple(_BUDGET_FIELDS_BY_KEY)
 
 _LOCAL_PRESETS: Dict[str, Dict[str, Any]] = {
     "qwen25-7b": {"label": "Qwen2.5-7B Instruct Q3_K_M", "source": "Qwen/Qwen2.5-7B-Instruct-GGUF", "filename": "qwen2.5-7b-instruct-q3_k_m.gguf", "contextLength": 16384, "chatFormat": ""},
@@ -94,7 +119,7 @@ _LOCAL_PRESETS: Dict[str, Dict[str, Any]] = {
     "qwen3-32b": {"label": "Qwen3-32B Instruct Q4_K_M", "source": "Qwen/Qwen3-32B-GGUF", "filename": "Qwen3-32B-Q4_K_M.gguf", "contextLength": 32768, "chatFormat": ""},
 }
 
-_MODEL_SUGGESTIONS = list(dict.fromkeys(("google/gemini-3.5-flash", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "anthropic::claude-opus-4-6", "anthropic::claude-sonnet-4-6", "openai/gpt-5.5", "openai::gpt-5.5", "openai::gpt-5.5-mini", "openai-compatible::meta-llama/compatible", "cloudru::zai-org/GLM-4.7")))
+_MODEL_SUGGESTIONS = list(dict.fromkeys(("google/gemini-3.5-flash", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4.6", "anthropic::claude-opus-4-8", "anthropic::claude-opus-4-7", "anthropic::claude-opus-4-6", "anthropic::claude-sonnet-4-6", "openai/gpt-5.5", "openai::gpt-5.5", "openai::gpt-5.5-mini", "openai-compatible::meta-llama/compatible", "cloudru::zai-org/GLM-4.7")))
 
 
 def _string(value: Any) -> str:
@@ -104,12 +129,34 @@ def _string(value: Any) -> str:
 _truthy = lambda value: value is True or _string(value).lower() in {"1", "true", "yes", "on"}
 
 
-def _number_setting(settings: dict, key: str, default: Any, cast: Any) -> Any:
+def parse_budget_setting(
+    key: str,
+    raw_value: Any,
+    *,
+    use_default_for_blank: bool = False,
+) -> Tuple[float | None, str | None]:
+    """Parse one shared budget setting for onboarding and Settings saves."""
+    field = _BUDGET_FIELDS_BY_KEY[key]
+    name = "Budget" if key == "TOTAL_BUDGET" else "Per-task soft threshold"
+    if raw_value is None or raw_value == "":
+        if use_default_for_blank:
+            raw_value = field["default"]
+        else:
+            return None, f"{name} must be a number."
+    if isinstance(raw_value, bool):
+        return None, f"{name} must be a number."
     try:
-        raw = settings.get(key, default)
-        return cast(raw if raw not in (None, "") else default)
+        value = float(raw_value)
     except (TypeError, ValueError):
-        return cast(default)
+        return None, f"{name} must be a number."
+    if not math.isfinite(value):
+        return None, f"{name} must be a number."
+    if value <= 0:
+        return None, f"{name} must be greater than zero."
+    min_value = float(field.get("min") or 0)
+    if min_value > 0 and value < min_value:
+        return None, f"{name} must be at least {field['min']}."
+    return value, None
 
 
 def derive_provider_profile(settings: dict) -> str:
@@ -171,6 +218,20 @@ def build_initial_setup_state(settings: dict, host_mode: str = "desktop") -> dic
         (preset_id for preset_id, preset in _LOCAL_PRESETS.items() if local_source == preset["source"] and local_filename == preset["filename"]),
         "custom" if local_source else "",
     )
+    try:
+        raw_context_length = settings.get("LOCAL_MODEL_CONTEXT_LENGTH", SETTINGS_DEFAULTS["LOCAL_MODEL_CONTEXT_LENGTH"])
+        local_context_length = int(raw_context_length if raw_context_length not in (None, "") else SETTINGS_DEFAULTS["LOCAL_MODEL_CONTEXT_LENGTH"])
+    except (TypeError, ValueError):
+        local_context_length = int(SETTINGS_DEFAULTS["LOCAL_MODEL_CONTEXT_LENGTH"])
+    try:
+        raw_gpu_layers = settings.get("LOCAL_MODEL_N_GPU_LAYERS", -1)
+        local_gpu_layers = int(raw_gpu_layers if raw_gpu_layers not in (None, "") else -1)
+    except (TypeError, ValueError):
+        local_gpu_layers = -1
+    budget_state: dict[str, float] = {}
+    for field in _BUDGET_FIELDS:
+        value, error = parse_budget_setting(field["settingKey"], settings.get(field["settingKey"]), use_default_for_blank=True)
+        budget_state[field["stateKey"]] = float(field["default"] if error or value is None else value)
     state = {
         "providerProfile": profile,
         "reviewEnforcement": _string(settings.get("OUROBOROS_REVIEW_ENFORCEMENT")) or str(SETTINGS_DEFAULTS["OUROBOROS_REVIEW_ENFORCEMENT"]),
@@ -179,13 +240,13 @@ def build_initial_setup_state(settings: dict, host_mode: str = "desktop") -> dic
         "localPreset": local_preset,
         "localSource": local_source,
         "localFilename": local_filename,
-        "localContextLength": _number_setting(settings, "LOCAL_MODEL_CONTEXT_LENGTH", int(SETTINGS_DEFAULTS["LOCAL_MODEL_CONTEXT_LENGTH"]), int),
-        "localGpuLayers": _number_setting(settings, "LOCAL_MODEL_N_GPU_LAYERS", -1, int),
+        "localContextLength": local_context_length,
+        "localGpuLayers": local_gpu_layers,
         "localChatFormat": _string(settings.get("LOCAL_MODEL_CHAT_FORMAT")),
         "localRoutingMode": derive_local_routing_mode(settings),
     }
     state.update({field["stateKey"]: _string(settings.get(field["settingKey"])) for field in _PROVIDER_FIELDS})
-    state.update({field["stateKey"]: _number_setting(settings, field["settingKey"], field["default"], float) for field in _BUDGET_FIELDS})
+    state.update(budget_state)
     state.update({slot["stateKey"]: _string(settings.get(slot["settingKey"])) or defaults[slot["slot"]] for slot in _MODEL_SLOTS})
     return state
 
@@ -236,13 +297,11 @@ def validate_setup_payload(data: dict, current_settings: dict) -> Tuple[dict, st
 
     parsed_budget: dict[str, float] = {}
     for field in _BUDGET_FIELDS:
-        try:
-            value = float(data.get(field["settingKey"]) or field["default"])
-        except (TypeError, ValueError):
-            return {}, "Budget must be a number." if field["settingKey"] == "TOTAL_BUDGET" else "Per-task soft threshold must be a number."
-        if value <= 0:
-            return {}, "Budget must be greater than zero." if field["settingKey"] == "TOTAL_BUDGET" else "Per-task soft threshold must be greater than zero."
-        parsed_budget[field["settingKey"]] = value
+        key = field["settingKey"]
+        value, error = parse_budget_setting(key, data.get(key), use_default_for_blank=True)
+        if error:
+            return {}, error
+        parsed_budget[key] = float(value)
 
     try:
         local_context_length = int(data.get("LOCAL_MODEL_CONTEXT_LENGTH") or SETTINGS_DEFAULTS["LOCAL_MODEL_CONTEXT_LENGTH"])

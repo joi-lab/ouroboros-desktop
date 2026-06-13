@@ -14,6 +14,9 @@ const CHAT_STORAGE_KEY = 'ouro_chat';
 const CHAT_INPUT_HISTORY_KEY = 'ouro_chat_input_history';
 const CHAT_SESSION_ID_KEY = 'ouro_chat_session_id';
 const PLAN_PREFIX = 'Please do multi-model planning (plan_task tool) and web-search before answering or starting this task:\n\n';
+const MAX_PENDING_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_PENDING_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 function getOrCreateChatSessionId() {
     try {
@@ -81,7 +84,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                     <span class="chat-attach-label">Прикрепить</span>
                 </button>
-                <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*">
+                <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*" multiple>
                 <textarea id="chat-input" placeholder="Сообщение Ouroboros..." rows="1" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
                 <div class="chat-send-group">
                     <button class="chat-send-inline" id="chat-send" title="Отправить сообщение">Отправить</button>
@@ -120,37 +123,107 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     const attachBtn = document.getElementById('chat-attach');
     const fileInput = document.getElementById('chat-file-input');
     const attachmentPreview = document.getElementById('chat-attachment-preview');
-    let pendingAttachment = null;
+    let pendingAttachments = [];
+    let attachmentsUploading = false;
 
-    // Shared paperclip/paste stager; upload still happens only on Send.
-    function stagePendingFile(file) {
-        if (!file) return;
-        pendingAttachment = { file, display_name: file.name };
-        attachmentPreview.classList.add('visible');
-        attachmentPreview.innerHTML = `
-            <span class="attach-badge">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                <span class="attach-name">${escapeHtml(file.name)}</span>
-                <button class="attach-remove" type="button" title="Remove">×</button>
-            </span>
-        `;
-        requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
-        attachmentPreview.querySelector('.attach-remove').addEventListener('click', () => {
-            pendingAttachment = null;
+    function pendingAttachmentBytes(items = pendingAttachments) {
+        return items.reduce((total, item) => total + Number(item.file?.size || 0), 0);
+    }
+
+    function updateAttachmentPreview() {
+        if (!pendingAttachments.length) {
             attachmentPreview.classList.remove('visible');
             attachmentPreview.innerHTML = '';
             requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
+            return;
+        }
+        attachmentPreview.classList.add('visible');
+        attachmentPreview.innerHTML = pendingAttachments.map((item) => `
+            <span class="attach-badge" data-attachment-id="${escapeHtmlAttr(item.id)}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                <span class="attach-name" title="${escapeHtmlAttr(item.display_name)}">${escapeHtml(item.display_name)}</span>
+                <button class="attach-remove" type="button" title="Remove" aria-label="Remove attachment ${escapeHtmlAttr(item.display_name)}" data-attachment-remove="${escapeHtmlAttr(item.id)}" ${attachmentsUploading ? 'disabled aria-disabled="true"' : ''}>×</button>
+            </span>
+        `).join('');
+        requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
+        attachmentPreview.querySelectorAll('[data-attachment-remove]').forEach((button) => {
+            button.addEventListener('click', () => {
+                if (attachmentsUploading) return;
+                const removeId = button.getAttribute('data-attachment-remove') || '';
+                pendingAttachments = pendingAttachments.filter((item) => item.id !== removeId);
+                updateAttachmentPreview();
+            });
         });
+    }
+
+    // Shared paperclip/paste stager; upload still happens only on Send.
+    function stagePendingFiles(files) {
+        const incoming = Array.from(files || []).filter(Boolean);
+        if (!incoming.length) return;
+        if (attachmentsUploading) {
+            showToast('Wait for the current upload to finish before changing attachments.', 'error');
+            return;
+        }
+        if (pendingAttachments.length + incoming.length > MAX_PENDING_ATTACHMENTS) {
+            showToast(`Attach up to ${MAX_PENDING_ATTACHMENTS} files per message.`, 'error');
+            return;
+        }
+        const oversized = incoming.find((file) => Number(file.size || 0) > MAX_ATTACHMENT_FILE_BYTES);
+        if (oversized) {
+            showToast(`Each attachment must be ${Math.round(MAX_ATTACHMENT_FILE_BYTES / (1024 * 1024))} MB or smaller.`, 'error');
+            return;
+        }
+        const incomingBytes = incoming.reduce((total, file) => total + Number(file.size || 0), 0);
+        if (pendingAttachmentBytes() + incomingBytes > MAX_PENDING_ATTACHMENT_BYTES) {
+            const limitMb = Math.round(MAX_PENDING_ATTACHMENT_BYTES / (1024 * 1024));
+            showToast(`Attachments are limited to ${limitMb} MB total per message.`, 'error');
+            return;
+        }
+        pendingAttachments = pendingAttachments.concat(incoming.map((file) => ({
+            id: (globalThis.crypto && typeof crypto.randomUUID === 'function')
+                ? crypto.randomUUID()
+                : `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            file,
+            display_name: file.name || 'upload',
+        })));
+        updateAttachmentPreview();
+    }
+
+    async function cleanupUploadedAttachments(uploaded) {
+        const filenames = uploaded
+            .map((item) => item.filename)
+            .filter(Boolean);
+        if (!filenames.length) return;
+        const results = await Promise.allSettled(filenames.map(async (filename) => {
+            const resp = await apiFetch('/api/chat/upload', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename }),
+            });
+            if (!resp.ok) throw new Error(`DELETE ${filename} failed with HTTP ${resp.status}`);
+        }));
+        const failed = results.filter((result) => result.status === 'rejected');
+        if (failed.length) {
+            console.warn('Failed to clean up uploaded chat attachments after send failure', failed);
+        }
+    }
+
+    function setAttachmentUploadState(uploading) {
+        attachmentsUploading = uploading;
+        attachBtn.disabled = uploading;
+        attachBtn.classList.toggle('uploading', uploading);
+        fileInput.disabled = uploading;
+        input.disabled = uploading;
+        updateAttachmentPreview();
     }
 
     attachBtn.addEventListener('click', () => fileInput.click());
 
     // Local-only staging avoids orphan uploads and fast-send races.
     fileInput.addEventListener('change', () => {
-        const file = fileInput.files[0];
-        if (!file) return;
+        const files = Array.from(fileInput.files || []);
         fileInput.value = '';
-        stagePendingFile(file);
+        stagePendingFiles(files);
     });
 
     // Image paste uses the same stager; only image matches call preventDefault().
@@ -158,21 +231,23 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     input.addEventListener('paste', (e) => {
         const items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
+        const pastedImages = [];
         for (let i = 0; i < items.length; i += 1) {
             const item = items[i];
             if (item && item.kind === 'file' && typeof item.type === 'string' && item.type.startsWith('image/')) {
                 const blob = item.getAsFile();
                 if (!blob) continue;
-                e.preventDefault();
                 const ext = (item.type.split('/')[1] || 'png').split(';')[0].trim() || 'png';
-                const ts = Date.now();
+                const ts = Date.now() + i;
                 const safeBlob = blob instanceof File
                     ? new File([blob], `clipboard-${ts}.${ext}`, { type: blob.type })
                     : new File([blob], `clipboard-${ts}.${ext}`, { type: item.type });
-                stagePendingFile(safeBlob);
-                return;
+                pastedImages.push(safeBlob);
             }
         }
+        if (!pastedImages.length) return;
+        e.preventDefault();
+        stagePendingFiles(pastedImages);
     });
 
     // Pass 1 builds live cards in memory; pass 2 inserts them in transcript order.
@@ -351,11 +426,13 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         });
         const spent = data?.spent_usd || 0;
         const limit = data?.budget_limit || 10;
+        const budgetLabel = typeof data?.budget_text === 'string'
+            ? data.budget_text
+            : `${formatUsdWhole(spent)} / ${formatUsdWhole(limit)}`;
         const budgetText = document.getElementById('chat-budget-text');
         const budgetFill = document.getElementById('chat-budget-bar-fill');
-        const pct = Math.min(100, (spent / limit) * 100);
-        if (budgetText) budgetText.textContent = `${formatUsdWhole(spent)} / ${formatUsdWhole(limit)}`;
-        if (budgetFill) budgetFill.style.width = `${pct}%`;
+        if (budgetText) budgetText.textContent = budgetLabel;
+        if (budgetFill) budgetFill.style.width = `${Math.min(100, (spent / limit) * 100)}%`;
     }
 
     async function refreshHeaderControlState(force = false) {
@@ -418,8 +495,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         return taskId === 'bg-consciousness';
     }
 
-    function isTerminalTaskPhase(phase = '') {
-        return phase === 'done' || phase === 'lifecycle_error';
+    function isTerminalTaskPhase(phase = '', terminal = false) {
+        return Boolean(terminal) || ['done', 'lifecycle_error'].includes(phase);
     }
 
     function createTaskUiState(taskId) {
@@ -469,7 +546,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
 
     function revealBufferedCardIfNeeded(taskState, { suppressDomInsert = false } = {}) {
         if (!taskState || taskState.cardVisible) return;
-        if (!(taskState.forceCard || taskState.toolCalls > 1 || shouldAlwaysShowTaskCard(taskState.taskId))) {
+        if (!(taskState.forceCard || taskState.toolCalls > 0 || shouldAlwaysShowTaskCard(taskState.taskId))) {
             return;
         }
         taskState.cardVisible = true;
@@ -536,7 +613,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         if (!resolvedTaskId) return;
         const taskState = getTaskUiState(resolvedTaskId, true);
         if (!taskState) return;
-        if (taskState.completed && !isTerminalTaskPhase(summary.phase || '')) {
+        if (taskState.completed && !isTerminalTaskPhase(summary.phase || '', summary.terminal)) {
             // A non-terminal event on a reusable id starts a fresh visible cycle.
             if (REUSABLE_TASK_IDS.has(resolvedTaskId)) {
                 if (taskState.cleanupTimer) clearTimeout(taskState.cleanupTimer);
@@ -567,14 +644,20 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         applyLiveCardState(summary, resolvedTaskId, ts, dedupeKey);
     }
 
-    function createLiveCardRecord(groupId = '') {
+    function createLiveCardRecord(groupId = '', options = {}) {
         const normalizedGroupId = groupId || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const timelineId = `chat-live-timeline-${normalizedGroupId.replace(/[^A-Za-z0-9_-]/g, '-')}`;
         const root = document.createElement('div');
         root.className = 'chat-live-card';
+        if (options.isSubagent) {
+            root.classList.add('subagent');
+            root.dataset.subagent = '1';
+            root.dataset.parentTaskId = String(options.parentGroupId || '');
+        }
         root.dataset.finished = '0';
         root.dataset.expanded = '0';
         root.innerHTML = `
-            <button type="button" class="chat-live-summary-button" data-live-summary-button>
+            <button type="button" class="chat-live-summary-button" data-live-summary-button aria-expanded="false" aria-controls="${escapeHtmlAttr(timelineId)}">
                 <div class="chat-live-summary">
                     <div class="chat-live-summary-main">
                         <span class="chat-live-phase working" data-live-phase>Работает</span>
@@ -593,7 +676,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 </div>
                 <div class="chat-live-meta" data-live-meta></div>
             </button>
-            <div class="chat-live-timeline" data-live-timeline></div>
+            <div class="chat-live-timeline" data-live-timeline id="${escapeHtmlAttr(timelineId)}"></div>
         `;
         const record = {
             groupId: normalizedGroupId,
@@ -611,6 +694,10 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             items: [],
             lastHumanHeadline: '',
             expandedLineKeys: new Set(),
+            isSubagent: Boolean(options.isSubagent),
+            parentGroupId: String(options.parentGroupId || ''),
+            subagentRole: String(options.role || ''),
+            subagentsEl: null,
             // Hidden-page layout sync is deferred until page/visibility returns.
             _needsLayoutSync: false,
         };
@@ -635,6 +722,40 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     function getLiveCardRecord(groupId = '') {
         const normalizedGroupId = groupId || activeLiveGroupId || 'chat';
         return liveCardRecords.get(normalizedGroupId) || createLiveCardRecord(normalizedGroupId);
+    }
+
+    function ensureSubagentContainer(parentId = '') {
+        if (!parentId) return null;
+        const parentRecord = getLiveCardRecord(parentId);
+        if (!parentRecord.subagentsEl) {
+            const container = document.createElement('div');
+            container.className = 'chat-subagents';
+            container.dataset.subagentsFor = parentId;
+            parentRecord.subagentsEl = container;
+            parentRecord.timelineEl?.insertAdjacentElement('afterend', container);
+        }
+        return parentRecord.subagentsEl;
+    }
+
+    function getSubagentCardRecord(childId = '', parentId = '', role = '') {
+        if (!childId || !parentId) return null;
+        const existing = liveCardRecords.get(childId);
+        const record = existing || createLiveCardRecord(childId, {
+            isSubagent: true,
+            parentGroupId: parentId,
+            role,
+        });
+        record.isSubagent = true;
+        record.parentGroupId = parentId;
+        record.subagentRole = role || record.subagentRole || '';
+        record.root.classList.add('subagent');
+        record.root.dataset.subagent = '1';
+        record.root.dataset.parentTaskId = parentId;
+        const container = ensureSubagentContainer(parentId);
+        if (container && record.root.parentNode !== container) {
+            container.appendChild(record.root);
+        }
+        return record;
     }
 
     function setLiveCardTypingVisible(record, visible) {
@@ -663,7 +784,18 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     function ensureLiveCardVisible(record, { suppressDomInsert = false } = {}) {
-        if (!suppressDomInsert && !_syncPass1Active) insertMessageNode(record.root);
+        if (record?.isSubagent && record.parentGroupId) {
+            if (!suppressDomInsert && !_syncPass1Active) {
+                const parentRecord = getLiveCardRecord(record.parentGroupId);
+                insertMessageNode(parentRecord.root);
+                const container = ensureSubagentContainer(record.parentGroupId);
+                if (container && record.root.parentNode !== container) {
+                    container.appendChild(record.root);
+                }
+            }
+            return;
+        }
+        if (!record.isSubagent && !suppressDomInsert && !_syncPass1Active) insertMessageNode(record.root);
     }
 
     function formatLiveCardPhaseLabel(phase) {
@@ -699,7 +831,9 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
 
     function syncLiveCardToggle(record) {
         if (!record?.toggleEl) return;
-        record.toggleEl.textContent = record.root.dataset.expanded === '1' ? 'Скрыть детали' : 'Показать детали';
+        const expanded = record.root.dataset.expanded === '1';
+        record.toggleEl.textContent = expanded ? 'Скрыть детали' : 'Показать детали';
+        record.summaryButtonEl?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
     const TIMELINE_MAX_HEIGHT = 420;
@@ -750,6 +884,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const displayHeadline = expanded && item.fullHeadline ? item.fullHeadline : item.headline;
         const displayBody = expanded && item.fullBody ? item.fullBody : item.body;
         const isProgressLine = item.phase === 'working' || item.phase === 'thinking';
+        const bodyId = `chat-live-line-body-${String(record.groupId || 'task').replace(/[^A-Za-z0-9_-]/g, '-')}-${String(item.lineKey || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
         const headContent = `
             <span class="chat-live-line-title">${isProgressLine ? renderMarkdown(displayHeadline) : escapeHtml(displayHeadline)}</span>
             <span class="chat-live-line-repeat" ${item.count > 1 ? '' : 'hidden'}>${item.count > 1 ? `${item.count}x` : ''}</span>
@@ -762,6 +897,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     class="chat-live-line-toggle"
                     data-live-line-toggle="${escapeHtmlAttr(item.lineKey)}"
                     aria-expanded="${expanded ? 'true' : 'false'}"
+                    ${displayBody ? `aria-controls="${escapeHtmlAttr(bodyId)}"` : ''}
                 >
                     <span class="chat-live-line-head">${headContent}</span>
                     <span class="chat-live-line-expand-label">${expanded ? 'Свернуть' : 'Развернуть'}</span>
@@ -775,7 +911,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 data-expanded="${expanded ? '1' : '0'}"
             >
                 ${headHtml}
-                ${displayBody ? `<div class="chat-live-line-body">${renderMarkdown(displayBody)}</div>` : ''}
+                ${displayBody ? `<div class="chat-live-line-body" id="${escapeHtmlAttr(bodyId)}">${renderMarkdown(displayBody)}</div>` : ''}
             </div>
         `;
     }
@@ -808,6 +944,17 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         if (newNode) record.timelineEl.replaceChild(newNode, lastEl);
     }
 
+    // Patch a specific timeline node in place (evolving subagent dashboard rows).
+    function patchTimelineItemAt(item, record) {
+        const key = String(item.lineKey || '').replace(/[^A-Za-z0-9_-]/g, '');
+        const el = key ? record.timelineEl.querySelector(`[data-live-line-key="${key}"]`) : null;
+        if (!el) return renderLiveCardTimeline(record);
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = buildTimelineItemHtml(item, record).trim();
+        const newNode = wrapper.firstElementChild;
+        if (newNode) record.timelineEl.replaceChild(newNode, el);
+    }
+
     function scheduleHistorySync() {
         if (historySyncTimer) clearTimeout(historySyncTimer);
         historySyncTimer = setTimeout(() => {
@@ -820,17 +967,24 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const nextGroupId = groupId || activeLiveGroupId || 'active';
         const record = getLiveCardRecord(nextGroupId);
         const nextPhase = summary.phase || '';
-        if (record.finished && !isTerminalTaskPhase(nextPhase)) {
+        if (record.finished && !isTerminalTaskPhase(nextPhase, summary.terminal)) {
             return;
         }
 
-        activeLiveGroupId = nextGroupId;
+        if (!record.isSubagent) activeLiveGroupId = nextGroupId;
         ensureLiveCardVisible(record, { suppressDomInsert });
         record.updates += 1;
         const wasFinished = record.finished;
-        record.finished = isTerminalTaskPhase(nextPhase);
-        record.root.dataset.finished = record.finished ? '1' : '0';
         const headline = summary.headline || 'Working...';
+        const syntheticKey = summary.dedupeKey || dedupeKey || `${summary.phase || 'working'}|${headline}|${summary.body || ''}`;
+        const isLegacyParentSubagentKey = syntheticKey.startsWith('parent-subagent:');
+        const inPlaceByKey = isLegacyParentSubagentKey
+            || syntheticKey.startsWith('subagent-lifecycle:')
+            || syntheticKey.startsWith('subagent-progress:');
+        if (!isLegacyParentSubagentKey) {
+            record.finished = isTerminalTaskPhase(nextPhase, summary.terminal);
+        }
+        record.root.dataset.finished = record.finished ? '1' : '0';
         if (summary.human && headline) {
             record.lastHumanHeadline = headline;
         }
@@ -851,16 +1005,32 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         record.phaseEl.className = `chat-live-phase ${activePhase}`;
         record.titleEl.textContent = activeHeadline;
 
-        const syntheticKey = summary.dedupeKey || dedupeKey || `${summary.phase || 'working'}|${headline}|${summary.body || ''}`;
         const shouldRenderLine = summary.visible !== false && Boolean(headline || summary.body);
+        // Legacy parent-subagent rows update in place if replayed from old
+        // history. Child-card lifecycle/progress rows also evolve in place.
         let timelineUpdate = 'none';
+        let patchIndex = -1;
         if (shouldRenderLine) {
-            const last = record.items[record.items.length - 1];
-            if (last && last.dedupeKey === syntheticKey) {
-                last.count += 1;
-                last.ts = ts || last.ts;
-                last.fullHeadline = summary.fullHeadline || last.fullHeadline || last.headline;
-                last.fullBody = summary.fullBody || last.fullBody || last.body;
+            const lastIdx = record.items.length - 1;
+            const existingIdx = inPlaceByKey
+                ? record.items.findIndex((it) => it.dedupeKey === syntheticKey)
+                : (lastIdx >= 0 && record.items[lastIdx].dedupeKey === syntheticKey ? lastIdx : -1);
+            if (existingIdx !== -1 && inPlaceByKey) {
+                const it = record.items[existingIdx];
+                it.phase = summary.phase || it.phase;
+                it.headline = headline || it.headline;
+                it.fullHeadline = summary.fullHeadline || headline || it.fullHeadline;
+                it.body = summary.body || '';
+                it.fullBody = summary.fullBody || summary.body || it.fullBody || '';
+                it.ts = ts || it.ts;
+                patchIndex = existingIdx;
+                timelineUpdate = 'patch-at';
+            } else if (existingIdx !== -1) {
+                const it = record.items[existingIdx];
+                it.count += 1;
+                it.ts = ts || it.ts;
+                it.fullHeadline = summary.fullHeadline || it.fullHeadline || it.headline;
+                it.fullBody = summary.fullBody || it.fullBody || it.body;
                 timelineUpdate = 'patch-last';
             } else {
                 const lineKey = `line-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -882,6 +1052,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         record.countEl.textContent = `${record.items.length} ${record.items.length === 1 ? 'заметка' : (record.items.length < 5 ? 'заметки' : 'заметок')}`;
         record.metaEl.innerHTML = [
             nextGroupId === 'bg-consciousness' ? 'Фоновое мышление' : '',
+            ...(Array.isArray(summary.meta) ? summary.meta : []),
             ts ? `Последнее ${ts}` : '',
         ].filter(Boolean).map((item) => `<span class="chat-live-meta-text">${escapeHtml(item)}</span>`).join('');
         // Incremental updates; full rebuilds stay limited to toggles.
@@ -890,8 +1061,10 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             appendTimelineItem(lastItem, record);
         } else if (timelineUpdate === 'patch-last' && lastItem) {
             patchLastTimelineItem(lastItem, record);
+        } else if (timelineUpdate === 'patch-at' && patchIndex !== -1) {
+            patchTimelineItemAt(record.items[patchIndex], record);
         }
-        if (!suppressDomInsert && !_syncPass1Active) insertMessageNode(record.root);
+        ensureLiveCardVisible(record, { suppressDomInsert });
         syncLiveCardLayout(record);
         hideTypingIndicatorOnly();
         const justFinished = record.finished && !wasFinished;
@@ -953,27 +1126,63 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             return;
         }
         const record = liveCardRecords.get(taskId);
-        const doneHeadline = (record && record.lastHumanHeadline) || 'Готово';
+        const resultStatus = msg?.result_status ? String(msg.result_status) : '';
+        const reasonCode = msg?.reason_code ? String(msg.reason_code) : '';
+        const failedResult = ['failed', 'infra_failed'].includes(resultStatus);
+        const doneHeadline = failedResult && reasonCode
+            ? `Готово: ${reasonCode}`
+            : ((record && record.lastHumanHeadline) || 'Готово');
         applyLiveCardState(
             {
-                phase: 'done',
+                phase: failedResult ? 'error' : 'done',
                 headline: doneHeadline,
                 visible: false,
                 human: false,
                 promote: true,
+                terminal: true,
             },
             taskId,
             normalizeLogTs(msg.ts || new Date().toISOString()),
             `task_done|${taskId}`,
             { suppressDomInsert },
         );
-        finishLiveCard(taskId, 'done');
+        finishLiveCard(taskId, failedResult ? 'error' : 'done');
         scheduleTaskUiCleanup(taskState);
     }
+
+    // child task_id -> { parentId, role }, learned from subagent lifecycle pings.
+    // Child cards are mounted under the parent card, but their phase/terminal
+    // state is independent so a finished child cannot mark the parent done.
+    const subagentChildParents = new Map();
+    // Children whose card has reached a terminal phase — late non-lifecycle
+    // progress for these must NOT revive it back to "working".
+    const subagentTerminalChildren = new Set();
+
+    const SUBAGENT_EVENT_PHASE = {
+        scheduled: 'start', running: 'working', completed: 'done',
+        failed: 'error', rejected: 'warn', cancelled: 'warn', interrupted: 'warn',
+    };
+    const SUBAGENT_EVENT_LABEL = {
+        scheduled: 'scheduled', running: 'running', completed: 'done',
+        failed: 'failed', rejected: 'rejected', cancelled: 'cancelled', interrupted: 'interrupted',
+    };
 
     function updateLiveCardFromProgressMessage(msg) {
         const taskId = msg?.task_id || activeLiveGroupId || '';
         if (!taskId) return;
+        // Subagent lifecycle pings render as child cards linked to the parent;
+        // they must not update the parent card's terminal state.
+        const lifecycleParent = String(msg?.parent_task_id || '').trim();
+        if (msg?.subagent_event && lifecycleParent && lifecycleParent !== taskId) {
+            updateSubagentCardFromEvent(msg, msg.ts || new Date().toISOString());
+            return;
+        }
+        // A known subagent child's own (non-lifecycle) progress stays on the child
+        // card so parallel work remains visible without expanding the parent.
+        if (subagentChildParents.has(taskId)) {
+            routeSubagentProgressToCard(taskId, msg);
+            return;
+        }
         // Progress messages are visible status; do not force-open completed replay.
         const taskState = getTaskUiState(taskId, true);
         if (taskState && !taskState.completed) taskState.forceCard = true;
@@ -983,10 +1192,148 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             content: msg?.content || msg?.text || '',
             text: msg?.content || msg?.text || '',
             task_id: taskId,
+            subagent_event: msg?.subagent_event || '',
+            subagent_task_id: msg?.subagent_task_id || '',
+            root_task_id: msg?.root_task_id || '',
+            parent_task_id: msg?.parent_task_id || '',
+            delegation_role: msg?.delegation_role || '',
+            subagent_role: msg?.subagent_role || '',
+            status: msg?.status || '',
+            cost_usd: msg?.cost_usd || 0,
+            result: msg?.result || '',
+            trace_summary: msg?.trace_summary || '',
+            error: msg?.error || '',
+            artifact_status: msg?.artifact_status || '',
             lifecycle: msg?.lifecycle || null,
         });
         if (!summary) return;
         queueTaskLiveUpdate(summary, taskId, normalizeLogTs(msg.ts || new Date().toISOString()), summary.dedupeKey || '');
+    }
+
+    function updateSubagentCardFromEvent(evt, tsValue) {
+        if (!evt || String(evt.delegation_role || '').toLowerCase() !== 'subagent') return false;
+        const parentId = String(evt.parent_task_id || '').trim();
+        const childId = String(evt.subagent_task_id || evt.task_id || '').trim();
+        if (!parentId || !childId || parentId === childId) return false;
+        const event = String(evt.subagent_event || 'update').toLowerCase();
+        const role = String(evt.subagent_role || '').trim();
+        subagentChildParents.set(childId, { parentId, role });
+        // NOTE: 'interrupted' is intentionally excluded — it is retryable
+        // (written before requeue), so the child resumes and its later progress
+        // must still flow to its card. Only true terminals lock it.
+        if (['completed', 'failed', 'cancelled', 'rejected'].includes(event)) {
+            subagentTerminalChildren.add(childId);  // lock the child card terminal
+        }
+        const phase = SUBAGENT_EVENT_PHASE[event] || 'working';
+        const label = SUBAGENT_EVENT_LABEL[event] || event;
+        const shortChild = childId.slice(0, 8);
+        const headline = role
+            ? `Subagent ${shortChild} · ${role} — ${label}`
+            : `Subagent ${shortChild} — ${label}`;
+        // Surface the child's handoff (result/trace/error) as expandable detail
+        // on the child card.
+        const detailParts = [];
+        if (evt.result) detailParts.push(`[RESULT]\n${String(evt.result)}`);
+        if (evt.trace_summary) detailParts.push(`[TRACE]\n${String(evt.trace_summary)}`);
+        if (evt.error) detailParts.push(`[ERROR]\n${String(evt.error)}`);
+        const cost = Number(evt.cost_usd || 0);
+        const metaBits = [`child=${shortChild}`];
+        if (role) metaBits.push(`role=${role}`);
+        if (cost > 0) metaBits.push(`cost=$${cost.toFixed(2)}`);
+        forceTaskCard(parentId);
+        const childState = getTaskUiState(childId, true);
+        if (childState && !childState.completed) childState.forceCard = true;
+        getSubagentCardRecord(childId, parentId, role);
+        queueTaskLiveUpdate({
+            phase,
+            headline,
+            body: '',
+            fullBody: detailParts.join('\n\n'),
+            visible: true,
+            promote: true,
+            meta: metaBits,
+            dedupeKey: `subagent-lifecycle:${childId}`,
+            terminal: ['completed', 'failed', 'cancelled', 'rejected'].includes(event),
+        }, childId, normalizeLogTs(tsValue || new Date().toISOString()), `subagent-lifecycle:${childId}`);
+        return true;
+    }
+
+    // A known child's own (non-lifecycle) progress updates the linked child card.
+    function routeSubagentProgressToCard(childId, msg) {
+        const info = subagentChildParents.get(childId);
+        if (!info) return;
+        if (subagentTerminalChildren.has(childId)) return;  // never revive a finished child
+        const { parentId, role } = info;
+        const shortChild = String(childId).slice(0, 8);
+        const line = String(msg?.content || msg?.text || '').trim().split('\n').filter(Boolean).pop() || '';
+        const headline = role
+            ? `Subagent ${shortChild} · ${role} — running`
+            : `Subagent ${shortChild} — running`;
+        forceTaskCard(parentId);
+        const childState = getTaskUiState(childId, true);
+        if (childState && !childState.completed) childState.forceCard = true;
+        getSubagentCardRecord(childId, parentId, role);
+        const meta = [`child=${shortChild}`];
+        if (role) meta.push(`role=${role}`);
+        queueTaskLiveUpdate({
+            phase: 'working',
+            headline,
+            body: line.slice(0, 200),
+            visible: true,
+            promote: true,
+            meta,
+            dedupeKey: `subagent-progress:${childId}`,
+        }, childId, normalizeLogTs(msg?.ts || new Date().toISOString()), `subagent-progress:${childId}`);
+    }
+
+    function routeSubagentFinalMessageToCard(taskId, msg) {
+        const childId = String(taskId || '').trim();
+        const info = subagentChildParents.get(childId);
+        if (!childId || !info) return false;
+        const { parentId, role } = info;
+        const shortChild = childId.slice(0, 8);
+        const text = String(msg?.content || msg?.text || '').trim();
+        forceTaskCard(parentId);
+        getSubagentCardRecord(childId, parentId, role);
+        const meta = [`child=${shortChild}`];
+        if (role) meta.push(`role=${role}`);
+        queueTaskLiveUpdate({
+            phase: 'done',
+            headline: role
+                ? `Subagent ${shortChild} · ${role} — result`
+                : `Subagent ${shortChild} — result`,
+            body: text.slice(0, 200),
+            fullBody: text,
+            visible: true,
+            promote: true,
+            meta,
+            dedupeKey: `subagent-result:${childId}`,
+            terminal: true,
+        }, childId, normalizeLogTs(msg?.ts || new Date().toISOString()), `subagent-result:${childId}`);
+        return true;
+    }
+
+    // Resolve a child's card from the child's terminal task_done
+    // (which arrives on the log channel without subagent metadata).
+    function routeSubagentTerminalToCard(childId, evt) {
+        const info = subagentChildParents.get(childId);
+        if (!info) return false;
+        const resultStatus = String(evt.result_status || '').toLowerCase();
+        const status = String(evt.status || '').toLowerCase();
+        const failed = ['failed', 'infra_failed'].includes(resultStatus) || status === 'failed';
+        const cancelled = status === 'cancelled' || status === 'cancel_requested' || resultStatus === 'cancelled';
+        const rejected = status === 'rejected_duplicate' || resultStatus === 'rejected_duplicate';
+        const event = failed ? 'failed' : cancelled ? 'cancelled' : rejected ? 'rejected' : 'completed';
+        updateSubagentCardFromEvent({
+            delegation_role: 'subagent',
+            parent_task_id: info.parentId,
+            subagent_task_id: childId,
+            subagent_role: info.role,
+            subagent_event: event,
+            result: evt.result || '',
+            error: evt.error || '',
+        }, evt.ts || evt.timestamp || new Date().toISOString());
+        return true;
     }
 
     function updateLiveCardFromLogEvent(evt) {
@@ -994,6 +1341,33 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const taskId = getLogTaskGroupId(evt) || activeLiveGroupId || '';
         if (!taskId) return;
         const eventType = evt.type || evt.event || '';
+        // A known subagent child's log events update its linked child card.
+        if (subagentChildParents.has(taskId)) {
+            if (eventType === 'task_done') {
+                routeSubagentTerminalToCard(taskId, evt);
+                return;
+            }
+            if (subagentTerminalChildren.has(taskId)) return;
+            if (eventType === 'tool_call_started') {
+                markTaskToolCall(taskId, 1);
+            } else if ((eventType === 'task_metrics_event' || eventType === 'task_eval') && Number.isFinite(Number(evt.tool_calls))) {
+                markTaskToolCall(taskId, Number(evt.tool_calls), true);
+            } else if (
+                eventType === 'tool_call_timeout'
+                || eventType === 'tool_timeout'
+                || eventType === 'llm_round_error'
+                || eventType === 'llm_api_error'
+                || (eventType === 'tool_call_finished' && evt.is_error)
+            ) {
+                forceTaskCard(taskId);
+            }
+            const summary = summarizeChatLiveEvent(evt);
+            if (!summary) return;
+            const info = subagentChildParents.get(taskId);
+            if (info) getSubagentCardRecord(taskId, info.parentId, info.role);
+            queueTaskLiveUpdate(summary, taskId, normalizeLogTs(evt.ts || evt.timestamp), summary.dedupeKey || '');
+            return;
+        }
         if (eventType === 'tool_call_started') {
             markTaskToolCall(taskId, 1);
         } else if ((eventType === 'task_metrics_event' || eventType === 'task_eval') && Number.isFinite(Number(evt.tool_calls))) {
@@ -1010,6 +1384,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const summary = summarizeChatLiveEvent(evt);
         if (!summary) return;
         queueTaskLiveUpdate(summary, taskId, normalizeLogTs(evt.ts || evt.timestamp), summary.dedupeKey || '');
+        updateSubagentCardFromEvent(evt, evt.ts || evt.timestamp || new Date().toISOString());
         if (eventType === 'task_done') {
             const taskState = getTaskUiState(taskId, false);
             revealBufferedCardIfNeeded(taskState);
@@ -1132,6 +1507,12 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 // First load/reconnect trusts server history and rebuilds retired cards.
                 // Routine post-completion syncs keep retiredTaskIds to avoid duplicates.
                 if (!historyLoaded || fromReconnect) retiredTaskIds.clear();
+                if (!historyLoaded || fromReconnect) {
+                    for (const record of liveCardRecords.values()) record.root?.remove();
+                    liveCardRecords.clear();
+                    taskUiStates.clear();
+                    activeLiveGroupId = '';
+                }
 
                 // Two passes ensure cards exist before finishLiveCard() marks them done.
 
@@ -1149,7 +1530,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                         // Historical cards only for non-trivial tasks.
                         const hadToolCalls = (msg.tool_calls || 0) > 0;
                         const hadMultipleRounds = (msg.rounds || 0) > 1;
-                        if (hadToolCalls || hadMultipleRounds) {
+                        const failedResult = ['failed', 'infra_failed'].includes(String(msg.result_status || ''));
+                        if (hadToolCalls || hadMultipleRounds || failedResult) {
                             const taskState = getTaskUiState(taskId, true);
                             if (taskState) taskState.forceCard = true;
                         }
@@ -1165,7 +1547,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     insertedCardTaskIds.add(taskId);
                     const rec = liveCardRecords.get(taskId);
                     if (rec && rec.root && !rec.root.isConnected) {
-                        insertMessageNode(rec.root);
+                        if (rec.isSubagent) ensureLiveCardVisible(rec);
+                        else insertMessageNode(rec.root);
                     }
                 }
                 for (const msg of messages) {
@@ -1178,8 +1561,20 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     }
                     if (msg.system_type === 'task_summary') continue;
                     if (taskId && (msg.role === 'assistant' || msg.role === 'system')) {
+                        if (subagentChildParents.has(taskId)) {
+                            insertCardIfNeeded(taskId);
+                            routeSubagentFinalMessageToCard(taskId, msg);
+                            const taskState = getTaskUiState(taskId, false);
+                            const record = liveCardRecords.get(taskId);
+                            const preservedPhase = taskState?.completedPhase || record?.phaseEl?.dataset?.phase || 'done';
+                            finishLiveCard(taskId, preservedPhase);
+                            continue;
+                        }
                         insertCardIfNeeded(taskId);
-                        finishLiveCard(taskId);
+                        const taskState = getTaskUiState(taskId, false);
+                        const record = liveCardRecords.get(taskId);
+                        const preservedPhase = taskState?.completedPhase || record?.phaseEl?.dataset?.phase || 'done';
+                        finishLiveCard(taskId, preservedPhase);
                     }
                     addMessage(msg.text, msg.role, !!msg.markdown, msg.ts || null, false, {
                         systemType: msg.system_type || '',
@@ -1190,12 +1585,38 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                         taskId,
                     });
                 }
+                // Resolve cards whose task is already terminal on the server
+                // (crash storm / hard timeout / cancellation write a terminal
+                // status but no task_summary). Without this their progress-only
+                // cards re-inflate as "Working" forever on reload/reconnect.
+                const terminalTaskStatus = new Map();
+                for (const msg of messages) {
+                    const tid = msg.task_id || '';
+                    if (tid && msg.task_terminal_status) {
+                        terminalTaskStatus.set(tid, String(msg.task_terminal_status));
+                    }
+                }
+                for (const [tid, status] of terminalTaskStatus) {
+                    // Subagent terminal status resolves the child card, not the
+                    // parent. Otherwise reload can revive a crashed/cancelled child.
+                    if (subagentChildParents.has(tid)) {
+                        routeSubagentTerminalToCard(tid, { status, result_status: status });
+                        continue;
+                    }
+                    const rec = liveCardRecords.get(tid);
+                    if (rec && !rec.finished) {
+                        insertCardIfNeeded(tid);
+                        finishLiveCard(tid, status === 'failed' ? 'error' : 'done');
+                    }
+                }
+
                 // Append disconnected visible cards after mid-task reload; skip trivial placeholders.
                 for (const [tid, rec] of liveCardRecords) {
                     if (rec && rec.root && !rec.root.isConnected && !retiredTaskIds.has(tid)) {
                         const ts = taskUiStates.get(tid);
                         if (ts && !ts.cardVisible && ts.completed) continue;
-                        insertMessageNode(rec.root);
+                        if (rec.isSubagent) ensureLiveCardVisible(rec);
+                        else insertMessageNode(rec.root);
                     }
                 }
 
@@ -1313,46 +1734,69 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     async function sendMessage(planMode = false) {
         if (sendBtn.disabled) return;  // guard against Enter re-entry during async upload
         let text = input.value.trim();
-        if (!text && !pendingAttachment) return;
-        if (pendingAttachment) {
+        const hasAttachments = pendingAttachments.length > 0;
+        let uploadedAttachments = [];
+        if (!text && !pendingAttachments.length) return;
+        if (pendingAttachments.length) {
             // Upload immediately before send; offline queueing would orphan files.
             if (ws.ws?.readyState !== WebSocket.OPEN) {
                 showToast('Cannot attach file while offline. Reconnect and try again.', 'error');
                 return;
             }
-            const staged = pendingAttachment;
-            setSendBusy(true, 'Загрузка');
+            const staged = [...pendingAttachments];
+            const uploaded = [];
+            setAttachmentUploadState(true);
+            setSendBusy(true, staged.length > 1 ? 'Загрузка файлов' : 'Загрузка');
             try {
-                const formData = new FormData();
-                formData.append('file', staged.file);
-                const resp = await apiFetch('/api/chat/upload', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (!resp.ok || !data.ok) {
-                    showToast('Upload failed: ' + (data.error || resp.statusText), 'error');
-                    return;  // pendingAttachment and preview remain — user can retry
+                for (const stagedItem of staged) {
+                    if (ws.ws?.readyState !== WebSocket.OPEN) throw new Error('Connection closed during upload. Reconnect and try again.');
+                    const formData = new FormData();
+                    formData.append('file', stagedItem.file);
+                    const resp = await apiFetch('/api/chat/upload', { method: 'POST', body: formData });
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok || !data.ok) {
+                        throw new Error(data.error || resp.statusText);
+                    }
+                    uploaded.push({
+                        filename: data.filename || '',
+                        path: data.path || '',
+                        display_name: data.display_name || stagedItem.display_name,
+                    });
                 }
-                pendingAttachment = null;
-                attachmentPreview.classList.remove('visible');
-                attachmentPreview.innerHTML = '';
-                requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: false }));
-                text += (text ? '\n\n' : '') + `[Attached file: ${data.display_name || staged.display_name} saved to ${data.path}]`;
+                if (ws.ws?.readyState !== WebSocket.OPEN) throw new Error('Connection closed after upload. Reconnect and try again.');
+                uploadedAttachments = uploaded;
+                const attachmentLines = uploaded
+                    .map((item) => `[Attached file: ${item.display_name} saved to ${item.path}]`)
+                    .join('\n');
+                text += (text ? '\n\n' : '') + attachmentLines;
             } catch (e) {
+                await cleanupUploadedAttachments(uploaded);
                 showToast('Upload error: ' + e.message, 'error');
-                return;  // pendingAttachment and preview remain — user can retry
+                return;  // pending attachments and preview remain so the user can retry
             } finally {
+                setAttachmentUploadState(false);
                 setSendBusy(false);
             }
         }
         if (!text) return;
-        rememberInput(text);
-        input.value = '';
         // Plan prefix is wire-only; slash commands stay literal.
         const wireText = (planMode && !text.startsWith('/')) ? PLAN_PREFIX + text : text;
         const result = ws.send({
             type: 'chat',
             content: wireText,
             sender_session_id: chatSessionId,
-        });
+        }, hasAttachments ? { queue: false } : undefined);
+        if (hasAttachments && result?.status !== 'sent') {
+            await cleanupUploadedAttachments(uploadedAttachments);
+            showToast('Connection lost before send. Reconnect and try again.', 'error');
+            return;
+        }
+        if (hasAttachments) {
+            pendingAttachments = [];
+            updateAttachmentPreview();
+        }
+        rememberInput(text);
+        input.value = '';
         addMessage(text, 'user', false, null, false, {
             pending: result?.status === 'queued',
             source: 'web',
@@ -1625,6 +2069,12 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 incrementUnreadIfNeeded();
                 return;
             }
+            if (explicitTaskId && subagentChildParents.has(explicitTaskId)) {
+                routeSubagentFinalMessageToCard(explicitTaskId, msg);
+                markAssistantReply(explicitTaskId);
+                incrementUnreadIfNeeded();
+                return;
+            }
             if (explicitTaskId) finishLiveCard(explicitTaskId);
             markAssistantReply(explicitTaskId);
             addMessage(msg.content, msg.role, msg.markdown, msg.ts || null, false, {
@@ -1679,6 +2129,36 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         incrementUnreadIfNeeded();
     });
 
+    ws.on('video', (msg) => {
+        hideTyping();
+        const role = msg.role === 'user' ? 'user' : 'assistant';
+        const sender = role === 'user'
+            ? getSenderLabel('user', false, '', {
+                source: msg.source || '',
+                senderLabel: msg.sender_label || '',
+                senderSessionId: msg.sender_session_id || '',
+            })
+            : 'Ouroboros';
+        const bubble = document.createElement('div');
+        bubble.className = `chat-bubble ${role}`;
+        const timeFmt = formatMsgTime(msg.ts || new Date().toISOString());
+        const timeHtml = timeFmt ? `<div class="msg-time" title="${escapeHtmlAttr(timeFmt.full)}">${escapeHtml(timeFmt.short)}</div>` : '';
+        const captionHtml = msg.caption ? `<div class="message">${escapeHtml(msg.caption)}</div>` : '';
+        const mime = /^video\/[a-z0-9.+-]+$/i.test(String(msg.mime || '')) ? String(msg.mime) : 'video/mp4';
+        const videoBase64 = /^[A-Za-z0-9+/=\s]+$/.test(String(msg.video_base64 || ''))
+            ? String(msg.video_base64 || '').replace(/\s+/g, '')
+            : '';
+        const videoUrl = videoBase64 ? `data:${mime};base64,${videoBase64}` : '';
+        bubble.innerHTML = `
+            <div class="sender">${escapeHtml(sender)}</div>
+            ${captionHtml}
+            <div class="message"><video class="chat-video" src="${escapeHtmlAttr(videoUrl)}" controls></video></div>
+            ${timeHtml}
+        `;
+        insertMessageNode(bubble);
+        incrementUnreadIfNeeded();
+    });
+
     let wsHasConnectedOnce = false;
 
     ws.on('open', () => {
@@ -1711,5 +2191,6 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     ws.on('close', () => {
         hideTyping();
         setStatus('offline', 'Переподключение...');
+        syncHeaderControlState({ spent_usd: 0, budget_limit: 10, budget_text: 'Подключение...' });
     });
 }

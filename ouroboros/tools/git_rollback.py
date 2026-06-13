@@ -71,8 +71,8 @@ def _rollback_to_target(ctx: ToolContext, target: str, confirm: bool = False) ->
 
 def get_tools() -> List[ToolEntry]:
     return [
-        ToolEntry("rollback_to_target", {
-            "name": "rollback_to_target",
+        ToolEntry("vcs_rollback", {
+            "name": "vcs_rollback",
             "description": (
                 "Reset current branch to a specific tag or commit SHA. "
                 "Creates a rescue snapshot first. Equivalent to UI Restore button. "

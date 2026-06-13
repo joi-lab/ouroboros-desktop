@@ -165,15 +165,16 @@ class TestBackgroundSubagentTools(unittest.TestCase):
         )
 
         schema_names = {s.get("function", {}).get("name") for s in bc._tool_schemas()}
-        self.assertIn("schedule_task", schema_names)
+        self.assertIn("schedule_subagent", schema_names)
         self.assertIn("get_task_result", schema_names)
-        self.assertIn("wait_for_task", schema_names)
+        self.assertIn("wait_task", schema_names)
+        self.assertIn("wait_tasks", schema_names)
 
         pending_events = []
         result = bc._execute_tool(
             {
                 "function": {
-                    "name": "schedule_task",
+                    "name": "schedule_subagent",
                     "arguments": json.dumps({
                         "objective": "Inspect background handoff",
                         "expected_output": "A concise result",
@@ -188,7 +189,7 @@ class TestBackgroundSubagentTools(unittest.TestCase):
         queued = []
         while not eq.empty():
             queued.append(eq.get_nowait())
-        schedule_events = [evt for evt in queued if evt.get("type") == "schedule_task"]
+        schedule_events = [evt for evt in queued if evt.get("type") == "schedule_subagent"]
         self.assertEqual(len(schedule_events), 1)
         evt = schedule_events[0]
         self.assertEqual(evt["chat_id"], 42)

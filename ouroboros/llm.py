@@ -11,7 +11,8 @@ import time
 import copy
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ouroboros.provider_models import normalize_anthropic_model_id
+from ouroboros.provider_models import normalize_anthropic_model_id, normalize_model_identity
+from ouroboros.utils import in_worker_process
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +190,10 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, ...]]:
             if raw_cached is not None:
                 cached_price = round(raw_cached * 1_000_000, 4)
             else:
-                cached_price = round(prompt_price * 0.1, 4)  # fallback cache discount
+                # Missing cache-read pricing is not a provider promise. Use the
+                # conservative input price unless the response carries an
+                # authoritative usage.cost value.
+                cached_price = prompt_price
             cache_write_price = (
                 round(raw_cache_write * 1_000_000, 4)
                 if raw_cache_write is not None else None
@@ -200,9 +204,13 @@ def fetch_openrouter_pricing() -> Dict[str, Tuple[float, ...]]:
                 continue
 
             if cache_write_price is not None:
-                pricing_dict[model_id] = (prompt_price, cached_price, cache_write_price, completion_price)
+                row = (prompt_price, cached_price, cache_write_price, completion_price)
             else:
-                pricing_dict[model_id] = (prompt_price, cached_price, completion_price)
+                row = (prompt_price, cached_price, completion_price)
+            pricing_dict[model_id] = row
+            normalized_model_id = normalize_model_identity(model_id)
+            if normalized_model_id != model_id:
+                pricing_dict[normalized_model_id] = row
 
         log.info(f"Fetched pricing for {len(pricing_dict)} models from OpenRouter")
         return pricing_dict
@@ -580,6 +588,11 @@ class LLMClient:
         if use_local:
             return self._chat_local(messages, tools, max_tokens, tool_choice)
 
+        # Central worker policy: any LLM call from a worker process is fork-safe
+        # by default (no system proxy lookup). This covers the main agent loop,
+        # consolidator, post-task threads, and supervisor dedup without each
+        # call site having to remember no_proxy=True.
+        no_proxy = no_proxy or in_worker_process()
         target = self._resolve_remote_target(model)
         return self._chat_remote(
             target, messages, tools, reasoning_effort, max_tokens, tool_choice, temperature,
@@ -598,6 +611,7 @@ class LLMClient:
         no_proxy: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Async remote chat; no_proxy keeps forked macOS workers off OS proxy APIs."""
+        no_proxy = no_proxy or in_worker_process()
         if tools:
             raise ValueError("chat_async does not support tool calls")
         target = self._resolve_remote_target(model)
@@ -617,7 +631,8 @@ class LLMClient:
             _oa_client, _http_client = self._make_no_proxy_async_client(target)
             try:
                 kwargs = self._build_remote_kwargs(
-                    target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
+                    target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools,
+                    skip_capability_fetch=True,
                 )
                 prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
                     kwargs.get("messages"),
@@ -1217,7 +1232,12 @@ class LLMClient:
         }
         if system:
             payload["system"] = system
-        if temperature is not None:
+        resolved_for_sampling = str(target.get("resolved_model") or "")
+        if resolved_for_sampling.startswith("anthropic/"):
+            resolved_for_sampling = resolved_for_sampling[len("anthropic/"):]
+        if resolved_for_sampling.startswith("anthropic::"):
+            resolved_for_sampling = resolved_for_sampling[len("anthropic::"):]
+        if temperature is not None and normalize_anthropic_model_id(resolved_for_sampling) != "claude-opus-4-7":
             payload["temperature"] = temperature
 
         anthropic_tools = self._build_anthropic_tools(
@@ -1265,6 +1285,7 @@ class LLMClient:
         tool_choice: str,
         temperature: Optional[float],
         tools: Optional[List[Dict[str, Any]]],
+        skip_capability_fetch: bool = False,
     ) -> Dict[str, Any]:
         resolved_model = str(target.get("resolved_model") or "")
         token_limit_key = "max_tokens"
@@ -1305,6 +1326,11 @@ class LLMClient:
             cache_model.startswith("anthropic/")
             or cache_model.startswith("google/gemini-")
         )
+        anthropic_model_id = cache_model[len("anthropic/"):] if cache_model.startswith("anthropic/") else cache_model
+        strip_sampling_for_known_model = (
+            cache_model.startswith("anthropic/")
+            and normalize_anthropic_model_id(anthropic_model_id) == "claude-opus-4-7"
+        )
 
         extra_body: Dict[str, Any] = {
             "reasoning": {"effort": effort, "exclude": not return_reasoning},
@@ -1325,7 +1351,7 @@ class LLMClient:
             "max_tokens": max_tokens,
             "extra_body": extra_body,
         }
-        if temperature is not None:
+        if temperature is not None and not strip_sampling_for_known_model:
             kwargs["temperature"] = temperature
         if tools:
             prepared_tools = [
@@ -1341,7 +1367,14 @@ class LLMClient:
 
         # With require_parameters, unsupported params cause OpenRouter 404s.
         # Unknown capabilities mean no stripping.
-        supported = self._get_supported_parameters(resolved_model)
+        if strip_sampling_for_known_model:
+            for sampling_param in ("temperature", "top_p", "top_k"):
+                kwargs.pop(sampling_param, None)
+            supported = None
+        elif skip_capability_fetch:
+            supported = None
+        else:
+            supported = self._get_supported_parameters(resolved_model)
         if supported is not None:
             for sampling_param in ("temperature", "top_p", "top_k"):
                 if sampling_param not in supported and sampling_param in kwargs:
@@ -1406,6 +1439,7 @@ class LLMClient:
                 int(usage.get("cached_tokens") or 0),
                 int(usage.get("cache_write_tokens") or 0),
                 usage.get("prompt_cache_ttl"),
+                allow_live_fetch=not skip_cost_fetch,
             )
             if estimated_cost:
                 usage["cost"] = estimated_cost
@@ -1435,7 +1469,8 @@ class LLMClient:
             _oa_client, _http_client = self._make_no_proxy_client(target)
             try:
                 kwargs = self._build_remote_kwargs(
-                    target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools
+                    target, messages, reasoning_effort, max_tokens, tool_choice, temperature, tools,
+                    skip_capability_fetch=True,
                 )
                 prompt_cache_ttl = self._prompt_cache_ttl_from_payload(
                     kwargs.get("messages"),

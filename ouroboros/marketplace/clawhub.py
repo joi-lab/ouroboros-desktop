@@ -135,7 +135,42 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_OPENER = urllib.request.build_opener(_AllowlistRedirectHandler())
+def _build_opener(no_proxy: bool) -> urllib.request.OpenerDirector:
+    handlers: List[Any] = [_AllowlistRedirectHandler()]
+    # In worker processes, disable system proxy resolution for fork-safety
+    # (macOS _scproxy/SCDynamicStoreCopyProxies crashes on the child side of a
+    # multi-threaded fork). The supervisor keeps proxy support for corporate
+    # networks. Marketplace hosts are allowlisted, so no-proxy is also correct.
+    if no_proxy:
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers)
+
+
+# Openers are built lazily and cached per process role. A worker NEVER builds
+# the proxy-discovery opener: build_opener()'s default ProxyHandler() calls
+# getproxies() at construction, and we must not run that system-proxy lookup in
+# a worker (the macOS _scproxy crash class on the fork escape-hatch, and an
+# unnecessary lookup on spawn). The supervisor (main process, never forked)
+# builds the proxy-honoring opener on first use.
+_OPENER: Optional[urllib.request.OpenerDirector] = None
+_WORKER_OPENER: Optional[urllib.request.OpenerDirector] = None
+
+
+def _active_opener() -> urllib.request.OpenerDirector:
+    global _OPENER, _WORKER_OPENER
+    worker = False
+    try:
+        from ouroboros.utils import in_worker_process
+        worker = in_worker_process()
+    except Exception:
+        worker = False
+    if worker:
+        if _WORKER_OPENER is None:
+            _WORKER_OPENER = _build_opener(no_proxy=True)
+        return _WORKER_OPENER
+    if _OPENER is None:
+        _OPENER = _build_opener(no_proxy=False)
+    return _OPENER
 
 
 def _parse_retry_after(value: Any) -> Optional[float]:
@@ -175,7 +210,7 @@ def _http_get(
     for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
         request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, "Accept": accept}, method="GET")
         try:
-            with _OPENER.open(request, timeout=timeout) as response:
+            with _active_opener().open(request, timeout=timeout) as response:
                 status = int(getattr(response, "status", 0) or response.getcode() or 0)
                 if status == 429:
                     retry_after = _parse_retry_after(response.headers.get("Retry-After"))

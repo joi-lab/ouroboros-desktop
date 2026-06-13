@@ -13,6 +13,7 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,12 @@ def main() -> int:
 
     rows = []
     errors = []
+    def record_error(row: dict) -> bool:
+        if not args.continue_on_error:
+            raise RuntimeError(str(row.get("error") or row))
+        errors.append(row)
+        return True
+
     for raw in Path(args.input).read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
@@ -56,16 +63,36 @@ def main() -> int:
                     break
         prompt = str(item.get("problem_statement") or item.get("prompt") or "")
         if not instance_id or not workspace or not prompt:
-            raise ValueError("each row must include instance_id, workspace_root or --workspaces-root, and problem_statement/prompt")
+            record_error({
+                "instance_id": instance_id,
+                "error": "each row must include instance_id, workspace_root or --workspaces-root, and problem_statement/prompt",
+                "reason_code": "invalid_instance",
+            })
+            continue
         workspace_path = Path(workspace).expanduser().resolve(strict=False)
         if not workspace_path.is_dir():
-            raise ValueError(f"workspace_root is not a directory for {instance_id}: {workspace}")
+            record_error({
+                "instance_id": instance_id,
+                "error": f"workspace_root is not a directory for {instance_id}: {workspace}",
+                "reason_code": "invalid_workspace",
+            })
+            continue
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=workspace_path, capture_output=True, text=True, timeout=10)
         if head.returncode != 0:
-            raise ValueError(f"workspace_root is not a git checkout for {instance_id}: {workspace_path}")
+            record_error({
+                "instance_id": instance_id,
+                "error": f"workspace_root is not a git checkout for {instance_id}: {workspace_path}",
+                "reason_code": "not_git_checkout",
+            })
+            continue
         base_commit = str(item.get("base_commit") or "").strip()
         if base_commit and head.stdout.strip() != base_commit:
-            raise ValueError(f"workspace HEAD for {instance_id} is {head.stdout.strip()}, expected base_commit {base_commit}")
+            record_error({
+                "instance_id": instance_id,
+                "error": f"workspace HEAD for {instance_id} is {head.stdout.strip()}, expected base_commit {base_commit}",
+                "reason_code": "wrong_base_commit",
+            })
+            continue
         status = subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             cwd=workspace_path,
@@ -74,8 +101,18 @@ def main() -> int:
             timeout=10,
         )
         if status.returncode != 0 or status.stdout.strip():
-            raise ValueError(f"workspace must be clean before SWE-bench run for {instance_id}")
+            record_error({
+                "instance_id": instance_id,
+                "error": f"workspace must be clean before SWE-bench run for {instance_id}",
+                "reason_code": "dirty_workspace",
+            })
+            continue
         cli_prefix = shlex.split(args.cli) if args.cli else [sys.executable, "-m", "ouroboros.cli"]
+        if args.logs_dir:
+            result_json_path = Path(args.logs_dir).expanduser() / instance_id / "task_result.json"
+        else:
+            result_json_path = Path(tempfile.gettempdir()) / f"ouroboros_swebench_{instance_id}.task_result.json"
+        result_json_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             *cli_prefix,
             "run",
@@ -86,6 +123,8 @@ def main() -> int:
             "--timeout",
             str(int(args.timeout)),
             "--patch",
+            "--result-json-out",
+            str(result_json_path),
             prompt,
         ]
         try:
@@ -113,11 +152,30 @@ def main() -> int:
                 raise RuntimeError(error_row["error"]) from exc
             errors.append(error_row)
             continue
+        task_result: dict[str, Any] = {}
+        if result_json_path.exists():
+            try:
+                loaded = json.loads(result_json_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    task_result = loaded
+            except Exception:
+                task_result = {}
         if args.logs_dir:
             log_dir = Path(args.logs_dir).expanduser() / instance_id
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "ouroboros.stdout").write_text(result.stdout, encoding="utf-8")
             (log_dir / "ouroboros.stderr").write_text(result.stderr, encoding="utf-8")
+            (log_dir / "ouroboros-agent-result.json").write_text(json.dumps({
+                "instance_id": instance_id,
+                "returncode": result.returncode,
+                "stdout_chars": len(result.stdout or ""),
+                "stderr_chars": len(result.stderr or ""),
+                "patch_empty": not bool((result.stdout or "").strip()),
+                "timeout_sec": int(args.timeout),
+                "result_status": task_result.get("result_status"),
+                "reason_code": task_result.get("reason_code"),
+                "artifact_bundle": task_result.get("artifact_bundle"),
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
             if len(details) > 4000:
@@ -126,6 +184,24 @@ def main() -> int:
                 "instance_id": instance_id,
                 "returncode": result.returncode,
                 "error": details or f"ouroboros run exited {result.returncode}",
+                "result_status": task_result.get("result_status"),
+                "reason_code": task_result.get("reason_code"),
+                "artifact_bundle": task_result.get("artifact_bundle"),
+                "trace_refs": task_result.get("trace_refs"),
+            }
+            if not args.continue_on_error:
+                raise RuntimeError(error_row["error"])
+            errors.append(error_row)
+            continue
+        if not (result.stdout or "").strip():
+            error_row = {
+                "instance_id": instance_id,
+                "returncode": 0,
+                "error": "ouroboros run produced no patch",
+                "result_status": task_result.get("result_status"),
+                "reason_code": task_result.get("reason_code") or "no_patch",
+                "artifact_bundle": task_result.get("artifact_bundle"),
+                "trace_refs": task_result.get("trace_refs"),
             }
             if not args.continue_on_error:
                 raise RuntimeError(error_row["error"])

@@ -5,6 +5,7 @@ import pathlib
 import uuid
 from typing import List, Optional
 
+from ouroboros.task_results import validate_task_id
 from ouroboros.utils import utc_now_iso
 
 log = logging.getLogger(__name__)
@@ -13,7 +14,7 @@ _MAILBOX_DIR = "memory/owner_mailbox"
 
 
 def _mailbox_path(drive_root: pathlib.Path, task_id: str) -> pathlib.Path:
-    return drive_root / _MAILBOX_DIR / f"{task_id}.jsonl"
+    return pathlib.Path(drive_root) / _MAILBOX_DIR / f"{validate_task_id(task_id)}.jsonl"
 
 
 def write_owner_message(

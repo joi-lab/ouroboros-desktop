@@ -97,7 +97,7 @@ def test_make_tool_name_handles_long_tool_names():
 
 
 def test_parse_tool_name_rejects_non_mcp():
-    assert mcp_client.parse_tool_name("repo_read") is None
+    assert mcp_client.parse_tool_name("read_file") is None
     assert mcp_client.parse_tool_name("") is None
     assert mcp_client.parse_tool_name("mcp_only_one_part") is None
     assert mcp_client.parse_tool_name("mcp_with-dash__tool") is None

@@ -12,7 +12,17 @@ import re
 import uuid
 from typing import Any, Dict, List, Tuple
 
+from ouroboros.artifacts import artifact_store_path_block_reason, copy_file_to_task_artifacts
 from ouroboros.tools.registry import ToolContext, ToolEntry, active_repo_dir_for
+from ouroboros.tool_access import (
+    decide_tool_access,
+    active_tool_profile,
+    normalize_root,
+    resolve_user_file_path,
+    resolve_resource_path,
+    resource_root_path,
+    user_files_path_block_reason,
+)
 from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_MODE
 from ouroboros.utils import atomic_write_json, read_text, safe_relpath, utc_now_iso
 from ouroboros.contracts.task_constraint import normalize_task_constraint, resolve_payload_path
@@ -141,6 +151,30 @@ def _list_dir(root: pathlib.Path, rel: str, max_entries: int = 500) -> List[str]
             items.append(str(entry.relative_to(root)) + suffix)
     except Exception as e:
         items.append(f"⚠️ Error listing: {e}")
+    return items
+
+
+def _list_user_files_dir(ctx: ToolContext, root: pathlib.Path, target: pathlib.Path, max_entries: int = 500) -> List[str]:
+    if not target.exists():
+        return [f"⚠️ Directory not found: {target}"]
+    if not target.is_dir():
+        return [f"⚠️ Not a directory: {target}"]
+    items: List[str] = []
+    hidden = 0
+    try:
+        for entry in sorted(target.iterdir()):
+            if user_files_path_block_reason(ctx, entry):
+                hidden += 1
+                continue
+            if len(items) >= max_entries:
+                items.append(f"...(truncated at {max_entries})")
+                break
+            suffix = "/" if entry.is_dir() else ""
+            items.append(str(entry.relative_to(root)) + suffix)
+    except Exception as e:
+        items.append(f"⚠️ Error listing: {e}")
+    if hidden:
+        items.append(f"⚠️ {hidden} hidden/control entr{'y' if hidden == 1 else 'ies'} omitted from user_files listing.")
     return items
 
 
@@ -303,8 +337,14 @@ _MEMORY_AT_DRIVE_MEMORY = frozenset({
 })
 
 
-def _repo_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: int = 1) -> str:
-    """Read a repo file; root-level memory names return a data_read hint."""
+def _repo_read(
+    ctx: ToolContext,
+    path: str,
+    max_lines: int = 2000,
+    start_line: int = 1,
+    display_path: str | None = None,
+) -> str:
+    """Read a repo file; root-level memory names return a runtime_data read hint."""
     target = ctx.repo_path(path)
     if _is_local_readonly_subagent(ctx) and _is_subagent_secret_repo_target(target, active_repo_dir_for(ctx)):
         return "⚠️ REPO_READ_BLOCKED: local_readonly_subagent cannot read repo secret or control files."
@@ -321,10 +361,10 @@ def _repo_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
                 f"git repo. Some memory artifacts are already summarized in "
                 f"context as `## {title}`, but raw memory state must be read "
                 f"from the data root. If you need the raw file, call "
-                f"`data_read(path='memory/{base}')`."
+                f"`read_file(root='runtime_data', path='memory/{base}')`."
             )
         raise
-    return _render_line_slice(path, content, max_lines=max_lines, start_line=start_line)
+    return _render_line_slice(display_path or path, content, max_lines=max_lines, start_line=start_line)
 
 
 def _repo_list(ctx: ToolContext, dir: str = ".", max_entries: int = 500) -> str:
@@ -365,7 +405,13 @@ def _normalize_data_read_path(ctx: ToolContext, path: str) -> str:
     return norm
 
 
-def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: int = 1) -> str:
+def _data_read(
+    ctx: ToolContext,
+    path: str,
+    max_lines: int = 2000,
+    start_line: int = 1,
+    display_path: str | None = None,
+) -> str:
     """Read a drive text file; duplicate drive_root prefixes are stripped."""
     task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
     norm = _normalize_data_read_path(ctx, path)
@@ -406,8 +452,11 @@ def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
         content = read_text(target)
         start_raw, max_raw = _coerce_line_window(start_line, max_lines)
         if _is_cognitive_data_path(norm) and start_raw == 1 and max_raw == 2000:
-            return content
-        return _render_line_slice(norm, content, max_lines=max_raw, start_line=start_raw)
+            if display_path is None:
+                return content
+            full_line_count = max(1, len(content.splitlines()))
+            return _render_line_slice(display_path, content, max_lines=full_line_count, start_line=1)
+        return _render_line_slice(display_path or norm, content, max_lines=max_raw, start_line=start_raw)
     except FileNotFoundError:
         if norm.replace("\\", "/").startswith("memory/"):
             explanation = (
@@ -424,7 +473,7 @@ def _data_read(ctx: ToolContext, path: str, max_lines: int = 2000, start_line: i
             )
         return (
             f"⚠️ DATA_NOT_YET_CREATED: {path}\n\n"
-            f"{explanation} Use data_list to confirm what currently exists."
+            f"{explanation} Use list_files with root=runtime_data to confirm what currently exists."
         )
 
 
@@ -469,6 +518,7 @@ def _data_write(
     mode: str = "overwrite",
     bucket: str = "",
     skill_name: str = "",
+    display_root: str = "runtime_data",
 ) -> str:
     # bucket+skill_name synthesize a payload-confined skill_repair constraint.
     short_form = decide_payload_short_form(
@@ -515,7 +565,7 @@ def _data_write(
         return (
             "⚠️ DATA_WRITE_BLOCKED: content looks like a serialized tool result "
             "object (for example {'content': ...}) rather than file text. "
-            "Extract the actual file body before calling data_write."
+            "Extract the actual file body before calling write_file."
         )
     if _native_payload_without_seed(lexical_target, data_root) or _native_payload_without_seed(target_path, data_root):
         return (
@@ -534,7 +584,7 @@ def _data_write(
         return (
             "⚠️ DATA_WRITE_BLOCKED: skill review, enablement, grants, and "
             "marketplace provenance are owner/review controlled state. Edit "
-            "the skill payload under data/skills/ and use review_skill, the "
+            "the skill payload under data/skills/ and use skill_review, the "
             "Skills UI toggle, or the desktop launcher grant flow."
         )
     # Block marketplace/launcher sidecars for every data_write path, not only heal mode.
@@ -543,7 +593,7 @@ def _data_write(
             "⚠️ DATA_WRITE_BLOCKED: marketplace provenance and launcher "
             "seed markers (.clawhub.json, .ouroboroshub.json, "
             "SKILL.openclaw.md, .seed-origin) are owner/review controlled. "
-            "Edit the payload's user-authored files instead and rerun review_skill."
+            "Edit the payload's user-authored files instead and rerun skill_review."
         )
     matches = False
     try:
@@ -608,10 +658,320 @@ def _data_write(
         state_marker = pathlib.Path(ctx.drive_root) / "state" / "skills" / marker_payload[1] / "self_authored.json"
         state_marker.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(state_marker, marker_payload_data, trailing_newline=True)
-    result = f"OK: wrote {mode} {path} ({len(content)} chars)"
+    result = f"OK: wrote {mode} {_root_display_path(display_root, write_path)} ({len(content)} chars)"
     if short_form.ignored_reason:
         result += f"\n⚠️ SKILL_SHORT_FORM_IGNORED: {short_form.ignored_reason}."
     return result
+
+
+def _access_or_block(ctx: ToolContext, root: str, operation: str) -> tuple[str, str]:
+    try:
+        normalized = normalize_root(root)
+    except ValueError as exc:
+        return "", f"⚠️ TOOL_ARG_ERROR: {exc}"
+    profile = active_tool_profile(ctx)
+    decision = decide_tool_access(profile=profile, root=normalized, operation=operation)  # type: ignore[arg-type]
+    if not decision.allow:
+        return "", f"⚠️ TOOL_ACCESS_BLOCKED: {decision.reason}"
+    return normalized, ""
+
+
+def _local_readonly_resource_block(
+    ctx: ToolContext,
+    normalized: str,
+    target: pathlib.Path,
+    base: pathlib.Path,
+    *,
+    action: str,
+) -> str:
+    if not _is_local_readonly_subagent(ctx):
+        return ""
+    if normalized in {"active_workspace", "system_repo"}:
+        if _is_subagent_secret_repo_target(target, pathlib.Path(base)):
+            return f"⚠️ {action}_BLOCKED: local_readonly_subagent cannot access repo secret or control paths."
+        return ""
+    if normalized in {"runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"}:
+        root = pathlib.Path(base).resolve(strict=False)
+        try:
+            rel = pathlib.Path(target).resolve(strict=False).relative_to(root).as_posix()
+        except (OSError, ValueError):
+            rel = str(target).replace(os.sep, "/")
+        data_root = pathlib.Path(ctx.drive_root).resolve(strict=False)
+        if (
+            _is_subagent_secret_data_path(rel)
+            or _is_skill_owner_state_target(target, data_root)
+            or is_skill_owner_state_alias(target, data_root)
+        ):
+            return f"⚠️ {action}_BLOCKED: local_readonly_subagent cannot access secret or owner-control data files."
+    return ""
+
+
+def _root_display_path(root: str, path: str) -> str:
+    rel = safe_relpath(str(path or "."))
+    if rel.startswith("./"):
+        rel = rel[2:]
+    return f"{root}:{rel or '.'}"
+
+
+def _join_write_results(results: List[str]) -> str:
+    rendered = "\n".join(results) if results else "⚠️ TOOL_ARG_ERROR: files must contain {path, content} objects."
+    if any(str(line).lstrip().startswith("⚠️") for result in results for line in str(result).splitlines()):
+        return "⚠️ WRITE_FILE_BATCH_PARTIAL_FAILURE: one or more writes failed.\n" + rendered
+    return rendered
+
+
+def _read_file(
+    ctx: ToolContext,
+    path: str,
+    root: str = "active_workspace",
+    max_lines: int = 2000,
+    start_line: int = 1,
+    bucket: str = "",
+    skill_name: str = "",
+) -> str:
+    normalized, block = _access_or_block(ctx, root, "read")
+    if block:
+        return block
+    if normalized == "active_workspace":
+        return _repo_read(
+            ctx,
+            path,
+            max_lines=max_lines,
+            start_line=start_line,
+            display_path=_root_display_path(normalized, path),
+        )
+    if normalized == "runtime_data":
+        return _data_read(
+            ctx,
+            path,
+            max_lines=max_lines,
+            start_line=start_line,
+            display_path=_root_display_path(normalized, path),
+        )
+    task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
+    if normalized == "skill_payload" and not bucket and not skill_name and task_constraint and task_constraint.mode == "skill_repair":
+        return _data_read(ctx, path, max_lines=max_lines, start_line=start_line, display_path=_root_display_path(normalized, path))
+    try:
+        base = resource_root_path(ctx, normalized, bucket=bucket, skill_name=skill_name)
+        target = resolve_resource_path(ctx, root=normalized, path=path, bucket=bucket, skill_name=skill_name)
+        block_msg = _local_readonly_resource_block(ctx, normalized, target, base, action="READ_FILE")
+        if block_msg:
+            return block_msg
+        content = read_text(target)
+        return _render_line_slice(_root_display_path(normalized, path), content, max_lines=max_lines, start_line=start_line)
+    except FileNotFoundError:
+        return f"⚠️ NOT_FOUND: {_root_display_path(normalized, path)}"
+    except Exception as exc:
+        return f"⚠️ READ_FILE_ERROR: {type(exc).__name__}: {exc}"
+
+
+def _list_files(
+    ctx: ToolContext,
+    dir: str = ".",
+    root: str = "active_workspace",
+    max_entries: int = 500,
+    bucket: str = "",
+    skill_name: str = "",
+) -> str:
+    normalized, block = _access_or_block(ctx, root, "list")
+    if block:
+        return block
+    if normalized == "active_workspace":
+        return _repo_list(ctx, dir=dir, max_entries=max_entries)
+    if normalized == "runtime_data":
+        return _data_list(ctx, dir=dir, max_entries=max_entries)
+    task_constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
+    if normalized == "skill_payload" and not bucket and not skill_name and task_constraint and task_constraint.mode == "skill_repair":
+        return _data_list(ctx, dir=dir, max_entries=max_entries)
+    try:
+        base = resource_root_path(ctx, normalized, bucket=bucket, skill_name=skill_name)
+        if normalized == "user_files":
+            target = resolve_user_file_path(ctx, dir, allow_protected_descendants=True)
+            items = _list_user_files_dir(ctx, base, target, max_entries)
+            return json.dumps(items, ensure_ascii=False, indent=2)
+        items = _list_dir(base, dir, max_entries)
+        if _is_local_readonly_subagent(ctx):
+            if normalized == "system_repo":
+                items = _filter_subagent_secret_repo_listing(items, base)
+            elif normalized in {"task_drive", "skill_payload", "artifact_store", "user_files"}:
+                items = _filter_subagent_secret_listing(items, base)
+        return json.dumps(items, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return json.dumps([f"⚠️ LIST_FILES_ERROR: {type(exc).__name__}: {exc}"], ensure_ascii=False, indent=2)
+
+
+def _write_file(
+    ctx: ToolContext,
+    path: str = "",
+    content: str = "",
+    files: List[Dict[str, str]] | None = None,
+    root: str = "active_workspace",
+    mode: str = "overwrite",
+    force: bool = False,
+    bucket: str = "",
+    skill_name: str = "",
+) -> str:
+    normalized, block = _access_or_block(ctx, root, "write")
+    if block:
+        return block
+    if normalized == "system_repo":
+        try:
+            from ouroboros.tool_access import resource_root_path
+
+            active_root = resource_root_path(ctx, "active_workspace")
+            system_root = resource_root_path(ctx, "system_repo")
+            if active_root.resolve(strict=False) != system_root.resolve(strict=False):
+                return "⚠️ WRITE_FILE_BLOCKED: root=system_repo writes require the active workspace to be the system repo."
+        except Exception as exc:
+            return f"⚠️ WRITE_FILE_BLOCKED: could not validate system_repo root: {type(exc).__name__}: {exc}"
+    if normalized in {"active_workspace", "system_repo"}:
+        from ouroboros.tools.git import _repo_write
+
+        return _repo_write(ctx, path=path, content=content, files=files or [], force=force, display_root=normalized)
+    if normalized == "runtime_data":
+        if files:
+            results = []
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                results.append(_data_write(
+                    ctx,
+                    str(item.get("path") or ""),
+                    str(item.get("content") or ""),
+                    mode=mode,
+                    display_root=normalized,
+                ))
+            return _join_write_results(results)
+        return _data_write(ctx, path=path, content=content, mode=mode, display_root=normalized)
+    if normalized == "skill_payload":
+        if files:
+            results = []
+            for item in files:
+                rel = str(item.get("path") or "") if isinstance(item, dict) else ""
+                body = str(item.get("content") or "") if isinstance(item, dict) else ""
+                results.append(_data_write(
+                    ctx,
+                    rel,
+                    body,
+                    mode=mode,
+                    bucket=bucket,
+                    skill_name=skill_name,
+                    display_root=normalized,
+                ))
+            return _join_write_results(results)
+        return _data_write(ctx, path=path, content=content, mode=mode, bucket=bucket, skill_name=skill_name, display_root=normalized)
+    try:
+        if files:
+            results = []
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                rel_path = str(item.get("path") or "")
+                target = resolve_resource_path(ctx, root=normalized, path=rel_path, bucket=bucket, skill_name=skill_name)
+                if normalized == "artifact_store":
+                    block_reason = artifact_store_path_block_reason(target)
+                    if block_reason:
+                        results.append(f"⚠️ WRITE_FILE_BLOCKED: artifact_store path blocked: {block_reason}")
+                        continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(str(item.get("content") or ""), encoding="utf-8")
+                result = f"OK: wrote {_root_display_path(normalized, rel_path)} ({len(str(item.get('content') or ''))} chars)"
+                if normalized == "user_files":
+                    record = copy_file_to_task_artifacts(ctx, target, kind="user_file")
+                    if record:
+                        result += f"\nARTIFACT_OUTPUTS: registered user file -> artifact_store:{record.get('name')}"
+                results.append(result)
+            return _join_write_results(results)
+        target = resolve_resource_path(ctx, root=normalized, path=path, bucket=bucket, skill_name=skill_name)
+        if normalized == "artifact_store":
+            block_reason = artifact_store_path_block_reason(target)
+            if block_reason:
+                return f"⚠️ WRITE_FILE_BLOCKED: artifact_store path blocked: {block_reason}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "append":
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+        result = f"OK: wrote {_root_display_path(normalized, path)} ({len(content)} chars)"
+        if normalized == "user_files":
+            record = copy_file_to_task_artifacts(ctx, target, kind="user_file")
+            if record:
+                result += f"\nARTIFACT_OUTPUTS: registered user file -> artifact_store:{record.get('name')}"
+        return result
+    except Exception as exc:
+        return f"⚠️ WRITE_FILE_ERROR: {type(exc).__name__}: {exc}"
+
+
+def _edit_text(
+    ctx: ToolContext,
+    path: str,
+    old_str: str,
+    new_str: str,
+    root: str = "active_workspace",
+    bucket: str = "",
+    skill_name: str = "",
+) -> str:
+    normalized, block = _access_or_block(ctx, root, "edit")
+    if block:
+        return block
+    if normalized == "system_repo":
+        try:
+            from ouroboros.tool_access import resource_root_path
+
+            active_root = resource_root_path(ctx, "active_workspace")
+            system_root = resource_root_path(ctx, "system_repo")
+            if active_root.resolve(strict=False) != system_root.resolve(strict=False):
+                return "⚠️ EDIT_TEXT_BLOCKED: root=system_repo edits require the active workspace to be the system repo."
+        except Exception as exc:
+            return f"⚠️ EDIT_TEXT_BLOCKED: could not validate system_repo root: {type(exc).__name__}: {exc}"
+    if normalized in {"active_workspace", "system_repo"}:
+        from ouroboros.tools.git import _str_replace_editor
+
+        result = _str_replace_editor(ctx, path=path, old_str=old_str, new_str=new_str, display_root=normalized)
+        short_form = decide_payload_short_form(
+            bucket=bucket,
+            skill_name=skill_name,
+            path_text=path,
+            repo_dir=pathlib.Path(ctx.repo_dir),
+            drive_root=pathlib.Path(ctx.drive_root),
+        )
+        if short_form.ignored_reason:
+            result += f"\n⚠️ SKILL_SHORT_FORM_IGNORED: {short_form.ignored_reason}."
+        return result
+    if normalized == "skill_payload":
+        from ouroboros.tools.git import _str_replace_editor
+
+        return _str_replace_editor(
+            ctx,
+            path=path,
+            old_str=old_str,
+            new_str=new_str,
+            bucket=bucket,
+            skill_name=skill_name,
+            display_root=normalized,
+        )
+    try:
+        target = resolve_resource_path(ctx, root=normalized, path=path, bucket=bucket, skill_name=skill_name)
+        if normalized == "artifact_store":
+            block_reason = artifact_store_path_block_reason(target)
+            if block_reason:
+                return f"⚠️ EDIT_TEXT_BLOCKED: artifact_store path blocked: {block_reason}"
+        text = target.read_text(encoding="utf-8")
+        count = text.count(old_str)
+        if count != 1:
+            return f"⚠️ EDIT_TEXT_ERROR: old_str matched {count} times; expected exactly 1."
+        target.write_text(text.replace(old_str, new_str, 1), encoding="utf-8")
+        result = f"OK: edited {_root_display_path(normalized, path)}"
+        if normalized == "user_files":
+            record = copy_file_to_task_artifacts(ctx, target, kind="user_file")
+            if record:
+                result += f"\nARTIFACT_OUTPUTS: registered user file -> artifact_store:{record.get('name')}"
+        return result
+    except FileNotFoundError:
+        return f"⚠️ EDIT_TEXT_ERROR: file not found: {_root_display_path(normalized, path)}"
+    except Exception as exc:
+        return f"⚠️ EDIT_TEXT_ERROR: {type(exc).__name__}: {exc}"
 
 _MAX_PHOTO_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -672,6 +1032,52 @@ def _send_photo(ctx: ToolContext, file_path: str = "", image_base64: str = "",
     })
     return "OK: photo queued for delivery to owner."
 
+
+_MAX_VIDEO_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+def _detect_video_mime(file_path: str, data: bytes) -> str:
+    """Detect video MIME type from path extension or magic bytes."""
+    if len(data) >= 8 and data[4:8] == b'ftyp':
+        return "video/mp4"
+    if data[:4] == b'\x1a\x45\xdf\xa3':
+        return "video/webm"
+    mime, _ = __import__("mimetypes").guess_type(file_path)
+    if mime and str(mime).lower().startswith("video/"):
+        return mime
+    return "video/mp4"
+
+
+def _send_video(ctx: ToolContext, file_path: str = "", caption: str = "") -> str:
+    """Queue an owner-chat video from a file."""
+    chat_id = getattr(ctx, "current_chat_id", None)
+    if chat_id is None or chat_id == "":
+        return "⚠️ No active chat — cannot send video."
+    if not file_path:
+        return "⚠️ Provide a file_path."
+
+    fp = pathlib.Path(file_path).expanduser().resolve()
+    if not fp.exists():
+        return f"⚠️ File not found: {file_path}"
+    if fp.stat().st_size > _MAX_VIDEO_FILE_BYTES:
+        return f"⚠️ File too large ({fp.stat().st_size} bytes). Max: {_MAX_VIDEO_FILE_BYTES} bytes."
+
+    try:
+        raw = fp.read_bytes()
+        mime = _detect_video_mime(str(fp), raw)
+        actual_b64 = __import__("base64").b64encode(raw).decode()
+    except Exception as e:
+        return f"⚠️ Failed to read video file: {e}"
+
+    ctx.pending_events.append({
+        "type": "send_video",
+        "chat_id": chat_id,
+        "video_base64": actual_b64,
+        "mime": mime,
+        "caption": caption or "",
+    })
+    return "OK: video queued for delivery to owner."
+
 _SEARCH_SKIP_DIRS = frozenset({
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     ".pytest_cache", ".mypy_cache", ".tox", "build", "dist",
@@ -693,7 +1099,7 @@ _MAX_FILE_SIZE_BYTES = 1024 * 1024  # 1 MB — skip huge files
 
 
 def _is_search_skippable(path: pathlib.Path) -> bool:
-    """Return True for files excluded from code_search."""
+    """Return True for files excluded from search_code."""
     name = path.name
     for glob_pat in _SEARCH_SKIP_GLOBS:
         if fnmatch.fnmatch(name, glob_pat):
@@ -708,19 +1114,36 @@ def _is_search_skippable(path: pathlib.Path) -> bool:
 
 def _code_search(ctx: ToolContext, query: str, path: str = ".",
                  regex: bool = False, max_results: int = 200,
-                 include: str = "") -> str:
+                 include: str = "", root: str = "active_workspace",
+                 bucket: str = "", skill_name: str = "") -> str:
     """Search repo text with optional regex, path, glob, and result cap."""
     if not query:
         return "⚠️ SEARCH_ERROR: query is required."
+    normalized, block = _access_or_block(ctx, root, "search")
+    if block:
+        return block
 
     max_results = min(max(1, max_results), _MAX_SEARCH_RESULTS)
-    root = active_repo_dir_for(ctx)
-    search_root = (root / safe_relpath(path)).resolve()
+    try:
+        root_path = resource_root_path(ctx, normalized, bucket=bucket, skill_name=skill_name)
+    except Exception as exc:
+        return f"⚠️ SEARCH_ERROR: {type(exc).__name__}: {exc}"
+    display_search_path = _root_display_path(normalized, path)
+    try:
+        search_root = (
+            resolve_user_file_path(ctx, path, allow_protected_descendants=True)
+            if normalized == "user_files"
+            else (root_path / safe_relpath(path)).resolve()
+        )
+    except Exception as exc:
+        return f"⚠️ SEARCH_ERROR: {type(exc).__name__}: {exc}"
     if not search_root.exists():
-        return f"⚠️ SEARCH_ERROR: path not found: {path}"
+        return f"⚠️ SEARCH_ERROR: path not found: {display_search_path}"
     subagent_readonly = _is_local_readonly_subagent(ctx)
-    if subagent_readonly and _is_subagent_secret_repo_target(search_root, root):
-        return "⚠️ SEARCH_BLOCKED: local_readonly_subagent cannot search repo secret or control paths."
+    if subagent_readonly:
+        block_msg = _local_readonly_resource_block(ctx, normalized, search_root, root_path, action="SEARCH")
+        if block_msg:
+            return block_msg
 
     try:
         if regex:
@@ -737,10 +1160,15 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
     for dirpath, dirnames, filenames in os.walk(str(search_root)):
         # Prune skipped dirs in-place.
         dirnames[:] = [d for d in sorted(dirnames) if d not in _SEARCH_SKIP_DIRS]
+        if normalized == "user_files":
+            dirnames[:] = [
+                d for d in dirnames
+                if not user_files_path_block_reason(ctx, pathlib.Path(dirpath) / d)
+            ]
         if subagent_readonly:
             dirnames[:] = [
                 d for d in dirnames
-                if not _is_subagent_secret_repo_target(pathlib.Path(dirpath) / d, root)
+                if not _local_readonly_resource_block(ctx, normalized, pathlib.Path(dirpath) / d, root_path, action="SEARCH")
             ]
 
         for fname in sorted(filenames):
@@ -749,7 +1177,9 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
             if include and not fnmatch.fnmatch(fname, include):
                 continue
 
-            if subagent_readonly and _is_subagent_secret_repo_target(fp, root):
+            if subagent_readonly and _local_readonly_resource_block(ctx, normalized, fp, root_path, action="SEARCH"):
+                continue
+            if normalized == "user_files" and user_files_path_block_reason(ctx, fp):
                 continue
 
             if _is_search_skippable(fp):
@@ -761,11 +1191,11 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
                 continue
 
             files_searched += 1
-            rel = fp.relative_to(root).as_posix()
+            rel = fp.relative_to(root_path).as_posix()
 
             for lineno, line in enumerate(text.splitlines(), 1):
                 if pattern.search(line):
-                    matches.append(f"{rel}:{lineno}: {line.rstrip()}")
+                    matches.append(f"{_root_display_path(normalized, rel)}:{lineno}: {line.rstrip()}")
                     if len(matches) >= max_results:
                         truncated = True
                         break
@@ -775,9 +1205,9 @@ def _code_search(ctx: ToolContext, query: str, path: str = ".",
             break
 
     if not matches:
-        return f"No matches found for {'regex' if regex else 'literal'} `{query}` in {path} ({files_searched} files searched)."
+        return f"No matches found for {'regex' if regex else 'literal'} `{query}` in {display_search_path} ({files_searched} files searched)."
 
-    header = f"Found {len(matches)} match{'es' if len(matches) != 1 else ''} ({files_searched} files searched)"
+    header = f"Found {len(matches)} match{'es' if len(matches) != 1 else ''} in {display_search_path} ({files_searched} files searched)"
     if truncated:
         header += f" — truncated at {max_results} results"
     return header + "\n\n" + "\n".join(matches)
@@ -808,164 +1238,130 @@ def _extract_python_symbols(file_path: pathlib.Path) -> Tuple[List[str], List[st
 
 def _codebase_digest(ctx: ToolContext) -> str:
     """Generate a compact file/symbol digest for the codebase."""
-    repo_dir = active_repo_dir_for(ctx)
-    subagent_readonly = _is_local_readonly_subagent(ctx)
-    py_files: List[pathlib.Path] = []
-    md_files: List[pathlib.Path] = []
-    other_files: List[pathlib.Path] = []
+    from ouroboros.code_intelligence import build_code_inventory, render_codebase_digest
 
-    for dirpath, dirnames, filenames in os.walk(str(repo_dir)):
-        # Skip excluded directories
-        dirnames[:] = [d for d in sorted(dirnames) if d not in _SKIP_DIRS]
-        if subagent_readonly:
-            dirnames[:] = [
-                d for d in dirnames
-                if not _is_subagent_secret_repo_target(pathlib.Path(dirpath) / d, repo_dir)
-            ]
-        for fn in sorted(filenames):
-            p = pathlib.Path(dirpath) / fn
-            if not p.is_file():
-                continue
-            if subagent_readonly and _is_subagent_secret_repo_target(p, repo_dir):
-                continue
-            if p.suffix == ".py":
-                py_files.append(p)
-            elif p.suffix == ".md":
-                md_files.append(p)
-            elif p.suffix in (".txt", ".cfg", ".toml", ".yml", ".yaml", ".json"):
-                other_files.append(p)
-
-    total_lines = 0
-    total_functions = 0
-    sections: List[str] = []
-
-    for pf in py_files:
-        try:
-            lines = pf.read_text(encoding="utf-8").splitlines()
-            line_count = len(lines)
-            total_lines += line_count
-            classes, functions = _extract_python_symbols(pf)
-            total_functions += len(functions)
-            rel = pf.relative_to(repo_dir).as_posix()
-            parts = [f"\n== {rel} ({line_count} lines) =="]
-            if classes:
-                cl = ", ".join(classes[:10])
-                if len(classes) > 10:
-                    cl += f", ... ({len(classes)} total)"
-                parts.append(f"  Classes: {cl}")
-            if functions:
-                fn = ", ".join(functions[:20])
-                if len(functions) > 20:
-                    fn += f", ... ({len(functions)} total)"
-                parts.append(f"  Functions: {fn}")
-            sections.append("\n".join(parts))
-        except Exception:
-            log.debug(f"Failed to process Python file {pf} in codebase_digest", exc_info=True)
-            pass
-
-    for mf in md_files:
-        try:
-            line_count = len(mf.read_text(encoding="utf-8").splitlines())
-            total_lines += line_count
-            rel = mf.relative_to(repo_dir).as_posix()
-            sections.append(f"\n== {rel} ({line_count} lines) ==")
-        except Exception:
-            log.debug(f"Failed to process markdown file {mf} in codebase_digest", exc_info=True)
-            pass
-
-    for of in other_files:
-        try:
-            line_count = len(of.read_text(encoding="utf-8").splitlines())
-            total_lines += line_count
-            rel = of.relative_to(repo_dir).as_posix()
-            sections.append(f"\n== {rel} ({line_count} lines) ==")
-        except Exception:
-            log.debug(f"Failed to process config file {of} in codebase_digest", exc_info=True)
-            pass
-
-    total_files = len(py_files) + len(md_files) + len(other_files)
-    header = f"Codebase Digest ({total_files} files, {total_lines} lines, {total_functions} functions)"
-    return header + "\n" + "\n".join(sections)
+    inventory = build_code_inventory(
+        active_repo_dir_for(ctx),
+        drive_root=pathlib.Path(ctx.drive_root),
+        persist=not _is_local_readonly_subagent(ctx),
+    )
+    if _is_local_readonly_subagent(ctx):
+        repo_root = active_repo_dir_for(ctx)
+        inventory.files = [
+            file for file in inventory.files
+            if not _is_subagent_secret_repo_target(repo_root / file.path, repo_root)
+        ]
+    return render_codebase_digest(inventory)
 
 def _forward_to_worker(ctx: ToolContext, task_id: str, message: str) -> str:
     """Forward a message to a running worker task's mailbox."""
     from ouroboros.owner_inject import write_owner_message
-    write_owner_message(ctx.drive_root, message, task_id=task_id, msg_id=uuid.uuid4().hex)
-    return f"Message forwarded to task {task_id}"
+    from ouroboros.task_results import STATUS_RUNNING, validate_task_id
+    from ouroboros.task_status import FINAL_STATUSES, load_effective_task_result
+
+    try:
+        tid = validate_task_id(task_id)
+    except ValueError as exc:
+        return f"⚠️ TOOL_ARG_ERROR (forward_to_worker): {exc}"
+    data = load_effective_task_result(pathlib.Path(ctx.drive_root), tid)
+    status = str(data.get("status") or "").lower()
+    if not data:
+        return f"⚠️ TASK_NOT_FOUND: task {tid} is not registered."
+    if status in FINAL_STATUSES:
+        return f"⚠️ TASK_NOT_ACTIVE: task {tid} is already {status}."
+    if status != STATUS_RUNNING:
+        return f"⚠️ TASK_NOT_ACTIVE: task {tid} is {status or 'unknown'}, not running."
+    current_task_id = str(getattr(ctx, "task_id", "") or "").strip()
+    target_parent = str(data.get("parent_task_id") or "").strip()
+    target_root = str(data.get("root_task_id") or "").strip()
+    if not current_task_id:
+        return "⚠️ TASK_FORBIDDEN: forward_to_worker requires an active task context."
+    allowed = target_parent == current_task_id or target_root == current_task_id
+    if not allowed:
+        return f"⚠️ TASK_FORBIDDEN: task {tid} is not a child or descendant of the current task."
+    child_drive = str(data.get("child_drive_root") or data.get("headless_child_drive_root") or data.get("drive_root") or "").strip()
+    mailbox_drive = pathlib.Path(child_drive) if child_drive else pathlib.Path(ctx.drive_root)
+    write_owner_message(mailbox_drive, message, task_id=tid, msg_id=uuid.uuid4().hex)
+    return f"Message forwarded to task {tid}"
 
 def get_tools() -> List[ToolEntry]:
     return [
-        ToolEntry("repo_read", {
-            "name": "repo_read",
+        ToolEntry("read_file", {
+            "name": "read_file",
             "description": (
-                "Read a UTF-8 text file from the local repo (relative path). "
+                "Read a UTF-8 text file from a declared resource root. "
+                "Default root=active_workspace (the user's workspace or the Ouroboros repo in self-modification tasks). "
                 "Use max_lines (default 2000) and start_line (default 1) to read large files in chunks. "
-                "The result header shows 'lines X\u2013Y of Z' so you know whether you saw the full file."
+                "The result header shows root:path and 'lines X\u2013Y of Z' so you know where and how much you read."
             ),
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},
+                "root": {"type": "string", "enum": ["active_workspace", "system_repo", "runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"], "default": "active_workspace"},
                 "max_lines": {"type": "integer", "default": 2000,
                               "description": "Maximum number of lines to return (default 2000)."},
                 "start_line": {"type": "integer", "default": 1,
                                "description": "1-indexed line to start reading from (default 1 = beginning)."},
+                "bucket": {"type": "string", "description": "Required only for root=skill_payload."},
+                "skill_name": {"type": "string", "description": "Required only for root=skill_payload."},
             }, "required": ["path"]},
-        }, _repo_read),
-        ToolEntry("repo_list", {
-            "name": "repo_list",
-            "description": "List files under a repo directory (relative path).",
+        }, _read_file),
+        ToolEntry("list_files", {
+            "name": "list_files",
+            "description": "List files under a resource root directory.",
             "parameters": {"type": "object", "properties": {
                 "dir": {"type": "string", "default": "."},
+                "root": {"type": "string", "enum": ["active_workspace", "system_repo", "runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"], "default": "active_workspace"},
                 "max_entries": {"type": "integer", "default": 500},
+                "bucket": {"type": "string", "description": "Required only for root=skill_payload."},
+                "skill_name": {"type": "string", "description": "Required only for root=skill_payload."},
             }, "required": []},
-        }, _repo_list),
-        ToolEntry("data_read", {
-            "name": "data_read",
+        }, _list_files),
+        ToolEntry("write_file", {
+            "name": "write_file",
             "description": (
-                "Read a UTF-8 text file from the local data directory. "
-                "Use max_lines (default 2000) and start_line (default 1) "
-                "to read large data/skill files in chunks."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "path": {"type": "string"},
-                "max_lines": {"type": "integer", "default": 2000,
-                              "description": "Maximum number of lines to return (default 2000)."},
-                "start_line": {"type": "integer", "default": 1,
-                               "description": "1-indexed line to start reading from (default 1)."},
-            }, "required": ["path"]},
-        }, _data_read),
-        ToolEntry("data_list", {
-            "name": "data_list",
-            "description": "List files under a local data directory.",
-            "parameters": {"type": "object", "properties": {
-                "dir": {"type": "string", "default": "."},
-                "max_entries": {"type": "integer", "default": 500},
-            }, "required": []},
-        }, _data_list),
-        ToolEntry("data_write", {
-            "name": "data_write",
-            "description": (
-                "Write a UTF-8 text file to the local data directory. "
+                "Write UTF-8 file(s) to a declared resource root. "
+                "Default root=active_workspace. "
+                "OK messages show root:path. "
                 "Use mode='append' to write a large file in chunks across multiple calls "
                 "(useful when the full content exceeds a single LLM output budget). "
-                "Optional bucket+skill_name args let tasks write a short relative path under "
-                "an existing data/skills/<bucket>/<skill_name>/ payload. Explicit data/repo "
-                "paths keep their own address space and ignore stale short-form args."
+                "For root=skill_payload, supply bucket and skill_name."
             ),
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},
                 "content": {"type": "string"},
+                "files": {"type": "array", "items": {"type": "object", "properties": {
+                    "path": {"type": "string"}, "content": {"type": "string"},
+                }, "required": ["path", "content"]}},
+                "root": {"type": "string", "enum": ["active_workspace", "system_repo", "runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"], "default": "active_workspace"},
                 "mode": {"type": "string", "enum": ["overwrite", "append"], "default": "overwrite"},
+                "force": {"type": "boolean", "default": False, "description": "Bypass shrink guard for intentional active_workspace full rewrites."},
                 "bucket": {
                     "type": "string",
                     "enum": ["external", "clawhub", "ouroboroshub"],
-                    "description": "Skill payload bucket for short relative payload paths only. Pair with skill_name. Do not supply for explicit repo/data paths.",
+                    "description": "Skill payload bucket. Required for root=skill_payload.",
                 },
                 "skill_name": {
                     "type": "string",
-                    "description": "Skill slug for short relative payload paths only. Requires bucket.",
+                    "description": "Skill slug. Required for root=skill_payload.",
                 },
-            }, "required": ["path", "content"]},
-        }, _data_write),
+            }, "required": []},
+        }, _write_file, is_code_tool=True),
+        ToolEntry("edit_text", {
+            "name": "edit_text",
+            "description": (
+                "Replace exactly one occurrence of old_str with new_str in a file. "
+                "Default root=active_workspace. Result messages show root:path. "
+                "For root=skill_payload, supply bucket and skill_name."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "path": {"type": "string"},
+                "old_str": {"type": "string"},
+                "new_str": {"type": "string"},
+                "root": {"type": "string", "enum": ["active_workspace", "system_repo", "runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"], "default": "active_workspace"},
+                "bucket": {"type": "string", "enum": ["external", "clawhub", "ouroboroshub"]},
+                "skill_name": {"type": "string"},
+            }, "required": ["path", "old_str", "new_str"]},
+        }, _edit_text, is_code_tool=True),
         ToolEntry("send_photo", {
             "name": "send_photo",
             "description": (
@@ -980,18 +1376,29 @@ def get_tools() -> List[ToolEntry]:
                 "caption": {"type": "string", "description": "Optional caption for the photo"},
             }, "required": []},
         }, _send_photo),
-        ToolEntry("code_search", {
-            "name": "code_search",
+        ToolEntry("send_video", {
+            "name": "send_video",
+            "description": "Send a video to the owner's chat (e.g. an anime animation). Requires a local file_path.",
+            "parameters": {"type": "object", "properties": {
+                "file_path": {"type": "string", "description": "Local file path to video (preferred)"},
+                "caption": {"type": "string", "description": "Optional caption for the video"},
+            }, "required": ["file_path"]},
+        }, _send_video),
+        ToolEntry("search_code", {
+            "name": "search_code",
             "description": (
                 "Search for a pattern in the repository code. "
                 "Literal search by default; set regex=True for regular expressions. "
-                "Scoped to path (default: entire repo). "
+                "Scoped to path (default: entire active workspace). "
                 "Skips binaries, caches, vendor dirs, and files >1MB. "
-                "Returns up to max_results matches (default 200) with file:line: context."
+                "Returns up to max_results matches (default 200) with root:file:line context."
             ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "Search pattern (literal or regex)"},
                 "path": {"type": "string", "default": ".", "description": "Subdirectory to search (relative to repo root)"},
+                "root": {"type": "string", "enum": ["active_workspace", "system_repo", "runtime_data", "task_drive", "skill_payload", "artifact_store", "user_files"], "default": "active_workspace"},
+                "bucket": {"type": "string", "description": "Required only for root=skill_payload."},
+                "skill_name": {"type": "string", "description": "Required only for root=skill_payload."},
                 "regex": {"type": "boolean", "default": False, "description": "Treat query as a regular expression"},
                 "max_results": {"type": "integer", "default": 200, "description": "Maximum number of matches to return (max 200)"},
                 "include": {"type": "string", "default": "", "description": "Filter by glob pattern (e.g. '*.py')"},
@@ -999,7 +1406,7 @@ def get_tools() -> List[ToolEntry]:
         }, _code_search),
         ToolEntry("codebase_digest", {
             "name": "codebase_digest",
-            "description": "Get a compact digest of the entire codebase: files, sizes, classes, functions. One call instead of many repo_read calls.",
+            "description": "Get a compact digest of the entire codebase: files, sizes, classes, functions. One call instead of many read_file calls.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         }, _codebase_digest),
         ToolEntry("forward_to_worker", {

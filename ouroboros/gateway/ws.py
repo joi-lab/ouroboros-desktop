@@ -129,6 +129,11 @@ async def _dispatch_extension_message(
             if hasattr(websocket.app, "state") and hasattr(websocket.app.state, "drive_root")
             else DATA_DIR
         )
+        repo_dir = pathlib.Path(
+            websocket.app.state.repo_dir  # type: ignore[attr-defined]
+            if hasattr(websocket.app, "state") and hasattr(websocket.app.state, "repo_dir")
+            else pathlib.Path(__file__).resolve().parents[2]
+        )
         repo_path = get_skills_repo_path()
         handler_spec = list_ws_handlers().get(msg_type)
         skill_name = str((handler_spec or {}).get("skill") or "")
@@ -155,6 +160,23 @@ async def _dispatch_extension_message(
         if isinstance(state, dict) and state.get("action") == "extension_load_error":
             extra = f" (load_error={state.get('load_error')})"
         await websocket.send_text(json.dumps({"type": "log", "data": {"level": "warning", "message": f"no extension WS handler for {msg_type!r}{extra}"}}))
+        return True
+
+    if handler_spec.get("out_of_process"):
+        try:
+            from ouroboros.extension_process_runner import dispatch_extension_ws_subprocess
+
+            result = await asyncio.to_thread(
+                dispatch_extension_ws_subprocess,
+                handler_spec,
+                msg,
+                drive_root=drive_root,
+                repo_dir=repo_dir,
+            )
+            if result is not None:
+                await websocket.send_text(json.dumps({"type": msg_type + ".reply", "data": result}))
+        except Exception as exc:
+            await websocket.send_text(json.dumps({"type": "log", "data": {"level": "error", "message": f"extension WS handler {msg_type!r} child failed: {type(exc).__name__}: {exc}"}}))
         return True
 
     handler = handler_spec.get("handler")

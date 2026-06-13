@@ -25,7 +25,7 @@ import pytest
 
 from ouroboros.onboarding_wizard import build_onboarding_html
 from ouroboros.runtime_mode_policy import protected_path_category
-from ouroboros.tools.registry import ToolEntry, ToolRegistry
+from ouroboros.tools.registry import ToolRegistry
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -458,7 +458,7 @@ class _CommitCtx:
         self._last_triad_raw_results = []
         self._last_scope_raw_result = {}
         self._review_degraded_reasons = []
-        self._current_review_tool_name = "repo_commit"
+        self._current_review_tool_name = "commit_reviewed"
         self._scope_review_history = {}
         self._review_history = []
 
@@ -488,14 +488,13 @@ def _git_repo(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 @pytest.mark.parametrize("tool_name", [
-    "repo_write",
-    "repo_commit",
-    "str_replace_editor",
-    "claude_code_edit",
-    "revert_commit",
-    "pull_from_remote",
-    "restore_to_head",
-    "rollback_to_target",
+    "write_file",
+    "commit_reviewed",
+    "edit_text",
+    "vcs_revert",
+    "vcs_pull_ff",
+    "vcs_restore",
+    "vcs_rollback",
     "promote_to_stable",
 ])
 def test_light_mode_blocks_repo_mutation_tools(tool_name, tmp_path, monkeypatch):
@@ -508,8 +507,39 @@ def test_light_mode_blocks_repo_mutation_tools(tool_name, tmp_path, monkeypatch)
 def test_light_mode_still_allows_read_only_tools(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("repo_read", {"path": "README.md"})
+    result = reg.execute("read_file", {"path": "README.md"})
     assert "LIGHT_MODE_BLOCKED" not in result
+
+
+def test_light_mode_redirects_cognitive_memory_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
+    reg = _registry(tmp_path)
+    result = reg.execute(
+        "write_file",
+        {"root": "runtime_data", "path": "memory/identity.md", "content": "x" * 60},
+    )
+    assert "COGNITIVE_TOOL_REQUIRED" in result, result[:200]
+    assert "update_identity" in result
+    assert "LIGHT_MODE_BLOCKED" not in result
+
+
+def test_light_mode_redirects_windows_style_cognitive_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
+    reg = _registry(tmp_path)
+    result = reg.execute(
+        "write_file",
+        {"root": "runtime_data", "path": "memory\\identity.md", "content": "x" * 60},
+    )
+    assert "COGNITIVE_TOOL_REQUIRED" in result, result[:200]
+
+
+def test_light_mode_redirects_absolute_home_path_to_user_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
+    reg = _registry(tmp_path)
+    home_path = str(pathlib.Path.home() / "Desktop" / "ouro_root_required_test.html")
+    result = reg.execute("write_file", {"path": home_path, "content": "<html></html>"})
+    assert "ROOT_REQUIRED_USER_FILES" in result, result[:200]
+    assert "user_files" in result
 
 
 def test_light_mode_does_not_block_skill_exec_at_registry_layer(tmp_path, monkeypatch):
@@ -536,7 +566,7 @@ def test_advanced_mode_blocks_protected_write(path, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "repo_write",
+        "write_file",
         {"path": path, "content": "x"},
     )
     assert "CORE_PROTECTION_BLOCKED" in result
@@ -551,7 +581,7 @@ def test_advanced_mode_allows_non_critical_write_calls_through(tmp_path, monkeyp
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "repo_write",
+        "write_file",
         {"path": "docs/README.md", "content": "x"},
     )
     assert "CORE_PROTECTION_BLOCKED" not in result
@@ -565,14 +595,14 @@ def test_pro_mode_allows_protected_write_with_core_patch_notice(tmp_path, monkey
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "pro")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "repo_write",
+        "write_file",
         {"path": "ouroboros/safety.py", "content": "x"},
     )
     assert "CORE_PROTECTION_BLOCKED" not in result
     assert "CORE_PATCH_NOTICE" in result
 
 
-def test_pro_mode_claude_code_edit_emits_core_patch_notice(tmp_path, monkeypatch):
+def test_pro_mode_edit_text_emits_core_patch_notice(tmp_path, monkeypatch):
     repo = _git_repo(tmp_path)
     (repo / "ouroboros" / "contracts").mkdir(parents=True)
     (repo / "ouroboros" / "contracts" / "plugin_api.py").write_text("old\n", encoding="utf-8")
@@ -582,22 +612,16 @@ def test_pro_mode_claude_code_edit_emits_core_patch_notice(tmp_path, monkeypatch
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "pro")
     reg = ToolRegistry(repo_dir=repo, drive_root=tmp_path)
 
-    def fake_edit(ctx, **_kwargs):
-        (pathlib.Path(ctx.repo_dir) / "ouroboros" / "contracts" / "plugin_api.py").write_text(
-            "new\n",
-            encoding="utf-8",
-        )
-        return "edited"
-
-    reg._entries["claude_code_edit"] = ToolEntry(
-        name="claude_code_edit",
-        schema={"name": "claude_code_edit"},
-        handler=fake_edit,
+    result = reg.execute(
+        "edit_text",
+        {
+            "path": "ouroboros/contracts/plugin_api.py",
+            "old_str": "old",
+            "new_str": "new",
+        },
     )
 
-    result = reg.execute("claude_code_edit", {"prompt": "edit protected"})
-
-    assert "edited" in result
+    assert "Replaced" in result
     assert "CORE_PATCH_NOTICE" in result
     assert "ouroboros/contracts/plugin_api.py" in result
 
@@ -728,7 +752,7 @@ def test_revert_commit_blocks_protected_contract_path(tmp_path, monkeypatch):
 def test_light_mode_blocks_runshell_mutation(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": "git commit -m 'x'"})
+    result = reg.execute("run_command", {"cmd": "git commit -m 'x'"})
     assert "GIT_VIA_SHELL_BLOCKED" in result
 
 
@@ -740,7 +764,7 @@ def test_light_mode_blocks_runshell_mutation(tmp_path, monkeypatch):
 def test_run_shell_blocks_env_wrapped_git_mutation(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "GIT_VIA_SHELL_BLOCKED" in result
 
 
@@ -751,7 +775,7 @@ def test_run_shell_blocks_env_wrapped_git_mutation(cmd, tmp_path, monkeypatch):
 def test_run_shell_blocks_shell_wrapped_git_mutation(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "GIT_VIA_SHELL_BLOCKED" in result
 
 
@@ -759,7 +783,7 @@ def test_advanced_mode_blocks_runshell_protected_python_writer(tmp_path, monkeyp
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": "python -c \"from pathlib import Path; Path('BIBLE.md').write_text('x')\""},
     )
     assert "SAFETY_VIOLATION" in result
@@ -770,7 +794,7 @@ def test_advanced_mode_blocks_runshell_protected_backslash_path(tmp_path, monkey
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": "python -c \"open('ouroboros\\\\contracts\\\\plugin_api.py','w').write('x')\""},
     )
     assert "SAFETY_VIOLATION" in result
@@ -816,7 +840,7 @@ def test_light_mode_allows_extension_tool_dispatch(tmp_path, monkeypatch):
 def test_light_mode_blocks_inplace_mutation_tools(bad_cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": bad_cmd})
+    result = reg.execute("run_command", {"cmd": bad_cmd})
     assert "LIGHT_MODE_BLOCKED" in result, f"cmd={bad_cmd!r}: {result[:200]}"
 
 
@@ -837,7 +861,7 @@ def test_light_mode_blocks_pr_integration_tools(tool_name, tmp_path, monkeypatch
 def test_light_mode_allows_readonly_runshell(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": "git status"})
+    result = reg.execute("run_command", {"cmd": "git status"})
     assert "LIGHT_MODE_BLOCKED" not in result
 
 
@@ -853,14 +877,14 @@ def test_light_mode_allows_readonly_runshell(tmp_path, monkeypatch):
 def test_light_mode_allows_non_repo_shell_file_operations(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "LIGHT_MODE_BLOCKED" not in result, result[:200]
 
 
 def test_advanced_mode_blocks_python_os_remove_protected_path(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": "python3 -c \"import os; os.remove('BIBLE.md')\""})
+    result = reg.execute("run_command", {"cmd": "python3 -c \"import os; os.remove('BIBLE.md')\""})
     assert "SAFETY_VIOLATION" in result
 
 
@@ -871,7 +895,7 @@ def test_advanced_mode_blocks_python_os_remove_protected_path(tmp_path, monkeypa
 def test_run_shell_blocks_sort_uniq_protected_output_paths(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "SAFETY_VIOLATION" in result
     assert "BIBLE.md" in result or "protected" in result.lower()
 
@@ -880,7 +904,7 @@ def test_run_shell_blocks_sort_uniq_protected_output_paths(cmd, tmp_path, monkey
 def test_run_shell_allows_readonly_mentions_of_protected_paths(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "SAFETY_VIOLATION" not in result
 
 
@@ -891,14 +915,14 @@ def test_run_shell_allows_readonly_mentions_of_protected_paths(cmd, tmp_path, mo
 def test_light_mode_blocks_simple_shell_c_repo_writer(cmd, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": cmd})
+    result = reg.execute("run_command", {"cmd": cmd})
     assert "LIGHT_MODE_BLOCKED" in result
 
 
 def test_light_mode_allows_shell_wrapper_non_repo_writer(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("run_shell", {"cmd": ["bash", "-c", "mkdir /tmp/ouroboros-light-wrapper"]})
+    result = reg.execute("run_command", {"cmd": ["bash", "-c", "mkdir /tmp/ouroboros-light-wrapper"]})
     assert "LIGHT_MODE_BLOCKED" not in result, result[:200]
 
 
@@ -911,7 +935,7 @@ def test_light_mode_tripwire_catches_python_repo_writer(tmp_path, monkeypatch):
     reg = ToolRegistry(repo_dir=repo, drive_root=tmp_path / "drive")
 
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": [sys.executable, "-c", "from pathlib import Path; Path('README.md').write_text('hacked\\n')"]},
     )
 
@@ -929,7 +953,7 @@ def test_light_mode_tripwire_catches_untracked_repo_file(tmp_path, monkeypatch):
     reg = ToolRegistry(repo_dir=repo, drive_root=tmp_path / "drive")
 
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": [sys.executable, "-c", "from pathlib import Path; Path('new_tool.py').write_text('x\\n')"]},
     )
 
@@ -947,7 +971,7 @@ def test_light_mode_tripwire_runs_after_failed_command(tmp_path, monkeypatch):
     reg = ToolRegistry(repo_dir=repo, drive_root=tmp_path / "drive")
 
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": [sys.executable, "-c", "from pathlib import Path; Path('README.md').write_text('bad\\n'); raise SystemExit(2)"]},
     )
 
@@ -964,7 +988,7 @@ def test_advanced_mode_does_not_run_light_tripwire(tmp_path, monkeypatch):
     reg = ToolRegistry(repo_dir=repo, drive_root=tmp_path / "drive")
 
     result = reg.execute(
-        "run_shell",
+        "run_command",
         {"cmd": [sys.executable, "-c", "from pathlib import Path; Path('README.md').write_text('advanced\\n')"]},
     )
 
@@ -975,28 +999,9 @@ def test_advanced_mode_does_not_run_light_tripwire(tmp_path, monkeypatch):
 # Part: light-mode bucket+skill_name short-form authoring (v5.16.0-rc.1)
 # ===========================================================================
 #
-# Under runtime_mode=light, the three skill-payload edit tools — data_write,
-# str_replace_editor, claude_code_edit — accept optional bucket+skill_name
-# args that synthesize a skill_repair-like constraint at the gate (registry
-# layer) and again at the handler layer. These tests pin the gate decision
-# (LIGHT_MODE_BLOCKED present / absent) and the new error/help messages.
-# Handler-internal path resolution is covered by handler-level tests
-# (test_data_write_*, test_str_replace_editor_*, test_skill_repair_*).
-
-
-def _register_fake(reg, tool_name, fake_handler):
-    """Replace a registered ToolEntry's handler with ``fake_handler`` while
-    preserving the registered schema. Lets gate tests observe what the gate
-    decided without dragging in handler-internal side effects (network, FS)."""
-    existing = reg._entries.get(tool_name)
-    schema = existing.schema if existing else {"name": tool_name}
-    is_code_tool = getattr(existing, "is_code_tool", False) if existing else False
-    reg._entries[tool_name] = ToolEntry(
-        name=tool_name,
-        schema=schema,
-        handler=fake_handler,
-        is_code_tool=is_code_tool,
-    )
+# Under runtime_mode=light, skill-payload edits use Tool API v2
+# root=skill_payload plus bucket/skill_name. Legacy private aliases still
+# route through the same policy for compatibility, but are not public schemas.
 
 
 def _make_skill_payload(tmp_path, bucket, name):
@@ -1009,17 +1014,22 @@ def _make_skill_payload(tmp_path, bucket, name):
 
 
 @pytest.mark.parametrize("bucket", ["external", "clawhub", "ouroboroshub"])
-def test_light_claude_code_edit_with_bucket_skill_name_allowed(bucket, tmp_path, monkeypatch):
+def test_light_write_file_with_skill_payload_root_allowed(bucket, tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     _make_skill_payload(tmp_path, bucket, "alpha")
     reg = _registry(tmp_path)
-    _register_fake(reg, "claude_code_edit", lambda ctx, **kw: "edit-ran")
     result = reg.execute(
-        "claude_code_edit",
-        {"prompt": "noop", "cwd": ".", "bucket": bucket, "skill_name": "alpha"},
+        "write_file",
+        {
+            "root": "skill_payload",
+            "path": "new.py",
+            "content": "VALUE = 1\n",
+            "bucket": bucket,
+            "skill_name": "alpha",
+        },
     )
     assert "LIGHT_MODE_BLOCKED" not in result, result[:200]
-    assert "edit-ran" in result
+    assert (tmp_path / "skills" / bucket / "alpha" / "new.py").is_file()
 
 
 @pytest.mark.parametrize("bucket", ["external", "clawhub", "ouroboroshub"])
@@ -1027,25 +1037,31 @@ def test_light_str_replace_editor_with_bucket_skill_name_allowed(bucket, tmp_pat
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     _make_skill_payload(tmp_path, bucket, "beta")
     reg = _registry(tmp_path)
-    _register_fake(reg, "str_replace_editor", lambda ctx, **kw: "str-replace-ran")
     result = reg.execute(
-        "str_replace_editor",
-        {"path": "plugin.py", "old_str": "x", "new_str": "y", "bucket": bucket, "skill_name": "beta"},
+        "edit_text",
+        {
+            "root": "skill_payload",
+            "path": "plugin.py",
+            "old_str": "pass",
+            "new_str": "return None",
+            "bucket": bucket,
+            "skill_name": "beta",
+        },
     )
     assert "LIGHT_MODE_BLOCKED" not in result, result[:200]
-    assert "str-replace-ran" in result
+    assert "Replaced" in result
 
 
 def test_light_data_write_with_bucket_skill_name_resolves_under_payload(tmp_path, monkeypatch):
-    """data_write is NOT in _REPO_MUTATION_TOOLS, so the gate never sees it.
-    Verify the handler-level synthesis still resolves the short path under
+    """write_file with root=skill_payload resolves the short path under
     data/skills/<bucket>/<skill>/ so a file lands inside the payload."""
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     _make_skill_payload(tmp_path, "external", "gamma")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "data_write",
+        "write_file",
         {
+            "root": "skill_payload",
             "path": "lib/utils.py",
             "content": "def hi(): return 'ok'\n",
             "bucket": "external",
@@ -1067,17 +1083,23 @@ def test_light_bucket_native_rejected_at_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "claude_code_edit",
-        {"prompt": "noop", "cwd": ".", "bucket": "native", "skill_name": "anything"},
+        "write_file",
+        {
+            "root": "skill_payload",
+            "path": "plugin.py",
+            "content": "x",
+            "bucket": "native",
+            "skill_name": "anything",
+        },
     )
     assert "SKILL_PAYLOAD_ARG_ERROR" in result, result[:200]
     assert "native excluded" in result
 
 
 @pytest.mark.parametrize("tool_name,base_args", [
-    ("data_write", {"path": "plugin.py", "content": "x"}),
-    ("str_replace_editor", {"path": "plugin.py", "old_str": "a", "new_str": "b"}),
-    ("claude_code_edit", {"prompt": "noop", "cwd": "plugin.py"}),
+    ("write_file", {"path": "plugin.py", "content": "x"}),
+    ("edit_text", {"path": "plugin.py", "old_str": "a", "new_str": "b"}),
+    ("write_file", {"root": "skill_payload", "path": "plugin.py", "content": "x"}),
 ])
 @pytest.mark.parametrize("partial", [
     {"bucket": "external"},
@@ -1113,7 +1135,7 @@ def test_light_control_plane_sidecar_still_blocked_with_bucket_skill_name(tmp_pa
     _make_skill_payload(tmp_path, "ouroboroshub", "delta")
     reg = _registry(tmp_path)
     result = reg.execute(
-        "str_replace_editor",
+        "edit_text",
         {
             "path": ".ouroboroshub.json",
             "old_str": "x",
@@ -1130,7 +1152,7 @@ def test_light_mode_blocked_message_lists_three_paths(tmp_path, monkeypatch):
     agents do not silently fall back to less-idiomatic tools."""
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     reg = _registry(tmp_path)
-    result = reg.execute("repo_write", {"path": "README.md", "content": "x"})
+    result = reg.execute("write_file", {"path": "README.md", "content": "x"})
     assert "LIGHT_MODE_BLOCKED" in result, result[:200]
     assert "skill_repair" in result
     assert "data/skills/<bucket>" in result
@@ -1164,9 +1186,9 @@ def _ctx_with_skill_repair(tmp_path, skill_name: str, bucket: str = "external"):
 
 
 @pytest.mark.parametrize("tool_name,extra_args", [
-    ("data_write", {"path": "plugin.py", "content": "evil-payload\n"}),
-    ("str_replace_editor", {"path": "plugin.py", "old_str": "x", "new_str": "y"}),
-    ("claude_code_edit", {"prompt": "noop", "cwd": "."}),
+    ("write_file", {"path": "plugin.py", "content": "evil-payload\n"}),
+    ("edit_text", {"path": "plugin.py", "old_str": "x", "new_str": "y"}),
+    ("write_file", {"root": "skill_payload", "path": "plugin.py", "content": "evil-payload\n"}),
 ])
 def test_repair_mode_blocks_cross_skill_redirect_via_bucket_skill_name(
     tool_name, extra_args, tmp_path, monkeypatch
@@ -1205,8 +1227,9 @@ def test_repair_mode_matching_bucket_skill_name_is_silently_redundant(tmp_path, 
     reg = _ctx_with_skill_repair(tmp_path, "alpha")
 
     result = reg.execute(
-        "data_write",
+        "write_file",
         {
+            "root": "skill_payload",
             "path": "extra.py",
             "content": "x\n",
             "bucket": "external",
@@ -1265,7 +1288,7 @@ def test_repo_path_wins_over_stale_bucket_skill_name(tmp_path, monkeypatch):
     reg = ToolRegistry(repo_dir=repo, drive_root=drive)
 
     result = reg.execute(
-        "str_replace_editor",
+        "edit_text",
         {
             "path": "README.md",
             "old_str": "ok",
@@ -1295,8 +1318,9 @@ def test_data_settings_path_wins_over_stale_bucket_skill_name(tmp_path, monkeypa
     reg = ToolRegistry(repo_dir=repo, drive_root=drive)
 
     result = reg.execute(
-        "data_write",
+        "write_file",
         {
+            "root": "runtime_data",
             "path": "settings.json",
             "content": "{}\n",
             "bucket": "external",
@@ -1323,8 +1347,9 @@ def test_data_settings_case_variant_wins_over_stale_bucket_skill_name(tmp_path, 
     reg = ToolRegistry(repo_dir=repo, drive_root=drive)
 
     result = reg.execute(
-        "data_write",
+        "write_file",
         {
+            "root": "runtime_data",
             "path": "Settings.json",
             "content": "{}\n",
             "bucket": "external",
@@ -1346,8 +1371,9 @@ def test_explicit_data_skills_path_wins_over_stale_bucket_skill_name(tmp_path, m
     reg = ToolRegistry(repo_dir=repo, drive_root=drive)
 
     result = reg.execute(
-        "data_write",
+        "write_file",
         {
+            "root": "runtime_data",
             "path": "data/skills/external/alpha/plugin.py",
             "content": "VALUE = 1\n",
             "bucket": "external",
@@ -1356,7 +1382,7 @@ def test_explicit_data_skills_path_wins_over_stale_bucket_skill_name(tmp_path, m
     )
 
     assert "DATA_WRITE_ERROR" not in result, result[:300]
-    assert "SKILL_SHORT_FORM_IGNORED" in result
+    assert "SKILL_SHORT_FORM_IGNORED" not in result
     assert (skill / "plugin.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert not (drive / "data" / "skills" / "external" / "alpha" / "plugin.py").exists()
 
@@ -1367,7 +1393,7 @@ def test_short_form_requires_existing_payload_root(tmp_path, monkeypatch):
     (tmp_path / "repo").mkdir()
 
     result = reg.execute(
-        "str_replace_editor",
+        "edit_text",
         {
             "path": "plugin.py",
             "old_str": "x",

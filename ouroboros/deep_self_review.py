@@ -242,7 +242,13 @@ def run_deep_self_review(
         ]
 
         # no_proxy prevents macOS fork-safety SIGSEGV in bundled child process.
-        response, usage = llm.chat(
+        from ouroboros.llm_observability import chat_observed
+
+        response, usage = chat_observed(
+            llm,
+            drive_root=drive_root,
+            task_id="deep_self_review",
+            call_type="deep_self_review",
             messages=messages,
             model=model,
             tools=None,

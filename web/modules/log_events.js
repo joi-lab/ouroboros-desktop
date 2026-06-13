@@ -40,12 +40,21 @@ function shortText(text, maxLen = 180) {
 }
 
 function describeText(text, maxLen = 180) {
-    const full = String(text || '').replace(/\s+/g, ' ').trim();
+    const full = String(text || '').trim();
     if (!full) return { preview: '', full: '' };
+    const previewSource = full.replace(/\s+/g, ' ');
     return {
-        preview: full.length > maxLen ? full.slice(0, maxLen - 3) + '...' : full,
+        preview: previewSource.length > maxLen ? previewSource.slice(0, maxLen - 3) + '...' : previewSource,
         full,
     };
+}
+
+function subagentId(evt) {
+    return String(evt.subagent_task_id || evt.task_id || '').trim();
+}
+
+function isSubagentEvent(evt) {
+    return String(evt.delegation_role || '').toLowerCase() === 'subagent' || Boolean(evt.subagent_task_id);
 }
 
 export function formatLogMoney(value) {
@@ -102,6 +111,20 @@ function describeStartupChecks(checks) {
     return shortText(parts.join(' | '), 240);
 }
 
+function taskDoneFailure(evt) {
+    const resultStatus = String(evt.result_status || '').toLowerCase();
+    const artifactStatus = String(evt.artifact_bundle?.status || evt.artifact_status || '').toLowerCase();
+    return ['failed', 'infra_failed'].includes(resultStatus) || artifactStatus === 'failed';
+}
+
+function taskDoneLabel(evt) {
+    const reasonCode = evt.reason_code ? String(evt.reason_code) : '';
+    if (taskDoneFailure(evt)) {
+        return reasonCode ? `Failed: ${reasonCode}` : `Failed ${evt.task_type || 'task'}`;
+    }
+    return `Finished ${evt.task_type || 'task'}`;
+}
+
 export function summarizeLogEvent(evt) {
     const t = evt.type || evt.event || 'unknown';
     const view = (phase, headline, { body = '', meta = [], typeLabel = t } = {}) => ({
@@ -114,6 +137,20 @@ export function summarizeLogEvent(evt) {
     const taskMeta = (...items) => [evt.task_id ? `task=${evt.task_id}` : '', ...items];
 
     if (evt.is_progress || t === 'send_message') {
+        if (isSubagentEvent(evt)) {
+            const sid = subagentId(evt);
+            const event = String(evt.subagent_event || 'update').toLowerCase();
+            const role = String(evt.subagent_role || '').trim();
+            return view(event === 'completed' ? 'done' : event === 'failed' || event === 'rejected' ? 'warn' : 'progress', `Subagent ${sid || 'child'} ${event}`, {
+                body: shortText(String(evt.content || evt.text || '').replace(/^💬\s*/, ''), 240),
+                meta: [
+                    sid ? `task=${sid}` : '',
+                    role ? `role=${role}` : '',
+                    evt.parent_task_id ? `parent=${evt.parent_task_id}` : '',
+                    evt.root_task_id ? `root=${evt.root_task_id}` : '',
+                ],
+            });
+        }
         return view(
             evt.task_id === 'bg-consciousness' ? 'thought' : 'progress',
             shortText(String(evt.content || evt.text || '').replace(/^💬\s*/, ''), 240) || 'Progress update',
@@ -233,6 +270,8 @@ export function summarizeLogEvent(evt) {
         return view('metrics', 'Task metrics', {
             meta: taskMeta(
                 evt.task_type || '',
+                evt.result_status || '',
+                evt.reason_code || '',
                 formatLogDuration(evt.duration_sec),
                 evt.tool_calls != null ? `${evt.tool_calls} tools` : '',
                 evt.tool_errors ? `${evt.tool_errors} errors` : '',
@@ -242,8 +281,14 @@ export function summarizeLogEvent(evt) {
     }
 
     if (t === 'task_done') {
-        return view('done', `Finished ${evt.task_type || 'task'}`, {
+        const resultStatus = evt.result_status ? String(evt.result_status) : '';
+        const reasonCode = evt.reason_code ? String(evt.reason_code) : '';
+        const artifactStatus = evt.artifact_bundle?.status || evt.artifact_status || '';
+        return view(taskDoneFailure(evt) ? 'error' : 'done', taskDoneLabel(evt), {
             meta: taskMeta(
+                resultStatus,
+                reasonCode,
+                artifactStatus ? `artifacts ${artifactStatus}` : '',
                 formatLogMoney(evt.cost_usd || evt.cost),
                 evt.total_rounds ? `${evt.total_rounds} rounds` : '',
                 formatLogTokens(evt),
@@ -324,8 +369,10 @@ function chatView({
     fullHeadline = '',
     visible = false,
     promote = false,
+    terminal = false,
     human = false,
     dedupeKey = '',
+    meta = [],
 } = {}) {
     const out = {
         phase,
@@ -333,11 +380,13 @@ function chatView({
         body,
         visible,
         promote,
+        terminal,
         human,
         dedupeKey,
     };
     if (fullBody) out.fullBody = fullBody;
     if (fullHeadline) out.fullHeadline = fullHeadline;
+    if (Array.isArray(meta) && meta.length) out.meta = meta.filter(Boolean);
     return out;
 }
 
@@ -369,8 +418,49 @@ export function summarizeChatLiveEvent(evt) {
             fullBody: body,
             visible: true,
             promote: true,
+            terminal: phase === 'done' || phase === 'lifecycle_error',
             human: true,
             dedupeKey: lifecycle.id ? `lifecycle:${lifecycle.id}:${status}:${label}:${stale ? 'stale' : 'fresh'}` : key(status, label),
+        });
+    }
+
+    if ((evt.is_progress || t === 'send_message') && isSubagentEvent(evt)) {
+        const sid = subagentId(evt);
+        const event = String(evt.subagent_event || '').toLowerCase();
+        const role = String(evt.subagent_role || '').trim();
+        const status = String(evt.status || '').trim();
+        const cost = formatLogMoney(evt.cost_usd || evt.cost);
+        const resultText = describeText(evt.result || '', 320);
+        const traceText = describeText(evt.trace_summary || '', 320);
+        const errorText = describeText(evt.error || '', 220);
+        const detailParts = [
+            progressText.full,
+            resultText.full ? `[RESULT]\n${resultText.full}` : '',
+            traceText.full ? `[TRACE]\n${traceText.full}` : '',
+            errorText.full ? `[ERROR]\n${errorText.full}` : '',
+        ].filter(Boolean);
+        const phase = ['completed'].includes(event) ? 'done'
+            : ['failed', 'rejected', 'cancelled', 'interrupted'].includes(event) ? 'lifecycle_error'
+                : event === 'scheduled' ? 'start'
+                    : 'working';
+        const label = event || 'update';
+        return chatView({
+            phase,
+            headline: `Subagent ${sid || 'child'} ${label}`,
+            body: progressText.preview || resultText.preview || errorText.preview || '',
+            fullBody: detailParts.join('\n\n'),
+            visible: true,
+            promote: true,
+            human: true,
+            meta: [
+                'subagent',
+                role ? `role=${role}` : '',
+                status ? `status=${status}` : '',
+                cost ? `cost=${cost}` : '',
+                evt.parent_task_id ? `parent=${evt.parent_task_id}` : '',
+                evt.root_task_id ? `root=${evt.root_task_id}` : '',
+            ],
+            dedupeKey: `subagent:${sid}:${label}:${status}:${progressText.full || resultText.full || errorText.full || ''}`,
         });
     }
 
@@ -481,7 +571,15 @@ export function summarizeChatLiveEvent(evt) {
     }
 
     if (t === 'task_done') {
-        return chatView({ phase: 'done', headline: 'Done', visible: true, promote: true, dedupeKey: key() });
+        const failed = taskDoneFailure(evt);
+        return chatView({
+            phase: failed ? 'error' : 'done',
+            headline: failed ? taskDoneLabel(evt) : 'Done',
+            visible: true,
+            promote: true,
+            terminal: true,
+            dedupeKey: key(evt.result_status || '', evt.reason_code || ''),
+        });
     }
 
     if (t.includes('error') || t.includes('crash') || t.includes('fail')) {
@@ -517,6 +615,7 @@ export function prettyLogEvent(evt) {
 }
 
 export function getLogTaskGroupId(evt) {
+    if (evt.subagent_task_id) return String(evt.subagent_task_id);
     if (evt.task_id) return String(evt.task_id);
     const task = evt.task;
     if (task && typeof task === 'object' && task.id) return String(task.id);

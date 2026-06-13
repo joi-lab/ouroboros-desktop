@@ -10,7 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from ouroboros.utils import utc_now_iso
+from ouroboros.utils import truncate_for_log, utc_now_iso
 from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_MODE, MAX_SUBTASK_DEPTH
 from ouroboros.task_results import (
     STATUS_CANCELLED,
@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 _PARENT_CONTEXT_MARKER = "[BEGIN_PARENT_CONTEXT"
 _PARENT_CONTEXT_END = "[END_PARENT_CONTEXT]"
 MAX_ACTIVE_SUBAGENTS_PER_ROOT = 3
+VALID_SUBAGENT_MEMORY_MODES = frozenset({"forked", "empty"})
 
 
 def _is_active_subagent_task(task: Dict[str, Any], root_task_id: str) -> bool:
@@ -47,6 +48,56 @@ def _active_subagent_count(root_task_id: str, pending: list, running: dict) -> i
         if isinstance(task, dict) and _is_active_subagent_task(task, root_task_id):
             count += 1
     return count
+
+
+def _subagent_rejection_meta(
+    tid: str,
+    *,
+    root_task_id: str,
+    parent_id: Any,
+    role: str,
+    status: str,
+    error: str,
+) -> Dict[str, Any]:
+    return {
+        "subagent_event": "rejected",
+        "subagent_task_id": tid,
+        "root_task_id": root_task_id,
+        "parent_task_id": str(parent_id or ""),
+        "delegation_role": "subagent",
+        "subagent_role": role,
+        "status": status,
+        "error": error,
+    }
+
+
+def _send_subagent_rejection(
+    ctx: Any,
+    chat_id: int,
+    *,
+    tid: str,
+    parent_id: Any,
+    root_task_id: str,
+    role: str,
+    status: str,
+    detail: str,
+) -> None:
+    if not chat_id:
+        return
+    ctx.send_with_budget(
+        chat_id,
+        "⚠️ " + detail,
+        is_progress=True,
+        task_id=str(parent_id or tid),
+        progress_meta=_subagent_rejection_meta(
+            tid,
+            root_task_id=root_task_id,
+            parent_id=parent_id,
+            role=role,
+            status=status,
+            error=detail,
+        ),
+    )
 
 
 def _compose_subagent_text(
@@ -186,6 +237,9 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
             "ts": evt.get("ts", utc_now_iso()),
             "type": "llm_usage",
             "task_id": evt.get("task_id", ""),
+            "root_task_id": evt.get("root_task_id", ""),
+            "parent_task_id": evt.get("parent_task_id", ""),
+            "delegation_role": evt.get("delegation_role", ""),
             "category": evt.get("category", "other"),
             "model": evt.get("model", ""),
             "api_key_type": evt.get("api_key_type", ""),
@@ -225,6 +279,12 @@ def _handle_task_heartbeat(evt: Dict[str, Any], ctx: Any) -> None:
                 "task_type": task.get("type"),
                 "phase": phase or meta.get("heartbeat_phase") or "running",
                 "runtime_sec": runtime_sec,
+                "subagent_event": evt.get("subagent_event", ""),
+                "subagent_task_id": evt.get("subagent_task_id", ""),
+                "root_task_id": evt.get("root_task_id", ""),
+                "parent_task_id": evt.get("parent_task_id", ""),
+                "delegation_role": evt.get("delegation_role", ""),
+                "subagent_role": evt.get("subagent_role", ""),
             })
         except Exception:
             log.debug("Failed to forward task heartbeat to live logs", exc_info=True)
@@ -273,19 +333,78 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
     meta = ctx.RUNNING.get(str(task_id or ""), {}) if task_id else {}
     task = meta.get("task") if isinstance(meta, dict) and isinstance(meta.get("task"), dict) else {}
 
+    final_task_result: Dict[str, Any] = {}
+    if task_id:
+        try:
+            from ouroboros.headless import copy_child_task_result, finalize_task_artifacts
+
+            if task:
+                copy_child_task_result(ctx.DRIVE_ROOT, task)
+                task_constraint = task.get("task_constraint") if isinstance(task.get("task_constraint"), dict) else {}
+                real_live_subagent = (
+                    str(task.get("delegation_role") or "") == "subagent"
+                    and str(task_constraint.get("mode") or "") == LOCAL_READONLY_SUBAGENT_MODE
+                    and not str(task.get("workspace_root") or "").strip()
+                )
+                if not real_live_subagent:
+                    finalize_task_artifacts(ctx.DRIVE_ROOT, task)
+        except Exception as exc:
+            try:
+                from ouroboros.headless import ARTIFACT_STATUS_FAILED
+                from ouroboros.outcomes import artifact_bundle_from_result
+
+                existing = load_task_result(ctx.DRIVE_ROOT, str(task_id)) or {}
+                fields = {
+                    "artifact_status": ARTIFACT_STATUS_FAILED,
+                    "artifact_error": f"{type(exc).__name__}: {exc}",
+                    "artifact_finalized_at": utc_now_iso(),
+                }
+                provisional = {**existing, **fields}
+                fields["artifact_bundle"] = artifact_bundle_from_result(provisional)
+                write_task_result(
+                    ctx.DRIVE_ROOT,
+                    str(task_id),
+                    str(existing.get("status") or "completed"),
+                    **fields,
+                )
+            except Exception:
+                pass
+            log.warning("Failed to finalize headless artifacts for task %s", task_id, exc_info=True)
+        try:
+            final_task_result = load_task_result(ctx.DRIVE_ROOT, str(task_id)) or {}
+        except Exception:
+            final_task_result = {}
+
     # Persist here so send_message reaches the UI before task_done collapses the card.
     from ouroboros.utils import utc_now_iso, append_jsonl
+    result_status = final_task_result.get("result_status") or evt.get("result_status")
+    reason_code = final_task_result.get("reason_code") or evt.get("reason_code")
+    artifact_status = final_task_result.get("artifact_status") or evt.get("artifact_status")
+    task_done_event = {
+        "ts": evt.get("ts", utc_now_iso()),
+        "type": "task_done",
+        "task_id": task_id,
+        "task_type": task_type,
+        "result_status": result_status,
+        "reason_code": reason_code,
+        "artifact_status": artifact_status,
+        "cost_usd": float(evt.get("cost_usd") or 0),
+        "total_rounds": int(evt.get("total_rounds") or 0),
+        "prompt_tokens": int(evt.get("prompt_tokens") or 0),
+        "completion_tokens": int(evt.get("completion_tokens") or 0),
+    }
+    artifact_bundle = final_task_result.get("artifact_bundle") if isinstance(final_task_result, dict) else None
+    if not isinstance(artifact_bundle, dict):
+        artifact_bundle = evt.get("artifact_bundle")
+    if isinstance(artifact_bundle, dict):
+        task_done_event["artifact_bundle"] = artifact_bundle
+    review_status = final_task_result.get("review_status") if isinstance(final_task_result, dict) else None
+    if not isinstance(review_status, dict):
+        review_status = evt.get("review_status")
+    if isinstance(review_status, dict):
+        task_done_event["review_status"] = review_status
     try:
-        append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
-            "ts": evt.get("ts", utc_now_iso()),
-            "type": "task_done",
-            "task_id": task_id,
-            "task_type": task_type,
-            "cost_usd": float(evt.get("cost_usd") or 0),
-            "total_rounds": int(evt.get("total_rounds") or 0),
-            "prompt_tokens": int(evt.get("prompt_tokens") or 0),
-            "completion_tokens": int(evt.get("completion_tokens") or 0),
-        })
+        append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", task_done_event)
     except Exception:
         log.warning("Failed to log task_done to events.jsonl", exc_info=True)
 
@@ -316,41 +435,13 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
             )
 
     if task_id:
-        try:
-            from ouroboros.headless import copy_child_task_result, finalize_task_artifacts
-
-            if task:
-                copy_child_task_result(ctx.DRIVE_ROOT, task)
-                task_constraint = task.get("task_constraint") if isinstance(task.get("task_constraint"), dict) else {}
-                real_live_subagent = (
-                    str(task.get("delegation_role") or "") == "subagent"
-                    and str(task_constraint.get("mode") or "") == LOCAL_READONLY_SUBAGENT_MODE
-                    and not str(task.get("workspace_root") or "").strip()
-                )
-                if not real_live_subagent:
-                    finalize_task_artifacts(ctx.DRIVE_ROOT, task)
-        except Exception as exc:
-            try:
-                from ouroboros.headless import ARTIFACT_STATUS_FAILED
-                existing = load_task_result(ctx.DRIVE_ROOT, str(task_id)) or {}
-                write_task_result(
-                    ctx.DRIVE_ROOT,
-                    str(task_id),
-                    str(existing.get("status") or "completed"),
-                    artifact_status=ARTIFACT_STATUS_FAILED,
-                    artifact_error=f"{type(exc).__name__}: {exc}",
-                    artifact_finalized_at=utc_now_iso(),
-                )
-            except Exception:
-                pass
-            log.warning("Failed to finalize headless artifacts for task %s", task_id, exc_info=True)
         if isinstance(task, dict) and str(task.get("delegation_role") or "") == "subagent":
             try:
                 chat_id = int(task.get("chat_id") or 0)
             except (TypeError, ValueError):
                 chat_id = 0
             if chat_id:
-                effective_result = load_task_result(ctx.DRIVE_ROOT, str(task_id or "")) or {}
+                effective_result = final_task_result or load_task_result(ctx.DRIVE_ROOT, str(task_id or "")) or {}
                 status = str(effective_result.get("status") or evt.get("status") or STATUS_COMPLETED)
                 if status == STATUS_COMPLETED:
                     icon, subagent_event, verb = "✅", "completed", "completed"
@@ -374,6 +465,12 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
                         "parent_task_id": str(task.get("parent_task_id") or ""),
                         "delegation_role": "subagent",
                         "subagent_role": str(task.get("role") or ""),
+                        "status": status,
+                        "cost_usd": effective_result.get("cost_usd", 0),
+                        "result": truncate_for_log(str(effective_result.get("result") or ""), 4000),
+                        "trace_summary": truncate_for_log(str(effective_result.get("trace_summary") or ""), 4000),
+                        "error": truncate_for_log(str(effective_result.get("error") or ""), 1000),
+                        "artifact_status": str(effective_result.get("artifact_status") or ""),
                     },
                 )
         ctx.RUNNING.pop(str(task_id), None)
@@ -381,16 +478,7 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
         ctx.WORKERS[wid].busy_task_id = None
     ctx.persist_queue_snapshot(reason="task_done")
     try:
-        ctx.bridge.push_log({
-            "ts": evt.get("ts", utc_now_iso()),
-            "type": "task_done",
-            "task_id": task_id,
-            "task_type": task_type,
-            "cost_usd": evt.get("cost_usd"),
-            "total_rounds": evt.get("total_rounds"),
-            "prompt_tokens": evt.get("prompt_tokens"),
-            "completion_tokens": evt.get("completion_tokens"),
-        })
+        ctx.bridge.push_log(task_done_event)
     except Exception:
         log.debug("Failed to forward task_done to live logs", exc_info=True)
 
@@ -403,7 +491,9 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
             write_task_result(
                 ctx.DRIVE_ROOT,
                 str(task_id or ""),
-                STATUS_COMPLETED,
+                STATUS_FAILED,
+                result_status="infra_failed",
+                reason_code="missing_task_result",
                 result="",
                 cost_usd=float(evt.get("cost_usd", 0)),
                 ts=evt.get("ts", ""),
@@ -421,6 +511,8 @@ def _handle_task_metrics(evt: Dict[str, Any], ctx: Any) -> None:
         "duration_sec": round(float(evt.get("duration_sec") or 0.0), 3),
         "tool_calls": int(evt.get("tool_calls") or 0),
         "tool_errors": int(evt.get("tool_errors") or 0),
+        "result_status": str(evt.get("result_status") or ""),
+        "reason_code": str(evt.get("reason_code") or ""),
     }
     ctx.append_jsonl(ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl", payload)
     try:
@@ -569,6 +661,45 @@ def _find_duplicate_task(
         return None
 
 
+def _reject_schedule_pool_unavailable(
+    ctx: Any,
+    *,
+    tid: str,
+    chat_id: int,
+    delegation_role: str,
+    parent_id: Any,
+    root_task_id: str,
+    role: str,
+    result_fields: Dict[str, Any],
+) -> None:
+    """Write a terminal workers_unavailable result instead of leaving a ghost
+    'scheduled' task when the worker pool is disabled."""
+    detail = (
+        "Subagent not scheduled: the worker pool is currently unavailable "
+        "(workers_unavailable), likely disabled after repeated worker crashes "
+        "(direct-chat mode). It was NOT left scheduled — do the work inline "
+        "yourself, or retry after /restart."
+    )
+    log.warning("Rejecting schedule for %s — worker pool unavailable", tid)
+    try:
+        write_task_result(
+            ctx.DRIVE_ROOT, tid, STATUS_FAILED, **result_fields,
+            result=detail, reason_code="workers_unavailable", cost_usd=0.0,
+        )
+    except Exception:
+        log.warning("Failed to persist workers-unavailable rejection for %s", tid, exc_info=True)
+    # The terminal result is already durable above; never let a notification
+    # failure (torn-down bus, etc.) propagate into the supervisor event loop.
+    try:
+        if chat_id:
+            if delegation_role == "subagent":
+                _send_subagent_rejection(ctx, chat_id, tid=tid, parent_id=parent_id, root_task_id=root_task_id, role=role, status=STATUS_FAILED, detail=detail)
+            else:
+                ctx.send_with_budget(chat_id, f"⚠️ Task {tid} not scheduled: worker pool unavailable.")
+    except Exception:
+        log.warning("Failed to notify workers-unavailable rejection for %s", tid, exc_info=True)
+
+
 def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
     st = ctx.load_state()
     owner_chat_id = st.get("owner_chat_id")
@@ -595,6 +726,7 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
     delegation_role = str(evt.get("delegation_role") or "subagent")
     memory_mode = str(evt.get("memory_mode") or "").strip()
     drive_root = str(evt.get("drive_root") or "").strip()
+    child_drive_root = str(evt.get("child_drive_root") or drive_root).strip()
     budget_drive_root = str(evt.get("budget_drive_root") or "").strip()
     task_constraint = evt.get("task_constraint") if isinstance(evt.get("task_constraint"), dict) else None
     if delegation_role == "subagent":
@@ -618,34 +750,49 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
         "chat_id": chat_id or None,
         "memory_mode": memory_mode,
         "drive_root": drive_root,
+        "child_drive_root": child_drive_root,
         "budget_drive_root": budget_drive_root,
         "task_constraint": task_constraint,
     }
-
     if delegation_role == "subagent" and (not str(evt.get("objective") or "").strip() or not expected_output):
-        log.warning("Rejected subagent due to strict schedule_task schema violation: task_id=%s", tid)
+        detail = "Subagent rejected: schedule_subagent requires objective and expected_output."
+        log.warning("Rejected subagent due to strict schedule_subagent schema violation: task_id=%s", tid)
         try:
             write_task_result(
                 ctx.DRIVE_ROOT,
                 tid,
                 STATUS_FAILED,
                 **{**result_fields, "objective": str(evt.get("objective") or "").strip()},
-                result="Subagent rejected: schedule_task requires objective and expected_output.",
+                result=detail,
                 cost_usd=0.0,
             )
         except Exception:
             log.warning("Failed to persist strict-schema rejection for %s", tid, exc_info=True)
-        if chat_id:
-            ctx.send_with_budget(
-                chat_id,
-                "⚠️ Subagent rejected: schedule_task requires objective and expected_output.",
-                is_progress=True,
-                task_id=str(parent_id or tid),
-                progress_meta={"subagent_event": "rejected", "subagent_task_id": tid, "root_task_id": root_task_id},
+        _send_subagent_rejection(ctx, chat_id, tid=tid, parent_id=parent_id, root_task_id=root_task_id, role=role, status=STATUS_FAILED, detail=detail)
+        return
+
+    if delegation_role == "subagent" and (memory_mode not in VALID_SUBAGENT_MEMORY_MODES or not child_drive_root):
+        detail = (
+            "Subagent rejected: internal schedule_subagent events must use memory_mode=forked or empty "
+            "and include a child_drive_root."
+        )
+        log.warning("Rejected subagent due to invalid child-drive contract: task_id=%s memory_mode=%s child_drive_root=%s", tid, memory_mode, child_drive_root)
+        try:
+            write_task_result(
+                ctx.DRIVE_ROOT,
+                tid,
+                STATUS_FAILED,
+                **result_fields,
+                result=detail,
+                cost_usd=0.0,
             )
+        except Exception:
+            log.warning("Failed to persist child-drive-contract rejection for %s", tid, exc_info=True)
+        _send_subagent_rejection(ctx, chat_id, tid=tid, parent_id=parent_id, root_task_id=root_task_id, role=role, status=STATUS_FAILED, detail=detail)
         return
 
     if depth > MAX_SUBTASK_DEPTH:
+        detail = f"Subagent rejected: subtask depth limit ({MAX_SUBTASK_DEPTH}) exceeded."
         log.warning("Rejected task due to depth limit: depth=%d, desc=%s", depth, desc[:100])
         try:
             write_task_result(
@@ -653,16 +800,19 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                 tid,
                 STATUS_FAILED,
                 **result_fields,
-                result=f"Subagent rejected: subtask depth limit ({MAX_SUBTASK_DEPTH}) exceeded.",
+                result=detail,
                 cost_usd=0.0,
             )
         except Exception:
             log.warning("Failed to persist depth-limit rejection for %s", tid, exc_info=True)
         if chat_id:
-            ctx.send_with_budget(
-                chat_id,
-                f"⚠️ Task rejected: subtask depth limit ({MAX_SUBTASK_DEPTH}) exceeded",
-            )
+            if delegation_role == "subagent":
+                _send_subagent_rejection(ctx, chat_id, tid=tid, parent_id=parent_id, root_task_id=root_task_id, role=role, status=STATUS_FAILED, detail=detail)
+            else:
+                ctx.send_with_budget(
+                    chat_id,
+                    f"⚠️ Task rejected: subtask depth limit ({MAX_SUBTASK_DEPTH}) exceeded",
+                )
         return
 
     if desc and not chat_id:
@@ -678,6 +828,19 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
             )
         except Exception:
             log.warning("Failed to persist no-chat-target rejection for %s", tid, exc_info=True)
+        return
+
+    # Fail fast when the worker pool is disabled (e.g. after a crash storm put
+    # the supervisor in direct-chat mode). Without this, the task is written as
+    # 'scheduled' and enqueued but nothing can ever run it — a permanent "ghost"
+    # the parent keeps polling. Give the parent a clear terminal signal instead
+    # so it can do the work inline.
+    if desc and not (getattr(ctx, "WORKERS", {}) or {}):
+        _reject_schedule_pool_unavailable(
+            ctx, tid=tid, chat_id=chat_id, delegation_role=delegation_role,
+            parent_id=parent_id, root_task_id=root_task_id, role=role,
+            result_fields=result_fields,
+        )
         return
 
     if desc:
@@ -701,12 +864,18 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                 )
             except Exception:
                 log.warning("Failed to persist active-limit rejection for %s", tid, exc_info=True)
-            ctx.send_with_budget(
+            _send_subagent_rejection(
+                ctx,
                 chat_id,
-                f"⚠️ Subagent rejected: active child limit ({MAX_ACTIVE_SUBAGENTS_PER_ROOT}) exceeded for root {root_task_id}",
-                is_progress=True,
-                task_id=str(parent_id or tid),
-                progress_meta={"subagent_event": "rejected", "subagent_task_id": tid, "root_task_id": root_task_id},
+                tid=tid,
+                parent_id=parent_id,
+                root_task_id=root_task_id,
+                role=role,
+                status=STATUS_FAILED,
+                detail=(
+                    "Subagent rejected: active child limit "
+                    f"({MAX_ACTIVE_SUBAGENTS_PER_ROOT}) exceeded for root_task_id={root_task_id}."
+                ),
             )
             return
         dup_id = _find_duplicate_task(
@@ -732,7 +901,11 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                 )
             except Exception:
                 log.warning("Failed to persist rejected duplicate task status for %s", tid, exc_info=True)
-            ctx.send_with_budget(chat_id, f"⚠️ Task rejected: semantically similar to already active task {dup_id}")
+            detail = f"Task was rejected as semantically similar to already active task {dup_id}."
+            if delegation_role == "subagent":
+                _send_subagent_rejection(ctx, chat_id, tid=tid, parent_id=parent_id, root_task_id=root_task_id, role=role, status=STATUS_REJECTED_DUPLICATE, detail=detail)
+            else:
+                ctx.send_with_budget(chat_id, f"⚠️ Task rejected: semantically similar to already active task {dup_id}")
             return
 
         text = _compose_subagent_text(
@@ -760,6 +933,7 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
             "delegation_role": delegation_role,
             "memory_mode": memory_mode,
             "drive_root": drive_root,
+            "child_drive_root": child_drive_root,
             "budget_drive_root": budget_drive_root,
             "task_constraint": task_constraint,
             "metadata": {
@@ -771,6 +945,7 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
                 "role": role,
                 "memory_mode": memory_mode,
                 "task_constraint": task_constraint,
+                "child_drive_root": child_drive_root,
             },
         }
         if not drive_root:
@@ -819,7 +994,7 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any) -> None:
             task_id=tid,
             progress_meta=progress_meta,
         )
-        ctx.persist_queue_snapshot(reason="schedule_task_event")
+        ctx.persist_queue_snapshot(reason="schedule_subagent_event")
 
 
 def _handle_cancel_task(evt: Dict[str, Any], ctx: Any) -> None:
@@ -898,6 +1073,40 @@ def _handle_send_photo(evt: Dict[str, Any], ctx: Any) -> None:
         )
 
 
+def _handle_send_video(evt: Dict[str, Any], ctx: Any) -> None:
+    """Send a video to the owner's chat."""
+    import base64 as b64mod
+    try:
+        raw_chat_id = evt.get("chat_id")
+        if raw_chat_id is None or raw_chat_id == "":
+            return
+        chat_id = int(raw_chat_id)
+        video_b64 = str(evt.get("video_base64") or "")
+        caption = str(evt.get("caption") or "")
+        mime = str(evt.get("mime") or "video/mp4")
+        if not video_b64:
+            return
+        video_bytes = b64mod.b64decode(video_b64)
+        ok, err = ctx.bridge.send_video(chat_id, video_bytes, caption=caption, mime=mime)
+        if not ok:
+            ctx.append_jsonl(
+                ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
+                {
+                    "ts": utc_now_iso(),
+                    "type": "send_video_error",
+                    "chat_id": chat_id, "error": err,
+                },
+            )
+    except Exception as e:
+        ctx.append_jsonl(
+            ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
+            {
+                "ts": utc_now_iso(),
+                "type": "send_video_event_error", "error": repr(e),
+            },
+        )
+
+
 def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
     """Log owner injections so health checks can detect duplicate processing."""
     from ouroboros.utils import utc_now_iso
@@ -960,8 +1169,10 @@ EVENT_HANDLERS = {
     "deep_self_review_request": _handle_deep_self_review_request,
     "promote_to_stable": _handle_promote_to_stable,
     "schedule_task": _handle_schedule_task,
+    "schedule_subagent": _handle_schedule_task,
     "cancel_task": _handle_cancel_task,
     "send_photo": _handle_send_photo,
+    "send_video": _handle_send_video,
     "toggle_evolution": _handle_toggle_evolution,
     "toggle_consciousness": _handle_toggle_consciousness,
     "owner_message_injected": _handle_owner_message_injected,

@@ -1,7 +1,7 @@
-"""Claude Code advisory pre-review gate.
+"""Advisory pre-review gate.
 
 Runs a read-only advisory review before multi-model commit review. Findings are
-non-blocking, but ``repo_commit`` requires a fresh matching advisory snapshot.
+non-blocking, but ``commit_reviewed`` requires a fresh matching advisory snapshot.
 Any edit after advisory makes it stale.
 """
 
@@ -570,7 +570,7 @@ def _syntax_preflight_staged_py_files(
     return (
         "⚠️ PREFLIGHT_BLOCKED: syntax errors:\n"
         + "\n".join(f"- {err}" for err in errors)
-        + "\n\nFix the syntax error(s) above and re-run advisory_pre_review. "
+        + "\n\nFix the syntax error(s) above and re-run advisory_review. "
         "Claude SDK advisory was skipped to save budget."
     )
 
@@ -873,7 +873,7 @@ def _audit_bypass(ctx: ToolContext, snapshot_hash: str, commit_message: str,
     try:
         append_jsonl(ctx.drive_logs() / "events.jsonl", {
             "ts": utc_now_iso(),
-            "type": "advisory_pre_review_bypassed",
+            "type": "advisory_review_bypassed",
             "snapshot_hash": snapshot_hash,
             "commit_message": commit_message,  # full — no [:200] truncation
             "bypass_reason": bypass_reason,
@@ -898,7 +898,7 @@ def _advisory_run_record(
         status=status,
         ts=_utc_now(),
         repo_key=repo_key,
-        tool_name="advisory_pre_review",
+        tool_name="advisory_review",
         task_id=task_id,
         items=list(fields.get("items") or []),
         snapshot_summary=str(fields.get("snapshot_summary") or ""),
@@ -1031,43 +1031,43 @@ def _next_step_guidance(latest: Optional["AdvisoryRunRecord"], state: "AdvisoryR
             parts.append(f"{len(open_debts)} commit-readiness debt item(s) surfaced by review_status")
         return (" ".join(parts) + ". ") if parts else ""
 
-    regroup = "After the first blocked review, stop patching one finding at a time: re-read the full diff, group obligations by root cause, rewrite the plan, finish all remaining edits, then run advisory_pre_review(commit_message='...')."
+    regroup = "After the first blocked review, stop patching one finding at a time: re-read the full diff, group obligations by root cause, rewrite the plan, finish all remaining edits, then run advisory_review(commit_message='...')."
 
     if not effective_is_fresh:
         status = str(getattr(latest, "status", "") or "")
         if latest and status in {"tests_preflight_blocked", "preflight_blocked"} and not stale_from_edit:
             if status == "tests_preflight_blocked":
                 problem = "test preflight: pytest failed before the Claude SDK call"
-                fix = "Fix the failing tests and re-run advisory_pre_review. Use advisory_pre_review(skip_tests=True) only for intentional WIP code."
+                fix = "Fix the failing tests and re-run advisory_review. Use advisory_review(skip_tests=True) only for intentional WIP code."
             else:
                 problem = "syntax preflight: a staged .py file has a SyntaxError"
-                fix = "See raw_result for file:line:msg, fix it, and re-run advisory_pre_review."
+                fix = "See raw_result for file:line:msg, fix it, and re-run advisory_review."
             return f"Last advisory run was blocked by {problem}. {fix} {_debt_hint()}".strip()
         if latest and status == "parse_failure" and not stale_from_edit:
             suffix = (
-                regroup + " Or bypass: repo_commit(skip_advisory_pre_review=True) (audited)."
+                regroup + " Or bypass: commit_reviewed(skip_advisory_review=True) (audited)."
                 if (open_obs or open_debts)
-                else "Re-run: advisory_pre_review(commit_message='...'), or bypass: repo_commit(skip_advisory_pre_review=True) (audited)."
+                else "Re-run: advisory_review(commit_message='...'), or bypass: commit_reviewed(skip_advisory_review=True) (audited)."
             )
             return f"Last advisory run produced unparseable output (parse_failure). {_debt_hint()}{suffix}"
         if open_obs or open_debts:
             prefix = f"Advisory was invalidated by a worktree edit at {stale_from_edit_ts}. " if stale_from_edit else "Advisory is stale or missing for the current snapshot. "
             return prefix + _debt_hint() + regroup
         if stale_from_edit:
-            return f"Advisory was invalidated by a worktree edit at {stale_from_edit_ts}. Complete ALL remaining edits, then run: advisory_pre_review(commit_message='...')"
+            return f"Advisory was invalidated by a worktree edit at {stale_from_edit_ts}. Complete ALL remaining edits, then run: advisory_review(commit_message='...')"
         if not state.advisory_runs:
-            return "No advisory run yet. Run: advisory_pre_review(commit_message='...')"
-        return "Advisory is stale (snapshot changed). Run: advisory_pre_review(commit_message='...')"
+            return "No advisory run yet. Run: advisory_review(commit_message='...')"
+        return "Advisory is stale (snapshot changed). Run: advisory_review(commit_message='...')"
 
     # Advisory is effectively fresh — check obligations and findings
     if open_obs or open_debts:
-        return f"Advisory is current but unresolved review debt remains. {_debt_hint()}repo_commit will be blocked until that debt is cleared. Re-read the full diff, group obligations by root cause, and rewrite the plan. Fix the issues, re-run advisory_pre_review so it marks them PASS, or bypass: repo_commit(skip_advisory_pre_review=True) (audited)."
+        return f"Advisory is current but unresolved review debt remains. {_debt_hint()}commit_reviewed will be blocked until that debt is cleared. Re-read the full diff, group obligations by root cause, and rewrite the plan. Fix the issues, re-run advisory_review so it marks them PASS, or bypass: commit_reviewed(skip_advisory_review=True) (audited)."
 
     if latest and latest.status == "skipped":
-        return "Advisory was skipped — prompt exceeded the budget gate (prompt too large for advisory). repo_commit may proceed. Consider splitting the commit into smaller chunks so advisory can run on the next change."
+        return "Advisory was skipped — prompt exceeded the budget gate (prompt too large for advisory). commit_reviewed may proceed. Consider splitting the commit into smaller chunks so advisory can run on the next change."
 
     if latest and latest.status == "bypassed":
-        return "Advisory was bypassed (audited). No open obligations — repo_commit should proceed. Consider running advisory_pre_review for a proper review."
+        return "Advisory was bypassed (audited). No open obligations — commit_reviewed should proceed. Consider running advisory_review for a proper review."
 
     fresh_critical = [
         i for i in (latest.items if latest else []) or []
@@ -1075,8 +1075,8 @@ def _next_step_guidance(latest: Optional["AdvisoryRunRecord"], state: "AdvisoryR
         and str(i.get("severity", "")).lower() == "critical"
     ]
     if fresh_critical:
-        return f"Advisory found {len(fresh_critical)} critical issue(s). Fix ALL critical findings, then re-run advisory_pre_review. Do NOT call repo_commit until advisory is fresh with 0 critical findings."
-    return "Advisory is fresh with no critical findings. Proceed with: repo_commit(commit_message='...'). ⚠️ Do NOT make any further edits — any edit will make advisory stale."
+        return f"Advisory found {len(fresh_critical)} critical issue(s). Fix ALL critical findings, then re-run advisory_review. Do NOT call commit_reviewed until advisory is fresh with 0 critical findings."
+    return "Advisory is fresh with no critical findings. Proceed with: commit_reviewed(commit_message='...'). ⚠️ Do NOT make any further edits — any edit will make advisory stale."
 
 
 def _persist_preflight_record(
@@ -1161,7 +1161,7 @@ def _advisory_pre_sdk_gate(
             "ts": existing.ts,
             "items": existing.items,
             "readiness_warnings": readiness_warnings,
-            "message": "A fresh advisory run already exists for this snapshot. Proceed with repo_commit.",
+            "message": "A fresh advisory run already exists for this snapshot. Proceed with commit_reviewed.",
         })
 
     ctx.emit_progress_fn("Running advisory pre-review (Claude Code, read-only)...")
@@ -1174,7 +1174,7 @@ def _advisory_pre_sdk_gate(
             "error": changed_files,
             "message": (
                 "Advisory review aborted: could not retrieve changed file list. "
-                "Fix the error and retry, or use skip_advisory_pre_review=True to bypass (will be audited)."
+                "Fix the error and retry, or use skip_advisory_review=True to bypass (will be audited)."
             ),
         })
 
@@ -1216,7 +1216,7 @@ def _advisory_pre_sdk_gate(
         if test_err:
             msg = (
                 "⚠️ TESTS_PREFLIGHT_BLOCKED: Tests must pass before advisory review.\n"
-                "Fix the failures below, then re-run advisory_pre_review.\n"
+                "Fix the failures below, then re-run advisory_review.\n"
                 "Use skip_tests=True if this is intentionally incomplete WIP code.\n\n"
                 f"{test_err}"
             )
@@ -1253,6 +1253,7 @@ def _run_advisory_tests(ctx: ToolContext) -> Optional[str]:
 def _handle_advisory_pre_review(
     ctx: ToolContext,
     commit_message: str = "",
+    skip_advisory_review: bool = False,
     skip_advisory_pre_review: bool = False,
     goal: str = "",
     scope: str = "",
@@ -1260,6 +1261,7 @@ def _handle_advisory_pre_review(
     skip_tests: bool = False,
 ) -> str:
     """Run an advisory pre-commit review via Claude Agent SDK (read-only)."""
+    skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
     repo_dir = pathlib.Path(ctx.repo_dir)
     drive_root = pathlib.Path(ctx.drive_root)
 
@@ -1283,7 +1285,7 @@ def _handle_advisory_pre_review(
     # Explicit audited bypass.
     if skip_advisory_pre_review:
         return _record_bypass(ctx, state, snapshot_hash, commit_message,
-                               "explicit skip_advisory_pre_review=True", task_id, drive_root,
+                               "explicit skip_advisory_review=True", task_id, drive_root,
                                snapshot_paths=paths)
 
     readiness_warnings, changed_files, early_exit = _advisory_pre_sdk_gate(
@@ -1338,7 +1340,7 @@ def _handle_advisory_pre_review(
             "readiness_warnings": readiness_warnings,
             "message": (
                 "Advisory review failed to run. Fix the error and retry, "
-                "or use skip_advisory_pre_review=True to bypass (will be audited)."
+                "or use skip_advisory_review=True to bypass (will be audited)."
             ),
         })
 
@@ -1363,7 +1365,7 @@ def _handle_advisory_pre_review(
             "readiness_warnings": readiness_warnings,
             "message": (
                 "Advisory SDK was skipped: a staged .py file has a SyntaxError. "
-                "Fix the syntax error listed above and re-run advisory_pre_review."
+                "Fix the syntax error listed above and re-run advisory_review."
             ),
         })
 
@@ -1422,8 +1424,8 @@ def _handle_advisory_pre_review(
             "session_id": advisory_session_id,
             "readiness_warnings": readiness_warnings,
             "message": (
-                "Advisory output could not be parsed. Re-run advisory_pre_review, "
-                "or use skip_advisory_pre_review=True to bypass (will be audited)."
+                "Advisory output could not be parsed. Re-run advisory_review, "
+                "or use skip_advisory_review=True to bypass (will be audited)."
             ),
         })
 
@@ -1453,7 +1455,7 @@ def _handle_advisory_pre_review(
         "message": (
             f"Advisory review complete. {len(critical_fails)} critical, "
             f"{len(advisory_fails)} advisory findings. "
-            "Fix issues and run repo_commit when ready."
+            "Fix issues and run commit_reviewed when ready."
         ),
     }
     if findings_summary:
@@ -1502,18 +1504,18 @@ _schema_param = lambda param_type, description, **extra: {"type": param_type, "d
 def get_tools() -> list:
     return [
         ToolEntry(
-            name="advisory_pre_review",
+            name="advisory_review",
             timeout_sec=1200,
             schema={
-                "name": "advisory_pre_review",
+                "name": "advisory_review",
                 "description": (
-                    "Run an advisory pre-commit review via Claude Agent SDK (read-only: Read, Grep, Glob only). MUST be called before repo_commit. Returns structured JSON findings. Findings are advisory (non-blocking), but repo_commit is blocked when ANY of the following holds: (a) no fresh matching advisory run for the current staged snapshot, (b) open obligations from prior blocked rounds remain unresolved, or (c) repo-scoped commit-readiness debt is still open (see review_status for details). Correct workflow: finish edits -> advisory_pre_review(...) -> repo_commit(...) immediately. WARNING: any edit (repo_write/str_replace_editor) after advisory_pre_review automatically marks advisory as stale and requires re-running it. Use skip_advisory_pre_review=True to bypass the entire commit gate (bypass is durably audited). Open obligations and commit-readiness debt remain in state for review_status but do not block the bypassed commit."
+                    "Run an advisory pre-commit review via Claude Agent SDK (read-only: Read, Grep, Glob only). MUST be called before commit_reviewed. Returns structured JSON findings. Findings are advisory (non-blocking), but commit_reviewed is blocked when ANY of the following holds: (a) no fresh matching advisory run for the current staged snapshot, (b) open obligations from prior blocked rounds remain unresolved, or (c) repo-scoped commit-readiness debt is still open (see review_status for details). Correct workflow: finish edits -> advisory_review(...) -> commit_reviewed(...) immediately. WARNING: any edit after advisory_review automatically marks advisory as stale and requires re-running it. Use skip_advisory_review=True to bypass the entire commit gate (bypass is durably audited). Open obligations and commit-readiness debt remain in state for review_status but do not block the bypassed commit."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "commit_message": _schema_param("string", "Intended commit message. Used to bind the advisory run to this specific commit."),
-                        "skip_advisory_pre_review": _schema_param("boolean", "Explicitly bypass the advisory review. Bypass is durably audited in events.jsonl. Default: False.", default=False),
+                        "skip_advisory_review": _schema_param("boolean", "Explicitly bypass the advisory review. Bypass is durably audited in events.jsonl. Default: False.", default=False),
                         "goal": _schema_param("string", "High-level goal of this change. Used to judge completeness."),
                         "scope": _schema_param("string", "Declared scope boundary. Issues outside scope are advisory-only."),
                         "paths": _schema_param("array", "Explicit list of changed file paths. Auto-detected from git status if omitted.", items={"type": "string"}),
@@ -1529,13 +1531,13 @@ def get_tools() -> list:
             schema={
                 "name": "review_status",
                 "description": (
-                    "Show recent advisory pre-review run history. Read-only diagnostic — use to check if a fresh advisory run exists before calling repo_commit. Also shows: last commit attempt state (reviewing/blocked/succeeded/failed) with block reason and actionable guidance; whether advisory is stale because of a worktree edit; open obligations from previous blocking rounds; open commit-readiness debt (durable repo-scoped anti-thrashing signal with fields `commit_readiness_debts`, `commit_readiness_debts_count`); `repo_commit_ready` (aligned with the real commit gate: fresh advisory AND no open obligations AND no open debt); `retry_anchor` (non-null, currently `commit_readiness_debt`, when debt is open — start the next retry from that record instead of patching one obligation at a time); and a concrete next_step recommendation. Pass include_raw=true to surface the full per-actor evidence (triad_raw_results, scope_raw_result) for the targeted attempt."
+                    "Show recent advisory pre-review run history. Read-only diagnostic — use to check if a fresh advisory run exists before calling commit_reviewed. Also shows: last commit attempt state (reviewing/blocked/succeeded/failed) with block reason and actionable guidance; whether advisory is stale because of a worktree edit; open obligations from previous blocking rounds; open commit-readiness debt (durable repo-scoped anti-thrashing signal with fields `commit_readiness_debts`, `commit_readiness_debts_count`); `repo_commit_ready` (aligned with the real commit gate: fresh advisory AND no open obligations AND no open debt); `retry_anchor` (non-null, currently `commit_readiness_debt`, when debt is open — start the next retry from that record instead of patching one obligation at a time); and a concrete next_step recommendation. Pass include_raw=true to surface the full per-actor evidence (triad_raw_results, scope_raw_result) for the targeted attempt."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "repo_key": _schema_param("string", "Optional repo identity filter for attempt/advisory history."),
-                        "tool_name": _schema_param("string", "Optional tool-name filter (for example repo_commit)."),
+                        "tool_name": _schema_param("string", "Optional tool-name filter (for example commit_reviewed)."),
                         "task_id": _schema_param("string", "Optional task-id filter for attempt/advisory history."),
                         "attempt": _schema_param("integer", "Optional attempt number filter within the selected repo/tool/task scope."),
                         "include_raw": _schema_param("boolean", "If true, append full per-actor evidence (triad_raw_results, scope_raw_result) for the targeted commit attempt to the output. Without this flag the output contains only structured summaries. Defaults to false."),

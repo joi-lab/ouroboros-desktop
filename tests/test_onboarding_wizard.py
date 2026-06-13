@@ -3,7 +3,7 @@ import pathlib
 import pytest
 
 from ouroboros.onboarding_wizard import build_onboarding_html, prepare_onboarding_settings
-from ouroboros.settings_setup_contract import build_setup_contract
+from ouroboros.settings_setup_contract import build_setup_bootstrap, build_setup_contract
 
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -49,6 +49,30 @@ def test_prepare_onboarding_settings_accepts_openai_only_setup():
     assert prepared["TOTAL_BUDGET"] == 10.0
     assert prepared["OUROBOROS_PER_TASK_COST_USD"] == 20.0
     assert prepared["OUROBOROS_REVIEW_ENFORCEMENT"] == "advisory"
+
+
+@pytest.mark.parametrize(("key", "value", "error"), [
+    ("TOTAL_BUDGET", 0, "Budget must be greater than zero."),
+    ("TOTAL_BUDGET", "0", "Budget must be greater than zero."),
+    ("TOTAL_BUDGET", -1, "Budget must be greater than zero."),
+    ("TOTAL_BUDGET", 0.005, "Budget must be at least 0.01."),
+    ("TOTAL_BUDGET", "nan", "Budget must be a number."),
+    ("OUROBOROS_PER_TASK_COST_USD", 0, "Per-task soft threshold must be greater than zero."),
+    ("OUROBOROS_PER_TASK_COST_USD", "0", "Per-task soft threshold must be greater than zero."),
+    ("OUROBOROS_PER_TASK_COST_USD", -1, "Per-task soft threshold must be greater than zero."),
+    ("OUROBOROS_PER_TASK_COST_USD", 0.005, "Per-task soft threshold must be at least 0.01."),
+    ("OUROBOROS_PER_TASK_COST_USD", "nan", "Per-task soft threshold must be a number."),
+    ("OUROBOROS_PER_TASK_COST_USD", False, "Per-task soft threshold must be a number."),
+])
+def test_prepare_onboarding_settings_rejects_invalid_budget_values(key, value, error):
+    payload = _base_payload()
+    payload["OPENAI_API_KEY"] = "sk-openai-1234567890"
+    payload[key] = value
+
+    prepared, actual_error = prepare_onboarding_settings(payload, {})
+
+    assert prepared == {}
+    assert actual_error == error
 
 
 def test_prepare_onboarding_settings_accepts_cloudru_only_setup():
@@ -180,13 +204,21 @@ def test_build_onboarding_html_adapts_to_multi_provider_access():
 def test_setup_contract_has_no_secret_values():
     contract = build_setup_contract("web")
     text = repr(contract)
+    budget_fields = {field["settingKey"]: field for field in contract["budgetFields"]}
 
     assert contract["hostMode"] == "web"
     assert "providerFields" in contract
+    assert budget_fields["TOTAL_BUDGET"]["settingsInputId"] == "s-total-budget"
+    assert budget_fields["TOTAL_BUDGET"]["min"] == "0.01"
+    assert budget_fields["TOTAL_BUDGET"]["step"] == "any"
+    assert budget_fields["OUROBOROS_PER_TASK_COST_USD"]["settingsInputId"] == "s-settings-per-task-cost"
     assert "settingsInputId" in contract["providerFields"][0]
     assert "OPENROUTER_API_KEY" in text
     assert "sk-or-v1-super-secret" not in text
     assert "sk-ant-super-secret" not in text
+    suggestions = build_setup_bootstrap({}, "web")["modelSuggestions"]
+    assert "anthropic/claude-opus-4.7" in suggestions
+    assert "anthropic::claude-opus-4-7" in suggestions
 
 
 def test_api_settings_exposes_setup_contract_without_secrets(tmp_path):

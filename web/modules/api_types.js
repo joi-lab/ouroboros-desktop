@@ -69,12 +69,62 @@
  * @property {string=} parent_task_id
  * @property {string=} delegation_role
  * @property {string=} subagent_role
+ * @property {string=} task_event
+ * @property {string=} status
+ * @property {number=} cost_usd
+ * @property {string=} result
+ * @property {string=} trace_summary
+ * @property {string=} error
+ * @property {string=} artifact_status
+ * @property {Object=} artifact_bundle
+ * @property {string=} result_status
+ * @property {string=} reason_code
+ * @property {Object=} review_status
  * @property {boolean=} worker_saturation_warning
  * @property {string=} source
  * @property {string=} sender_label
  * @property {string=} sender_session_id
  * @property {string=} client_message_id
  * @property {Object=} transport
+ * @property {number=} telegram_chat_id
+ * @property {string=} system_type
+ * @property {number=} chat_id
+ */
+
+/**
+ * @typedef {Object} PhotoOutbound
+ * @property {"photo"} type
+ * @property {"user"|"assistant"} role
+ * @property {string} image_base64
+ * @property {string} mime
+ * @property {string} ts
+ * @property {string=} caption
+ * @property {string=} content
+ * @property {string=} source
+ * @property {string=} sender_label
+ * @property {string=} sender_session_id
+ * @property {string=} client_message_id
+ * @property {Object=} transport
+ * @property {number=} chat_id
+ * @property {number=} telegram_chat_id
+ */
+
+/**
+ * @typedef {Object} VideoOutbound
+ * @property {"video"} type
+ * @property {"user"|"assistant"} role
+ * @property {string} video_base64
+ * @property {string} mime
+ * @property {string} ts
+ * @property {string=} caption
+ * @property {string=} content
+ * @property {string=} source
+ * @property {string=} sender_label
+ * @property {string=} sender_session_id
+ * @property {string=} client_message_id
+ * @property {Object=} transport
+ * @property {number=} chat_id
+ * @property {number=} telegram_chat_id
  */
 
 /**
@@ -167,4 +217,4 @@
  * @property {string=} error
  */
 
-export const GATEWAY_CONTRACT_VERSION = '6.0.0';
+export const GATEWAY_CONTRACT_VERSION = '6.7.3';

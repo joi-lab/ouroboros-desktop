@@ -63,7 +63,7 @@ def test_repo_read_memory_artifact_returns_hint(tmp_path, name):
     assert name in result
     assert "raw memory state" in result.lower()
     # Suggested replacement call
-    assert f"data_read(path='memory/{name}')" in result
+    assert f"read_file(root='runtime_data', path='memory/{name}')" in result
 
 
 def test_repo_read_normal_file_unchanged(tmp_path):
@@ -101,7 +101,7 @@ def test_repo_read_real_memory_named_file_at_repo_root_wins(tmp_path, name):
     result = _repo_read(ctx, name)
     assert "repo-local content" in result
     assert "NOT_FOUND" not in result
-    assert "data_read(path=" not in result
+    assert "read_file(root='runtime_data'" not in result
 
 
 @pytest.mark.parametrize("name", [
@@ -122,7 +122,7 @@ def test_repo_read_memory_hint_does_not_claim_artifact_is_loaded(tmp_path, name)
     assert "NOT_FOUND" in result
     assert "already injected" not in result.lower()
     assert "don't need to read" not in result.lower()
-    assert f"data_read(path='memory/{name}')" in result
+    assert f"read_file(root='runtime_data', path='memory/{name}')" in result
 
 
 def test_repo_read_subdirectory_path_unchanged(tmp_path):

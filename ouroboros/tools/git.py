@@ -205,12 +205,14 @@ def _run_reviewed_stage_cycle(
     commit_start: float,
     *,
     paths: Optional[List[str]] = None,
+    skip_advisory_review: bool = False,
     skip_advisory_pre_review: bool = False,
     skip_tests: bool = False,
     goal: str = "",
     scope: str = "",
     review_rebuttal: str = "",
 ) -> Dict[str, Any]:
+    skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
     def _failed(message: str) -> Dict[str, Any]:
         _record_commit_attempt(
             ctx,
@@ -337,8 +339,8 @@ def _run_reviewed_stage_cycle(
             msg = (
                 "⚠️ TESTS_PREFLIGHT_BLOCKED: Tests must pass before triad + scope review "
                 "when advisory is bypassed.\n"
-                "Fix the failures below, then re-run repo_commit (or drop "
-                "skip_advisory_pre_review=True to run the full advisory flow).\n"
+                "Fix the failures below, then re-run commit_reviewed (or drop "
+                "skip_advisory_review=True to run the full advisory flow).\n"
                 "Set OUROBOROS_PRE_PUSH_TESTS=0 to skip tests entirely.\n\n"
                 f"{test_err}"
             )
@@ -482,11 +484,13 @@ def _run_non_committing_review_cycle(
     commit_message: str,
     *,
     paths: Optional[List[str]] = None,
+    skip_advisory_review: bool = False,
     skip_advisory_pre_review: bool = False,
     goal: str = "",
     scope: str = "",
     review_rebuttal: str = "",
 ) -> Dict[str, Any]:
+    skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
     ctx.last_push_succeeded = False
     ctx._review_advisory = []
     ctx._last_triad_models = []
@@ -494,7 +498,7 @@ def _run_non_committing_review_cycle(
     ctx._last_triad_raw_results = []
     ctx._last_scope_raw_result = {}
     ctx._review_degraded_reasons = []
-    ctx._current_review_tool_name = "repo_commit"
+    ctx._current_review_tool_name = "commit_reviewed"
     commit_start = time.time()
     if not commit_message.strip():
         return {"status": "failed", "message": "⚠️ ERROR: commit_message must be non-empty."}
@@ -837,7 +841,7 @@ def _check_shrink_guard(ctx: ToolContext, file_path: str, new_content: str, forc
             return (
                 f"⚠️ WRITE_BLOCKED: new content for '{file_path}' is {pct}% of original "
                 f"({old_len} -> {new_len} chars). This looks like accidental truncation. "
-                f"Use str_replace_editor for surgical edits, or pass force=true to confirm "
+                f"Use edit_text for surgical edits, or pass force=true to confirm "
                 f"intentional rewrite."
             )
     except Exception:
@@ -847,7 +851,8 @@ def _check_shrink_guard(ctx: ToolContext, file_path: str, new_content: str, forc
 
 def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
                 files: Optional[List[Dict[str, str]]] = None,
-                force: bool = False) -> str:
+                force: bool = False,
+                display_root: str = "active_workspace") -> str:
     """Write file(s) to the repo working directory without committing."""
     write_list: List[Dict[str, str]] = []
     if files:
@@ -891,14 +896,14 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
                     ctx,
                     changed_paths=written_paths,
                     mutation_root=active_repo_dir_for(ctx),
-                    source_tool="repo_write",
+                    source_tool="write_file",
                 )
             return shrink_warning
         try:
             target = ctx.repo_path(e["path"])
             target.parent.mkdir(parents=True, exist_ok=True)
             write_text(target, e["content"])
-            written.append(f"{e['path']} ({len(e['content'])} chars)")
+            written.append(f"{display_root}:{safe_relpath(e['path'])} ({len(e['content'])} chars)")
             written_paths.append(e["path"])
         except Exception as exc:
             if written:
@@ -906,7 +911,7 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
                     ctx,
                     changed_paths=written_paths,
                     mutation_root=active_repo_dir_for(ctx),
-                    source_tool="repo_write",
+                    source_tool="write_file",
                 )
             already = ", ".join(written) if written else "(none)"
             return (
@@ -918,7 +923,7 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
         ctx,
         changed_paths=written_paths,
         mutation_root=active_repo_dir_for(ctx),
-        source_tool="repo_write",
+        source_tool="write_file",
     )
     summary = ", ".join(written)
     if ctx.is_workspace_mode():
@@ -929,8 +934,8 @@ def _repo_write(ctx: ToolContext, path: str = "", content: str = "",
     else:
         result = (
             f"✅ Written {len(written)} file(s): {summary}\n"
-            "Files are on disk but NOT committed. Run repo_commit when ready.\n"
-            "⚠️ Advisory pre-review is now stale — run advisory_pre_review before repo_commit."
+            "Files are on disk but NOT committed. Run commit_reviewed when ready.\n"
+            "⚠️ Advisory pre-review is now stale — run advisory_review before commit_reviewed."
         )
     protected_written = [] if ctx.is_workspace_mode() else protected_paths_in(written_paths)
     if protected_written and mode_allows_protected_write(_current_runtime_mode()):
@@ -945,6 +950,7 @@ def _str_replace_editor(
     new_str: str,
     bucket: str = "",
     skill_name: str = "",
+    display_root: str = "active_workspace",
 ) -> str:
     """Replace exactly one occurrence of old_str with new_str in a file."""
     if not path or not path.strip():
@@ -1063,10 +1069,10 @@ def _str_replace_editor(
         ctx,
         changed_paths=[path],
         mutation_root=invalidation_root,
-        source_tool="str_replace_editor",
+        source_tool="edit_text",
     )
     result = (
-        f"✅ Replaced in {path} (line {replacement_line}).\n"
+        f"✅ Replaced in {display_root}:{safe_relpath(path)} (line {replacement_line}).\n"
         f"Context:\n{context_preview}\n\n"
         "File is on disk but NOT committed."
     )
@@ -1075,9 +1081,9 @@ def _str_replace_editor(
     if data_skill_target is None and ctx.is_workspace_mode():
         result += "\nDo not commit; the headless runner will emit a patch artifact."
     elif data_skill_target is None:
-        result += "\nRun repo_commit when ready.\n⚠️ Advisory pre-review is now stale — run advisory_pre_review before repo_commit."
+        result += "\nRun commit_reviewed when ready.\n⚠️ Advisory pre-review is now stale — run advisory_review before commit_reviewed."
     else:
-        result += "\nRun review_skill for this skill before enabling or declaring it ready."
+        result += "\nRun skill_review for this skill before enabling or declaring it ready."
     if not ctx.is_workspace_mode() and is_protected_runtime_path(norm) and mode_allows_protected_write(_current_runtime_mode()):
         result += "\n\n" + core_patch_notice([norm])
     return result
@@ -1087,10 +1093,12 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
                        paths: Optional[List[str]] = None,
                        skip_tests: bool = False,
                        review_rebuttal: str = "",
+                       skip_advisory_review: bool = False,
                        skip_advisory_pre_review: bool = False,
                        goal: str = "",
                        scope: str = "") -> str:
     """Stage, review, and commit files with unified pre-commit review."""
+    skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
     ctx.last_push_succeeded = False
     ctx._review_advisory = []
     ctx._last_triad_models = []
@@ -1098,7 +1106,7 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
     ctx._last_triad_raw_results = []
     ctx._last_scope_raw_result = {}
     ctx._review_degraded_reasons = []
-    ctx._current_review_tool_name = "repo_commit"
+    ctx._current_review_tool_name = "commit_reviewed"
     _commit_start = time.time()
     if not commit_message.strip():
         return "⚠️ ERROR: commit_message must be non-empty."
@@ -1428,8 +1436,8 @@ def _revert_commit(ctx: ToolContext, sha: str, confirm: bool = False) -> str:
         return (
             f"⚠️ REVERT_BLOCKED: Commit {sha[:8]} touches protected file(s): "
             f"{format_protected_paths(protected_changes)}. "
-            "Direct revert_commit cannot create protected-path commits; stage the intended "
-            "revert manually and use repo_commit so the normal triad + scope review covers it."
+            "Direct vcs_revert cannot create protected-path commits; stage the intended "
+            "revert manually and use commit_reviewed so the normal triad + scope review covers it."
         )
     try:
         commit_msg = run_cmd(
@@ -1458,7 +1466,7 @@ def _revert_commit(ctx: ToolContext, sha: str, confirm: bool = False) -> str:
     if status:
         return (
             "⚠️ REVERT_ERROR: Working directory is not clean.\n"
-            "Commit or discard changes first (use restore_to_head), then retry."
+            "Commit or discard changes first (use vcs_restore), then retry."
         )
     lock = _acquire_git_lock(ctx)
     try:
@@ -1477,55 +1485,10 @@ def _revert_commit(ctx: ToolContext, sha: str, confirm: bool = False) -> str:
 
 def get_tools() -> List[ToolEntry]:
     return [
-        ToolEntry("repo_write", {
-            "name": "repo_write",
+        ToolEntry("commit_reviewed", {
+            "name": "commit_reviewed",
             "description": (
-                "Write file(s) to repo working directory WITHOUT committing. "
-                "Use for all code edits — single-file or multi-file. "
-                "After writing all files, call repo_commit to stage, review, and commit. "
-                "Supports: (1) single file via path+content, "
-                "(2) multi-file via files array [{path, content}, ...]."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "path": {"type": "string", "description": "File path (single-file mode). Ignored if 'files' is provided."},
-                "content": {"type": "string", "description": "File content (single-file mode). Ignored if 'files' is provided."},
-                "files": {"type": "array", "items": {"type": "object", "properties": {
-                    "path": {"type": "string"}, "content": {"type": "string"},
-                }, "required": ["path", "content"]},
-                    "description": "Array of {path, content} pairs (multi-file mode)."},
-                "force": {"type": "boolean", "default": False, "description": "Bypass shrink guard for intentional full rewrites."},
-            }, "required": []},
-        }, _repo_write, is_code_tool=True),
-        ToolEntry("str_replace_editor", {
-            "name": "str_replace_editor",
-            "description": (
-                "Surgical edit: replace exactly one occurrence of old_str with new_str in a file. "
-                "Safer than repo_write for existing files — reads the file, verifies the match is unique, "
-                "performs the replacement, and shows context. Use for all edits to existing tracked files. "
-                "For new files or intentional full rewrites, use repo_write instead. "
-                "Optional bucket+skill_name args let tasks address a short relative path under an "
-                "existing data/skills/<bucket>/<skill_name>/ payload. Explicit repo/data paths "
-                "keep their own address space and ignore stale short-form args."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "path": {"type": "string", "description": "File path relative to repo root"},
-                "old_str": {"type": "string", "description": "Exact string to find (must appear exactly once)"},
-                "new_str": {"type": "string", "description": "Replacement string"},
-                "bucket": {
-                    "type": "string",
-                    "enum": ["external", "clawhub", "ouroboroshub"],
-                    "description": "Skill payload bucket for short relative payload paths only. Pair with skill_name. Do not supply for explicit repo/data paths.",
-                },
-                "skill_name": {
-                    "type": "string",
-                    "description": "Skill slug for short relative payload paths only. Requires bucket.",
-                },
-            }, "required": ["path", "old_str", "new_str"]},
-        }, _str_replace_editor, is_code_tool=True),
-        ToolEntry("repo_commit", {
-            "name": "repo_commit",
-            "description": (
-                "Commit already-changed files. Requires a fresh advisory_pre_review run first. "
+                "Commit already-changed files. Requires a fresh advisory_review run first. "
                 "Includes unified pre-commit multi-model review before commit, "
                 "with configurable Advisory/Blocking enforcement, plus blocking scope review."
             ),
@@ -1535,7 +1498,7 @@ def get_tools() -> List[ToolEntry]:
                 "skip_tests": {"type": "boolean", "default": False, "description": "Skip pre-commit tests."},
                 "review_rebuttal": {"type": "string", "default": "",
                     "description": "If previous commit was blocked by reviewers and you disagree, include counter-argument."},
-                "skip_advisory_pre_review": {"type": "boolean", "default": False,
+                "skip_advisory_review": {"type": "boolean", "default": False,
                     "description": "Bypass advisory pre-review gate (durably audited). Use only when necessary."},
                 "goal": {"type": "string", "default": "",
                     "description": "High-level goal of this change. Used by scope reviewer to judge completeness."},
@@ -1543,16 +1506,29 @@ def get_tools() -> List[ToolEntry]:
                     "description": "Declared scope boundary. Issues outside scope are advisory-only for scope reviewer."},
             }, "required": ["commit_message"]},
         }, _repo_commit_push, is_code_tool=True),
-        ToolEntry("git_status", {
-            "name": "git_status",
+        ToolEntry("vcs_commit_reviewed", {
+            "name": "vcs_commit_reviewed",
+            "description": "Alias of commit_reviewed for version-control workflows.",
+            "parameters": {"type": "object", "properties": {
+                "commit_message": {"type": "string"},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Files to add (empty = git add -A)"},
+                "skip_tests": {"type": "boolean", "default": False, "description": "Skip pre-commit tests."},
+                "review_rebuttal": {"type": "string", "default": ""},
+                "skip_advisory_review": {"type": "boolean", "default": False},
+                "goal": {"type": "string", "default": ""},
+                "scope": {"type": "string", "default": ""},
+            }, "required": ["commit_message"]},
+        }, _repo_commit_push, is_code_tool=True),
+        ToolEntry("vcs_status", {
+            "name": "vcs_status",
             "description": "git status --porcelain for the active repo/workspace",
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string", "default": "", "description": "Optional path filter relative to the active repo/workspace"},
                 "max_chars": {"type": "integer", "default": 0, "description": "Optional output character limit; 0 means no explicit limit"},
             }, "required": []},
         }, _git_status, is_code_tool=True),
-        ToolEntry("git_diff", {
-            "name": "git_diff",
+        ToolEntry("vcs_diff", {
+            "name": "vcs_diff",
             "description": "git diff for the active repo/workspace (use staged=true to see staged changes after git add)",
             "parameters": {"type": "object", "properties": {
                 "staged": {"type": "boolean", "default": False, "description": "If true, show staged changes (--staged)"},
@@ -1562,21 +1538,21 @@ def get_tools() -> List[ToolEntry]:
                 "max_chars": {"type": "integer", "default": 0, "description": "Optional output character limit; 0 means no explicit limit"},
             }, "required": []},
         }, _git_diff, is_code_tool=True),
-        ToolEntry("pull_from_remote", {
-            "name": "pull_from_remote",
+        ToolEntry("vcs_pull_ff", {
+            "name": "vcs_pull_ff",
             "description": "Fetch from origin and fast-forward merge. Safe: never rewrites history.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         }, _pull_from_remote, is_code_tool=True),
-        ToolEntry("restore_to_head", {
-            "name": "restore_to_head",
+        ToolEntry("vcs_restore", {
+            "name": "vcs_restore",
             "description": "Discard uncommitted changes, restoring to last committed state (HEAD).",
             "parameters": {"type": "object", "properties": {
                 "confirm": {"type": "boolean", "description": "Must be true to execute."},
                 "paths": {"type": "array", "items": {"type": "string"}, "description": "Specific files to restore"},
             }, "required": ["confirm"]},
         }, _restore_to_head, is_code_tool=True),
-        ToolEntry("revert_commit", {
-            "name": "revert_commit",
+        ToolEntry("vcs_revert", {
+            "name": "vcs_revert",
             "description": "Revert a specific commit by creating a new undo commit. Safe: no history rewrite.",
             "parameters": {"type": "object", "properties": {
                 "sha": {"type": "string", "description": "Commit SHA to revert"},

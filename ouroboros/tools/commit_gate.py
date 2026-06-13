@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 def _current_review_tool_name(ctx: ToolContext) -> str:
-    return str(getattr(ctx, "_current_review_tool_name", "") or "repo_commit")
+    return str(getattr(ctx, "_current_review_tool_name", "") or "commit_reviewed")
 
 
 def _attempt_phase(status: str, block_reason: str = "") -> str:
@@ -381,10 +381,10 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
 
     if skip_advisory_pre_review:
         task_id = str(getattr(ctx, "task_id", "") or "")
-        reason = "skip_advisory_pre_review=True passed to repo_commit"
+        reason = "skip_advisory_review=True passed to commit_reviewed"
         try:
             append_jsonl(ctx.drive_logs() / "events.jsonl", {
-                "ts": _utc_now(), "type": "advisory_pre_review_bypassed",
+                "ts": _utc_now(), "type": "advisory_review_bypassed",
                 "snapshot_hash": snapshot_hash, "commit_message": commit_message,
                 "bypass_reason": reason, "task_id": task_id,
             })
@@ -401,7 +401,7 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
                 bypassed_by_task=task_id,
                 snapshot_paths=paths,
                 repo_key=repo_key,
-                tool_name="advisory_pre_review",
+                tool_name="advisory_review",
                 task_id=task_id,
             ))
 
@@ -445,8 +445,8 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
         if open_debts:
             lines.append("\nCommit-readiness debt:")
             lines += _render_debts()
-        lines.append("\nFix the flagged issues and re-run advisory_pre_review so it can verify them PASS.")
-        lines.append("Or bypass: repo_commit(commit_message='...', skip_advisory_pre_review=True) (audited).")
+        lines.append("\nFix the flagged issues and re-run advisory_review so it can verify them PASS.")
+        lines.append("Or bypass: commit_reviewed(commit_message='...', skip_advisory_review=True) (audited).")
         return "\n".join(lines)
 
     matching_run = state.find_by_hash(snapshot_hash, repo_key=repo_key)
@@ -465,8 +465,8 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
             f"⚠️ ADVISORY_PRE_REVIEW_REQUIRED: Last advisory run for this snapshot returned "
             f"parse_failure (hash={snapshot_hash[:12]}, ts={matching_run.ts}). "
             f"The advisory ran but its output could not be parsed — re-run it.{obs_section}\n"
-            "Re-run: advisory_pre_review(commit_message='...')\n"
-            "Or bypass: repo_commit(commit_message='...', skip_advisory_pre_review=True) (audited)."
+            "Re-run: advisory_review(commit_message='...')\n"
+            "Or bypass: commit_reviewed(commit_message='...', skip_advisory_review=True) (audited)."
         )
 
     if matching_run and matching_run.status == "preflight_blocked":
@@ -477,7 +477,7 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
             f"ts={matching_run.ts}). The Claude SDK advisory was skipped because a "
             f"staged `.py` file has a SyntaxError.\n\n"
             f"{preflight_detail}\n\n"
-            "Re-run after fixing: advisory_pre_review(commit_message='...')"
+            "Re-run after fixing: advisory_review(commit_message='...')"
         )
 
     if latest and latest.status == "stale" and state.last_stale_from_edit_ts:
@@ -493,7 +493,7 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
     if open_obs:
         lines = [f"\nOpen obligations ({len(open_obs)}):"]
         lines += _render_obligations()
-        lines.append("  → advisory_pre_review will verify each obligation is resolved.")
+        lines.append("  → advisory_review will verify each obligation is resolved.")
         obs_section = "\n".join(lines)
     debt_section = ""
     if open_debts:
@@ -509,9 +509,9 @@ def _check_advisory_freshness(ctx: ToolContext, commit_message: str,
         f"{obs_section}{debt_section}\n\n"
         "Correct workflow:\n"
         "  1. Finish ALL edits first\n"
-        "  2. advisory_pre_review(commit_message='your message')   ← run AFTER all edits\n"
-        "  3. repo_commit(commit_message='your message')            ← run IMMEDIATELY after advisory\n\n"
+        "  2. advisory_review(commit_message='your message')       ← run AFTER all edits\n"
+        "  3. commit_reviewed(commit_message='your message')       ← run IMMEDIATELY after advisory\n\n"
         "⚠️ Any edit after step 2 makes the advisory stale and requires re-running it.\n\n"
         "To bypass (will be durably audited):\n"
-        "  repo_commit(commit_message='...', skip_advisory_pre_review=True)"
+        "  commit_reviewed(commit_message='...', skip_advisory_review=True)"
     )

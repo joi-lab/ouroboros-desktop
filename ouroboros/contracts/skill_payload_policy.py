@@ -501,6 +501,18 @@ def cross_skill_redirect_error(
     )
 
 
+def constraint_bucket_skill(constraint: Optional[TaskConstraint]) -> tuple[str, str]:
+    """Return the skill payload bucket/name implied by a repair constraint."""
+
+    tc = normalize_task_constraint(constraint)
+    if not tc or tc.mode != "skill_repair" or not tc.payload_root:
+        return "", ""
+    parts = PurePosixPath(_clean_data_rel(tc.payload_root)).parts
+    if len(parts) >= 3 and parts[0] == "skills":
+        return parts[1], parts[2]
+    return "", tc.skill_name or ""
+
+
 __all__ = [
     "SKILL_PAYLOAD_BUCKETS",
     "SKILL_PAYLOAD_ALL_BUCKETS",
@@ -511,6 +523,7 @@ __all__ = [
     "SkillPayloadPathError",
     "SkillPayloadTarget",
     "PayloadShortFormDecision",
+    "constraint_bucket_skill",
     "decide_payload_short_form",
     "is_skill_control_plane_path",
     "is_skill_owner_state_alias",

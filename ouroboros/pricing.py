@@ -27,23 +27,27 @@ _LEGACY_GEMINI_3_FLASH_PREVIEW = "google/gemini-" + "3-flash-preview"
 _LEGACY_GEMINI_25_PRO_PREVIEW = "google/gemini-" + "2.5-pro-preview"
 _LEGACY_GEMINI_3_PRO_PREVIEW = "google/gemini-" + "3-pro-preview"
 
-# Pricing from OpenRouter API (2026-05-22). Update periodically via /api/v1/models.
+# Static fallback pricing; live OpenRouter pricing is fetched when available.
 MODEL_PRICING_STATIC = {
     "anthropic/claude-opus-4.6": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4-6": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4.7": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4-7": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4.8": (5.0, 0.5, 25.0),
+    "anthropic/claude-opus-4-8": (5.0, 0.5, 25.0),
     "anthropic/claude-opus-4": (15.0, 1.5, 75.0),
     "anthropic/claude-sonnet-4": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4.6": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4-6": (3.0, 0.30, 15.0),
     "anthropic/claude-sonnet-4.5": (3.0, 0.30, 15.0),
     "openai/o3": (2.0, 0.50, 8.0),
-    "openai/o3-pro": (20.0, 1.0, 80.0),
+    "openai/o3-pro": (20.0, 20.0, 80.0),
     "openai/o4-mini": (1.10, 0.275, 4.40),
     "openai/gpt-4.1": (2.0, 0.50, 8.0),
     # Mirrors latest available GPT-5 family pricing until live OpenRouter
     # pricing is fetched.
-    "openai/gpt-5.5": (1.75, 0.175, 14.0),
-    "openai/gpt-5.5-pro": (1.75, 0.175, 14.0),
+    "openai/gpt-5.5": (5.0, 0.50, 30.0),
+    "openai/gpt-5.5-pro": (30.0, 30.0, 180.0),
     # Mirrors the previous static mini lane until live OpenRouter pricing is fetched.
     "openai/gpt-5.5-mini": (0.75, 0.075, 4.50),
     "openai/gpt-5.2": (1.75, 0.175, 14.0),
@@ -55,8 +59,15 @@ MODEL_PRICING_STATIC = {
     _LEGACY_GEMINI_31_PRO_PREVIEW: (2.0, 0.20, 12.0),
     _LEGACY_GEMINI_31_FLASH_LITE: (0.25, 0.025, 1.50),
     _LEGACY_GEMINI_3_FLASH_PREVIEW: (0.15, 0.015, 0.60),
-    "x-ai/grok-3-mini": (0.30, 0.03, 0.50),
+    "x-ai/grok-3-mini": (0.30, 0.075, 0.50),
     "qwen/qwen3.5-plus-02-15": (0.40, 0.04, 2.40),
+    # Cloud.ru Foundation Models default (GLM-4.7). Cloud.ru does not expose a
+    # generation-cost API and these IDs are absent from OpenRouter pricing, so a
+    # static estimate is the only cost source for cloudru-only users (P8 budget
+    # integrity). Approximate (per 1M tokens, input/cached/output); refine if
+    # Cloud.ru publishes exact rates.
+    "cloudru/zai-org/GLM-4.7": (0.50, 0.50, 2.00),
+    "cloudru::zai-org/GLM-4.7": (0.50, 0.50, 2.00),
 }
 
 _pricing_fetched = False
@@ -64,7 +75,7 @@ _cached_pricing = None
 _pricing_lock = threading.Lock()
 
 
-def get_pricing() -> Dict[str, Tuple[float, ...]]:
+def get_pricing(*, allow_live_fetch: bool = True) -> Dict[str, Tuple[float, ...]]:
     """
     Lazy-load pricing. On first call, attempts to fetch from OpenRouter API.
     Falls back to static pricing if fetch fails.
@@ -76,6 +87,8 @@ def get_pricing() -> Dict[str, Tuple[float, ...]]:
     with _pricing_lock:
         if _cached_pricing is None:
             _cached_pricing = dict(MODEL_PRICING_STATIC)
+        if not allow_live_fetch:
+            return _cached_pricing
         if _pricing_fetched:
             return _cached_pricing
 
@@ -96,20 +109,25 @@ def get_pricing() -> Dict[str, Tuple[float, ...]]:
 
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
                   cached_tokens: int = 0, cache_write_tokens: int = 0,
-                  prompt_cache_ttl: Optional[str] = None) -> float:
+                  prompt_cache_ttl: Optional[str] = None,
+                  allow_live_fetch: bool = True) -> float:
     """Estimate cost from token counts using known pricing. Returns 0 if model unknown."""
-    model_pricing = get_pricing()
+    raw_model = str(model or "").strip()
+    model = normalize_model_identity(raw_model)
+    lookup_candidates = list(dict.fromkeys([raw_model, model]))
+    model_pricing = get_pricing(allow_live_fetch=allow_live_fetch)
     # Try exact match first
-    pricing = model_pricing.get(model)
+    pricing = next((model_pricing[candidate] for candidate in lookup_candidates if candidate in model_pricing), None)
     if not pricing:
         # Try longest prefix match
         best_match = None
         best_length = 0
-        for key, val in model_pricing.items():
-            if model and model.startswith(key):
-                if len(key) > best_length:
-                    best_match = val
-                    best_length = len(key)
+        for candidate in lookup_candidates:
+            for key, val in model_pricing.items():
+                if candidate and candidate.startswith(key):
+                    if len(key) > best_length:
+                        best_match = val
+                        best_length = len(key)
         pricing = best_match
     if not pricing:
         return 0.0

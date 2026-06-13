@@ -14,10 +14,10 @@ class TestLocalToolCallParsing(unittest.TestCase):
         msg = {
             "content": """
 <tool_call>
-{"name": "repo_read", "arguments": {"path": "README.md"}}
+{"name": "read_file", "arguments": {"path": "README.md"}}
 </tool_call>
 <tool_call>
-{"name": "repo_write", "arguments": {"path": "notes.txt", "content": "hello"}}
+{"name": "write_file", "arguments": {"path": "notes.txt", "content": "hello"}}
 </tool_call>
 """,
             "tool_calls": [],
@@ -25,12 +25,12 @@ class TestLocalToolCallParsing(unittest.TestCase):
 
         parsed = LLMClient._parse_tool_calls_from_content(
             msg,
-            {"repo_read", "repo_write"},
+            {"read_file", "write_file"},
         )
 
         self.assertEqual(len(parsed["tool_calls"]), 2)
         self.assertIsNone(parsed["content"])
-        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "repo_read")
+        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "read_file")
         self.assertEqual(
             json.loads(parsed["tool_calls"][0]["function"]["arguments"]),
             {"path": "README.md"},
@@ -44,13 +44,13 @@ class TestLocalToolCallParsing(unittest.TestCase):
 Sure, I will use the tool now.
 
 <tool_call>
-{"name": "repo_read", "arguments": {"path": "README.md"}}
+{"name": "read_file", "arguments": {"path": "README.md"}}
 </tool_call>
 """,
             "tool_calls": [],
         }
 
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(parsed, msg)
 
@@ -66,7 +66,7 @@ Sure, I will use the tool now.
             "tool_calls": [],
         }
 
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(parsed, msg)
 
@@ -76,13 +76,13 @@ Sure, I will use the tool now.
         msg = {
             "content": """
 <tool_call>
-{"name": "repo_read", "arguments": "README.md"}
+{"name": "read_file", "arguments": "README.md"}
 </tool_call>
 """,
             "tool_calls": [],
         }
 
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(parsed, msg)
 
@@ -91,15 +91,15 @@ Sure, I will use the tool now.
         from ouroboros.llm import LLMClient
 
         msg = {
-            "content": '<tool_call>\n{{"name": "data_write", "arguments": {"content": "hello world", "path": "test.txt"}}}\n</tool_call>',
+            "content": '<tool_call>\n{{"name": "write_file", "arguments": {"content": "hello world", "path": "test.txt"}}}\n</tool_call>',
             "tool_calls": [],
         }
 
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"data_write"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"write_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1)
         self.assertIsNone(parsed["content"])
-        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "data_write")
+        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "write_file")
         args = json.loads(parsed["tool_calls"][0]["function"]["arguments"])
         self.assertEqual(args["content"], "hello world")
         self.assertEqual(args["path"], "test.txt")
@@ -163,14 +163,14 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         msg = {
             "content": (
                 "<think>I need to read the file first.</think>\n"
-                '<tool_call>\n{"name": "repo_read", "arguments": {"path": "README.md"}}\n</tool_call>'
+                '<tool_call>\n{"name": "read_file", "arguments": {"path": "README.md"}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1)
-        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "repo_read")
+        self.assertEqual(parsed["tool_calls"][0]["function"]["name"], "read_file")
         # reasoning preserved in content
         self.assertEqual(parsed["content"], "I need to read the file first.")
 
@@ -182,11 +182,11 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         msg = {
             "content": (
                 f"<think>{reasoning_text}</think>"
-                '<tool_call>\n{"name": "repo_read", "arguments": {"path": "f.py"}}\n</tool_call>'
+                '<tool_call>\n{"name": "read_file", "arguments": {"path": "f.py"}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertIsNotNone(parsed.get("content"))
         self.assertEqual(parsed["content"], reasoning_text)
@@ -198,11 +198,11 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         msg = {
             "content": (
                 "<think></think>"
-                '<tool_call>\n{"name": "repo_read", "arguments": {"path": "f.py"}}\n</tool_call>'
+                '<tool_call>\n{"name": "read_file", "arguments": {"path": "f.py"}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1)
         self.assertIsNone(parsed["content"])  # empty reasoning → None
@@ -214,11 +214,11 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         msg = {
             "content": (
                 "Sure, I'll do that now.\n"
-                '<tool_call>\n{"name": "repo_read", "arguments": {"path": "f.py"}}\n</tool_call>'
+                '<tool_call>\n{"name": "read_file", "arguments": {"path": "f.py"}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         # Must remain unchanged — safety guard in effect
         self.assertEqual(parsed, msg)
@@ -234,7 +234,7 @@ class TestParseToolCallsWithThink(unittest.TestCase):
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(parsed, msg)
 
@@ -249,7 +249,7 @@ class TestParseToolCallsWithThink(unittest.TestCase):
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(parsed, msg)
 
@@ -258,10 +258,10 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         from ouroboros.llm import LLMClient
 
         msg = {
-            "content": '<tool_call>\n{"name": "repo_read", "arguments": {"path": "f.py"}}\n</tool_call>',
+            "content": '<tool_call>\n{"name": "read_file", "arguments": {"path": "f.py"}}\n</tool_call>',
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"repo_read"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"read_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1)
         self.assertIsNone(parsed["content"])
@@ -278,11 +278,11 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         arg_value = "<think>literal tag in arg</think>"
         msg = {
             "content": (
-                f'<tool_call>\n{{"name": "data_write", "arguments": {{"content": "{arg_value}", "path": "out.txt"}}}}\n</tool_call>'
+                f'<tool_call>\n{{"name": "write_file", "arguments": {{"content": "{arg_value}", "path": "out.txt"}}}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"data_write"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"write_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1, "Tool call should be parsed")
         args = _json.loads(parsed["tool_calls"][0]["function"]["arguments"])
@@ -301,11 +301,11 @@ class TestParseToolCallsWithThink(unittest.TestCase):
         msg = {
             "content": (
                 "<think>model reasoning goes here</think>\n"
-                f'<tool_call>\n{{"name": "data_write", "arguments": {{"content": "{arg_value}"}}}}\n</tool_call>'
+                f'<tool_call>\n{{"name": "write_file", "arguments": {{"content": "{arg_value}"}}}}\n</tool_call>'
             ),
             "tool_calls": [],
         }
-        parsed = LLMClient._parse_tool_calls_from_content(msg, {"data_write"})
+        parsed = LLMClient._parse_tool_calls_from_content(msg, {"write_file"})
 
         self.assertEqual(len(parsed["tool_calls"]), 1)
         # Reasoning from the wrapper block is in content

@@ -48,11 +48,11 @@ def test_query_model_preserves_full_error_body_under_4000_chars():
     model, result, _headers = _run_query_model(client, "anthropic/claude-opus-4.6", [])
 
     assert model == "anthropic/claude-opus-4.6"
-    assert isinstance(result, str)
+    assert isinstance(result, dict)
     # Full body must survive
-    assert "X" * 500 in result
+    assert "X" * 500 in result["error"]
     # No omission note when under the limit
-    assert "OMISSION NOTE" not in result
+    assert "OMISSION NOTE" not in result["error"]
 
 
 def test_query_model_over_limit_appends_omission_note():
@@ -61,11 +61,11 @@ def test_query_model_over_limit_appends_omission_note():
     client = _ExplodingClient(body)
     _, result, _ = _run_query_model(client, "anthropic/claude-opus-4.6", [])
 
-    assert isinstance(result, str)
+    assert isinstance(result, dict)
     # Omission note is explicit (no silent clipping)
-    assert "OMISSION NOTE" in result
+    assert "OMISSION NOTE" in result["error"]
     # Original length reported so forensic readers know what was lost
-    assert "5000" in result or "5_000" in result or "5,000" in result
+    assert "5000" in result["error"] or "5_000" in result["error"] or "5,000" in result["error"]
 
 
 def test_parse_model_response_unparseable_preserves_full_body():

@@ -173,7 +173,7 @@ class TestPlanReviewUsageEmit:
         assert len(ctx.pending_events) == 0
 
     def test_real_cost_propagated_from_reviewer(self):
-        """Cost from _query_reviewer must reach the emitted event — not hardcoded 0."""
+        """Cost from reviewer raw results must reach the emitted event — not hardcoded 0."""
         fn = self._get_fn()
         ctx = _FakeCtx()
         results = [

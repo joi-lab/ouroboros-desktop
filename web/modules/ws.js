@@ -182,7 +182,7 @@ export class WS {
         };
     }
 
-    send(msg) {
+    send(msg, options = {}) {
         const payload = { ...msg };
         if (!payload.client_message_id && payload.type === 'chat') {
             payload.client_message_id = `msg-${Date.now()}-${this._nextClientMessageId++}`;
@@ -197,6 +197,9 @@ export class WS {
                 });
                 return { status: 'sent', clientMessageId: payload.client_message_id || '' };
             } catch {}
+        }
+        if (options.queue === false) {
+            return { status: 'failed', clientMessageId: payload.client_message_id || '' };
         }
         if (this._pendingMessages.length >= 100) this._pendingMessages.shift();
         this._pendingMessages.push(payload);

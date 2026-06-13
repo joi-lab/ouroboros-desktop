@@ -130,14 +130,36 @@ class TestEstimateCost:
             assert all(isinstance(p, (int, float)) for p in prices), f"{model} has non-numeric prices"
             assert all(p >= 0 for p in prices), f"{model} has negative prices"
 
-    def test_gpt_55_static_pricing_is_registered(self):
-        assert MODEL_PRICING_STATIC["openai/gpt-5.5"] == (1.75, 0.175, 14.0)
-        assert MODEL_PRICING_STATIC["openai/gpt-5.5-pro"] == (1.75, 0.175, 14.0)
+    def test_current_static_pricing_is_registered(self):
+        assert MODEL_PRICING_STATIC["openai/gpt-5.5"] == (5.0, 0.50, 30.0)
+        assert MODEL_PRICING_STATIC["openai/gpt-5.5-pro"] == (30.0, 30.0, 180.0)
+        assert MODEL_PRICING_STATIC["openai/o3-pro"] == (20.0, 20.0, 80.0)
         assert MODEL_PRICING_STATIC["openai/gpt-5.5-mini"] == (0.75, 0.075, 4.50)
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4.7"] == (5.0, 0.5, 25.0)
+        assert MODEL_PRICING_STATIC["anthropic/claude-opus-4-7"] == (5.0, 0.5, 25.0)
+        assert MODEL_PRICING_STATIC["x-ai/grok-3-mini"] == (0.30, 0.075, 0.50)
         assert MODEL_PRICING_STATIC["google/gemini-3.5-flash"] == (1.50, 0.15, 9.00)
         assert MODEL_PRICING_STATIC["google/gemini-3.1-pro-preview"] == (2.0, 0.20, 12.0)
         assert MODEL_PRICING_STATIC["google/gemini-3.1-flash-lite"] == (0.25, 0.025, 1.50)
         assert MODEL_PRICING_STATIC["google/gemini-3-flash-preview"] == (0.15, 0.015, 0.60)
+        cost = estimate_cost(
+            "anthropic::claude-opus-4-7",
+            prompt_tokens=1000,
+            completion_tokens=100,
+            cached_tokens=0,
+        )
+        expected = (1000 * 5.0 + 100 * 25.0) / 1e6
+        assert abs(cost - expected) < 1e-6
+        with patch("ouroboros.pricing.get_pricing", return_value={
+            "anthropic/claude-opus-4.7": (999.0, 999.0, 999.0),
+            "anthropic/claude-opus-4-7": (5.0, 0.5, 25.0),
+        }):
+            live_cost = estimate_cost(
+                "anthropic/claude-opus-4.7",
+                prompt_tokens=1000,
+                completion_tokens=0,
+            )
+        assert live_cost == 0.999
 
 
 # --- infer_api_key_type ---
@@ -309,7 +331,7 @@ class TestGetPricing:
 
             def json(self):
                 return {
-                    "data": [
+                    "data": ([
                         {
                             "id": "google/gemini-test",
                             "pricing": {
@@ -318,14 +340,32 @@ class TestGetPricing:
                                 "input_cache_write": "0.00000125",
                                 "completion": "0.000003",
                             },
-                        }
-                    ] * 6
+                        },
+                        {
+                            "id": "openai/no-cache-read",
+                            "pricing": {
+                                "prompt": "0.000020",
+                                "completion": "0.000080",
+                            },
+                        },
+                        {
+                            "id": "anthropic/claude-opus-4.7",
+                            "pricing": {
+                                "prompt": "0.000005",
+                                "input_cache_read": "0.0000005",
+                                "completion": "0.000025",
+                            },
+                        },
+                    ] * 3)
                 }
 
         with patch("requests.get", return_value=FakeResponse()):
             pricing = fetch_openrouter_pricing()
 
         assert pricing["google/gemini-test"] == (1.0, 0.1, 1.25, 3.0)
+        assert pricing["openai/no-cache-read"] == (20.0, 20.0, 80.0)
+        assert pricing["anthropic/claude-opus-4.7"] == (5.0, 0.5, 25.0)
+        assert pricing["anthropic/claude-opus-4-7"] == (5.0, 0.5, 25.0)
 
     def test_caches_after_successful_fetch(self):
         import ouroboros.pricing as mod

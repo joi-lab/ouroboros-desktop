@@ -1,5 +1,6 @@
 """Tests for browser state isolation and infrastructure error detection."""
 import pathlib
+import socket
 import sys
 import types
 
@@ -60,6 +61,15 @@ class TestBrowserModuleState:
         )
         monkeypatch.setattr(browser_mod, "_HAS_STEALTH", False)
         monkeypatch.setattr(browser_mod, "_ensure_playwright_installed", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            browser_mod.socket,
+            "getaddrinfo",
+            lambda host, *args, **kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+            ] if host == "example.com" else [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))
+            ],
+        )
         monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
 
         ctx = types.SimpleNamespace(
@@ -104,6 +114,26 @@ class TestBrowserModuleState:
         route.request.url = "https://example.com/"
         routes[-1][1](route)
         assert events == ["abort", "abort", "abort", "abort", "continue"]
+
+    def test_local_readonly_browser_url_guard_resolves_dns_fail_closed(self, monkeypatch):
+        def fake_getaddrinfo(host, *args, **kwargs):
+            if host == "public.example":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+            if host == "internal.example":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
+            raise socket.gaierror("no such host")
+
+        monkeypatch.setattr(browser_mod.socket, "getaddrinfo", fake_getaddrinfo)
+
+        assert browser_mod._is_subagent_blocked_browser_url("ftp://public.example/file") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://127.0.0.1:8765") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://0177.0.0.1/") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://0x7f.0.0.1/") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://2130706433/") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://012.0.0.1/") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://internal.example") is True
+        assert browser_mod._is_subagent_blocked_browser_url("http://missing.example") is True
+        assert browser_mod._is_subagent_blocked_browser_url("https://public.example/path") is False
 
     def test_subagent_screenshot_text_does_not_reference_blocked_send_photo(self):
         fake_page = types.SimpleNamespace(screenshot=lambda **_kwargs: b"png")

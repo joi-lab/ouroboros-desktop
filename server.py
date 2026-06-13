@@ -456,6 +456,51 @@ def _run_supervisor(settings: dict) -> None:
         spawn_workers(max_workers)
         restored_pending = restore_pending_from_snapshot()
         persist_queue_snapshot(reason="startup")
+        try:
+            from ouroboros.headless import prune_headless_task_drives, prune_task_drives
+
+            prune_report = prune_headless_task_drives(DATA_DIR)
+            task_drive_report = prune_task_drives(DATA_DIR)
+            if (
+                prune_report.get("pruned")
+                or prune_report.get("errors")
+                or task_drive_report.get("pruned")
+                or task_drive_report.get("errors")
+            ):
+                append_jsonl(DATA_DIR / "logs" / "events.jsonl", {
+                    "ts": utc_now_iso(),
+                    "type": "headless_task_drive_prune",
+                    "report": prune_report,
+                    "task_drives": task_drive_report,
+                })
+        except Exception:
+            log.debug("Headless task drive prune failed", exc_info=True)
+
+        try:
+            from ouroboros.observability import prune_observability_blobs
+            from ouroboros.tools.services import prune_service_logs
+
+            observability_report = prune_observability_blobs(DATA_DIR)
+            service_report = prune_service_logs(DATA_DIR)
+            if (
+                observability_report.get("enabled")
+                or observability_report.get("manifest_count")
+                or observability_report.get("blob_count")
+                or observability_report.get("deleted_manifests")
+                or observability_report.get("deleted_blobs")
+                or observability_report.get("errors")
+                or service_report.get("deleted_dirs")
+                or service_report.get("deleted_files")
+                or service_report.get("errors")
+            ):
+                append_jsonl(DATA_DIR / "logs" / "events.jsonl", {
+                    "ts": utc_now_iso(),
+                    "type": "runtime_artifact_prune",
+                    "observability": observability_report,
+                    "services": service_report,
+                })
+        except Exception:
+            log.debug("Runtime artifact prune failed", exc_info=True)
 
         if restored_pending > 0:
             st_boot = load_state()
@@ -779,6 +824,11 @@ async def lifespan(app):
         except Exception:
             pass
         try:
+            from ouroboros.tools.services import kill_all_services
+            kill_all_services(lifespan_drive_root)
+        except Exception:
+            pass
+        try:
             from ouroboros.extension_companion import get_global_supervisor
             supervisor = get_global_supervisor()
             if supervisor is not None:
@@ -821,8 +871,13 @@ def _emergency_process_cleanup(*, port_sweep: bool = True) -> None:
     except Exception:
         pass
     try:
+        from ouroboros.tools.services import kill_all_services
+        kill_all_services(wait=False)
+    except Exception:
+        pass
+    try:
         from supervisor.workers import kill_workers
-        kill_workers(force=True)
+        kill_workers(force=True, archive_service_logs=False)
     except Exception:
         pass
     import multiprocessing

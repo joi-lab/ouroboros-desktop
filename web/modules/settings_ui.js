@@ -281,7 +281,7 @@ export function renderSettingsPage() {
                         <div class="form-row">
                             <div class="form-field">
                                 <label>Модель Claude Code</label>
-                                <input id="s-claude-code-model" value="claude-opus-4-6[1m]" placeholder="sonnet, opus, claude-opus-4-6[1m] или полное имя">
+                                <input id="s-claude-code-model" value="opus[1m]" placeholder="sonnet, opus, opus[1m] или полное имя">
                                 <div class="settings-inline-note">Модель Anthropic для инструментов <code>claude_code_edit</code> и <code>advisory_pre_review</code>. Требует ключ Anthropic в разделе «Провайдеры».</div>
                             </div>
                         </div>
@@ -289,19 +289,19 @@ export function renderSettingsPage() {
 
                     <div class="form-section">
                         <h3>Модели для проверки</h3>
-                        <div class="settings-section-copy">Модели, используемые для проверки перед коммитом. Запускается автоматически при каждом <code>repo_commit</code>.</div>
+                        <div class="settings-section-copy">Слоты проверяющих для планирования, приёмки задач и проверки коммитов.</div>
                         <div class="form-row">
                             <div class="form-field">
-                                <label>Модели для проверки перед коммитом</label>
+                                <label>Слоты проверки</label>
                                 <input id="s-review-models" placeholder="модель1,модель2,модель3">
-                                <div class="settings-inline-note">Модели проверки через запятую (триада). Дублирование модели допускается, но снижает разнообразие проверяющих. В режиме только OpenAI или только Anthropic список автоматически нормализуется до [main, light, light] (3 слота). Для OpenAI-compatible и Cloud.ru необходимо настроить список явно.</div>
+                                <div class="settings-inline-note">Слоты проверяющих через запятую. Дублирование ID модели допустимо — это независимые слоты для сэмплирования одной и той же модели.</div>
                             </div>
                         </div>
                         <div class="form-grid two">
                             <div class="form-field">
-                                <label>Модель проверки области</label>
-                                <input id="s-scope-review-model" placeholder="openai/gpt-5.5">
-                                <div class="settings-inline-note">Одна модель для блокирующей проверки области. Работает параллельно с триадой diff-проверки.</div>
+                                <label>Слоты проверки области</label>
+                                <input id="s-scope-review-models" placeholder="openai/gpt-5.5">
+                                <div class="settings-inline-note">Слоты проверяющих область через запятую. Пустое значение откатывается к устаревшей настройке одной модели проверки области.</div>
                             </div>
                             <div class="form-field">
                                 <label>Модель веб-поиска</label>
@@ -330,6 +330,20 @@ export function renderSettingsPage() {
                             <div class="settings-effort-group" data-effort-group data-enforcement-group data-effort-target="s-review-enforcement">
                                 <button type="button" class="settings-effort-btn" data-effort-value="advisory">Рекомендательный</button>
                                 <button type="button" class="settings-effort-btn" data-effort-value="blocking">Блокирующий</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Проверка результата задачи</h3>
+                        <div class="settings-section-copy">В режиме «Авто» решение остаётся за Ouroboros через видимый инструмент проверки; «Обязательно» вставляет вывод проверяющего перед выдачей подходящих результатов задач.</div>
+                        <div class="settings-effort-card">
+                            <label>Проверка результата задачи</label>
+                            <input id="s-task-review-mode" type="hidden" value="auto">
+                            <div class="settings-effort-group" data-effort-group data-task-review-group data-effort-target="s-task-review-mode">
+                                <button type="button" class="settings-effort-btn" data-effort-value="off">Выкл</button>
+                                <button type="button" class="settings-effort-btn" data-effort-value="auto">Авто</button>
+                                <button type="button" class="settings-effort-btn" data-effort-value="required">Обязательно</button>
                             </div>
                         </div>
                     </div>
@@ -493,7 +507,7 @@ export function renderSettingsPage() {
 
                     <div class="form-section">
                         <h3>Ограничения среды выполнения</h3>
-                        <div class="settings-section-copy">Воркеры управляют параллельной мощностью задач. Значения таймаутов — ограничители безопасности для длинных или зависших задач и инструментов.</div>
+                        <div class="settings-section-copy">Воркеры управляют параллельной мощностью задач. Значения таймаутов — ограничители безопасности для длинных или зависших задач и инструментов. Лимиты бюджета задают пороги стоимости выполнения.</div>
                         <div class="form-grid two">
                             <div class="form-field">
                                 <label>Макс. воркеров</label>
@@ -509,7 +523,15 @@ export function renderSettingsPage() {
                             </div>
                             <div class="form-field">
                                 <label>Таймаут инструмента (с)</label>
-                                <input id="s-tool-timeout" type="number" value="120">
+                                <input id="s-tool-timeout" type="number" value="600">
+                            </div>
+                            <div class="form-field">
+                                <label>Общий бюджет (USD)</label>
+                                <input id="s-total-budget" type="number" min="0.01" step="any" value="10.0">
+                            </div>
+                            <div class="form-field">
+                                <label>Мягкий порог на задачу (USD)</label>
+                                <input id="s-settings-per-task-cost" type="number" min="0.01" step="any" value="20.0">
                             </div>
                         </div>
                     </div>

@@ -53,6 +53,21 @@ _extra_datas = []
 _extra_binaries = []
 _extra_hiddenimports = []
 
+# Bundle the official, notarized Node.js runtime (pruned to bin/node[.exe]) so
+# skill payloads with runtime=node and the `node --check` preflight work out of
+# the box. The build scripts run scripts/download_node_standalone.* before
+# PyInstaller; the signing pass re-signs node under the hardened runtime so
+# macOS does not code-signing-kill it. The build scripts guarantee its presence
+# in CI/release builds; for ad-hoc dev builds we warn-and-continue (rather than
+# hard-fail) so a local PyInstaller run without node still produces an app —
+# node-runtime skills simply fall back to PATH node there.
+if os.path.isdir('node-standalone'):
+    _extra_datas.append(('node-standalone', 'node-standalone'))
+else:
+    print('WARNING: node-standalone/ not found — bundled node will be absent and '
+          'node-runtime skills will rely on PATH node. Run '
+          'scripts/download_node_standalone.sh (or .ps1) before PyInstaller for a release build.')
+
 if _is_windows:
     for _pkg in ('pythonnet', 'clr_loader'):
         try:

@@ -8,6 +8,7 @@ import logging
 import os
 import pathlib
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 
 _playwright_ready = False
 _MISSING_EXECUTABLE_RE = re.compile(r"Executable doesn't exist at ([^\n]+)")
+_NONSTANDARD_NUMERIC_IPV4_RE = re.compile(r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}$", re.I)
 
 
 def _is_subagent_blocked_browser_url(url: str) -> bool:
@@ -43,7 +45,13 @@ def _is_subagent_blocked_browser_url(url: str) -> bool:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        if _NONSTANDARD_NUMERIC_IPV4_RE.match(host):
+            return True
+        return _hostname_resolves_to_blocked_ip(host)
+    return _is_blocked_subagent_ip(ip)
+
+
+def _is_blocked_subagent_ip(ip: ipaddress._BaseAddress) -> bool:
     return bool(
         ip.is_loopback
         or ip.is_private
@@ -51,6 +59,24 @@ def _is_subagent_blocked_browser_url(url: str) -> bool:
         or ip.is_unspecified
         or ip.is_reserved
     )
+
+
+def _hostname_resolves_to_blocked_ip(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return True
+    if not infos:
+        return True
+    for info in infos:
+        try:
+            sockaddr = info[4]
+            ip = ipaddress.ip_address(str(sockaddr[0]))
+        except Exception:
+            return True
+        if _is_blocked_subagent_ip(ip):
+            return True
+    return False
 
 
 def _has_platform_chromium(local_browsers_dir: pathlib.Path) -> bool:

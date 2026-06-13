@@ -80,7 +80,7 @@ def test_get_tools_exports():
     from ouroboros.tools.git_rollback import get_tools
     tools = get_tools()
     assert len(tools) == 1
-    assert tools[0].name == "rollback_to_target"
+    assert tools[0].name == "vcs_rollback"
     schema = tools[0].schema
     assert "target" in schema["parameters"]["properties"]
     assert "confirm" in schema["parameters"]["properties"]
@@ -88,7 +88,7 @@ def test_get_tools_exports():
 
 def test_rollback_in_core_tool_names():
     from ouroboros.tool_capabilities import CORE_TOOL_NAMES
-    assert "rollback_to_target" in CORE_TOOL_NAMES
+    assert "vcs_rollback" in CORE_TOOL_NAMES
 
 
 def test_rollback_in_initial_tool_schemas():
@@ -100,7 +100,7 @@ def test_rollback_in_initial_tool_schemas():
         reg = ToolRegistry(repo_dir=pathlib.Path(d), drive_root=pathlib.Path(d))
         schemas = initial_tool_schemas(reg)
         names = {s["function"]["name"] for s in schemas}
-        assert "rollback_to_target" in names
+        assert "vcs_rollback" in names
 
 
 def test_rollback_requests_restart_on_success(ctx):

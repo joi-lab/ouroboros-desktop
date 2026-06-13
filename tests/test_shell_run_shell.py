@@ -16,7 +16,6 @@ distinct branch of the cascade).
 """
 from __future__ import annotations
 
-import inspect
 from subprocess import CompletedProcess
 from types import SimpleNamespace
 
@@ -77,7 +76,7 @@ class TestShellArgContract:
         fake_subprocess(stdout="hello")
         result = _run_shell(_ctx(tmp_path), "echo hello")
         assert "SHELL_ARG_ERROR" not in result
-        assert "exit_code=0" in result
+        assert f"exit_code=0 (cwd={tmp_path.resolve()})" in result
 
     def test_json_array_string_recovered(self, tmp_path, fake_subprocess):
         fake_subprocess(stdout="ok")
@@ -139,11 +138,13 @@ class TestShellArgContract:
 
     def test_refusal_message_points_at_correct_usage(self, tmp_path):
         result = _run_shell(_ctx(tmp_path), '["git", "log",')
-        assert 'run_shell(cmd=["git"' in result
+        assert 'run_command(cmd=["git"' in result
 
-    def test_list_cmd_is_accepted(self):
-        src = inspect.getsource(_run_shell)
-        assert "isinstance(cmd, list)" in src or "not isinstance(cmd, list)" in src
+    def test_list_cmd_is_accepted(self, tmp_path, fake_subprocess):
+        fake_subprocess(stdout="ok")
+        result = _run_shell(_ctx(tmp_path), ["echo", "ok"])
+        assert "SHELL_ARG_ERROR" not in result
+        assert "exit_code=0" in result
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ def test_run_shell_nonzero_exit_is_reported_as_failure(tmp_path, fake_subprocess
     result = _run_shell(_ctx(tmp_path), ["npm", "install", "-g", "@anthropic-ai/claude-code"])
 
     assert result.startswith("⚠️ SHELL_EXIT_ERROR:")
-    assert "exit_code=3" in result
+    assert f"exit_code=3 (cwd={tmp_path.resolve()})" in result
     assert "permission denied" in result
 
 
@@ -181,8 +182,9 @@ def test_run_shell_timeout_uses_settings_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("ouroboros.tools.shell._tracked_subprocess_run", fake_timeout)
     result = _run_shell(_ctx(tmp_path), ["sleep", "999"])
 
-    assert "TOOL_TIMEOUT (run_shell)" in result
+    assert "TOOL_TIMEOUT (run_command)" in result
     assert "42s" in result
+    assert f"cwd={tmp_path.resolve()}" in result
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +201,9 @@ def test_grep_or_rg_exit_one_without_stderr_is_no_match(cmd, tmp_path, fake_subp
     result = _run_shell(_ctx(tmp_path), cmd)
 
     assert "SHELL_EXIT_ERROR" not in result
-    assert "exit_code=1 (no matches)" in result
+    assert "exit_code=1" in result
+    assert f"cwd={tmp_path.resolve()}" in result
+    assert "no matches" in result
 
 
 def test_grep_exit_one_with_stderr_still_surfaces_shell_error(tmp_path, fake_subprocess):
@@ -213,6 +217,16 @@ def test_grep_exit_one_with_stderr_still_surfaces_shell_error(tmp_path, fake_sub
 # ---------------------------------------------------------------------------
 # grep \| regex-escape hint / auto-correct (2026-05-04 hint class)
 # ---------------------------------------------------------------------------
+
+
+def test_user_file_output_audit_extracts_windows_absolute_paths():
+    from ouroboros.tools import shell
+
+    body = r"from pathlib import Path; Path('C:\\Users\\anton\\Desktop\\out.html').write_text('x')"
+    redirect = r"echo x > C:\\Users\\anton\\Desktop\\out.html"
+
+    assert shell._EMBEDDED_OUTPUT_PATH_RE.findall(body) == [r"C:\\Users\\anton\\Desktop\\out.html"]
+    assert shell._USER_FILE_REDIRECT_RE.search(redirect).group("bare") == r"C:\\Users\\anton\\Desktop\\out.html"
 
 
 class TestGrepRegexHint:

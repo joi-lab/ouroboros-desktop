@@ -26,22 +26,22 @@ class TestReflectionTrigger:
     def test_clean_trace_no_reflection(self):
         from ouroboros.reflection import should_generate_reflection
         trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "file contents", "is_error": False},
-            {"tool": "run_shell", "args": {}, "result": "ok", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "file contents", "is_error": False},
+            {"tool": "run_command", "args": {}, "result": "ok", "is_error": False},
         ]}
         assert should_generate_reflection(trace) is False
 
     def test_error_tool_triggers_reflection(self):
         from ouroboros.reflection import should_generate_reflection
         trace = {"tool_calls": [
-            {"tool": "run_shell", "args": {}, "result": "⚠️ TOOL_ERROR: failed", "is_error": True},
+            {"tool": "run_command", "args": {}, "result": "⚠️ TOOL_ERROR: failed", "is_error": True},
         ]}
         assert should_generate_reflection(trace) is True
 
     def test_review_blocked_marker_triggers_reflection(self):
         from ouroboros.reflection import should_generate_reflection
         trace = {"tool_calls": [
-            {"tool": "repo_commit", "args": {}, "is_error": False,
+            {"tool": "commit_reviewed", "args": {}, "is_error": False,
              "result": "⚠️ REVIEW_BLOCKED (attempt 1/3): reviewer flagged version sync"},
         ]}
         assert should_generate_reflection(trace) is True
@@ -49,7 +49,7 @@ class TestReflectionTrigger:
     def test_tests_failed_marker_triggers_reflection(self):
         from ouroboros.reflection import should_generate_reflection
         trace = {"tool_calls": [
-            {"tool": "repo_commit", "args": {}, "is_error": False,
+            {"tool": "commit_reviewed", "args": {}, "is_error": False,
              "result": "OK: committed\n\n⚠️ TESTS_FAILED: VERSION not in README"},
         ]}
         assert should_generate_reflection(trace) is True
@@ -63,7 +63,7 @@ class TestReflectionTrigger:
         """rounds >= NONTRIVIAL_ROUNDS_THRESHOLD fires even on a clean trace."""
         from ouroboros.reflection import should_generate_reflection, NONTRIVIAL_ROUNDS_THRESHOLD
         clean_trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "file contents", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "file contents", "is_error": False},
         ]}
         assert should_generate_reflection(clean_trace, rounds=NONTRIVIAL_ROUNDS_THRESHOLD) is True
         assert should_generate_reflection(clean_trace, rounds=NONTRIVIAL_ROUNDS_THRESHOLD - 1) is False
@@ -72,7 +72,7 @@ class TestReflectionTrigger:
         """cost_usd >= NONTRIVIAL_COST_THRESHOLD fires even on a clean trace."""
         from ouroboros.reflection import should_generate_reflection, NONTRIVIAL_COST_THRESHOLD
         clean_trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "file contents", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "file contents", "is_error": False},
         ]}
         assert should_generate_reflection(clean_trace, rounds=0, cost_usd=NONTRIVIAL_COST_THRESHOLD) is True
         assert should_generate_reflection(clean_trace, rounds=0, cost_usd=NONTRIVIAL_COST_THRESHOLD - 0.01) is False
@@ -81,7 +81,7 @@ class TestReflectionTrigger:
         """Default kwargs (rounds=0, cost_usd=0.0) keep original behaviour unchanged."""
         from ouroboros.reflection import should_generate_reflection
         clean_trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "file contents", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "file contents", "is_error": False},
         ]}
         assert should_generate_reflection(clean_trace) is False
 
@@ -89,7 +89,7 @@ class TestReflectionTrigger:
         from ouroboros.reflection import should_generate_reflection
         trace = {"tool_calls": [
             {
-                "tool": "run_shell",
+                "tool": "run_command",
                 "args": {},
                 "result": "exit_code=-9",
                 "is_error": False,
@@ -111,9 +111,9 @@ class TestHelperFunctions:
     def test_detect_markers_finds_all(self):
         from ouroboros.reflection import _detect_markers
         trace = {"tool_calls": [
-            {"tool": "repo_commit", "is_error": True,
+            {"tool": "commit_reviewed", "is_error": True,
              "result": "⚠️ REVIEW_BLOCKED: test"},
-            {"tool": "run_shell", "is_error": False,
+            {"tool": "run_command", "is_error": False,
              "result": "⚠️ TESTS_FAILED: something"},
         ]}
         markers = _detect_markers(trace)
@@ -128,17 +128,17 @@ class TestHelperFunctions:
     def test_collect_error_details_includes_tool_name(self):
         from ouroboros.reflection import _collect_error_details
         trace = {"tool_calls": [
-            {"tool": "repo_commit", "is_error": True,
+            {"tool": "commit_reviewed", "is_error": True,
              "result": "⚠️ REVIEW_BLOCKED: test"},
         ]}
         details = _collect_error_details(trace)
-        assert "repo_commit" in details
+        assert "commit_reviewed" in details
         assert "REVIEW_BLOCKED" in details
 
     def test_collect_error_details_respects_cap(self):
         from ouroboros.reflection import _collect_error_details
         trace = {"tool_calls": [
-            {"tool": "run_shell", "is_error": True,
+            {"tool": "run_command", "is_error": True,
              "result": "x" * 5000},
         ]}
         details = _collect_error_details(trace, cap=200)
@@ -147,18 +147,18 @@ class TestHelperFunctions:
     def test_collect_error_details_skips_clean_results(self):
         from ouroboros.reflection import _collect_error_details
         trace = {"tool_calls": [
-            {"tool": "repo_read", "is_error": False, "result": "file contents"},
-            {"tool": "run_shell", "is_error": True, "result": "error happened"},
+            {"tool": "read_file", "is_error": False, "result": "file contents"},
+            {"tool": "run_command", "is_error": True, "result": "error happened"},
         ]}
         details = _collect_error_details(trace)
-        assert "repo_read" not in details
-        assert "run_shell" in details
+        assert "read_file" not in details
+        assert "run_command" in details
 
     def test_collect_error_details_includes_structured_status(self):
         from ouroboros.reflection import _collect_error_details
         trace = {"tool_calls": [
             {
-                "tool": "run_shell",
+                "tool": "run_command",
                 "is_error": True,
                 "status": "non_zero_exit",
                 "exit_code": -9,
@@ -187,7 +187,7 @@ class TestHelperFunctions:
             pass
 
         clean_trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "ok", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "ok", "is_error": False},
         ]}
         high_cost_usage = {"rounds": 20, "cost": 6.0}
 
@@ -229,8 +229,8 @@ class TestHelperFunctions:
                 return {"content": "Friction was in repeated advisory runs."}, {"cost": 0}
 
         clean_trace = {"tool_calls": [
-            {"tool": "repo_read", "args": {}, "result": "file contents", "is_error": False},
-            {"tool": "run_shell", "args": {}, "result": "ok", "is_error": False},
+            {"tool": "read_file", "args": {}, "result": "file contents", "is_error": False},
+            {"tool": "run_command", "args": {}, "result": "ok", "is_error": False},
         ]}
         entry = generate_reflection(
             task={"id": "task-2", "type": "task", "text": "A 20-round clean task"},
@@ -260,7 +260,7 @@ class TestHelperFunctions:
                 return {"content": "Root cause was missing tests."}, {"cost": 0}
 
         error_trace = {"tool_calls": [
-            {"tool": "repo_commit", "args": {}, "is_error": False,
+            {"tool": "commit_reviewed", "args": {}, "is_error": False,
              "result": "⚠️ REVIEW_BLOCKED: tests_affected"},
         ]}
         generate_reflection(
@@ -287,7 +287,7 @@ class TestHelperFunctions:
         entry = generate_reflection(
             task={"id": "task-1", "type": "task", "text": "Fix commit flow"},
             llm_trace={"tool_calls": [{
-                "tool": "repo_commit",
+                "tool": "commit_reviewed",
                 "is_error": False,
                 "result": "⚠️ REVIEW_BLOCKED: blocked by tests_affected",
             }]},
@@ -333,14 +333,14 @@ class TestReflectionContextLoading:
         """Reflection entries must include required fields."""
         from ouroboros.reflection import _detect_markers, _collect_error_details
         trace = {"tool_calls": [
-            {"tool": "repo_commit", "is_error": True,
+            {"tool": "commit_reviewed", "is_error": True,
              "result": "⚠️ REVIEW_BLOCKED: test"},
         ]}
         markers = _detect_markers(trace)
         assert "REVIEW_BLOCKED" in markers
 
         details = _collect_error_details(trace)
-        assert "repo_commit" in details
+        assert "commit_reviewed" in details
         assert "REVIEW_BLOCKED" in details
 
 

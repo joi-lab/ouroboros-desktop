@@ -34,12 +34,10 @@ DEFAULT_POLICY = POLICY_CHECK
 # Must cover every built-in exported from ouroboros/tools; invariant-tested.
 TOOL_POLICY: Dict[str, str] = {
     # Read-only / trivially safe.
-    "repo_read": POLICY_SKIP,
-    "repo_list": POLICY_SKIP,
-    "data_read": POLICY_SKIP,
-    "data_list": POLICY_SKIP,
-    "git_status": POLICY_SKIP,
-    "git_diff": POLICY_SKIP,
+    "read_file": POLICY_SKIP,
+    "list_files": POLICY_SKIP,
+    "vcs_status": POLICY_SKIP,
+    "vcs_diff": POLICY_SKIP,
     "chat_history": POLICY_SKIP,
     "recent_tasks": POLICY_SKIP,
     "knowledge_read": POLICY_SKIP,
@@ -47,7 +45,7 @@ TOOL_POLICY: Dict[str, str] = {
     "web_search": POLICY_SKIP,
     "codebase_digest": POLICY_SKIP,
     "codebase_health": POLICY_SKIP,
-    "code_search": POLICY_SKIP,
+    "search_code": POLICY_SKIP,
     "list_available_tools": POLICY_SKIP,
     "memory_map": POLICY_SKIP,
     "analyze_screenshot": POLICY_SKIP,
@@ -58,29 +56,32 @@ TOOL_POLICY: Dict[str, str] = {
     "get_github_pr": POLICY_SKIP,
     "list_github_issues": POLICY_SKIP,
     "get_github_issue": POLICY_SKIP,
-    "multi_model_review": POLICY_SKIP,
     "plan_task": POLICY_SKIP,
+    "task_acceptance_review": POLICY_SKIP,
     "review_status": POLICY_SKIP,
     "get_task_result": POLICY_SKIP,
-    "wait_for_task": POLICY_SKIP,
+    "wait_task": POLICY_SKIP,
+    "wait_tasks": POLICY_SKIP,
     "switch_model": POLICY_SKIP,
+    "service_status": POLICY_SKIP,
+    "service_logs": POLICY_SKIP,
 
     # Mutative but separately guarded by sandbox/revert/review gates.
-    "repo_write": POLICY_SKIP,
-    "repo_commit": POLICY_SKIP,
-    "str_replace_editor": POLICY_SKIP,
-    "data_write": POLICY_SKIP,
+    "write_file": POLICY_SKIP,
+    "edit_text": POLICY_SKIP,
+    "commit_reviewed": POLICY_SKIP,
+    "vcs_commit_reviewed": POLICY_SKIP,
     "knowledge_write": POLICY_SKIP,
     "update_scratchpad": POLICY_SKIP,
     "update_identity": POLICY_SKIP,
     "memory_update_registry": POLICY_SKIP,
-    "pull_from_remote": POLICY_SKIP,
-    "restore_to_head": POLICY_SKIP,
-    "revert_commit": POLICY_SKIP,
-    "rollback_to_target": POLICY_SKIP,
+    "vcs_pull_ff": POLICY_SKIP,
+    "vcs_restore": POLICY_SKIP,
+    "vcs_revert": POLICY_SKIP,
+    "vcs_rollback": POLICY_SKIP,
 
     # Control / messaging / internal side effects.
-    "schedule_task": POLICY_SKIP,
+    "schedule_subagent": POLICY_SKIP,
     "cancel_task": POLICY_SKIP,
     "request_restart": POLICY_SKIP,
     "request_deep_self_review": POLICY_SKIP,
@@ -90,15 +91,19 @@ TOOL_POLICY: Dict[str, str] = {
     "promote_to_stable": POLICY_SKIP,
     "send_user_message": POLICY_SKIP,
     "send_photo": POLICY_SKIP,
+    "send_video": POLICY_SKIP,
     "forward_to_worker": POLICY_SKIP,
     "compact_context": POLICY_SKIP,
     "enable_tools": POLICY_SKIP,
-    "advisory_pre_review": POLICY_SKIP,
+    "advisory_review": POLICY_SKIP,
+    "start_service": POLICY_CHECK_CONDITIONAL,
+    "stop_service": POLICY_SKIP,
+    "claude_code_edit": POLICY_SKIP,
 
     # External skill surface.
     "list_skills": POLICY_SKIP,
     # Review mutates durable skill state but executes no skill subprocess.
-    "review_skill": POLICY_SKIP,
+    "skill_review": POLICY_SKIP,
     # Toggle only writes private enabled.json state.
     "toggle_skill": POLICY_SKIP,
     # skill_exec enforces fresh executable review/enabled/hash; recheck per call.
@@ -106,8 +111,9 @@ TOOL_POLICY: Dict[str, str] = {
     # Read-only argv-only syntax validator with scrubbed env and per-file caps.
     "skill_preflight": POLICY_SKIP,
 
-    # Conditional: run_shell safe-subject whitelist.
-    "run_shell": POLICY_CHECK_CONDITIONAL,
+    # Conditional: run_command safe-subject whitelist.
+    "run_command": POLICY_CHECK_CONDITIONAL,
+    "run_script": POLICY_CHECK_CONDITIONAL,
 
     # Always LLM-checked built-ins.
     "fetch_pr_ref": POLICY_CHECK,
@@ -123,14 +129,11 @@ TOOL_POLICY: Dict[str, str] = {
     "close_github_issue": POLICY_CHECK,
     "create_github_issue": POLICY_CHECK,
 
-    # External Claude edits mutate outside this process; keep a local recheck too.
-    "claude_code_edit": POLICY_CHECK,
-
     # Consciousness-only built-ins registered outside get_tools().
     "set_next_wakeup": POLICY_SKIP,
 }
 
-# run_shell safe-subject whitelist.
+# run_command safe-subject whitelist.
 
 # ``pip`` mutates the Python env and must route through the LLM check.
 SAFE_SHELL_COMMANDS = frozenset([
@@ -492,7 +495,13 @@ def _run_llm_check(
     log.info(f"Running safety check on {tool_name} using {light_model} (local={_use_local_light})")
 
     try:
-        msg, usage = client.chat(
+        from ouroboros.llm_observability import chat_observed
+
+        msg, usage = chat_observed(
+            client,
+            drive_root=pathlib.Path(getattr(ctx, "drive_root", "../data")) if ctx is not None else pathlib.Path("../data"),
+            task_id=str(getattr(ctx, "task_id", "") or "safety"),
+            call_type="safety_supervisor",
             messages=[
                 {"role": "system", "content": _get_safety_prompt()},
                 {"role": "user", "content": prompt},
@@ -501,18 +510,21 @@ def _run_llm_check(
             use_local=_use_local_light,
         )
     except Exception as e:
+        from ouroboros.utils import sanitize_tool_result_for_log
+
+        safe_error = sanitize_tool_result_for_log(f"{type(e).__name__}: {e}")
         # Fallback local outage warns instead of blocking all unknown tools.
         if _use_local_light and _is_local_fallback:
             log.warning(
                 "Safety local-fallback LLM call failed for %s (%s); proceeding with warning",
-                tool_name, e,
+                tool_name, safe_error,
             )
             return True, (
-                f"⚠️ SAFETY_WARNING: Local safety runtime unreachable ({e}). "
+                f"⚠️ SAFETY_WARNING: Local safety runtime unreachable ({safe_error}). "
                 f"{_UNCHECKED_WARNING_SUFFIX}"
             )
-        log.error(f"Safety check LLM call failed for {tool_name}: {e}")
-        return False, f"⚠️ SAFETY_VIOLATION: Safety check failed with error: {e}"
+        log.error("Safety check LLM call failed for %s: %s", tool_name, safe_error)
+        return False, f"⚠️ SAFETY_VIOLATION: Safety check failed with error: {safe_error}"
 
     if usage:
         # Use provider-canonical model identity for cost/events.
@@ -594,6 +606,8 @@ def check_safety(
 
     if policy == POLICY_CHECK_CONDITIONAL:
         raw_cmd = arguments.get("cmd", arguments.get("command", ""))
+        if tool_name == "run_script":
+            raw_cmd = arguments.get("script", raw_cmd)
         if _normalize_safe_shell_subject(raw_cmd):
             return True, ""
         return _run_llm_check(tool_name, arguments, messages, ctx)

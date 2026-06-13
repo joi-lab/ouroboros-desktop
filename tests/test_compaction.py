@@ -48,7 +48,7 @@ def _make_large_arg_messages(tool_name: str, num_rounds: int = 8):
 def test_protected_tool_results_survive_compaction():
     """repo_commit results must not be truncated even in old rounds."""
     original_result = "OK: committed to ouroboros: v3.19.0 review feedback applied"
-    msgs = _make_messages("repo_commit", original_result, num_rounds=10)
+    msgs = _make_messages("commit_reviewed", original_result, num_rounds=10)
     compacted = compact_tool_history(msgs, keep_recent=3)
 
     commit_results = [
@@ -61,7 +61,7 @@ def test_protected_tool_results_survive_compaction():
 def test_warning_results_survive_compaction():
     """Results starting with warning emoji must not be truncated."""
     warn_result = "\u26a0\ufe0f REVIEW_BLOCKED: tests failed, commit rejected. Fix errors first."
-    msgs = _make_messages("run_shell", warn_result, num_rounds=10)
+    msgs = _make_messages("run_command", warn_result, num_rounds=10)
     compacted = compact_tool_history(msgs, keep_recent=3)
 
     warning_results = [
@@ -73,7 +73,7 @@ def test_warning_results_survive_compaction():
 
 def test_old_assistant_tool_payloads_are_compacted():
     """Fallback compaction should compact oversized old assistant tool-call payloads."""
-    msgs = _make_large_arg_messages("repo_write", num_rounds=10)
+    msgs = _make_large_arg_messages("write_file", num_rounds=10)
     compacted = compact_tool_history(msgs, keep_recent=3)
 
     compacted_assistants = [
@@ -108,7 +108,7 @@ def test_round_has_protected_content_ignores_normal_assistant_text():
         {
             "role": "assistant",
             "content": "Normal reasoning without any reflection marker",
-            "tool_calls": [{"id": "c1", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "tool_calls": [{"id": "c1", "function": {"name": "read_file", "arguments": "{}"}}],
         },
         {
             "role": "tool",
@@ -130,7 +130,7 @@ def test_round_has_protected_content_does_not_protect_checkpoint_text():
         {
             "role": "assistant",
             "content": "CHECKPOINT_REFLECTION:\n- Known: x\n- Blocker: none",
-            "tool_calls": [{"id": "c1", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "tool_calls": [{"id": "c1", "function": {"name": "read_file", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": "c1", "content": "ok"},
     ]
@@ -148,7 +148,7 @@ def test_round_has_protected_content_protects_error_tool_results():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "c1", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "tool_calls": [{"id": "c1", "function": {"name": "read_file", "arguments": "{}"}}],
         },
         {
             "role": "tool",

@@ -26,8 +26,8 @@ _STATE_SCHEMA_VERSION = 3
 _MAX_RUN_HISTORY = 10
 _MAX_ATTEMPT_HISTORY = 50
 _MAX_COMMIT_READINESS_DEBTS = 50
-_DEFAULT_TOOL_NAME = "repo_commit"
-_DEFAULT_ADVISORY_TOOL_NAME = "advisory_pre_review"
+_DEFAULT_TOOL_NAME = "commit_reviewed"
+_DEFAULT_ADVISORY_TOOL_NAME = "advisory_review"
 _LEGACY_CURRENT_REPO_KEY = "__legacy_current_repo__"
 _REVIEW_ATTEMPT_TTL_SEC = 1800
 _REVIEW_ATTEMPT_GRACE_SEC = 120
@@ -715,7 +715,7 @@ class AdvisoryReviewState:
                     "severity": "warning",
                     "repo_key": str(getattr(latest_run, "repo_key", "") or repo_key or ""),
                     "fingerprint": f"readiness_warning:advisory:{_stable_digest(warning_text)}",
-                    "source": "advisory_pre_review",
+                    "source": "advisory_review",
                     "source_obligation_ids": [],
                     "evidence": [warning_text],
                 })
@@ -1335,7 +1335,7 @@ def format_status_section(state: AdvisoryReviewState, repo_dir: Optional[pathlib
         lines.append(f"\n⚠️ Advisory marked stale after worktree edit at {state.last_stale_from_edit_ts}.")  # full ts — no [:16]
         if state.last_stale_reason:
             lines.append(f"   Reason: {state.last_stale_reason}")
-        lines.append("   Run advisory_pre_review again before repo_commit.")
+        lines.append("   Run advisory_review again before commit_reviewed.")
 
     if open_debts:
         lines.append(f"\n### Commit-readiness debt ({len(open_debts)})")
@@ -1356,6 +1356,8 @@ def format_status_section(state: AdvisoryReviewState, repo_dir: Optional[pathlib
             label = f"{tool}#{num}" if num else tool
             phase = item.phase or "review"
             facts = [f"status={item.status}", f"phase={phase}", f"blocked={'yes' if item.blocked else 'no'}"]
+            if item.commit_message:
+                facts.append(f"commit={item.commit_message}")
             if item.late_result_pending:
                 facts.append("late_result_pending=yes")
             if item.readiness_warnings:

@@ -29,6 +29,24 @@ def set_log_sink(fn: Optional[Callable[[Dict[str, Any]], None]]) -> None:
 def utc_now_iso() -> str:
     return _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
+
+# Worker processes set OUROBOROS_IN_WORKER=1 before importing the agent stack.
+WORKER_PROCESS_ENV = "OUROBOROS_IN_WORKER"
+
+
+def in_worker_process() -> bool:
+    """Return True inside a supervisor worker process.
+
+    Worker processes disable system proxy resolution (``trust_env=False`` /
+    ``ProxyHandler({})``) on every HTTP client they create. This is the central
+    network-transport policy that keeps workers fork-safe: the macOS
+    ``_scproxy.get_proxies`` -> ``SCDynamicStoreCopyProxies`` lookup crashes
+    (SIGSEGV) on the child side of a multi-threaded fork. It is also a clean,
+    proxy-free default for spawned workers on every platform.
+    """
+    return os.environ.get(WORKER_PROCESS_ENV) == "1"
+
+
 def emit_log_event(
     event_queue: Any,
     payload: Dict[str, Any],
@@ -548,14 +566,29 @@ def sanitize_tool_args_for_log(
 ) -> Dict[str, Any]:
     """Sanitize tool arguments for logging: redact secrets, truncate large fields."""
 
+    def _redact_public_string(value: str) -> tuple[str, bool]:
+        try:
+            from ouroboros.observability import redact_projection
+
+            redacted = redact_projection(value)
+            return str(redacted.value), bool(redacted.records)
+        except Exception:
+            log.debug("Failed to run observability redactor for tool args", exc_info=True)
+            return sanitize_tool_result_for_log(value), sanitize_tool_result_for_log(value) != value
+
     def _sanitize_value(key: str, value: Any, depth: int) -> Any:
         if depth > 3:
             return {"_depth_limit": True}
         if key.lower() in _SECRET_KEYS:
             return "*** REDACTED ***"
-        if isinstance(value, str) and len(value) > threshold:
-            return f"<TRUNCATED:{key}:{len(value)}ch:sha={sha256_text(value)[:12]}>"
         if isinstance(value, str):
+            redacted, did_redact = _redact_public_string(value)
+            if did_redact:
+                if len(redacted) > threshold:
+                    return f"<REDACTED_TRUNCATED:{key}:{len(redacted)}ch>"
+                return redacted
+            if len(value) > threshold:
+                return f"<TRUNCATED:{key}:{len(value)}ch:sha={sha256_text(value)[:12]}>"
             return value
         if isinstance(value, dict):
             return {k: _sanitize_value(k, v, depth + 1) for k, v in value.items()}

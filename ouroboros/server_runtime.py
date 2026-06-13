@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 
 from ouroboros.provider_models import (
     ANTHROPIC_DIRECT_DEFAULTS,
+    CLOUDRU_DIRECT_DEFAULTS,
     OPENAI_DIRECT_DEFAULTS,
     compute_direct_review_models_fallback,
     migrate_model_value,
@@ -28,7 +29,19 @@ _DIRECT_PROVIDER_AUTO_DEFAULTS = {
         "OUROBOROS_MODEL_LIGHT": ANTHROPIC_DIRECT_DEFAULTS["light"],
         "OUROBOROS_MODEL_FALLBACK": ANTHROPIC_DIRECT_DEFAULTS["fallback"],
     },
+    "cloudru": {
+        "OUROBOROS_MODEL": CLOUDRU_DIRECT_DEFAULTS["main"],
+        "OUROBOROS_MODEL_CODE": CLOUDRU_DIRECT_DEFAULTS["code"],
+        "OUROBOROS_MODEL_LIGHT": CLOUDRU_DIRECT_DEFAULTS["light"],
+        "OUROBOROS_MODEL_FALLBACK": CLOUDRU_DIRECT_DEFAULTS["fallback"],
+    },
 }
+# Legacy values that should be auto-replaced with a provider's direct defaults.
+# Cloud.ru intentionally has NO entry: a Cloud.ru-only user's main/code/light
+# slots match the shipped SETTINGS_DEFAULTS (google/gemini) and migrate via the
+# `current in {"", default}` check, and the review/scope slots are rebuilt from
+# the (now cloudru::) main by _normalize_direct_review_models — so no per-model
+# legacy set is needed (verified by test_apply_runtime_provider_defaults_cloudru_*).
 _DIRECT_PROVIDER_LEGACY_DEFAULTS = {
     "openai": {
         "OUROBOROS_MODEL": {"anthropic/claude-opus-4.6"},
@@ -37,8 +50,11 @@ _DIRECT_PROVIDER_LEGACY_DEFAULTS = {
         "OUROBOROS_MODEL_FALLBACK": {"anthropic/claude-sonnet-4.6"},
     },
     "anthropic": {
-        "OUROBOROS_MODEL": {"anthropic/claude-opus-4.6"},
-        "OUROBOROS_MODEL_CODE": {"anthropic/claude-opus-4.6"},
+        # Both spellings of the previous opus default so existing Anthropic-only
+        # users on claude-opus-4.6 migrate to the new claude-opus-4.8 default
+        # (agreed migration), whether stored in dot/slash or dash/colon form.
+        "OUROBOROS_MODEL": {"anthropic/claude-opus-4.6", "anthropic::claude-opus-4-6"},
+        "OUROBOROS_MODEL_CODE": {"anthropic/claude-opus-4.6", "anthropic::claude-opus-4-6"},
         "OUROBOROS_MODEL_LIGHT": {"anthropic/claude-sonnet-4.6"},
         "OUROBOROS_MODEL_FALLBACK": {"anthropic/claude-sonnet-4.6"},
     },
@@ -68,9 +84,6 @@ _SCOPE_REVIEW_LEGACY_DEFAULTS = frozenset({
     "openai::gpt-" + "5.4-mini",
 })
 _RETIRED_MODEL_DEFAULT_REPLACEMENTS = {
-    "anthropic/claude-opus-" + "4.7": "anthropic/claude-opus-4.6",
-    "anthropic::claude-opus-" + "4-7": "anthropic::claude-opus-4-6",
-    "claude-opus-" + "4-7[1m]": "claude-opus-4-6[1m]",
     "openai/gpt-" + "5.4": "openai/gpt-5.5",
     "openai::gpt-" + "5.4": "openai::gpt-5.5",
     "openai/gpt-" + "5.4-pro": "openai/gpt-5.5-pro",
@@ -130,6 +143,16 @@ def _refresh_retired_model_defaults(settings: dict) -> tuple[dict, list[str]]:
         if serialized != review_value:
             normalized["OUROBOROS_REVIEW_MODELS"] = serialized
             changed.append("OUROBOROS_REVIEW_MODELS")
+    scope_review_value = _setting_text(normalized, "OUROBOROS_SCOPE_REVIEW_MODELS")
+    if scope_review_value:
+        models = [
+            _RETIRED_MODEL_DEFAULT_REPLACEMENTS.get(item, item)
+            for item in _parse_model_list(scope_review_value)
+        ]
+        serialized = _serialize_model_list(models)
+        if serialized != scope_review_value:
+            normalized["OUROBOROS_SCOPE_REVIEW_MODELS"] = serialized
+            changed.append("OUROBOROS_SCOPE_REVIEW_MODELS")
     return normalized, _unique_changed_keys(changed)
 
 
@@ -144,13 +167,19 @@ def _exclusive_direct_remote_provider(settings: dict) -> str:
     has_legacy_openai_base = bool(_setting_text(settings, "OPENAI_BASE_URL"))
     has_compatible = bool(_setting_text(settings, "OPENAI_COMPATIBLE_API_KEY"))
     has_cloudru = bool(_setting_text(settings, "CLOUDRU_FOUNDATION_MODELS_API_KEY"))
-    if has_openrouter or has_legacy_openai_base or has_compatible or has_cloudru:
+    # Mirror config._exclusive_direct_remote_provider_env: OpenRouter / legacy
+    # base / compatible disqualify exclusivity; among the real direct providers
+    # (OpenAI, Anthropic, Cloud.ru) return one only when exactly one is set.
+    if has_openrouter or has_legacy_openai_base or has_compatible:
         return ""
-    if has_official_openai and not has_anthropic:
-        return "openai"
-    if has_anthropic and not has_official_openai:
-        return "anthropic"
-    return ""
+    direct = [
+        name for name, present in (
+            ("openai", has_official_openai),
+            ("anthropic", has_anthropic),
+            ("cloudru", has_cloudru),
+        ) if present
+    ]
+    return direct[0] if len(direct) == 1 else ""
 
 
 def _normalize_direct_review_models(settings: dict, provider: str) -> str:
@@ -196,6 +225,21 @@ def _normalize_direct_scope_review_model(settings: dict, provider: str) -> str:
     if current.startswith(provider_prefix) and current_raw:
         return current
     return current or auto_value
+
+
+def _normalize_direct_scope_review_models(settings: dict, provider: str) -> str:
+    raw = _setting_text(settings, "OUROBOROS_SCOPE_REVIEW_MODELS")
+    models = _parse_model_list(raw)
+    if not models:
+        singular = _normalize_direct_scope_review_model(settings, provider)
+        return _serialize_model_list([singular] if singular else [])
+    migrated = [migrate_model_value(provider, model) for model in models]
+    provider_prefix = _provider_prefix(provider)
+    if raw == _setting_text(SETTINGS_DEFAULTS, "OUROBOROS_SCOPE_REVIEW_MODELS"):
+        return _serialize_model_list([_normalize_direct_scope_review_model(settings, provider)])
+    if all(model.startswith(provider_prefix) for model in migrated):
+        return _serialize_model_list(migrated)
+    return _serialize_model_list([_normalize_direct_scope_review_model(settings, provider)])
 
 
 def classify_runtime_provider_change(before: dict, after: dict) -> str:
@@ -291,6 +335,11 @@ def apply_runtime_provider_defaults(settings: dict) -> tuple[dict, bool, list[st
     if scope_review_model != _setting_text(normalized, "OUROBOROS_SCOPE_REVIEW_MODEL"):
         normalized["OUROBOROS_SCOPE_REVIEW_MODEL"] = scope_review_model
         changed_keys.append("OUROBOROS_SCOPE_REVIEW_MODEL")
+
+    scope_review_models = _normalize_direct_scope_review_models(normalized, provider)
+    if scope_review_models != _setting_text(normalized, "OUROBOROS_SCOPE_REVIEW_MODELS"):
+        normalized["OUROBOROS_SCOPE_REVIEW_MODELS"] = scope_review_models
+        changed_keys.append("OUROBOROS_SCOPE_REVIEW_MODELS")
 
     changed_keys = _unique_changed_keys(changed_keys)
     return normalized, bool(changed_keys), changed_keys

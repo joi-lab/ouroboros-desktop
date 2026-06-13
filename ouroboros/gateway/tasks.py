@@ -19,7 +19,6 @@ from ouroboros.headless import (
     ARTIFACT_STATUS_FAILED,
     ARTIFACT_STATUS_FINALIZING,
     ARTIFACT_STATUS_PENDING,
-    ARTIFACT_STATUS_READY,
     HEADLESS_TASKS_DIR,
     prepare_task_drive,
     task_artifacts_dir,
@@ -27,6 +26,13 @@ from ouroboros.headless import (
 )
 from ouroboros.platform_layer import bootstrap_process_path
 from ouroboros.task_results import STATUS_SCHEDULED, list_task_results, load_task_result, validate_task_id, write_task_result
+from ouroboros.task_status import (
+    FINAL_STATUSES,
+    effective_task_result,
+    find_child_tasks,
+    load_effective_task_result,
+)
+from ouroboros.tool_access import paths_overlap_casefold
 from ouroboros.utils import iter_jsonl_objects, utc_now_iso
 from ouroboros.workspace_preflight import (
     collect_workspace_preflight,
@@ -35,8 +41,6 @@ from ouroboros.workspace_preflight import (
 )
 
 
-_FINAL_STATUSES = {"completed", "failed", "cancelled", "rejected_duplicate"}
-_ARTIFACT_TERMINAL_STATUSES = {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}
 _LOG_SOURCES = (
     ("progress", ("logs", "progress.jsonl")),
     ("chat", ("logs", "chat.jsonl")),
@@ -44,6 +48,28 @@ _LOG_SOURCES = (
     ("tools", ("logs", "tools.jsonl")),
     ("supervisor", ("logs", "supervisor.jsonl")),
 )
+
+_RESERVED_METADATA_KEYS = frozenset({
+    "task_id",
+    "parent_task_id",
+    "root_task_id",
+    "session_id",
+    "actor_id",
+    "delegation_role",
+    "drive_root",
+    "child_drive_root",
+    "headless_child_drive_root",
+    "budget_drive_root",
+    "task_constraint",
+})
+
+
+def _external_subagent_label(body: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    role_values = [
+        body.get("delegation_role"),
+        metadata.get("delegation_role"),
+    ]
+    return any(str(value or "").strip().lower() == "subagent" for value in role_values)
 
 
 async def api_tasks_create(request: Request) -> JSONResponse:
@@ -93,15 +119,18 @@ async def api_tasks_create(request: Request) -> JSONResponse:
     except (TypeError, ValueError):
         return json_error("chat_id and depth must be integers", 400)
 
+    raw_metadata = dict(body.get("metadata") or {}) if isinstance(body.get("metadata"), dict) else {}
+    if _external_subagent_label(body, raw_metadata):
+        return json_error("delegation_role=subagent is only allowed through the internal schedule_subagent tool", 400)
+    if str(body.get("parent_task_id") or "").strip() or str(body.get("root_task_id") or "").strip():
+        return json_error("parent_task_id and root_task_id are internal lineage fields; external tasks must start as roots", 400)
+    metadata = {str(k): v for k, v in raw_metadata.items() if str(k) not in _RESERVED_METADATA_KEYS}
     child_drive = prepare_task_drive(drive_root, task_id, memory_mode) if workspace_root else None
-    metadata = dict(body.get("metadata") or {}) if isinstance(body.get("metadata"), dict) else {}
     metadata.setdefault("session_id", str(body.get("session_id") or uuid.uuid4().hex))
     metadata.setdefault("actor_id", str(body.get("actor_id") or "cli"))
-    metadata.setdefault("delegation_role", str(body.get("delegation_role") or "root"))
-    parent_task_id = str(body.get("parent_task_id") or "") or None
-    explicit_root = str(body.get("root_task_id") or "").strip()
-    parent_result = load_task_result(drive_root, parent_task_id) if parent_task_id else {}
-    root_task_id = explicit_root or str(parent_result.get("root_task_id") or "") or parent_task_id or task_id
+    metadata.setdefault("delegation_role", "root")
+    parent_task_id = None
+    root_task_id = task_id
     metadata.setdefault("task_id", task_id)
     metadata.setdefault("parent_task_id", parent_task_id or "")
     metadata.setdefault("root_task_id", root_task_id)
@@ -151,7 +180,9 @@ async def api_tasks_create(request: Request) -> JSONResponse:
     }
     if child_drive is not None:
         task["drive_root"] = str(child_drive)
+        task["child_drive_root"] = str(child_drive)
         task["budget_drive_root"] = str(drive_root)
+        metadata["child_drive_root"] = str(child_drive)
         metadata["budget_drive_root"] = str(drive_root)
     write_task_result(
         drive_root,
@@ -214,7 +245,7 @@ async def api_tasks_list(request: Request) -> JSONResponse:
     limit = max(1, min(coerce_int(request.query_params.get("limit"), 50), 500))
     drive_root = request_drive_root(request)
     wanted = {status.lower() for status in statuses}
-    rows = [_effective_task_result(drive_root, row) for row in list_task_results(drive_root)]
+    rows = [effective_task_result(drive_root, row) for row in list_task_results(drive_root)]
     if wanted:
         rows = [row for row in rows if str(row.get("status") or "").lower() in wanted]
     rows.sort(key=lambda item: str(item.get("ts") or ""), reverse=True)
@@ -227,7 +258,7 @@ async def api_task_get(request: Request) -> JSONResponse:
     except ValueError as exc:
         return json_error(str(exc), 400)
     drive_root = request_drive_root(request)
-    data = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+    data = load_effective_task_result(drive_root, task_id)
     if not data:
         return json_error("task not found", 404)
     return JSONResponse(data)
@@ -242,7 +273,7 @@ async def api_task_artifact(request: Request):
     if not name or "/" in name or "\\" in name or name in {".", ".."} or ".." in pathlib.PurePosixPath(name).parts:
         return json_error("artifact name must be a simple filename", 400)
     drive_root = request_drive_root(request)
-    result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+    result = load_effective_task_result(drive_root, task_id)
     if not result:
         return json_error("task not found", 404)
     artifact = _artifact_by_name(result, name)
@@ -303,11 +334,11 @@ async def api_task_events(request: Request) -> StreamingResponse:
                 cursor = int(event.get("seq") or cursor)
                 if str(event.get("type") or "") == "task_result":
                     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-                    emitted_final = str(data.get("status") or "").lower() in _FINAL_STATUSES
+                    emitted_final = str(data.get("status") or "").lower() in FINAL_STATUSES
                 yield _sse(event, event_id=cursor)
             if _is_task_final(drive_root, task_id):
                 if not emitted_final:
-                    result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+                    result = load_effective_task_result(drive_root, task_id)
                     if result:
                         final_event = {
                             "source": "task_result",
@@ -334,19 +365,40 @@ def iter_task_events(drive_root: pathlib.Path, task_id: str) -> List[Dict[str, A
 
     rows: List[Dict[str, Any]] = []
     roots = [pathlib.Path(drive_root)]
-    result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
+    task_filter_ids = {task_id}
+    result = load_effective_task_result(drive_root, task_id)
     suppress_task_done = _is_workspace_result(result) and str(result.get("artifact_status") or "").lower() in {
         ARTIFACT_STATUS_PENDING,
         ARTIFACT_STATUS_FINALIZING,
     }
     child = str(result.get("child_drive_root") or result.get("headless_child_drive_root") or "").strip()
     if child:
-        roots.append(pathlib.Path(child))
+        child_path = pathlib.Path(child)
+        if child_path not in roots:
+            roots.append(child_path)
+    for child_row in find_child_tasks(drive_root, parent_task_id=task_id, root_task_id=task_id):
+        child_id = str(child_row.get("task_id") or child_row.get("id") or "").strip()
+        if child_id:
+            task_filter_ids.add(child_id)
+        child_root = str(child_row.get("child_drive_root") or child_row.get("headless_child_drive_root") or "").strip()
+        if child_root:
+            child_path = pathlib.Path(child_root)
+            if child_path not in roots:
+                roots.append(child_path)
     for root in roots:
         for source, parts in _LOG_SOURCES:
             path = root.joinpath(*parts)
             for line_no, entry in enumerate(iter_jsonl_objects(path), 1):
-                if str(entry.get("task_id") or "") != task_id:
+                entry_task = str(entry.get("task_id") or "")
+                entry_subagent = str(entry.get("subagent_task_id") or "")
+                entry_parent = str(entry.get("parent_task_id") or "")
+                entry_root = str(entry.get("root_task_id") or "")
+                if (
+                    entry_task not in task_filter_ids
+                    and entry_subagent not in task_filter_ids
+                    and entry_parent != task_id
+                    and entry_root != task_id
+                ):
                     continue
                 event = _event_from_log_entry(source, line_no, entry, root)
                 if suppress_task_done and event.get("type") == "task_done":
@@ -386,58 +438,14 @@ def _event_from_log_entry(source: str, line_no: int, entry: Dict[str, Any], root
     }
 
 
-def _effective_task_result(drive_root: pathlib.Path, result: Dict[str, Any]) -> Dict[str, Any]:
-    if not result:
-        return {}
-    task_id = str(result.get("task_id") or result.get("id") or "").strip()
-    child_text = str(result.get("child_drive_root") or result.get("headless_child_drive_root") or "").strip()
-    if not task_id or not child_text:
-        return result
-    child_result = load_task_result(pathlib.Path(child_text), task_id) or {}
-    if not child_result:
-        return result
-    merged = dict(result)
-    parent_status = str(result.get("status") or "").lower()
-    child_status = str(child_result.get("status") or "").lower()
-    result_child_status = str(result.get("child_status") or "").lower()
-    copied_child_terminal = (
-        _is_workspace_result(result)
-        and result_child_status in _FINAL_STATUSES
-        and parent_status == result_child_status
-    )
-    preserve_parent_terminal = (
-        (parent_status in {"failed", "cancelled", "rejected_duplicate"} and not copied_child_terminal)
-        or (parent_status in _FINAL_STATUSES and child_status not in _FINAL_STATUSES)
-    )
-    parent_terminal_fields = {"status", "result", "error", "ts"} if preserve_parent_terminal else set()
-    for key, value in child_result.items():
-        if key in {"task_id", "parent_task_id", "root_task_id", "session_id", "actor_id", "delegation_role"}:
-            continue
-        if key in parent_terminal_fields:
-            continue
-        merged[key] = value
-    merged.setdefault("child_drive_root", child_text)
-    if (
-        _is_workspace_result(merged)
-        and child_status in _FINAL_STATUSES
-        and (parent_status not in {"failed", "cancelled", "rejected_duplicate"} or copied_child_terminal)
-    ):
-        artifact_status = str(merged.get("artifact_status") or "").lower()
-        if artifact_status not in _ARTIFACT_TERMINAL_STATUSES:
-            merged["child_status"] = child_status
-            merged["status"] = "running"
-            merged["artifact_status"] = ARTIFACT_STATUS_FINALIZING
-    return merged
-
-
 def _sse(event: Dict[str, Any], *, event_id: int) -> str:
     payload = json.dumps(event, ensure_ascii=False)
     return f"id: {event_id}\nevent: task_event\ndata: {payload}\n\n"
 
 
 def _is_task_final(drive_root: pathlib.Path, task_id: str) -> bool:
-    result = _effective_task_result(drive_root, load_task_result(drive_root, task_id) or {})
-    return str(result.get("status") or "").lower() in _FINAL_STATUSES
+    result = load_effective_task_result(drive_root, task_id)
+    return str(result.get("status") or "").lower() in FINAL_STATUSES
 
 
 def _resolve_workspace_root(
@@ -450,9 +458,6 @@ def _resolve_workspace_root(
     if not text:
         return None
     root = pathlib.Path(text).expanduser().resolve(strict=False)
-    if not root.exists() or not root.is_dir():
-        raise ValueError(f"workspace_root is not a directory: {text}")
-    bootstrap_process_path()
     system_repo = pathlib.Path(system_repo_dir).resolve(strict=False)
     drive = pathlib.Path(drive_root).resolve(strict=False)
     for protected_root, label in ((system_repo, "Ouroboros system repo"), (drive, "Ouroboros data drive")):
@@ -466,8 +471,13 @@ def _resolve_workspace_root(
                 overlaps = True
             except ValueError:
                 pass
+        if not overlaps and paths_overlap_casefold(root, protected_root):
+            overlaps = True
         if overlaps:
             raise ValueError(f"workspace_root must not overlap the {label}")
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"workspace_root is not a directory: {text}")
+    bootstrap_process_path()
     try:
         res = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -520,7 +530,7 @@ def _compose_task_text(
             f"workspace_root: {workspace_root}\n"
             f"workspace_mode: {workspace_mode or 'external'}\n"
             f"memory_mode: {memory_mode}\n"
-            "Use repo_read, repo_write, repo_list, code_search, git_status, git_diff, and run_shell against this target workspace, not the Ouroboros system repo.\n"
+            "Use read_file, write_file, list_files, search_code, vcs_status, vcs_diff, and run_command against this target workspace, not the Ouroboros system repo.\n"
             f"{render_workspace_preflight_summary(workspace_preflight)}\n"
             "Before editing, account for target-repo docs or root-level instructions if present.\n"
             "Project-local dependency installs are allowed in external workspace tasks; system/global installs are for runtime_mode=pro only and must be noninteractive.\n"

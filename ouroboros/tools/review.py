@@ -107,36 +107,64 @@ def _load_bible() -> str:
     return load_governance_doc(_REPO_ROOT, "BIBLE.md", on_missing="explicit")
 
 
-# Tool: multi_model_review.
+# Tool: task_acceptance_review.
 
 def get_tools():
     return [
         ToolEntry(
-            name="multi_model_review",
+            name="task_acceptance_review",
             schema={
-                "name": "multi_model_review",
+                "name": "task_acceptance_review",
                 "description": (
-                    "Send code or text to multiple LLM models for review/consensus. "
-                    "Each model reviews independently. Returns structured verdicts. "
-                    "Choose diverse models yourself. Budget is tracked automatically. "
-                    "BIBLE.md (Constitution) is automatically included as top-priority context."
+                    "Run independent reviewer slots over a task-result claim and evidence packet. "
+                    "Verdicts are advisory; if findings are valid, continue fixing or reject them with evidence."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "The code or text to review"},
-                        "prompt": {"type": "string", "description": "Review instructions — what to check for."},
-                        "models": {
-                            "type": "array", "items": {"type": "string"},
-                            "description": "OpenRouter model identifiers (e.g. 3 diverse models)",
-                        },
+                        "claim": {"type": "string", "description": "Final claim or task result the agent intends to release."},
+                        "goal": {"type": "string", "description": "Original task goal."},
+                        "evidence": {"type": "object", "description": "Relevant tool trace, artifacts, tests, and observed facts."},
+                        "checklist": {"type": "string", "default": "", "description": "Optional acceptance checklist."},
                     },
-                    "required": ["content", "prompt", "models"],
+                    "required": ["claim", "goal"],
                 },
             },
-            handler=_handle_multi_model_review,
+            handler=_handle_task_acceptance_review,
+            timeout_sec=900,
         )
     ]
+
+
+def _handle_task_acceptance_review(
+    ctx: ToolContext,
+    claim: str = "",
+    goal: str = "",
+    evidence: Optional[dict] = None,
+    checklist: str = "",
+) -> str:
+    from ouroboros.config import resolve_effort
+    from ouroboros.review_substrate import ReviewRequest, run_review_request, reviewer_slots
+
+    request = ReviewRequest(
+        surface="task_acceptance",
+        goal=goal,
+        subject=claim,
+        evidence=evidence or {},
+        checklist=checklist,
+        policy={
+            "verdict_is_advisory": True,
+            "raw_output_must_be_preserved": True,
+            "min_successful_slots": 2,
+            "fail_closed_on_errors": True,
+        },
+        task_id=str(getattr(ctx, "task_id", "") or ""),
+    )
+    slots = reviewer_slots(effort=resolve_effort("review"), role_hint="task acceptance")
+    if len(slots) < 2:
+        request.policy["min_successful_slots"] = max(1, len(slots))
+    result = run_review_request(request, slots=slots, drive_root=pathlib.Path(ctx.drive_root), usage_ctx=ctx)
+    return json.dumps(result.__dict__, ensure_ascii=False, indent=2, default=str)
 
 
 def _handle_multi_model_review(ctx: ToolContext, content: str = "",
@@ -160,32 +188,125 @@ def _handle_multi_model_review(ctx: ToolContext, content: str = "",
         return json.dumps({"error": f"Review failed: {e}"}, ensure_ascii=False)
 
 
-async def _query_model(llm_client: LLMClient, model: str, messages: list, semaphore):
+def _review_drive_root(ctx: Optional[ToolContext]) -> pathlib.Path:
+    if ctx is not None:
+        try:
+            return pathlib.Path(ctx.drive_root)
+        except Exception:
+            pass
+    try:
+        from ouroboros.config import DATA_DIR
+
+        return pathlib.Path(DATA_DIR)
+    except Exception:
+        return pathlib.Path("../data").resolve(strict=False)
+
+
+def _review_query_error_payload(
+    *,
+    ctx: Optional[ToolContext],
+    model: str,
+    messages: list,
+    slot_id: str,
+    error: str,
+) -> dict:
+    payload = {"error": error, "usage": {}, "prompt_ref": {}, "response_ref": {}}
+    try:
+        from ouroboros.observability import new_call_id, persist_call
+
+        drive_root = _review_drive_root(ctx)
+        task_id = str(getattr(ctx, "task_id", "") or "multi_model_review") if ctx is not None else "multi_model_review"
+        call_id = new_call_id(f"review_multi_model_review_{slot_id}_error")
+        payload["prompt_ref"] = persist_call(
+            drive_root,
+            task_id=task_id,
+            call_id=f"{call_id}_prompt",
+            call_type="multi_model_review_prompt",
+            payload={"messages": messages, "slot_id": slot_id, "model": model},
+            manifest={"surface": "multi_model_review", "slot_id": slot_id, "model": model, "synthetic": True},
+        )
+        payload["response_ref"] = persist_call(
+            drive_root,
+            task_id=task_id,
+            call_id=f"{call_id}_error",
+            call_type="multi_model_review_error",
+            payload={"error": error},
+            manifest={"surface": "multi_model_review", "slot_id": slot_id, "model": model, "status": "error", "synthetic": True},
+        )
+    except Exception:
+        pass
+    return payload
+
+
+async def _query_model(
+    llm_client: LLMClient,
+    model: str,
+    messages: list,
+    semaphore,
+    ctx: Optional[ToolContext] = None,
+    slot_id: str = "multi_model_slot",
+):
     async with semaphore:
         timeout_sec = _review_model_timeout_sec()
         try:
-            msg, usage = await asyncio.wait_for(
-                llm_client.chat_async(
-                    messages=messages,
-                    model=model,
-                    reasoning_effort="medium",
-                    max_tokens=65536,
-                    temperature=0.2,
-                    no_proxy=True,
+            from ouroboros.review_substrate import ReviewRequest, ReviewSlot, run_review_request
+
+            request = ReviewRequest(
+                surface="multi_model_review",
+                goal="Run independent multi-model review over the supplied evidence.",
+                messages=messages,
+                task_id=str(getattr(ctx, "task_id", "") or "multi_model_review") if ctx is not None else "multi_model_review",
+                call_type="multi_model_review",
+                max_tokens=65536,
+                temperature=0.2,
+                no_proxy=True,
+            )
+            slot = ReviewSlot(
+                slot_id=slot_id,
+                model=model,
+                effort="medium",
+                timeout_sec=timeout_sec,
+                max_tokens=65536,
+                temperature=0.2,
+                role_hint="multi-model review",
+            )
+            loop = asyncio.get_running_loop()
+            run_result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: run_review_request(
+                        request,
+                        slots=[slot],
+                        drive_root=_review_drive_root(ctx),
+                        llm=llm_client,
+                        usage_ctx=None,
+                    ),
                 ),
                 timeout=timeout_sec,
             )
+            actor = (run_result.actors or [{}])[0]
+            if actor.get("status") not in {"ok", "empty"}:
+                return model, {
+                    "error": f"Error: {actor.get('error') or actor.get('status') or 'review failed'}",
+                    "usage": actor.get("usage") or {},
+                    "prompt_ref": actor.get("prompt_ref") or {},
+                    "response_ref": actor.get("response_ref") or {},
+                }, None
             payload = {
-                "choices": [{"message": {"content": msg.get("content") or ""}}],
-                "usage": usage or {},
+                "choices": [{"message": {"content": actor.get("raw_text") or ""}}],
+                "usage": actor.get("usage") or {},
+                "prompt_ref": actor.get("prompt_ref") or {},
+                "response_ref": actor.get("response_ref") or {},
             }
             return model, payload, None
         except asyncio.TimeoutError:
-            return model, f"Error: Timeout after {_format_timeout_seconds(timeout_sec)}s", None
+            error = f"Error: Timeout after {_format_timeout_seconds(timeout_sec)}s"
+            return model, _review_query_error_payload(ctx=ctx, model=model, messages=messages, slot_id=slot_id, error=error), None
         except Exception as e:
             # Preserve full review errors; helper adds an omission note if needed.
             error_msg = truncate_review_artifact(str(e), limit=4000)
-            return model, f"Error: {error_msg}", None
+            error = f"Error: {error_msg}"
+            return model, _review_query_error_payload(ctx=ctx, model=model, messages=messages, slot_id=slot_id, error=error), None
 
 
 async def _multi_model_review_async(content: str, prompt: str,
@@ -222,7 +343,10 @@ async def _multi_model_review_async(content: str, prompt: str,
 
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     llm_client = LLMClient()
-    tasks = [_query_model(llm_client, m, messages, semaphore) for m in models]
+    tasks = [
+        _query_model(llm_client, m, messages, semaphore, ctx, slot_id=f"multi_model_slot_{idx + 1}")
+        for idx, m in enumerate(models)
+    ]
     results = await asyncio.gather(*tasks)
 
     review_results = []
@@ -255,6 +379,14 @@ def _parse_model_response(model: str, result, headers_dict) -> dict:
     usage = result.get("usage", {}) if isinstance(result, dict) else {}
     resolved_model = str(usage.get("resolved_model") or model)
     provider = str(usage.get("provider") or "openrouter")
+    if isinstance(result, dict) and result.get("error"):
+        return {
+            "model": resolved_model, "request_model": model,
+            "provider": provider, "verdict": "ERROR", "text": str(result.get("error") or ""),
+            "tokens_in": 0, "tokens_out": 0, "cost_estimate": 0.0,
+            "prompt_ref": result.get("prompt_ref", {}),
+            "response_ref": result.get("response_ref", {}),
+        }
     if isinstance(result, str):
         return {
             "model": resolved_model, "request_model": model,
@@ -319,6 +451,8 @@ def _parse_model_response(model: str, result, headers_dict) -> dict:
         "cached_tokens": cached_tokens, "cache_write_tokens": cache_write_tokens,
         "prompt_cache_ttl": prompt_cache_ttl,
         "cost_estimate": cost,
+        "prompt_ref": result.get("prompt_ref", {}) if isinstance(result, dict) else {},
+        "response_ref": result.get("response_ref", {}) if isinstance(result, dict) else {},
     }
 
 
@@ -463,8 +597,8 @@ def _preflight_check(commit_message: str, staged_files: str,
             f"⚠️ PREFLIGHT_BLOCKED: Staged diff is incomplete — fix before review.\n"
             f"  Missing from staged: {', '.join(missing)}\n"
             f"  Currently staged: {', '.join(sorted(staged_set)) or '(none)'}\n\n"
-            "Stage all related files together. Use repo_write for all files first,\n"
-            "then repo_commit to stage and commit everything in one diff."
+            "Stage all related files together. Use write_file for all files first,\n"
+            "then commit_reviewed to stage and commit everything in one diff."
         )
 
     # Python logic touched without active tests staged.
@@ -752,7 +886,7 @@ def _build_critical_block_message(
     retry_coaching = build_self_verification_template(
         self_verify_findings,
         attempt_idx=ctx._review_iteration_count,
-        tool_name="repo_commit",
+        tool_name="commit_reviewed",
         context_noun="diff",
     )
 

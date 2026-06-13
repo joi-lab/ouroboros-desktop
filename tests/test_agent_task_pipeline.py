@@ -30,8 +30,8 @@ def test_task_summary_prefers_direct_model_when_openrouter_missing(tmp_path, mon
         env=None,
         llm=FakeLlm(),
         task={"id": "task-123", "type": "task", "text": "Reply with exactly OK."},
-        usage={"rounds": 3, "cost": 0.01},
-        llm_trace={"tool_calls": [{"tool": "repo_read", "args": {}}], "reasoning_notes": []},
+        usage={"rounds": 3, "cost": 0.01, "result_status": "failed", "reason_code": "empty_final_text"},
+        llm_trace={"tool_calls": [{"tool": "read_file", "args": {}}], "reasoning_notes": []},
         drive_logs=drive_logs,
     )
 
@@ -44,6 +44,8 @@ def test_task_summary_prefers_direct_model_when_openrouter_missing(tmp_path, mon
     # Non-trivial task metadata is persisted
     assert payload["tool_calls"] == 1
     assert payload["rounds"] == 3
+    assert payload["result_status"] == "failed"
+    assert payload["reason_code"] == "empty_final_text"
 
 
 def test_task_summary_keeps_openrouter_model_when_key_present(monkeypatch):
@@ -131,7 +133,7 @@ def test_emit_task_results_queues_restart_after_final_events(tmp_path, monkeypat
 def test_build_trace_summary_shows_structured_failure_facts():
     trace = {
         "tool_calls": [{
-            "tool": "run_shell",
+            "tool": "run_command",
             "args": {"cmd": ["npm", "install", "-g", "@anthropic-ai/claude-code"]},
             "result": "⚠️ SHELL_EXIT_ERROR: command exited with exit_code=-9 (signal=SIGKILL).",
             "is_error": True,
@@ -148,6 +150,19 @@ def test_build_trace_summary_shows_structured_failure_facts():
     assert "exit_code=-9" in summary
     assert "signal=SIGKILL" in summary
     assert "Agent notes (supplementary, not source of truth)" in summary
+
+    long_trace = {
+        "tool_calls": [
+            {
+                "tool": "run_command",
+                "args": {"cmd": "x" * 5000},
+                "is_error": False,
+            }
+            for _ in range(40)
+        ],
+        "reasoning_notes": ["note" * 2000],
+    }
+    assert "OMISSION NOTE" in pipeline.build_trace_summary(long_trace)
 
 
 def test_task_summary_prompt_includes_review_evidence(tmp_path, monkeypatch):
@@ -169,7 +184,7 @@ def test_task_summary_prompt_includes_review_evidence(tmp_path, monkeypatch):
         llm=FakeLlm(),
         task={"id": "task-review", "type": "task", "text": "Fix commit flow"},
         usage={"rounds": 4, "cost": 0.02},
-        llm_trace={"tool_calls": [{"tool": "repo_commit", "args": {}}], "reasoning_notes": []},
+        llm_trace={"tool_calls": [{"tool": "commit_reviewed", "args": {}}], "reasoning_notes": []},
         drive_logs=drive_logs,
         review_evidence={
             "has_evidence": True,
@@ -205,7 +220,7 @@ def test_trivial_task_summary_bypasses_llm_and_uses_short_format(tmp_path):
         env=None,
         llm=FailIfCalledLlm(),
         task={"id": "task-trivial", "type": "task", "text": "Say hi"},
-        usage={"rounds": 1, "cost": 0.0},
+        usage={"rounds": 1, "cost": 0.0, "result_status": "infra_failed", "reason_code": "llm_api_error"},
         llm_trace={"tool_calls": [], "reasoning_notes": []},
         drive_logs=drive_logs,
     )
@@ -216,6 +231,8 @@ def test_trivial_task_summary_bypasses_llm_and_uses_short_format(tmp_path):
     assert payload["text"] == "Task task-trivial (task): Say hi. 1r, $0.00."
     assert payload["tool_calls"] == 0
     assert payload["rounds"] == 1
+    assert payload["result_status"] == "infra_failed"
+    assert payload["reason_code"] == "llm_api_error"
 
 
 def test_multi_round_zero_tool_task_uses_llm_summary_prompt(tmp_path, monkeypatch):
@@ -286,6 +303,74 @@ def test_store_task_result_preserves_failed_status(tmp_path):
     assert payload["result"] == "final failure reply"
 
 
+def test_store_task_result_marks_unresolved_tool_failure_failed(tmp_path):
+    from ouroboros.task_results import STATUS_FAILED
+
+    env = SimpleNamespace(drive_root=tmp_path)
+
+    pipeline._store_task_result(
+        env=env,
+        task={"id": "task-tool-failed", "type": "task", "text": "make file"},
+        text="Created the file.",
+        usage={"rounds": 2, "cost": 0.0},
+        llm_trace={
+            "tool_calls": [{
+                "tool": "run_command",
+                "args": {"cmd": "python3 -c ..."},
+                "result": "⚠️ ARTIFACT_OUTPUT_ERROR: undeclared output",
+                "is_error": True,
+                "status": "artifact_output_error",
+            }],
+            "reasoning_notes": [],
+        },
+        review_evidence={},
+    )
+
+    payload = json.loads((tmp_path / "task_results" / "task-tool-failed.json").read_text(encoding="utf-8"))
+    assert payload["status"] == STATUS_FAILED
+    assert payload["result_status"] == "failed"
+    assert payload["reason_code"] == "tool_failure"
+    assert payload["loop_outcome"]["failure"]["tool_errors"][0]["status"] == "artifact_output_error"
+
+
+def test_store_task_result_allows_recovered_tool_failure_success(tmp_path):
+    from ouroboros.task_results import STATUS_COMPLETED
+
+    env = SimpleNamespace(drive_root=tmp_path)
+
+    pipeline._store_task_result(
+        env=env,
+        task={"id": "task-tool-recovered", "type": "task", "text": "make file"},
+        text="Created the file.",
+        usage={"rounds": 3, "cost": 0.0},
+        llm_trace={
+            "tool_calls": [
+                {
+                    "tool": "edit_text",
+                    "args": {"path": "Desktop/report.html"},
+                    "result": "⚠️ EDIT_TEXT_ERROR: old_str matched 0 times",
+                    "is_error": True,
+                    "status": "edit_text_blocked",
+                },
+                {
+                    "tool": "write_file",
+                    "args": {"root": "user_files", "path": "Desktop/report.html"},
+                    "result": "OK: wrote user_files:Desktop/report.html\nARTIFACT_OUTPUTS: registered user file -> artifact_store:report.html",
+                    "is_error": False,
+                    "status": "ok",
+                },
+            ],
+            "reasoning_notes": [],
+        },
+        review_evidence={},
+    )
+
+    payload = json.loads((tmp_path / "task_results" / "task-tool-recovered.json").read_text(encoding="utf-8"))
+    assert payload["status"] == STATUS_COMPLETED
+    assert payload["result_status"] == "succeeded"
+    assert payload["loop_outcome"]["failure"] is None
+
+
 def test_collect_review_evidence_keeps_recent_attempts_task_scoped(tmp_path):
     from ouroboros.review_evidence import collect_review_evidence
     from ouroboros.review_state import AdvisoryReviewState, CommitAttemptRecord, make_repo_key, save_state
@@ -300,7 +385,7 @@ def test_collect_review_evidence_keeps_recent_attempts_task_scoped(tmp_path):
         commit_message="other task attempt",
         status="blocked",
         repo_key=make_repo_key(repo_dir),
-        tool_name="repo_commit",
+        tool_name="commit_reviewed",
         task_id="task-other",
         attempt=1,
         block_reason="critical_findings",
@@ -366,7 +451,7 @@ def test_run_reflection_returns_entry_when_generated(tmp_path):
         FakeLlm(),
         {"id": "task-reflect", "type": "task", "text": "Fix it"},
         {"rounds": 2, "cost": 0.01},
-        {"tool_calls": [{"tool": "repo_commit", "is_error": False, "result": "⚠️ REVIEW_BLOCKED"}]},
+        {"tool_calls": [{"tool": "commit_reviewed", "is_error": False, "result": "⚠️ REVIEW_BLOCKED"}]},
         {"recent_attempts": [], "open_obligations": [{"item": "tests_affected", "reason": "Fix the failing test before commit"}]},
     )
 
@@ -412,7 +497,7 @@ def test_collect_review_evidence_scopes_open_obligations_to_repo(tmp_path):
         commit_message="repo b blocked",
         status="blocked",
         repo_key=repo_b_key,
-        tool_name="repo_commit",
+        tool_name="commit_reviewed",
         task_id="task-b",
         attempt=1,
         block_reason="critical_findings",
@@ -454,7 +539,7 @@ def test_collect_review_evidence_includes_commit_readiness_debt(tmp_path):
             commit_message=f"blocked {idx}",
             status="blocked",
             repo_key=repo_key,
-            tool_name="repo_commit",
+            tool_name="commit_reviewed",
             task_id=f"task-{idx}",
             attempt=idx,
             block_reason="critical_findings",

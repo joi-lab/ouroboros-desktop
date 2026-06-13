@@ -426,7 +426,7 @@ def build_self_verification_template(
     findings: list,
     *,
     attempt_idx: int,
-    tool_name: str = "repo_commit",
+    tool_name: str = "commit_reviewed",
     context_noun: str = "diff",
 ) -> str:
     """Return retry self-verification text, with circuit-breaker hint at attempt 3+."""
@@ -703,10 +703,12 @@ def paths_from_name_status(name_status_text: str, *, include_sources_for_renames
     return [path for path in paths if path]
 
 
-def build_scope_actor_record(scope_result: object, *, fallback_model_id: str = "") -> dict:
+def build_scope_actor_record(scope_result: object, *, fallback_model_id: str = "", slot_id: str = "") -> dict:
     critical_findings = list(getattr(scope_result, "critical_findings", None) or [])
     advisory_findings = list(getattr(scope_result, "advisory_findings", None) or [])
     return {
+        "slot": slot_id,
+        "slot_id": slot_id,
         "model_id": getattr(scope_result, "model_id", "") or fallback_model_id,
         "status": getattr(scope_result, "status", "responded"),
         "raw_text": getattr(scope_result, "raw_text", ""),
@@ -715,6 +717,8 @@ def build_scope_actor_record(scope_result: object, *, fallback_model_id: str = "
         "tokens_out": getattr(scope_result, "tokens_out", 0),
         "cost_usd": getattr(scope_result, "cost_usd", 0.0),
         "context_manifest": getattr(scope_result, "context_manifest", {}) or {},
+        "prompt_ref": getattr(scope_result, "prompt_ref", {}) or {},
+        "response_ref": getattr(scope_result, "response_ref", {}) or {},
         "parsed_items": critical_findings + advisory_findings,  # scope has one reviewer; match triad shape.
         "critical_findings": critical_findings,
         "advisory_findings": advisory_findings,

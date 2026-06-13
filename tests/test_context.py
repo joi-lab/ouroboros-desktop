@@ -100,6 +100,10 @@ def test_runtime_section_includes_light_runtime_mode_rule(tmp_path, monkeypatch)
 
     assert payload["runtime_mode"] == "light"
     assert "forbids Ouroboros repo mutation" in payload["runtime_mode_rule"]
+    assert "user_files" in payload["runtime_mode_rule"]
+    assert "artifact_store" in payload["runtime_mode_rule"]
+    assert "explicit scoped skill-payload work/repair" in payload["runtime_mode_rule"]
+    assert "runtime_data/uploads" in payload["runtime_mode_rule"]
 
 
 def test_runtime_section_omits_light_rule_for_advanced(tmp_path, monkeypatch):
@@ -374,7 +378,7 @@ class TestAdvisoryReviewStatusInContext:
             commit_message="blocked commit",
             status="blocked",
             repo_key=repo_key,
-            tool_name="repo_commit",
+            tool_name="commit_reviewed",
             task_id="task-old",
             attempt=1,
             critical_findings=[{
@@ -394,7 +398,7 @@ class TestAdvisoryReviewStatusInContext:
                 source="blocked_review",
                 stage="blocking_review",
                 repo_key=repo_key,
-                tool_name="repo_commit",
+                tool_name="commit_reviewed",
                 attempt=1,
                 block_reason="critical_findings",
                 critical_findings=[{
@@ -469,7 +473,7 @@ class TestAdvisoryReviewStatusInContext:
             commit_message="repo b blocked",
             status="blocked",
             repo_key=repo_b_key,
-            tool_name="repo_commit",
+            tool_name="commit_reviewed",
             task_id="task-b",
             attempt=1,
             block_reason="critical_findings",

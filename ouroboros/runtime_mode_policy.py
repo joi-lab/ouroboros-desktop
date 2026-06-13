@@ -17,6 +17,7 @@ SAFETY_CRITICAL_PATHS = frozenset({
     "BIBLE.md",
     "ouroboros/safety.py",
     "ouroboros/runtime_mode_policy.py",
+    "ouroboros/tools/extension_dispatch.py",
     "ouroboros/tools/registry.py",
     "prompts/SAFETY.md",
 })
@@ -50,7 +51,7 @@ PROTECTED_RUNTIME_PATHS = (
 )
 
 # Case-insensitive lookup tables. On case-insensitive filesystems (macOS HFS+
-# default, Windows NTFS), `repo_write("bible.md", ...)` writes to BIBLE.md
+# default, Windows NTFS), `write_file(path="bible.md", ...)` writes to BIBLE.md
 # but the literal string "bible.md" doesn't match SAFETY_CRITICAL_PATHS' uppercase
 # entry, bypassing the safety guard. Matching the lowercased form via these
 # frozensets closes the bypass.
@@ -78,7 +79,7 @@ def protected_path_category(path: str) -> str:
     """Return the protected-surface category for *path*, or ``""``.
 
     Lookup is case-insensitive. On case-insensitive filesystems (macOS
-    HFS+ default, Windows NTFS), `repo_write("bible.md", ...)` writes to
+    HFS+ default, Windows NTFS), `write_file(path="bible.md", ...)` writes to
     BIBLE.md but the literal lowercase string would bypass the strict
     uppercase membership check. Compare lowercased forms to close the
     bypass.
@@ -160,4 +161,3 @@ def core_patch_notice(paths: Iterable[ProtectedPath | str]) -> str:
         f"{format_protected_paths(paths)}. These changes can be committed only "
         "through the normal triad + scope review pipeline."
     )
-

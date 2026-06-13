@@ -69,6 +69,18 @@ def _seed_disk(settings_path: pathlib.Path, payload: dict) -> None:
     settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _clear_safety_provider_env(monkeypatch) -> None:
+    """Keep post-check tests from depending on live safety LLM credentials."""
+    for key in (
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "CLOUDRU_FOUNDATION_MODELS_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # 1. save_settings chokepoint
 # ---------------------------------------------------------------------------
@@ -619,7 +631,7 @@ def test_generic_settings_save_preserves_pending_runtime_mode_without_hot_apply(
     assert save_resp.status_code == 200, save_resp.text
     on_disk = json.loads(isolated_settings.read_text(encoding="utf-8"))
     assert on_disk["OUROBOROS_RUNTIME_MODE"] == next_mode
-    assert on_disk["TOTAL_BUDGET"] == "77"
+    assert on_disk["TOTAL_BUDGET"] == 77.0
     assert os.environ["OUROBOROS_RUNTIME_MODE"] == "advanced"
     assert os.environ["OUROBOROS_BOOT_RUNTIME_MODE"] == "advanced"
 
@@ -1189,7 +1201,7 @@ def test_set_tool_timeout_sanitizes_corrupted_disk_to_env(isolated_settings, mon
 def test_elevation_indicators_block_attack_patterns_in_all_modes(blocked_cmd, tmp_path, monkeypatch):
     """Iteration-2 fix (real triad finding T1, iter-2 multi-critic F2-6):
     the elevation indicators block actual attack patterns — runs
-    ``ToolRegistry.execute("run_shell", ...)`` end-to-end in each
+    ``ToolRegistry.execute("run_command", ...)`` end-to-end in each
     runtime mode and asserts ``ELEVATION_BLOCKED`` is returned. The
     earlier string-level test only verified substring presence; this
     covers the dispatch wiring."""
@@ -1198,7 +1210,7 @@ def test_elevation_indicators_block_attack_patterns_in_all_modes(blocked_cmd, tm
     for mode in ("light", "advanced", "pro"):
         monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", mode)
         reg = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
-        result = reg.execute("run_shell", {"cmd": blocked_cmd})
+        result = reg.execute("run_command", {"cmd": blocked_cmd})
         assert "ELEVATION_BLOCKED" in result, (
             f"mode={mode!r} cmd={blocked_cmd!r}: "
             f"got {result[:200]!r}"
@@ -1227,7 +1239,7 @@ def test_elevation_indicators_do_not_false_positive(diagnostic_cmd, tmp_path, mo
 
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
-    result = reg.execute("run_shell", {"cmd": diagnostic_cmd})
+    result = reg.execute("run_command", {"cmd": diagnostic_cmd})
     assert "ELEVATION_BLOCKED" not in result, (
         f"Diagnostic cmd {diagnostic_cmd!r} was wrongly blocked as "
         "elevation attempt. The conjunctive check should let this pass."
@@ -1381,6 +1393,7 @@ def test_files_api_owner_only_helper_blocks_symlinked_skill_state_dir(tmp_path, 
 def test_run_shell_blocks_obfuscated_skill_owner_state_write(filename, tmp_path, monkeypatch):
     from ouroboros.tools.registry import ToolRegistry
 
+    _clear_safety_provider_env(monkeypatch)
     drive_root = tmp_path / "data"
     skill_state_dir = drive_root / "state" / "skills" / "weather"
     skill_state_dir.mkdir(parents=True)
@@ -1397,7 +1410,7 @@ def test_run_shell_blocks_obfuscated_skill_owner_state_write(filename, tmp_path,
     )
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = ToolRegistry(repo_dir=tmp_path, drive_root=drive_root)
-    result = reg.execute("run_shell", {"cmd": ["python3", str(helper_path), str(drive_root)]})
+    result = reg.execute("run_command", {"cmd": ["python3", str(helper_path), str(drive_root)]})
     assert "OWNER_STATE_RESTORED" in result
     assert not (skill_state_dir / filename).exists()
 
@@ -1425,7 +1438,7 @@ def test_run_shell_blocks_delayed_skill_owner_state_writer(tmp_path, monkeypatch
     )
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = ToolRegistry(repo_dir=tmp_path, drive_root=drive_root)
-    result = reg.execute("run_shell", {"cmd": [sys.executable, "-c", parent_code, str(drive_root), child_code]})
+    result = reg.execute("run_command", {"cmd": [sys.executable, "-c", parent_code, str(drive_root), child_code]})
     assert "SKILL_STATE_WRITE_BLOCKED" in result
     time.sleep(1.4)
     assert not (skill_state_dir / "review.json").exists()
@@ -1444,7 +1457,7 @@ def test_run_shell_blocks_detached_skill_state_command(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = ToolRegistry(repo_dir=tmp_path, drive_root=drive_root)
-    result = reg.execute("run_shell", {"cmd": [sys.executable, "-c", code]})
+    result = reg.execute("run_command", {"cmd": [sys.executable, "-c", code]})
     assert "SKILL_STATE_WRITE_BLOCKED" in result
 
 
@@ -1452,6 +1465,7 @@ def test_run_shell_scans_scripts_relative_to_cwd(tmp_path, monkeypatch):
     from ouroboros.tools.registry import ToolRegistry
     import sys
 
+    _clear_safety_provider_env(monkeypatch)
     repo_dir = tmp_path / "repo"
     subdir = repo_dir / "sub"
     subdir.mkdir(parents=True)
@@ -1468,7 +1482,7 @@ def test_run_shell_scans_scripts_relative_to_cwd(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     reg = ToolRegistry(repo_dir=repo_dir, drive_root=drive_root)
-    result = reg.execute("run_shell", {"cmd": [sys.executable, "evil.py", str(drive_root)], "cwd": "sub"})
+    result = reg.execute("run_command", {"cmd": [sys.executable, "evil.py", str(drive_root)], "cwd": "sub"})
     assert "OWNER_STATE_RESTORED" in result
     assert not (drive_root / "state" / "skills" / "weather" / "review.json").exists()
 

@@ -115,7 +115,8 @@ class TestPathGuard:
         assert result != {}
         assert "deny" in str(result)
 
-    def test_blocks_safety_critical_file(self, tmp_path):
+    def test_blocks_safety_critical_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
         guard = make_path_guard(str(tmp_path))
         for critical in SAFETY_CRITICAL:
             result = self._run(guard(
@@ -124,13 +125,14 @@ class TestPathGuard:
             ))
             assert "deny" in str(result), f"Should block {critical}"
 
-    def test_blocks_safety_critical_with_backslash_paths(self, tmp_path):
+    def test_blocks_safety_critical_with_backslash_paths(self, tmp_path, monkeypatch):
         """Safety-critical check must work regardless of OS path separator.
 
         On Windows os.path.relpath returns backslashes. The guard must normalize
         to forward slashes (via pathlib.as_posix) before comparing against
         SAFETY_CRITICAL which uses forward slashes.
         """
+        monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
         guard = make_path_guard(str(tmp_path))
         # Simulate a Windows-style resolved path by using the native separator
         for critical in SAFETY_CRITICAL:
@@ -143,6 +145,14 @@ class TestPathGuard:
             assert "deny" in str(result), (
                 f"Should block '{critical}' even with native path separators"
             )
+
+    def test_can_disable_runtime_path_guard_for_external_workspaces(self, tmp_path):
+        guard = make_path_guard(str(tmp_path), protect_runtime_paths=False)
+        result = self._run(guard(
+            {"tool_name": "Edit", "tool_input": {"file_path": str(tmp_path / ".github" / "workflows" / "ci.yml")}},
+            "tid-external-ci", None,
+        ))
+        assert result == {}
 
     def test_allows_read_tool(self, tmp_path):
         guard = make_path_guard(str(tmp_path))
@@ -159,6 +169,26 @@ class TestPathGuard:
             "tid-escape", None,
         ))
         assert "deny" in str(result)
+
+    def test_applies_external_write_path_blocker(self, tmp_path):
+        guard = make_path_guard(
+            str(tmp_path),
+            protect_runtime_paths=False,
+            write_path_blocker=lambda target: "path is credential-like" if target.name == ".env" else "",
+        )
+
+        blocked = self._run(guard(
+            {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / ".env")}},
+            "tid-user-files-secret", None,
+        ))
+        allowed = self._run(guard(
+            {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "report.html")}},
+            "tid-user-files-report", None,
+        ))
+
+        assert "deny" in str(blocked)
+        assert "credential-like" in str(blocked)
+        assert allowed == {}
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +252,11 @@ class TestProjectContext:
         ctx = _load_project_context(tmp_path)
         assert ctx == ""  # no docs, empty context
 
-    def test_truncates_large_docs(self, tmp_path):
+    def test_preserves_large_governance_docs(self, tmp_path):
         (tmp_path / "BIBLE.md").write_text("x" * 100_000, encoding="utf-8")
         ctx = _load_project_context(tmp_path)
-        assert "truncated" in ctx.lower()
+        assert "truncated" not in ctx.lower()
+        assert "x" * 100_000 in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +363,12 @@ class TestSDKAPISurface:
         assert " query," not in src
         assert "query(prompt=prompt" not in src
 
+    def test_edit_mode_allows_write_tool_for_new_files(self):
+        """Edit mode must allow SDK Write for new-file deliverables."""
+        src = self._gateway_source()
+        assert 'allowed_tools=["Read", "Edit", "Write", "Grep", "Glob"]' in src
+        assert 'matcher="Edit|Write|MultiEdit"' in src
+
 
 # ---------------------------------------------------------------------------
 # SDK-only path: ImportError and failure diagnostics
@@ -347,23 +384,14 @@ class TestSDKOnlyPath:
 
         ctx = SimpleNamespace(
             repo_dir=tmp_path,
+            drive_root=tmp_path,
             branch_dev="ouroboros",
             pending_events=[],
             emit_progress_fn=lambda _: None,
         )
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
 
-        # Patch run_edit to raise ImportError
         import ouroboros.gateways.claude_code as gw_mod
-        monkeypatch.setattr(gw_mod, "run_edit", None)
-
-        # Patch the import itself
-        import builtins
-        real_import = builtins.__import__
-        def mock_import(name, *args, **kwargs):
-            if name == "ouroboros.gateways.claude_code":
-                raise ImportError("claude-agent-sdk not installed")
-            return real_import(name, *args, **kwargs)
 
         # Directly test the error message in the function
         from ouroboros.tools.shell import _claude_code_edit
@@ -375,23 +403,13 @@ class TestSDKOnlyPath:
         import ouroboros.utils as utils_mod
         monkeypatch.setattr(utils_mod, "run_cmd", lambda *args, **kwargs: None)
 
-        # Simulate SDK ImportError in the try block
-        original_run_edit = None
-        try:
-            import ouroboros.gateways.claude_code as gw
-            original_run_edit = gw.run_edit
-        except Exception:
-            pass
-
-        # Patch to raise ImportError
         def raise_import_error(*args, **kwargs):
             raise ImportError("No module named 'claude_agent_sdk'")
 
-        if original_run_edit is not None:
-            monkeypatch.setattr("ouroboros.gateways.claude_code.run_edit", raise_import_error)
-            result = _claude_code_edit(ctx, "Test prompt")
-            assert "CLAUDE_CODE_UNAVAILABLE" in result
-            assert "claude-agent-sdk" in result
+        monkeypatch.setattr(gw_mod, "run_edit", raise_import_error)
+        result = _claude_code_edit(ctx, "Test prompt")
+        assert "CLAUDE_CODE_UNAVAILABLE" in result
+        assert "claude-agent-sdk" in result
 
     def test_advisory_returns_error_when_sdk_missing(self, monkeypatch, tmp_path):
         """When SDK not installed → advisory returns install hint."""

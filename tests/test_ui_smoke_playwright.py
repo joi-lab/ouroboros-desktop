@@ -86,7 +86,7 @@ def _run_docker_ui_assertions(url: str) -> None:
 
 
 @pytest.fixture()
-def direct_server(tmp_path):
+def direct_server_with_data(tmp_path):
     if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
         pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1 to run browser UI smoke")
     with MockLLMServer() as llm:
@@ -128,7 +128,7 @@ def direct_server(tmp_path):
         url = f"http://127.0.0.1:{port}"
         try:
             _wait_health(url)
-            yield url
+            yield {"url": url, "data_dir": data_dir}
         finally:
             proc.terminate()
             try:
@@ -136,6 +136,11 @@ def direct_server(tmp_path):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+
+
+@pytest.fixture()
+def direct_server(direct_server_with_data):
+    return direct_server_with_data["url"]
 
 
 @pytest.mark.ui_browser
@@ -172,6 +177,174 @@ def test_ui_smoke_direct_mode_creates_task_with_mock_provider(direct_server):
                     }"""
                 )
                 assert metrics["remaining"] <= 4, metrics
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc).lower():
+            pytest.skip(str(exc))
+        raise
+
+
+@pytest.mark.ui_browser
+def test_ui_smoke_direct_mode_nests_subagent_child_cards(direct_server_with_data):
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    data_dir = direct_server_with_data["data_dir"]
+    logs_dir = data_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "ts": "2026-05-25T10:00:00+00:00",
+            "chat_id": 1,
+            "task_id": "parent1",
+            "content": "Parent task started",
+            "is_progress": True,
+        },
+        {
+            "ts": "2026-05-25T10:00:01+00:00",
+            "chat_id": 1,
+            "task_id": "child1",
+            "content": "Scheduled subagent child1",
+            "is_progress": True,
+            "delegation_role": "subagent",
+            "subagent_event": "scheduled",
+            "subagent_task_id": "child1",
+            "parent_task_id": "parent1",
+            "root_task_id": "parent1",
+            "subagent_role": "researcher",
+        },
+        {
+            "ts": "2026-05-25T10:00:02+00:00",
+            "chat_id": 1,
+            "task_id": "child1",
+            "content": "Subagent child1 running",
+            "is_progress": True,
+            "delegation_role": "subagent",
+            "subagent_event": "running",
+            "subagent_task_id": "child1",
+            "parent_task_id": "parent1",
+            "root_task_id": "parent1",
+            "subagent_role": "researcher",
+            "status": "running",
+        },
+        {
+            "ts": "2026-05-25T10:00:02.500000+00:00",
+            "chat_id": 1,
+            "task_id": "child1",
+            "content": "Searching evidence",
+            "is_progress": True,
+            "delegation_role": "subagent",
+            "subagent_event": "progress",
+            "subagent_task_id": "child1",
+            "parent_task_id": "parent1",
+            "root_task_id": "parent1",
+            "subagent_role": "researcher",
+            "status": "running",
+        },
+        {
+            "ts": "2026-05-25T10:00:03+00:00",
+            "chat_id": 1,
+            "task_id": "child1",
+            "content": "Subagent child1 completed",
+            "is_progress": True,
+            "delegation_role": "subagent",
+            "subagent_event": "completed",
+            "subagent_task_id": "child1",
+            "parent_task_id": "parent1",
+            "root_task_id": "parent1",
+            "subagent_role": "researcher",
+            "status": "completed",
+            "cost_usd": 0.125,
+            "result": "Child result with evidence table\n| source | verdict |\n| A | pass |",
+            "trace_summary": "searched sources\ncompared output",
+        },
+    ]
+    (logs_dir / "progress.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    (logs_dir / "chat.jsonl").write_text(
+        json.dumps({
+            "ts": "2026-05-25T10:00:03.500000+00:00",
+            "chat_id": 1,
+            "direction": "out",
+            "task_id": "child1",
+            "text": "Final child answer should stay inside the child card.",
+            "format": "markdown",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                page.wait_for_selector(".chat-live-card", timeout=30_000)
+                # Subagents render as always-visible child cards nested under
+                # the parent card. Child completion must not finish the parent.
+                page.wait_for_function("() => document.querySelectorAll('.chat-live-card').length === 2", timeout=30_000)
+                page.wait_for_function(
+                    "() => { const p = document.querySelector('.chat-live-card:not(.subagent)');"
+                    " const c = document.querySelector('.chat-live-card.subagent');"
+                    " return !!p && !!c && c.closest('.chat-subagents') && c.parentElement.closest('.chat-live-card') === p"
+                    " && /Subagent child1/.test(c.innerText) && /role=researcher/.test(c.innerText); }",
+                    timeout=30_000,
+                )
+                parent = page.locator(".chat-live-card:not(.subagent)").first
+                child = page.locator(".chat-live-card.subagent").first
+                parent_text = parent.inner_text()
+                child_text = child.inner_text()
+                assert "Parent task started" in parent_text
+                assert "Subagent child1" in child_text
+                assert "child=child1" in child_text
+                assert "role=researcher" in child_text
+                assert parent.get_attribute("data-finished") == "0"
+                assert child.get_attribute("data-finished") == "1"
+                assert page.locator(".chat-bubble.progress").count() == 0
+                assert page.locator(".chat-bubble").filter(
+                    has_text="Final child answer should stay inside the child card."
+                ).count() == 0
+
+                # Expand only the child card + its lifecycle line to read the handoff.
+                child.locator("[data-live-summary-button]").first.click()
+                line_toggles = child.locator(".chat-live-line-toggle")
+                if line_toggles.count():
+                    line_toggles.last.click()
+                expanded_text = child.inner_text(timeout=5_000)
+                assert "Final child answer should stay inside the child card." in expanded_text
+                assert "Child result with evidence table" in expanded_text
+                assert "| source | verdict |" in expanded_text
+                assert "searched sources" in expanded_text
+                assert "compared output" in expanded_text
+                assert "done" in expanded_text.lower()
+                assert "Scheduled subagent child1" not in expanded_text
+                assert child.locator("[data-live-summary-button]").first.get_attribute("aria-expanded") == "true"
+                assert child.locator("[data-live-timeline]").first.get_attribute("id")
+                assert child.locator(".chat-live-line-toggle").last.get_attribute("aria-controls")
+
+                page.reload(wait_until="domcontentloaded", timeout=30_000)
+                page.wait_for_function("() => document.querySelectorAll('.chat-live-card').length === 2", timeout=30_000)
+                page.wait_for_function(
+                    "() => { const p = document.querySelector('.chat-live-card:not(.subagent)');"
+                    " const c = document.querySelector('.chat-live-card.subagent');"
+                    " return !!p && !!c && c.closest('.chat-subagents') && c.parentElement.closest('.chat-live-card') === p; }",
+                    timeout=30_000,
+                )
+                replay_parent = page.locator(".chat-live-card:not(.subagent)").first
+                replay_child = page.locator(".chat-live-card.subagent").first
+                assert replay_parent.get_attribute("data-finished") == "0"
+                assert replay_child.get_attribute("data-finished") == "1"
+                assert "Subagent child1" in replay_child.inner_text()
+                assert "child=child1" in replay_child.inner_text()
+                replay_child.locator("[data-live-summary-button]").first.click()
+                assert "Final child answer should stay inside the child card." in replay_child.inner_text()
+                assert page.locator(".chat-bubble.progress").count() == 0
+                assert page.locator(".chat-bubble", has_text="Final child answer should stay inside the child card.").count() == 0
             finally:
                 browser.close()
     except PlaywrightError as exc:

@@ -34,6 +34,7 @@ dist/
 build/
 *.dmg
 python-standalone/
+node-standalone/
 
 # OS
 .DS_Store

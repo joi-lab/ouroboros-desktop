@@ -273,13 +273,12 @@
     }
 
     function validateBudgetStep() {
-        const totalBudget = Number(state.totalBudget);
-        const perTaskCostUsd = Number(state.perTaskCostUsd);
-        if (!Number.isFinite(totalBudget) || totalBudget <= 0) {
-            return 'Общий бюджет должен быть больше нуля.';
-        }
-        if (!Number.isFinite(perTaskCostUsd) || perTaskCostUsd <= 0) {
-            return 'Мягкий порог затрат на задачу должен быть больше нуля.';
+        for (const field of BUDGET_FIELDS) {
+            const value = Number(state[field.stateKey]);
+            const min = Number(field.min || 0.01);
+            if (!Number.isFinite(value) || value < min) {
+                return `${field.title || field.label || 'Бюджет'} должен быть больше нуля.`;
+            }
         }
         return '';
     }
@@ -727,22 +726,16 @@
                 </div>
             </div>
             <div class="grid two">
-                <div class="panel-card">
-                    <h3>Общий бюджет</h3>
-                    <div class="field">
-                        <label for="total-budget">Общий бюджет (USD)</label>
-                        <input id="total-budget" type="number" min="1" step="1" value="${escapeHtml(state.totalBudget)}">
-                        <div class="field-note">Глобальный бюджет расходов для всей среды. Оставляйте редактируемым даже после настройки.</div>
+                ${BUDGET_FIELDS.map((field) => `
+                    <div class="panel-card">
+                        <h3>${escapeHtml(field.title)}</h3>
+                        <div class="field">
+                            <label for="${escapeHtml(field.inputId)}">${escapeHtml(field.label)}</label>
+                            <input id="${escapeHtml(field.inputId)}" type="number" min="${escapeHtml(field.min || '0.01')}" step="${escapeHtml(field.step || 'any')}" value="${escapeHtml(state[field.stateKey])}">
+                            <div class="field-note">${escapeHtml(field.note)}</div>
+                        </div>
                     </div>
-                </div>
-                <div class="panel-card">
-                    <h3>Мягкий порог на задачу</h3>
-                    <div class="field">
-                        <label for="per-task-budget">Лимит затрат на задачу (USD)</label>
-                        <input id="per-task-budget" type="number" min="1" step="1" value="${escapeHtml(state.perTaskCostUsd)}">
-                        <div class="field-note">Не останавливает задачу жёстко. Вставляет напоминание о бюджете, когда задача начинает становиться дорогой.</div>
-                    </div>
-                </div>
+                `).join('')}
             </div>
         `;
     }

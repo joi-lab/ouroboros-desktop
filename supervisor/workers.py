@@ -36,9 +36,18 @@ _CTX = None
 _LAST_SPAWN_TIME: float = 0.0  # grace period: don't count dead workers right after spawn
 _SPAWN_GRACE_SEC: float = 90.0  # workers need up to ~60s to init (spawn + pip)
 
-# Avoid spawn in frozen Unix apps: it re-imports __main__ and can fork-bomb.
-# Workers do not touch GUI, so fork is safe there; Windows only supports spawn.
-_DEFAULT_WORKER_START_METHOD = "spawn" if sys.platform == "win32" else "fork"
+# macOS + Windows default to spawn; Linux keeps fork.
+#
+# fork() from the long-lived, multi-threaded supervisor is unsafe on macOS: the
+# child inherits dead Mach ports, and the first network call that resolves
+# system proxies (SCDynamicStoreCopyProxies via _scproxy / httpx / requests)
+# SIGSEGVs on the child side of fork pre-exec. macOS therefore uses spawn, like
+# Windows. Linux proxy lookup reads env only (no Mach/GCD), so fork stays the
+# default there for fast worker startup. ``worker_main`` is a module-level
+# target (picklable) and re-derives all state from argv, so spawn is safe; the
+# PyInstaller bootloader provides multiprocessing.freeze_support() for frozen
+# builds. Override with OUROBOROS_WORKER_START_METHOD when diagnosing.
+_DEFAULT_WORKER_START_METHOD = "fork" if sys.platform.startswith("linux") else "spawn"
 _WORKER_START_METHOD = str(os.environ.get("OUROBOROS_WORKER_START_METHOD", _DEFAULT_WORKER_START_METHOD) or _DEFAULT_WORKER_START_METHOD).strip().lower()
 if _WORKER_START_METHOD not in {"fork", "spawn", "forkserver"}:
     _WORKER_START_METHOD = _DEFAULT_WORKER_START_METHOD
@@ -272,6 +281,13 @@ def auto_resume_after_restart() -> None:
         })
 
 def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str) -> None:
+    import os as _os
+    # Mark this process as a worker BEFORE importing the agent/LLM stack so the
+    # central network-transport policy disables system proxy resolution
+    # (trust_env=False) for every HTTP client created here. This is the
+    # fork-safety guard (no _scproxy/SCDynamicStoreCopyProxies on the child side
+    # of fork) and a clean default for spawned workers too.
+    _os.environ["OUROBOROS_IN_WORKER"] = "1"
     from ouroboros.platform_layer import create_new_session
     create_new_session()
     import sys as _sys
@@ -320,10 +336,15 @@ def _write_failure_result(
     task_id: str,
     reason: str = "Worker process crashed (crash storm). Task was not completed.",
     status: str = "",
-) -> None:
-    """Write failure result for a crashed/orphaned task."""
+) -> str:
+    """Write failure result for a crashed/orphaned task.
+
+    Returns the FINAL persisted status: if the task already reached a terminal
+    state, the monotonic guard preserves it and that existing status is returned
+    (so the UI event matches disk); otherwise the written failure status.
+    """
     if not task_id:
-        return
+        return ""
     try:
         from ouroboros.task_results import (
             STATUS_FAILED, STATUS_COMPLETED, STATUS_REJECTED_DUPLICATE,
@@ -333,17 +354,47 @@ def _write_failure_result(
         _FINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED, STATUS_REJECTED_DUPLICATE, STATUS_CANCELLED}
         existing = load_task_result(DRIVE_ROOT, task_id)
         if existing and existing.get("status") in _FINAL_STATUSES:
-            return
+            return str(existing.get("status") or "")
+        final_status = status or STATUS_FAILED
         write_task_result(
             DRIVE_ROOT,
             task_id,
-            status or STATUS_FAILED,
+            final_status,
             result=reason,
             cost_usd=0,
             total_rounds=0,
         )
+        return final_status
     except Exception:
         log.warning("Failed to write failure result for task %s", task_id, exc_info=True)
+        return status or "failed"
+
+
+def _emit_task_done_terminal(task: Optional[Dict[str, Any]], task_id: str, status: str = "failed") -> None:
+    """Emit a task_done event so the UI resolves the live card when a task is
+    torn down outside the normal completion path (crash storm, kill, hard
+    timeout). Without this the spinner spins forever on these paths."""
+    if not task_id:
+        return
+    try:
+        chat_id = int((task or {}).get("chat_id") or 0)
+    except (TypeError, ValueError):
+        chat_id = 0
+    if not chat_id:
+        return
+    status = status or "failed"
+    try:
+        get_event_q().put({
+            "type": "task_done",
+            "task_id": str(task_id),
+            "chat_id": chat_id,
+            "status": status,
+            # infra_failed drives the UI's failure styling; cancelled resolves
+            # the card without an error badge.
+            "result_status": "infra_failed" if status == "failed" else status,
+        })
+    except Exception:
+        log.debug("Failed to emit terminal task_done for %s", task_id, exc_info=True)
 
 
 def _log_worker_crash(wid: int, drive_root: pathlib.Path, phase: str, exc: Exception, tb: str) -> None:
@@ -491,22 +542,36 @@ def kill_workers(
     *,
     result_reason: str = "Worker process crashed (crash storm). Task was not completed.",
     result_status: str = "",
+    archive_service_logs: bool = True,
 ) -> None:
     from supervisor import queue
     with _queue_lock:
         cleared_running = len(RUNNING)
+        from ouroboros.platform_layer import kill_pid_tree
         for w in WORKERS.values():
-            if w.proc.is_alive():
+            if w.proc.pid:
+                kill_pid_tree(w.proc.pid)
+            elif w.proc.is_alive():
                 w.proc.terminate()
         for w in WORKERS.values():
             w.proc.join(timeout=3)
         _kill_survivors()
         WORKERS.clear()
         try:
+            done_status = result_status or "failed"
             orphaned_ids = []
             for task_id in list(RUNNING):
                 try:
-                    _write_failure_result(task_id, reason=result_reason, status=result_status)
+                    meta = RUNNING.get(task_id) or {}
+                    task = meta.get("task") if isinstance(meta, dict) and isinstance(meta.get("task"), dict) else {}
+                    persisted = _write_failure_result(task_id, reason=result_reason, status=result_status)
+                    if archive_service_logs:
+                        try:
+                            from ouroboros.tools.services import archive_task_service_logs
+                            archive_task_service_logs(pathlib.Path(DRIVE_ROOT), str(task_id), task)
+                        except Exception:
+                            log.debug("Failed to archive service logs for task %s", task_id, exc_info=True)
+                    _emit_task_done_terminal(task, str(task_id), persisted or done_status)
                     orphaned_ids.append(task_id)
                 except Exception:
                     log.warning("Failed to write failure result for running task %s", task_id, exc_info=True)
@@ -516,7 +581,8 @@ def kill_workers(
                 tid = task.get("id")
                 if tid:
                     try:
-                        _write_failure_result(tid, reason=result_reason, status=result_status)
+                        persisted = _write_failure_result(tid, reason=result_reason, status=result_status)
+                        _emit_task_done_terminal(task, str(tid), persisted or done_status)
                         drained_ids.append(tid)
                     except Exception:
                         log.warning("Failed to write failure result for pending task %s", tid, exc_info=True)
@@ -568,6 +634,49 @@ def respawn_worker(wid: int) -> None:
     # Do not reset _LAST_SPAWN_TIME here; respawn grace would hide crash storms.
 
 
+def _drop_cancelled_pending() -> None:
+    """Remove pending tasks cancelled/finished between scheduling and assignment
+    so a cancelled subagent never actually starts. Caller holds _queue_lock."""
+    if not PENDING:
+        return
+    try:
+        from ouroboros.task_results import (
+            STATUS_CANCEL_REQUESTED, STATUS_CANCELLED, _TRULY_TERMINAL_STATUSES,
+            load_task_result, write_task_result,
+        )
+    except Exception:
+        return
+    survivors: List[Dict[str, Any]] = []
+    dropped: List[str] = []
+    for t in PENDING:
+        tid = str(t.get("id") or "")
+        status = ""
+        if tid:
+            try:
+                existing = load_task_result(DRIVE_ROOT, tid)
+                status = str((existing or {}).get("status") or "")
+            except Exception:
+                status = ""
+        if status == STATUS_CANCEL_REQUESTED:
+            try:
+                write_task_result(DRIVE_ROOT, tid, STATUS_CANCELLED, result="Cancelled before start.")
+            except Exception:
+                log.debug("Failed to finalize cancelled pending task %s", tid, exc_info=True)
+            _emit_task_done_terminal(t, tid, "cancelled")
+            dropped.append(tid)
+            continue
+        if status in _TRULY_TERMINAL_STATUSES:
+            dropped.append(tid)
+            continue
+        survivors.append(t)
+    if dropped:
+        PENDING[:] = survivors
+        append_jsonl(
+            DRIVE_ROOT / "logs" / "supervisor.jsonl",
+            {"ts": utc_now_iso(), "type": "pending_cancelled_dropped", "task_ids": dropped},
+        )
+
+
 def assign_tasks() -> None:
     from supervisor import queue
     from supervisor.state import budget_remaining, EVOLUTION_BUDGET_RESERVE
@@ -577,7 +686,10 @@ def assign_tasks() -> None:
         
         if remaining <= 0:
             return  # Stop assigning ALL tasks if budget is completely exhausted
-            
+
+        # Drop tasks cancelled after scheduling but before assignment.
+        _drop_cancelled_pending()
+
         for w in WORKERS.values():
             if w.busy_task_id is None and PENDING:
                 # Find first suitable task (skip over-budget evolution tasks)
@@ -593,6 +705,34 @@ def assign_tasks() -> None:
                     queue.persist_queue_snapshot(reason="evolution_dropped_budget")
                     continue
                 task = PENDING.pop(chosen_idx)
+                if str(task.get("delegation_role") or "") == "subagent" and str(task.get("drive_root") or ""):
+                    try:
+                        from ouroboros.task_results import STATUS_RUNNING, write_task_result
+                        write_task_result(
+                            DRIVE_ROOT,
+                            str(task.get("id") or ""),
+                            STATUS_RUNNING,
+                            parent_task_id=task.get("parent_task_id"),
+                            root_task_id=task.get("root_task_id"),
+                            session_id=task.get("session_id"),
+                            actor_id=task.get("actor_id"),
+                            delegation_role=task.get("delegation_role"),
+                            role=task.get("role"),
+                            description=task.get("description"),
+                            objective=task.get("objective") or task.get("description"),
+                            expected_output=task.get("expected_output"),
+                            constraints=task.get("constraints"),
+                            context=task.get("context"),
+                            memory_mode=task.get("memory_mode"),
+                            drive_root=task.get("drive_root"),
+                            child_drive_root=task.get("child_drive_root") or task.get("drive_root"),
+                            budget_drive_root=task.get("budget_drive_root"),
+                            task_constraint=task.get("task_constraint"),
+                            metadata=task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
+                            result="Subagent assigned to a worker.",
+                        )
+                    except Exception:
+                        log.debug("Failed to mirror running subagent status", exc_info=True)
                 w.busy_task_id = task["id"]
                 w.in_q.put(task)
                 now_ts = time.time()
@@ -659,128 +799,135 @@ def ensure_workers_healthy() -> None:
                 )
             if w.busy_task_id and w.busy_task_id in RUNNING:
                 meta = RUNNING.pop(w.busy_task_id) or {}
+                try:
+                    from ouroboros.tools.services import archive_task_service_logs
+                    task_for_roots = meta.get("task") if isinstance(meta, dict) and isinstance(meta.get("task"), dict) else {}
+                    archive_task_service_logs(pathlib.Path(DRIVE_ROOT), str(w.busy_task_id), task_for_roots)
+                except Exception:
+                    log.debug("Failed to archive service logs for task %s", w.busy_task_id, exc_info=True)
                 task = meta.get("task") if isinstance(meta, dict) else None
                 if isinstance(task, dict):
                     task_type = str(task.get("type") or "")
-                    # deep_self_review SIGSEGVs can loop forever on macOS fork-safety paths.
+                    # A negative exitcode means the worker died from a signal
+                    # (SIGSEGV/SIGBUS/SIGABRT/SIGKILL). These are deterministic
+                    # infrastructure crashes: retrying the same runtime path
+                    # reproduces them and only burns budget, so they are terminal
+                    # for EVERY task type (not just deep_self_review).
                     is_crash_signal = isinstance(exitcode, int) and exitcode < 0
-                    no_retry_types = {"deep_self_review"}
-                    if task_type in no_retry_types and is_crash_signal:
+                    crash_signal = -exitcode if is_crash_signal else None
+                    chat_id = int(task.get("chat_id") or 1)
+                    attempt = int(task.get("_attempt") or 1)
+
+                    # Already terminal via inline/direct-chat path? Leave it.
+                    already_done = False
+                    existing_status = ""
+                    try:
+                        from ouroboros.task_results import load_task_result, _TRULY_TERMINAL_STATUSES
+                        existing = load_task_result(DRIVE_ROOT, str(w.busy_task_id))
+                        if existing and str(existing.get("status") or "") in _TRULY_TERMINAL_STATUSES:
+                            already_done = True
+                            existing_status = str(existing.get("status") or "")
+                            log.info(
+                                "Skipping requeue for task %s — already in terminal state: %s",
+                                w.busy_task_id, existing.get("status"),
+                            )
+                    except Exception:
+                        log.debug("Failed to check existing result for %s", w.busy_task_id, exc_info=True)
+
+                    if already_done:
+                        # Terminal on disk but the worker died — its normal task_done
+                        # event may have been lost with it. Emit an (idempotent)
+                        # terminal event so the live card resolves instead of
+                        # spinning until reconnect/history reconciliation.
+                        _emit_task_done_terminal(task, str(w.busy_task_id), existing_status or "completed")
+                    elif is_crash_signal or attempt > QUEUE_MAX_RETRIES:
+                        deep = task_type == "deep_self_review"
+                        if is_crash_signal:
+                            log.warning(
+                                "Task %s worker crashed with signal %s — terminal (no retry)",
+                                w.busy_task_id, crash_signal,
+                            )
+                            result_text = (
+                                f"❌ {'Deep self-review ' if deep else ''}worker process crashed "
+                                f"(signal {crash_signal}). This is an infrastructure/platform crash "
+                                "and is not retried automatically. "
+                                + (
+                                    "Use /restart and then /review to retry after a clean restart."
+                                    if deep else
+                                    "Use /restart and try again; if it recurs it is a platform-level issue."
+                                )
+                            )
+                            reason_code = "worker_crash_signal"
+                        else:
+                            log.warning(
+                                "Task %s exceeded crash retry limit (%d/%d) — marking failed",
+                                w.busy_task_id, attempt, QUEUE_MAX_RETRIES,
+                            )
+                            result_text = (
+                                f"❌ Task failed after {attempt} crash(es) (exit {exitcode}). "
+                                "Worker process died repeatedly — likely a platform-level issue. "
+                                "Please try again or use a different approach."
+                            )
+                            reason_code = "worker_crash_retry_exhausted"
                         try:
                             from ouroboros.task_results import STATUS_FAILED, write_task_result
                             write_task_result(
                                 DRIVE_ROOT, str(w.busy_task_id), STATUS_FAILED,
-                                result=(
-                                    f"❌ Deep self-review worker crashed (signal {-exitcode}). "
-                                    "This is likely a platform fork-safety issue on macOS. "
-                                    "The task will not be retried automatically. "
-                                    "Use /restart and then /review to try again after a clean restart."
-                                ),
+                                result=result_text,
+                                result_status="infra_failed",
+                                reason_code=reason_code,
+                                crash_signal=crash_signal,
+                                crash_exitcode=exitcode if isinstance(exitcode, int) else None,
                             )
                         except Exception:
                             log.debug("Failed to write failed status for %s", w.busy_task_id, exc_info=True)
                         # Message before task_done: otherwise the UI may close the card first.
-                        chat_id = int(task.get("chat_id") or 1)
                         try:
                             from supervisor.message_bus import get_bridge
                             bridge = get_bridge()
                             if bridge is not None:
-                                bridge.send_message(
-                                    chat_id,
-                                    "❌ Deep self-review failed: worker process crashed (SIGSEGV). "
-                                    "This is a known macOS fork-safety limitation. "
-                                    "Please use `/restart` and then `/review` to retry with a fresh process.",
-                                )
+                                if is_crash_signal and deep:
+                                    user_msg = (
+                                        f"❌ Deep self-review failed: worker process crashed (signal {crash_signal}). "
+                                        "This is a known platform fork-safety limitation. "
+                                        "Please use `/restart` and then `/review` to retry with a fresh process."
+                                    )
+                                elif is_crash_signal:
+                                    user_msg = (
+                                        f"❌ Task `{str(w.busy_task_id)[:8]}` failed: worker process crashed "
+                                        f"(signal {crash_signal}). This is an infrastructure crash and was not retried."
+                                    )
+                                else:
+                                    user_msg = (
+                                        f"❌ Task `{str(w.busy_task_id)[:8]}` failed after {attempt} crash(es). "
+                                        "Worker process crashed repeatedly. Please try again."
+                                    )
+                                bridge.send_message(chat_id, user_msg)
                         except Exception:
-                            log.debug("Failed to send deep_self_review crash message", exc_info=True)
+                            log.debug("Failed to send failure message for %s", w.busy_task_id, exc_info=True)
                         try:
                             get_event_q().put({
                                 "type": "task_done",
                                 "task_id": str(w.busy_task_id),
                                 "chat_id": chat_id,
                                 "status": "failed",
+                                "result_status": "infra_failed",
+                                "reason_code": reason_code,
                             })
                         except Exception:
-                            log.debug("Failed to emit task_done for deep_self_review crash %s", w.busy_task_id, exc_info=True)
+                            log.debug("Failed to emit terminal event for %s", w.busy_task_id, exc_info=True)
                     else:
-                        attempt = int(task.get("_attempt") or 1)
-                        # Check if this task already completed via inline/direct-chat path
-                        already_done = False
+                        task = dict(task)
+                        task["_attempt"] = attempt + 1
                         try:
-                            from ouroboros.task_results import (
-                                load_task_result,
-                                STATUS_COMPLETED, STATUS_FAILED, STATUS_REJECTED_DUPLICATE,
-                                STATUS_CANCELLED,
+                            from ouroboros.task_results import STATUS_INTERRUPTED, write_task_result
+                            write_task_result(
+                                DRIVE_ROOT, str(w.busy_task_id), STATUS_INTERRUPTED,
+                                result=f"Worker process died mid-task (attempt {attempt}). Retrying.",
                             )
-                            # STATUS_INTERRUPTED precedes requeue and is not terminal.
-                            _TERMINAL_STATUSES = {
-                                STATUS_COMPLETED, STATUS_FAILED,
-                                STATUS_REJECTED_DUPLICATE, STATUS_CANCELLED,
-                            }
-                            existing = load_task_result(DRIVE_ROOT, str(w.busy_task_id))
-                            if existing and existing.get("status") in _TERMINAL_STATUSES:
-                                already_done = True
-                                log.info(
-                                    "Skipping requeue for task %s — already in terminal state: %s",
-                                    w.busy_task_id, existing.get("status"),
-                                )
                         except Exception:
-                            log.debug("Failed to check existing result for %s", w.busy_task_id, exc_info=True)
-
-                        if already_done:
-                            pass
-                        elif attempt > QUEUE_MAX_RETRIES:
-                            log.warning(
-                                "Task %s exceeded crash retry limit (%d/%d) — marking failed",
-                                w.busy_task_id, attempt, QUEUE_MAX_RETRIES,
-                            )
-                            try:
-                                from ouroboros.task_results import STATUS_FAILED, write_task_result
-                                write_task_result(
-                                    DRIVE_ROOT, str(w.busy_task_id), STATUS_FAILED,
-                                    result=(
-                                        f"❌ Task failed after {attempt} crash(es) "
-                                        f"(signal {-exitcode if isinstance(exitcode, int) and exitcode < 0 else exitcode}). "
-                                        "Worker process crashed repeatedly — likely a platform-level issue. "
-                                        "Please try again or use a different approach."
-                                    ),
-                                )
-                            except Exception:
-                                log.debug("Failed to write failed status for %s", w.busy_task_id, exc_info=True)
-                            chat_id = int(task.get("chat_id") or 1)
-                            try:
-                                from supervisor.message_bus import get_bridge
-                                bridge = get_bridge()
-                                if bridge is not None:
-                                    bridge.send_message(
-                                        chat_id,
-                                        f"❌ Task `{str(w.busy_task_id)[:8]}` failed after "
-                                        f"{attempt} crash(es). Worker process crashed "
-                                        "repeatedly. Please try again.",
-                                    )
-                            except Exception:
-                                log.debug("Failed to send failure message for %s", w.busy_task_id, exc_info=True)
-                            try:
-                                get_event_q().put({
-                                    "type": "task_done",
-                                    "task_id": str(w.busy_task_id),
-                                    "chat_id": chat_id,
-                                    "status": "failed",
-                                })
-                            except Exception:
-                                log.debug("Failed to emit terminal event for %s", w.busy_task_id, exc_info=True)
-                        else:
-                            task = dict(task)
-                            task["_attempt"] = attempt + 1
-                            try:
-                                from ouroboros.task_results import STATUS_INTERRUPTED, write_task_result
-                                write_task_result(
-                                    DRIVE_ROOT, str(w.busy_task_id), STATUS_INTERRUPTED,
-                                    result=f"Worker process died mid-task (attempt {attempt}). Retrying.",
-                                )
-                            except Exception:
-                                log.debug("Failed to write interrupted status for %s", w.busy_task_id, exc_info=True)
-                            queue.enqueue_task(task, front=True)
+                            log.debug("Failed to write interrupted status for %s", w.busy_task_id, exc_info=True)
+                        queue.enqueue_task(task, front=True)
             respawn_worker(wid)
             queue.persist_queue_snapshot(reason="worker_respawn_after_crash")
 

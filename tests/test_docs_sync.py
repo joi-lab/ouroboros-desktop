@@ -43,3 +43,12 @@ def test_architecture_mentions_shared_log_grouping_and_direct_provider_review_fa
     # browser-side `catch` block paths that set `claudeRuntimeHasError`.
     assert "refreshClaudeCodeStatus" in arch
     assert "transport failure" in arch
+
+
+def test_consciousness_prompt_matches_subagent_wait_and_memory_contracts():
+    consciousness = _read("prompts/CONSCIOUSNESS.md")
+
+    assert "memory_mode=forked|empty" in consciousness
+    assert "memory_mode=forked|empty|shared" not in consciousness
+    assert "`shared` is disabled" in consciousness
+    assert "wait_tasks" in consciousness

@@ -52,6 +52,7 @@ log = logging.getLogger(__name__)
 
 _SCOPE_MODEL_DEFAULT = "openai/gpt-5.5"
 _SCOPE_MAX_TOKENS = 100_000  # 100K output tokens
+_SCOPE_REVIEW_SLOT_TIMEOUT_SEC = 900
 
 # Budget gate: estimate_tokens under-counts real tokens, so this non-blocking
 # skip limit leaves headroom for 1M-context reviewer models.
@@ -95,6 +96,8 @@ class ScopeReviewResult:
     tokens_out: int = 0
     cost_usd: float = 0.0
     context_manifest: dict = field(default_factory=dict)
+    prompt_ref: dict = field(default_factory=dict)
+    response_ref: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -107,10 +110,15 @@ class _TouchedContextStatus:
 
 def _get_scope_model() -> str:
     """Return the configured scope review model (env → settings default)."""
-    return (
-        os.environ.get("OUROBOROS_SCOPE_REVIEW_MODEL", "").strip()
-        or _SCOPE_MODEL_DEFAULT
-    )
+    try:
+        from ouroboros.config import get_scope_review_models
+
+        models = get_scope_review_models()
+        if models:
+            return models[0]
+    except Exception:
+        pass
+    return os.environ.get("OUROBOROS_SCOPE_REVIEW_MODEL", "").strip() or _SCOPE_MODEL_DEFAULT
 
 _CANONICAL_CONTEXT_DOCS = (
     "BIBLE.md",
@@ -265,6 +273,7 @@ def _gather_scope_packs(
     repo_dir: pathlib.Path,
     all_touched_paths: list,
     fixed_prompt_tokens: int = 0,
+    drive_root: Optional[pathlib.Path] = None,
 ) -> str:
     """Collect the bounded wider repository atlas, failing closed on git errors."""
     # Canonical docs and touched files are injected explicitly; avoid duplicating them.
@@ -280,6 +289,7 @@ def _gather_scope_packs(
                 hard_total_tokens=_SCOPE_BUDGET_TOKEN_LIMIT,
                 include_tests=False,
                 title="Generated Scope Atlas",
+                drive_root=drive_root,
             )
         )
         _SCOPE_CONTEXT_MANIFEST.set(atlas.manifest)
@@ -536,10 +546,14 @@ section — the staged diff below already shows every `-` line.
 """
     fixed_prompt_tokens = estimate_tokens(prompt)
     try:
+        import inspect
+        gather_kwargs = {"fixed_prompt_tokens": fixed_prompt_tokens}
+        if "drive_root" in inspect.signature(_gather_scope_packs).parameters:
+            gather_kwargs["drive_root"] = drive_root
         repo_pack_section = _gather_scope_packs(
             repo_dir,
             all_touched_paths,
-            fixed_prompt_tokens=fixed_prompt_tokens,
+            **gather_kwargs,
         )
     except _ScopeAtlasBudgetExceeded as exc:
         return None, _TouchedContextStatus(
@@ -596,6 +610,7 @@ def _log_scope_result(
     critical_count: int,
     advisory_count: int,
     prompt_chars: int = 0,
+    model_id: str = "",
 ) -> None:
     """Append a scope_review_complete event to events.jsonl.
 
@@ -608,7 +623,7 @@ def _log_scope_result(
         append_jsonl(ctx.drive_logs() / "events.jsonl", {
             "ts": utc_now_iso(), "type": "scope_review_complete",
             "task_id": getattr(ctx, "task_id", "") or "",
-            "model": _get_scope_model(),
+            "model": model_id or _get_scope_model(),
             "critical_count": critical_count,
             "advisory_count": advisory_count,
             "prompt_tokens": prompt_tokens,
@@ -619,13 +634,29 @@ def _log_scope_result(
         pass
 
 
-def _call_scope_llm(prompt: str) -> tuple:
+def _scope_drive_root(ctx: ToolContext | None = None) -> pathlib.Path:
+    if ctx is not None:
+        try:
+            return pathlib.Path(ctx.drive_root)
+        except Exception:
+            pass
+    try:
+        from ouroboros.config import DATA_DIR
+
+        return pathlib.Path(DATA_DIR)
+    except Exception:
+        return pathlib.Path("../data").resolve(strict=False)
+
+
+def _call_scope_llm(prompt: str, scope_model: str | None = None, ctx: ToolContext | None = None) -> tuple:
     """Execute the scope review LLM call synchronously.
 
     Returns (raw_text, usage, error_msg) — error_msg is non-empty on failure.
+    ``usage`` may contain a private ``_review_refs`` entry with durable prompt
+    and response refs from the shared review substrate.
     """
     from ouroboros.config import resolve_effort as _resolve_effort
-    scope_model = _get_scope_model()
+    scope_model = scope_model or _get_scope_model()
     scope_effort = _resolve_effort("scope_review")
     messages = [
         {"role": "system", "content": prompt},
@@ -634,34 +665,49 @@ def _call_scope_llm(prompt: str) -> tuple:
             "content": "Review the staged change and context above. Output ONLY a JSON array.",
         },
     ]
-    llm = LLMClient()
     try:
-        try:
-            asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                msg, usage = pool.submit(
-                    asyncio.run,
-                    llm.chat_async(
-                        messages=messages,
-                        model=scope_model,
-                        reasoning_effort=scope_effort,
-                        max_tokens=_SCOPE_MAX_TOKENS,
-                        temperature=0.2,
-                        no_proxy=True,
-                    ),
-                ).result(timeout=180)
-        except RuntimeError:
-            msg, usage = asyncio.run(
-                llm.chat_async(
-                    messages=messages,
-                    model=scope_model,
-                    reasoning_effort=scope_effort,
-                    max_tokens=_SCOPE_MAX_TOKENS,
-                    temperature=0.2,
-                    no_proxy=True,
-                )
+        from ouroboros.review_substrate import ReviewRequest, ReviewSlot, run_review_request
+
+        request = ReviewRequest(
+            surface="scope_review",
+            goal="Review the staged change and context above. Output ONLY a JSON array.",
+            messages=messages,
+            task_id=str(getattr(ctx, "task_id", "") or "scope_review") if ctx is not None else "scope_review",
+            call_type="scope_review",
+            max_tokens=_SCOPE_MAX_TOKENS,
+            temperature=0.2,
+            no_proxy=True,
+        )
+        slot = ReviewSlot(
+            slot_id="scope_slot_1",
+            model=scope_model,
+            effort=scope_effort,
+            timeout_sec=_SCOPE_REVIEW_SLOT_TIMEOUT_SEC,
+            max_tokens=_SCOPE_MAX_TOKENS,
+            temperature=0.2,
+            role_hint="scope reviewer",
+        )
+        result = run_review_request(
+            request,
+            slots=[slot],
+            drive_root=_scope_drive_root(ctx),
+            llm=LLMClient(),
+            usage_ctx=None,
+        )
+        actor = (result.actors or [{}])[0]
+        usage = dict(actor.get("usage") or {})
+        usage["_review_refs"] = {
+            "prompt_ref": actor.get("prompt_ref") or {},
+            "response_ref": actor.get("response_ref") or {},
+        }
+        if actor.get("status") not in {"ok", "empty"}:
+            error_msg = (
+                f"⚠️ SCOPE_REVIEW_BLOCKED: Scope reviewer ({scope_model}) failed — commit blocked.\n"
+                f"Error: {actor.get('error') or actor.get('status') or 'scope reviewer failed'}\n"
+                "Retry the commit, or check API key and network connectivity."
             )
+            return "", usage, error_msg
+        return str(actor.get("raw_text") or ""), usage, ""
     except Exception as e:
         error_msg = (
             f"⚠️ SCOPE_REVIEW_BLOCKED: Scope reviewer ({scope_model}) failed — commit blocked.\n"
@@ -669,7 +715,6 @@ def _call_scope_llm(prompt: str) -> tuple:
             "Retry the commit, or check API key and network connectivity."
         )
         return "", None, error_msg
-    return str(msg.get("content") or ""), usage, ""
 
 
 def _handle_prompt_signals(
@@ -775,10 +820,11 @@ def run_scope_review(
     review_rebuttal: str = "",
     review_history: Optional[list] = None,
     scope_review_history: Optional[list] = None,  # prior scope rounds for this commit
+    scope_model: Optional[str] = None,
 ) -> ScopeReviewResult:
     """Run blocking scope review and return structured findings/evidence."""
     repo_dir = pathlib.Path(ctx.repo_dir)
-    scope_model_id = _get_scope_model()
+    scope_model_id = scope_model or _get_scope_model()
 
     try:
         prompt, context_status = _build_scope_prompt(
@@ -810,10 +856,14 @@ def run_scope_review(
         return signal_result
 
     _prompt_chars = len(prompt)  # type: ignore[arg-type]
-    raw_text, usage, llm_error = _call_scope_llm(prompt)  # type: ignore[arg-type]
-    _tokens_in = int((usage or {}).get("prompt_tokens", 0) or 0)
-    _tokens_out = int((usage or {}).get("completion_tokens", 0) or 0)
-    _cost_usd = float((usage or {}).get("cost", 0.0) or 0.0)
+    raw_text, usage, llm_error = _call_scope_llm(prompt, scope_model=scope_model_id, ctx=ctx)  # type: ignore[arg-type]
+    _usage = dict(usage or {})
+    _review_refs = dict(_usage.pop("_review_refs", {}) or {})
+    _prompt_ref = dict(_review_refs.get("prompt_ref") or {})
+    _response_ref = dict(_review_refs.get("response_ref") or {})
+    _tokens_in = int(_usage.get("prompt_tokens", 0) or 0)
+    _tokens_out = int(_usage.get("completion_tokens", 0) or 0)
+    _cost_usd = float(_usage.get("cost", 0.0) or 0.0)
     if llm_error:
         return ScopeReviewResult(
             blocked=True,
@@ -822,9 +872,11 @@ def run_scope_review(
             status="error",
             prompt_chars=_prompt_chars,
             context_manifest=_current_scope_context_manifest(),
+            prompt_ref=_prompt_ref,
+            response_ref=_response_ref,
         )
-    if usage:
-        _emit_usage(ctx, scope_model_id, usage or {})
+    if _usage:
+        _emit_usage(ctx, scope_model_id, _usage)
 
     if not raw_text.strip():
         # Empty model response is distinct from transport/API error.
@@ -841,6 +893,8 @@ def run_scope_review(
             tokens_out=_tokens_out,
             cost_usd=_cost_usd,
             context_manifest=_current_scope_context_manifest(),
+            prompt_ref=_prompt_ref,
+            response_ref=_response_ref,
         )
 
     items = extract_json_array(raw_text, normalize=True)
@@ -859,6 +913,8 @@ def run_scope_review(
             tokens_out=_tokens_out,
             cost_usd=_cost_usd,
             context_manifest=_current_scope_context_manifest(),
+            prompt_ref=_prompt_ref,
+            response_ref=_response_ref,
         )
 
     critical_findings, advisory_findings = _classify_scope_findings(items)
@@ -867,6 +923,7 @@ def run_scope_review(
         len(critical_findings),
         len(advisory_findings),
         prompt_chars=_prompt_chars,
+        model_id=scope_model_id,
     )
 
     if critical_findings:
@@ -885,6 +942,8 @@ def run_scope_review(
                 tokens_out=_tokens_out,
                 cost_usd=_cost_usd,
                 context_manifest=_current_scope_context_manifest(),
+                prompt_ref=_prompt_ref,
+                response_ref=_response_ref,
             )
         # Parallel review aggregates advisory findings on the main thread.
 
@@ -900,4 +959,6 @@ def run_scope_review(
         tokens_out=_tokens_out,
         cost_usd=_cost_usd,
         context_manifest=_current_scope_context_manifest(),
+        prompt_ref=_prompt_ref,
+        response_ref=_response_ref,
     )

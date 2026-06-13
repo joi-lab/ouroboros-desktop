@@ -178,7 +178,7 @@ jobs:
       - name: Run host UI smoke
         env:
           OUROBOROS_RUN_UI_SMOKE: "1"
-        run: python -m pytest tests/test_ui_smoke_playwright.py -m ui_browser -q --tb=short
+        run: python -m pytest tests/ -m ui_browser -q --tb=short
       - name: Run browser tools Chromium smoke
         run: python -m pytest tests/test_browser_tools_smoke.py -m browser -q --tb=short
 

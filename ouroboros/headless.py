@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -21,12 +23,20 @@ from ouroboros.utils import atomic_write_json, utc_now_iso
 
 HEADLESS_TASKS_DIR = pathlib.Path("state") / "headless_tasks"
 ARTIFACTS_DIR = pathlib.Path("task_results") / "artifacts"
+TASK_DRIVES_DIR = pathlib.Path("task_drives")
 ARTIFACT_STATUS_PENDING = "pending"
 ARTIFACT_STATUS_FINALIZING = "finalizing"
 ARTIFACT_STATUS_READY = "ready"
 ARTIFACT_STATUS_FAILED = "failed"
 
 _FINAL_STATUSES = {"completed", "failed", "cancelled", "rejected_duplicate"}
+_ARTIFACT_LIFECYCLE_FIELDS = {
+    "artifact_status",
+    "artifact_error",
+    "artifact_bundle",
+    "artifact_finalized_at",
+}
+DEFAULT_HEADLESS_TASK_RETENTION_DAYS = 7
 _PATCH_EXCLUDE_RULES_VERSION = 1
 _TOP_LEVEL_EXCLUDE_DIRS = {".ouroboros", ".venv", "venv", "env"}
 _ANY_SEGMENT_EXCLUDE_DIRS = {
@@ -50,9 +60,10 @@ def task_state_dir(drive_root: pathlib.Path, task_id: str) -> pathlib.Path:
     return pathlib.Path(drive_root) / HEADLESS_TASKS_DIR / validate_task_id(task_id)
 
 
-def task_artifacts_dir(drive_root: pathlib.Path, task_id: str) -> pathlib.Path:
+def task_artifacts_dir(drive_root: pathlib.Path, task_id: str, *, create: bool = True) -> pathlib.Path:
     path = pathlib.Path(drive_root) / ARTIFACTS_DIR / validate_task_id(task_id)
-    path.mkdir(parents=True, exist_ok=True)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -110,6 +121,138 @@ def prepare_task_drive(parent_drive_root: pathlib.Path, task_id: str, memory_mod
     return child
 
 
+def headless_task_retention_days() -> int:
+    raw = os.environ.get("OUROBOROS_HEADLESS_TASK_RETENTION_DAYS", "")
+    if not str(raw or "").strip():
+        try:
+            from ouroboros.config import load_settings
+
+            raw = load_settings().get("OUROBOROS_HEADLESS_TASK_RETENTION_DAYS", "")
+        except Exception:
+            raw = ""
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = DEFAULT_HEADLESS_TASK_RETENTION_DAYS
+    return max(1, min(365, days))
+
+
+def _timestamp_from_result(result: Dict[str, Any], fallback: float) -> float:
+    for key in ("artifact_finalized_at", "completed_at", "finished_at", "ts"):
+        raw = str(result.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return float(parsed.timestamp())
+        except ValueError:
+            continue
+    return fallback
+
+
+def prune_headless_task_drives(
+    parent_drive_root: pathlib.Path,
+    *,
+    retention_days: Optional[int] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Best-effort startup prune for copied-back terminal child drives."""
+
+    parent = pathlib.Path(parent_drive_root)
+    base = parent / HEADLESS_TASKS_DIR
+    days = headless_task_retention_days() if retention_days is None else max(1, int(retention_days))
+    cutoff = float(now if now is not None else time.time()) - days * 86400
+    report: Dict[str, Any] = {"retention_days": days, "scanned": 0, "pruned": [], "skipped": [], "errors": []}
+    if not base.is_dir():
+        return report
+    for task_dir in sorted(base.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        task_id = task_dir.name
+        report["scanned"] += 1
+        try:
+            validate_task_id(task_id)
+            dir_mtime = task_dir.stat().st_mtime
+            try:
+                from ouroboros.task_status import load_effective_task_result
+
+                result = load_effective_task_result(parent, task_id) or {}
+            except Exception:
+                result = load_task_result(parent, task_id) or {}
+            status = str(result.get("status") or "").lower()
+            if status not in _FINAL_STATUSES:
+                report["skipped"].append({"task_id": task_id, "reason": "parent_not_terminal", "status": status})
+                continue
+            artifact_status = str(result.get("artifact_status") or "").lower()
+            if artifact_status and artifact_status not in {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}:
+                report["skipped"].append({"task_id": task_id, "reason": "artifacts_not_terminal", "artifact_status": artifact_status})
+                continue
+            retention_ts = _timestamp_from_result(result, dir_mtime)
+            if retention_ts > cutoff:
+                report["skipped"].append({"task_id": task_id, "reason": "younger_than_retention"})
+                continue
+            expected_child = str((task_dir / "data").resolve(strict=False))
+            known_child = str(
+                result.get("child_drive_root")
+                or result.get("headless_child_drive_root")
+                or result.get("drive_root")
+                or ""
+            ).strip()
+            if known_child and str(pathlib.Path(known_child).resolve(strict=False)) != expected_child:
+                report["skipped"].append({"task_id": task_id, "reason": "child_drive_mismatch"})
+                continue
+            shutil.rmtree(task_dir)
+            report["pruned"].append({"task_id": task_id, "path": str(task_dir)})
+        except Exception as exc:
+            report["errors"].append({"task_id": task_id, "error": f"{type(exc).__name__}: {exc}"})
+    return report
+
+
+def prune_task_drives(
+    parent_drive_root: pathlib.Path,
+    *,
+    retention_days: Optional[int] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Best-effort startup prune for direct-task scratch drives."""
+
+    parent = pathlib.Path(parent_drive_root)
+    base = parent / TASK_DRIVES_DIR
+    days = headless_task_retention_days() if retention_days is None else max(1, int(retention_days))
+    cutoff = float(now if now is not None else time.time()) - days * 86400
+    report: Dict[str, Any] = {"retention_days": days, "scanned": 0, "pruned": [], "skipped": [], "errors": []}
+    if not base.is_dir():
+        return report
+    for task_dir in sorted(base.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        task_id = task_dir.name
+        report["scanned"] += 1
+        try:
+            validate_task_id(task_id)
+            dir_mtime = task_dir.stat().st_mtime
+            try:
+                from ouroboros.task_status import load_effective_task_result
+
+                result = load_effective_task_result(parent, task_id) or {}
+            except Exception:
+                result = load_task_result(parent, task_id) or {}
+            status = str(result.get("status") or "").lower()
+            if status not in _FINAL_STATUSES:
+                report["skipped"].append({"task_id": task_id, "reason": "task_not_terminal", "status": status})
+                continue
+            if _timestamp_from_result(result, dir_mtime) > cutoff:
+                report["skipped"].append({"task_id": task_id, "reason": "younger_than_retention"})
+                continue
+            shutil.rmtree(task_dir)
+            report["pruned"].append({"task_id": task_id, "path": str(task_dir)})
+        except Exception as exc:
+            report["errors"].append({"task_id": task_id, "error": f"{type(exc).__name__}: {exc}"})
+    return report
+
+
 def copy_child_task_result(parent_drive_root: pathlib.Path, task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Copy a child-drive task result back to the parent data root."""
 
@@ -120,16 +263,45 @@ def copy_child_task_result(parent_drive_root: pathlib.Path, task: Dict[str, Any]
     child_result = load_task_result(child_drive, task_id)
     if not isinstance(child_result, dict):
         return None
+    workspace_task = _workspace_root_from_task(task) is not None
+    child_status = str(child_result.get("status") or "completed")
+    existing = load_task_result(parent_drive_root, task_id) if workspace_task and child_status in _FINAL_STATUSES else {}
+    existing_artifact_status = str((existing or {}).get("artifact_status") or "").strip().lower()
+    preserve_parent_artifacts = existing_artifact_status in {
+        ARTIFACT_STATUS_PENDING,
+        ARTIFACT_STATUS_FINALIZING,
+        ARTIFACT_STATUS_READY,
+        ARTIFACT_STATUS_FAILED,
+    }
     payload = {
         key: value
         for key, value in child_result.items()
         if key not in {"task_id", "status"}
     }
+    if isinstance(payload.get("artifacts"), list):
+        payload["artifacts"] = _copy_child_artifacts_to_parent(
+            parent_drive_root,
+            task_id,
+            child_drive,
+            [item for item in payload.get("artifacts") or [] if isinstance(item, dict)],
+        )
+        try:
+            from ouroboros.outcomes import artifact_bundle_from_result
+
+            payload["artifact_bundle"] = artifact_bundle_from_result(payload)
+        except Exception:
+            payload.pop("artifact_bundle", None)
+    if preserve_parent_artifacts:
+        payload["artifacts"] = _merge_artifacts(
+            list((existing or {}).get("artifacts") or []),
+            list(payload.get("artifacts") or []),
+        )
+        for key in _ARTIFACT_LIFECYCLE_FIELDS:
+            if key in (existing or {}):
+                payload[key] = (existing or {}).get(key)
     payload.setdefault("headless_child_drive_root", str(child_drive))
-    child_status = str(child_result.get("status") or "completed")
-    if _workspace_root_from_task(task) is not None and child_status in _FINAL_STATUSES:
-        existing = load_task_result(parent_drive_root, task_id) or {}
-        if str(existing.get("artifact_status") or "") not in {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}:
+    if workspace_task and child_status in _FINAL_STATUSES:
+        if not preserve_parent_artifacts and existing_artifact_status not in {ARTIFACT_STATUS_READY, ARTIFACT_STATUS_FAILED}:
             payload["artifact_status"] = ARTIFACT_STATUS_FINALIZING
         payload["child_status"] = child_status
     return write_task_result(
@@ -138,6 +310,47 @@ def copy_child_task_result(parent_drive_root: pathlib.Path, task: Dict[str, Any]
         child_status,
         **payload,
     )
+
+
+def _copy_child_artifacts_to_parent(
+    parent_drive_root: pathlib.Path,
+    task_id: str,
+    child_drive: pathlib.Path,
+    artifacts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Rebase child-drive artifact files into the parent task artifact store."""
+
+    parent_dir = task_artifacts_dir(parent_drive_root, task_id)
+    rebased: List[Dict[str, Any]] = []
+    for artifact in artifacts:
+        item = dict(artifact)
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path:
+            rebased.append(item)
+            continue
+        src = pathlib.Path(raw_path)
+        if not src.is_absolute():
+            src = (child_drive / raw_path).resolve(strict=False)
+        try:
+            src.resolve(strict=False).relative_to(parent_dir.resolve(strict=False))
+            rebased.append(item)
+            continue
+        except ValueError:
+            pass
+        if not src.is_file():
+            rebased.append(item)
+            continue
+        dest = parent_dir / src.name
+        if dest.exists() and dest.resolve(strict=False) != src.resolve(strict=False):
+            dest = parent_dir / f"{src.stem}_{sha256(str(src).encode('utf-8')).hexdigest()[:8]}{src.suffix}"
+        shutil.copy2(src, dest)
+        data = dest.read_bytes()
+        item["path"] = str(dest)
+        item["name"] = str(item.get("name") or dest.name)
+        item["size"] = len(data)
+        item["sha256"] = sha256(data).hexdigest()
+        rebased.append(item)
+    return rebased
 
 
 def finalize_task_artifacts(parent_drive_root: pathlib.Path, task: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -222,6 +435,25 @@ def finalize_task_artifacts(parent_drive_root: pathlib.Path, task: Dict[str, Any
         }
         if artifact_error:
             fields["artifact_error"] = artifact_error
+        provisional = {
+            **existing,
+            **fields,
+            "artifacts": merged,
+            "artifact_status": fields.get("artifact_status", existing.get("artifact_status")),
+        }
+        try:
+            from ouroboros.outcomes import artifact_bundle_from_result, refresh_verification_ledger_artifacts
+
+            artifact_bundle = artifact_bundle_from_result(provisional)
+            fields["artifact_bundle"] = artifact_bundle
+            refreshed_ledger = refresh_verification_ledger_artifacts(
+                existing.get("verification_ledger"),
+                artifact_bundle,
+            )
+            if refreshed_ledger is not None:
+                fields["verification_ledger"] = refreshed_ledger
+        except Exception:
+            pass
         write_task_result(
             parent_drive_root,
             task_id,
@@ -702,22 +934,19 @@ def _merge_artifacts(
 ) -> List[Dict[str, Any]]:
     merged: List[Dict[str, Any]] = []
     drop = drop_kinds or set()
-    keys = {_artifact_merge_key(item) for item in new_items if isinstance(item, dict)}
+    key_for = lambda item: (
+        str(item.get("kind") or ""),
+        str(item.get("name") or pathlib.Path(str(item.get("path") or "")).name),
+    )
+    keys = {key_for(item) for item in new_items if isinstance(item, dict)}
     for item in existing:
         if not isinstance(item, dict):
             continue
-        key = _artifact_merge_key(item)
+        key = key_for(item)
         if key[0] not in drop and key not in keys:
             merged.append(item)
     merged.extend(new_items)
     return merged
-
-
-def _artifact_merge_key(item: Dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(item.get("kind") or ""),
-        str(item.get("name") or pathlib.Path(str(item.get("path") or "")).name),
-    )
 
 
 __all__ = [
@@ -730,6 +959,8 @@ __all__ = [
     "copy_child_task_result",
     "finalize_task_artifacts",
     "prepare_task_drive",
+    "prune_headless_task_drives",
+    "prune_task_drives",
     "task_artifacts_dir",
     "task_state_dir",
     "write_workspace_patch_artifacts",

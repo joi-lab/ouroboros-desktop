@@ -45,7 +45,7 @@ def test_repo_read_max_lines_slice(tmp_path):
 def test_data_read_memory_file_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "m" * 70000
-    result = _truncate_tool_result(big, "data_read", {"path": "memory/scratchpad.md"})
+    result = _truncate_tool_result(big, "read_file", {"path": "memory/scratchpad.md"})
     assert result == big
 
 
@@ -137,17 +137,17 @@ def test_data_read_sentinel_narrower_for_non_memory_paths(tmp_path):
 def test_repo_read_prompt_file_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "p" * 90000
-    result = _truncate_tool_result(big, "repo_read", {"path": "prompts/SYSTEM.md"})
+    result = _truncate_tool_result(big, "read_file", {"path": "prompts/SYSTEM.md"})
     assert result == big
 
 
 def test_repo_commit_results_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "r" * 90000
-    assert _truncate_tool_result(big, "repo_commit") == big
-    assert _truncate_tool_result(big, "repo_commit") == big
-    assert _truncate_tool_result(big, "multi_model_review") == big
-    assert _truncate_tool_result(big, "review_skill") == big
+    assert _truncate_tool_result(big, "commit_reviewed") == big
+    assert _truncate_tool_result(big, "commit_reviewed") == big
+    assert _truncate_tool_result(big, "task_acceptance_review") == big
+    assert _truncate_tool_result(big, "skill_review") == big
 
 
 def test_self_check_returns_bool_and_interval_15():
@@ -164,7 +164,7 @@ def test_advisory_pre_review_results_never_truncated():
     """advisory_pre_review results must not be truncated (full JSON needed)."""
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "a" * 90000
-    assert _truncate_tool_result(big, "advisory_pre_review") == big
+    assert _truncate_tool_result(big, "advisory_review") == big
 
 
 def test_review_status_results_never_truncated():
@@ -179,7 +179,8 @@ def test_child_task_handoff_results_never_truncated():
     from ouroboros.loop_tool_execution import _truncate_tool_result
     big = "c" * 90000
     assert _truncate_tool_result(big, "get_task_result") == big
-    assert _truncate_tool_result(big, "wait_for_task") == big
+    assert _truncate_tool_result(big, "wait_task") == big
+    assert _truncate_tool_result(big, "wait_tasks") == big
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +203,8 @@ def test_repo_read_schema_default_is_2000():
     """Tool schema for repo_read must advertise default 2000 for max_lines."""
     from ouroboros.tools.core import get_tools
     tools = {t.name: t for t in get_tools()}
-    assert "repo_read" in tools
-    schema = tools["repo_read"].schema
+    assert "read_file" in tools
+    schema = tools["read_file"].schema
     ml_param = schema["parameters"]["properties"]["max_lines"]
     assert ml_param["default"] == 2000, (
         f"repo_read schema default for max_lines should be 2000, got {ml_param['default']}."

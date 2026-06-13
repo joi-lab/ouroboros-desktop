@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import logging
 import pathlib
@@ -42,6 +43,31 @@ from ouroboros.skill_loader import (
 from ouroboros.utils import append_jsonl, utc_now_iso
 
 log = logging.getLogger(__name__)
+_CHILD_DISPATCH_HEADER_DENYLIST = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+}
+_CHILD_DISPATCH_BODY_CAP = 512 * 1024
+
+
+async def _read_child_dispatch_body(request: Request) -> bytes:
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > _CHILD_DISPATCH_BODY_CAP:
+                raise ValueError("extension route body too large")
+        except ValueError:
+            raise ValueError("extension route body too large")
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > _CHILD_DISPATCH_BODY_CAP:
+            raise ValueError("extension route body too large")
+        chunks.extend(chunk)
+    return bytes(chunks)
 
 
 def _review_fields(loaded: Any, *, stale: bool | None = None, gate: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -426,6 +452,52 @@ async def api_extension_dispatch(request: Request) -> Response:
         allowed.add("HEAD")
     if method not in allowed:
         return json_error(f"method {method} not allowed; allowed={sorted(allowed)}", 405)
+    if spec.get("out_of_process"):
+        try:
+            from ouroboros.extension_process_runner import dispatch_extension_route_subprocess
+
+            try:
+                body = await _read_child_dispatch_body(request)
+            except ValueError as exc:
+                return json_error(str(exc), 413)
+            headers = [
+                (key, value)
+                for key, value in request.headers.items()
+                if key.lower() not in _CHILD_DISPATCH_HEADER_DENYLIST
+            ]
+            child_result = await asyncio.to_thread(
+                dispatch_extension_route_subprocess,
+                spec,
+                {
+                    "method": method,
+                    "path": request.url.path,
+                    "path_params": dict(request.path_params),
+                    "query_string": request.url.query,
+                    "headers": headers,
+                    "body_b64": base64.b64encode(body).decode("ascii"),
+                },
+                drive_root=drive_root,
+                repo_dir=_request_repo_dir(request),
+            )
+            route_result = dict(child_result.get("route") or {})
+            kind = str(route_result.get("kind") or "")
+            status_code = int(route_result.get("status_code") or 200)
+            if kind == "response":
+                headers = dict(route_result.get("headers") or {})
+                headers.pop("content-length", None)
+                body_bytes = base64.b64decode(str(route_result.get("body_b64") or ""))
+                return Response(
+                    body_bytes,
+                    status_code=status_code,
+                    headers=headers,
+                    media_type=route_result.get("media_type") or None,
+                )
+            if kind == "json":
+                return JSONResponse(route_result.get("data"), status_code=status_code)
+            return Response(str(route_result.get("text") or ""), status_code=status_code)
+        except Exception as exc:
+            log.exception("extension child dispatch failure: %s", mount)
+            return json_error(f"{type(exc).__name__}: {exc}", 502)
     handler = spec.get("handler")
     if not callable(handler):
         return json_error("registered handler is not callable")

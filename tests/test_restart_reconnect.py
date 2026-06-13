@@ -222,6 +222,13 @@ def test_live_event_summaries_preserve_full_text_for_expansion():
     assert "fullBody" in source
 
 
+def test_task_done_live_summary_distinguishes_typed_failure():
+    source = _read("web/modules/log_events.js")
+    assert "function taskDoneFailure" in source
+    assert "['failed', 'infra_failed'].includes(resultStatus)" in source
+    assert "phase: failed ? 'error' : 'done'" in source
+
+
 def test_chat_scrolls_to_bottom_after_first_history_load():
     """syncHistory must scroll to bottom on first load (restart/open) but
     respect user scroll position on subsequent reconnect syncs."""

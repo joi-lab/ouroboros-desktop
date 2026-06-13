@@ -93,14 +93,17 @@ def build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
             "workspace_mode": str(task.get("workspace_mode") or ""),
             "memory_mode": str(task.get("memory_mode") or ""),
             "rule": (
-                "repo_read/repo_write/repo_list/code_search/run_shell target the active workspace; "
+                "read_file/write_file/list_files/search_code/run_command target the active workspace; "
                 "Ouroboros self-review/commit tools are unavailable; final changes are exported as artifacts."
             ),
         }
     if str(runtime_mode).lower() == "light":
         runtime_data["runtime_mode_rule"] = (
-            "light mode forbids Ouroboros repo mutation; scoped edits under "
-            "data/skills/{external,clawhub,ouroboroshub}/<skill>/ remain allowed"
+            "light mode forbids Ouroboros repo mutation and control-plane mutation, not user-file work; "
+            "use user_files for visible files, artifact_store for canonical deliverables, "
+            "task_drive for scratch, process outputs=[...] for generated artifacts, and "
+            "skill_payload only for explicit scoped skill-payload work/repair, not generic "
+            "artifact transport; do not use runtime_data/uploads as artifact transport"
         )
     if budget_info:
         runtime_data["budget"] = budget_info
@@ -230,12 +233,12 @@ def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
     if include_volatile:
         scratchpad_raw = memory.load_scratchpad()
         _warn_if_over_budget("scratchpad", scratchpad_raw)
-        sections.append("## Scratchpad (from `memory/scratchpad.md` — already loaded; do not re-read via repo_read or data_read)\n\n" + scratchpad_raw)
+        sections.append("## Scratchpad (from `memory/scratchpad.md` — already loaded; do not re-read via read_file(root='runtime_data', path='memory/scratchpad.md'))\n\n" + scratchpad_raw)
 
     if include_stable:
         identity_raw = memory.load_identity()
         _warn_if_over_budget("identity", identity_raw)
-        sections.append("## Identity (from `memory/identity.md` — already loaded; do not re-read via repo_read or data_read)\n\n" + identity_raw)
+        sections.append("## Identity (from `memory/identity.md` — already loaded; do not re-read via read_file(root='runtime_data', path='memory/identity.md'))\n\n" + identity_raw)
         world_raw = memory.load_world_profile().strip()
         if world_raw:
             world_text = truncate_review_artifact(world_raw, limit=4096)
@@ -466,7 +469,7 @@ def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
                 checks.append(
                     f"WARNING: RESCUE SNAPSHOT AVAILABLE — {', '.join(recent)}. "
                     "Uncommitted changes were saved before last restart. "
-                    "Use data_read to inspect archive/rescue/<dirname>/rescue_meta.json "
+                    "Use read_file(root='runtime_data', path='archive/rescue/<dirname>/rescue_meta.json') "
                     "and changes.diff to decide if recovery is needed."
                 )
     except Exception:

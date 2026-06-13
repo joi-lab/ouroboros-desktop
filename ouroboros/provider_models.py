@@ -17,8 +17,8 @@ CLOUDRU_DIRECT_DEFAULTS = {
 }
 
 ANTHROPIC_DIRECT_DEFAULTS = {
-    "main": "anthropic::claude-opus-4-6",
-    "code": "anthropic::claude-opus-4-6",
+    "main": "anthropic::claude-opus-4-8",
+    "code": "anthropic::claude-opus-4-8",
     "light": "anthropic::claude-sonnet-4-6",
     "fallback": "anthropic::claude-sonnet-4-6",
 }
@@ -26,11 +26,13 @@ ANTHROPIC_DIRECT_DEFAULTS = {
 _DIRECT_PROVIDER_DEFAULTS = {
     "openai": OPENAI_DIRECT_DEFAULTS,
     "anthropic": ANTHROPIC_DIRECT_DEFAULTS,
+    "cloudru": CLOUDRU_DIRECT_DEFAULTS,
 }
 
 _ANTHROPIC_MODEL_ALIASES = {
     "claude-opus-4.6": "claude-opus-4-6",
-    "claude-opus-" + "4.7": "claude-opus-4-6",
+    "claude-opus-4.7": "claude-opus-4-7",
+    "claude-opus-4.8": "claude-opus-4-8",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
 }
 
@@ -51,6 +53,12 @@ def migrate_model_value(provider: str, value: str) -> str:
             return f"anthropic::{normalize_anthropic_model_id(text[len('anthropic::'):])}"
         if text.startswith("anthropic/"):
             return f"anthropic::{normalize_anthropic_model_id(text[len('anthropic/'):])}"
+        return text
+    if provider == "cloudru":
+        if text.startswith("cloudru::"):
+            return text
+        if text.startswith("cloudru/"):
+            return f"cloudru::{text[len('cloudru/'):]}"
         return text
     return text
 

@@ -29,6 +29,7 @@ from ouroboros.skill_review_status import (
     STATUS_WARNINGS,
     aggregate_skill_review_status,
 )
+from ouroboros.utils import sanitize_tool_result_for_log
 from ouroboros.tools.review_helpers import (
     build_anti_thrashing_rules_section,
     build_rebuttal_section,
@@ -111,9 +112,8 @@ class _SkillFileTooLarge(RuntimeError):
 
 
 def _truncate_raw_result(text: str) -> str:
-    """Truncate raw review text through the shared omission-note helper."""
-    from ouroboros.utils import truncate_review_artifact
-    return truncate_review_artifact(str(text or ""), limit=_MAX_RAW_RESULT_CHARS)
+    """Return full raw review text; actor records are the structured SSOT."""
+    return str(text or "")
 _SKILL_REVIEW_ITEMS = (
     "manifest_schema",
     "permissions_honesty",
@@ -648,7 +648,7 @@ def render_skill_review_block(
         retry_coaching = build_self_verification_template(
             fail_items,
             attempt_idx=attempt_idx,
-            tool_name="review_skill",
+            tool_name="skill_review",
             context_noun="skill pack",
         )
         if retry_coaching:
@@ -1177,7 +1177,7 @@ def review_skill(
                 f"Skill file {exc.relpath!r} is unreadable "
                 f"({type(exc.err).__name__}: {exc.err}). Review refuses "
                 "to fail open — fix the file permissions or remove the "
-                "file before re-running review_skill."
+                "file before re-running skill_review."
             ),
         )
     preflight_outcome = _run_deterministic_preflight(
@@ -1219,7 +1219,7 @@ def review_skill(
             status=STATUS_PENDING,
             reviewer_models=models,
             content_hash=content_hash,
-            error=f"infrastructure failure: {exc}",
+            error=f"infrastructure failure: {sanitize_tool_result_for_log(f'{type(exc).__name__}: {exc}')}",
         )
 
     try:

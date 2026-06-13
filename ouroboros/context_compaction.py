@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
 _COMPACTION_PROTECTED_TOOLS = frozenset({
-    "repo_commit",
+    "commit_reviewed",
+    "vcs_commit_reviewed",
+    "advisory_review",
+    "task_acceptance_review",
+    "skill_review",
+    "review_status",
     "knowledge_read",
-    "data_read",
 })
 
 _SUMMARY_INPUT_LIMIT = 2500
@@ -97,9 +102,7 @@ def _compact_argument_value(value: Any, depth: int = 0) -> Any:
 def _compact_tool_call_arguments(tool_name: str, args_json: str) -> Dict[str, Any]:
     """Compact tool call arguments for old rounds without silent truncation."""
     large_content_tools = {
-        "repo_write": "content",
-        "data_write": "content",
-        "claude_code_edit": "prompt",
+        "write_file": "content",
         "update_scratchpad": "content",
         "update_identity": "content",
     }
@@ -196,7 +199,13 @@ def _summarize_round_batch(
     light_model = get_light_model()
     client = LLMClient()
     use_local_light = os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1")
-    resp_msg, usage = client.chat(
+    from ouroboros.llm_observability import chat_observed
+
+    resp_msg, usage = chat_observed(
+        client,
+        drive_root=pathlib.Path("../data").resolve(strict=False),
+        task_id="context_compaction",
+        call_type="context_compaction",
         messages=[{"role": "user", "content": prompt}],
         model=light_model,
         reasoning_effort="low",

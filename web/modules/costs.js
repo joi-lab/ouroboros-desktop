@@ -1,6 +1,19 @@
 import { formatUsd2 } from './utils.js';
 import { apiFetch } from './api_client.js';
 
+const COST_BUDGET_INPUTS = {
+    TOTAL_BUDGET: 's-budget',
+    OUROBOROS_PER_TASK_COST_USD: 's-per-task-cost',
+};
+
+function readPositiveBudget(id) {
+    const input = document.getElementById(id);
+    const raw = String(input?.value || '').trim();
+    const value = Number(raw);
+    const min = Number(input?.min || 0.01);
+    return Number.isFinite(value) && value >= min ? value : null;
+}
+
 export function initCosts({ state, mount }) {
     const page = document.createElement('div');
     page.id = 'page-costs';
@@ -15,11 +28,11 @@ export function initCosts({ state, mount }) {
                 <div class="costs-budget-fields">
                     <div class="form-field">
                         <label>Total Budget ($)</label>
-                        <input id="s-budget" type="number" min="1" value="10">
+                        <input id="s-budget" type="number" value="10">
                     </div>
                     <div class="form-field">
                         <label>Per-task Cost Cap ($)</label>
-                        <input id="s-per-task-cost" type="number" min="1" value="20">
+                        <input id="s-per-task-cost" type="number" value="20">
                         <div class="settings-inline-note">Soft threshold only. When a task crosses it, Ouroboros is asked to wrap up rather than being hard-killed.</div>
                     </div>
                 </div>
@@ -107,6 +120,16 @@ export function initCosts({ state, mount }) {
         try {
             const resp = await apiFetch('/api/settings', { cache: 'no-store' });
             const s = await resp.json().catch(() => ({}));
+            const fields = s?._meta?.setup_contract?.budgetFields || [];
+            fields.forEach((field) => {
+                const input = document.getElementById(COST_BUDGET_INPUTS[field.settingKey]);
+                if (!input) return;
+                input.min = field.min || '0.01';
+                input.step = field.step || 'any';
+                if (field.default != null && !String(input.value || '').trim()) {
+                    input.value = field.default;
+                }
+            });
             if (s.TOTAL_BUDGET != null) document.getElementById('s-budget').value = s.TOTAL_BUDGET;
             if (s.OUROBOROS_PER_TASK_COST_USD != null) document.getElementById('s-per-task-cost').value = s.OUROBOROS_PER_TASK_COST_USD;
         } catch {}
@@ -116,8 +139,12 @@ export function initCosts({ state, mount }) {
 
     document.getElementById('btn-save-budget').addEventListener('click', async () => {
         const statusEl = document.getElementById('budget-save-status');
-        const budget = parseFloat(document.getElementById('s-budget').value) || 10;
-        const perTask = parseFloat(document.getElementById('s-per-task-cost').value) || 20;
+        const budget = readPositiveBudget('s-budget');
+        const perTask = readPositiveBudget('s-per-task-cost');
+        if (budget === null || perTask === null) {
+            statusEl.textContent = 'Budget values must be at least 0.01.';
+            return;
+        }
         try {
             const resp = await apiFetch('/api/settings', {
                 method: 'POST',
@@ -132,7 +159,7 @@ export function initCosts({ state, mount }) {
             } else if (data.restart_required) {
                 msg = 'Saved. Restart required.';
             } else if (data.immediate_changed && data.next_task_changed) {
-                msg = 'Saved. Budget limit took effect immediately; per-task cap applies on the next task.';
+                msg = 'Saved. Some changes took effect immediately; others apply on the next task.';
             } else if (data.immediate_changed) {
                 msg = 'Saved. Took effect immediately.';
             } else {
@@ -140,6 +167,7 @@ export function initCosts({ state, mount }) {
             }
             if (data.warnings && data.warnings.length) msg += ' ⚠️ ' + data.warnings.join(' | ');
             statusEl.textContent = msg;
+            window.dispatchEvent(new CustomEvent('ouro:settings-updated', { detail: { reason: 'budget saved', source: 'costs' } }));
         } catch (e) {
             statusEl.textContent = 'Error: ' + e.message;
         }
@@ -153,5 +181,9 @@ export function initCosts({ state, mount }) {
 
     window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
         if (event.detail?.tab === 'costs' && state.activePage === 'dashboard') refreshCostsPanel();
+    });
+    window.addEventListener('ouro:settings-updated', (event) => {
+        if (event.detail?.source === 'costs') return;
+        refreshCostsPanel();
     });
 }

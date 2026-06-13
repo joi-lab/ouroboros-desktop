@@ -19,5 +19,6 @@ def test_query_model_timeout_becomes_error_actor(monkeypatch):
 
     assert model == "fake/reviewer"
     assert headers is None
-    assert result == "Error: Timeout after 0.01s"
-
+    assert result["error"] == "Error: Timeout after 0.01s"
+    assert result["prompt_ref"]["manifest_ref"]["path"]
+    assert result["response_ref"]["manifest_ref"]["path"]

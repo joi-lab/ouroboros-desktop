@@ -70,6 +70,7 @@ class OuroborosAgent:
         self._current_chat_id: Optional[int] = None
         self._current_task_type: Optional[str] = None
         self._current_task_id: Optional[str] = None
+        self._current_task_metadata: Dict[str, Any] = {}
 
         self._incoming_messages: queue.Queue = queue.Queue()
         self._busy = False
@@ -152,6 +153,7 @@ class OuroborosAgent:
                 context=task.get("context"),
                 memory_mode=task.get("memory_mode"),
                 drive_root=task.get("drive_root"),
+                child_drive_root=task.get("child_drive_root") or task.get("drive_root"),
                 budget_drive_root=task.get("budget_drive_root"),
                 task_constraint=task.get("task_constraint"),
                 result="Task is running.",
@@ -197,10 +199,12 @@ class OuroborosAgent:
             "workspace_mode",
             "memory_mode",
             "drive_root",
+            "child_drive_root",
             "budget_drive_root",
         ):
             if task.get(key) not in (None, ""):
-                task_metadata.setdefault(key, task.get(key))
+                task_metadata[key] = task.get(key)
+        self._current_task_metadata = dict(task_metadata)
 
         ctx = ToolContext(
             repo_dir=self.env.repo_dir,
@@ -328,7 +332,10 @@ class OuroborosAgent:
                             review_model = ""
                     if not review_model:
                         text = "❌ Deep self-review unavailable: no OPENROUTER_API_KEY or OPENAI_API_KEY configured."
-                        usage = {}
+                        usage = {
+                            "result_status": "infra_failed",
+                            "reason_code": "deep_self_review_unavailable",
+                        }
                     else:
                         text, usage = run_deep_self_review(
                             repo_dir=self.env.repo_dir,
@@ -361,7 +368,10 @@ class OuroborosAgent:
                         "traceback": truncate_for_log(tb, 2000),
                     })
                     text = f"⚠️ Deep self-review error: {type(e).__name__}: {e}"
-                    usage = {}
+                    usage = {
+                        "result_status": "infra_failed",
+                        "reason_code": "deep_self_review_error",
+                    }
                     llm_trace = {"reasoning_notes": ["deep_self_review_error"], "tool_calls": []}
             else:
                 try:
@@ -387,6 +397,10 @@ class OuroborosAgent:
                         "traceback": truncate_for_log(tb, 2000),
                     })
                     text = f"⚠️ Error during processing: {type(e).__name__}: {e}"
+                    usage = {
+                        "result_status": "infra_failed",
+                        "reason_code": "task_exception",
+                    }
                     try:
                         from ouroboros.task_results import STATUS_FAILED, write_task_result
                         write_task_result(
@@ -394,6 +408,8 @@ class OuroborosAgent:
                             str(task.get("id") or ""),
                             STATUS_FAILED,
                             result=text,
+                            result_status="infra_failed",
+                            reason_code="task_exception",
                         )
                     except Exception:
                         pass
@@ -437,18 +453,23 @@ class OuroborosAgent:
                 heartbeat_stop.set()
             self._current_task_type = None
             self._current_task_id = None
+            self._current_task_metadata = {}
 
     def _emit_progress(self, text: str) -> None:
         self._last_progress_ts = time.time()
         if self._event_queue is None or self._current_chat_id is None:
             return
         try:
-            self._event_queue.put({
+            event = {
                 "type": "send_message", "chat_id": self._current_chat_id,
                 "text": f"💬 {text}", "format": "markdown", "is_progress": True,
                 "task_id": self._current_task_id or "",
                 "ts": utc_now_iso(),
-            })
+            }
+            progress_meta = self._subagent_progress_meta("progress")
+            if progress_meta:
+                event["progress_meta"] = progress_meta
+            self._event_queue.put(event)
         except Exception:
             log.warning("Failed to emit progress event", exc_info=True)
             pass
@@ -472,10 +493,25 @@ class OuroborosAgent:
             self._event_queue.put({
                 "type": "task_heartbeat", "task_id": task_id,
                 "phase": phase, "ts": utc_now_iso(),
+                **self._subagent_progress_meta(phase),
             })
         except Exception:
             log.warning("Failed to emit task heartbeat event", exc_info=True)
             pass
+
+    def _subagent_progress_meta(self, event: str) -> Dict[str, Any]:
+        metadata = self._current_task_metadata if isinstance(self._current_task_metadata, dict) else {}
+        if str(metadata.get("delegation_role") or "").lower() != "subagent":
+            return {}
+        task_id = str(self._current_task_id or metadata.get("subagent_task_id") or metadata.get("task_id") or "")
+        return {
+            "subagent_event": str(event or "progress"),
+            "subagent_task_id": task_id,
+            "root_task_id": str(metadata.get("root_task_id") or ""),
+            "parent_task_id": str(metadata.get("parent_task_id") or ""),
+            "delegation_role": "subagent",
+            "subagent_role": str(metadata.get("role") or ""),
+        }
 
     def _start_task_heartbeat_loop(self, task_id: str) -> Optional[threading.Event]:
         if self._event_queue is None or not task_id.strip():

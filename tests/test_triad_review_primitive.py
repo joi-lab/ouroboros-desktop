@@ -14,6 +14,19 @@ def test_extract_json_array_handles_fences_and_normalizes():
     assert parsed[0]["item"] == "x"
 
 
+def test_extract_json_array_tries_later_fenced_chunks_when_first_is_malformed():
+    raw = (
+        "```json\n"
+        "[{\"item\":\"bad\",\"verdict\":\"FAIL\",}]\n"
+        "```\n"
+        "```json\n"
+        "[{\"item\":\"good\",\"verdict\":\"PASS\",\"severity\":\"critical\",\"reason\":\"ok\"}]\n"
+        "```"
+    )
+    parsed = extract_json_array(raw, normalize=True)
+    assert parsed[0]["item"] == "good"
+
+
 def test_extract_json_array_normalizes_obligation_suffix():
     raw = json.dumps([
         {

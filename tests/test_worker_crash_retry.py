@@ -49,12 +49,19 @@ def _make_worker(wid=0, alive=False, busy_task_id="abc123", exitcode=-11):
 # ---------------------------------------------------------------------------
 
 def test_attempt_incremented_before_requeue(tmp_path):
-    """When a worker crashes on attempt 1 and QUEUE_MAX_RETRIES=1, the requeued
-    task should have _attempt=2."""
+    """When a worker dies WITHOUT a crash signal (non-negative exitcode) on
+    attempt 1 and QUEUE_MAX_RETRIES=1, the requeued task should have _attempt=2.
+    Signal crashes (negative exitcode) are terminal and covered separately."""
     import supervisor.workers as W
 
     task = _make_task(task_id="t001", attempt=1)
-    worker = _make_worker(busy_task_id="t001", exitcode=-11)
+    child_drive = tmp_path / "child-drive"
+    task["drive_root"] = str(child_drive)
+    task["child_drive_root"] = str(child_drive)
+    service_dir = child_drive / "services" / "t001"
+    service_dir.mkdir(parents=True)
+    (service_dir / "devserver.log").write_text("READY\n", encoding="utf-8")
+    worker = _make_worker(busy_task_id="t001", exitcode=1)
 
     W.DRIVE_ROOT = tmp_path
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
@@ -83,6 +90,7 @@ def test_attempt_incremented_before_requeue(tmp_path):
 
     assert len(enqueued) == 1, "Task should be requeued once"
     assert enqueued[0]["_attempt"] == 2, f"Expected _attempt=2, got {enqueued[0].get('_attempt')}"
+    assert not service_dir.exists(), "Child-drive service logs should be archived after worker death"
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +382,9 @@ def test_non_completed_terminal_status_not_requeued(tmp_path):
     # Reset state: previous loop iterations consumed t005 from RUNNING/WORKERS
     enqueued.clear()
     task2 = _make_task(task_id="t006", attempt=1, chat_id=9)
-    worker2 = _make_worker(busy_task_id="t006", exitcode=-11)
+    # Non-signal death so the retry path runs; this asserts 'interrupted' status
+    # does not block requeue (signal crashes are terminal, tested separately).
+    worker2 = _make_worker(busy_task_id="t006", exitcode=1)
     W.WORKERS = {0: worker2}
     W.RUNNING = {
         "t006": {
@@ -401,6 +411,58 @@ def test_non_completed_terminal_status_not_requeued(tmp_path):
     assert enqueued[0].get("_attempt", 1) == 2, (
         f"Attempt should have incremented to 2, got: {enqueued[0].get('_attempt')}"
     )
+
+
+def test_signal_crash_is_terminal_no_retry(tmp_path):
+    """A worker killed by a signal (negative exitcode, e.g. SIGSEGV -11) is a
+    deterministic infrastructure crash: it must be marked failed with no retry
+    for ANY task type, and emit a task_done so the UI card resolves."""
+    import supervisor.workers as W
+    import queue as _queue
+
+    task = _make_task(task_id="sig01", attempt=1, chat_id=7)  # ordinary task type
+    worker = _make_worker(busy_task_id="sig01", exitcode=-11)
+
+    W.DRIVE_ROOT = tmp_path
+    (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+    W.QUEUE_MAX_RETRIES = 1
+    W.WORKERS = {0: worker}
+    W.RUNNING = {
+        "sig01": {
+            "task": task,
+            "started_at": time.time() - 5,
+            "last_heartbeat_at": time.time() - 5,
+            "attempt": 1,
+        }
+    }
+    W._LAST_SPAWN_TIME = 0
+
+    written = {}
+    enqueued = []
+    event_q = _queue.Queue()
+
+    def fake_write(drive, task_id, status, result="", **kw):
+        written[task_id] = {"status": status, **kw}
+
+    import supervisor.queue as sq
+
+    with patch.object(sq, "enqueue_task", side_effect=lambda t, front=False: enqueued.append(dict(t))), \
+         patch.object(sq, "persist_queue_snapshot", MagicMock()), \
+         patch("supervisor.workers.respawn_worker"), \
+         patch("supervisor.workers.load_state", return_value={}), \
+         patch("ouroboros.task_results.load_task_result", return_value=None), \
+         patch("ouroboros.task_results.write_task_result", side_effect=fake_write), \
+         patch("supervisor.workers.get_event_q", return_value=event_q), \
+         patch("supervisor.message_bus.get_bridge", return_value=None):
+        W.ensure_workers_healthy()
+
+    assert len(enqueued) == 0, "Signal crash must NOT be retried"
+    assert written.get("sig01", {}).get("status") == "failed"
+    assert written["sig01"].get("crash_signal") == 11
+    drained = []
+    while not event_q.empty():
+        drained.append(event_q.get_nowait())
+    assert any(e.get("type") == "task_done" and e.get("task_id") == "sig01" for e in drained)
 
 
 def test_deep_self_review_crash_emits_task_done_event(tmp_path):

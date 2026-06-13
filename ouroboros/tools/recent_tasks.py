@@ -7,6 +7,7 @@ import pathlib
 from typing import Any, Dict, List
 
 from ouroboros.tools.registry import ToolContext, ToolEntry
+from ouroboros.task_status import effective_task_result
 
 
 _MAX_TASKS = 20
@@ -42,12 +43,14 @@ def _preview(text: Any) -> str:
 def _task_record(
     path: pathlib.Path,
     *,
+    drive_root: pathlib.Path,
     include_results: bool,
     include_traces: bool,
 ) -> tuple[Dict[str, Any] | None, Dict[str, str] | None]:
     data, error = _read_json(path)
     if data is None:
         return None, {"path": str(path), "error": error}
+    data = effective_task_result(drive_root, data)
     result = str(data.get("result") or "")
     record: Dict[str, Any] = {
         "task_id": str(data.get("task_id") or path.stem),
@@ -106,6 +109,7 @@ def _handle_recent_tasks(
         for path in files[:task_limit]:
             record, error = _task_record(
                 path,
+                drive_root=drive_root,
                 include_results=bool(include_results),
                 include_traces=bool(include_traces),
             )

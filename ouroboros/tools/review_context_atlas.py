@@ -9,7 +9,7 @@ import pathlib
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from ouroboros.runtime_mode_policy import (
     PROTECTED_RUNTIME_PATH_PREFIXES,
@@ -81,6 +81,7 @@ class ReviewContextAtlasRequest:
     hard_total_tokens: int = DEFAULT_ATLAS_HARD_TOTAL_TOKENS
     include_tests: bool = False
     title: str = "Generated Scope Atlas"
+    drive_root: pathlib.Path | None = None
 
 
 @dataclass(frozen=True)
@@ -162,14 +163,38 @@ def compile_review_context_atlas(req: ReviewContextAtlasRequest) -> ReviewContex
 
     if req.tracked_paths:
         tracked_paths = [_normalize_path(path) for path in req.tracked_paths]
+        inventory_summary = {}
+        inventory_by_path: dict[str, Any] = {}
     else:
         try:
-            tracked_paths = [_normalize_path(path) for path in list_git_tracked_paths(repo_dir)]
+            from ouroboros.code_intelligence import build_code_inventory
+
+            inventory = build_code_inventory(repo_dir, drive_root=req.drive_root, persist=True)
+            tracked_paths = [_normalize_path(file.path) for file in inventory.files]
+            inventory_by_path = {file.path: file for file in inventory.files}
+            inventory_summary = {
+                "schema_version": inventory.schema_version,
+                "git_head": inventory.git_head,
+                "file_count": len(inventory.files),
+                "coverage": inventory.coverage,
+            }
         except Exception as exc:
-            raise RuntimeError(f"git tracked path inventory unavailable: {exc}") from exc
+            try:
+                tracked_paths = [_normalize_path(path) for path in list_git_tracked_paths(repo_dir)]
+                inventory_summary = {"fallback": "git_ls_files"}
+                inventory_by_path = {}
+            except Exception as git_exc:
+                raise RuntimeError(f"git tracked path inventory unavailable: {exc}; fallback failed: {git_exc}") from git_exc
 
     facts_by_path = {
-        rel: _build_file_facts(repo_dir, rel, anchors, already_included, req.include_tests)
+        rel: _build_file_facts(
+            repo_dir,
+            rel,
+            anchors,
+            already_included,
+            req.include_tests,
+            inventory_fact=inventory_by_path.get(rel),
+        )
         for rel in tracked_paths
         if rel
     }
@@ -249,6 +274,7 @@ def compile_review_context_atlas(req: ReviewContextAtlasRequest) -> ReviewContex
     text = _render_atlas_text(req, facts_by_path, selected_paths, status_hint=status)
     token_count = estimate_tokens(text)
     manifest = _build_manifest(req, facts_by_path, selected_paths, token_count, status)
+    manifest["code_inventory"] = inventory_summary
     selected = tuple(_record_for(facts_by_path[path]) for path in selected_paths)
     omitted = tuple(
         _record_for(facts)
@@ -271,8 +297,14 @@ def _build_file_facts(
     anchors: frozenset[str],
     already_included: frozenset[str],
     include_tests: bool,
+    inventory_fact: Any = None,
 ) -> _FileFacts:
     facts = _FileFacts(rel_path=rel, language=pathlib.PurePosixPath(rel).suffix.lstrip("."))
+    if inventory_fact is not None:
+        facts.size_bytes = int(getattr(inventory_fact, "size", 0) or 0)
+        digest = str(getattr(inventory_fact, "sha256", "") or "")
+        facts.sha256 = digest[:16]
+        facts.language = str(getattr(inventory_fact, "language", "") or facts.language)
     path = repo_dir / rel
     if rel in already_included:
         facts.disposition = "already_included"
@@ -348,9 +380,18 @@ def _build_file_facts(
     content, redacted = redact_prompt_secrets(content)
     facts.content = content
     facts.note = "*(secret-like content redacted)*\n" if redacted else ""
-    facts.symbols, facts.imports, facts.symbol_count, facts.import_count = _extract_python_facts(rel, content)
+    if inventory_fact is not None and str(getattr(inventory_fact, "language", "") or "") == "python":
+        inventory_symbols = list(getattr(inventory_fact, "symbols", []) or [])
+        inventory_imports = list(getattr(inventory_fact, "imports", []) or [])
+        facts.symbols = tuple(str(getattr(symbol, "name", "") or "") for symbol in inventory_symbols[:16] if str(getattr(symbol, "name", "") or ""))
+        facts.imports = tuple(str(item) for item in inventory_imports[:24] if str(item))
+        facts.symbol_count = len({str(getattr(symbol, "name", "") or "") for symbol in inventory_symbols if str(getattr(symbol, "name", "") or "")})
+        facts.import_count = len(set(str(item) for item in inventory_imports if str(item)))
+    else:
+        facts.symbols, facts.imports, facts.symbol_count, facts.import_count = _extract_python_facts(rel, content)
     facts.js_imports, facts.js_import_count = _extract_js_imports(rel, content)
-    routes = sorted(set(_ROUTE_RE.findall(content)))
+    inventory_routes = list(getattr(inventory_fact, "routes", []) or []) if inventory_fact is not None else []
+    routes = sorted(set(str(route) for route in inventory_routes if str(route))) or sorted(set(_ROUTE_RE.findall(content)))
     facts.routes = tuple(routes[:12])
     facts.route_count = len(routes)
     facts.token_count = estimate_tokens(_render_file_content(facts))

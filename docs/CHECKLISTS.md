@@ -13,33 +13,33 @@ When a new reviewable concern appears, add it here — not in prompts or docs.
 **Correct sequence (mandatory):**
 
 ```
-1. Finish ALL edits first (`str_replace_editor` / `repo_write` / `claude_code_edit`)
-2. advisory_pre_review(commit_message="...")   ← run AFTER all edits, ONCE
-3. repo_commit(commit_message="...")           ← run IMMEDIATELY after advisory
+1. Finish ALL edits first (`edit_text` / `write_file`)
+2. advisory_review(commit_message="...")       ← run AFTER all edits, ONCE
+3. commit_reviewed(commit_message="...")       ← run IMMEDIATELY after advisory
 ```
 
 **Rules:**
 - Successful worktree mutations automatically mark advisory as **stale**. This includes
-  `repo_write`, `str_replace_editor`, `claude_code_edit`, and mutating `run_shell` /
+  `write_file`, `edit_text`, and mutating `run_command` /
   reviewed-commit paths when they change tracked worktree state.
-- Any stale advisory → must re-run advisory before repo_commit.
+- Any stale advisory → must re-run advisory before commit_reviewed.
 - Do NOT interleave edits and advisory calls: `edit → advisory → edit → advisory` wastes two
   expensive advisory cycles. Finish all edits first.
 - If advisory finds critical issues: **strongly recommended** to fix them and re-run advisory
-  before calling repo_commit.
-  Note: repo_commit's gate checks snapshot freshness, open obligations, and open
+  before calling commit_reviewed.
+  Note: commit_reviewed's gate checks snapshot freshness, open obligations, and open
   commit-readiness debt — it does not enforce zero advisory FAIL items as a hard
   gate. Fixing critical findings and re-running advisory is best practice. Under
   `OUROBOROS_REVIEW_ENFORCEMENT=advisory`, a fresh advisory also downgrades open
   obligations and commit-readiness debt to a warning by writing
   `advisory_obligations_acknowledged` to `events.jsonl`; stale advisory still
-  blocks. Under `blocking`, `repo_commit` can proceed only when no open
+  blocks. Under `blocking`, `commit_reviewed` can proceed only when no open
   obligations or commit-readiness debt remain.
-- Once advisory is fresh → call repo_commit immediately without further edits.
-- Bypass (`skip_advisory_pre_review=True`) is an **absolute** escape hatch: it short-circuits the entire commit gate (freshness + open obligations + open commit-readiness debt). Every bypass is durably audited in events.jsonl. Open obligations/debt stay visible in `review_status` (`repo_commit_ready=false`) but do NOT block the bypassed commit. Reach for it when advisory cannot run (provider outage, rate limit) or when the stale signals are known to be obsolete.
+- Once advisory is fresh → call commit_reviewed immediately without further edits.
+- Bypass (`skip_advisory_review=True`) is an **absolute** escape hatch: it short-circuits the entire commit gate (freshness + open obligations + open commit-readiness debt). Every bypass is durably audited in events.jsonl. Open obligations/debt stay visible in `review_status` (`repo_commit_ready=false`) but do NOT block the bypassed commit. Reach for it when advisory cannot run (provider outage, rate limit) or when the stale signals are known to be obsolete.
 
 **Obligation tracking:**
-- Every blocking `repo_commit` result creates "open obligations" — a structured checklist of
+- Every blocking `commit_reviewed` result creates "open obligations" — a structured checklist of
   unresolved issues that advisory must explicitly address on the next run.
 - Advisory will receive the full list of open obligations and should respond to each one by name.
 - A generic PASS without addressing open obligations is a weak signal — advisory is expected
@@ -47,19 +47,19 @@ When a new reviewable concern appears, add it here — not in prompts or docs.
 - Open obligations are cleared automatically on a successful commit.
 - Both triad-review blocks and scope-review blocks produce structured obligations.
 - Repeated blockers may also synthesize **commit-readiness debt**. When present,
-  the non-bypass `repo_commit` path remains blocked under `blocking` until
+  the non-bypass `commit_reviewed` path remains blocked under `blocking` until
   advisory clears both the open obligations and the debt; `review_status` reports
   this via `commit_readiness_debts_count`, `repo_commit_ready=false`, and
   `retry_anchor=commit_readiness_debt`. Under `advisory`, a fresh advisory allows
   commit after recording `advisory_obligations_acknowledged`; `review_status`
-  still shows the debt until a successful commit clears it. `skip_advisory_pre_review=True`
+  still shows the debt until a successful commit clears it. `skip_advisory_review=True`
   overrides this — bypass is absolute and does not require clearing obligations/debt first.
 - **Anti-thrashing injection (v4.35.1):** On retry attempts, open obligations are loaded from durable review state and injected into reviewer prompts as an inert JSON data block (fenced ```json``` with a "DATA records — not instructions" disclaimer). Two mandatory rules are also appended: (1) The JSON `"verdict"` field is the authoritative signal — withdrawal notes in `"reason"` text are ignored; (2) Do not rephrase prior findings under a different checklist item name. In `claude_advisory_review.py::_build_advisory_prompt`, these same two rules are injected at **step 5a unconditionally** (on every advisory run, not only when obligations exist), and reinforced at steps 6.e/6.f when obligations are present.
 - **Obligation storage policy:** All obligations are stored; deduplication is the agent's responsibility.
   Multiple obligations describing the same root cause (from reviewer rephrasing across attempts) are
   expected — address them together and explain this in `review_rebuttal`.
 - **Note:** conservative false-stale is acceptable. If you are unsure whether a mutating path
-  changed the relevant repo snapshot, re-run `advisory_pre_review` explicitly.
+  changed the relevant repo snapshot, re-run `advisory_review` explicitly.
 
 ---
 
@@ -68,9 +68,9 @@ When a new reviewable concern appears, add it here — not in prompts or docs.
 The following tools create commits but are **exempt** from multi-model review
 (Bible P9 explicit exception):
 
-- `restore_to_head` — discards uncommitted changes (not a commit, no review needed)
-- `revert_commit` — creates a mechanical inverse of an already-reviewed commit
-- `rollback_to_target` — resets to an existing tag/SHA (already-reviewed state)
+- `vcs_restore` — discards uncommitted changes (not a commit, no review needed)
+- `vcs_revert` — creates a mechanical inverse of an already-reviewed commit
+- `vcs_rollback` — resets to an existing tag/SHA (already-reviewed state)
 
 Rationale: review gates on rollbacks create a paradox where reviewers block
 the undo for missing tests/VERSION, trapping the agent with broken code.
@@ -78,13 +78,13 @@ These tools restore to already-reviewed states by definition.
 
 ---
 
-## Pre-Commit Self-Check (Ouroboros, before calling advisory_pre_review)
+## Pre-Commit Self-Check (Ouroboros, before calling advisory_review)
 
-Run this walkthrough honestly before every `advisory_pre_review` call for a
-`repo_commit`. The correct sequence is:
+Run this walkthrough honestly before every `advisory_review` call for a
+`commit_reviewed`. The correct sequence is:
 
 ```
-finish ALL edits → Pre-Commit Self-Check → advisory_pre_review → repo_commit
+finish ALL edits → Pre-Commit Self-Check → advisory_review → commit_reviewed
 ```
 
 This section is **not injected as a named checklist section by the review prompts** — it exists here so the agent's
@@ -96,25 +96,26 @@ or Intent/Scope checklists are.
 
 | # | Check | How |
 |---|-------|-----|
-| 1 | `VERSION`, `README.md` badge, `docs/ARCHITECTURE.md` header, and the latest git tag — are all four carrying the *author-facing* spelling (for example `4.50.0-rc.3`)? And does `pyproject.toml` carry the **PEP 440 canonical form** of that same version (for example `4.50.0rc3`)? | `repo_read` each file before editing. Never reconstruct version strings from memory — the in-context copy may be stale. The `VERSION` vs `pyproject.toml` divergence is intentional: `pyproject.toml` must satisfy PEP 440 so pip / build / twine accept it, while `VERSION` / tags / README / ARCHITECTURE use the author-facing spelling. `tests/test_packaging_sync.py::test_version_file_and_pyproject_are_synced` enforces the relationship via `ouroboros.tools.release_sync._normalize_pep440`. |
+| 1 | `VERSION`, `README.md` badge, `docs/ARCHITECTURE.md` header, and the latest git tag — are all four carrying the *author-facing* spelling (for example `4.50.0-rc.3`)? And does `pyproject.toml` carry the **PEP 440 canonical form** of that same version (for example `4.50.0rc3`)? | `read_file` each file before editing. Never reconstruct version strings from memory — the in-context copy may be stale. The `VERSION` vs `pyproject.toml` divergence is intentional: `pyproject.toml` must satisfy PEP 440 so pip / build / twine accept it, while `VERSION` / tags / README / ARCHITECTURE use the author-facing spelling. `tests/test_packaging_sync.py::test_version_file_and_pyproject_are_synced` enforces the relationship via `ouroboros.tools.release_sync._normalize_pep440`. |
 | 2 | Preparing any commit → is `VERSION` bumped? | Under BIBLE.md P9, every commit is a release. A `VERSION` bump is mandatory for every commit, including docs/config/memory changes. Update `VERSION`, `pyproject.toml`, `README.md`, and `docs/ARCHITECTURE.md` together. |
 | 3 | New or changed logic → does an existing or newly staged test assert on the specific scenario it introduces? | Name the scenario your code handles in plain words. If no test asserts on THAT named scenario, write or update one now. "Tests exist for the module" is not the same as "tests cover this new behavior". |
 | 4 | Shared log / memory / replay format changed? | Grep every reader and writer first. JSONL logs (`events.jsonl`, `task_reflections.jsonl`, replay indexes), durable state files (`advisory_review.json`, `review_continuations/*.json`), and canonical-vs-derived memory pairs (patterns-register journal / `patterns.md`, improvement-backlog items) must stay coherent across every consumer. |
 | 5 | New validation guard, input filter, or edge-case check? | Before the first commit attempt, name three concrete ways it could break: wrong bounds, legitimate inputs it silently blocks, platform-specific edge cases. If you cannot name three, think longer. One honest minute here is cheaper than one reviewer round. |
-| 6 | New tool added? | `get_tools()` exports it, `prompts/SYSTEM.md` tool tables mention it, the handler signature matches the declared schema, and (if it mutates repo state) it is routed through the reviewed commit path rather than ad-hoc `run_shell`. Also add an explicit entry in `ouroboros/safety.py::TOOL_POLICY` (`POLICY_SKIP` for trusted built-ins, `POLICY_CHECK` for opaque or outward-facing ones) — the `test_tool_policy_covers_all_builtin_tools` invariant will fail otherwise, and without an entry the tool falls through to `DEFAULT_POLICY = check` and pays a light-model LLM call per invocation. |
-| 7 | Tests green before first `repo_commit`? | Run `pytest -x` on the narrowest relevant target(s) you can name before the first `advisory_pre_review` / `repo_commit` attempt. If a new `.py` file is added under `ouroboros/` or `supervisor/`, **always** run `pytest tests/test_smoke.py` first — module-size and function-count violations are cheap to catch locally and expensive in review. A red test suite before the first commit attempt has caused repeated $2-5 blocked-review cycles. |
-| 8 | Adding a `README.md` version row? | BIBLE.md P9 hard cap: ≤ 2 major, ≤ 5 minor, ≤ 5 patch visible entries. Categories are mutually exclusive: major = `X.0.0` (minor=0, patch=0); minor = `X.Y.0` (patch=0, Y≠0); patch = all other `X.Y.Z` (Z≠0). Count existing rows in the category you are adding to. Easy check: `run_shell(["python", "-c", "import sys; from ouroboros.tools.release_sync import check_history_limit; warns=check_history_limit(open('README.md').read()); print(warns or 'OK')"])` — if it prints warnings, trim the oldest row in the over-limit category **in the same edit** before committing. |
+| 6 | New tool added? | `get_tools()` exports it, `prompts/SYSTEM.md` tool tables mention it, the handler signature matches the declared schema, and (if it mutates repo state) it is routed through the reviewed commit path rather than ad-hoc `run_command`. Also add an explicit entry in `ouroboros/safety.py::TOOL_POLICY` (`POLICY_SKIP` for trusted built-ins, `POLICY_CHECK` for opaque or outward-facing ones) — the `test_tool_policy_covers_all_builtin_tools` invariant will fail otherwise, and without an entry the tool falls through to `DEFAULT_POLICY = check` and pays a light-model LLM call per invocation. |
+| 7 | Tests green before first `commit_reviewed`? | Run `pytest -x` on the narrowest relevant target(s) you can name before the first `advisory_review` / `commit_reviewed` attempt. If a new `.py` file is added under `ouroboros/` or `supervisor/`, **always** run `pytest tests/test_smoke.py` first — module-size and function-count violations are cheap to catch locally and expensive in review. A red test suite before the first commit attempt has caused repeated $2-5 blocked-review cycles. |
+| 8 | Adding a `README.md` version row? | BIBLE.md P9 hard cap: ≤ 2 major, ≤ 5 minor, ≤ 5 patch visible entries. Categories are mutually exclusive: major = `X.0.0` (minor=0, patch=0); minor = `X.Y.0` (patch=0, Y≠0); patch = all other `X.Y.Z` (Z≠0). Count existing rows in the category you are adding to. Easy check: `run_command(["python", "-c", "import sys; from ouroboros.tools.release_sync import check_history_limit; warns=check_history_limit(open('README.md').read()); print(warns or 'OK')"])` — if it prints warnings, trim the oldest row in the over-limit category **in the same edit** before committing. |
 | 9 | Changing any of `build.sh`, `build_linux.sh`, `build_windows.ps1`, `Dockerfile`, or `ouroboros/tools/browser.py`? | Cross-surface doc sync is mandatory. Check ALL of: `README.md` Install section (Linux native-lib caveat), `README.md` Build section (per-platform instructions), `docs/ARCHITECTURE.md` Bundled Chromium paragraph, and inline comments in the touched build script. Any one of these being stale has blocked review twice. Verify before staging. |
-| 10 | Changing `ouroboros/tools/commit_gate.py`? | Coupled surfaces that MUST be updated atomically in the same commit: (a) `claude_advisory_review.py::get_tools()` tool description for `advisory_pre_review` and `review_status`; (b) `claude_advisory_review.py::_next_step_guidance()` strings; (c) `docs/DEVELOPMENT.md` Review & Commit Protocol section; (d) `prompts/SYSTEM.md` Commit review section. Missing any one has blocked review. |
+| 10 | Changing `ouroboros/tools/commit_gate.py`? | Coupled surfaces that MUST be updated atomically in the same commit: (a) `claude_advisory_review.py::get_tools()` tool description for `advisory_review` and `review_status`; (b) `claude_advisory_review.py::_next_step_guidance()` strings; (c) `docs/DEVELOPMENT.md` Review & Commit Protocol section; (d) `prompts/SYSTEM.md` Commit review section. Missing any one has blocked review. |
 | 11 | Changing VERSION + pyproject.toml? | Ordering matters: (1) write `VERSION` and `pyproject.toml` first; (2) then write `README.md` badge + changelog row; (3) then run `pytest`. Never interleave — updating README before VERSION means `test_version_in_readme` will catch a stale badge. |
 | 12 | Writing or editing any JS file under `web/modules/`? | Inline styles are banned. Before staging: `grep -n "\.style\." web/modules/*.js` — any hit on `.style.display`, `.style.color`, `.style.visibility`, etc. is a REVIEW_BLOCKED waiting to happen. Use CSS classes and `classList`/`hidden` attribute instead. |
 | 13 | Changing LLM output-token budgets? | Grep the whole repo for `max_tokens`, `max_completion_tokens`, `_MAX_TOKENS`, and `max_toks`. Keep `docs/ARCHITECTURE.md` §LLM output token budgets and `tests/test_max_tokens_constants.py` in sync so main-loop, VLM, summaries, compaction, skill publish, and consciousness floors cannot drift independently. |
+| 14 | Changing extension loader/dispatch or isolated deps? | Native-risk extension imports and tool/route/WS handlers must stay out-of-process. Add or run regression tests where a native-risk plugin aborts during import and the host survives, plus tool/route child-dispatch tests. Do not "fix" failures by importing native-risk plugin code in `server.py`. |
 
 Rule: read before write. Never reconstruct `VERSION`, `pyproject.toml`
 `version`, or the README badge from memory — one stale reconstruction creates
 a `self_consistency` FAIL that an entire advisory cycle is then spent on.
 
-**After a blocked reviewed commit (`repo_commit`) — mandatory regrouping before the next attempt:**
+**After a blocked reviewed commit (`commit_reviewed`) — mandatory regrouping before the next attempt:**
 When a reviewed commit returns critical findings, the reflex is to patch the single
 flagged finding and retry. That pattern reliably produces 5-10 blocked rounds.
 The correct procedure before **every** retry:
@@ -131,7 +132,7 @@ but without it appearing here as a procedural step it stays theoretical rather t
 
 ## Repo Commit Checklist
 
-Used by `repo_commit` for all changes to the Ouroboros repository.
+Used by `commit_reviewed` for all changes to the Ouroboros repository.
 
 | # | item | what to check | severity when FAIL |
 |---|------|---------------|--------------------|
@@ -148,24 +149,25 @@ Used by `repo_commit` for all changes to the Ouroboros repository.
 | 11 | context_building | New data/memory files that should appear in LLM context (context.py) but don't? | advisory |
 | 12 | knowledge_index | Knowledge base topics changed but memory/knowledge/index-full.md not updated? | advisory |
 | 13 | self_consistency | Does this change affect behavior described in `BIBLE.md`, `prompts/`, `docs/`, or this checklist itself? Check explicitly: (a) version in `ARCHITECTURE.md` header matches `VERSION` file; (b) tool names/descriptions in `prompts/SYSTEM.md` match tools actually exported by `get_tools()`; (c) JSONL log/memory file formats described in `ARCHITECTURE.md` match all readers/writers; (d) any behavioral change reflected in `prompts/CONSCIOUSNESS.md` if it affects background loop behavior; (e) DEVELOPMENT.md rules still accurate after the change. Severity must follow the shared `Critical surface whitelist` below — release metadata, tool schema, module map, behavioural documentation, or safety contracts are critical; commentary/prose/stylistic mismatches are advisory. | critical |
-| 14 | cross_platform | Does the diff use platform-specific APIs (`os.kill`, `os.setsid`, `os.killpg`, `os.getpgid`, `fcntl`, `msvcrt`, `signal.SIGKILL`, `signal.SIGTERM`, `subprocess` with `start_new_session`/`creationflags`, hardcoded `/` or `\\` in filesystem paths) outside of `ouroboros/platform_layer.py`? Does it import Unix-only or Windows-only modules (`fcntl`, `msvcrt`, `winreg`, `resource`) at any level without a platform guard (`sys.platform`/`IS_WINDOWS` check)? | critical |
-| 15 | changelog_accuracy | Do the exact wording, test counts, and minor description details in the README Version History row match what the diff actually does? Wording drift, off-by-one test counts, minor inaccuracies in descriptive prose — these belong here, NOT in `self_consistency` or `changelog_and_badge`. This item exists so reviewers have a dedicated advisory bucket for prose-level changelog imprecision that does not affect release metadata, runtime behavior, or safety contracts. | advisory |
-| 16 | gateway_parity | If the diff changes any browser-facing endpoint, WebSocket message, or frontend API call, are `ouroboros/gateway/contracts.py`, `ouroboros/gateway/router.py`, `web/modules/api_client.js`, `web/modules/api_types.js`, and `tests/test_gateway_parity.py` still aligned? Missing alignment is advisory unless it also breaks a frozen contract, safety guard, release metadata, or runtime behavior. | advisory |
-| 17 | subagent_isolation | If the diff changes `schedule_task`, child-task queueing, task constraints, tool discovery/execution, data reads, or memory handoff, does it preserve the accepted live-subagent contract: strict `objective` + `expected_output` schema, inferred lineage, `local_readonly_subagent` schema and execute-time allowlist, subagent-scoped secret/control-file denial for data tools, no grandchildren, no local writes/commits/review/runtime/tool-expansion/skills/MCP/shell, full task-result handoff, and tests for both allowed and blocked paths? | critical |
+| 14 | light_external_artifacts | If tool/runtime policy changed, does light mode still allow external user deliverables via `user_files`, task-scoped `task_drive`/`artifact_store`, process `outputs`, and external `claude_code_edit` cwd while blocking Ouroboros repo/control-plane mutation? Do review prompts avoid recommending `runtime_data/uploads` or skill payloads as generic artifact transport? | critical |
+| 15 | cross_platform | Does the diff use platform-specific APIs (`os.kill`, `os.setsid`, `os.killpg`, `os.getpgid`, `fcntl`, `msvcrt`, `signal.SIGKILL`, `signal.SIGTERM`, `subprocess` with `start_new_session`/`creationflags`, hardcoded `/` or `\\` in filesystem paths) outside of `ouroboros/platform_layer.py`? Does it import Unix-only or Windows-only modules (`fcntl`, `msvcrt`, `winreg`, `resource`) at any level without a platform guard (`sys.platform`/`IS_WINDOWS` check)? | critical |
+| 16 | changelog_accuracy | Do the exact wording, test counts, and minor description details in the README Version History row match what the diff actually does? Wording drift, off-by-one test counts, minor inaccuracies in descriptive prose — these belong here, NOT in `self_consistency` or `changelog_and_badge`. This item exists so reviewers have a dedicated advisory bucket for prose-level changelog imprecision that does not affect release metadata, runtime behavior, or safety contracts. | advisory |
+| 17 | gateway_parity | If the diff changes any browser-facing endpoint, WebSocket message, or frontend API call, are `ouroboros/gateway/contracts.py`, `ouroboros/gateway/router.py`, `web/modules/api_client.js`, `web/modules/api_types.js`, and `tests/test_gateway_parity.py` still aligned? Missing alignment is advisory unless it also breaks a frozen contract, safety guard, release metadata, or runtime behavior. | advisory |
+| 18 | subagent_isolation | If the diff changes `schedule_subagent`, child-task queueing, task constraints, tool discovery/execution, data reads, or memory handoff, does it preserve the accepted live-subagent contract: strict `objective` + `expected_output` schema, inferred lineage, `local_readonly_subagent` schema and execute-time allowlist, subagent-scoped secret/control-file denial for data tools, no grandchildren, no local writes/commits/review/runtime/tool-expansion/skills/MCP/shell, full task-result handoff, and tests for both allowed and blocked paths? | critical |
 
 ### Severity rules
 
 - Items 1-5 are always critical.
-- Items 6-10, 14, and 17 are conditionally critical: FAIL only when the condition applies.
+- Items 6-10, 14-15, and 18 are conditionally critical: FAIL only when the condition applies.
   If the condition does not apply, write verdict PASS with a short reason
   (e.g. "Not applicable — no code logic change").
-- Items 11-12 and 15-16 are advisory: FAIL produces a warning but does not block.
+- Items 11-12 and 16-17 are advisory: FAIL produces a warning but does not block.
 - Item 13 (self_consistency) is conditionally critical: FAIL only when the
   mismatch falls in the `Critical surface whitelist` below AND a concrete
   stale artifact is named (specific file, line, or symbol). If no whitelisted
   surface is affected, the finding is advisory. If no concrete staleness is
   found at all, write verdict PASS with a short reason.
-- Item 15 (`changelog_accuracy`) is advisory by design: prose-level wording
+- Item 16 (`changelog_accuracy`) is advisory by design: prose-level wording
   drift, off-by-one test counts, and minor descriptive inaccuracies in the
   README changelog row MUST NOT be raised as critical under `self_consistency`
   or `changelog_and_badge`. They surface here and do not block.
@@ -268,11 +270,10 @@ A state-machine change that only passes the success-path test is incomplete.
 
 ## Skill Review Checklist
 
-Used by `review_skill` (Phase 3 three-layer refactor) to vet a single
-external skill before it is allowed to execute via `skill_exec`. This
-runs the same tri-model review infrastructure (`_handle_multi_model_review`
-in `ouroboros/tools/review.py`, configured providers from
-`OUROBOROS_REVIEW_MODELS`) but against a skill package in the local
+Used by `skill_review` to vet a single
+external skill before it is allowed to execute via `skill_exec`. This uses the
+shared reviewer-slot configuration (`OUROBOROS_REVIEW_MODELS`) but preserves the
+existing skill-review gate semantics against a skill package in the local
 checkout of `OUROBOROS_SKILLS_REPO_PATH`, not against a staged git diff.
 
 Scope of a skill review pack:
@@ -322,7 +323,7 @@ Skill review is **text-only**: any non-UTF-8 file in the runtime-
 reachable skill surface (whether a recognised loadable-binary extension
 like `.so`/`.dylib`/`.pyc`/`.node`/`.wasm` or an extensionless
 disguised blob) is a hard review blocker. ``_read_capped_text`` raises
-``_SkillBinaryPayload`` for any such file and ``review_skill`` converts
+``_SkillBinaryPayload`` for any such file and ``skill_review`` converts
 that into ``status="pending"`` with an actionable error — never a
 filename+size note that would let bytes the reviewer could not inspect
 slip past the gate. The subprocess runs with ``cwd=skill_dir`` so it
@@ -346,7 +347,7 @@ marketplace paths, not through generic agent/browser file writes.
 
 Self-authored skills carry payload-local `.self_authored.json` and
 owner-state `data/state/skills/<skill>/self_authored.json` provenance,
-but they do not bypass review. As of v5.9.0, `review_skill` routes them
+but they do not bypass review. `skill_review` routes them
 through the same tri-model skill review as marketplace and user-managed
 skills; no deterministic PASS or enablement is written automatically. Key
 and permission grants remain explicit unless the owner has enabled
@@ -355,12 +356,12 @@ review grants only manifest-declared settings keys and host permissions for
 that exact content hash.
 
 The Skills UI Repair affordance is only a task starter: it asks Ouroboros
-to edit payload files and rerun `review_skill`. It must not write
+to edit payload files and rerun `skill_review`. It must not write
 trust/control-plane state directly, auto-enable a repaired skill, or
 grant keys. Repair tasks carry the legacy `task_constraint.mode="skill_repair"` marker so deterministic
-tool guards allow `list_skills`, payload-oriented read/write tools,
-scoped `str_replace_editor`, scoped `claude_code_edit`, `data_read/data_list`,
-`review_skill`, and `skill_preflight` for cheap offline syntax/manifest/widget
+tool guards allow `list_skills`, payload-oriented `read_file`/`list_files`/
+`write_file`/`edit_text` with `root=skill_payload`, `skill_review`, and
+`skill_preflight` for cheap offline syntax/manifest/widget
 validation, and block `toggle_skill`, `skill_exec`, shell/browser
 indirection, extension tools, broad repo mutation, and subtask delegation
 while the repair task is active.
@@ -391,14 +392,14 @@ and do not return `PASS` for an item that also has a `FAIL` — the concrete
 |---|------|---------------|--------------------|
 | 1 | manifest_schema | Does the manifest parse cleanly? Does `type` match the actual payload (`instruction` = no scripts/entry; `script` = at least one entry in `scripts`; `extension` = non-empty `entry`)? Is `runtime` one of `python`/`python3`/`node`/`bash`/`deno`/`ruby`/`go` for `type: script` (empty `""` is allowed ONLY for `type: instruction` since instruction skills never execute; extension entries are Python `plugin.py` modules)? Is `timeout_sec` > 0? | critical |
 | 2 | permissions_honesty | Do the declared `permissions` match what the scripts actually do? Missing permission declaration for an effect the code performs is a concrete FAIL. Examples: `net` must be declared if any script uses `httpx`/`requests`/`socket`/`urllib`; `fs` must be declared if a script writes outside the skill state dir; `subprocess` must be declared if a script spawns another process. | critical |
-| 3 | no_repo_mutation | Does any script attempt to write to the self-modifying Ouroboros repo (`~/Ouroboros/repo/`)? Import of `repo_write`/`repo_commit`, `git add`/`git commit`, or any path that starts with `OUROBOROS_REPO_DIR` / `~/Ouroboros/repo` is a concrete FAIL. Skills may only propose patches by returning artifact bundles; commits go through the first-party reviewed path. | critical |
+| 3 | no_repo_mutation | Does any script attempt to write to the self-modifying Ouroboros repo (`~/Ouroboros/repo/`)? Import of `write_file`/`commit_reviewed` against the system repo, `git add`/`git commit`, or any path that starts with `OUROBOROS_REPO_DIR` / `~/Ouroboros/repo` is a concrete FAIL. Skills may only propose patches by returning artifact bundles; commits go through the first-party reviewed path. | critical |
 | 4 | path_confinement | Do scripts stay inside the skill directory and the dedicated state dir (`~/Ouroboros/data/state/skills/<name>/`)? Absolute paths, `..` traversal, and writes to arbitrary user home subdirs are concrete FAIL. Reading from outside the skill dir is OK for read-only lookups (e.g. system info), write-path confinement is the strict rule. | critical |
 | 5 | env_allowlist | Is `env_from_settings` a short, justified list of settings keys? Core keys in `FORBIDDEN_SKILL_SETTINGS` (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `CLOUDRU_FOUNDATION_MODELS_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `OUROBOROS_NETWORK_PASSWORD`) may be declared only when the skill genuinely needs that provider/token for its stated purpose; runtime forwards them only after a fresh executable review and a content-bound desktop-launcher owner grant. v5.2.2 dual-track grants: both `type: script` skills (forwarded by `_scrub_env`) and `type: extension` skills (forwarded by `PluginAPIImpl.get_settings`) are eligible; `type: instruction` skills cannot receive core keys. Mark unjustified core-key requests or non-forbidden secrets unrelated to the purpose as FAIL. An empty list is the default and always fine. | critical |
 | 6 | timeout_and_output_discipline | Is `timeout_sec` reasonable for the stated workload (default 60, hard cap 300)? Do scripts print to stdout in chunks that the runtime can cap, rather than streaming unbounded output? Unbounded loops without a `break`/timeout path are a concrete FAIL. | advisory |
 | 7 | extension_namespace_discipline | `type: extension` only: does the extension register its tool/route/ws-handler/ui-tab under the namespace derived from its `name` (e.g. provider-safe tool/ws names like `ext_<len>_<token>_<surface>`, route `/api/extensions/<name>/…`)? Tool and WS short names must be alphanumeric/underscore and at most 24 characters. Namespace collisions with built-in surfaces are a concrete FAIL. If the extension uses `api.send_ws_message`, are emitted event names short/provider-safe and paired with reviewed host-owned widget `subscription` components rather than arbitrary same-origin JavaScript? If the extension declares streaming UI, is it a reviewed extension route consumed by a host-owned `stream` component? If the extension owns background resources (threads, sockets, EventSource clients, subprocesses), does it register cleanup with `api.on_unload(callback)`? If the extension declares a widget render block, is it one of the host-owned schemas (`iframe`, `module`, or declarative v1: forms/actions, markdown/code, JSON/kv/table, tabs/chart, stream/subscription, progress/poll, file/gallery/media, **map/calendar/kanban (v5.7.0)**), with media sourced from extension routes or safe data URLs and no arbitrary same-origin JavaScript? For non-extension skills, verdict PASS with reason "Not applicable — type != extension." | severity-driven for applicable extensions |
 | 8 | widget_module_safety | **v5.7.0+. ``kind: "module"`` widgets only.** Does the extension-supplied ``widget.js`` avoid touching ``document.cookie``, ``localStorage``, ``sessionStorage``, ``window.parent`` data, or ``fetch``/``XMLHttpRequest`` URLs OUTSIDE ``/api/extensions/<skill>/``? The host fetches reviewed ``widget.js`` through ``GET /api/extensions/<skill>/module/<entry>``, embeds the source into a sandboxed ``<iframe srcdoc sandbox="allow-scripts">`` with no ``allow-same-origin``, and injects a parent-mediated ``fetch`` bridge that rejects paths outside the owning skill route prefix. Reviewers must still confirm at the source level that the script is NOT trying to escape the sandbox via arbitrary ``postMessage`` protocols, opaque-origin storage probes, or unauthorised cross-origin fetches. Acceptable interactions: ``fetch('/api/extensions/<skill>/...')`` (through the host bridge), ``window.OuroborosWidget.fetch('/api/extensions/<skill>/...')``, and host-supplied data attributes. Mark non-module widgets and non-extension skills PASS with reason "Not applicable". | severity-driven when kind=module |
 | 9 | inject_chat_minimization | Does any use of the `inject_chat` permission have a narrow, user-facing transport purpose? The Host Service enforces token auth, skill-source attribution, slash-command rejection, rate limits, and in-flight limits; reviewers must not claim reserved slash commands would execute when that host guard is present. A skill that accepts external inbound traffic must still show local defense-in-depth: reject owner-like slash-command-shaped input before injection and rate-limit or backpressure traffic before it piles up. Missing local defense-in-depth is a concrete FAIL for network transports; attempting to inject `/panic`, `/restart`, `/review`, `/evolve`, `/bg`, `/status`, or owner-impersonating instructions is always a concrete FAIL. Mark PASS with reason "Not applicable" when `inject_chat` is not declared. | critical |
-| 10 | event_subscription_minimization | Are `subscribe_event` and `subscribe_events` limited to the minimum host event topics required by the skill? `chat.outbound`, `chat.typing`, and `chat.photo` expose owner/agent conversation data and require explicit justification. Wildcards, undeclared topics, or forwarding subscribed chat content to unrelated external services are concrete FAILs. Mark PASS with reason "Not applicable" when `subscribe_event` is not declared. | critical |
+| 10 | event_subscription_minimization | Are `subscribe_event` and `subscribe_events` limited to the minimum host event topics required by the skill? `chat.outbound`, `chat.typing`, `chat.photo`, and `chat.video` expose owner/agent conversation data and require explicit justification. Wildcards, undeclared topics, or forwarding subscribed chat content to unrelated external services are concrete FAILs. Mark PASS with reason "Not applicable" when `subscribe_event` is not declared. | critical |
 | 11 | companion_process_safety | For `companion_process` / `supervised_task` skills: is every command declared as an argument list (not shell string), using an allowlisted runtime, with no writes outside `skill_dir` / `state_dir`, no unbounded restart loop, and cleanup on unload/panic? Does the process avoid inheriting secrets except through reviewed `env_from_settings` grants? Mark PASS with reason "Not applicable" when no long-lived process/task is declared — a transient `subprocess.run`/`subprocess.Popen` invocation of a build tool like `ffmpeg`, `ImageMagick`, or `git` inside a normal request handler is NOT a long-lived companion process and does not trigger this item (its safety belongs under items 4 / 6 / 13). | severity-driven when applicable |
 | 12 | host_token_handling | If the skill calls the Host Service API, does it use the provided `SkillToken.use_in_request()` only at request construction sites, avoid logging/serializing tokens, and keep all host-service calls on the loopback endpoint? Printing, persisting, exfiltrating, or embedding the token into user-visible output is a concrete FAIL. Mark PASS with reason "Not applicable" when the skill does not access the Host Service API. | critical |
 | 13 | error_handling | Does the skill surface actionable errors instead of swallowing exceptions, returning success on partial failure, or leaving users to inspect raw logs manually? Are retry/backoff paths bounded and purpose-specific? | advisory |
@@ -540,11 +541,15 @@ block repo commits and vice versa.
 
 Used by `plan_task` for pre-implementation design reviews, BEFORE any code is written.
 Reviewers see the proposed plan, HEAD snapshots of files planned to be touched,
-and a Generated Plan Review Atlas that raw-inlines selected protected/central files
-while accounting for every tracked path in its manifest.
+and an agent-selected context level: `minimal`, `localized`, `broad`, or
+`constitutional`. `minimal` keeps governance docs and touched-file snapshots
+but omits the generated Atlas; `localized` adds a bounded neighborhood around
+planned files, `broad` is for shared contracts, and `constitutional` is
+reserved for self-evolution / immune-system surfaces.
 
 **Reviewer role is GENERATIVE, not audit.** The primary job is to contribute
-ideas the implementer may not see, using broad Atlas-backed repo access. Finding defects in
+ideas the implementer may not see, using the repository evidence available for
+the selected context level. Finding defects in
 the plan is secondary; proposing concrete alternatives, surfacing existing
 surfaces that already solve the goal, and flagging subtle contract breaks the
 implementer missed is primary.
@@ -554,7 +559,7 @@ implementer missed is primary.
 Reviewers must structure their response in this order:
 
 1. **Your own approach** (1-2 sentences). State what YOU would do if this goal
-   came to you with broad Atlas-backed repo access: the concrete alternative path, the
+   came to you with the available repository evidence: the concrete alternative path, the
    existing file/function you would reuse, or the simpler route. If after real
    effort you genuinely see no better approach, say so explicitly.
 2. **`## PROPOSALS` section** (top 1-2 contributions). The highest-value thing

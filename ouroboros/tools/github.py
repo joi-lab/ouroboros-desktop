@@ -301,8 +301,8 @@ def _get_pr(ctx: ToolContext, number: int) -> str:
         f"  1. fetch_pr_ref(pr_number={number})\n"
         f"  2. create_integration_branch(pr_number={number})\n"
         f"  3. cherry_pick_pr_commits(shas=[...])  # SHAs above; use override_author only for placeholder identities\n"
-        f"  4. stage_adaptations()                 # optional; do NOT repo_commit on the integration branch\n"
-        f"  5. stage_pr_merge(branch='integrate/pr-{number}') → advisory_pre_review → repo_commit\n"
+            f"  4. stage_adaptations()                 # optional; do NOT commit_reviewed on the integration branch\n"
+            f"  5. stage_pr_merge(branch='integrate/pr-{number}') → advisory_review → commit_reviewed\n"
         f"  6. comment_on_pr(number={number}, body='Integrated as ...')"
     )
 

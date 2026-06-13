@@ -86,6 +86,12 @@ class TestOwnerInjectPerTask(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertIn("persistent", path.read_text())
 
+    def test_mailbox_rejects_unsafe_task_id(self):
+        from ouroboros.owner_inject import _mailbox_path
+
+        with self.assertRaises(ValueError):
+            _mailbox_path(self.drive_root, "../settings")
+
 
 class TestForwardToWorkerTool(unittest.TestCase):
     """Test that forward_to_worker tool is registered."""
@@ -98,6 +104,32 @@ class TestForwardToWorkerTool(unittest.TestCase):
         )
         tools = registry.available_tools()
         self.assertIn("forward_to_worker", tools)
+
+    def test_forward_to_worker_routes_to_child_drive_and_rejects_non_running(self):
+        from types import SimpleNamespace
+        from ouroboros.task_results import STATUS_RUNNING, STATUS_SCHEDULED, write_task_result
+        from ouroboros.tools.core import _forward_to_worker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent_drive = pathlib.Path(tmp) / "parent"
+            child_drive = pathlib.Path(tmp) / "child"
+            child_drive.mkdir(parents=True)
+            write_task_result(parent_drive, "child1", STATUS_RUNNING, child_drive_root=str(child_drive), parent_task_id="parent1", root_task_id="parent1", result="running")
+            write_task_result(parent_drive, "queued1", STATUS_SCHEDULED, result="queued")
+            write_task_result(parent_drive, "otherchild", STATUS_RUNNING, parent_task_id="otherparent", root_task_id="otherroot", result="running")
+            ctx = SimpleNamespace(drive_root=parent_drive, task_id="parent1")
+
+            output = _forward_to_worker(ctx, "child1", "continue")
+            blocked = _forward_to_worker(ctx, "queued1", "too soon")
+            forbidden = _forward_to_worker(ctx, "otherchild", "wrong root")
+
+            self.assertIn("Message forwarded", output)
+            self.assertIn("TASK_NOT_ACTIVE", blocked)
+            self.assertIn("TASK_FORBIDDEN", forbidden)
+            self.assertFalse((parent_drive / "memory" / "owner_mailbox" / "child1.jsonl").exists())
+            mailbox = child_drive / "memory" / "owner_mailbox" / "child1.jsonl"
+            self.assertTrue(mailbox.exists())
+            self.assertIn("continue", mailbox.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

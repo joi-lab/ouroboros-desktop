@@ -75,6 +75,17 @@ class ChatOutbound(TypedDict):
     parent_task_id: NotRequired[str]
     delegation_role: NotRequired[str]
     subagent_role: NotRequired[str]
+    task_event: NotRequired[str]
+    status: NotRequired[str]
+    cost_usd: NotRequired[float]
+    result: NotRequired[str]
+    trace_summary: NotRequired[str]
+    error: NotRequired[str]
+    artifact_status: NotRequired[str]
+    artifact_bundle: NotRequired[Dict[str, Any]]
+    result_status: NotRequired[str]
+    reason_code: NotRequired[str]
+    review_status: NotRequired[Dict[str, Any]]
     worker_saturation_warning: NotRequired[bool]
     source: NotRequired[str]
     sender_label: NotRequired[str]
@@ -95,6 +106,26 @@ class PhotoOutbound(TypedDict):
     type: Literal["photo"]
     role: Literal["user", "assistant"]
     image_base64: str
+    mime: str
+    ts: str
+    caption: NotRequired[str]
+    content: NotRequired[str]
+    source: NotRequired[str]
+    sender_label: NotRequired[str]
+    sender_session_id: NotRequired[str]
+    client_message_id: NotRequired[str]
+    transport: NotRequired[TransportMetadata]
+    chat_id: NotRequired[int]
+    # Deprecated compatibility field: runtime emits ``transport`` instead.
+    telegram_chat_id: NotRequired[int]
+
+
+class VideoOutbound(TypedDict):
+    """Outbound WS video frame."""
+
+    type: Literal["video"]
+    role: Literal["user", "assistant"]
+    video_base64: str
     mime: str
     ts: str
     caption: NotRequired[str]
@@ -463,6 +494,7 @@ WS_MESSAGE_TYPES: tuple[str, ...] = (
     "chat",
     "command",
     "photo",
+    "video",
     "typing",
     "log",
     "heartbeat",
@@ -478,6 +510,7 @@ __all__ = [
     "TransportMetadata",
     "ChatOutbound",
     "PhotoOutbound",
+    "VideoOutbound",
     "TypingOutbound",
     "LogOutbound",
     "HeartbeatOutbound",

@@ -627,6 +627,38 @@ def embedded_python_candidates(base_dir: pathlib.Path) -> List[pathlib.Path]:
     ]
 
 
+def embedded_node_candidates(base_dir: pathlib.Path) -> List[pathlib.Path]:
+    """Return candidate bundled Node.js runtime paths."""
+    if IS_WINDOWS:
+        return [base_dir / "node-standalone" / "node.exe"]
+    return [base_dir / "node-standalone" / "bin" / "node"]
+
+
+def resolve_bundled_node() -> Optional[str]:
+    """Return the path to the bundled, signed Node.js runtime if present.
+
+    The packaged app ships an official notarized node under ``node-standalone``
+    (re-signed under the hardened runtime by the build's signing pass). Prefer it
+    over a PATH (e.g. Homebrew) node, which macOS code-signing enforcement can
+    SIGKILL when launched from the packaged process tree.
+    """
+    bases: List[pathlib.Path] = []
+    frozen_base = getattr(sys, "_MEIPASS", None)
+    if frozen_base:
+        bases.append(pathlib.Path(frozen_base))
+    # Dev/source layout: node-standalone sits at the repo root (created by the
+    # build scripts), two levels up from this module.
+    bases.append(pathlib.Path(__file__).resolve().parent.parent)
+    for base in bases:
+        for candidate in embedded_node_candidates(base):
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+    return None
+
+
 def embedded_pip(base_dir: pathlib.Path) -> Optional[pathlib.Path]:
     """Return path to pip inside embedded python-standalone."""
     if IS_WINDOWS:

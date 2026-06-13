@@ -137,6 +137,30 @@ class TestSupportedParametersFilter:
         # Temperature survives (zero-regression fallback when offline).
         assert kwargs.get("temperature") == 0.2
 
+    def test_opus47_temperature_stripped_even_when_capability_fetch_fails(self, monkeypatch):
+        from ouroboros.llm import LLMClient
+
+        def exploding_get(url: str, timeout: int = 15):
+            raise RuntimeError("simulated transport failure")
+
+        import requests
+        monkeypatch.setattr(requests, "get", exploding_get)
+
+        client = LLMClient(api_key="test")
+        target = client._resolve_remote_target("anthropic/claude-opus-4.7")
+        kwargs = client._build_remote_kwargs(
+            target=target,
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="medium",
+            max_tokens=256,
+            tool_choice="auto",
+            temperature=0.2,
+            tools=None,
+        )
+
+        assert kwargs["model"] == "anthropic/claude-opus-4.7"
+        assert "temperature" not in kwargs
+
     def test_cache_fetched_at_most_once(self, monkeypatch):
         from ouroboros.llm import LLMClient
 

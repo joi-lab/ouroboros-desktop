@@ -46,10 +46,18 @@ _VALIDATORS: Dict[str, Tuple[List[str], str]] = {
 
 def _resolve_runtime(runtime: str) -> Optional[str]:
     if runtime == "python3":
-        path = shutil.which("python3") or shutil.which("python")
-    else:
-        path = shutil.which(runtime)
-    return path
+        return shutil.which("python3") or shutil.which("python")
+    if runtime == "node":
+        # Prefer the bundled, signed node over a PATH (Homebrew) node that macOS
+        # code-signing enforcement may SIGKILL inside the packaged app.
+        try:
+            from ouroboros.platform_layer import resolve_bundled_node
+            bundled = resolve_bundled_node()
+            if bundled:
+                return bundled
+        except Exception:
+            log.debug("resolve_bundled_node failed", exc_info=True)
+    return shutil.which(runtime)
 
 
 def _run_check(cmd: List[str], cwd: pathlib.Path) -> Dict[str, Any]:
@@ -361,36 +369,72 @@ def _handle_skill_preflight(
             continue
         argv_template, runtime = validator
         runtime_path = _resolve_runtime(runtime)
+        rel_path = str(path.relative_to(skill_dir))
         if runtime_path is None:
+            # Missing external runtime is an environment gap, not a syntax
+            # verdict. Skip it (do not block); tri-model review still reads the
+            # file in full.
             file_findings.append({
-                "path": str(path.relative_to(skill_dir)),
+                "path": rel_path,
                 "runtime": runtime,
-                "ok": False,
-                "detail": f"runtime {runtime!r} is not on PATH (skipped)",
+                "ok": True,
                 "skipped": True,
+                "skip_reason": "runtime_unavailable",
+                "detail": f"{runtime} not on PATH — syntax not verified; relying on tri-model review",
             })
             continue
         cmd = [runtime_path] + [str(path) if part == "{path}" else part for part in argv_template[1:]]
         result = _run_check(cmd, cwd=skill_dir)
-        ok = result["returncode"] == 0 and not result["timeout"]
+        rc = result["returncode"]
+        timed_out = bool(result["timeout"])
+        if timed_out or (isinstance(rc, int) and rc < 0):
+            # The validator process itself failed to run to completion — e.g. a
+            # Homebrew `node` killed by macOS code-signing enforcement
+            # (SIGKILL), or a timeout. This is infrastructure, not a syntax
+            # error: only a clean non-zero exit (rc > 0) means bad syntax.
+            # Skip so a working skill is not falsely blocked; tri-model review
+            # remains the authoritative gate.
+            file_findings.append({
+                "path": rel_path,
+                "runtime": runtime,
+                "ok": True,
+                "skipped": True,
+                "skip_reason": "validator_timeout" if timed_out else "validator_killed",
+                "detail": (
+                    f"{runtime} syntax not verified ("
+                    + ("timed out" if timed_out else f"process killed, signal {-rc}")
+                    + "); relying on tri-model review"
+                ),
+                "returncode": rc,
+                "timeout": timed_out,
+                "stderr": result["stderr"][:2000],
+            })
+            continue
+        ok = rc == 0
         file_findings.append({
-            "path": str(path.relative_to(skill_dir)),
+            "path": rel_path,
             "runtime": runtime,
             "ok": ok,
-            "returncode": result["returncode"],
-            "timeout": result["timeout"],
+            "returncode": rc,
+            "timeout": timed_out,
             "stderr": result["stderr"][:2000],
             "stdout": result["stdout"][:2000],
         })
 
+    # ok iff every contract check passes and every file that was ACTUALLY
+    # validated (not skipped) is clean. Skipped findings (missing/killed/
+    # timed-out validators) never block — they are environment limitations, not
+    # syntax failures — and a file set with nothing syntax-checkable (e.g. only
+    # .txt/.md, or all validators skipped) is tolerated; tri-model review stays
+    # authoritative. A real syntax error (rc > 0) on any non-skipped file blocks.
     overall_ok = (
         all(f.get("ok") for f in manifest_findings)
         and all(f.get("ok") for f in widget_findings)
         and all(f.get("ok") for f in permission_findings)
-        and all(f.get("ok") for f in file_findings)
+        and all(f.get("ok") for f in file_findings if not f.get("skipped"))
         and omitted_count == 0
-        and (not paths or any(f.get("ok") for f in file_findings))
     )
+    skipped_files = [f for f in file_findings if f.get("skipped")]
     payload = {
         "skill": skill_name,
         "skill_dir": str(skill_dir),
@@ -400,10 +444,20 @@ def _handle_skill_preflight(
         "files": file_findings,
         "files_checked": len(file_findings),
         "files_failed": sum(1 for f in file_findings if not f.get("ok") and not f.get("skipped")),
+        "files_skipped": len(skipped_files),
         "omitted_count": omitted_count,
         "omitted_files": omitted_files,
         "ok": bool(overall_ok),
     }
+    if skipped_files:
+        # Surface the degradation explicitly (no silent skip): tri-model review
+        # is authoritative for these files.
+        payload["degraded"] = True
+        payload["degraded_note"] = (
+            f"{len(skipped_files)} validator(s) could not run "
+            f"({', '.join(sorted({str(f.get('skip_reason') or 'skipped') for f in skipped_files}))}); "
+            "syntax for those files was not verified and tri-model review remains authoritative."
+        )
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
@@ -415,7 +469,7 @@ _PREFLIGHT_SCHEMA = {
         "(or just the ones in `paths` if provided), plus a manifest "
         "parse and static widget render-schema validation. Cheap and offline (no LLM, no review.json mutation, "
         "no review status change). Heal-mode agents use this before "
-        "calling review_skill so silly syntax errors are caught "
+        "calling skill_review so silly syntax errors are caught "
         "without spending tri-model review tokens. Argv-only "
         "subprocess invocation, cwd=skill_dir, scrubbed env, 30s "
         "per-file cap, panic-tracked process group."

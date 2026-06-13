@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import os
 import logging
+import pathlib
 
 from ouroboros.llm import LLMClient
 from ouroboros.tools.registry import ToolContext, ToolEntry
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 
 _PLAN_REVIEW_MAX_TOKENS = 65536
 _PLAN_REVIEW_EFFORT = "high"
+_PLAN_REVIEW_SLOT_TIMEOUT_SEC = 560
+_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC = 620
 
 from ouroboros.tools.review_helpers import REVIEW_PROMPT_TOKEN_BUDGET as _REVIEW_BUDGET
 
@@ -38,10 +41,11 @@ def get_tools():
             schema={
                 "name": "plan_task",
                 "description": (
-                    "Run a pre-implementation design review of a proposed plan using 2–3 parallel Atlas-backed "
+                    "Run a pre-implementation design review of a proposed plan using 2–3 parallel "
                     "reviewers. Call this BEFORE writing any code for non-trivial tasks (>2 files or >50 lines "
-                    "of changes). Each reviewer sees a generated repository Atlas plus your plan description and the "
-                    "files you plan to touch. They will identify forgotten touchpoints, implicit contract "
+                    "of changes). The agent chooses the context level: minimal includes governance docs, the plan, "
+                    "and touched-file snapshots; localized/broad/constitutional add a generated repository Atlas. "
+                    "Reviewers identify forgotten touchpoints, implicit contract "
                     "violations, simpler alternatives, and Bible/architecture compliance issues — before you've "
                     "written a single line. Uses the reviewer slots configured in OUROBOROS_REVIEW_MODELS (same "
                     "slot as the commit triad); duplicate model IDs are allowed and count as separate stochastic "
@@ -54,12 +58,32 @@ def get_tools():
                         "plan": {"type": "string", "description": "Describe what you plan to implement: which files you will change, what the key design decisions are, and what you will NOT change."},
                         "goal": {"type": "string", "description": "The high-level goal of the task (what problem is being solved)."},
                         "files_to_touch": {"type": "array", "description": "Optional list of repo-relative file paths you plan to modify. Their current content (HEAD snapshot) will be injected so reviewers can reason about concrete code, not just abstract plans.", "items": {"type": "string"}},
+                        "context_level": {
+                            "type": "string",
+                            "enum": ["minimal", "localized", "broad", "constitutional"],
+                            "description": (
+                                "Agent-chosen repository context level. Choose explicitly: minimal omits generated "
+                                "Atlas context but keeps governance docs and touched-file snapshots; localized adds "
+                                "a small Atlas around files_to_touch; broad is for shared contracts; constitutional "
+                                "is for self-evolution/immune surfaces."
+                            ),
+                        },
+                        "context_notes": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional agent-chosen notes explaining why this context level/evidence is appropriate.",
+                        },
+                        "include_tests": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Whether generated Atlas context may include related tests.",
+                        },
                     },
-                    "required": ["plan", "goal"],
+                    "required": ["plan", "goal", "context_level"],
                 },
             },
             handler=_handle_plan_task,
-            timeout_sec=600,
+            timeout_sec=660,
         )
     ]
 
@@ -69,6 +93,9 @@ def _handle_plan_task(
     plan: str = "",
     goal: str = "",
     files_to_touch: list | None = None,
+    context_level: str = "",
+    context_notes: str = "",
+    include_tests: bool = False,
 ) -> str:
     if not plan.strip():
         return "ERROR: plan parameter is required and must not be empty."
@@ -83,13 +110,23 @@ def _handle_plan_task(
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 result = pool.submit(
                     asyncio.run,
-                    _run_plan_review_async(ctx, plan, goal, files_to_touch),
-                ).result(timeout=590)
+                    asyncio.wait_for(
+                        _run_plan_review_async(ctx, plan, goal, files_to_touch, context_level, context_notes, include_tests),
+                        timeout=_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC,
+                    ),
+                ).result(timeout=_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC + 5)
         except RuntimeError:
-            result = asyncio.run(_run_plan_review_async(ctx, plan, goal, files_to_touch))
+            result = asyncio.run(
+                asyncio.wait_for(
+                    _run_plan_review_async(ctx, plan, goal, files_to_touch, context_level, context_notes, include_tests),
+                    timeout=_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC,
+                )
+            )
         return result
     except concurrent.futures.TimeoutError:
-        return "ERROR: Plan review timed out after 590s."
+        return f"ERROR: Plan review timed out after {_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC}s."
+    except asyncio.TimeoutError:
+        return f"ERROR: Plan review timed out after {_PLAN_REVIEW_WRAPPER_TIMEOUT_SEC}s."
     except Exception as e:
         log.error("plan_task failed: %s", e, exc_info=True)
         return f"ERROR: Plan review failed: {e}"
@@ -100,6 +137,9 @@ async def _run_plan_review_async(
     plan: str,
     goal: str,
     files_to_touch: list,
+    context_level: str = "",
+    context_notes: str = "",
+    include_tests: bool = False,
 ) -> str:
     repo_dir = ctx.repo_dir
 
@@ -121,6 +161,10 @@ async def _run_plan_review_async(
         )
 
     models = _get_review_models()
+    try:
+        resolved_context_level = _resolve_plan_context_level(context_level)
+    except ValueError as exc:
+        return f"ERROR: {exc}"
 
     checklist = _load_plan_checklist()
     bible_text = _load_bible(repo_dir)
@@ -139,39 +183,61 @@ async def _run_plan_review_async(
     if files_to_touch:
         head_snapshots = build_head_snapshot_section(repo_dir, files_to_touch)
 
-    system_prompt = _build_system_prompt(checklist, bible_text, dev_md, arch_md, checklists_md)
+    system_prompt = _build_system_prompt(
+        checklist,
+        bible_text,
+        dev_md,
+        arch_md,
+        checklists_md,
+        context_level=resolved_context_level,
+    )
     placeholder = "__GENERATED_PLAN_ATLAS_PENDING__"
-    user_content = _build_user_content(plan, goal, files_to_touch, head_snapshots, placeholder, "")
+    user_content = _build_user_content(
+        plan,
+        goal,
+        files_to_touch,
+        head_snapshots,
+        placeholder if resolved_context_level != "minimal" else "",
+        "",
+        context_level=resolved_context_level,
+        context_notes=context_notes,
+        include_tests=include_tests,
+    )
     fixed_prompt_tokens = estimate_tokens(system_prompt + user_content)
-    ctx.emit_progress_fn("📐 plan_task: building Generated Plan Review Atlas…")
-    try:
-        atlas = compile_review_context_atlas(
-            ReviewContextAtlasRequest(
-                repo_dir=repo_dir,
-                anchors=tuple(files_to_touch),
-                already_included=frozenset(set(files_to_touch) | canonical_docs),
-                fixed_prompt_tokens=fixed_prompt_tokens,
-                target_total_tokens=850_000,
-                hard_total_tokens=_PLAN_BUDGET_TOKEN_LIMIT,
-                include_tests=False,
-                title="Generated Plan Review Atlas",
+    if resolved_context_level != "minimal":
+        target_tokens = _plan_context_target_tokens(resolved_context_level)
+        ctx.emit_progress_fn(
+            f"📐 plan_task: building {resolved_context_level} Generated Plan Review Atlas…"
+        )
+        try:
+            atlas = compile_review_context_atlas(
+                ReviewContextAtlasRequest(
+                    repo_dir=repo_dir,
+                    anchors=tuple(files_to_touch),
+                    already_included=frozenset(set(files_to_touch) | canonical_docs),
+                    fixed_prompt_tokens=fixed_prompt_tokens,
+                    target_total_tokens=target_tokens,
+                    hard_total_tokens=_PLAN_BUDGET_TOKEN_LIMIT,
+                    include_tests=bool(include_tests),
+                    title=f"Generated Plan Review Atlas ({resolved_context_level})",
+                    drive_root=pathlib.Path(ctx.drive_root),
+                )
             )
-        )
-    except Exception as e:
-        return f"ERROR: Failed to build review context atlas: {e}"
+        except Exception as e:
+            return f"ERROR: Failed to build review context atlas: {e}"
 
-    if atlas.status == "budget_exceeded":
-        estimated = int((atlas.manifest or {}).get("estimated_total_tokens") or 0)
-        return (
-            f"⚠️ PLAN_REVIEW_SKIPPED: generated repository atlas exceeded hard budget"
-            + (f" ({estimated:,} estimated tokens)" if estimated else "")
-            + ". Split the plan into a smaller scope or reduce protected context size."
-        )
+        if atlas.status == "budget_exceeded":
+            estimated = int((atlas.manifest or {}).get("estimated_total_tokens") or 0)
+            return (
+                f"⚠️ PLAN_REVIEW_SKIPPED: generated repository atlas exceeded hard budget"
+                + (f" ({estimated:,} estimated tokens)" if estimated else "")
+                + ". Split the plan into a smaller scope or choose a smaller context_level."
+            )
 
-    head, sep, tail = user_content.rpartition(placeholder)
-    if not sep:
-        return "ERROR: Failed to build review context atlas: placeholder missing."
-    user_content = head + atlas.text + tail
+        head, sep, tail = user_content.rpartition(placeholder)
+        if not sep:
+            return "ERROR: Failed to build review context atlas: placeholder missing."
+        user_content = head + atlas.text + tail
 
     estimated_tokens = estimate_tokens(system_prompt + user_content)
     if estimated_tokens > _PLAN_BUDGET_TOKEN_LIMIT:
@@ -183,23 +249,87 @@ async def _run_plan_review_async(
 
     ctx.emit_progress_fn(
         f"📐 plan_task: running {len(models)} parallel reviewers "
-        f"(~{estimated_tokens:,} tokens each)…"
+        f"(context={resolved_context_level}, ~{estimated_tokens:,} tokens each)…"
     )
 
-    llm_client = LLMClient()
-    semaphore = asyncio.Semaphore(3)
-    tasks = [
-        _query_reviewer(llm_client, model, system_prompt, user_content, semaphore)
-        for model in models
-    ]
-    raw_results = await asyncio.gather(*tasks)
-
-    _emit_plan_review_usage(ctx, raw_results)
+    raw_results = await _run_plan_review_slots(ctx, models, system_prompt, user_content)
 
     return _format_output(raw_results, models, goal, estimated_tokens)
 
 
+async def _run_plan_review_slots(
+    ctx: ToolContext,
+    models: list[str],
+    system_prompt: str,
+    user_content: str,
+) -> list[dict]:
+    from ouroboros.review_substrate import ReviewRequest, ReviewSlot, run_review_request
+
+    slots = [
+        ReviewSlot(
+            slot_id=f"plan_slot_{idx + 1}",
+            model=str(model),
+            effort=_PLAN_REVIEW_EFFORT,
+            timeout_sec=_PLAN_REVIEW_SLOT_TIMEOUT_SEC,
+            max_tokens=_PLAN_REVIEW_MAX_TOKENS,
+            temperature=0.2,
+            role_hint="plan reviewer",
+        )
+        for idx, model in enumerate(models)
+    ]
+    request = ReviewRequest(
+        surface="plan_review",
+        goal="Review the proposed implementation plan before code is written.",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        task_id=str(getattr(ctx, "task_id", "") or "plan_review"),
+        call_type="plan_review",
+        max_tokens=_PLAN_REVIEW_MAX_TOKENS,
+        temperature=0.2,
+        no_proxy=True,
+    )
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: run_review_request(
+            request,
+            slots=slots,
+            drive_root=pathlib.Path(ctx.drive_root),
+            llm=LLMClient(),
+            usage_ctx=ctx,
+        ),
+    )
+    return [_plan_raw_result_from_actor(actor, models[idx] if idx < len(models) else "") for idx, actor in enumerate(result.actors)]
+
+
+def _plan_raw_result_from_actor(actor: dict, request_model: str) -> dict:
+    usage = actor.get("usage") or {}
+    text = actor.get("raw_text") or ""
+    error = actor.get("error") or ""
+    if actor.get("status") not in {"ok", "empty"} and not error:
+        error = str(actor.get("status") or "review failed")
+    return {
+        "model": str(usage.get("resolved_model") or actor.get("model") or request_model),
+        "request_model": request_model or actor.get("model") or "",
+        "text": text,
+        "error": error or None,
+        "prompt_ref": actor.get("prompt_ref") or {},
+        "response_ref": actor.get("response_ref") or {},
+        "tokens_in": usage.get("prompt_tokens", 0),
+        "tokens_out": usage.get("completion_tokens", 0),
+        "cost": float(usage.get("cost", 0) or 0),
+    }
+
+
 def _emit_plan_review_usage(ctx: "ToolContext", raw_results: list) -> None:
+    """Compatibility helper for explicit plan-review usage emission tests.
+
+    The live plan path emits through ReviewCoordinator; this helper preserves
+    the small SSOT conversion from old raw result dictionaries to events.
+    """
+
     for result in raw_results:
         if result.get("error"):
             continue
@@ -216,55 +346,6 @@ def _emit_plan_review_usage(ctx: "ToolContext", raw_results: list) -> None:
             source="plan_review",
             extra={"cost": cost},
         )
-
-
-async def _query_reviewer(
-    llm_client: LLMClient,
-    model: str,
-    system_prompt: str,
-    user_content: str,
-    semaphore: asyncio.Semaphore,
-) -> dict:
-    async with semaphore:
-        try:
-            msg, usage = await llm_client.chat_async(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                model=model,
-                reasoning_effort=_PLAN_REVIEW_EFFORT,
-                max_tokens=_PLAN_REVIEW_MAX_TOKENS,
-                temperature=0.2,
-                no_proxy=True,
-            )
-            content = msg.get("content") or "(empty response)"
-            resolved_model = str((usage or {}).get("resolved_model") or model)
-            prompt_tokens = (usage or {}).get("prompt_tokens", 0)
-            completion_tokens = (usage or {}).get("completion_tokens", 0)
-            cost = float((usage or {}).get("cost", 0) or 0)
-            return {
-                "model": resolved_model,
-                "request_model": model,
-                "text": content,
-                "error": None,
-                "tokens_in": prompt_tokens,
-                "tokens_out": completion_tokens,
-                "cost": cost,
-            }
-        except asyncio.TimeoutError:
-            return {
-                "model": model, "request_model": model,
-                "text": "", "error": "Timeout after 120s",
-                "tokens_in": 0, "tokens_out": 0,
-            }
-        except Exception as e:
-            error_msg = _classify_reviewer_error(e, model)
-            return {
-                "model": model, "request_model": model,
-                "text": "", "error": error_msg,
-                "tokens_in": 0, "tokens_out": 0,
-            }
 
 
 def _format_output(raw_results: list, models: list, goal: str, estimated_tokens: int) -> str:
@@ -382,18 +463,25 @@ def _build_system_prompt(
     dev_md: str,
     arch_md: str,
     checklists_md: str = "",
+    context_level: str = "",
 ) -> str:
+    atlas_note = (
+        f"Repository evidence is bounded by context_level={context_level!r}: "
+        "`minimal` includes governance docs, the plan, and touched-file snapshots "
+        "without a generated Atlas; `localized`, `broad`, and `constitutional` add "
+        "progressively larger generated Atlas context. Use only evidence actually present."
+    )
     parts = [(
         "You are a senior design reviewer for Ouroboros, a self-creating AI agent.\n"
         "Your job is to review a proposed implementation plan BEFORE any code is written.\n"
         "You are validating a concrete candidate plan, not brainstorming from zero. If the plan is weak, say exactly why and what boundary or contract was missed.\n"
-        "You have broad Atlas-backed repository access to find issues that the implementer may have missed.\n\n"
+        f"{atlas_note}\n\n"
         "## Review stance — GENERATIVE, not audit\n\n"
-        "Your primary job is to CONTRIBUTE ideas the implementer may not see, using broad Atlas-backed repo access.\n"
+        "Your primary job is to CONTRIBUTE ideas the implementer may not see, using the repository evidence provided for this context level.\n"
         "Finding defects in the plan is secondary; proposing concrete alternatives, surfacing existing surfaces that already solve the goal, and flagging subtle contract breaks is primary.\n"
         "Assume the implementer has already thought through the first-pass design — you are a design PARTNER who contributes, not an auditor who rubber-stamps.\n\n"
         "## Required output structure (follow exactly)\n\n"
-        "1. **Your own approach** (1-2 sentences). State what YOU would do with broad Atlas-backed repo access: the concrete alternative path, the existing file/function you would reuse, or the simpler route. If after real effort you see no better approach, say so explicitly.\n"
+        "1. **Your own approach** (1-2 sentences). State what YOU would do with the available repository evidence: the concrete alternative path, the existing file/function you would reuse, or the simpler route. If after real effort you see no better approach, say so explicitly.\n"
         "2. **`## PROPOSALS` section** (top 1-2 ideas). Each proposal is one of:\n   - An existing function/module that already solves this (named exactly).\n   - A subtle contract break or shared-state interaction the plan likely missed.\n   - A simpler path with less surface area preserving the goal.\n   - A risk pattern visible from codebase history in your context.\n   - A BIBLE.md alignment issue with a specific principle cited.\n"
         "3. **Per-item verdicts**. For each checklist item below:\n   - **verdict**: PASS | RISK | FAIL\n   - **explanation**: 2-5 sentences describing what you found (or why it's fine)\n   - **concrete fix** (if RISK or FAIL): exact file, function, or line to address\n   - **alternative approaches** (if applicable): 1-2 more elegant solutions\n"
         "4. **Final line** (exactly one of):\n   - `AGGREGATE: GREEN` — no critical issues, implementer can proceed\n   - `AGGREGATE: REVIEW_REQUIRED` — risks or minor concerns, implementer should consider adjustments\n   - `AGGREGATE: REVISE_PLAN` — critical structural issues, plan must be revised before coding\n\n"
@@ -433,8 +521,21 @@ def _build_user_content(
     head_snapshots: str,
     repo_pack: str,
     omitted_note: str,
+    *,
+    context_level: str = "",
+    context_notes: str = "",
+    include_tests: bool = False,
 ) -> str:
-    parts = [f"## Implementation Plan Under Review\n\n**Goal:** {goal}\n\n**Proposed Plan:**\n{plan}\n"]
+    parts = [
+        f"## Implementation Plan Under Review\n\n**Goal:** {goal}\n\n**Proposed Plan:**\n{plan}\n",
+        (
+            "## Plan Context Contract\n\n"
+            f"**Context level:** {context_level}\n"
+            f"**Include tests in generated Atlas:** {bool(include_tests)}\n"
+        ),
+    ]
+    if context_notes:
+        parts.append(f"**Agent context notes:** {context_notes}\n")
 
     if files_to_touch:
         parts.append(f"**Files planned to touch:** {', '.join(files_to_touch)}\n")
@@ -449,6 +550,26 @@ def _build_user_content(
         parts.append(omitted_note)
 
     return "\n".join(parts)
+
+
+def _resolve_plan_context_level(raw_level: str) -> str:
+    level = str(raw_level or "").strip().lower()
+    valid = {"minimal", "localized", "broad", "constitutional"}
+    if level not in valid:
+        allowed = ", ".join(sorted(valid))
+        raise ValueError(
+            "plan_task requires an explicit context_level chosen by the agent "
+            f"({allowed}); do not rely on host-side auto selection."
+        )
+    return level
+
+
+def _plan_context_target_tokens(level: str) -> int:
+    return {
+        "localized": 80_000,
+        "broad": 350_000,
+        "constitutional": 850_000,
+    }.get(str(level or ""), 80_000)
 
 
 def _classify_reviewer_error(exc: BaseException, model: str) -> str:

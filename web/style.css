@@ -1157,6 +1157,11 @@ body {
   cursor: pointer;
 }
 
+.chat-video {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
 .chat-bubble.user .message {
   color: rgba(215, 230, 255, 0.96);
 }
@@ -1480,7 +1485,7 @@ body {
   animation-delay: 0.4s;
 }
 
-.chat-live-card[data-finished="1"] .chat-live-typing {
+.chat-live-card[data-finished="1"] > .chat-live-summary-button .chat-live-typing {
   display: none;
 }
 
@@ -1512,7 +1517,7 @@ body {
   transition: transform 0.18s ease;
 }
 
-.chat-live-card[data-expanded="1"] .chat-live-chevron {
+.chat-live-card[data-expanded="1"] > .chat-live-summary-button .chat-live-chevron {
   transform: rotate(180deg);
 }
 
@@ -1536,13 +1541,39 @@ body {
   gap: 11px;
 }
 
-.chat-live-card[data-expanded="1"] .chat-live-timeline {
+.chat-live-card[data-expanded="1"] > .chat-live-timeline {
   display: flex;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   padding-top: 10px;
   max-height: 420px;
   overflow-y: auto;
   scrollbar-gutter: stable;
+}
+
+.chat-subagents {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 14px 12px 24px;
+    padding-left: 14px;
+    border-left: 1px solid rgba(201, 53, 69, 0.28);
+}
+
+.chat-subagents:empty {
+    display: none;
+}
+
+.chat-live-card.subagent {
+    width: 100%;
+    max-width: 100%;
+    margin-right: 0;
+    border-color: rgba(201, 53, 69, 0.20);
+    background: rgba(255, 255, 255, 0.025);
+    box-shadow: inset 0 1px 0 rgba(255, 200, 210, 0.03);
+}
+
+.chat-live-card.subagent .chat-live-summary-button {
+    padding: 9px 12px;
 }
 
 .chat-live-line {
@@ -1935,11 +1966,15 @@ body {
 .chat-attachment-preview {
   display: none;
   padding: 4px 8px 2px;
+  max-height: 112px;
+  overflow-y: auto;
 }
 
 .chat-attachment-preview.visible {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .attach-badge {
@@ -1966,7 +2001,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 200px;
+  max-width: min(220px, 56vw);
 }
 
 .attach-remove {

@@ -95,59 +95,34 @@ def test_tool_set_matches(registry):
 
 
 EXPECTED_TOOLS = [
-    "repo_read", "repo_write", "repo_list", "repo_commit", "str_replace_editor",
-    "data_read", "data_write", "data_list",
-    "git_status", "git_diff",
-    "pull_from_remote", "restore_to_head", "revert_commit", "rollback_to_target",
-    "run_shell", "claude_code_edit",
     "browse_page", "browser_action",
-    "web_search",
-    "chat_history", "recent_tasks", "update_scratchpad", "update_identity",
-    "set_tool_timeout", "request_restart", "promote_to_stable", "request_deep_self_review",
-    "schedule_task", "cancel_task",
-    "switch_model", "toggle_evolution", "toggle_consciousness",
-    "send_user_message", "send_photo",
-    "codebase_digest", "codebase_health",
-    "knowledge_read", "knowledge_write", "knowledge_list",
-    # Memory registry
-    "memory_map", "memory_update_registry",
-    "multi_model_review",
-    # GitHub Issues
+    "run_ci_tests",
+    "advisory_review", "review_status",
+    "compact_context", "set_tool_timeout", "request_restart",
+    "promote_to_stable", "schedule_subagent", "cancel_task",
+    "request_deep_self_review", "chat_history", "update_scratchpad",
+    "send_user_message", "update_identity", "toggle_evolution",
+    "toggle_consciousness", "switch_model", "get_task_result",
+    "wait_task", "wait_tasks",
+    "read_file", "list_files", "write_file", "edit_text",
+    "send_photo", "send_video", "search_code", "codebase_digest", "forward_to_worker",
+    "generate_evolution_stats",
+    "commit_reviewed", "vcs_commit_reviewed", "vcs_status", "vcs_diff",
+    "vcs_pull_ff", "vcs_restore", "vcs_revert",
+    "fetch_pr_ref", "create_integration_branch", "cherry_pick_pr_commits",
+    "stage_adaptations", "stage_pr_merge", "vcs_rollback",
+    "list_github_prs", "get_github_pr", "comment_on_pr",
     "list_github_issues", "get_github_issue", "comment_on_issue",
     "close_github_issue", "create_github_issue",
-    # GitHub PRs
-    "list_github_prs", "get_github_pr", "comment_on_pr",
-    # Git PR integration (non-core: require enable_tools)
-    "fetch_pr_ref", "create_integration_branch",
-    "cherry_pick_pr_commits", "stage_adaptations", "stage_pr_merge",
-    # Code search
-    "code_search",
-    # Task decomposition
-    "get_task_result", "wait_for_task",
-    "generate_evolution_stats",
-    # VLM / Vision
+    "codebase_health", "knowledge_read", "knowledge_write", "knowledge_list",
+    "memory_map", "memory_update_registry",
+    "plan_task", "recent_tasks", "task_acceptance_review", "web_search",
+    "start_service", "service_status", "service_logs", "stop_service",
+    "run_command", "claude_code_edit", "run_script",
+    "list_skills", "skill_review", "skill_exec", "toggle_skill",
+    "skill_preflight", "submit_skill_to_hub",
+    "list_available_tools", "enable_tools",
     "analyze_screenshot", "vlm_query",
-    # Message routing
-    "forward_to_worker",
-    # Context management
-    "compact_context",
-    "list_available_tools",
-    "enable_tools",
-    # Advisory pre-review gate
-    "advisory_pre_review", "review_status",
-    # Pre-implementation design review
-    "plan_task",
-    # CI
-    "run_ci_tests",
-    # Phase 3 three-layer refactor: external skill surface
-    # (non-core: require enable_tools, except review_skill which is core
-    # in v5.7.0+ so heal mode can satisfy its own prompt without a
-    # forbidden enable_tools round-trip)
-    "list_skills", "review_skill", "skill_exec", "toggle_skill",
-    # v5.7.0: skill_preflight — heal-allowed validator that runs
-    # Python compile() / node --check / bash -n on a skill's payload.
-    "skill_preflight",
-    "submit_skill_to_hub",
 ]
 
 
@@ -191,7 +166,7 @@ def test_github_create_issue_schema_fields(registry):
 
 def test_tool_execute_basic(registry):
     """Actually execute a simple tool to verify execution works."""
-    result = registry.execute("run_shell", {"cmd": ["echo", "hello"]})
+    result = registry.execute("run_command", {"cmd": ["echo", "hello"]})
     assert isinstance(result, str), "Tool execute should return string"
     assert "hello" in result.lower() or "⚠️" in result, "Should return output or error"
 
@@ -206,10 +181,10 @@ def test_frozen_registry_includes_packaged_tool_modules(monkeypatch):
     expected_subset = {
         "memory_map",
         "memory_update_registry",
-        "advisory_pre_review",
+        "advisory_review",
         "review_status",
         "plan_task",
-        "rollback_to_target",
+        "vcs_rollback",
         "run_ci_tests",
         # github.py is in _FROZEN_TOOL_MODULES — PR inspection tools must work in frozen builds
         "list_github_prs",
@@ -506,8 +481,8 @@ def test_no_extremely_oversized_functions():
 def test_function_count_reasonable():
     """Codebase doesn't have too few or too many functions.
 
-    The hard gate value is imported from ouroboros/review.py::MAX_TOTAL_FUNCTIONS
-    (currently 2250 as of v6.0.0) — no hardcoded assertion number here.
+    The hard gate value is imported from ouroboros/review.py::MAX_TOTAL_FUNCTIONS;
+    there is no hardcoded assertion number here.
     """
     from ouroboros.review import MAX_TOTAL_FUNCTIONS
 

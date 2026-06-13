@@ -165,7 +165,7 @@ def test_non_openrouter_payload_strips_reasoning_roundtrip_metadata(monkeypatch)
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
             "reasoning": "read first",
             "reasoning_details": [{"type": "reasoning.text", "text": "read first"}],
             "response_id": "gen-123",
@@ -197,7 +197,7 @@ def test_openrouter_payload_keeps_reasoning_roundtrip_metadata(monkeypatch):
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
             "reasoning": "read first",
             "reasoning_details": [{"type": "reasoning.text", "text": "read first"}],
             "response_id": "gen-123",
@@ -490,8 +490,8 @@ def test_normalize_remote_response_estimates_cost_for_direct_openai(monkeypatch)
     target = client._resolve_remote_target("openai::gpt-5.2")
     seen = {}
 
-    def fake_estimate_cost(model, prompt_tokens, completion_tokens, cached_tokens=0, cache_write_tokens=0, prompt_cache_ttl=None):
-        seen["args"] = (model, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, prompt_cache_ttl)
+    def fake_estimate_cost(model, prompt_tokens, completion_tokens, cached_tokens=0, cache_write_tokens=0, prompt_cache_ttl=None, allow_live_fetch=True):
+        seen["args"] = (model, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, prompt_cache_ttl, allow_live_fetch)
         return 0.123456
 
     monkeypatch.setattr(pricing_module, "estimate_cost", fake_estimate_cost)
@@ -515,7 +515,7 @@ def test_normalize_remote_response_estimates_cost_for_direct_openai(monkeypatch)
     assert usage["cache_write_tokens"] == 5
     assert usage["cost"] == 0.123456
     assert usage["cost_estimated"] is True
-    assert seen["args"] == ("openai/gpt-5.2", 100, 40, 10, 5, None)
+    assert seen["args"] == ("openai/gpt-5.2", 100, 40, 10, 5, None, True)
 
 
 def test_normalize_remote_response_preserves_reasoning_and_response_id():
@@ -528,7 +528,7 @@ def test_normalize_remote_response_preserves_reasoning_and_response_id():
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "repo_read", "arguments": "{}"}}],
+                    "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
                     "reasoning": "look up the file",
                     "reasoning_details": [{"type": "reasoning.text", "text": "look up the file"}],
                 },
