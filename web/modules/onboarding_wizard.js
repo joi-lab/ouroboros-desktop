@@ -10,31 +10,65 @@
             .replace(/`/g, '&#96;');
     }
 
-        const bootstrap = window.__OURO_ONBOARDING_BOOTSTRAP__ || {};
-        const SETUP_CONTRACT = bootstrap.contract || {};
-        const HOST_MODE = bootstrap.hostMode || 'desktop';
-        const LOCAL_RUNTIME_CONTROLS = Boolean(bootstrap.supportsLocalRuntimeControls);
-        const STEP_ORDER = bootstrap.stepOrder || (SETUP_CONTRACT.steps || []).map((step) => step.id);
-        const STEP_META = Object.fromEntries((SETUP_CONTRACT.steps || []).map((step) => [step.id, step]));
-        const PROVIDER_FIELDS = SETUP_CONTRACT.providerFields || [];
-        const PROVIDER_PROFILES = SETUP_CONTRACT.providerProfiles || {};
-        const MODEL_SLOTS = SETUP_CONTRACT.modelSlots || [];
-        const REVIEW_MODES = SETUP_CONTRACT.reviewModes || [];
-        const RUNTIME_MODES = SETUP_CONTRACT.runtimeModes || [];
-        const LOCAL_ROUTING_MODES = SETUP_CONTRACT.localRoutingModes || [];
-        const BUDGET_FIELDS = SETUP_CONTRACT.budgetFields || [];
-        const LOCAL_FIELDS = [
-            ['local-source', 'localSource', 'Model Source', 'Qwen/Qwen2.5-7B-Instruct-GGUF or /absolute/path/model.gguf', 'Use either a HuggingFace repo ID or a local absolute GGUF path.', 'field field-full'],
-            ['local-filename', 'localFilename', 'GGUF Filename', 'qwen2.5-7b-instruct-q3_k_m.gguf', 'Required only for HuggingFace repo IDs. Leave empty when the source is a direct filesystem path.', 'field field-full'],
-            ['local-context', 'localContextLength', 'Context Length', '', '', 'field', 'number', '2048', '1024'],
-            ['local-gpu-layers', 'localGpuLayers', 'GPU Layers', '', '', 'field', 'number', '', '1'],
-            ['local-chat-format', 'localChatFormat', 'Chat Format', 'Leave empty for auto-detect', '', 'field field-full'],
-        ];
-        const MODEL_DEFAULTS = bootstrap.modelDefaults || {};
-        const LOCAL_PRESETS = bootstrap.localPresets || {};
-        const MODEL_SUGGESTIONS = bootstrap.modelSuggestions || [];
-        const INITIAL_STATE = bootstrap.initialState || {};
-        const root = document.getElementById('root');
+    const bootstrap = window.__OURO_ONBOARDING_BOOTSTRAP__ || {};
+    const SETUP_CONTRACT = bootstrap.contract || {};
+    const HOST_MODE = bootstrap.hostMode || 'desktop';
+    const LOCAL_RUNTIME_CONTROLS = Boolean(bootstrap.supportsLocalRuntimeControls);
+    const STEP_ORDER = bootstrap.stepOrder || (SETUP_CONTRACT.steps || []).map((step) => step.id);
+    const STEP_META = Object.assign(
+        Object.fromEntries((SETUP_CONTRACT.steps || []).map((step) => [step.id, step])),
+        {
+            providers: {
+                title: 'Добавьте доступ',
+                railCopy: 'Ключи + локальная',
+                copy: 'Заполните хотя бы один удалённый ключ или источник локальной модели. Следующий шаг адаптируется к тому, что вы настроили здесь.',
+                footer: 'Вставляйте только то, что у вас уже есть. OpenRouter, прямые ключи провайдеров и необязательная локальная модель могут сосуществовать.',
+            },
+            models: {
+                title: 'Выберите модели',
+                railCopy: '4 слота моделей',
+                copy: 'Просмотрите видимые настройки моделей по умолчанию, полученные из вашей текущей конфигурации, затем измените всё, что нужно, перед запуском.',
+                footer: 'Значения вида openai/... или anthropic/... остаются в стиле роутера. Прямые значения используют openai::... и anthropic::....',
+            },
+            review_mode: {
+                title: 'Выберите режим проверки',
+                railCopy: 'Рекомендательный / Блокирующий',
+                copy: 'Определите строгость проверки перед коммитом до того, как Ouroboros начнёт самомодификацию.',
+                footer: 'Выберите режим проверки и начальный режим среды выполнения до запуска Ouroboros.',
+            },
+            budget: {
+                title: 'Установите бюджет',
+                railCopy: 'Ограничения сессии',
+                copy: 'Бюджет — отдельный шаг, потому что он напрямую определяет, насколько далеко Ouroboros может зайти за одну сессию и в одной задаче.',
+                footer: 'Общий бюджет — глобальный. Лимит затрат на задачу — мягкое напоминание, а не жёсткий выключатель.',
+            },
+            summary: {
+                title: 'Проверьте перед запуском',
+                railCopy: 'Финальная проверка',
+                copy: 'Проверьте итоговую картину по провайдерам, моделям, проверке и бюджету. Ouroboros сохранит эти значения перед запуском.',
+                footer: 'Те же параметры останутся доступными для редактирования в Настройках.',
+            },
+        },
+    );
+    const PROVIDER_FIELDS = SETUP_CONTRACT.providerFields || [];
+    const PROVIDER_PROFILES = SETUP_CONTRACT.providerProfiles || {};
+    const MODEL_SLOTS = SETUP_CONTRACT.modelSlots || [];
+    const REVIEW_MODES = SETUP_CONTRACT.reviewModes || [];
+    const RUNTIME_MODES = SETUP_CONTRACT.runtimeModes || [];
+    const LOCAL_ROUTING_MODES = SETUP_CONTRACT.localRoutingModes || [];
+    const BUDGET_FIELDS = SETUP_CONTRACT.budgetFields || [];
+    const LOCAL_FIELDS = [
+        ['local-source', 'localSource', 'Источник модели', 'Qwen/Qwen2.5-7B-Instruct-GGUF или /абсолютный/путь/model.gguf', 'Используйте либо ID репозитория HuggingFace, либо абсолютный путь к GGUF-файлу.', 'field field-full'],
+        ['local-filename', 'localFilename', 'Имя GGUF-файла', 'qwen2.5-7b-instruct-q3_k_m.gguf', 'Требуется только для ID репозиториев HuggingFace. Оставьте пустым, если указан прямой путь.', 'field field-full'],
+        ['local-context', 'localContextLength', 'Длина контекста', '', '', 'field', 'number', '2048', '1024'],
+        ['local-gpu-layers', 'localGpuLayers', 'GPU-слои', '', '', 'field', 'number', '', '1'],
+        ['local-chat-format', 'localChatFormat', 'Формат чата', 'Оставьте пустым для автоопределения', '', 'field field-full'],
+    ];
+    const MODEL_DEFAULTS = bootstrap.modelDefaults || {};
+    const LOCAL_PRESETS = bootstrap.localPresets || {};
+    const MODEL_SUGGESTIONS = bootstrap.modelSuggestions || [];
+    const INITIAL_STATE = bootstrap.initialState || {};
+    const root = document.getElementById('root');
 
     const state = Object.assign({
         currentStep: STEP_ORDER[0],
@@ -42,7 +76,7 @@
         saving: false,
         modelsDirty: false,
         localSourceOpen: Boolean(INITIAL_STATE.localSource),
-        localStatusText: 'Status: Offline',
+        localStatusText: 'Статус: Офлайн',
         localStatusTone: 'muted',
         localTestResult: '',
         localTestTone: 'muted',
@@ -50,7 +84,7 @@
         claudeCliInstalled: false,
         claudeCliBusy: false,
         claudeCliStatus: '',
-        claudeCliStatusText: 'Checking Claude runtime...',
+        claudeCliStatusText: 'Проверка среды Claude...',
         claudeCliTone: 'muted',
         claudeCliError: '',
         claudeCliDismissed: false,
@@ -113,21 +147,21 @@
         return profile;
     }
 
-        function profileLabel(profile) {
-            return PROVIDER_PROFILES[profile]?.label || PROVIDER_PROFILES.openrouter?.label || 'OpenRouter';
-        }
+    function profileLabel(profile) {
+        return PROVIDER_PROFILES[profile]?.label || PROVIDER_PROFILES.openrouter?.label || 'OpenRouter';
+    }
 
-        function reviewLabel(mode) {
-            return optionByValue(REVIEW_MODES, mode).label || 'Advisory';
-        }
+    function reviewLabel(mode) {
+        return optionByValue(REVIEW_MODES, mode).label || 'Рекомендательный';
+    }
 
-        function runtimeModeLabel(mode) {
-            return optionByValue(RUNTIME_MODES, mode).label || 'Advanced';
-        }
+    function runtimeModeLabel(mode) {
+        return optionByValue(RUNTIME_MODES, mode).label || 'Advanced';
+    }
 
-        function localRoutingLabel(mode) {
-            return optionByValue(LOCAL_ROUTING_MODES, mode).label || 'Cloud models only';
-        }
+    function localRoutingLabel(mode) {
+        return optionByValue(LOCAL_ROUTING_MODES, mode).label || 'Только облачные модели';
+    }
 
     function nextButtonShouldBeDisabled() {
         if (state.saving) return true;
@@ -199,41 +233,41 @@
         state.modelsDirty = false;
     }
 
-        function validateProvidersStep() {
-            const keyValues = PROVIDER_FIELDS.map((field) => [field, trim(state[field.stateKey])]);
-            const localSource = trim(state.localSource);
-            const localFilename = trim(state.localFilename);
-            const shortKey = keyValues.find(([, value]) => value && value.length < 10);
-            if (shortKey) return `${shortKey[0].label.replace(' API Key', '')} API key looks too short.`;
-            const hasRemote = keyValues.some(([, value]) => value);
-            if (!hasRemote && !localSource) {
-                return 'Enter at least one remote key or a local model source before continuing.';
-            }
-            if (localSource && !hasRemote && trim(state.localRoutingMode) === 'cloud') {
-                return 'Local-only setups must route at least one model to the local runtime.';
-            }
+    function validateProvidersStep() {
+        const keyValues = PROVIDER_FIELDS.map((field) => [field, trim(state[field.stateKey])]);
+        const localSource = trim(state.localSource);
+        const localFilename = trim(state.localFilename);
+        const shortKey = keyValues.find(([, value]) => value && value.length < 10);
+        if (shortKey) return `Ключ ${shortKey[0].label.replace(' API Key', '')} выглядит слишком коротким.`;
+        const hasRemote = keyValues.some(([, value]) => value);
+        if (!hasRemote && !localSource) {
+            return 'Введите хотя бы один удалённый ключ или источник локальной модели перед продолжением.';
+        }
+        if (localSource && !hasRemote && trim(state.localRoutingMode) === 'cloud') {
+            return 'Только-локальные конфигурации должны маршрутизировать хотя бы одну модель на локальную среду.';
+        }
         if (localSource && localSource.includes('/') && !isLocalFilesystemSource(localSource) && !localFilename) {
-            return 'Local HuggingFace sources need a GGUF filename.';
+            return 'Для локальных источников HuggingFace требуется имя файла GGUF.';
         }
         if (localSource && (!Number.isInteger(Number(state.localContextLength)) || Number(state.localContextLength) <= 0)) {
-            return 'Local context length must be a positive integer.';
+            return 'Длина контекста должна быть положительным целым числом.';
         }
         if (localSource && !Number.isInteger(Number(state.localGpuLayers))) {
-            return 'Local GPU layers must be an integer.';
+            return 'Количество слоёв GPU должно быть целым числом.';
         }
         return '';
     }
 
     function validateModelsStep() {
         if (!trim(state.mainModel) || !trim(state.codeModel) || !trim(state.lightModel) || !trim(state.fallbackModel)) {
-            return 'Confirm all four models before starting Ouroboros.';
+            return 'Подтвердите все четыре модели перед запуском Ouroboros.';
         }
         return '';
     }
 
     function validateReviewStep() {
         if (!['advisory', 'blocking'].includes(trim(state.reviewEnforcement))) {
-            return 'Choose advisory or blocking review mode.';
+            return 'Выберите рекомендательный или блокирующий режим проверки.';
         }
         return '';
     }
@@ -243,7 +277,7 @@
             const value = Number(state[field.stateKey]);
             const min = Number(field.min || 0.01);
             if (!Number.isFinite(value) || value < min) {
-                return `${field.title || field.label || 'Budget'} must be greater than zero.`;
+                return `${field.title || field.label || 'Бюджет'} должен быть больше нуля.`;
             }
         }
         return '';
@@ -295,7 +329,7 @@
         const busy = Boolean(payload.busy);
         const errorText = trim(payload.error);
         const message = trim(payload.message)
-            || (ready ? 'Claude runtime ready.' : (installed ? 'Claude runtime available but not ready.' : 'Claude runtime not available.'));
+            || (ready ? 'Среда Claude готова.' : (installed ? 'Среда Claude доступна, но не готова.' : 'Среда Claude недоступна.'));
         state.claudeCliInstalled = installed || ready;
         state.claudeCliBusy = busy;
         state.claudeCliStatus = trim(payload.status) || (ready ? 'ready' : (installed ? 'installed' : 'missing'));
@@ -335,7 +369,7 @@
             state.claudeCliStatus = 'error';
             state.claudeCliError = String(error?.message || error || '');
             state.claudeCliTone = 'error';
-            state.claudeCliStatusText = `Claude runtime status failed: ${state.claudeCliError}`;
+            state.claudeCliStatusText = `Ошибка проверки среды Claude: ${state.claudeCliError}`;
             renderClaudeCliStatus();
         }
     }
@@ -362,14 +396,14 @@
         const skipButton = document.getElementById('wizard-claude-skip');
         if (card) card.hidden = !shouldShowClaudeCliCta();
         if (statusEl) {
-            statusEl.textContent = state.claudeCliStatusText || 'Checking Claude runtime...';
+            statusEl.textContent = state.claudeCliStatusText || 'Проверка среды Claude...';
             statusEl.dataset.tone = state.claudeCliTone || 'muted';
         }
         if (installButton) {
             installButton.disabled = state.claudeCliBusy;
             installButton.textContent = state.claudeCliBusy
-                ? 'Repairing...'
-                : (state.claudeCliInstalled ? 'Runtime OK' : 'Repair Runtime');
+                ? 'Восстановление...'
+                : (state.claudeCliInstalled ? 'Среда готова' : 'Восстановить среду');
         }
         if (skipButton) {
             skipButton.hidden = state.claudeCliBusy || state.claudeCliInstalled;
@@ -382,7 +416,7 @@
         const testButton = document.getElementById('wizard-local-test');
         const resultEl = document.getElementById('wizard-local-test-result');
         if (statusEl) {
-            statusEl.textContent = state.localStatusText || 'Status: Offline';
+            statusEl.textContent = state.localStatusText || 'Статус: Офлайн';
             statusEl.dataset.tone = state.localStatusTone || 'muted';
         }
         if (stopButton) stopButton.disabled = !state.localRuntimeReady;
@@ -405,7 +439,7 @@
         try {
             const data = await apiRequest('/api/local-model/status', { cache: 'no-store' });
             const isReady = data.status === 'ready';
-            let text = 'Status: ' + ((data.status || 'offline').charAt(0).toUpperCase() + (data.status || 'offline').slice(1));
+            let text = 'Статус: ' + ((data.status || 'offline').charAt(0).toUpperCase() + (data.status || 'offline').slice(1));
             if (data.status === 'ready' && data.context_length) text += ` (ctx: ${data.context_length})`;
             if (data.status === 'downloading' && data.download_progress) text += ` ${Math.round(data.download_progress * 100)}%`;
             if (data.error) text += ` - ${data.error}`;
@@ -415,7 +449,7 @@
             renderLocalStatus();
         } catch (error) {
             state.localRuntimeReady = false;
-            state.localStatusText = `Status: Error - ${error.message}`;
+            state.localStatusText = `Статус: Ошибка - ${error.message}`;
             state.localStatusTone = 'error';
             renderLocalStatus();
         }
@@ -443,10 +477,10 @@
         if (!LOCAL_RUNTIME_CONTROLS) return '';
         return `
             <div class="wizard-runtime-strip">
-                <button type="button" class="btn btn-ghost" id="wizard-local-start">Start local runtime</button>
-                <button type="button" class="btn btn-ghost" id="wizard-local-stop" disabled>Stop</button>
-                <button type="button" class="btn btn-ghost" id="wizard-local-test" disabled>Test tool calling</button>
-                <span id="wizard-local-status" class="wizard-runtime-status">Status: Offline</span>
+                <button type="button" class="btn btn-ghost" id="wizard-local-start">Запустить локальную среду</button>
+                <button type="button" class="btn btn-ghost" id="wizard-local-stop" disabled>Остановить</button>
+                <button type="button" class="btn btn-ghost" id="wizard-local-test" disabled>Тест вызова инструментов</button>
+                <span id="wizard-local-status" class="wizard-runtime-status">Статус: Офлайн</span>
             </div>
             <div id="wizard-local-test-result" class="wizard-test-result"></div>
         `;
@@ -455,14 +489,14 @@
     function renderClaudeCliControls() {
         return `
             <div class="panel-card" id="wizard-claude-card"${shouldShowClaudeCliCta() ? '' : ' hidden'}>
-                <h3>Claude Runtime</h3>
-                <p>Claude runtime powers delegated code editing and advisory review. It is managed automatically by the app.</p>
+                <h3>Среда Claude</h3>
+                <p>Среда Claude обеспечивает делегированное редактирование кода и рекомендательную проверку. Управляется приложением автоматически.</p>
                 <div class="wizard-runtime-strip">
                     <button type="button" class="btn btn-ghost" id="wizard-claude-install" ${state.claudeCliBusy || state.claudeCliInstalled ? 'disabled' : ''}>
-                        ${escapeHtml(state.claudeCliBusy ? 'Repairing...' : (state.claudeCliInstalled ? 'Runtime OK' : 'Repair Runtime'))}
+                        ${escapeHtml(state.claudeCliBusy ? 'Восстановление...' : (state.claudeCliInstalled ? 'Среда готова' : 'Восстановить среду'))}
                     </button>
-                    <button type="button" class="btn btn-secondary" id="wizard-claude-skip" ${state.claudeCliBusy || state.claudeCliInstalled ? 'hidden' : ''}>Skip for now</button>
-                    <span id="wizard-claude-status" class="wizard-runtime-status" data-tone="${escapeHtml(state.claudeCliTone || 'muted')}">${escapeHtml(state.claudeCliStatusText || 'Checking Claude runtime...')}</span>
+                    <button type="button" class="btn btn-secondary" id="wizard-claude-skip" ${state.claudeCliBusy || state.claudeCliInstalled ? 'hidden' : ''}>Пропустить</button>
+                    <span id="wizard-claude-status" class="wizard-runtime-status" data-tone="${escapeHtml(state.claudeCliTone || 'muted')}">${escapeHtml(state.claudeCliStatusText || 'Проверка среды Claude...')}</span>
                 </div>
             </div>
         `;
@@ -470,30 +504,30 @@
 
     function summaryRows() {
         const rows = [
-            ['Detected setup', profileLabel(activeProviderProfile())],
-            ['Review mode', reviewLabel(state.reviewEnforcement)],
-            ['Runtime mode', runtimeModeLabel(state.runtimeMode)],
-            ['Total budget', formatUsd(state.totalBudget)],
-            ['Per-task soft threshold', formatUsd(state.perTaskCostUsd)],
-            ['Main', trim(state.mainModel)],
-            ['Code', trim(state.codeModel)],
-            ['Light', trim(state.lightModel)],
-            ['Fallback', trim(state.fallbackModel)],
+            ['Обнаруженная конфигурация', profileLabel(activeProviderProfile())],
+            ['Режим проверки', reviewLabel(state.reviewEnforcement)],
+            ['Режим среды', runtimeModeLabel(state.runtimeMode)],
+            ['Общий бюджет', formatUsd(state.totalBudget)],
+            ['Мягкий порог на задачу', formatUsd(state.perTaskCostUsd)],
+            ['Основная', trim(state.mainModel)],
+            ['Код', trim(state.codeModel)],
+            ['Лёгкая', trim(state.lightModel)],
+            ['Запасная', trim(state.fallbackModel)],
         ];
-        if (trim(state.openrouterKey)) rows.splice(1, 0, ['OpenRouter', 'configured']);
-        if (trim(state.openaiKey)) rows.splice(1, 0, ['OpenAI', 'configured']);
-        if (trim(state.cloudruKey)) rows.splice(1, 0, ['Cloud.ru', 'configured']);
-        if (trim(state.anthropicKey)) rows.splice(1, 0, ['Anthropic', 'configured']);
+        if (trim(state.openrouterKey)) rows.splice(1, 0, ['OpenRouter', 'настроен']);
+        if (trim(state.openaiKey)) rows.splice(1, 0, ['OpenAI', 'настроен']);
+        if (trim(state.cloudruKey)) rows.splice(1, 0, ['Cloud.ru', 'настроен']);
+        if (trim(state.anthropicKey)) rows.splice(1, 0, ['Anthropic', 'настроен']);
         if (hasLocalModel()) {
             rows.splice(
                 1,
                 0,
-                ['Local source', trim(state.localSource) + (trim(state.localFilename) ? ` / ${trim(state.localFilename)}` : '')],
-                ['Local routing', localRoutingLabel(state.localRoutingMode)],
+                ['Локальный источник', trim(state.localSource) + (trim(state.localFilename) ? ` / ${trim(state.localFilename)}` : '')],
+                ['Локальная маршрутизация', localRoutingLabel(state.localRoutingMode)],
             );
         }
         if (trim(state.skillsRepoPath)) {
-            rows.push(['Skills repo', trim(state.skillsRepoPath)]);
+            rows.push(['Репозиторий навыков', trim(state.skillsRepoPath)]);
         }
         return rows;
     }
@@ -535,45 +569,45 @@
                     <p class="step-copy">${escapeHtml(STEP_META.providers.copy)}</p>
                 </div>
             </div>
-                <div class="panel-card">
-                    <h3>Keys first, routing second</h3>
-                    <p>${escapeHtml(PROVIDER_PROFILES[selectedProfile]?.providerCopy || '')}</p>
-                </div>
-                <div class="field-grid">
-                    ${PROVIDER_FIELDS.map((field) => providerKeyField({
-                        ...field,
-                        value: state[field.stateKey],
-                    })).join('')}
-                </div>
+            <div class="panel-card">
+                <h3>Сначала ключи, потом маршрутизация</h3>
+                <p>${escapeHtml(PROVIDER_PROFILES[selectedProfile]?.providerCopy || '')}</p>
+            </div>
+            <div class="field-grid">
+                ${PROVIDER_FIELDS.map((field) => providerKeyField({
+                    ...field,
+                    value: state[field.stateKey],
+                })).join('')}
+            </div>
             ${renderClaudeCliControls()}
             <details class="wizard-collapse" ${localSourceOpen ? 'open' : ''}>
                 <summary>
-                    <span>Local model settings</span>
-                    <span class="selection-badge">${hasLocalModel() ? 'Configured' : 'Optional'}</span>
+                    <span>Настройки локальной модели</span>
+                    <span class="selection-badge">${hasLocalModel() ? 'Настроено' : 'Необязательно'}</span>
                 </summary>
                 <div class="wizard-collapse-body">
                     <div class="field-grid">
                         <div class="field">
                             <div class="field-label-row">
-                                <label for="local-preset">Preset</label>
-                                <button class="field-clear" data-clear="local-preset" type="button">Clear</button>
+                                <label for="local-preset">Пресет</label>
+                                <button class="field-clear" data-clear="local-preset" type="button">Очистить</button>
                             </div>
-                                <select id="local-preset">
-                                    <option value="" ${localPreset === '' ? 'selected' : ''}>None</option>
-                                    ${Object.entries(LOCAL_PRESETS).map(([id, preset]) => `<option value="${escapeHtml(id)}" ${localPreset === id ? 'selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
-                                    <option value="custom" ${localPreset === 'custom' ? 'selected' : ''}>Custom source</option>
-                                </select>
-                            <div class="field-note">Most people can ignore this. Open it only if you want local GGUF routing.</div>
+                            <select id="local-preset">
+                                <option value="" ${localPreset === '' ? 'selected' : ''}>Нет</option>
+                                ${Object.entries(LOCAL_PRESETS).map(([id, preset]) => `<option value="${escapeHtml(id)}" ${localPreset === id ? 'selected' : ''}>${escapeHtml(preset.label)}</option>`).join('')}
+                                <option value="custom" ${localPreset === 'custom' ? 'selected' : ''}>Пользовательский источник</option>
+                            </select>
+                            <div class="field-note">Большинству пользователей не нужно. Открывайте только если хотите локальную GGUF маршрутизацию.</div>
                         </div>
                         <div class="field">
-                                <div class="field-label-row"><label>Local routing</label></div>
-                                <div class="selection-row">
-                                    ${LOCAL_ROUTING_MODES.map((mode) => `<button class="selection-pill ${state.localRoutingMode === mode.value ? 'active' : ''}" data-local-mode="${escapeHtml(mode.value)}" type="button">${escapeHtml(mode.buttonLabel || mode.label)}</button>`).join('')}
-                                </div>
-                                <div class="field-note">Ignored unless a local model source is configured below.</div>
+                            <div class="field-label-row"><label>Локальная маршрутизация</label></div>
+                            <div class="selection-row">
+                                ${LOCAL_ROUTING_MODES.map((mode) => `<button class="selection-pill ${state.localRoutingMode === mode.value ? 'active' : ''}" data-local-mode="${escapeHtml(mode.value)}" type="button">${escapeHtml(mode.buttonLabel || mode.label)}</button>`).join('')}
                             </div>
-                            ${LOCAL_FIELDS.map(localInputField).join('')}
+                            <div class="field-note">Игнорируется, если источник локальной модели не настроен ниже.</div>
                         </div>
+                        ${LOCAL_FIELDS.map(localInputField).join('')}
+                    </div>
                     ${renderLocalControls()}
                 </div>
             </details>
@@ -600,62 +634,84 @@
                     <p class="step-copy">${escapeHtml(STEP_META.models.copy)}</p>
                 </div>
             </div>
-                <div class="panel-card">
-                    <h3>Current profile</h3>
-                    <p>${escapeHtml(PROVIDER_PROFILES[profile]?.modelCopy || '')}</p>
-                </div>
-                <div class="grid two">
-                    ${MODEL_SLOTS.map((slot) => modelSuggestionField({
-                        id: slot.inputId,
-                        label: slot.label,
-                        value: state[slot.stateKey],
-                        note: slot.note,
-                    })).join('')}
-                </div>
-            <div class="wizard-inline-note">Direct providers use <code>openai::gpt-5.5</code>, <code>cloudru::zai-org/GLM-4.7</code>, and <code>anthropic::claude-sonnet-4-6</code>. Plain <code>openai/...</code> or <code>anthropic/...</code> stays router-style by design.</div>
+            <div class="panel-card">
+                <h3>Текущий профиль</h3>
+                <p>${escapeHtml(
+                    activeProviderProfile() === 'openai'
+                        ? 'Обнаружена конфигурация только OpenAI. Значения по умолчанию явные и официальные.'
+                        : activeProviderProfile() === 'cloudru'
+                            ? 'Обнаружена конфигурация только Cloud.ru. Значения по умолчанию используют явные ID моделей cloudru::.'
+                        : activeProviderProfile() === 'anthropic'
+                            ? 'Обнаружена конфигурация только Anthropic. Значения по умолчанию явные и официальные.'
+                        : activeProviderProfile() === 'direct-multi'
+                                ? 'Настроено несколько прямых провайдеров. Начните здесь, затем при необходимости распределите слоты моделей между ними.'
+                                : activeProviderProfile() === 'local'
+                                    ? 'Обнаружена только-локальная конфигурация. Проверьте значения моделей и локальную маршрутизацию перед запуском.'
+                                    : 'Маршрутизация в стиле OpenRouter остаётся активной. ID провайдеров без префикса, такие как openai/gpt-5.5 или anthropic/claude-sonnet-4.6, продолжают маршрутизироваться через OpenRouter.'
+                )}</p>
+            </div>
+            <div class="grid two">
+                ${modelSuggestionField({ id: 'main-model', label: 'Основная модель', value: state.mainModel, note: 'Основная для рассуждений и длинных задач.' })}
+                ${modelSuggestionField({ id: 'code-model', label: 'Модель кода', value: state.codeModel, note: 'Для задач с большим количеством инструментов.' })}
+                ${modelSuggestionField({ id: 'light-model', label: 'Лёгкая модель', value: state.lightModel, note: 'Быстрые резюме и лёгкие задачи.' })}
+                ${modelSuggestionField({ id: 'fallback-model', label: 'Запасная модель', value: state.fallbackModel, note: 'Используется, если основная модель недоступна.' })}
+            </div>
+            <div class="wizard-inline-note">Прямые провайдеры используют <code>openai::gpt-5.5</code>, <code>cloudru::zai-org/GLM-4.7</code> и <code>anthropic::claude-sonnet-4-6</code>. Простые значения <code>openai/...</code> или <code>anthropic/...</code> остаются в стиле роутера по замыслу.</div>
         `;
     }
 
     function renderReviewModeStep() {
         const runtimeMode = trim(state.runtimeMode) || 'advanced';
         const runtimeModeCopy = HOST_MODE === 'desktop'
-            ? 'Separate axis from review enforcement. This first-run choice becomes the boot baseline before Ouroboros starts; later elevation requires native launcher confirmation.'
-            : 'Separate axis from review enforcement. Web/Docker onboarding saves this through the owner endpoint; the selected mode becomes active after restart.';
+            ? 'Отдельная ось от режима проверки. Этот первоначальный выбор становится базовым при загрузке до запуска Ouroboros; последующее повышение требует нативного подтверждения лаунчера.'
+            : 'Отдельная ось от режима проверки. Веб/Docker-настройка сохраняет это через owner-эндпоинт; выбранный режим активируется после перезапуска.';
+        const disabledAttr = '';
         return `
             <div class="step-header">
                 <div>
                     <h2 class="step-title">${escapeHtml(STEP_META.review_mode.title)}</h2>
                     <p class="step-copy">${escapeHtml(STEP_META.review_mode.copy)}</p>
                 </div>
-                </div>
-                <div class="wizard-choice-grid">
-                    ${REVIEW_MODES.map((mode) => `
-                        <button type="button" class="wizard-choice ${escapeHtml(mode.className || mode.value)} ${state.reviewEnforcement === mode.value ? 'active' : ''}" data-review-mode="${escapeHtml(mode.value)}">
-                            <span class="tone">${escapeHtml(mode.tone)}</span>
-                            <h3>${escapeHtml(mode.label)}</h3>
-                            <p>${escapeHtml(mode.copy)}</p>
-                        </button>
-                    `).join('')}
-                </div>
+            </div>
+            <div class="wizard-choice-grid">
+                <button type="button" class="wizard-choice advisory ${state.reviewEnforcement === 'advisory' ? 'active' : ''}" data-review-mode="advisory">
+                    <span class="tone">Гибкий</span>
+                    <h3>Рекомендательный</h3>
+                    <p>Быстрее и дешевле. Проверка всё равно выполняется, но вы сами решаете, что делать с замечаниями. Лучший выбор, когда важна скорость итераций.</p>
+                </button>
+                <button type="button" class="wizard-choice blocking ${state.reviewEnforcement === 'blocking' ? 'active' : ''}" data-review-mode="blocking">
+                    <span class="tone">Строгий</span>
+                    <h3>Блокирующий</h3>
+                    <p>Медленнее и дороже, но намного безопаснее. Критические замечания останавливают коммиты, что значительно снижает риск постепенной деградации кода.</p>
+                </button>
+            </div>
             <div class="panel-card runtime-mode-card">
-                <h3>Runtime mode</h3>
-                    <p class="field-note">${escapeHtml(runtimeModeCopy)}</p>
-                    <div class="wizard-choice-grid three">
-                        ${RUNTIME_MODES.map((mode) => `
-                            <button type="button" class="wizard-choice ${escapeHtml(mode.className || mode.value)} ${runtimeMode === mode.value ? 'active' : ''}" data-runtime-mode="${escapeHtml(mode.value)}">
-                                <span class="tone">${escapeHtml(mode.tone)}</span>
-                                <h3>${escapeHtml(mode.label)}</h3>
-                                <p>${escapeHtml(mode.copy)}</p>
-                            </button>
-                        `).join('')}
-                    </div>
+                <h3>Режим среды выполнения</h3>
+                <p class="field-note">${escapeHtml(runtimeModeCopy)}</p>
+                <div class="wizard-choice-grid three">
+                    <button type="button" class="wizard-choice light ${runtimeMode === 'light' ? 'active' : ''}" data-runtime-mode="light"${disabledAttr}>
+                        <span class="tone">Безопаснее</span>
+                        <h3>Light</h3>
+                        <p>Самомодификация основного репозитория отключена. Лучший вариант для знакомства с Ouroboros или использования как чистого ассистента.</p>
+                    </button>
+                    <button type="button" class="wizard-choice advanced ${runtimeMode === 'advanced' ? 'active' : ''}" data-runtime-mode="advanced"${disabledAttr}>
+                        <span class="tone">По умолчанию</span>
+                        <h3>Advanced</h3>
+                        <p>Самомодификация эволюционного слоя разрешена (текущее поведение). Защищённые файлы ядра/контрактов/релизов охраняются в режиме Advanced.</p>
+                    </button>
+                    <button type="button" class="wizard-choice pro ${runtimeMode === 'pro' ? 'active' : ''}" data-runtime-mode="pro"${disabledAttr}>
+                        <span class="tone">Расширенный</span>
+                        <h3>Pro</h3>
+                        <p>Прямой режим защищённых поверхностей. Редактирование защищённых файлов ядра/контрактов/релизов разрешено, но коммиты по-прежнему проходят через триаду и проверку области.</p>
+                    </button>
+                </div>
                 <div class="field">
                     <div class="field-label-row">
-                        <label for="skills-repo-path">External skills repo (optional)</label>
-                        <button class="field-clear" data-clear="skills-repo-path" type="button">Clear</button>
+                        <label for="skills-repo-path">Внешний репозиторий навыков (необязательно)</label>
+                        <button class="field-clear" data-clear="skills-repo-path" type="button">Очистить</button>
                     </div>
-                    <input id="skills-repo-path" type="text" placeholder="~/Ouroboros/skills or /absolute/path/to/skills" value="${escapeHtml(state.skillsRepoPath || '')}">
-                    <div class="field-note">Optional. Extra discovery root on top of the in-data-plane <code>data/skills/{native,clawhub,external}/</code> tree. Leave empty if you do not maintain your own skills checkout — Ouroboros never clones/pulls this directory.</div>
+                    <input id="skills-repo-path" type="text" placeholder="~/Ouroboros/skills или /абсолютный/путь/к/навыкам" value="${escapeHtml(state.skillsRepoPath || '')}">
+                    <div class="field-note">Необязательно. Дополнительный корень поиска поверх дерева <code>data/skills/{native,clawhub,external}/</code>. Оставьте пустым, если не поддерживаете собственную копию навыков — Ouroboros никогда не клонирует/не обновляет эту директорию.</div>
                 </div>
             </div>
         `;
@@ -668,21 +724,21 @@
                     <h2 class="step-title">${escapeHtml(STEP_META.budget.title)}</h2>
                     <p class="step-copy">${escapeHtml(STEP_META.budget.copy)}</p>
                 </div>
-                </div>
-                <div class="grid two">
-                    ${BUDGET_FIELDS.map((field) => `
-                        <div class="panel-card">
-                            <h3>${escapeHtml(field.title)}</h3>
-                            <div class="field">
-                                <label for="${escapeHtml(field.inputId)}">${escapeHtml(field.label)}</label>
-                                <input id="${escapeHtml(field.inputId)}" type="number" min="${escapeHtml(field.min || '0.01')}" step="${escapeHtml(field.step || 'any')}" value="${escapeHtml(state[field.stateKey])}">
-                                <div class="field-note">${escapeHtml(field.note)}</div>
-                            </div>
+            </div>
+            <div class="grid two">
+                ${BUDGET_FIELDS.map((field) => `
+                    <div class="panel-card">
+                        <h3>${escapeHtml(field.title)}</h3>
+                        <div class="field">
+                            <label for="${escapeHtml(field.inputId)}">${escapeHtml(field.label)}</label>
+                            <input id="${escapeHtml(field.inputId)}" type="number" min="${escapeHtml(field.min || '0.01')}" step="${escapeHtml(field.step || 'any')}" value="${escapeHtml(state[field.stateKey])}">
+                            <div class="field-note">${escapeHtml(field.note)}</div>
                         </div>
-                    `).join('')}
-                </div>
-            `;
-        }
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
 
     function renderSummaryStep() {
         const summary = summaryRows().map(([label, value]) => `
@@ -717,7 +773,7 @@
             const meta = STEP_META[stepId];
             return `
                 <div class="wizard-step ${active ? 'active' : ''} ${done ? 'done' : ''}">
-                    <div class="wizard-step-index">Step ${index + 1}</div>
+                    <div class="wizard-step-index">Шаг ${index + 1}</div>
                     <p class="wizard-step-title">${escapeHtml(meta.title)}</p>
                     <p class="wizard-step-copy">${escapeHtml(meta.railCopy || '')}</p>
                 </div>
@@ -729,16 +785,16 @@
         const meta = STEP_META[state.currentStep];
         const index = STEP_ORDER.indexOf(state.currentStep);
         const nextLabel = state.currentStep === 'summary'
-            ? (state.saving ? 'Saving...' : 'Start Ouroboros')
-            : 'Continue';
+            ? (state.saving ? 'Сохранение...' : 'Запустить Ouroboros')
+            : 'Продолжить';
         root.innerHTML = `
             <div class="wizard-shell">
                 <div class="wizard-header">
                     <div>
                         <h1 class="wizard-title">Ouroboros</h1>
-                        <p class="wizard-subtitle">Shared desktop and web onboarding with the same model, review, and budget flow in both hosts.</p>
+                        <p class="wizard-subtitle">Единая настройка для десктопа и веба с одинаковым потоком выбора модели, проверки и бюджета.</p>
                     </div>
-                    <div class="wizard-badge">Step ${index + 1} of ${STEP_ORDER.length}</div>
+                    <div class="wizard-badge">Шаг ${index + 1} из ${STEP_ORDER.length}</div>
                 </div>
                 <div class="wizard-steps">${stepCards()}</div>
                 <div class="wizard-content">
@@ -746,7 +802,7 @@
                     <div class="wizard-footer">
                         <div class="footer-copy">${escapeHtml(meta.footer)}</div>
                         <div class="footer-actions">
-                            <button class="btn btn-secondary" id="back-btn" type="button" ${index === 0 || state.saving ? 'disabled' : ''}>Back</button>
+                            <button class="btn btn-secondary" id="back-btn" type="button" ${index === 0 || state.saving ? 'disabled' : ''}>Назад</button>
                             <button class="btn btn-primary" id="next-btn" type="button" ${nextButtonShouldBeDisabled() ? 'disabled' : ''}>${escapeHtml(nextLabel)}</button>
                         </div>
                     </div>
@@ -863,7 +919,7 @@
             document.getElementById('wizard-local-start')?.addEventListener('click', async () => {
                 const body = readLocalModelBody();
                 if (!body.source) {
-                    state.error = 'Enter a local model source before starting the local runtime.';
+                    state.error = 'Укажите источник локальной модели перед запуском локальной среды.';
                     render();
                     return;
                 }
@@ -877,19 +933,19 @@
                     const data = await resp.json().catch(() => ({}));
                     if (resp.status === 412 && data.error === 'runtime_missing') {
                         setLocalTestResult(
-                            'Local runtime (llama-cpp-python) is not installed.\n' +
-                            'Go to Settings → Advanced → Local Model Runtime\n' +
-                            'and click "Install Local Runtime".\n\n' +
-                            'Manual: ' + (data.hint || 'pip install llama-cpp-python[server]'),
+                            'Локальная среда (llama-cpp-python) не установлена.\n' +
+                            'Перейдите в Настройки → Расширенные → Локальная среда выполнения модели\n' +
+                            'и нажмите «Установить локальную среду».\n\n' +
+                            'Вручную: ' + (data.hint || 'pip install llama-cpp-python[server]'),
                             'error'
                         );
                     } else if (data.error) {
-                        setLocalTestResult(`Start failed: ${data.error}`, 'error');
+                        setLocalTestResult(`Ошибка запуска: ${data.error}`, 'error');
                     } else {
                         updateLocalStatus();
                     }
                 } catch (error) {
-                    setLocalTestResult(`Start failed: ${error.message}`, 'error');
+                    setLocalTestResult(`Ошибка запуска: ${error.message}`, 'error');
                 }
             });
             document.getElementById('wizard-local-stop')?.addEventListener('click', async () => {
@@ -897,27 +953,27 @@
                     await apiRequest('/api/local-model/stop', { method: 'POST' });
                     updateLocalStatus();
                 } catch (error) {
-                    setLocalTestResult(`Stop failed: ${error.message}`, 'error');
+                    setLocalTestResult(`Ошибка остановки: ${error.message}`, 'error');
                 }
             });
             document.getElementById('wizard-local-test')?.addEventListener('click', async () => {
-                setLocalTestResult('Running tests...', 'muted');
+                setLocalTestResult('Выполняется тестирование...', 'muted');
                 try {
                     const result = await apiRequest('/api/local-model/test', { method: 'POST' });
                     const lines = [];
-                    lines.push(`${result.chat_ok ? '✓' : '✗'} Basic chat${result.tokens_per_sec ? ` (${result.tokens_per_sec} tok/s)` : ''}`);
-                    lines.push(`${result.tool_call_ok ? '✓' : '✗'} Tool calling`);
+                    lines.push(`${result.chat_ok ? '✓' : '✗'} Базовый чат${result.tokens_per_sec ? ` (${result.tokens_per_sec} tok/s)` : ''}`);
+                    lines.push(`${result.tool_call_ok ? '✓' : '✗'} Вызов инструментов`);
                     if (result.details && !result.success) lines.push(result.details);
                     setLocalTestResult(lines.join('\n'), result.success ? 'ok' : 'warn');
                 } catch (error) {
-                    setLocalTestResult(`Test failed: ${error.message}`, 'error');
+                    setLocalTestResult(`Тест не пройден: ${error.message}`, 'error');
                 }
             });
         }
         document.getElementById('wizard-claude-install')?.addEventListener('click', async () => {
             state.claudeCliBusy = true;
             state.claudeCliTone = 'muted';
-            state.claudeCliStatusText = 'Repairing Claude runtime...';
+            state.claudeCliStatusText = 'Восстановление среды Claude...';
             renderClaudeCliStatus();
             try {
                 applyClaudeCliStatus(await claudeCliStartInstall());
@@ -927,7 +983,7 @@
                 state.claudeCliStatus = 'error';
                 state.claudeCliError = String(error?.message || error || '');
                 state.claudeCliTone = 'error';
-                state.claudeCliStatusText = `Claude runtime repair failed: ${state.claudeCliError}`;
+                state.claudeCliStatusText = `Ошибка восстановления среды Claude: ${state.claudeCliError}`;
                 renderClaudeCliStatus();
             }
         });
@@ -1070,7 +1126,7 @@
             throw new Error('Desktop onboarding bridge is unavailable.');
         }
         const result = await window.pywebview.api.save_wizard(payload);
-        if (result !== 'ok') throw new Error(result || 'Failed to save onboarding settings.');
+        if (result !== 'ok') throw new Error(result || 'Не удалось сохранить настройки онбординга.');
         return result;
     }
 
@@ -1105,7 +1161,7 @@
             await saveWizardPayload(payload);
         } catch (error) {
             state.saving = false;
-            state.error = String(error?.message || error || 'Failed to save onboarding settings.');
+            state.error = String(error?.message || error || 'Не удалось сохранить настройки онбординга.');
             render();
         }
     }

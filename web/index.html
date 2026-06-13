@@ -1,46 +1,141 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#eff5fb">
+    <meta name="color-scheme" content="light">
+    <meta name="description" content="Ouroboros — самосовершенствующийся ИИ-агент">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Ouroboros">
     <title>Ouroboros</title>
+    <link rel="manifest" href="/manifest.webmanifest">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/settings.css">
-    <link rel="icon" href="/static/favicon.png" type="image/png">
+    <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+    <link rel="icon" href="/static/icons/favicon-16.png" type="image/png" sizes="16x16">
+    <link rel="icon" href="/static/icons/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="/static/icons/favicon-48.png" type="image/png" sizes="48x48">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" sizes="180x180">
     <script src="/static/chart.umd.min.js"></script>
     <script src="/static/marked.min.js"></script>
     <script src="/static/purify.min.js"></script>
 </head>
 <body>
+    <!-- Mobile-only top bar (menu | title) -->
+    <header id="mobile-top-bar">
+        <!-- Sub-page back button (shown instead of menu when not on chat) -->
+        <button id="mobile-back-btn" class="mobile-top-btn" type="button" aria-label="Назад">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071C13.0976 19.3166 13.0976 18.6834 12.7071 18.2929L7.41421 13H19C19.5523 13 20 12.5523 20 12C20 11.4477 19.5523 11 19 11H7.41421L12.7071 5.70711C13.0976 5.31658 13.0976 4.68342 12.7071 4.29289C12.3166 3.90237 11.6834 3.90237 11.2929 4.29289L4.29361 11.2922C4.29119 11.2946 4.28879 11.297 4.2864 11.2995C4.1099 11.4792 4.0008 11.7254 4 11.997C4 11.998 4 11.999 4 12C4 12.001 4 12.002 4 12.003C4.00079 12.2699 4.09963 12.5104 4.2864 12.7005C4.28875 12.703 4.29112 12.7053 4.29351 12.7077M4.29351 12.7077L11.2929 19.7071L4.29351 12.7077Z" fill="#8AA0BA"/>
+            </svg>
+        </button>
+        <span id="mobile-page-title" class="mobile-page-title"></span>
+
+        <button id="mobile-nav-open" class="mobile-top-btn" type="button" aria-label="Открыть навигацию" aria-expanded="false" aria-controls="mobile-left-drawer">
+            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 17C12 16.4477 12.4264 16 12.9524 16H31.0476C31.5736 16 32 16.4477 32 17C32 17.5523 31.5736 18 31.0476 18H12.9524C12.4264 18 12 17.5523 12 17ZM12 27C12 26.4477 12.4264 26 12.9524 26H31.0476C31.5736 26 32 26.4477 32 27C32 27.5523 31.5736 28 31.0476 28H12.9524C12.4264 28 12 27.5523 12 27Z" fill="#8AA0BA"/>
+            </svg>
+        </button>
+
+    </header>
+    <!-- Backdrop for mobile drawers -->
+    <div id="mobile-drawer-backdrop" aria-hidden="true"></div>
+    <!-- Mobile left drawer: unified navigation -->
+    <aside id="mobile-left-drawer" aria-label="Виджеты">
+        <div class="mobile-left-head">
+            <span class="mobile-left-title">Меню</span>
+            <button id="mobile-left-close" class="mobile-drawer-close" type="button" aria-label="Закрыть">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M2 2l12 12M14 2L2 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+        <div id="mobile-widgets-host" class="mobile-widgets-host">
+            <button class="mobile-left-navbtn active" type="button" data-left-page="chat">
+                <img src="/static/icons/chat.svg" alt="" width="20" height="20" aria-hidden="true">
+                <span>Чат</span>
+            </button>
+        </div>
+        <div class="mobile-profile-host">
+            <button class="mobile-profile-navbtn" type="button" data-profile-page="files">
+                <img src="/static/icons/files.svg" alt="" width="24" height="24" aria-hidden="true">
+                <span>Файлы</span>
+            </button>
+            <button class="mobile-profile-navbtn" type="button" data-profile-page="dashboard">
+                <img src="/static/icons/logs.svg" alt="" width="24" height="24" aria-hidden="true">
+                <span>Логи</span>
+            </button>
+            <button class="mobile-profile-navbtn" type="button" data-profile-page="skills">
+                <img src="/static/icons/skills.svg" alt="" width="24" height="24" aria-hidden="true">
+                <span>Навыки</span>
+            </button>
+            <button class="mobile-profile-navbtn" type="button" data-profile-page="settings">
+                <img src="/static/icons/settings.svg" alt="" width="24" height="24" aria-hidden="true">
+                <span>Настройки</span>
+            </button>
+            <div class="mobile-profile-budget-row">
+                <button class="mobile-profile-navbtn" type="button" id="mobile-budget-row-btn">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect x="2" y="5" width="20" height="14" rx="3" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M2 9h20" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M6 14h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    <span>Бюджет</span>
+                </button>
+                <span class="chat-budget-pill mobile-budget-mirror" id="mobile-budget-pill-mirror" tabindex="0" title="Бюджет">
+                    <span class="chat-budget-text" id="mobile-budget-text-mirror">$0 / $0</span>
+                    <span class="chat-budget-bar">
+                        <span class="chat-budget-bar-fill" id="mobile-budget-fill-mirror"></span>
+                    </span>
+                </span>
+            </div>
+        </div>
+    </aside>
     <div id="app">
         <nav id="nav-rail">
             <div id="nav-logo"></div>
-            <button class="nav-btn active" data-page="chat" title="Chat">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/></svg>
-                <span>Chat</span>
+            <button id="nav-collapse-toggle" type="button" aria-label="Свернуть боковую панель" aria-expanded="true">
+                <span class="nav-brand-left" aria-hidden="true">
+                    <img class="nav-brand-mark" src="/static/icons/nav-avatar.png" alt="">
+                </span>
+                <img class="nav-collapse-icon" src="/static/icons/panel-arrow-left.svg" alt="">
             </button>
-            <button class="nav-btn" data-page="files" title="Files">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>
-                <span>Files</span>
+            <button class="nav-btn active" data-page="chat" title="Чат">
+                <img class="nav-icon" src="/static/icons/chat.svg" alt="">
+                <span>Чат</span>
+            </button>
+            <button class="nav-btn" data-page="files" title="Файлы">
+                <img class="nav-icon" src="/static/icons/files.svg" alt="">
+                <span>Файлы</span>
             </button>
 
-            <button class="nav-btn" data-page="skills" title="Skills">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
-                <span>Skills</span>
+            <button class="nav-btn" data-page="skills" title="Навыки">
+                <img class="nav-icon" src="/static/icons/skills.svg" alt="">
+                <span>Навыки</span>
             </button>
-            <button class="nav-btn" data-page="widgets" title="Widgets">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                <span>Widgets</span>
+            <button class="nav-btn" data-page="dashboard" title="Дашборд">
+                <img class="nav-icon" src="/static/icons/logs.svg" alt="">
+                <span>Дашборд</span>
             </button>
-            <button class="nav-btn" data-page="dashboard" title="Dashboard">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
-                <span>Dashboard</span>
+            <button class="nav-btn" data-page="settings" title="Настройки">
+                <img class="nav-icon" src="/static/icons/settings.svg" alt="">
+                <span>Настройки</span>
             </button>
-            <button class="nav-btn" data-page="settings" title="Settings">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>
-                <span>Settings</span>
-            </button>
+            <div class="nav-section-divider"></div>
+            <section id="nav-widgets-section" class="nav-widgets-section" aria-label="Виджеты">
+                <div class="nav-section-title">Виджеты</div>
+                <div id="nav-widget-list" class="nav-widget-list"></div>
+            </section>
             <div class="nav-spacer"></div>
+            <span class="chat-budget-pill nav-budget-pill" id="chat-budget-pill" role="button" tabindex="0" title="Открыть управление бюджетом" aria-label="Открыть управление бюджетом">
+                <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
+                <span class="chat-budget-bar">
+                    <span class="chat-budget-bar-fill" id="chat-budget-bar-fill"></span>
+                </span>
+            </span>
             <span id="nav-version"></span>
         </nav>
         <div id="divider"></div>
@@ -50,7 +145,7 @@
     </div>
     <div id="reconnect-overlay">
         <div class="spinner"></div>
-        <div>Reconnecting to Ouroboros...</div>
+        <div>Переподключение к Ouroboros...</div>
     </div>
     <script type="module" src="/static/app.js"></script>
 </body>

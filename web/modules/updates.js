@@ -12,35 +12,35 @@ export function initUpdates({ mount, state }) {
             <section class="updates-card" id="updates-status-card">
                 <div class="updates-card-head">
                     <div class="updates-card-head-main">
-                        <div class="section-title">Official Updates</div>
-                        <div class="updates-summary" id="updates-summary">Loading update status...</div>
+                        <div class="section-title">Официальные обновления</div>
+                        <div class="updates-summary" id="updates-summary">Загрузка статуса обновлений...</div>
                     </div>
                     <div class="updates-head-actions">
-                        <span class="status-badge offline" id="updates-badge">Idle</span>
-                        <button class="btn btn-default btn-sm" id="btn-update-check">Check for updates</button>
+                        <span class="status-badge offline" id="updates-badge">Ожидание</span>
+                        <button class="btn btn-default btn-sm" id="btn-update-check">Проверить обновления</button>
                     </div>
                 </div>
                 <div class="updates-meta" id="updates-meta"></div>
                 <div class="updates-actions">
-                    <button class="btn btn-primary" id="btn-update-apply" disabled>Update Now</button>
+                    <button class="btn btn-primary" id="btn-update-apply" disabled>Обновить сейчас</button>
                 </div>
             </section>
             <section class="updates-card">
                 <div class="evo-versions-header">
                     <div id="updates-current" class="evo-versions-branch"></div>
-                    <button class="btn btn-primary" id="updates-promote">Promote to Stable</button>
+                    <button class="btn btn-primary" id="updates-promote">Сделать стабильной</button>
                 </div>
                 <div class="evo-versions-cols">
                     <div class="evo-versions-col">
-                        <h3 class="section-title">Local Recovery: Recent Commits</h3>
+                        <h3 class="section-title">Локальное восстановление: последние коммиты</h3>
                         <div id="updates-commits" class="log-scroll evo-versions-list"></div>
                     </div>
                     <div class="evo-versions-col">
-                        <h3 class="section-title">Official Releases</h3>
+                        <h3 class="section-title">Официальные релизы</h3>
                         <div id="updates-official-tags" class="log-scroll evo-versions-list"></div>
                     </div>
                     <div class="evo-versions-col">
-                        <h3 class="section-title">Local Recovery: Local Tags</h3>
+                        <h3 class="section-title">Локальное восстановление: локальные теги</h3>
                         <div id="updates-tags" class="log-scroll evo-versions-list"></div>
                     </div>
                 </div>
@@ -78,24 +78,24 @@ export function initUpdates({ mount, state }) {
         const unmanaged = data.managed === false
             || (Array.isArray(data.warnings) && data.warnings.includes('managed_updates_unavailable'));
         if (unmanaged) {
-            summary.textContent = 'Managed updates are unavailable for this checkout.';
+            summary.textContent = 'Управляемые обновления недоступны для этого репозитория.';
             meta.innerHTML = `
-                <span class="evo-runtime-chip"><strong>Mode:</strong> source checkout</span>
-                <span class="evo-runtime-chip"><strong>Action:</strong> use git or install a launcher-managed build</span>
+                <span class="evo-runtime-chip"><strong>Режим:</strong> исходники</span>
+                <span class="evo-runtime-chip"><strong>Действие:</strong> используйте git или установите управляемую сборку</span>
             `;
             applyBtn.disabled = true;
             applyBtn.dataset.safe = '0';
-            applyBtn.textContent = 'Unavailable';
-            setBadge('offline', 'Unavailable');
+            applyBtn.textContent = 'Недоступно';
+            setBadge('offline', 'Недоступно');
             return;
         }
         if (Array.isArray(data.warnings) && data.warnings.includes('official_status_requires_check')) {
-            summary.textContent = 'Click Check for updates to refresh official update status.';
-            meta.innerHTML = '<span class="evo-runtime-chip"><strong>Official repo:</strong> joi-lab/ouroboros-desktop</span>';
+            summary.textContent = 'Нажмите «Проверить обновления», чтобы обновить статус официальных обновлений.';
+            meta.innerHTML = '<span class="evo-runtime-chip"><strong>Официальный репозиторий:</strong> joi-lab/ouroboros-desktop</span>';
             applyBtn.disabled = true;
             applyBtn.dataset.safe = '0';
-            applyBtn.textContent = 'Check Required';
-            setBadge('offline', 'Not checked');
+            applyBtn.textContent = 'Требуется проверка';
+            setBadge('offline', 'Не проверялось');
             return;
         }
         const currentVersion = data.current_version || 'unknown';
@@ -106,23 +106,23 @@ export function initUpdates({ mount, state }) {
         const canUpdate = Boolean(data.available);
         const safe = Boolean(data.safe_to_apply);
         summary.textContent = canUpdate
-            ? `Update available: ${currentVersion} (${currentSha}) -> ${latestVersion} (${latestSha})`
-            : `Ouroboros is up to date at ${currentVersion} (${currentSha}).`;
+            ? `Доступно обновление: ${currentVersion} (${currentSha}) -> ${latestVersion} (${latestSha})`
+            : `Ouroboros актуален: ${currentVersion} (${currentSha}).`;
         meta.innerHTML = [
-            `<span class="evo-runtime-chip"><strong>Official repo:</strong> joi-lab/ouroboros-desktop</span>`,
-            `<span class="evo-runtime-chip"><strong>Remote ref:</strong> ${escapeHtml(data.remote || 'managed')}/${escapeHtml(data.remote_branch || '')}</span>`,
-            `<span class="evo-runtime-chip"><strong>Divergence:</strong> ${escapeHtml(divergenceText(data))}</span>`,
-            `<span class="evo-runtime-chip"><strong>Latest:</strong> ${escapeHtml(latestMsg)}</span>`,
+            `<span class="evo-runtime-chip"><strong>Официальный репозиторий:</strong> joi-lab/ouroboros-desktop</span>`,
+            `<span class="evo-runtime-chip"><strong>Ветка:</strong> ${escapeHtml(data.remote || 'managed')}/${escapeHtml(data.remote_branch || '')}</span>`,
+            `<span class="evo-runtime-chip"><strong>Расхождение:</strong> ${escapeHtml(divergenceText(data))}</span>`,
+            `<span class="evo-runtime-chip"><strong>Последнее:</strong> ${escapeHtml(latestMsg)}</span>`,
         ].join('');
         applyBtn.disabled = !canUpdate;
         applyBtn.dataset.safe = safe ? '1' : '0';
-        applyBtn.textContent = !canUpdate ? 'No Update Available' : (safe ? 'Update Now' : 'Update with Options');
-        setBadge(canUpdate ? (safe ? 'online' : 'starting') : 'offline', canUpdate ? 'Available' : 'Current');
+        applyBtn.textContent = !canUpdate ? 'Нет обновлений' : (safe ? 'Обновить сейчас' : 'Обновить с параметрами');
+        setBadge(canUpdate ? (safe ? 'online' : 'starting') : 'offline', canUpdate ? 'Доступно' : 'Актуально');
     }
 
     async function loadStatus({ fetchRemote = false } = {}) {
         checkBtn.disabled = true;
-        setBadge('starting', fetchRemote ? 'Checking...' : 'Loading...');
+        setBadge('starting', fetchRemote ? 'Проверка...' : 'Загрузка...');
         try {
             const resp = await apiFetch(fetchRemote ? '/api/update/check' : '/api/update/status', {
                 method: fetchRemote ? 'POST' : 'GET',
@@ -133,10 +133,10 @@ export function initUpdates({ mount, state }) {
             renderStatus(data);
             renderOfficialTags(data.official_tags || []);
         } catch (err) {
-            summary.textContent = `Failed to load update status: ${err.message || err}`;
+            summary.textContent = `Не удалось загрузить статус обновлений: ${err.message || err}`;
             meta.innerHTML = '';
             applyBtn.disabled = true;
-            setBadge('error', 'Error');
+            setBadge('error', 'Ошибка');
         } finally {
             checkBtn.disabled = false;
         }
@@ -151,7 +151,7 @@ export function initUpdates({ mount, state }) {
             <span class="log-type tools evo-versions-row-label">${escapeHtml(labelText)}</span>
             <span class="log-ts">${escapeHtml(date)}</span>
             <span class="log-msg evo-versions-row-msg">${msg}</span>
-            <button class="btn btn-danger btn-xs" data-target="${escapeHtml(targetId)}">Restore</button>
+            <button class="btn btn-danger btn-xs" data-target="${escapeHtml(targetId)}">Восстановить</button>
         `;
         row.querySelector('button').addEventListener('click', () => rollback(targetId));
         return row;
@@ -168,7 +168,7 @@ export function initUpdates({ mount, state }) {
             `;
             officialTagsDiv.appendChild(row);
         });
-        if (!tags?.length) officialTagsDiv.innerHTML = '<div class="evo-empty">Check for updates to load official releases.</div>';
+        if (!tags?.length) officialTagsDiv.innerHTML = '<div class="evo-empty">Нажмите «Проверить обновления» для загрузки официальных релизов.</div>';
     }
 
     async function loadVersions() {
@@ -181,22 +181,22 @@ export function initUpdates({ mount, state }) {
             (data.commits || []).forEach((commit) => {
                 commitsDiv.appendChild(renderVersionRow(commit, commit.short_sha || commit.sha?.slice(0, 8), commit.sha));
             });
-            if (!data.commits?.length) commitsDiv.innerHTML = '<div class="evo-empty">No commits found</div>';
+            if (!data.commits?.length) commitsDiv.innerHTML = '<div class="evo-empty">Коммиты не найдены</div>';
             tagsDiv.innerHTML = '';
             (data.tags || []).forEach((tag) => {
                 tagsDiv.appendChild(renderVersionRow(tag, tag.tag, tag.tag));
             });
-            if (!data.tags?.length) tagsDiv.innerHTML = '<div class="evo-empty">No tags found</div>';
+            if (!data.tags?.length) tagsDiv.innerHTML = '<div class="evo-empty">Теги не найдены</div>';
         } catch (err) {
             const msg = `<div class="evo-empty evo-empty-error">Failed to load: ${escapeHtml(err.message || err)}</div>`;
             commitsDiv.innerHTML = msg;
             tagsDiv.innerHTML = msg;
-            current.textContent = 'Branch: unknown';
+            current.textContent = 'Ветка: неизвестна';
         }
     }
 
     async function rollback(target) {
-        if (!confirm(`Roll back to ${target}?\n\nA rescue snapshot of the current state will be saved. The server will restart.`)) return;
+        if (!confirm(`Откатиться к ${target}?\n\nБудет сохранён снимок текущего состояния. Сервер перезапустится.`)) return;
         try {
             const resp = await apiFetch('/api/git/rollback', {
                 method: 'POST',
@@ -205,12 +205,12 @@ export function initUpdates({ mount, state }) {
             });
             const data = await resp.json();
             if (data.status === 'ok') {
-                showToast(`Rollback successful: ${data.message}. Server is restarting...`, 'success');
+                showToast(`Откат выполнен: ${data.message}. Сервер перезапускается...`, 'success');
             } else {
-                showToast(`Rollback failed: ${data.error || 'unknown error'}`, 'error');
+                showToast(`Откат не удался: ${data.error || 'неизвестная ошибка'}`, 'error');
             }
         } catch (err) {
-            showToast('Rollback failed: ' + (err.message || err), 'error');
+            showToast('Откат не удался: ' + (err.message || err), 'error');
         }
     }
 
@@ -221,13 +221,13 @@ export function initUpdates({ mount, state }) {
         if (!safe) {
             const localBits = divergenceText(latestStatus);
             const proceed = confirm(
-                `This update will replace the active managed checkout with the selected official version.\n\nLocal state: ${localBits}\n\nLocal commits will be preserved on a local-keep-* branch before the active branch moves. Dirty files will be saved in a rescue snapshot. Continue?`,
+                `Это обновление заменит активный управляемый репозиторий выбранной официальной версией.\n\nЛокальное состояние: ${localBits}\n\nЛокальные коммиты будут сохранены в ветке local-keep-*. Изменённые файлы сохранятся в снимке. Продолжить?`,
             );
             if (!proceed) return;
             strategy = latestStatus.ahead ? 'stash' : 'replace';
         }
         applyBtn.disabled = true;
-        applyBtn.textContent = 'Preparing...';
+        applyBtn.textContent = 'Подготовка...';
         try {
             const resp = await apiFetch('/api/update/apply', {
                 method: 'POST',
@@ -236,12 +236,12 @@ export function initUpdates({ mount, state }) {
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-            const keep = data.keep_branch ? ` Local commits preserved as ${data.keep_branch}.` : '';
-            showToast(`Update prepared. Server is restarting.${keep}`, 'success');
+            const keep = data.keep_branch ? ` Локальные коммиты сохранены в ${data.keep_branch}.` : '';
+            showToast(`Обновление подготовлено. Сервер перезапускается.${keep}`, 'success');
         } catch (err) {
-            showToast('Update failed: ' + (err.message || err), 'error');
+            showToast('Обновление не удалось: ' + (err.message || err), 'error');
             applyBtn.disabled = false;
-            applyBtn.textContent = safe ? 'Update Now' : 'Update with Options';
+            applyBtn.textContent = safe ? 'Обновить сейчас' : 'Обновить с параметрами';
         }
     }
 
@@ -251,7 +251,7 @@ export function initUpdates({ mount, state }) {
     });
     applyBtn.addEventListener('click', applyUpdate);
     page.querySelector('#updates-promote').addEventListener('click', async () => {
-        if (!confirm('Promote current ouroboros branch to ouroboros-stable?')) return;
+        if (!confirm('Перевести текущую ветку ouroboros в ouroboros-stable?')) return;
         try {
             const resp = await apiFetch('/api/git/promote', { method: 'POST' });
             const data = await resp.json();

@@ -656,6 +656,16 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     syncSettingsLoadState();
     syncRuntimeModeBridgeState();
     syncAutoGrantBridgeState();
+    window.addEventListener('pywebviewready', () => {
+        syncRuntimeModeBridgeState();
+        syncAutoGrantBridgeState();
+    });
+    [250, 1000, 2500].forEach((delay) => {
+        setTimeout(() => {
+            syncRuntimeModeBridgeState();
+            syncAutoGrantBridgeState();
+        }, delay);
+    });
     reloadSettingsWithFeedback();
 
     if (typeof setBeforePageLeave === 'function') {
@@ -924,7 +934,7 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
         try {
             const res = await apiFetch('/api/reset', { method: 'POST' });
             const data = await res.json();
-            if (data.status === 'ok') alert('Deleted: ' + (data.deleted.join(', ') || 'nothing') + '\nRestarting...');
+            if (data.status === 'ok') alert('Deleted: ' + (data.deleted.join(', ') || 'nothing') + '\nПерезапуск...');
             else alert('Error: ' + (data.error || 'unknown'));
         } catch (e) {
             showToast('Reset failed: ' + e.message, 'error');

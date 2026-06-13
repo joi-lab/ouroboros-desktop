@@ -18,10 +18,10 @@ function pageTemplate() {
     return `
         <section class="page app-page-glass" id="page-widgets">
             ${renderPageHeader({
-                title: 'Widgets',
+                title: 'Виджеты',
                 icon: PAGE_ICONS.widgets,
-                description: 'Reviewed extension UI surfaces live here, separate from the skill catalogue.',
-                actionsHtml: '<button id="widgets-refresh" class="btn btn-default btn-sm">Refresh</button>',
+                description: 'Проверенные интерфейсы расширений отображаются здесь, отдельно от каталога навыков.',
+                actionsHtml: '<button id="widgets-refresh" class="btn btn-default btn-sm">Обновить</button>',
             })}
             <div class="widgets-scroll scroll-fade-y">
                 <div id="widgets-list" class="widgets-list"></div>
@@ -32,7 +32,7 @@ function pageTemplate() {
 
 function renderShell(host, tabs) {
     if (!tabs.length) {
-        host.innerHTML = '<div class="muted">No live widgets yet. Review and enable an extension that registers a UI tab.</div>';
+        host.innerHTML = '<div class="muted">Активных виджетов пока нет. Проверьте и включите расширение с вкладкой пользовательского интерфейса.</div>';
         return;
     }
     host.innerHTML = tabs.map((tab) => {
@@ -53,6 +53,27 @@ function renderShell(host, tabs) {
         </article>
         `;
     }).join('');
+}
+
+function applyWidgetsLayout(list) {
+    applyMasonry(list, { minColumnWidth: Number.MAX_SAFE_INTEGER });
+}
+
+function cleanWidgetRoute(value) {
+    const route = String(value || '').trim().replace(/^\/+/, '');
+    const parts = route.split('/').filter(Boolean);
+    if (!route || route.includes('\\') || parts.some((part) => part === '.' || part === '..')) {
+        return '';
+    }
+    return parts.map(encodeURIComponent).join('/');
+}
+
+function extensionRouteUrl(tab, route, params) {
+    const cleanRoute = cleanWidgetRoute(route);
+    if (!cleanRoute) return '';
+    const base = `/api/extensions/${encodeURIComponent(tab.skill)}/${cleanRoute}`;
+    const query = params instanceof URLSearchParams && String(params) ? `?${params}` : '';
+    return base + query;
 }
 
 function getPath(root, path, fallback = '') {
@@ -900,6 +921,7 @@ export function initWidgets(ctx = {}) {
     let renderGeneration = 0;
     let widgetsVisible = false;
     let widgetsMounted = false;
+    let pendingWidgetKey = '';
     // Last good payload keeps revisits and slow refreshes from blanking the page.
     let lastTabs = null;
     if (ctx.ws && !widgetsWsBridgeBound) {
@@ -909,26 +931,49 @@ export function initWidgets(ctx = {}) {
         });
     }
 
+    function focusWidget(key = '') {
+        const targetKey = String(key || pendingWidgetKey || '').trim();
+        if (!targetKey) {
+            list.classList.remove('widgets-solo-mode');
+            return false;
+        }
+        const card = list.querySelector(`[data-widget-key="${CSS.escape(targetKey)}"]`);
+        if (!card) return false;
+        list.querySelectorAll('.widgets-card.is-focused-from-sidebar').forEach((item) => {
+            item.classList.remove('is-focused-from-sidebar');
+        });
+        card.classList.add('is-focused-from-sidebar');
+        list.classList.add('widgets-solo-mode');
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        pendingWidgetKey = '';
+        return true;
+    }
+
     async function render(force = false) {
         const generation = ++renderGeneration;
         widgetsVisible = true;
-        if (widgetsMounted && !force) return;
+        if (widgetsMounted && !force) {
+            focusWidget();
+            return;
+        }
+        if (!pendingWidgetKey) list.classList.remove('widgets-solo-mode');
         refreshBtn.disabled = true;
         refreshBtn.classList.add('is-loading');
         disposeMountedWidgets();
         if (lastTabs) {
             renderShell(list, lastTabs);
-            applyMasonry(list);
+            applyWidgetsLayout(list);
         } else {
-            list.innerHTML = '<div class="muted">Loading widgets…</div>';
+            list.innerHTML = '<div class="muted">Загрузка виджетов…</div>';
         }
         try {
             const data = await apiClient.extensions();
             if (!widgetsVisible || generation !== renderGeneration) return;
             const tabs = Array.isArray(data.live?.ui_tabs) ? data.live.ui_tabs : [];
             lastTabs = tabs;
+            window.dispatchEvent(new CustomEvent('ouro:widgets-updated', { detail: { tabs } }));
             renderShell(list, tabs);
-            applyMasonry(list);
+            applyWidgetsLayout(list);
             widgetsMounted = true;
             for (const tab of tabs) {
                 if (!widgetsVisible || generation !== renderGeneration) return;
@@ -937,14 +982,15 @@ export function initWidgets(ctx = {}) {
                 if (!card) continue;
                 try {
                     await mountTrackedTab(card, tab);
-                    applyMasonry(list);
+                    applyWidgetsLayout(list);
                 } catch (err) {
                     const mount = card.querySelector('[data-widget-mount]');
                     if (mount) mount.innerHTML = `<div class="skills-load-error">widget failed: ${escapeHtml(err.message || err)}</div>`;
-                    applyMasonry(list);
+                    applyWidgetsLayout(list);
                 }
             }
-            applyMasonry(list);
+            applyWidgetsLayout(list);
+            focusWidget();
         } catch (err) {
             if (!widgetsVisible || generation !== renderGeneration) return;
             // Preserve cached widgets on transient fetch errors.
@@ -970,5 +1016,10 @@ export function initWidgets(ctx = {}) {
             widgetsMounted = false;
             disposeMountedWidgets();
         }
+    });
+    window.addEventListener('ouro:widget-open', (event) => {
+        pendingWidgetKey = String(event.detail?.key || '');
+        widgetsVisible = true;
+        if (!focusWidget()) render();
     });
 }

@@ -1,4 +1,4 @@
-import { jsonPost } from './api_client.js';
+import { apiFetch, jsonPost } from './api_client.js';
 /** MCP settings cards; preserves masked auth tokens until the user edits them. */
 import { escapeHtmlAttr as escapeHtml } from './utils.js';
 
@@ -38,10 +38,6 @@ function notifyChanged() {
     }
 }
 
-function toolCountLabel(count) {
-    return `${count} tool${count === 1 ? '' : 's'}`;
-}
-
 function renderServerCard(server, index) {
     const id = String(server.id ?? '');
     const name = String(server.name ?? '');
@@ -61,16 +57,16 @@ function renderServerCard(server, index) {
     const lastRefreshed = status ? String(status.last_refreshed || '') : '';
     const tools = status && Array.isArray(status.tools) ? status.tools : [];
 
-    let statusBadgeText = 'Not refreshed yet';
+    let statusBadgeText = 'Ещё не обновлялось';
     let statusClass = 'mcp-server-status-muted';
     if (lastError) {
-        statusBadgeText = `Error: ${lastError}`;
+        statusBadgeText = `Ошибка: ${lastError}`;
         statusClass = 'mcp-server-status-danger';
     } else if (toolCount > 0) {
-        statusBadgeText = `${toolCount} tool${toolCount === 1 ? '' : 's'} discovered`;
+        statusBadgeText = `Найдено ${toolCount} инструмент${toolCount === 1 ? '' : (toolCount < 5 ? 'а' : 'ов')}`;
         statusClass = 'mcp-server-status-ok';
     } else if (lastRefreshed) {
-        statusBadgeText = '0 tools discovered';
+        statusBadgeText = 'Инструменты не найдены';
         statusClass = 'mcp-server-status-warn';
     }
 
@@ -97,55 +93,55 @@ function renderServerCard(server, index) {
                 <div class="mcp-server-card-actions">
                     <label class="mcp-server-enabled">
                         <input type="checkbox" data-mcp-field="enabled" ${enabled ? 'checked' : ''}>
-                        <span>Enabled</span>
+                        <span>Включён</span>
                     </label>
-                    <button type="button" class="settings-ghost-btn" data-mcp-test>Test</button>
-                    <button type="button" class="settings-ghost-btn" data-mcp-refresh>Refresh tools</button>
-                    <button type="button" class="settings-ghost-btn mcp-server-remove" data-mcp-remove>Remove</button>
+                    <button type="button" class="settings-ghost-btn" data-mcp-test>Тест</button>
+                    <button type="button" class="settings-ghost-btn" data-mcp-refresh>Обновить инструменты</button>
+                    <button type="button" class="settings-ghost-btn mcp-server-remove" data-mcp-remove>Удалить</button>
                 </div>
             </header>
             <div class="form-grid two">
                 <div class="form-field">
-                    <label>Server ID</label>
+                    <label>ID сервера</label>
                     <input type="text" data-mcp-field="id" value="${escapeHtml(id)}" placeholder="github" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-field">
-                    <label>Display name</label>
+                    <label>Отображаемое имя</label>
                     <input type="text" data-mcp-field="name" value="${escapeHtml(name)}" placeholder="GitHub MCP" autocomplete="off" spellcheck="false">
                 </div>
             </div>
             <div class="form-grid two">
                 <div class="form-field">
-                    <label>Transport</label>
+                    <label>Транспорт</label>
                     <select data-mcp-field="transport">${transportOptions}</select>
                 </div>
                 <div class="form-field">
-                    <label>Server URL</label>
+                    <label>URL сервера</label>
                     <input type="text" data-mcp-field="url" value="${escapeHtml(url)}" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false">
                 </div>
             </div>
             <div class="form-grid two">
                 <div class="form-field">
-                    <label>Auth header</label>
+                    <label>Заголовок авторизации</label>
                     <input type="text" data-mcp-field="auth_header" value="${escapeHtml(authHeader)}" placeholder="Authorization" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-field">
-                    <label>Auth token (optional)</label>
+                    <label>Токен авторизации (необязательно)</label>
                     <div class="secret-input-row">
                         <input type="password" data-mcp-field="auth_token" value="${escapeHtml(authToken)}" placeholder="${escapeHtml(authPlaceholder)}" autocomplete="off" spellcheck="false">
-                        <button type="button" class="settings-ghost-btn" data-mcp-token-toggle>Show</button>
-                        <button type="button" class="settings-ghost-btn" data-mcp-token-clear>Clear</button>
+                        <button type="button" class="settings-ghost-btn" data-mcp-token-toggle>Показать</button>
+                        <button type="button" class="settings-ghost-btn" data-mcp-token-clear>Очистить</button>
                     </div>
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-field">
-                    <label>Allowed tools (optional, comma-separated)</label>
+                    <label>Разрешённые инструменты (необязательно, через запятую)</label>
                     <input type="text" data-mcp-field="allowed_tools" value="${escapeHtml(allowedTools)}" placeholder="search, read_repo" autocomplete="off" spellcheck="false">
                 </div>
             </div>
             <div class="settings-inline-status mcp-server-message" data-mcp-message hidden></div>
-            ${toolsHtml ? `<details class="mcp-tools-disclosure"><summary>Discovered tools</summary>${toolsHtml}</details>` : ''}
+            ${toolsHtml ? `<details class="mcp-tools-disclosure"><summary>Найденные инструменты</summary>${toolsHtml}</details>` : ''}
         </article>
     `;
 }
@@ -207,10 +203,10 @@ function bindCardEvents(card) {
         tokenToggle.addEventListener('click', () => {
             if (tokenInput.type === 'password') {
                 tokenInput.type = 'text';
-                tokenToggle.textContent = 'Hide';
+                tokenToggle.textContent = 'Скрыть';
             } else {
                 tokenInput.type = 'password';
-                tokenToggle.textContent = 'Show';
+                tokenToggle.textContent = 'Показать';
             }
         });
     }
@@ -241,7 +237,7 @@ function bindCardEvents(card) {
             const server = mcpServers[idx];
             if (!server) return;
             testBtn.disabled = true;
-            setMessage('Testing connection...', 'muted');
+            setMessage('Проверка соединения...', 'muted');
             try {
                 // Masked token + server_id lets Test use saved auth with edited URL/transport.
                 const sid = String(server.id || '').trim();
@@ -250,9 +246,10 @@ function bindCardEvents(card) {
                     ? { server_id: sid, server: { ...server } }
                     : { server: serverForTest(server) };
                 const data = await jsonPost('/api/mcp/test', body, { rejectOkFalse: true });
-                setMessage(`Test OK — ${toolCountLabel(Number(data.tool_count || 0))} reported.`, 'ok');
+                const count = Number(data.tool_count || 0);
+                setMessage(`Тест пройден — найдено ${count} инструмент${count === 1 ? '' : (count < 5 ? 'а' : 'ов')}.`, 'ok');
             } catch (err) {
-                setMessage(`Test failed: ${err && err.message ? err.message : err}`, 'danger');
+                setMessage(`Тест не пройден: ${err && err.message ? err.message : err}`, 'danger');
             } finally {
                 testBtn.disabled = false;
             }
@@ -266,17 +263,18 @@ function bindCardEvents(card) {
             if (!server) return;
             const sid = String(server.id || '').trim();
             if (!sid) {
-                setMessage('Save the server (with an ID) before refreshing.', 'warn');
+                setMessage('Сохраните сервер (с ID) перед обновлением.', 'warn');
                 return;
             }
             refreshBtn.disabled = true;
-            setMessage('Refreshing tools...', 'muted');
+            setMessage('Обновление инструментов...', 'muted');
             try {
                 const data = await jsonPost('/api/mcp/refresh', { server_id: sid }, { rejectOkFalse: true });
-                setMessage(`Refreshed — ${Number(data.tool_count || 0)} tools discovered.`, 'ok');
+                const cnt = Number(data.tool_count || 0);
+                setMessage(`Обновлено — найдено ${cnt} инструмент${cnt === 1 ? '' : (cnt < 5 ? 'а' : 'ов')}.`, 'ok');
                 await refreshStatus();
             } catch (err) {
-                setMessage(`Refresh failed: ${err && err.message ? err.message : err}`, 'danger');
+                setMessage(`Ошибка обновления: ${err && err.message ? err.message : err}`, 'danger');
             } finally {
                 refreshBtn.disabled = false;
             }
@@ -297,7 +295,7 @@ function renderAll() {
     const host = document.getElementById('mcp-servers-list');
     if (!host) return;
     if (!mcpServers.length) {
-        host.innerHTML = '<div class="muted">No MCP servers configured. Click "Add Server" to start.</div>';
+        host.innerHTML = '<div class="muted">MCP серверы не настроены. Нажмите «Добавить сервер», чтобы начать.</div>';
         return;
     }
     host.innerHTML = mcpServers.map((s, idx) => renderServerCard(s, idx)).join('');
@@ -313,12 +311,12 @@ function renderEnvelopeStatus() {
         return;
     }
     if (!mcpStatusEnvelope.sdk_available) {
-        el.textContent = `MCP SDK not installed: ${mcpStatusEnvelope.sdk_error || 'install `mcp>=1.6` to enable MCP integration.'}`;
+        el.textContent = `MCP SDK не установлен: ${mcpStatusEnvelope.sdk_error || 'установите `mcp>=1.6` для включения MCP интеграции.'}`;
         el.dataset.tone = 'warn';
         return;
     }
     if (!mcpStatusEnvelope.enabled) {
-        el.textContent = 'MCP client is disabled. Enable it above to allow tool discovery.';
+        el.textContent = 'MCP клиент отключён. Включите выше для обнаружения инструментов.';
         el.dataset.tone = 'muted';
         return;
     }
@@ -326,7 +324,7 @@ function renderEnvelopeStatus() {
     const totalTools = Array.isArray(mcpStatusEnvelope.servers)
         ? mcpStatusEnvelope.servers.reduce((sum, s) => sum + Number(s.tool_count || 0), 0)
         : 0;
-    el.textContent = `${total} server${total === 1 ? '' : 's'} configured, ${totalTools} tool${totalTools === 1 ? '' : 's'} discovered.`;
+    el.textContent = `Настроено ${total} сервер${total === 1 ? '' : (total < 5 ? 'а' : 'ов')}, найдено ${totalTools} инструмент${totalTools === 1 ? '' : (totalTools < 5 ? 'а' : 'ов')}.`;
     el.dataset.tone = 'ok';
 }
 
@@ -363,7 +361,7 @@ function bindRefreshAllButton() {
     btn.addEventListener('click', async () => {
         btn.disabled = true;
         const wasText = btn.textContent;
-        btn.textContent = 'Refreshing...';
+        btn.textContent = 'Обновление...';
         try {
             await jsonPost('/api/mcp/refresh', {}, { rejectOkFalse: true });
             await refreshStatus();

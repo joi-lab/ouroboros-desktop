@@ -44,7 +44,7 @@ export function renderTabStrip({
     active = '',
     dataAttr,
     activeClass = 'active',
-    ariaLabel = 'Page views',
+    ariaLabel = 'Просмотры страницы',
     stripClass = '',
     tabClass = '',
 } = {}) {

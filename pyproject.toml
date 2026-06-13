@@ -88,6 +88,8 @@ web = [
     "*.png",
     "*.jpg",
     "modules/*.js",
+    "icons/*.svg",
+    "icons/*.png",
     "providers/*.svg",
     "providers/*.png",
     "providers/*.ico",

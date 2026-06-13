@@ -57,7 +57,7 @@ export function bindLocalModelControls({ state }) {
             const isDownloading = d.status === 'downloading';
             const runtimeMissing = d.runtime_status === 'missing' || d.runtime_status === 'install_error';
 
-            let text = 'Status: ' + (d.status || 'offline').charAt(0).toUpperCase() + (d.status || 'offline').slice(1);
+            let text = 'Статус: ' + (d.status || 'offline').charAt(0).toUpperCase() + (d.status || 'offline').slice(1);
             if (isReady && d.context_length) text += ` (ctx: ${d.context_length})`;
             if (isDownloading && d.download_progress != null) {
                 const pct = Math.round(d.download_progress * 100);
@@ -66,9 +66,9 @@ export function bindLocalModelControls({ state }) {
             } else {
                 setProgressBar(null);
             }
-            if (isInstalling) text = 'Status: Installing local runtime…';
-            if (d.runtime_status === 'install_ok') text += ' — Runtime installed ✓';
-            if (d.runtime_status === 'install_error') text += ' — Runtime install failed';
+            if (isInstalling) text = 'Статус: Установка локальной среды…';
+            if (d.runtime_status === 'install_ok') text += ' — Среда установлена ✓';
+            if (d.runtime_status === 'install_error') text += ' — Ошибка установки среды';
             if (d.error && !isInstalling) text += ' — ' + d.error;
 
             el.textContent = text;
@@ -83,7 +83,7 @@ export function bindLocalModelControls({ state }) {
             if (installBtn) installBtn.disabled = isInstalling;
 
             if (d.runtime_status === 'install_error' && d.runtime_install_log) {
-                setTestResult('Install failed:\n' + d.runtime_install_log, 'error');
+                setTestResult('Ошибка установки:\n' + d.runtime_install_log, 'error');
             }
 
             if (d.runtime_status === 'install_ok' && state._pendingLocalStart) {
@@ -96,7 +96,7 @@ export function bindLocalModelControls({ state }) {
                 const label = cb?.closest('.local-toggle');
                 if (!cb || !label) return;
                 if (cb.checked && !isReady) {
-                    label.title = 'Local server is not running - requests will fail until started';
+                    label.title = 'Локальный сервер не запущен — запросы будут завершаться с ошибкой до запуска';
                     label.dataset.warning = '1';
                 } else {
                     label.title = '';
@@ -109,7 +109,7 @@ export function bindLocalModelControls({ state }) {
     async function triggerStart() {
         const body = readLocalModelBody();
         if (!body.source) {
-            showToast('Enter a model source (HuggingFace repo ID or local path)', 'error');
+            showToast('Укажите источник модели (HuggingFace repo ID или локальный путь)', 'error');
             return;
         }
         setTestResult('');
@@ -123,16 +123,16 @@ export function bindLocalModelControls({ state }) {
             const data = await resp.json();
             if (resp.status === 412 && data.error === 'runtime_missing') {
                 setInstallBtnVisible(true);
-                setLocalStatus('Local runtime not installed. Click "Install Local Runtime" below.', 'error');
+                setLocalStatus('Локальная среда не установлена. Нажмите «Установить локальную среду» ниже.', 'error');
                 setTestResult(
-                    'llama-cpp-python is not installed.\n' +
-                    'Click "Install Local Runtime" to install it automatically,\n' +
-                    'then the model will start automatically.\n\n' +
-                    'Manual install: ' + (data.hint || 'pip install llama-cpp-python[server]'),
+                    'llama-cpp-python не установлен.\n' +
+                    'Нажмите «Установить локальную среду», чтобы установить автоматически,\n' +
+                    'затем модель запустится автоматически.\n\n' +
+                    'Ручная установка: ' + (data.hint || 'pip install llama-cpp-python[server]'),
                     'error'
                 );
             } else if (data.error) {
-                setLocalStatus('Error: ' + data.error, 'error');
+                setLocalStatus('Ошибка: ' + data.error, 'error');
             } else {
                 updateLocalStatus();
             }
@@ -149,28 +149,28 @@ export function bindLocalModelControls({ state }) {
             setProgressBar(null);
             updateLocalStatus();
         } catch (e) {
-            showToast('Failed: ' + e.message, 'error');
+            showToast('Ошибка: ' + e.message, 'error');
         }
     });
 
     document.getElementById('btn-local-test').addEventListener('click', async () => {
-        setTestResult('Running tests...', 'muted');
+        setTestResult('Выполняется тестирование...', 'muted');
         try {
             const resp = await apiFetch('/api/local-model/test', { method: 'POST' });
             const r = await resp.json();
             if (r.error) {
-                setTestResult('Error: ' + r.error, 'error');
+                setTestResult('Ошибка: ' + r.error, 'error');
                 return;
             }
             const lines = [];
-            lines.push((r.chat_ok ? '✓' : '✗') + ' Basic chat' + (r.tokens_per_sec ? ` (${r.tokens_per_sec} tok/s)` : ''));
-            lines.push((r.tool_call_ok ? '✓' : '✗') + ' Tool calling');
+            lines.push((r.chat_ok ? '✓' : '✗') + ' Базовый чат' + (r.tokens_per_sec ? ` (${r.tokens_per_sec} tok/s)` : ''));
+            lines.push((r.tool_call_ok ? '✓' : '✗') + ' Вызов инструментов');
             if (r.details && !r.success) lines.push(r.details);
             setTestResult(lines.join('\n'), r.success ? 'ok' : 'warn');
             const el = document.getElementById('local-model-test-result');
             if (el) el.style.whiteSpace = 'pre-wrap';
         } catch (e) {
-            setTestResult('Test failed: ' + e.message, 'error');
+            setTestResult('Тест не пройден: ' + e.message, 'error');
         }
     });
 
@@ -178,19 +178,19 @@ export function bindLocalModelControls({ state }) {
     if (installBtn) {
         installBtn.addEventListener('click', async () => {
             installBtn.disabled = true;
-            setTestResult('Installing llama-cpp-python, this may take a few minutes…', 'muted');
-            setLocalStatus('Status: Installing local runtime…', 'muted');
+            setTestResult('Установка llama-cpp-python, это может занять несколько минут…', 'muted');
+            setLocalStatus('Статус: Установка локальной среды…', 'muted');
             const body = readLocalModelBody();
             state._pendingLocalStart = !!body.source;
             try {
                 const resp = await apiFetch('/api/local-model/install-runtime', { method: 'POST' });
                 const d = await resp.json();
                 if (d.error) {
-                    setTestResult('Install request failed: ' + d.error, 'error');
+                    setTestResult('Ошибка запроса установки: ' + d.error, 'error');
                     installBtn.disabled = false;
                 }
             } catch (e) {
-                setTestResult('Install failed: ' + e.message, 'error');
+                setTestResult('Установка не удалась: ' + e.message, 'error');
                 installBtn.disabled = false;
             }
         });

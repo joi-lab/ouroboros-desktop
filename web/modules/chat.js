@@ -1,7 +1,3 @@
-import { escapeHtmlAttr, escapeHtmlText as escapeHtml, formatUsdWhole, renderMarkdown } from './utils.js';
-import { renderPageHeader } from './page_header.js';
-import { PAGE_ICONS } from './page_icons.js';
-import { showToast } from './toast.js';
 import { apiFetch } from './api_client.js';
 import {
     getLogTaskGroupId,
@@ -9,6 +5,10 @@ import {
     normalizeLogTs,
     summarizeChatLiveEvent,
 } from './log_events.js';
+import { renderPageHeader } from './page_header.js';
+import { PAGE_ICONS } from './page_icons.js';
+import { showToast } from './toast.js';
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr, formatUsdWhole, renderMarkdown } from './utils.js';
 
 const CHAT_STORAGE_KEY = 'ouro_chat';
 const CHAT_INPUT_HISTORY_KEY = 'ouro_chat_input_history';
@@ -56,49 +56,49 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     page.className = 'page active';
     page.innerHTML = `
         ${renderPageHeader({
-            title: 'Chat',
+            title: 'Чат',
             icon: PAGE_ICONS.chat,
             variant: 'overlay',
             className: 'chat-page-header',
             actionsHtml: `
-                <div class="chat-header-actions" id="chat-header-actions">
-                    <button class="chat-header-btn" type="button" data-chat-command="evolve" title="Toggle evolution mode">Evolve</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="bg" title="Toggle background consciousness">Consciousness</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="review" title="Run review now">Review</button>
-                    <button class="chat-header-btn" type="button" data-chat-command="restart" title="Restart agent">Restart</button>
-                    <button class="chat-header-btn danger" type="button" data-chat-command="panic" title="Stop all workers">Panic</button>
-                </div>
-                <button class="chat-budget-pill" id="chat-budget-pill" type="button" title="Open budget controls" aria-label="Open budget controls">
-                    <span class="chat-budget-text" id="chat-budget-text">$0 / $0</span>
-                    <div class="chat-budget-bar">
-                        <div class="chat-budget-bar-fill" id="chat-budget-bar-fill"></div>
+                <div class="chat-action-menu" id="chat-action-menu">
+                    <span id="chat-status" class="status-badge offline">Подключение...</span>
+                    <button class="chat-action-trigger" id="chat-action-trigger" type="button" title="Действия чата" aria-label="Действия чата" aria-expanded="false" aria-haspopup="menu">
+                        <img class="chat-action-trigger-icon" src="/static/icons/settings-cog.svg" alt="">
+                    </button>
+                    <div class="chat-header-actions chat-action-dropdown" id="chat-header-actions" role="menu">
+                        <button class="chat-header-btn" type="button" data-chat-command="evolve" role="menuitem" title="Toggle evolution mode"><span class="chat-action-switch" aria-hidden="true"></span><span>Эволюция</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="review" role="menuitem" title="Run review now"><span class="chat-action-switch" aria-hidden="true"></span><span>Ревью кода</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="bg" role="menuitem" title="Toggle background consciousness"><span class="chat-action-switch" aria-hidden="true"></span><span>Фоновое сознание</span></button>
+                        <button class="chat-header-btn" type="button" data-chat-command="restart" role="menuitem" title="Restart agent"><span class="chat-action-icon" aria-hidden="true"><img src="/static/icons/restart.svg" alt=""></span><span>Перезапустить чат</span></button>
+                        <button class="chat-header-btn danger" type="button" data-chat-command="panic" role="menuitem" title="Stop all workers"><span class="chat-action-icon" aria-hidden="true"><img src="/static/icons/power.svg" alt=""></span><span>Экстренное отключение</span></button>
                     </div>
-                </button>
-                <span id="chat-status" class="status-badge offline">Connecting...</span>
+                </div>
             `,
         })}
         <div id="chat-messages"></div>
         <div id="chat-input-area">
             <div id="chat-attachment-preview" class="chat-attachment-preview"></div>
             <div class="chat-input-wrap">
-                <button class="chat-attach-btn" id="chat-attach" type="button" title="Attach file">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <button class="chat-attach-btn" id="chat-attach" type="button" title="Прикрепить файл">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                    <span class="chat-attach-label">Прикрепить</span>
                 </button>
                 <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*" multiple>
-                <textarea id="chat-input" placeholder="Message Ouroboros..." rows="1" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+                <textarea id="chat-input" placeholder="Сообщение Ouroboros..." rows="1" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
                 <div class="chat-send-group">
-                    <button class="chat-send-inline" id="chat-send" title="Send message">Send</button>
-                    <button class="chat-send-chevron" id="chat-send-chevron" type="button" title="More send options" aria-label="More send options">
+                    <button class="chat-send-inline" id="chat-send" title="Отправить сообщение">Отправить</button>
+                    <button class="chat-send-chevron" id="chat-send-chevron" type="button" title="Другие варианты отправки" aria-label="Другие варианты отправки">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
                     <div class="chat-send-dropdown" id="chat-send-dropdown" role="menu">
                         <button class="chat-send-dropdown-item" id="chat-dropdown-send" role="menuitem">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                            Send
+                            Отправить
                         </button>
                         <button class="chat-send-dropdown-item" id="chat-dropdown-plan" role="menuitem">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>
-                            Plan
+                            Планировать
                         </button>
                     </div>
                 </div>
@@ -116,6 +116,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     const dropdownSend = document.getElementById('chat-dropdown-send');
     const dropdownPlan = document.getElementById('chat-dropdown-plan');
     const statusBadge = document.getElementById('chat-status');
+    const actionMenu = document.getElementById('chat-action-menu');
+    const actionTrigger = document.getElementById('chat-action-trigger');
     const headerActions = document.getElementById('chat-header-actions');
     const budgetPill = document.getElementById('chat-budget-pill');
     const attachBtn = document.getElementById('chat-attach');
@@ -298,8 +300,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     function reconnectBannerText(reason = '') {
-        if (reason === 'sha-change') return '♻️ Restart complete';
-        if (reason) return '♻️ Reconnected';
+        if (reason === 'sha-change') return '♻️ Перезапущен';
+        if (reason) return '♻️ Соединение установлено';
         return '';
     }
 
@@ -340,15 +342,15 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             const now = new Date();
             const pad = n => String(n).padStart(2, '0');
             const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
             const todayStr = now.toDateString();
             const yesterday = new Date(now);
             yesterday.setDate(now.getDate() - 1);
             let short;
             if (d.toDateString() === todayStr) short = hhmm;
-            else if (d.toDateString() === yesterday.toDateString()) short = `Yesterday, ${hhmm}`;
+            else if (d.toDateString() === yesterday.toDateString()) short = `Вчера, ${hhmm}`;
             else short = `${months[d.getMonth()]} ${d.getDate()}, ${hhmm}`;
-            const full = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} at ${hhmm}`;
+            const full = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} в ${hhmm}`;
             return { short, full };
         } catch {
             return null;
@@ -361,14 +363,14 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             if (opts.senderSessionId && opts.senderSessionId !== chatSessionId) {
                 return `WebUI (${opts.senderSessionId.slice(0, 8)})`;
             }
-            return opts.senderLabel || 'You';
+            return opts.senderLabel || 'Вы';
         }
         if (role === 'system') {
-            if (systemType === 'task_summary') return '📋 Task Summary';
-            if (systemType === 'skill_review') return '📋 Skill Review';
-            return '📋 System';
+            if (systemType === 'task_summary') return '📋 Сводка задачи';
+            if (systemType === 'skill_review') return '📋 Ревью навыка';
+            return '📋 Система';
         }
-        if (isProgress) return '💬 Thought';
+        if (isProgress) return '💬 Мысль';
         return 'Ouroboros';
     }
 
@@ -397,7 +399,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     <span class="skill-review-summary-main">${summary.headline}</span>
                     <span class="skill-review-summary-side">
                         <span class="skill-review-meta">${summary.meta}</span>
-                        <span class="skill-review-toggle-label">Show review</span>
+                        <span class="skill-review-toggle-label">Показать ревью</span>
                     </span>
                 </button>
                 <div class="skill-review-full" data-skill-review-full hidden>${renderMarkdown(text)}</div>
@@ -449,23 +451,44 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     const NEAR_BOTTOM_THRESHOLD_PX = 160;
+    const REATTACH_STICKY_THRESHOLD_PX = 48;
+    let shouldAutoStickToBottom = true;
+    let lastMessagesScrollTop = 0;
+    let suppressStickyDetection = false;
 
     function isNearBottom(threshold = NEAR_BOTTOM_THRESHOLD_PX) {
         const remaining = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
         return remaining <= threshold;
     }
 
+    function setProgrammaticScrollTop(nextScrollTop) {
+        suppressStickyDetection = true;
+        messagesDiv.scrollTop = nextScrollTop;
+        requestAnimationFrame(() => {
+            suppressStickyDetection = false;
+            lastMessagesScrollTop = messagesDiv.scrollTop;
+        });
+    }
+
+    function setStickyByUserScroll() {
+        if (suppressStickyDetection) return;
+        const current = messagesDiv.scrollTop;
+        if (current < lastMessagesScrollTop - 2) shouldAutoStickToBottom = false;
+        else if (isNearBottom(REATTACH_STICKY_THRESHOLD_PX)) shouldAutoStickToBottom = true;
+        lastMessagesScrollTop = current;
+    }
+
     function insertMessageNode(node, options = {}) {
         if (!node) return;
-        const shouldStick = Boolean(options.forceStick) || isNearBottom();
+        const shouldStick = Boolean(options.forceStick) || (shouldAutoStickToBottom && isNearBottom());
         if (node.parentNode === messagesDiv) {
-            if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            if (shouldStick) setProgrammaticScrollTop(messagesDiv.scrollHeight);
             return;
         }
         const typing = document.getElementById('typing-indicator');
         if (typing && typing.parentNode === messagesDiv) messagesDiv.insertBefore(node, typing);
         else messagesDiv.appendChild(node);
-        if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        if (shouldStick) setProgrammaticScrollTop(messagesDiv.scrollHeight);
     }
 
     function shouldAlwaysShowTaskCard(taskId = '') {
@@ -637,15 +660,15 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             <button type="button" class="chat-live-summary-button" data-live-summary-button aria-expanded="false" aria-controls="${escapeHtmlAttr(timelineId)}">
                 <div class="chat-live-summary">
                     <div class="chat-live-summary-main">
-                        <span class="chat-live-phase working" data-live-phase>Working</span>
+                        <span class="chat-live-phase working" data-live-phase>Работает</span>
                         <div class="chat-live-typing" data-live-typing aria-hidden="true">
                             <span></span><span></span><span></span>
                         </div>
-                        <span class="chat-live-title" data-live-title>Waiting for work</span>
+                        <span class="chat-live-title" data-live-title>Ожидание работы</span>
                     </div>
                     <div class="chat-live-summary-side">
-                        <span class="chat-live-count" data-live-count hidden>2 notes</span>
-                        <span class="chat-live-toggle" data-live-toggle>Show details</span>
+                        <span class="chat-live-count" data-live-count hidden>2 заметки</span>
+                        <span class="chat-live-toggle" data-live-toggle>Показать детали</span>
                         <svg class="chat-live-chevron" width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                             <path d="M5 7.5 10 12.5 15 7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>
                         </svg>
@@ -746,12 +769,12 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         record.items = [];
         record.lastHumanHeadline = '';
         record.expandedLineKeys.clear();
-        record.titleEl.textContent = 'Working...';
+        record.titleEl.textContent = 'Работает...';
         record.phaseEl.dataset.phase = 'working';
-        record.phaseEl.textContent = 'Working';
+        record.phaseEl.textContent = 'Работает';
         record.phaseEl.className = 'chat-live-phase working';
         record.countEl.hidden = true;
-        record.countEl.textContent = '0 notes';
+        record.countEl.textContent = '0 заметок';
         record.metaEl.innerHTML = '';
         record.timelineEl.innerHTML = '';
         record.root.style.minHeight = '';
@@ -776,18 +799,23 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     function formatLiveCardPhaseLabel(phase) {
-        if (phase === 'thinking') return 'Thinking';
-        if (phase === 'working') return 'Working';
-        if (phase === 'done') return 'Done';
-        if (phase === 'warn') return 'Notice';
-        if (phase === 'error' || phase === 'timeout' || phase === 'lifecycle_error') return 'Issue';
-        if (!phase) return 'Working';
+        if (phase === 'thinking') return 'Думает';
+        if (phase === 'working') return 'Работает';
+        if (phase === 'done') return 'Готово';
+        if (phase === 'warn') return 'Внимание';
+        if (phase === 'error' || phase === 'timeout') return 'Ошибка';
+        if (!phase) return 'Работает';
         return phase.charAt(0).toUpperCase() + phase.slice(1);
     }
 
     function setLiveCardExpanded(record, expanded) {
         if (!record?.root) return;
         record.root.dataset.expanded = expanded ? '1' : '0';
+        // Re-apply timeline visibility explicitly so viewport switches
+        // (mobile -> desktop and back) cannot leave stale display state.
+        if (record.timelineEl) {
+            record.timelineEl.style.display = expanded ? 'flex' : 'none';
+        }
         syncLiveCardToggle(record);
         if (record.root.isConnected) {
             requestAnimationFrame(() => syncLiveCardLayout(record));
@@ -804,7 +832,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     function syncLiveCardToggle(record) {
         if (!record?.toggleEl) return;
         const expanded = record.root.dataset.expanded === '1';
-        record.toggleEl.textContent = expanded ? 'Hide details' : 'Show details';
+        record.toggleEl.textContent = expanded ? 'Скрыть детали' : 'Показать детали';
         record.summaryButtonEl?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
@@ -831,6 +859,15 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         if (event?.detail?.page !== 'chat') return;
         for (const record of liveCardRecords.values()) {
             if (record?.root?.isConnected) syncLiveCardLayout(record);
+        }
+    });
+    window.addEventListener('resize', () => {
+        if (state.activePage !== 'chat') return;
+        for (const record of liveCardRecords.values()) {
+            if (!record?.root?.isConnected) continue;
+            const expanded = record.root.dataset.expanded === '1';
+            if (record.timelineEl) record.timelineEl.style.display = expanded ? 'flex' : 'none';
+            syncLiveCardLayout(record);
         }
     });
     document.addEventListener('visibilitychange', () => {
@@ -863,7 +900,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     ${displayBody ? `aria-controls="${escapeHtmlAttr(bodyId)}"` : ''}
                 >
                     <span class="chat-live-line-head">${headContent}</span>
-                    <span class="chat-live-line-expand-label">${expanded ? 'Collapse' : 'Expand'}</span>
+                    <span class="chat-live-line-expand-label">${expanded ? 'Свернуть' : 'Развернуть'}</span>
                 </button>
             `
             : `<div class="chat-live-line-head">${headContent}</div>`;
@@ -1012,11 +1049,11 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             }
         }
         record.countEl.hidden = record.items.length < 2;
-        record.countEl.textContent = `${record.items.length} notes`;
+        record.countEl.textContent = `${record.items.length} ${record.items.length === 1 ? 'заметка' : (record.items.length < 5 ? 'заметки' : 'заметок')}`;
         record.metaEl.innerHTML = [
-            nextGroupId === 'bg-consciousness' ? 'Background thinking' : '',
+            nextGroupId === 'bg-consciousness' ? 'Фоновое мышление' : '',
             ...(Array.isArray(summary.meta) ? summary.meta : []),
-            ts ? `Latest ${ts}` : '',
+            ts ? `Последнее ${ts}` : '',
         ].filter(Boolean).map((item) => `<span class="chat-live-meta-text">${escapeHtml(item)}</span>`).join('');
         // Incremental updates; full rebuilds stay limited to toggles.
         const lastItem = record.items[record.items.length - 1];
@@ -1039,10 +1076,10 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 scheduleHistorySync();
             }
             syncLiveCardToggle(record);
-            setStatus(summary.phase === 'error' || summary.phase === 'timeout' ? 'error' : 'online', summary.phase === 'error' || summary.phase === 'timeout' ? 'Attention' : 'Online');
+            setStatus(summary.phase === 'error' || summary.phase === 'timeout' ? 'error' : 'online', summary.phase === 'error' || summary.phase === 'timeout' ? 'Внимание' : 'Онлайн');
         } else {
             setLiveCardTypingVisible(record, true);
-            setStatus('thinking', 'Working...');
+            setStatus('thinking', 'Работает...');
         }
     }
 
@@ -1068,7 +1105,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         if (activeLiveGroupId === record.groupId) activeLiveGroupId = '';
         if (!hasActiveLiveCard()) {
             setStatus(activePhase === 'error' || activePhase === 'timeout' ? 'error' : 'online',
-                      activePhase === 'error' || activePhase === 'timeout' ? 'Attention' : 'Online');
+                      activePhase === 'error' || activePhase === 'timeout' ? 'Внимание' : 'Онлайн');
         }
     }
 
@@ -1093,8 +1130,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         const reasonCode = msg?.reason_code ? String(msg.reason_code) : '';
         const failedResult = ['failed', 'infra_failed'].includes(resultStatus);
         const doneHeadline = failedResult && reasonCode
-            ? `Done: ${reasonCode}`
-            : ((record && record.lastHumanHeadline) || 'Done');
+            ? `Готово: ${reasonCode}`
+            : ((record && record.lastHumanHeadline) || 'Готово');
         applyLiveCardState(
             {
                 phase: failedResult ? 'error' : 'done',
@@ -1408,7 +1445,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 : renderMarkdown(text));
         const timeFmt = formatMsgTime(ts);
         const timeHtml = timeFmt ? `<div class="msg-time" title="${escapeHtmlAttr(timeFmt.full)}">${escapeHtml(timeFmt.short)}</div>` : '';
-        const pendingHtml = pending ? `<div class="msg-pending">Queued until reconnect</div>` : '';
+        const pendingHtml = pending ? `<div class="msg-pending">В очереди до переподключения</div>` : '';
         bubble.innerHTML = `
             <div class="sender">${escapeHtml(sender)}</div>
             <div class="message">${rendered}</div>
@@ -1426,7 +1463,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 disclosure.dataset.expanded = expanded ? '0' : '1';
                 full.hidden = expanded;
                 skillReviewToggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-                if (label) label.textContent = expanded ? 'Show review' : 'Hide review';
+                if (label) label.textContent = expanded ? 'Показать ревью' : 'Скрыть ревью';
                 requestAnimationFrame(() => updateMessagesPadding({ preserveStickiness: true }));
             });
         }
@@ -1451,7 +1488,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         );
         if (hasRealBubbles) return;
         welcomeShown = true;
-        addMessage('Ouroboros has awakened', 'assistant', false, null, false, { ephemeral: true });
+        addMessage('Ouroboros пробудился', 'assistant', false, null, false, { ephemeral: true });
     }
 
     async function syncHistory({ includeUser = false, fromReconnect = false } = {}) {
@@ -1673,11 +1710,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     function resizeChatInput({ preserveStickiness = false } = {}) {
-        const caretAtEnd = input.selectionEnd >= input.value.length - 1;
-        const previousScrollTop = input.scrollTop;
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-        input.scrollTop = caretAtEnd ? input.scrollHeight : previousScrollTop;
+        input.style.removeProperty('height');
         updateMessagesPadding({ preserveStickiness });
     }
 
@@ -1713,7 +1746,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             const staged = [...pendingAttachments];
             const uploaded = [];
             setAttachmentUploadState(true);
-            setSendBusy(true, staged.length > 1 ? 'Uploading files' : 'Uploading');
+            setSendBusy(true, staged.length > 1 ? 'Загрузка файлов' : 'Загрузка');
             try {
                 for (const stagedItem of staged) {
                     if (ws.ws?.readyState !== WebSocket.OPEN) throw new Error('Connection closed during upload. Reconnect and try again.');
@@ -1780,8 +1813,9 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
 
     function setSendMode(mode) {
         sendGroup.dataset.sendMode = mode;
-        sendBtn.textContent = mode === 'plan' ? 'Plan' : 'Send';
-        sendBtn.title = mode === 'plan' ? 'Send with planning prefix' : 'Send message';
+        sendBtn.textContent = mode === 'plan' ? 'Планировать' : 'Отправить';
+        sendBtn.title = mode === 'plan' ? 'Отправить с префиксом планирования' : 'Отправить сообщение';
+        // Mark the active item in the dropdown for visual feedback.
         dropdownSend.dataset.modeActive = mode === 'send' ? 'true' : 'false';
         dropdownPlan.dataset.modeActive = mode === 'plan' ? 'true' : 'false';
     }
@@ -1791,8 +1825,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
         sendBtn.disabled = busy;
         chevronBtn.disabled = busy;
         if (busy) {
-            sendBtn.textContent = label || 'Sending';
-            sendBtn.title = label || 'Sending';
+            sendBtn.textContent = label || 'Отправка';
+            sendBtn.title = label || 'Отправка';
         } else {
             setSendMode(sendGroup.dataset.sendMode || 'send');
         }
@@ -1849,7 +1883,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     });
     // Dynamic CSS reserve keeps the absolute composer from covering messages.
     function scrollToBottom() {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        shouldAutoStickToBottom = true;
+        setProgrammaticScrollTop(messagesDiv.scrollHeight);
     }
 
     function scrollToBottomAfterLayout() {
@@ -1886,10 +1921,26 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     }
 
     installChatResizeObservers();
+    messagesDiv.addEventListener('scroll', setStickyByUserScroll, { passive: true });
 
     input.addEventListener('input', () => {
         if (inputHistoryIndex === inputHistory.length) inputDraft = input.value;
         resizeChatInput({ preserveStickiness: false });
+    });
+
+    function closeActionMenu() {
+        actionMenu?.classList.remove('open');
+        actionTrigger?.setAttribute('aria-expanded', 'false');
+    }
+
+    actionTrigger?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isOpen = actionMenu?.classList.contains('open');
+        if (isOpen) closeActionMenu();
+        else {
+            actionMenu?.classList.add('open');
+            actionTrigger.setAttribute('aria-expanded', 'true');
+        }
     });
 
     headerActions?.addEventListener('click', (event) => {
@@ -1900,30 +1951,47 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             const next = !button.classList.contains('on');
             button.classList.toggle('on', next);
             ws.send({ type: 'command', cmd: `/evolve ${next ? 'start' : 'stop'}` });
+            closeActionMenu();
             return;
         }
         if (command === 'bg') {
             const next = !button.classList.contains('on');
             button.classList.toggle('on', next);
             ws.send({ type: 'command', cmd: `/bg ${next ? 'start' : 'stop'}` });
+            closeActionMenu();
             return;
         }
         if (command === 'review') {
             ws.send({ type: 'command', cmd: '/review' });
+            closeActionMenu();
             return;
         }
         if (command === 'restart') {
             ws.send({ type: 'command', cmd: '/restart' });
+            closeActionMenu();
             return;
         }
-        if (command === 'panic' && confirm('Kill all workers immediately?')) {
+        if (command === 'panic' && confirm('Немедленно остановить всех воркеров?')) {
             ws.send({ type: 'command', cmd: '/panic' });
         }
+        closeActionMenu();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (actionMenu && !actionMenu.contains(event.target)) closeActionMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeActionMenu();
     });
 
     budgetPill?.addEventListener('click', () => {
         if (typeof openDashboardTab === 'function') openDashboardTab('costs');
         else if (typeof openSettingsTab === 'function') openSettingsTab('costs');
+    });
+    budgetPill?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        budgetPill.click();
     });
 
     refreshHeaderControlState(true);
@@ -1943,9 +2011,9 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     function showTyping() {
         if (!hasActiveLiveCard()) {
             typingEl.style.display = '';
-            if (isNearBottom()) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            if (shouldAutoStickToBottom && isNearBottom()) scrollToBottom();
         }
-        setStatus('thinking', 'Thinking...');
+        setStatus('thinking', 'Думает...');
     }
 
     function hideTypingIndicatorOnly() {
@@ -1954,8 +2022,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
 
     function hideTyping() {
         hideTypingIndicatorOnly();
-        if (statusBadge && ['Thinking...', 'Working...'].includes(statusBadge.textContent)) {
-            setStatus('online', 'Online');
+        if (statusBadge && ['Думает...', 'Работает...'].includes(statusBadge.textContent)) {
+            setStatus('online', 'Онлайн');
         }
     }
 
@@ -2094,11 +2162,11 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
     let wsHasConnectedOnce = false;
 
     ws.on('open', () => {
-        setStatus('online', 'Online');
+        setStatus('online', 'Онлайн');
         refreshHeaderControlState(true);
         const reconnectBanner =
             pendingReconnectBannerText
-            || (wsHasConnectedOnce ? '♻️ Reconnected' : '');
+            || (wsHasConnectedOnce ? '♻️ Соединение установлено' : '');
         const shouldClearReconnectParams = Boolean(pendingReconnectBannerText);
         pendingReconnectBannerText = '';
         const isReconnect = wsHasConnectedOnce;
@@ -2122,7 +2190,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
 
     ws.on('close', () => {
         hideTyping();
-        setStatus('offline', 'Reconnecting...');
-        syncHeaderControlState({ spent_usd: 0, budget_limit: 10, budget_text: 'Connecting...' });
+        setStatus('offline', 'Переподключение...');
+        syncHeaderControlState({ spent_usd: 0, budget_limit: 10, budget_text: 'Подключение...' });
     });
 }

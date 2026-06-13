@@ -1,9 +1,9 @@
-import { renderPageHeader } from './page_header.js';
-import { PAGE_ICONS } from './page_icons.js';
-import { escapeHtmlAttr, escapeHtmlText as escapeHtml } from './utils.js';
 import { apiFetch, jsonPost } from './api_client.js';
 import { openConfirmDialog } from './confirm_dialog.js';
+import { renderPageHeader } from './page_header.js';
+import { PAGE_ICONS } from './page_icons.js';
 import { downloadViaHostBridge } from './ui_helpers.js';
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr } from './utils.js';
 
 function formatFileSize(size) {
     const num = Number(size);
@@ -18,11 +18,11 @@ function iconForEntry(entry) {
 }
 
 function defaultDirectoryMeta() {
-    return 'Browse folders, preview/edit text files, upload, download, copy, and move files here. This is a file manager, not a chat attachment picker.';
+    return 'Просматривайте папки, читайте и редактируйте текстовые файлы, загружайте, скачивайте, копируйте и перемещайте файлы. Это файловый менеджер, а не выбор вложений для чата.';
 }
 
 function defaultDirectoryContent() {
-    return 'Open a folder or file from the left panel to browse, preview, or edit its contents.';
+    return 'Откройте папку или файл на левой панели для просмотра, предпросмотра или редактирования.';
 }
 
 export function initFiles({ state: appState, setBeforePageLeave } = {}) {
@@ -31,22 +31,22 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
     page.className = 'page app-page-glass';
     page.innerHTML = `
         ${renderPageHeader({
-            title: 'Files',
+            title: 'Файлы',
             icon: PAGE_ICONS.files,
             description: defaultDirectoryMeta(),
-            actionsHtml: '<button class="btn btn-default" id="files-refresh">Refresh</button>',
+            actionsHtml: '<button class="btn btn-default" id="files-refresh">Обновить</button>',
         })}
         <div class="files-layout">
             <section class="files-sidebar">
                 <div class="files-toolbar">
-                    <input id="files-search" type="text" placeholder="Filter current folder...">
+                    <input id="files-search" type="text" placeholder="Фильтр текущей папки...">
                 </div>
                 <div class="files-browser-header">
                     <div id="files-breadcrumb" class="files-breadcrumb"></div>
                     <div class="files-browser-actions">
-                        <button class="btn btn-default" id="files-paste" title="Paste copied or moved item" hidden>Paste</button>
-                        <button class="btn btn-default" id="files-new-file" title="Create file">+ File</button>
-                        <button class="btn btn-default" id="files-new-dir" title="Create directory">+ Dir</button>
+                        <button class="btn btn-default" id="files-paste" title="Вставить скопированный или перемещённый элемент" hidden>Вставить</button>
+                        <button class="btn btn-default" id="files-new-file" title="Создать файл">+ Файл</button>
+                        <button class="btn btn-default" id="files-new-dir" title="Создать папку">+ Папка</button>
                     </div>
                 </div>
                 <div id="files-list" class="files-list scroll-fade-y"></div>
@@ -54,26 +54,38 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             <section class="files-preview">
                 <div class="files-preview-header">
                     <div>
-                        <div id="files-preview-path" class="files-preview-path">Files</div>
+                        <div id="files-preview-path" class="files-preview-path">Файлы</div>
                         <div id="files-preview-meta" class="files-preview-meta">${defaultDirectoryMeta()}</div>
                     </div>
                     <div class="files-preview-actions">
-                        <button class="btn btn-default" id="files-download" hidden>Download</button>
-                        <button class="btn btn-default" id="files-open-external" hidden>Open externally</button>
-                        <button class="btn btn-primary" id="files-save" hidden disabled>Save</button>
+                        <button class="btn btn-default" id="files-download" hidden>Скачать</button>
+                        <button class="btn btn-default" id="files-open-external" hidden>Открыть снаружи</button>
+                        <button class="btn btn-primary" id="files-save" hidden disabled>Сохранить</button>
                     </div>
                 </div>
                 <div id="files-preview-content" class="files-preview-content scroll-fade-y">${defaultDirectoryContent()}</div>
             </section>
             <div class="files-drop-overlay" aria-hidden="true">
-                <div class="files-drop-card">Drop files to upload into the current folder</div>
+                <div class="files-drop-card">Перетащите файлы для загрузки в текущую папку</div>
             </div>
             <div id="files-context-menu" class="files-context-menu" hidden>
-                <button type="button" class="files-context-item" data-action="download">Download</button>
-                <button type="button" class="files-context-item" data-action="copy">Copy</button>
-                <button type="button" class="files-context-item" data-action="move">Move</button>
-                <button type="button" class="files-context-item" data-action="paste">Paste Here</button>
-                <button type="button" class="files-context-item files-context-item-danger" data-action="delete">Delete</button>
+                <button type="button" class="files-context-item" data-action="download">Скачать</button>
+                <button type="button" class="files-context-item" data-action="copy">Копировать</button>
+                <button type="button" class="files-context-item" data-action="move">Переместить</button>
+                <button type="button" class="files-context-item" data-action="paste">Вставить здесь</button>
+                <button type="button" class="files-context-item files-context-item-danger" data-action="delete">Удалить</button>
+            </div>
+            <div id="files-modal" class="files-modal" hidden>
+                <div class="files-modal-backdrop" data-close="backdrop"></div>
+                <div class="files-modal-card" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
+                    <div class="files-modal-title" id="files-modal-title"></div>
+                    <div class="files-modal-message" id="files-modal-message"></div>
+                    <input id="files-modal-input" class="files-modal-input" type="text" hidden>
+                    <div class="files-modal-actions">
+                        <button type="button" class="btn btn-default" id="files-modal-cancel">Отмена</button>
+                        <button type="button" class="btn btn-primary" id="files-modal-confirm">OK</button>
+                    </div>
+                </div>
             </div>
         </div>
     `;
@@ -151,12 +163,12 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         pasteBtn.hidden = !state.clipboard;
         pasteBtn.disabled = !state.clipboard;
         pasteBtn.textContent = state.clipboard
-            ? `Paste ${state.clipboard.mode === 'move' ? 'Move' : 'Copy'}`
-            : 'Paste';
+            ? `Вставить (${state.clipboard.mode === 'move' ? 'перемещение' : 'копирование'})`
+            : 'Вставить';
     }
 
     function setPreview({ path, meta, content, html, node }) {
-        previewPathEl.textContent = path || 'Select a file';
+        previewPathEl.textContent = path || 'Выберите файл';
         previewMetaEl.textContent = meta || '';
         if (node) {
             previewContentEl.replaceChildren(node);
@@ -225,10 +237,10 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
     async function canLeaveEditor() {
         if (!state.editorDirty) return true;
         const result = await showModal({
-            title: 'Discard Changes?',
-            message: 'You have unsaved edits in the current file. Leave without saving?',
-            confirmLabel: 'Discard',
-            cancelLabel: 'Stay',
+            title: 'Отменить изменения?',
+            message: 'В текущем файле есть несохранённые правки. Уйти без сохранения?',
+            confirmLabel: 'Отменить',
+            cancelLabel: 'Остаться',
         });
         return Boolean(result?.confirmed);
     }
@@ -309,7 +321,7 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (!listEntries.length) {
             const empty = document.createElement('div');
             empty.className = 'files-empty';
-            empty.textContent = state.filter ? 'No matches in this folder.' : 'Folder is empty.';
+            empty.textContent = state.filter ? 'Ничего не найдено в этой папке.' : 'Папка пуста.';
             listEl.appendChild(empty);
             return;
         }
@@ -359,8 +371,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
 
     function showError(err) {
         setPreview({
-            path: 'Files',
-            meta: 'Request failed',
+            path: 'Файлы',
+            meta: 'Ошибка запроса',
             content: err instanceof Error ? err.message : String(err),
         });
     }
@@ -393,8 +405,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
 
         if (!state.selectedPath || state.selectedType === 'dir') {
             setPreview({
-                path: data.display_path || state.rootPath || 'Files',
-                meta: data.truncated ? 'Directory listing truncated.' : defaultDirectoryMeta(),
+                path: data.display_path || state.rootPath || 'Файлы',
+                meta: data.truncated ? 'Список каталога сокращён.' : defaultDirectoryMeta(),
                 content: defaultDirectoryContent(),
             });
         }
@@ -411,8 +423,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (data.is_image && data.content_url) {
             resetEditorState();
             setPreview({
-                path: data.display_path || state.rootPath || 'Files',
-                meta: `${formatFileSize(data.size)} • ${data.media_type || 'image'}`,
+                path: data.display_path || state.rootPath || 'Файлы',
+                meta: `${formatFileSize(data.size)} • ${data.media_type || 'изображение'}`,
                 html: `<img class="files-preview-image" src="${escapeHtmlAttr(data.content_url)}" alt="${escapeHtmlAttr(data.name || data.path || 'image')}">`,
             });
             return;
@@ -422,8 +434,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             resetEditorState();
             const safeUrl = escapeHtmlAttr(data.content_url);
             setPreview({
-                path: data.display_path || state.rootPath || 'Files',
-                meta: `${formatFileSize(data.size)} • PDF preview`,
+                path: data.display_path || state.rootPath || 'Файлы',
+                meta: `${formatFileSize(data.size)} • предпросмотр PDF`,
                 html: `<iframe class="files-preview-frame" sandbox="allow-same-origin" src="${safeUrl}" title="${escapeHtmlAttr(data.name || 'PDF preview')}"></iframe>`,
             });
             return;
@@ -432,9 +444,9 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (!data.is_text) {
             resetEditorState();
             setPreview({
-                path: data.display_path || state.rootPath || 'Files',
-                meta: `${formatFileSize(data.size)} • binary or unsupported preview`,
-                content: 'Binary or non-text file preview is not available in the UI yet.',
+                path: data.display_path || state.rootPath || 'Файлы',
+                meta: `${formatFileSize(data.size)} • бинарный или неподдерживаемый формат`,
+                content: 'Предпросмотр бинарных и нетекстовых файлов пока не поддерживается.',
             });
             return;
         }
@@ -450,10 +462,10 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         state.editorFilename = data.name || '';
         updateEditorActions();
         setPreview({
-            path: data.display_path || state.rootPath || 'Files',
+            path: data.display_path || state.rootPath || 'Файлы',
             meta: editable
-                ? `${formatFileSize(data.size)} • editable`
-                : `${formatFileSize(data.size)} • preview truncated • read-only`,
+                ? `${formatFileSize(data.size)} • редактируемый`
+                : `${formatFileSize(data.size)} • предпросмотр сокращён • только чтение`,
             node: editable ? renderEditor(data.content || '', { isNew: false }) : document.createTextNode(data.content || ''),
         });
     }
@@ -471,7 +483,7 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (result.native) {
             setPreview({
                 path,
-                meta: openExternal ? 'Opened externally' : 'Downloaded',
+                meta: openExternal ? 'Открыто снаружи' : 'Скачано',
                 content: `${filename} saved to ${result.path || 'Downloads'}.`,
             });
             return;
@@ -481,11 +493,11 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
     async function createDirectory() {
         if (!(await canLeaveEditor())) return;
         const result = await showModal({
-            title: 'Create Directory',
-            message: 'Enter a name for the new directory in the current folder.',
+            title: 'Создать папку',
+            message: 'Введите имя для новой папки в текущем каталоге.',
             input: true,
-            confirmLabel: 'Create',
-            cancelLabel: 'Cancel',
+            confirmLabel: 'Создать',
+            cancelLabel: 'Отмена',
         });
         const name = (result?.value || '').trim();
         if (!result?.confirmed || !name) return;
@@ -499,11 +511,42 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (!state.clipboard) return;
         if (!(await canLeaveEditor())) return;
 
-        const data = await jsonPost('/api/files/transfer', {
+        const resp = await jsonPost('/api/files/transfer', {
             source_path: state.clipboard.path,
             destination_dir: destinationPath || '.',
             mode: state.clipboard.mode,
         });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+
+        const pastedMode = state.clipboard.mode;
+        state.clipboard = null;
+        updateClipboardActions();
+        state.selectedPath = data.path || '';
+        state.selectedType = data.type || '';
+        await loadDirectory(state.path || '.', { skipLeaveCheck: true });
+        setPreview({
+            path: data.display_path || state.rootPath || 'Файлы',
+            meta: `${pastedMode === 'move' ? 'Перемещено' : 'Скопировано'}: ${data.type === 'dir' ? 'папка' : 'файл'}`,
+            content: '',
+        });
+    }
+
+    async function pasteClipboardInto(destinationPath) {
+        if (!state.clipboard) return;
+        if (!(await canLeaveEditor())) return;
+
+        const resp = await apiFetch('/api/files/transfer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_path: state.clipboard.path,
+                destination_dir: destinationPath || '.',
+                mode: state.clipboard.mode,
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
 
         const pastedMode = state.clipboard.mode;
         state.clipboard = null;
@@ -513,8 +556,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         state.selectedType = data.type || '';
         await loadDirectory(refreshPath, { skipLeaveCheck: true });
         setPreview({
-            path: data.display_path || state.rootPath || 'Files',
-            meta: `${pastedMode === 'move' ? 'Moved' : 'Copied'} ${data.type || 'item'}`,
+            path: data.display_path || state.rootPath || 'Файлы',
+            meta: `${pastedMode === 'move' ? 'Перемещено' : 'Скопировано'}: ${data.type === 'dir' ? 'папка' : 'файл'}`,
             content: '',
         });
     }
@@ -526,12 +569,12 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (!(await canLeaveEditor())) return;
 
         const result = await showModal({
-            title: `Delete ${entry.type === 'dir' ? 'Directory' : 'File'}?`,
+            title: `Удалить ${entry.type === 'dir' ? 'папку' : 'файл'}?`,
             message: entry.type === 'dir'
-                ? `Delete "${entry.name}" and all its contents? This cannot be undone.`
-                : `Delete "${entry.name}"? This cannot be undone.`,
-            confirmLabel: 'Delete',
-            cancelLabel: 'Cancel',
+                ? `Удалить «${entry.name}» со всем содержимым? Это действие необратимо.`
+                : `Удалить «${entry.name}»? Это действие необратимо.`,
+            confirmLabel: 'Удалить',
+            cancelLabel: 'Отмена',
         });
         if (!result?.confirmed) return;
 
@@ -542,8 +585,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         state.selectedType = 'dir';
         await loadDirectory(state.path || '.', { skipLeaveCheck: true, skipEditorReset: true });
         setPreview({
-            path: state.rootPath || 'Files',
-            meta: `${entry.type === 'dir' ? 'Directory' : 'File'} deleted`,
+            path: state.rootPath || 'Файлы',
+            meta: `${entry.type === 'dir' ? 'Папка' : 'Файл'} удалён`,
             content: '',
         });
     }
@@ -558,9 +601,9 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
             form.set('file', file);
 
             setPreview({
-                path: state.rootPath || 'Files',
-                meta: `Uploading into ${state.path || '.'}`,
-                content: `Uploading ${file.name}...`,
+                path: state.rootPath || 'Файлы',
+                meta: `Загрузка в ${state.path || '.'}`,
+                content: `Загружается ${file.name}...`,
             });
 
             const resp = await apiFetch('/api/files/upload', {
@@ -578,8 +621,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         if (state.selectedPath) {
             const selected = state.entries.find((entry) => entry.path === state.selectedPath);
             setPreview({
-                path: selected ? `${state.rootPath || 'Files'}/${selected.name}` : (state.rootPath || 'Files'),
-                meta: selected ? `${formatFileSize(selected.size)} • uploaded` : 'Upload complete',
+                path: selected ? `${state.rootPath || 'Файлы'}/${selected.name}` : (state.rootPath || 'Файлы'),
+                meta: selected ? `${formatFileSize(selected.size)} • загружено` : 'Загрузка завершена',
                 content: '',
             });
         }
@@ -608,8 +651,8 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         state.editorDirty = false;
         updateEditorActions();
         setPreview({
-            path: data.display_path || state.rootPath || 'Files',
-            meta: `${formatFileSize(data.size)} • saved`,
+            path: data.display_path || state.rootPath || 'Файлы',
+            meta: `${formatFileSize(data.size)} • сохранено`,
             node: renderEditor(state.editorValue, { isNew: false }),
         });
         await loadDirectory(state.path || '.', { skipEditorReset: true, skipLeaveCheck: true });
@@ -632,9 +675,9 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
         updateEditorActions();
         setPreview({
             path: state.path && state.path !== '.'
-                ? `${state.rootPath || 'Files'}/${state.path}`
-                : (state.rootPath || 'Files'),
-            meta: 'New file • editable',
+                ? `${state.rootPath || 'Файлы'}/${state.path}`
+                : (state.rootPath || 'Файлы'),
+            meta: 'Новый файл • редактируемый',
             node: renderEditor('', { isNew: true }),
         });
     }
@@ -715,9 +758,9 @@ export function initFiles({ state: appState, setBeforePageLeave } = {}) {
                 };
                 updateClipboardActions();
                 setPreview({
-                    path: state.rootPath || 'Files',
-                    meta: `${action === 'move' ? 'Move' : 'Copy'} ready`,
-                    content: `${entry.name} will be ${action === 'move' ? 'moved' : 'copied'} into the next folder where you press Paste.`,
+                    path: state.rootPath || 'Файлы',
+                    meta: `${action === 'move' ? 'Перемещение' : 'Копирование'} готово`,
+                    content: `«${entry.name}» будет ${action === 'move' ? 'перемещён' : 'скопирован'} в следующую папку, где вы нажмёте «Вставить».`,
                 });
             }
         } else if (action === 'paste') {

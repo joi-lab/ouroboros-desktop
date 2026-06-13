@@ -27,7 +27,7 @@ from ouroboros.server_auth import (
     validate_network_auth_configuration,
 )
 from ouroboros.server_entrypoint import find_free_port, parse_server_args, write_port_file
-from ouroboros.server_web import NoCacheStaticFiles, make_index_page, resolve_web_dir
+from ouroboros.server_web import NoCacheStaticFiles, make_index_page, make_pwa_routes, resolve_web_dir
 from ouroboros.gateway import collect_routes
 from ouroboros.gateway import settings as _gateway_settings
 from ouroboros.gateway.ws import (
@@ -656,6 +656,7 @@ index_page = make_index_page(web_dir)
 
 routes = [
     Route("/", endpoint=index_page),
+    *make_pwa_routes(web_dir),
     *collect_routes(
         data_dir=DATA_DIR,
         settings_handlers={
