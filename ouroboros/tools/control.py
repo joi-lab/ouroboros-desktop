@@ -319,11 +319,33 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "") -> str:
 
 
 def _update_identity(ctx: ToolContext, content: str) -> str:
-    """Update identity manifest (who you are, who you want to become)."""
-    if not content or not isinstance(content, str) or len(content.strip()) < 50:
+    """Update identity manifest (who you are, who you want to become).
+
+    SEMANTICS: this OVERWRITES ``memory/identity.md`` with ``content``.
+    It is NOT append. The shrinkage guard below blocks accidental
+    destructive calls — see the comment there for the corruption
+    pattern that motivated it.
+    """
+    if not content or not isinstance(content, str):
         return (
-            "⚠️ REJECTED: content is empty or too short "
-            f"(got {type(content).__name__}, len={len(content) if isinstance(content, str) else 'N/A'}). "
+            "⚠️ REJECTED: content is empty or wrong type "
+            f"(got {type(content).__name__}). "
+            "Identity must be a substantial text (50+ chars). "
+            "This likely means the tool call was malformed — check your arguments."
+        )
+    # Strip the truncation sentinel FIRST so the 50-char quality floor
+    # applies to the actual body being written, not the sentinel prefix.
+    # Bug: prior order ran len(content.strip()) < 50 on raw content —
+    # sentinel+28 chars passed the gate but wrote a sub-50-char body;
+    # sentinel+short text was wrongly rejected with "too short".
+    _confirm_marker = "<<CONFIRMED_TRUNCATE>>\n"
+    explicit_truncate = content.startswith(_confirm_marker)
+    if explicit_truncate:
+        content = content[len(_confirm_marker):]
+    if len(content.strip()) < 50:
+        return (
+            "⚠️ REJECTED: content is too short "
+            f"(got {len(content)} chars after sentinel strip). "
             "Identity must be a substantial text (50+ chars). "
             "This likely means the tool call was malformed — check your arguments."
         )
@@ -338,6 +360,41 @@ def _update_identity(ctx: ToolContext, content: str) -> str:
             old_content = path.read_text(encoding="utf-8")
         except Exception:
             pass
+
+    # 2026-05-05: shrinkage guard. update_identity is OVERWRITE, not
+    # append — but smaller coder models read "update" as "add to" and
+    # call this with a short reflection snippet, blowing away the
+    # existing identity content. Observed P1-continuity corruption
+    # pattern in identity_journal.jsonl: 12409 → 556 → 224 chars
+    # across two calls in 24h, both with reflection-style new_preview
+    # that was clearly intended as a journal entry, not a manifest
+    # rewrite. Reject hard shrinkage so the destructive call surfaces
+    # a teachable error instead of silent identity loss.
+    #
+    # Bypass: prefix content with "<<CONFIRMED_TRUNCATE>>\n" (stripped above).
+    old_len = len(old_content)
+    new_len = len(content)
+    if old_len > 1000 and new_len < old_len * 0.7 and not explicit_truncate:
+        loss_pct = (1 - new_len / old_len) * 100
+        return (
+            f"⚠️ REJECTED: identity.md shrinkage guard "
+            f"({old_len} → {new_len} chars, {loss_pct:.0f}% loss). "
+            "update_identity OVERWRITES the entire file — it does NOT "
+            f"append. Your call would lose {old_len - new_len} chars of "
+            "existing identity content.\n\n"
+            "If you wanted to APPEND a reflection / continuity note:\n"
+            "  - update_scratchpad(text=...) for working memory\n"
+            "  - knowledge_write(topic=..., mode='append', content=...) "
+            "for durable journal entries\n\n"
+            "If you genuinely want to REPLACE identity (rare; major "
+            "rewrite): first read the current content via "
+            "read_drive('memory/identity.md') or repo_read('memory/"
+            "identity.md'), edit preserving the parts you want to keep, "
+            "then call update_identity with the merged result. To bypass "
+            "this guard for a one-shot intentional truncation, prefix "
+            "your content with the literal sentinel '<<CONFIRMED_TRUNCATE>>\\n' "
+            "(it gets stripped before write)."
+        )
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
