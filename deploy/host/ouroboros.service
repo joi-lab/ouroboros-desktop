@@ -1,0 +1,20 @@
+[Unit]
+Description=Ouroboros Desktop (home-host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_DIR__
+EnvironmentFile=__ENV_FILE__
+Environment=PATH=__APP_ROOT__/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=__VENV_PYTHON__ __REPO_DIR__/server.py
+ExecStartPost=__REPO_DIR__/deploy/host/systemd-healthcheck.sh __ENV_FILE__ __APP_ROOT__/data/state/server_port
+Restart=on-failure
+RestartSec=15
+StartLimitIntervalSec=120
+StartLimitBurst=3
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
