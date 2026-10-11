@@ -57,10 +57,10 @@ def test_evolution_effort_configurable():
 # Review
 # ---------------------------------------------------------------------------
 
-def test_review_effort_default_is_medium():
-    """Default review effort is 'medium'."""
+def test_review_effort_default_is_high():
+    """Default review effort is 'high'."""
     with patch.dict(os.environ, {}, clear=True):
-        assert resolve_effort("review") == "medium"
+        assert resolve_effort("review") == "high"
 
 
 def test_review_effort_configurable():
@@ -73,10 +73,14 @@ def test_review_effort_configurable():
 # Consciousness
 # ---------------------------------------------------------------------------
 
-def test_consciousness_effort_default_is_low():
-    """Default consciousness effort is 'low'."""
+def test_consciousness_effort_default_inherits_task_effort():
+    """An empty consciousness slot is Main's effort: a wake-up is an ordinary Main turn."""
     with patch.dict(os.environ, {}, clear=True):
-        assert resolve_effort("consciousness") == "low"
+        assert resolve_effort("consciousness") == resolve_effort("task")
+    with patch.dict(os.environ, {"OUROBOROS_EFFORT_TASK": "xhigh"}, clear=True):
+        assert resolve_effort("consciousness") == "xhigh"
+    with patch.dict(os.environ, {"OUROBOROS_EFFORT_TASK": "xhigh", "OUROBOROS_EFFORT_CONSCIOUSNESS": "bogus"}, clear=True):
+        assert resolve_effort("consciousness") == "xhigh"  # an invalid value is treated as empty
 
 
 def test_consciousness_effort_configurable():
@@ -93,5 +97,5 @@ def test_task_type_is_case_insensitive():
     """Task type matching is case-insensitive."""
     with patch.dict(os.environ, {}, clear=True):
         assert resolve_effort("EVOLUTION") == "high"
-        assert resolve_effort("Review") == "medium"
-        assert resolve_effort("CONSCIOUSNESS") == "low"
+        assert resolve_effort("Review") == "high"
+        assert resolve_effort("CONSCIOUSNESS") == resolve_effort("task")

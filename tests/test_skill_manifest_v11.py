@@ -1,4 +1,65 @@
-from ouroboros.contracts.skill_manifest import parse_skill_manifest_text
+import json
+
+import pytest
+
+from ouroboros.contracts.skill_manifest import (
+    SKILL_MANIFEST_SCHEMA_VERSION,
+    SkillManifestError,
+    parse_skill_manifest_text,
+)
+
+
+def test_manifest_conflicts_are_optional_schema_v1_and_preserve_unknown_fields() -> None:
+    manifest = parse_skill_manifest_text(
+        """---
+name: telegram
+description: Telegram
+version: 1.0.0
+type: extension
+entry: plugin.py
+conflicts: telegram-bridge, legacy.telegram
+future_field: preserved
+---
+body
+"""
+    )
+
+    assert manifest.schema_version == SKILL_MANIFEST_SCHEMA_VERSION == 1
+    assert manifest.conflicts == ["telegram-bridge", "legacy.telegram"]
+    assert manifest.raw_extra == {"future_field": "preserved"}
+
+    without_conflicts = parse_skill_manifest_text("# Body-only skill")
+    assert without_conflicts.conflicts == []
+
+
+def test_json_manifest_parses_conflicts_without_schema_bump() -> None:
+    manifest = parse_skill_manifest_text(json.dumps({
+        "name": "telegram",
+        "description": "Telegram",
+        "version": "1.0.0",
+        "type": "extension",
+        "entry": "plugin.py",
+        "conflicts": ["telegram-bridge"],
+    }))
+
+    assert manifest.conflicts == ["telegram-bridge"]
+    assert manifest.schema_version == 1
+
+
+@pytest.mark.parametrize("name", ["../telegram", "telegram bridge", ".hidden", "x" * 65])
+def test_manifest_rejects_noncanonical_conflict_names(name: str) -> None:
+    with pytest.raises(SkillManifestError, match="canonical skill name"):
+        parse_skill_manifest_text(
+            """---
+name: telegram
+description: Telegram
+version: 1.0.0
+type: extension
+entry: plugin.py
+conflicts: [%s]
+---
+""" % name
+        )
 
 
 def test_manifest_parses_companion_processes_and_subscribe_events() -> None:

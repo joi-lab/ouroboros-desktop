@@ -1,0 +1,23 @@
+diff --git a/src/systems/ouroboros/_docker_launcher.py b/src/systems/ouroboros/_docker_launcher.py
+index 5932259..3f32bfd 100644
+--- a/src/systems/ouroboros/_docker_launcher.py
++++ b/src/systems/ouroboros/_docker_launcher.py
+@@ -251,6 +251,18 @@ class DockerOuroborosEngine:
+                    "OUROBOROS_EFFORT_SCOPE_REVIEW", "OUROBOROS_EFFORT_DEEP_SELF_REVIEW",
+                    "OUROBOROS_EFFORT_CONSCIOUSNESS"):
+             ov[_k] = _eff
++        # Operator env overrides (campaign knobs). Parity defaults above stay authoritative
++        # unless the host explicitly exports one of these — then the export wins, so a
++        # campaign can pin e.g. runtime=pro / single low-effort reviewer / required review
++        # without editing this file per run ("declared vs applied" auditability).
++        for _k in ("OUROBOROS_RUNTIME_MODE", "OUROBOROS_TASK_REVIEW_MODE",
++                   "OUROBOROS_REVIEW_MODELS", "OUROBOROS_EFFORT_REVIEW",
++                   "OUROBOROS_EFFORT_SCOPE_REVIEW", "OUROBOROS_REVIEW_ENFORCEMENT",
++                   "OUROBOROS_SAFETY_MODE", "OUROBOROS_MAX_SUBAGENT_DEPTH",
++                   "OUROBOROS_MAX_WORKERS", "OUROBOROS_CONTEXT_MODE", "OUROBOROS_SUBAGENTS"):
++            _v = os.environ.get(_k)
++            if _v:
++                ov[_k] = _v
+         # Conversation-resume: tell the in-container agent to capture each task's final messages so the
+         # next per-action submit can continue the conversation (the Ouroboros analog of CC --resume).
+         if self.resume:

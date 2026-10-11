@@ -1,6 +1,5 @@
 """Tests for block-based memory pipeline (scratchpad blocks, dialogue blocks)."""
 import json
-import pathlib
 
 import pytest
 
@@ -84,15 +83,6 @@ class TestDialogueBlocks:
         blocks_path.write_text(json.dumps(blocks), encoding="utf-8")
         loaded = memory.load_dialogue_blocks()
         assert len(loaded) == 2
-
-    def test_format_blocks_as_markdown(self, memory):
-        blocks = [
-            {"type": "summary", "content": "### Block: 2026-01-01\nFirst."},
-            {"type": "era", "content": "### Era: 2025\nOld stuff."},
-        ]
-        md = Memory.format_blocks_as_markdown(blocks)
-        assert "First." in md
-        assert "Old stuff." in md
 
     def test_corrupt_blocks_file(self, memory):
         blocks_path = memory.drive_root / "memory" / "dialogue_blocks.json"

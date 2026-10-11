@@ -30,7 +30,7 @@ def test_network_requests_require_explicit_file_root(monkeypatch: pytest.MonkeyP
     assert "OUROBOROS_FILE_BROWSER_DEFAULT" in response.json()["error"]
 
 
-def test_external_symlink_file_is_visible_readable_writable_and_deletable(
+def test_external_symlink_file_is_listed_but_not_accessible(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ):
@@ -55,24 +55,27 @@ def test_external_symlink_file_is_visible_readable_writable_and_deletable(
         assert "escape.txt" in names
         assert entries["escape.txt"]["is_symlink"] is True
 
+        # v6.26.0 containment contract: a symlink RESOLVING outside the root is
+        # listed (the link itself lives in-root) but cannot be read, written,
+        # or deleted through the API — that was a root escape.
         read_response = client.get("/api/files/read?path=escape.txt")
-        assert read_response.status_code == 200
-        assert read_response.json()["content"] == "secret"
+        assert read_response.status_code == 400
+        assert "escapes file browser root" in read_response.json()["error"]
 
         write_response = client.post(
             "/api/files/write",
             json={"path": "escape.txt", "content": "changed"},
         )
-        assert write_response.status_code == 200
-        assert outside.read_text(encoding="utf-8") == "changed"
+        assert write_response.status_code == 400
+        assert outside.read_text(encoding="utf-8") == "secret"
 
         delete_response = client.post("/api/files/delete", json={"path": "escape.txt"})
-        assert delete_response.status_code == 200
-        assert not escape.exists()
+        assert delete_response.status_code == 400
+        assert escape.is_symlink()
         assert outside.exists()
 
 
-def test_external_symlink_dir_allows_mkdir_upload_and_copy(
+def test_external_symlink_dir_mutations_are_blocked(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ):
@@ -98,12 +101,14 @@ def test_external_symlink_dir_allows_mkdir_upload_and_copy(
         pytest.skip("Symlink creation is not available in this test environment.")
 
     with _make_client(root, monkeypatch) as client:
+        # v6.26.0 containment contract: mutations THROUGH an out-of-root
+        # symlink are blocked (they were a root escape).
         mkdir_response = client.post(
             "/api/files/mkdir",
             json={"path": "external-dir", "name": "child"},
         )
-        assert mkdir_response.status_code == 200
-        assert (outside_dir / "child").is_dir()
+        assert mkdir_response.status_code == 400
+        assert not (outside_dir / "child").exists()
 
         copy_response = client.post(
             "/api/files/transfer",
@@ -113,10 +118,8 @@ def test_external_symlink_dir_allows_mkdir_upload_and_copy(
                 "mode": "copy",
             },
         )
-        assert copy_response.status_code == 200
-        copied = copy_dir / "external-file.txt"
-        assert copied.is_symlink()
-        assert copied.resolve() == outside_file.resolve()
+        assert copy_response.status_code == 400
+        assert not (copy_dir / "external-file.txt").exists()
 
     class _Client:
         host = "testclient"
@@ -131,8 +134,8 @@ def test_external_symlink_dir_allows_mkdir_upload_and_copy(
             }
 
     upload_response = asyncio.run(file_browser_api.api_files_upload(_UploadRequest()))
-    assert upload_response.status_code == 200
-    assert (outside_dir / "uploaded.txt").read_bytes() == b"payload"
+    assert upload_response.status_code == 400
+    assert not (outside_dir / "uploaded.txt").exists()
 
 
 def test_root_delete_is_rejected_and_image_url_is_encoded(

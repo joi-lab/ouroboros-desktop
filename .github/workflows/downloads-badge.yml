@@ -1,0 +1,93 @@
+# Downloads Badge — combined all-time release download counter
+#
+# The desktop app lived in joi-lab/ouroboros-desktop (v3.3.1, 2026-02-23 →
+# v6.7.3, 2026-05-30) before releases moved to razzant/ouroboros (v6.8.0+).
+# Release assets and their download counters did not transfer with the
+# migration, so neither repository's native shields.io counter shows the true
+# all-time total. This workflow sums release-asset downloads across both
+# repositories once a day and publishes a shields.io endpoint-badge JSON to
+# the single-commit orphan branch `badges`, which README.md renders via
+# https://img.shields.io/endpoint.
+
+name: Downloads Badge
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-badge:
+    # Guard against scheduled runs on the joi-lab mirror fork.
+    if: github.repository == 'razzant/ouroboros'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute combined release downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+          import urllib.request
+
+          def total_downloads(repo: str) -> int:
+              downloads, page = 0, 1
+              while True:
+                  request = urllib.request.Request(
+                      f"https://api.github.com/repos/{repo}/releases?per_page=100&page={page}",
+                      headers={
+                          "Accept": "application/vnd.github+json",
+                          "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                          "User-Agent": "ouroboros-downloads-badge",
+                      },
+                  )
+                  with urllib.request.urlopen(request) as response:
+                      releases = json.load(response)
+                  if not releases:
+                      return downloads
+                  for release in releases:
+                      downloads += sum(
+                          asset["download_count"] for asset in release.get("assets", [])
+                      )
+                  page += 1
+
+          combined = total_downloads("razzant/ouroboros") + total_downloads(
+              "joi-lab/ouroboros-desktop"
+          )
+          if combined >= 1_000_000:
+              message = f"{combined / 1_000_000:.1f}M"
+          elif combined >= 1_000:
+              message = f"{combined / 1_000:.1f}k"
+          else:
+              message = str(combined)
+          badge = {
+              "schemaVersion": 1,
+              "label": "downloads",
+              "message": message,
+              "color": "brightgreen",
+              "namedLogo": "github",
+              "cacheSeconds": 3600,
+              "exactCount": combined,
+          }
+          with open("downloads.json", "w", encoding="utf-8") as fh:
+              json.dump(badge, fh, indent=2)
+              fh.write("\n")
+          print(f"combined release downloads: {combined} -> {message}")
+          EOF
+
+      - name: Publish to badges branch
+        run: |
+          git init --quiet badge-repo
+          cd badge-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp ../downloads.json .
+          git add downloads.json
+          git commit --quiet -m "Update combined downloads badge"
+          git push --quiet --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            HEAD:refs/heads/badges

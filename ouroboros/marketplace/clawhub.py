@@ -8,6 +8,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from ouroboros.marketplace import AllowlistRedirectHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,7 +20,7 @@ log = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_SEC = 15
 _MAX_JSON_RESPONSE_BYTES = 4 * 1024 * 1024  # 4 MB JSON cap
 _MAX_ARCHIVE_BYTES = 50 * 1024 * 1024       # mirrors fetcher cap
-_USER_AGENT = "Ouroboros-Marketplace/4.50 (+https://github.com/joi-lab/ouroboros-desktop)"
+_USER_AGENT = "Ouroboros-Marketplace/4.50 (+https://github.com/razzant/ouroboros)"
 _BROWSE_PATH = "packages"
 _LEXICAL_SEARCH_PATH = "search"
 _SEARCH_ENRICH_WORKERS = 8
@@ -48,6 +50,10 @@ class ClawHubRateLimitError(ClawHubClientError):
 
 class ClawHubClientHostBlocked(ClawHubClientError):
     pass
+
+
+class ClawHubNotFoundError(ClawHubClientError):
+    """Raised when the registry returns HTTP 404 for a slug/endpoint."""
 
 
 @dataclass
@@ -125,18 +131,17 @@ def _build_url(base: str, path: str, query: Optional[Dict[str, Any]] = None) -> 
     return composed
 
 
-class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        target = urllib.parse.urlparse(newurl).hostname
-        if target not in _ALLOWED_REGISTRY_HOSTS:
-            raise ClawHubClientHostBlocked(
-                f"Refused to follow redirect to {target!r} outside marketplace allowlist"
-            )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+def _redirect_handler() -> AllowlistRedirectHandler:
+    return AllowlistRedirectHandler(
+        _ALLOWED_REGISTRY_HOSTS,
+        lambda target: ClawHubClientHostBlocked(
+            f"Refused to follow redirect to {target!r} outside marketplace allowlist"
+        ),
+    )
 
 
 def _build_opener(no_proxy: bool) -> urllib.request.OpenerDirector:
-    handlers: List[Any] = [_AllowlistRedirectHandler()]
+    handlers: List[Any] = [_redirect_handler()]
     # In worker processes, disable system proxy resolution for fork-safety
     # (macOS _scproxy/SCDynamicStoreCopyProxies crashes on the child side of a
     # multi-threaded fork). The supervisor keeps proxy support for corporate
@@ -220,6 +225,8 @@ def _http_get(
                         continue
                     raise ClawHubRateLimitError(url, retry_after)
                 if status >= 400:
+                    if status == 404:
+                        raise ClawHubNotFoundError(f"GET {url} returned HTTP 404")
                     raise ClawHubClientError(f"GET {url} returned HTTP {status}")
                 buf = bytearray()
                 while True:
@@ -241,6 +248,8 @@ def _http_get(
                     _sleep_for_rate_limit(retry_after, attempt)
                     continue
                 raise ClawHubRateLimitError(url, retry_after) from exc
+            if int(exc.code or 0) == 404:
+                raise ClawHubNotFoundError(f"GET {url}: HTTP 404: {exc.reason}") from exc
             raise ClawHubClientError(f"GET {url}: HTTP {exc.code}: {exc.reason}") from exc
         except urllib.error.URLError as exc:
             raise ClawHubClientError(f"GET {url}: transport error: {exc.reason}") from exc
@@ -695,6 +704,7 @@ __all__ = [
     "ClawHubArchive",
     "ClawHubClientError",
     "ClawHubClientHostBlocked",
+    "ClawHubNotFoundError",
     "ClawHubRateLimitError",
     "ClawHubSkillSummary",
     "download",

@@ -2,497 +2,199 @@
 
 from __future__ import annotations
 
-import json
+import json  # noqa: F401
 import logging
-import os
-import queue
-import uuid
-from pathlib import Path
-from typing import Any, Dict, List
+import os  # noqa: F401
+import queue  # noqa: F401
+import shutil  # noqa: F401
+import threading  # noqa: F401
+import time  # noqa: F401
+import uuid  # noqa: F401
+from hashlib import sha256  # noqa: F401
+from pathlib import Path  # noqa: F401
+from typing import Any, Callable, Dict, List, Optional  # noqa: F401
 
-from ouroboros.config import apply_settings_to_env, load_settings, save_settings
-from ouroboros.headless import prepare_task_drive
-from ouroboros.task_results import (
-    STATUS_COMPLETED,
-    STATUS_REJECTED_DUPLICATE,
-    STATUS_REQUESTED,
-    validate_task_id,
-    write_task_result,
+from ouroboros.config import (
+    apply_settings_to_env,  # noqa: F401
+    get_max_subagent_depth,  # noqa: F401
+    load_settings,  # noqa: F401
+    save_settings,  # noqa: F401
 )
-from ouroboros.task_status import load_effective_task_result, wait_for_effective_tasks
-from ouroboros.tool_capabilities import LOCAL_READONLY_SUBAGENT_MODE, MAX_SUBTASK_DEPTH
-from ouroboros.tools.registry import ToolContext, ToolEntry
-from ouroboros.utils import atomic_write_json, utc_now_iso, run_cmd
+from ouroboros.depth_evidence import parse_task_depth  # noqa: F401
+from ouroboros.headless import prepare_task_drive, task_state_dir  # noqa: F401
+from ouroboros.contracts.task_contract import (
+    build_task_contract,  # noqa: F401
+    effective_acceptance_claims,  # noqa: F401
+    normalize_allowed_resources,  # noqa: F401
+)
+from ouroboros.tools.control_delegation import (
+    _ensure_project_scope,
+    admitted_depth_cap,  # noqa: F401
+    child_budget_for_schedule,  # noqa: F401
+    normalize_required_capabilities,  # noqa: F401
+    profile_from_task_constraint,  # noqa: F401
+    record_depth_limit_refusal,  # noqa: F401
+    resolve_cooperative_write_root,  # noqa: F401
+    schedule_delegation_refusal,  # noqa: F401
+)
+from ouroboros.tools.registry import active_repo_dir_for, system_repo_dir_for  # noqa: F401
+from ouroboros.outcomes import normalize_outcome_axes  # noqa: F401
+from ouroboros.task_results import (
+    STATUS_COMPLETED,  # noqa: F401
+    STATUS_REJECTED_DUPLICATE,  # noqa: F401
+    STATUS_REQUESTED,  # noqa: F401
+    validate_task_id,  # noqa: F401
+    write_task_result,  # noqa: F401
+)
+from ouroboros.task_status import load_effective_task_result, wait_for_effective_tasks  # noqa: F401
+from ouroboros.subagents import (
+    LEGACY_SUBAGENT_FIELDS,  # noqa: F401
+    build_subagent_envelope,  # noqa: F401
+)
+from ouroboros.subagent_runtime import (
+    SubagentSelectionError,  # noqa: F401
+    effective_runtime_subagent_settings,  # noqa: F401
+    select_subagent_snapshot,  # noqa: F401
+)
+from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE, LOCAL_READONLY_SUBAGENT_MODE  # noqa: F401
+from ouroboros.tools.registry import ToolContext, ToolEntry  # noqa: F401
+from ouroboros.utils import append_jsonl, atomic_write_json, truncate_review_artifact, utc_now_iso, run_cmd  # noqa: F401
 
 log = logging.getLogger(__name__)
 
-VALID_SUBTASK_MEMORY_MODES = frozenset({"forked", "empty"})
+
+# Guards parent-side shared ctx state mutated during (possibly parallel)
+# schedule_subagent emission within one tool-call round. Process-local: a parent
+# ctx is never shared across processes, so a threading.Lock is sufficient.
 
 
-def _emit_control_event(ctx: ToolContext, evt: Dict[str, Any]) -> str:
-    """Emit a control event live when possible, preserving legacy fallback."""
-    event_queue = getattr(ctx, "event_queue", None)
-    if event_queue is not None:
-        try:
-            event_queue.put_nowait(dict(evt))
-            return "live"
-        except (AttributeError, queue.Full):
-            pass
-        except Exception:
-            log.warning("Live control event emission failed; falling back to pending_events", exc_info=True)
-    ctx.pending_events.append(evt)
-    return "deferred"
+# Runtime-INTERNAL scheduling options, deliberately absent from the public schema and
+# structurally unreachable from a model tool call: they ride in the POSITIONAL-ONLY `internal`
+# mapping, which no keyword argument produced from tool-call JSON can ever bind to. Keeping
+# them out of the signature is also what holds the handler inside the <8-parameter contract.
+#
+# The set is EMPTY as of v6.87.7: its only member, `deadline_at`, became a public parameter
+# once the caller judged to be the right one turned out to be the parent LLM itself — it is
+# the parent that knows when a child's handoff stops being useful. The seam stays because it
+# is closed and cheap, and an unknown key here still fails loudly rather than being ignored.
 
 
-def _request_restart(ctx: ToolContext, reason: str) -> str:
-    if str(ctx.current_task_type or "") == "evolution" and not ctx.last_push_succeeded:
-        return "⚠️ RESTART_BLOCKED: in evolution mode, commit+push first."
-    # Persist expected ref for post-restart verification.
-    try:
-        sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=ctx.repo_dir)
-        branch = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ctx.repo_dir)
-        verify_path = ctx.drive_path("state") / "pending_restart_verify.json"
-        atomic_write_json(verify_path, {
-            "ts": utc_now_iso(), "expected_sha": sha,
-            "expected_branch": branch, "reason": reason,
-        })
-    except Exception:
-        log.debug("Failed to read VERSION file or git ref for restart verification", exc_info=True)
-        pass
-    ctx.pending_restart_reason = str(reason or "").strip() or "agent_requested_restart"
-    ctx.last_push_succeeded = False
-    return f"Restart requested: {reason}"
+# A parameter this tool used to publish, mapped to the durable field it wrote.
+# Separate from "unsupported" because a caller passing one is not guessing: it read
+# a schema that was real, and "unsupported argument" hides that the capability still
+# exists and is now derived. The REASON is not restated here — it is
+# `LEGACY_SUBAGENT_FIELDS`, the same sentence the dispatch resolution puts on the
+# record when it ignores a stored value, so the live refusal and the durable
+# disclosure cannot come to disagree about why the field went away.
+
+# D23: accepted only by the real registry invocation path and intentionally absent
+# from ``schedule_subagent_properties``.  The handler attribute is consumed by the
+# generic registry seam; no tool-name special case or public schema alias exists.
 
 
-def _set_tool_timeout(ctx: ToolContext, seconds: int) -> str:
-    """Persist timeout while pinning owner-only runtime mode to the live env."""
-    try:
-        timeout_sec = int(seconds)
-    except (TypeError, ValueError):
-        return f"⚠️ TOOL_ARG_ERROR (set_tool_timeout): invalid seconds={seconds!r}"
-    if timeout_sec < 1:
-        return "⚠️ TOOL_ARG_ERROR (set_tool_timeout): seconds must be >= 1"
-
-    settings = load_settings()
-    settings["OUROBOROS_TOOL_TIMEOUT_SEC"] = timeout_sec
-    settings["OUROBOROS_RUNTIME_MODE"] = os.environ.get("OUROBOROS_RUNTIME_MODE", "advanced")
-    save_settings(settings)
-    apply_settings_to_env(settings)
-    return f"OK: OUROBOROS_TOOL_TIMEOUT_SEC set to {timeout_sec}s and applied immediately."
+# Registration-race grace for a wait set in which NOTHING was minted (v6.91):
+# "not YET registered" is a real state for a child scheduled moments ago, so a
+# phantom-only wait still polls — but only for this long, instead of blocking
+# the parent for the whole requested window on ids that exist nowhere.
 
 
-def _promote_to_stable(ctx: ToolContext, reason: str) -> str:
-    ctx.pending_events.append({"type": "promote_to_stable", "reason": reason, "ts": utc_now_iso()})
-    return f"Promote to stable requested: {reason}"
+# promote_chat_to_task tool description (hoisted from get_tools for the
+# 300-line function gate; v6.70.0 added the ground-truth-probe contract).
+_PROMOTE_CHAT_DESCRIPTION = (
+    "Promote real work out of this conversation into a supervised pooled task "
+    "while the conversation remains available. Tools, files and several steps can "
+    "stay in the conversation; promote when independent work is useful — its own "
+    "queue slot, admission and reviews, steerable from chat — or when the owner "
+    "explicitly asks for a separate task. "
+    "Before framing the objective around an EXISTING artifact "
+    "('check/fix/extend the X skill/file'), ground-truth its existence with one cheap probe "
+    "first (skills: list_skills; files: list_files) — memory of past work is not evidence "
+    "the referent still exists. Always give a short, human-readable task `title`. To "
+    "CREATE A NEW NAMED PROJECT and start the work there (owner asked to 'create a "
+    "project called X and …'), set `project_name` — the project is created now and "
+    "a NEW independent task starts in it; the task you are in stays where it is. To "
+    "move THIS task into a project use ensure_project_scope instead (my own judgment: "
+    "the owner's phrasing is intent, not a keyword trigger — I name the project from "
+    "what they actually want it called, and do not just answer or spawn a project-less "
+    "task). `project_id` starts the new task in an existing project. If your task "
+    "carries a planning obligation (Swarm force_plan) that no plan review has met, the "
+    "obligation moves to the new task and your own further work here is unplanned. "
+    "When this new task continues one specific settled result (any settled status; from "
+    "the host manifest, recent_tasks or get_task_result — any project, the "
+    "list is a hint; a helper's result is continued with its root named), pass its internal "
+    "id as `predecessor_task_id`; pass an empty string for fresh work. A live root "
+    "(steer_task instead) or a pending promote is refused. "
+    "`workspace_root` points at a working folder. A project-scoped task inherits "
+    "the project's working folder as its ACTIVE WORKSPACE by default (its file/"
+    "shell/git tools operate there, not on the Ouroboros repo); pass "
+    "workspace='none' for a folder-less task. Owner follow-ups can steer the "
+    "running task. Report creation only when this tool returns "
+    "OK; PROMOTE_REJECTED or PROMOTE_UNCONFIRMED means the task must not be "
+    "claimed as created, and UNCONFIRMED must not be retried automatically."
+)
 
 
-def _schedule_task(
-    ctx: ToolContext,
-    objective: str = "",
-    expected_output: str = "",
-    role: str = "",
-    context: str = "",
-    constraints: str = "",
-    memory_mode: str = "forked",
-    **legacy_or_unknown: Any,
-) -> str:
-    if bool(getattr(ctx, "is_workspace_mode", lambda: False)()):
-        return (
-            "⚠️ WORKSPACE_MODE_BLOCKED: schedule_subagent would create a child agent. "
-            "Headless workspace tasks expose task/session metadata for future delegation, "
-            "but local live subagents are intentionally disabled in workspace mode."
-        )
-    if legacy_or_unknown:
-        bad = ", ".join(sorted(str(key) for key in legacy_or_unknown.keys()))
-        return (
-            "⚠️ TOOL_ARG_ERROR (schedule_subagent): unsupported argument(s): "
-            f"{bad}. Use the v6 strict schema: objective, expected_output, "
-            "optional role/context/constraints/memory_mode."
-        )
-    objective = str(objective or "").strip()
-    expected_output = str(expected_output or "").strip()
-    role = str(role or "researcher").strip() or "researcher"
-    context = str(context or "").strip()
-    constraints = str(constraints or "").strip()
-    memory_mode = str(memory_mode or "forked").strip().lower()
-    if not objective:
-        return "⚠️ TOOL_ARG_ERROR (schedule_subagent): objective is required."
-    if not expected_output:
-        return "⚠️ TOOL_ARG_ERROR (schedule_subagent): expected_output is required."
-    if memory_mode not in VALID_SUBTASK_MEMORY_MODES:
-        allowed = ", ".join(sorted(VALID_SUBTASK_MEMORY_MODES))
-        return (
-            f"⚠️ TOOL_ARG_ERROR (schedule_subagent): memory_mode must be one of: {allowed}. "
-            "memory_mode=shared is disabled for live local subagents until a sanitized shared-context mode exists."
-        )
-
-    current_depth = getattr(ctx, 'task_depth', 0)
-    new_depth = current_depth + 1
-    if new_depth > MAX_SUBTASK_DEPTH:
-        return f"ERROR: Subtask depth limit ({MAX_SUBTASK_DEPTH}) exceeded. Simplify your approach."
-
-    if getattr(ctx, 'is_direct_chat', False):
-        from ouroboros.utils import append_jsonl
-        try:
-            append_jsonl(ctx.drive_logs() / "events.jsonl", {
-                "ts": utc_now_iso(),
-                "type": "schedule_task_from_direct_chat",
-                "description": objective[:200],
-                "warning": "schedule_subagent called from direct chat context — potential duplicate work",
-            })
-        except Exception:
-            pass
-
-    tid = uuid.uuid4().hex[:8]
-    metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
-    current_task_id = str(getattr(ctx, "task_id", "") or "")
-    parent_task_id = str(current_task_id or metadata.get("parent_task_id") or "").strip()
-    root_task_id = str(metadata.get("root_task_id") or current_task_id or tid)
-    session_id = str(metadata.get("session_id") or "")
-    try:
-        current_chat_id = int(getattr(ctx, "current_chat_id", None) or 0)
-    except (TypeError, ValueError):
-        current_chat_id = 0
-    child_drive = None
-    if memory_mode in {"forked", "empty"}:
-        try:
-            child_drive = prepare_task_drive(Path(ctx.drive_root), tid, memory_mode)
-        except Exception as exc:
-            log.warning("Failed to prepare child drive for subtask %s", tid, exc_info=True)
-            return f"⚠️ SUBTASK_DRIVE_ERROR: failed to prepare {memory_mode} child drive: {exc}"
-
-    task_constraint = {
-        "mode": LOCAL_READONLY_SUBAGENT_MODE,
-        "allow_enable": False,
-        "allow_review": False,
-    }
-    evt = {
-        "type": "schedule_subagent",
-        "description": objective,
-        "objective": objective,
-        "expected_output": expected_output,
-        "constraints": constraints,
-        "role": role,
-        "task_id": tid,
-        "depth": new_depth,
-        "ts": utc_now_iso(),
-        "root_task_id": root_task_id,
-        "session_id": session_id,
-        "actor_id": f"subagent:{role}",
-        "delegation_role": "subagent",
-        "memory_mode": memory_mode,
-        "budget_drive_root": str(ctx.drive_root),
-        "task_constraint": task_constraint,
-    }
-    if current_chat_id:
-        evt["chat_id"] = current_chat_id
-    if child_drive is not None:
-        evt["drive_root"] = str(child_drive)
-        evt["child_drive_root"] = str(child_drive)
-    if context:
-        evt["context"] = context
-    if parent_task_id:
-        evt["parent_task_id"] = parent_task_id
-    try:
-        write_task_result(
-            ctx.drive_root,
-            tid,
-            STATUS_REQUESTED,
-            parent_task_id=parent_task_id or None,
-            root_task_id=root_task_id,
-            session_id=session_id,
-            actor_id=f"subagent:{role}",
-            delegation_role="subagent",
-            role=role,
-            description=objective,
-            objective=objective,
-            expected_output=expected_output,
-            constraints=constraints,
-            context=context,
-            chat_id=current_chat_id or None,
-            memory_mode=memory_mode,
-            drive_root=str(child_drive) if child_drive is not None else "",
-            child_drive_root=str(child_drive) if child_drive is not None else "",
-            budget_drive_root=str(ctx.drive_root),
-            task_constraint=task_constraint,
-            result="Subagent request queued. Awaiting supervisor acceptance.",
-        )
-    except Exception:
-        log.warning("Failed to persist requested task status for %s", tid, exc_info=True)
-        return f"⚠️ SUBTASK_STATUS_ERROR: failed to persist requested status for {tid}; subagent was not scheduled."
-    emitted = _emit_control_event(ctx, evt)
-    worker_note = ""
-    if emitted == "live":
-        worker_note = " (live queue emission requested)"
-    return f"Subagent request queued {tid}: {objective}{worker_note}"
-
-
-def _cancel_task(ctx: ToolContext, task_id: str) -> str:
-    try:
-        tid = validate_task_id(task_id)
-    except ValueError as exc:
-        return f"⚠️ TOOL_ARG_ERROR (cancel_task): {exc}"
-    # Latch a cancel-intent status on disk immediately so the parent's own
-    # find_child_tasks view treats the child as terminal right away — this stops
-    # the handoff-reminder loop from re-injecting "still scheduled" every round,
-    # even before the supervisor tears the task down.
-    try:
-        from ouroboros.task_results import STATUS_CANCEL_REQUESTED
-        write_task_result(
-            ctx.drive_root, tid, STATUS_CANCEL_REQUESTED,
-            result="Cancellation requested by agent; awaiting supervisor teardown.",
-        )
-    except Exception:
-        log.debug("Failed to latch cancel_requested status for %s", tid, exc_info=True)
-    # Emit live so the supervisor processes the cancellation within one loop tick
-    # instead of at end-of-round. schedule_subagent already emits live; cancel
-    # must be symmetric, otherwise a scheduled child looks stuck until the
-    # parent's whole turn finishes.
-    emitted = _emit_control_event(ctx, {"type": "cancel_task", "task_id": tid, "ts": utc_now_iso()})
-    note = " (live)" if emitted == "live" else " (deferred to round end)"
-    return f"Cancel requested: {tid}{note}"
-
-
-def _request_deep_self_review(ctx: ToolContext, reason: str) -> str:
-    from ouroboros.deep_self_review import is_review_available
-    available, model = is_review_available()
-    if not available:
-        return "❌ Deep self-review unavailable: requires OPENROUTER_API_KEY or OPENAI_API_KEY."
-    ctx.pending_events.append({"type": "deep_self_review_request", "reason": reason, "model": model, "ts": utc_now_iso()})
-    return f"Deep self-review requested (model: {model}). It will be queued and executed asynchronously."
-
-
-def _chat_history(ctx: ToolContext, count: int = 100, offset: int = 0, search: str = "") -> str:
-    from ouroboros.memory import Memory
-    mem = Memory(drive_root=ctx.drive_root)
-    return mem.chat_history(count=count, offset=offset, search=search)
-
-
-def _update_scratchpad(ctx: ToolContext, content: str) -> str:
-    """LLM-driven scratchpad update — appends a timestamped block (Constitution P5: LLM-first)."""
-    if not content or not isinstance(content, str) or len(content.strip()) < 10:
-        return (
-            "⚠️ REJECTED: content is empty or too short "
-            f"(got {type(content).__name__}, len={len(content) if isinstance(content, str) else 'N/A'}). "
-            "Scratchpad must have meaningful content (10+ chars). "
-            "This likely means the tool call was malformed — check your arguments."
-        )
-    from ouroboros.memory import Memory
-    mem = Memory(drive_root=ctx.drive_root)
-    mem.ensure_files()
-    try:
-        block = mem.append_scratchpad_block(content, source="task")
-    except RuntimeError as exc:
-        if "LEGACY_SCRATCHPAD_REQUIRES_MANUAL_UPGRADE" in str(exc):
-            return f"⚠️ {exc}"
-        raise
-    return f"OK: scratchpad block appended ({len(content)} chars, ts={block.get('ts', '?')[:16]})"
-
-
-def _send_user_message(ctx: ToolContext, text: str, reason: str = "") -> str:
-    """Send a proactive message to the user (not as reply to a task).
-
-    Use when you have something genuinely worth saying — an insight,
-    a question, a status update, or an invitation to collaborate.
-    """
-    if not ctx.current_chat_id:
-        return "⚠️ No active chat — cannot send proactive message."
-    if not text or not text.strip():
-        return "⚠️ Empty message."
-
-    from ouroboros.utils import append_jsonl
-    ctx.pending_events.append({
-        "type": "send_message",
-        "chat_id": ctx.current_chat_id,
-        "text": text,
-        "format": "markdown",
-        "is_progress": False,
-        "ts": utc_now_iso(),
-    })
-    append_jsonl(ctx.drive_logs() / "events.jsonl", {
-        "ts": utc_now_iso(),
-        "type": "proactive_message",
-        "reason": reason,
-        "text_preview": text[:200],
-    })
-    return "OK: message queued for delivery."
-
-
-def _update_identity(ctx: ToolContext, content: str) -> str:
-    """Update identity manifest (who you are, who you want to become)."""
-    if not content or not isinstance(content, str) or len(content.strip()) < 50:
-        return (
-            "⚠️ REJECTED: content is empty or too short "
-            f"(got {type(content).__name__}, len={len(content) if isinstance(content, str) else 'N/A'}). "
-            "Identity must be a substantial text (50+ chars). "
-            "This likely means the tool call was malformed — check your arguments."
-        )
-    from ouroboros.memory import Memory
-    mem = Memory(drive_root=ctx.drive_root)
-    mem.ensure_files()
-
-    old_content = ""
-    path = ctx.drive_root / "memory" / "identity.md"
-    if path.exists():
-        try:
-            old_content = path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-    mem.append_identity_journal({
-        "ts": utc_now_iso(),
-        "old_len": len(old_content),
-        "new_len": len(content),
-        "old_preview": old_content[:500],
-        "new_preview": content[:500],
-    })
-
-    result = f"OK: identity updated ({len(content)} chars)"
-    old_len = len(old_content)
-    if old_len >= 400 and len(content) < old_len * 0.5:
-        result += (
-            f"\n⚠️ SELF_OVERWRITE_NOTICE: this replaced a {old_len}-char identity with "
-            f"{len(content)} chars (>50% shrink). Identity is intentionally mutable (Bible P4), "
-            "but full rewrites should be rare and reflect genuine self-creation — not a trivial turn. "
-            "Read before writing (P12) and prefer evolving over replacing wholesale."
-        )
-    return result
-
-
-def _toggle_evolution(ctx: ToolContext, enabled: bool) -> str:
-    """Toggle evolution mode on/off via supervisor event."""
-    ctx.pending_events.append({
-        "type": "toggle_evolution",
-        "enabled": bool(enabled),
-        "ts": utc_now_iso(),
-    })
-    state_str = "ON" if enabled else "OFF"
-    return f"OK: evolution mode toggled {state_str}."
-
-
-def _toggle_consciousness(ctx: ToolContext, action: str = "status") -> str:
-    """Control background consciousness: start, stop, or status."""
-    ctx.pending_events.append({
-        "type": "toggle_consciousness",
-        "action": action,
-        "ts": utc_now_iso(),
-    })
-    return f"OK: consciousness '{action}' requested."
-
-
-def _switch_model(ctx: ToolContext, model: str = "", effort: str = "") -> str:
-    """LLM-driven model/effort switch (Constitution P5: LLM-first).
-
-    Stored in ToolContext, applied on the next LLM call in the loop.
-    """
-    from ouroboros.llm import LLMClient, normalize_reasoning_effort
-    available = LLMClient().available_models()
-    changes = []
-
-    if model:
-        if model not in available:
-            return f"⚠️ Unknown model: {model}. Available: {', '.join(available)}"
-        ctx.active_model_override = model
-        
-        import os
-        use_local = False
-        if model == os.environ.get("OUROBOROS_MODEL") and os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1"):
-            use_local = True
-        elif model == os.environ.get("OUROBOROS_MODEL_CODE") and os.environ.get("USE_LOCAL_CODE", "").lower() in ("true", "1"):
-            use_local = True
-        elif model == os.environ.get("OUROBOROS_MODEL_LIGHT") and os.environ.get("USE_LOCAL_LIGHT", "").lower() in ("true", "1"):
-            use_local = True
-        elif model == os.environ.get("OUROBOROS_MODEL_FALLBACK") and os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1"):
-            use_local = True
-            
-        ctx.active_use_local_override = use_local
-        changes.append(f"model={model}{' (local)' if use_local else ''}")
-
-    if effort:
-        normalized = normalize_reasoning_effort(effort, default="medium")
-        ctx.active_effort_override = normalized
-        changes.append(f"effort={normalized}")
-
-    if not changes:
-        return f"Current available models: {', '.join(available)}. Pass model and/or effort to switch."
-
-    return f"OK: switching to {', '.join(changes)} on next round."
-
-
-def _get_task_result(ctx: ToolContext, task_id: str) -> str:
-    """Read the effective result of a registered subtask."""
-    data = load_effective_task_result(ctx.drive_root, task_id)
-    if not data:
-        return f"Task {task_id}: unknown or not yet registered"
-    status = data.get("status", "unknown")
-    result = data.get("result", "")
-    cost = data.get("cost_usd", 0)
-    trace = data.get("trace_summary", "")
-    if status == STATUS_COMPLETED:
-        output = f"Task {task_id} [{status}]: cost=${cost:.2f}\n\n[BEGIN_SUBTASK_OUTPUT]\n{result}\n[END_SUBTASK_OUTPUT]"
-    elif status == STATUS_REJECTED_DUPLICATE:
-        duplicate_of = str(data.get("duplicate_of") or "?")
-        output = (
-            f"Task {task_id} [{status}]: duplicate_of={duplicate_of}\n\n"
-            f"{result or f'Task was rejected as a duplicate of {duplicate_of}.'}"
-        )
-    else:
-        output = f"Task {task_id} [{status}]: {result or 'No details available.'}"
-    if trace:
-        output += f"\n\n[SUBTASK_TRACE]\n{trace}\n[/SUBTASK_TRACE]"
-    return output
-
-
-def _wait_for_task(ctx: ToolContext, task_id: str, timeout_sec: int = 180) -> str:
-    """Wait for a subtask to reach a terminal status."""
-    try:
-        tid = validate_task_id(task_id)
-    except ValueError as exc:
-        return f"⚠️ TOOL_ARG_ERROR (wait_task): {exc}"
-    try:
-        timeout = max(0, min(int(timeout_sec), 3600))
-    except (TypeError, ValueError):
-        timeout = 180
-    waited = wait_for_effective_tasks(ctx.drive_root, [tid], timeout_sec=timeout)
-    header = "Task wait completed" if waited.get("all_terminal") else "Task wait timed out"
-    return f"{header} after {waited.get('elapsed_sec', 0):.1f}s.\n\n{_get_task_result(ctx, tid)}"
-
-
-def _wait_for_tasks(
-    ctx: ToolContext,
-    task_ids: List[str],
-    timeout_sec: int = 600,
-    mode: str = "all_terminal",
-) -> str:
-    """Wait for multiple subtasks and return their full effective results."""
-    if not isinstance(task_ids, list) or not task_ids:
-        return "⚠️ TOOL_ARG_ERROR (wait_tasks): task_ids must be a non-empty list."
-    if len(task_ids) > 50:
-        return "⚠️ TOOL_ARG_ERROR (wait_tasks): task_ids is capped at 50."
-    normalized_ids: List[str] = []
-    for item in task_ids:
-        try:
-            tid = validate_task_id(item)
-        except ValueError as exc:
-            return f"⚠️ TOOL_ARG_ERROR (wait_tasks): {exc}"
-        if tid not in normalized_ids:
-            normalized_ids.append(tid)
-    try:
-        timeout = max(0, min(int(timeout_sec), 7200))
-    except (TypeError, ValueError):
-        timeout = 600
-    normalized_mode = str(mode or "all_terminal").strip().lower()
-    if normalized_mode not in {"all_terminal", "any_terminal"}:
-        return "⚠️ TOOL_ARG_ERROR (wait_tasks): mode must be all_terminal or any_terminal."
-    waited = wait_for_effective_tasks(ctx.drive_root, normalized_ids, timeout_sec=timeout, mode=normalized_mode)
-    return json.dumps(waited, ensure_ascii=False, indent=2)
+_SCHEDULE_SUBAGENT_DESCRIPTION = (
+    "Schedule a live subagent (a child of Ouroboros). Returns task_id for later retrieval. "
+    "DEFAULT is READ-ONLY: the child inspects local repo/data/history plus web/browser and "
+    "returns findings (apart from knowledge notes, memory marks and chronicle drafts in its own name, it cannot "
+    "write local state, commit, enable tools, or run shell/review/runtime/skills). Set write_surface to spawn a "
+    "MUTATIVE (acting) child that "
+    "writes on the selected surface. You remain the sole committer of the live Ouroboros body. "
+    "workspace_root selects the starting folder; omission inherits it. self_worktree copies "
+    "that Git source's current eligible files, including uncommitted work: return its patch "
+    "through integrate_subagent_patch for parallel changes / best-of-N. Native children on "
+    "external_workspace write directly to the SHARED external project directory (write_root or "
+    "the parent workspace); integrate_subagent_patch verifies the files already there without reapplying. "
+    "genesis (a from-scratch new project — game/site/app/new Ouroboros — auto-provisioned as a fresh "
+    "empty git repo under the durable projects root; the project directory IS the deliverable, not "
+    "integrated into this repo). "
+    "An installed skill payload under data/ is NOT a write_surface (runtime data is never one, by "
+    "design): mutate it YOURSELF via delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
+    "— a child cannot open a payload delegation — and schedule children only as read-only "
+    "designers/reviewers for that work. "
+    "COOPERATIVE MULTI-BUILDER vs GENESIS: when SEVERAL builder children must contribute to ONE new "
+    "deliverable together, give each write_surface=external_workspace and OMIT write_root — the host "
+    "mints ONE shared git tree the whole subagent tree writes into cooperatively (deeper descendants "
+    "inherit it), and you verify their combined files with integrate_subagent_patch. Use genesis only when EACH child "
+    "should own its OWN standalone durable repo (e.g. best-of-N separate builds). "
+    "Harness-delegated work uses a private snapshot; integrate_delegated_patch handles that separate patch. "
+    "Mutative children cannot commit or enable tools; children may write knowledge notes and memory "
+    "marks in their own name and publish chronicle pages and parts only as drafts, which the integrating mind "
+    "accepts or rejects (chronicle_write kind=decision); identity and scratchpad stay with the parent. Cyber-effective "
+    "children inherit selected review, skill and runtime tools; explicit task restrictions remain. Nested delegation "
+    "is allowed within configured depth/cap limits — use delegation_intent / may_mutate / "
+    "may_fan_out to tell a child to recurse further, so a 'maximum subagents / grandchildren' "
+    "request propagates structurally instead of collapsing into one flat layer. "
+    "BURST + ABSORB: independent children scheduled in the same round run concurrently; absorb "
+    "them with wait_tasks(any_terminal), which returns whichever finishes first. On cache-write-priced "
+    "routes each sibling launched before the first sibling's first response pays its own full "
+    "prefix write, so burst buys latency and spacing buys cash; your call. "
+    "EXCHANGE OF ADDRESSED TURNS: to make children participants whose position is not "
+    "their whole participation, state the rules in objective/constraints (what is interim, "
+    "whom to address, what ends participation); a native child reaches you, a sibling or any "
+    "task in its tree with forward_to_worker and waits with await_messages, and its final answer ends its "
+    "participation; a session (delegate_start) continues in the SAME session through "
+    "delegate_answer when it can ask mid-run, else a later turn is a NEW run. Always retrieve "
+    "the handoff with get_task_result, wait_task, or wait_tasks before relying on its results."
+)
 
 
 def get_tools() -> List[ToolEntry]:
+    from ouroboros.config import EFFORT_SCALE
     return [
+        ToolEntry("finish_task", {"name": "finish_task",
+            "description": "Select the complete answer and request completion of your current task. "
+                "Use finish after considering the observed work, or stop with a rationale naming unfinished work. "
+                "Select exactly one of answer or a host-offered answer_sha256. This grants no success, cancels no children, and retains all configured review and owner controls.",
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["finish", "stop"]}, "answer": {"type": "string", "description": "The complete answer, including a short correction."},
+                "answer_sha256": {"type": "string", "description": "Exact offered retained or whole held response hash."},
+                "rationale": {"type": "string", "description": "For stop, what remains unfinished."}, "acceptance_subject": {"type": "object", "properties": {"owner_source_sha256": {"type": "string"},
+                    "effective_criteria": {"type": "string"}, "material_tool_indices": {"type": "array", "items": {"type": "integer"}},
+                }, "required": ["owner_source_sha256"]},
+                "pending_review": {"type": "string", "enum": ["wait", "finish"], "default": "wait"},
+            }, "required": ["action"]}}, _finish_task),
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",
             "description": "Update the global tool timeout in settings.json and apply it immediately without restart.",
@@ -502,7 +204,7 @@ def get_tools() -> List[ToolEntry]:
         }, _set_tool_timeout),
         ToolEntry("request_restart", {
             "name": "request_restart",
-            "description": "Ask supervisor to restart runtime (after successful push).",
+            "description": "Ask supervisor to restart runtime after a reviewed local commit or a non-evolution clean no-op; evolution requires its exact active commit receipt.",
             "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
         }, _request_restart),
         ToolEntry("promote_to_stable", {
@@ -510,69 +212,167 @@ def get_tools() -> List[ToolEntry]:
             "description": "Promote ouroboros -> ouroboros-stable. Call when you consider the code stable.",
             "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
         }, _promote_to_stable),
-        ToolEntry("schedule_subagent", {
-            "name": "schedule_subagent",
+        ToolEntry("promote_chat_to_task", {
+            "name": "promote_chat_to_task",
+            "description": _PROMOTE_CHAT_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {"type": "string", "description": "What the task must accomplish."},
+                    "title": {"type": "string", "description": "A short human-readable task name (<=80 chars, e.g. 'Tic-tac-toe game'). Reused as the project name if the owner later turns the task into a project — so coin a clean, concise one.", "default": ""},
+                    "project_name": {"type": "string", "description": "Set ONLY to create a brand-new NAMED project now and start a NEW independent task in it (e.g. 'airi research'); to move THIS task into a project use ensure_project_scope. The display name; a filesystem id is derived from it.", "default": ""},
+                    "expected_output": {"type": "string", "description": "What done looks like.", "default": ""},
+                    "project_id": {"type": "string", "description": "Optional EXISTING project scope (filesystem-clean id).", "default": ""},
+                    "workspace_root": {"type": "string", "description": "Optional absolute working-folder path (validated at admission as an ordinary folder or Git worktree root outside the Ouroboros repo/data). Git-specific operations require a Git worktree; ordinary file and process work is supported directly in a validated folder. When omitted for a project-scoped task, the project's registered working_dir is used by default. Leave empty to work in Ouroboros's own repository (the Main default).", "default": ""},
+                    "workspace": {"type": "string", "description": "Pass 'none' to opt OUT of the project room's default working folder (a folder-less task in a folder-ful project). Leave empty otherwise.", "default": ""},
+                    "source": {"type": "string", "description": "Attach or clone the project's working folder in ONE move: a git URL (https://... or git@host:path — cloned server-side into the projects root; private repos fail typed auth_required) or an existing folder path (validated attach). The folder is registered on the project (provenance + trusted_at) and becomes this task's active workspace. Use for 'help me debug this GitHub repo / this folder' asks.", "default": ""},
+                    "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the id of a settled result (any settled status; any project, the host list is a hint; a helper's result is continued with its root named) to continue it. A live root or a pending promote is refused."},
+                },
+                "required": ["objective", "predecessor_task_id"],
+            },
+        }, _promote_chat_to_task),
+        ToolEntry("ensure_project_scope", {
+            "name": "ensure_project_scope",
             "description": (
-                "Schedule a live local_readonly subagent. Returns task_id for later retrieval. "
-                "Use for genuinely parallel or independently reviewable work: repository exploration, "
-                "log/state forensics, external research, alternate design checks, and adversarial "
-                "validation while the parent continues. The child can inspect local repo/data/history "
-                "and web/browser surfaces, but cannot write local state, commit, enable tools, "
-                "or schedule further subagents. Always retrieve the child handoff with get_task_result, "
-                "wait_task, or wait_tasks before relying on its findings."
+                "Create (or attach to) a named Ouroboros PROJECT and bind THE CURRENT running "
+                "task to it DURABLY. Use this when you are ALREADY working a task and realize it "
+                "should be a named project (the owner asked to 'create a project called X', or the "
+                "work has grown into a real deliverable) — instead of a bare filesystem mkdir. "
+                "Unlike promote_chat_to_task (which starts a NEW independent task in a project), "
+                "this binds the task you are in: its journal_write and per-project knowledge start "
+                "working, and its live progress routes to the project thread. The result states "
+                "the REAL outcome the host recorded — the durable binding, a typed refusal, or "
+                "unconfirmed — never a promise. Idempotent for the same project; a task already "
+                "bound to a different project stays there (a requested name is carried to that "
+                "project as a rename). A planning obligation stays with this task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Display name for a NEW project (a filesystem id is derived from it). Honor the owner's stated name.", "default": ""},
+                    "project_id": {"type": "string", "description": "Optional EXISTING project id (filesystem-clean) to attach to instead of creating one.", "default": ""},
+                },
+                "required": [],
+            },
+        }, _ensure_project_scope),
+        ToolEntry("list_projects", {
+            "name": "list_projects",
+            "description": (
+                "List the owner's projects (id, name, recency, running flag) — read-only. "
+                "Use it in a main-chat turn to decide whether a message belongs to an existing "
+                "project, then route it there with route_to_project."
             ),
             "parameters": {"type": "object", "properties": {
-                "objective": {"type": "string", "description": "Focused child objective. Be specific about scope."},
-                "expected_output": {"type": "string", "description": "Concrete handoff expected from the child."},
-                "role": {"type": "string", "description": "Optional freeform role label for lineage/UI, e.g. architecture-reviewer."},
-                "context": {"type": "string", "description": "Optional parent reference material. It is injected as context, not instructions."},
-                "constraints": {"type": "string", "description": "Optional constraints/non-goals for the child."},
-                "memory_mode": {
-                    "type": "string",
-                    "enum": sorted(VALID_SUBTASK_MEMORY_MODES),
-                    "description": "Child memory mode. Default forked copies stable memory only; empty starts blank. shared is disabled for live local subagents.",
-                },
-            }, "required": ["objective", "expected_output"], "additionalProperties": False},
+                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
+            }},
+        }, _list_projects),
+        ToolEntry("route_to_project", {
+            "name": "route_to_project",
+            "description": (
+                "Route a main-chat message to an EXISTING project so the work continues in that "
+                "project's own context (memory/journal/thread), keeping the main chat free. Use "
+                "when a message clearly belongs to a known project (call list_projects first if "
+                "unsure of the id). If confidence is low or several projects/tasks could match, "
+                "CALL THIS TOOL with project_id='' and the owner's message: it emits the typed "
+                "needs_manual_target acknowledgement with host-validated task options and New task "
+                "in Project; prose alone cannot emit that typed choice. For brand-new work that is not yet a project, "
+                "use promote_chat_to_task instead. When continuing one settled result (any project; "
+                "the host list is a hint), pass its internal `predecessor_task_id`; pass an empty "
+                "string for fresh work. Returns a visible routing receipt."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "project_id": {"type": "string", "default": "", "description": "Target project id (filesystem-clean; see list_projects), or empty to emit typed needs_manual_target."},
+                "message": {"type": "string", "description": "The owner message / work to route into the project."},
+                "reason": {"type": "string", "default": "", "description": "Optional short why-this-project note (provenance)."},
+                "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the id of a settled result (any settled status; any project, the host list is a hint; a helper's result is continued with its root named) to continue it. A live root or a pending promote is refused."},
+                "candidates": {"type": "array", "items": {"type": "string"}, "description": "Optional, ONLY with project_id='': the task/project ids you consider plausible, in preference order. The typed picker shows them first; ids not in the host-built option list are ignored."},
+            }, "required": ["message", "predecessor_task_id"]},
+        }, _route_to_project),
+        ToolEntry("steer_task", {
+            "name": "steer_task",
+            "description": (
+                "Deliver a message to any host-listed active independent root (a running or pending "
+                "root task; hidden/headless roots included) — YOU pick from current_chat.addressable_root_tasks, "
+                "main_routing_manifest.root_tasks, or the [INDEPENDENT_ROOTS] note. Use it when a message "
+                "continues or redirects a task already in flight, instead of spawning a duplicate. Who "
+                "you are decides how it lands: in an owner conversation turn it is delivered as the "
+                "owner's steering text; from a task it is written as a message from THIS task (never "
+                "owner text, no file attachments), and the result says written, not read. The task picks "
+                "it up at its next step. If no running task clearly fits, use promote_chat_to_task "
+                "(new work) or answer inline — never steer a task you are unsure about. "
+                "A Presence-bound turn can steer only work in its own binding; the host checks it."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "task_id": {"type": "string", "description": "Id of the running task to steer (from current_chat.running_tasks)."},
+                "message": {"type": "string", "description": "The follow-up / steering message to deliver to that task."},
+            }, "required": ["task_id", "message"]},
+        }, _steer_task),
+        ToolEntry("schedule_subagent", {
+            "name": "schedule_subagent",
+            "description": _SCHEDULE_SUBAGENT_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                # DERIVED, not restated: schedule_subagent_properties() is the single source
+                # this schema and the handler's allowed-key set both read from.
+                "properties": schedule_subagent_properties(),
+                "required": ["subagent_id", "objective", "expected_output"],
+                "additionalProperties": False,
+            },
         }, _schedule_task),
-        ToolEntry("cancel_task", {
-            "name": "cancel_task",
-            "description": "Cancel a task by ID.",
-            "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]},
-        }, _cancel_task),
+        # cancel_task + peek_task + discard_child_result are registered by ouroboros/tools/join_ledger.py.
         ToolEntry("request_deep_self_review", {
             "name": "request_deep_self_review",
-            "description": "Request an Atlas-backed deep self-review of the entire Ouroboros project. Uses a large-context model with full core memory whitelist and manifest accounting for every tracked repo path against the Constitution. Results go to chat and memory. Requires OPENROUTER_API_KEY or OPENAI_API_KEY.",
+            "description": "Request a deep self-review of the entire Ouroboros project against the Constitution, on the configured deep-review reviewer row (Settings → Agents → Review lanes; absent, the OUROBOROS_MODEL_DEEP_SELF_REVIEW model runs one packed Atlas review): a packed API model reads the Atlas plus the full core memory whitelist; a configured subagent or agent session reads the repository itself with read-only tools and receives the same memory whitelist inline byte-exact (memory is never receipt-checked). Results go to chat and memory.",
             "parameters": {"type": "object", "properties": {
                 "reason": {"type": "string", "description": "Why you want a review (context for the reviewer)"},
             }, "required": ["reason"]},
         }, _request_deep_self_review),
         ToolEntry("chat_history", {
             "name": "chat_history",
-            "description": "Retrieve messages from chat history. Supports search.",
+            "description": "Retrieve live and recent archived chat messages. Supports exact provenance/date filters, substring search, and pagination.",
             "parameters": {"type": "object", "properties": {
                 "count": {"type": "integer", "default": 100, "description": "Number of messages (from latest)"},
                 "offset": {"type": "integer", "default": 0, "description": "Skip N from end (pagination)"},
                 "search": {"type": "string", "default": "", "description": "Text filter"},
-            }, "required": []},
+                "provider": {"type": "string", "default": "", "description": "Exact transport provider"},
+                "account_id": {"type": "string", "default": "", "description": "Exact transport account ID"},
+                "conversation_id": {"type": "string", "default": "", "description": "Exact transport conversation ID"},
+                "thread_id": {"type": "string", "default": "", "description": "Exact transport thread ID"},
+                "actor_id": {"type": "string", "default": "", "description": "Exact platform actor ID"},
+                "date_from": {"type": "string", "default": "", "description": "Inclusive ISO-8601 lower timestamp bound"},
+                "date_to": {"type": "string", "default": "", "description": "Inclusive ISO-8601 upper timestamp bound"},
+                "snapshot": {"type": "string", "default": "", "description": "Opaque snapshot returned by the first page; reuse it with offset to refuse shifted/mixed pages"},
+            }, "required": [], "additionalProperties": False},
         }, _chat_history),
         ToolEntry("update_scratchpad", {
             "name": "update_scratchpad",
             "description": "Append a block to your working memory (scratchpad). Each call adds a "
-                           "timestamped block; oldest blocks are auto-evicted when the cap (10) is reached. "
+                           "timestamped block; oldest blocks are auto-evicted when either cap is reached "
+                           "(10 blocks, 60000 characters of content). "
                            "Write what matters NOW — active tasks, decisions, observations. "
-                           "Persists across sessions, read at every task start.",
+                           "Persists across sessions, read at every task start. "
+                           "Project rooms included — the scratchpad is the same working memory in every room.",
             "parameters": {"type": "object", "properties": {
                 "content": {"type": "string", "description": "Content for this scratchpad block"},
             }, "required": ["content"]},
         }, _update_scratchpad),
         ToolEntry("send_user_message", {
             "name": "send_user_message",
-            "description": "Send a proactive message to the user. Use when you have something "
-                           "genuinely worth saying — an insight, a question, or an invitation to collaborate. "
-                           "This is NOT for task responses (those go automatically).",
+            "description": "Send a separate reply to the owner while work continues: the first "
+                           "line of longer work (what I am about to do and why), or a mid-work "
+                           "insight, a question, or an invitation to collaborate. It appears in "
+                           "the conversation as a normal reply and leaves the work running; later "
+                           "progress stays in the card and the final answer is delivered "
+                           "automatically.",
             "parameters": {"type": "object", "properties": {
                 "text": {"type": "string", "description": "Message text"},
                 "reason": {"type": "string", "description": "Why you're reaching out (logged, not sent)"},
+                "destination": {"type": "string", "enum": ["current", "main"], "default": "current",
+                                "description": "'current' (default): this conversation's room. 'main': the "
+                                               "owner's main chat, for a brief plain-text notice that belongs "
+                                               "there while this work lives in an owner-visible Project room. "
+                                               "It never appears in the Project thread and is not this task's "
+                                               "answer. Delegated, Presence and agent-to-agent work cannot use it."},
             }, "required": ["text"]},
         }, _send_user_message),
         ToolEntry("update_identity", {
@@ -583,58 +383,198 @@ def get_tools() -> List[ToolEntry]:
                            "Full rewrites are allowed but should be rare; continuity of self matters. "
                            "Use this only after substantive reflection or real experience — not on a "
                            "greeting or trivial turn. This is the only correct way to write identity; "
-                           "never write memory/identity.md through write_file/edit_text.",
+                           "never write memory/identity.md through write_file/edit_text. "
+                           "Project rooms included — identity is the same continuous file in every room.",
             "parameters": {"type": "object", "properties": {
                 "content": {"type": "string", "description": "Full identity content (prefer evolving over rewriting from scratch)"},
             }, "required": ["content"]},
         }, _update_identity),
         ToolEntry("toggle_evolution", {
             "name": "toggle_evolution",
-            "description": "Enable or disable evolution mode. When enabled, Ouroboros runs continuous self-improvement cycles.",
+            "description": "Enable or disable evolution mode. When enabled, Ouroboros runs continuous self-improvement cycles. Enabling requires runtime_mode 'advanced', 'pro', or 'cyber_pro'; it is refused in 'light' mode.",
             "parameters": {"type": "object", "properties": {
                 "enabled": {"type": "boolean", "description": "true to enable, false to disable"},
+                "objective": {"type": "string", "default": "", "description": "Optional Evolution Campaign objective when enabling."},
             }, "required": ["enabled"]},
         }, _toggle_evolution),
         ToolEntry("toggle_consciousness", {
             "name": "toggle_consciousness",
-            "description": "Control background consciousness: 'start', 'stop', or 'status'.",
+            "description": ("Control background consciousness: 'start' or 'stop' (the owner is told), or "
+                            "'status' (answered to you only: the persisted state with its source, never posted to "
+                            "the owner's chat)."),
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["start", "stop", "status"], "description": "Action to perform"},
             }, "required": ["action"]},
         }, _toggle_consciousness),
+        ToolEntry("set_next_wakeup", {
+            "name": "set_next_wakeup", "description": (
+                "Choose the consciousness wake-up interval in seconds: how long after a wake-up ends the next one "
+                "starts, clamped into the owner's OUROBOROS_BG_WAKEUP_MIN/MAX. A wake-up calling this sets its own "
+                "next one; a wake-up already pending keeps its time; with consciousness off it is stored for later. "
+                "The alarm still adjusts it: a failed wake-up doubles the interval (up to MAX), a pending event "
+                "brings the next wake-up forward, a skipped one retries after MIN (an exhausted allowance waits for "
+                "its reset), and no wake-up starts sooner than MIN after the last wake-up, boot or skip."),
+            "parameters": {"type": "object", "properties": {"seconds": {"type": "integer", "description": "Seconds from the end of a wake-up to the next one"}}, "required": ["seconds"]},
+        }, _set_next_wakeup),
         ToolEntry("switch_model", {
             "name": "switch_model",
             "description": "Switch to a different LLM model or reasoning effort level. "
                            "Use when you need more power (complex code, deep reasoning) "
-                           "or want to save budget (simple tasks). Takes effect on next round.",
+                           "or want to save budget (simple tasks). Takes effect on next round. "
+                           "After the host moved this turn to a configured fallback, primary='return' "
+                           "or 'wait' goes back to the turn's primary route.",
             "parameters": {"type": "object", "properties": {
                 "model": {"type": "string", "description": "Model name (e.g. anthropic/claude-sonnet-4). Leave empty to keep current."},
-                "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh"],
-                           "description": "Reasoning effort level. Leave empty to keep current."},
+                "effort": {"type": "string", "enum": list(EFFORT_SCALE),
+                           "description": "Reasoning effort level (adapted down per route when a model tops out lower). Leave empty to keep current."},
+                "primary": {"type": "string", "enum": ["return", "wait"],
+                            "description": ("Omit to keep the current route. Return to this turn's primary route: its model, role and account policy "
+                                            "(Auto stays Auto) plus the owner's wait-card choice; effort stays. 'return': "
+                                            "if the primary refuses, configured routes are tried again. 'wait': if it "
+                                            "refuses or is unreachable, wait for it where this turn may wait instead of "
+                                            "paid alternatives. The next real request tests it; no timer or probe does. "
+                                            "Not with model.")},
             }, "required": []},
         }, _switch_model),
         ToolEntry("get_task_result", {
             "name": "get_task_result",
-            "description": "Read the effective result of a subtask, including child-drive output when available.",
+            "description": "Read the effective result or exact authority of a task, including one bounded canonical work-order source range when requested.",
             "parameters": {"type": "object", "required": ["task_id"], "properties": {
-                "task_id": {"type": "string", "description": "Task ID returned by schedule_subagent"},
+                "task_id": {"type": "string", "description": "Task ID returned by scheduling or exposed by the host routing manifest."},
+                "known_result_sha256": {"type": "string", "description": "Optional child_result_sha256 from a previous read. An exact match omits only unchanged result/trace text, retaining current facts and a full-read reference. Omit for full text; explicit authority/source requests always return their requested view."},
+                "include_authority": {"type": "boolean", "default": False, "description": "Return the exact selected result, task contract, origin, artifact references, and current plan-review authority."},
+                "include_work_order_source": {"type": "boolean", "default": False, "description": "Return the canonical work-order source projection; provide both source_start_char and source_end_char for the exact bounded range."},
+                "include_completion_source": {"type": "boolean", "default": False,
+                                              "description": "Read the full stored completion observations for this task, including returns omitted from the summary. Omit bounds for source length/hash, then request explicit character ranges."},
+                "include_focus_source": {"type": "boolean", "default": False, "description": "Read the exact bytes this task's focus source_ref answered when the focus was authored (the retained_source of an [INDEPENDENT_ROOTS] row); same bounds contract as include_completion_source."},
+                "focus_source_sha256": {"type": "string", "default": "", "description": "With include_focus_source: select the retained source by the sha256 the roster row quoted, so a later focus of the same author cannot substitute its evidence."},
+                "review_source_sha256": {"type": "string", "default": "", "description": "Root turns: read only the exact acceptance-review source named by a late-evidence digest, pinned to the physical task_id even after a retry. Works across forked/empty drives. Without a range returns complete_chars/hash; then use source_start_char/source_end_char to read exact text. Does not include authority."},
+                "source_start_char": {"type": "integer", "description": "Inclusive character offset for the requested canonical source range."},
+                "source_end_char": {"type": "integer", "description": "Exclusive character offset for the requested canonical source range. A range outside the source returns no text: the answer names complete_chars and the range received, and is an argument error."},
+                "presence_scope": {"type": "string", "enum": ["own_binding"], "description": "Presence tasks only: read just independent work started from this Presence binding (any of its conversations) or this task's own tree."},
             }},
         }, _get_task_result),
         ToolEntry("wait_task", {
             "name": "wait_task",
-            "description": "Wait for a subtask to reach a terminal status and return its effective result.",
+            "description": "Wait for ONE subtask to reach a terminal status and return its effective result: the full single-child handoff once it settled (or when your known_result_sha256 no longer matches); a return BEFORE it settled carries the compact wait_tasks projection plus delegated_runs (its open delegated runs with dated observation facts, no liveness verdict). May return EARLY (before terminal) if the child raises a tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon — the result then carries a [CHILD_BEACONS] block so you can steer, review, or override it. An unread message in your own mailbox also returns early so the ordinary loop can deliver and acknowledge it; the child keeps running. With SEVERAL children in flight, prefer wait_tasks(any_terminal) to absorb whichever finishes first rather than blocking serially on one id at a time.",
             "parameters": {"type": "object", "required": ["task_id"], "properties": {
                 "task_id": {"type": "string", "description": "Task ID to check"},
-                "timeout_sec": {"type": "integer", "default": 180, "description": "Maximum seconds to wait (default 180)."},
+                "known_result_sha256": {"type": "string", "description": "Optional child_result_sha256 already obtained for this task. An exact match returns unchanged without repeating result/trace; current facts remain. Omit to return full text. This does not change when the wait ends."},
+                "timeout_sec": {"type": "integer", "default": 180, "description":
+                                "Maximum seconds to wait (default 180); a larger value is clamped to "
+                                f"{_WAIT_TASK_CLAMP_SEC}, and a deadline narrows it (named in the result). Size the window to the child's expected life."},
             }},
-        }, _wait_for_task),
+        }, _wait_for_task, timeout_sec=7200),
         ToolEntry("wait_tasks", {
             "name": "wait_tasks",
-            "description": "Wait for multiple subtasks and return full effective results for each child.",
+            "description": "Wait for MULTIPLE subtasks at once and return a compact structural projection per child (task_id, status, accounted_upper_bound_usd, cost_final, child_result_sha256, outcome_axes, result, trace_summary, capability_delta when the child has something to disclose, duplicate_of) — the right tool to ABSORB a batch of independent children you scheduled in one burst. The full per-child envelope stays on disk in task_results/<task_id>.json (child_result_sha256 pins the exact result you saw; get_task_result returns the full result text plus trace/outcome summaries). With mode=any_terminal it returns as soon as the FIRST child finishes (handle it, then call again for the rest) instead of blocking serially. The JSON also includes live_child_status (running/scheduled/terminal per child) and may early_return (before all terminal) on a child tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon so you can steer, review, or override mid-flight, or on an unread message in your own mailbox (reason=owner_mailbox_pending); the ordinary loop then handles delivery and acknowledgement. An id no surface of this tree ever minted (no task result, no queue row, no tree-ledger row) is flagged unknown_task_id — 'not yet registered or never scheduled' — and unknown_task_ids + a compact children_roster of your ACTUAL direct children are attached so you can repair the wait set instead of re-polling phantoms.",
             "parameters": {"type": "object", "required": ["task_ids"], "properties": {
                 "task_ids": {"type": "array", "items": {"type": "string"}, "description": "Task IDs returned by schedule_subagent."},
-                "timeout_sec": {"type": "integer", "default": 600, "description": "Maximum seconds to wait (default 600)."},
+                "known_result_sha256_by_task": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Optional task_id to previously obtained child_result_sha256 map. Matching children omit only result/trace and return result_unchanged plus a full-read reference. Missing or different hashes return the usual complete body/trace. Current status/cost/outcome/capability facts remain; wait timing is unchanged."},
+                "timeout_sec": {"type": "integer", "default": 600, "description":
+                                "Maximum seconds to wait (default 600); a larger value is clamped to "
+                                f"{_WAIT_TASKS_CLAMP_SEC}. Size the window to the children's expected life; "
+                                "an expired wait returns the still-live ids and this ceiling; a deadline narrows it (window_bound)."},
                 "mode": {"type": "string", "enum": ["all_terminal", "any_terminal"], "default": "all_terminal"},
             }},
-        }, _wait_for_tasks, timeout_sec=7200),
+        }, _wait_for_tasks, timeout_sec=_WAIT_TASKS_CLAMP_SEC + NESTED_SETTLEMENT_MARGIN_SEC),
+        await_messages_entry(),
     ]
+
+
+# v7next F1 (D08): moved spans live in their owner leaves; re-exported here
+# so this facade stays the single import surface for callers and tests.
+from ouroboros.tools.control_events import (  # noqa: E402, F401 -- intentional public re-exports
+    _PROMOTE_CONFIRM_POLL_SEC,
+    _PROMOTE_CONFIRM_TIMEOUT_SEC,
+    _SCHEDULE_EMIT_LOCK,
+    _emit_and_wait_for_routing,
+    _emit_control_event,
+    _promotion_pool_disabled_from_snapshot,
+    _routing_status_root,
+    _wait_for_promotion_admission,
+    _wait_for_routing_annotation,
+)
+from ouroboros.tools.control_routing import (  # noqa: E402, F401 -- intentional public re-exports
+    _MISSING_PREDECESSOR_SELECTOR,
+    _attach_client_surface,
+    _attach_origin_from_metadata,
+    _attach_predecessor_authority_from_metadata,
+    _finish_swarm_handoff,
+    _list_projects,
+    _predecessor_selector_error,
+    _promote_chat_to_task,
+    _route_to_project,
+    _steer_task,
+)
+from ouroboros.tools.control_runtime import (  # noqa: E402, F401 -- intentional public re-exports
+    _chat_history,
+    _evolution_restart_block_reason,
+    _promote_to_stable,
+    _request_deep_self_review,
+    _request_restart,
+    _finish_task,
+    _send_user_message,
+    _set_next_wakeup,
+    _set_tool_timeout,
+    _switch_model,
+    _toggle_consciousness,
+    _toggle_evolution,
+    _update_identity,
+    _update_scratchpad,
+)
+
+
+# v7next F2 (D07): moved spans live in their owner leaves; re-exported here
+# so this facade stays the single import surface for callers and tests.
+from ouroboros.tools.control_subagent_spec import (  # noqa: E402, F401 -- intentional public re-exports
+    RETIRED_SCHEDULE_PARAMS,
+    VALID_SUBTASK_MEMORY_MODES,
+    _INTERNAL_SCHEDULE_OPTIONS,
+    _validated_schedule_fields,
+    schedule_subagent_param_names,
+    schedule_subagent_properties,
+)
+from ouroboros.tools.control_scheduling import (  # noqa: E402, F401 -- intentional public re-exports
+    HIDDEN_LEGACY_SCHEDULE_PARAMS,
+    _build_acting_constraint,
+    _build_child_subagent_contract,
+    _capability_mismatch_message,
+    _context_task_depth,
+    _earliest_deadline_at,
+    _emit_swarm_fanout,
+    _finalize_schedule_emission,
+    _inherited_workspace_from_active_repo,
+    _materialize_child_attachment_manifest,
+    _populate_subagent_event_extras,
+    _prepare_child_drive,
+    _record_scheduled_subagent,
+    _resolve_executor_ref,
+    _schedule_task,
+    _select_subagent_constraint,
+    _subagent_slot_note,
+    maybe_emit_delegated_run_fanout,
+)
+from ouroboros.tools.control_task_results import (  # noqa: E402, F401 -- intentional public re-exports
+    NESTED_SETTLEMENT_MARGIN_SEC,
+    _UNMINTED_WAIT_GRACE_SEC,
+    _WAIT_TASK_CLAMP_SEC,
+    _WAIT_TASKS_CLAMP_SEC,
+    _await_messages,
+    _children_roster_projection,
+    await_messages_entry,
+    _count_live_sibling_children,
+    _get_task_result,
+    _subtask_outcome_summary,
+    _unminted_wait_ids,
+    _wait_attention_poll,
+    _wait_for_task,
+    _wait_for_tasks,
+    cache_horizon_note,
+    disclosable_capability_delta,
+)
+
+# The D23 hidden-params handler attribute is stamped AFTER the re-exports bind
+# _schedule_task and HIDDEN_LEGACY_SCHEDULE_PARAMS above (the moved spans own
+# the definitions; the attribute consumer reads it off the registered handler).
+setattr(_schedule_task, "_hidden_legacy_params", HIDDEN_LEGACY_SCHEDULE_PARAMS)

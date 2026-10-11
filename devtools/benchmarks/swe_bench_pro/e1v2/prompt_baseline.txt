@@ -1,0 +1,61 @@
+# SOFTWARE ENGINEERING TASK
+
+A repository ({repo}, language: {repo_language}) is checked out at /app in this container.
+Resolve the issue below by editing the repo's source, and verify the fix passes before finishing.
+
+## Working in /app (your ACTIVE WORKSPACE)
+- /app is your active external workspace: repo-aware tools default to it via
+  root="active_workspace", with WORKSPACE-RELATIVE paths ("pkg/file.go", not "/app/pkg/file.go").
+- Understand: query_code(op=...) (root defaults to active_workspace) for symbol-aware structure
+  (definitions/references/callers/callees/impact); search_code / read_file / list_files
+  (root="active_workspace") for text/regex and file reads.
+- Edit source: write_file / edit_text (root="active_workspace", path="pkg/file.ext").
+- Build/run/test: run_command runs shell INSIDE this container with the project toolchain
+  (go/node/yarn/python/pytest/...); use cwd="/app" (or a subdir). Reproduce and run tests with it.
+- No git-commit needed — your on-disk edits in /app are captured automatically (read-only git via
+  run_command — diff/status/log — is fine).
+- Optional: delegate a heavy parallelizable sub-part with schedule_subagent(...); keep it narrow;
+  you own the integrated fix.
+
+## How to solve
+1. Find and read the code relevant to the issue.
+2. Reproduce the bug via the project's own test runner (run_command) to confirm it.
+3. Implement the MINIMAL change to non-test source that resolves the issue and satisfies every
+   requirement; conform to <interface> exactly (names/paths/signatures).
+4. Re-run the relevant tests and confirm they pass. Then close the spec gap: re-read
+   <requirements> and <interface> and list every required behavior and edge/error case they imply
+   but the currently checked-out tests do NOT exercise; make your change satisfy that full list,
+   not just the visible suite. The visible tests are a lower bound on what is graded, never the ceiling.
+   To probe a spec-implied case the in-repo tests miss, you MAY write a throwaway in-package test and
+   declare it as scratch — run_command(cmd=[...], scratch=["path/to/your_throwaway_test_file"]): scratch
+   is exempt from the output guard, never a deliverable, and excluded from the graded patch. Delete it
+   before finishing. (Do NOT edit the project's own tests — the evaluator restores its held-out tests.)
+5. Before finishing, ground it: verify_and_record(contract_kind="explicit_command",
+   check="<the ACTUAL test command you ran>", expected="<pass marker>"). Ground on the real test
+   runner — never a `grep`/`tail`/`|| true` proxy that can exit 0 without actually asserting (the host
+   flags such exit-masking checks as weak grounding).
+
+## Keep the patch minimal and clean (your raw diff is graded by applying it)
+- Edit ONLY the source needed for the fix; do not reformat unrelated code.
+- Match <interface> EXACTLY (names/paths/signatures): a parameter/field/return you add but never
+  USE, or a signature that diverges from <interface>, is a red flag — the contract is graded, not
+  a plausible-looking shape.
+- Do NOT modify/add/delete tests — the evaluator restores its OWN held-out tests at grading time.
+  Passing the in-repo tests is therefore NOT proof of correctness, and a local green can still be
+  graded RED. Treat the in-repo tests as possibly INCOMPLETE (missing cases), not as wrong: derive
+  the required behavior from <requirements>/<interface> and the issue, and cover the cases the spec
+  implies even when no checked-out test asserts them. Do not weaken or work around a test to turn it
+  green, and do not dismiss a genuine failure — if a visible test fails and the spec agrees with it,
+  the bug is in your change.
+- Do NOT run production builds / bundlers / codegen that regenerate compiled assets
+  (dist/, *.bundle.js, public/assets/*); such artifacts must NOT enter your diff.
+- Do NOT hand-edit lock files (yarn.lock, package-lock.json, go.sum, poetry.lock, Cargo.lock)
+  unless you deliberately changed the corresponding manifest.
+
+### ISSUE
+I've checked out {repo} (language: {repo_language}) at /app.
+<issue>{problem_statement}</issue>
+<requirements>{requirements}</requirements>
+<interface>{interface}</interface>
+Implement the changes in /app so the issue is resolved and every requirement is met.
+Make the minimal change to non-test source files. Think carefully and verify before finishing.

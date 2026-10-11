@@ -93,7 +93,10 @@ def _manifest_frontmatter_dict(manifest: SkillManifest) -> Dict[str, Any]:
         "scripts": [dict(s) for s in manifest.scripts],
         "entry": manifest.entry,
         "permissions": list(manifest.permissions),
+        "conflicts": list(manifest.conflicts),
         "ui_tab": dict(manifest.ui_tab) if manifest.ui_tab else None,
+        # CPL-7: preserve the author's Model Experience prose across adaptation.
+        "model_experience": dict(manifest.model_experience) if manifest.model_experience else None,
     }
     front.update(manifest.raw_extra or {})
     return front
@@ -182,7 +185,12 @@ def _detect_runtime(
     declared_outside = [b for b in declared if b not in _ALLOWED_RUNTIME_BINS]
     if declared_outside:
         warnings.append(
-            f"Skill declares CLI dependencies outside the allowed runtime set ({sorted(_ALLOWED_RUNTIME_BINS)}): {declared_outside}. Scripts will not be executable; the skill will land as 'type: instruction' (markdown-only)."
+            f"Skill declares host tools outside the launchable-interpreter set "
+            f"({sorted(_ALLOWED_RUNTIME_BINS)}): {declared_outside}. These are runtime "
+            "tools a script calls via PATH, not script interpreters Ouroboros launches, "
+            "so with no runnable script the skill lands as 'type: instruction'. Use the "
+            "Skills 'Make runnable' repair to author a bash/python/node script that "
+            "invokes them, then review and enable."
         )
     if declared_in_allowlist:
         # Prefer the common case when only one runtime can be emitted.
@@ -291,7 +299,7 @@ def _translate_env_from_settings(
 def _render_frontmatter(front: Dict[str, Any]) -> str:
     import yaml  # type: ignore
 
-    order = ("name", "description", "version", "type", "runtime", "timeout_sec", "when_to_use", "permissions", "env_from_settings", "os", "requires", "entry", "scripts")
+    order = ("name", "description", "version", "type", "runtime", "timeout_sec", "when_to_use", "model_experience", "permissions", "env_from_settings", "os", "requires", "entry", "scripts")
     ordered = {
         key: front[key]
         for key in order
@@ -493,6 +501,11 @@ def adapt_openclaw_skill(
         "scripts": scripts_entries if skill_type == "script" else [],
         "schema_version": SKILL_MANIFEST_SCHEMA_VERSION,
     }
+    # CPL-7: a source manifest that already carries Ouroboros Model Experience
+    # prose keeps it; the re-parse below re-validates the section fail-closed.
+    source_model_experience = original_front.get("model_experience")
+    if isinstance(source_model_experience, dict) and source_model_experience:
+        translated_front["model_experience"] = source_model_experience
 
     rendered_body = _append_manual_install_guidance(body, manual_install_specs)
     rendered_skill_md = _render_skill_md(translated_front, rendered_body)

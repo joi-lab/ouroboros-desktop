@@ -16,7 +16,6 @@ import asyncio
 import pathlib
 from unittest import mock
 
-import pytest
 
 
 # The minimal canonical provenance record any v5 marketplace install
@@ -130,7 +129,6 @@ def test_required_projection_fields_match_between_endpoints(monkeypatch):
             "routes": [],
             "ws_handlers": [],
             "ui_tabs": [],
-            "ui_tabs_pending": [],
         }
 
     def _stub_read_provenance(*_a, **_kw):

@@ -81,9 +81,7 @@ def test_initial_tool_schemas_includes_enabled_extension_tools(tmp_path, monkeyp
             extension_loader._tools.pop(tool_name, None)
 
     assert tool_name in names
-    # It remains discoverable as an additional tool in raw policy output;
-    # loop.py hides active tools from the user-facing list_available_tools result.
-    assert tool_name in non_core
+    assert tool_name not in non_core
 
 
 def test_initial_schemas_skip_disabled_or_unreviewed_extensions(tmp_path, monkeypatch):
@@ -109,7 +107,7 @@ def test_initial_schemas_skip_disabled_or_unreviewed_extensions(tmp_path, monkey
     assert tool_name not in names
 
 
-def test_extension_schema_size_cap_warns_and_truncates(tmp_path, monkeypatch, caplog):
+def test_extension_schema_size_does_not_silently_omit_initial_schema(tmp_path, monkeypatch, caplog):
     from ouroboros import extension_loader
 
     registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
@@ -130,9 +128,9 @@ def test_extension_schema_size_cap_warns_and_truncates(tmp_path, monkeypatch, ca
         with extension_loader._lock:
             extension_loader._tools.pop(big_name, None)
 
-    assert big_name not in names
-    assert big_name in non_core_names
-    assert "extension schema budget exceeded" in caplog.text
+    assert big_name in names
+    assert big_name not in non_core_names
+    assert "extension schema budget exceeded" not in caplog.text
 
 
 def test_system_prompt_lists_installed_skills(tmp_path):

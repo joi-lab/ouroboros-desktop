@@ -7,9 +7,12 @@ so routes can move work across ``asyncio.to_thread`` boundaries.
 
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
+import re
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -27,15 +30,30 @@ from ouroboros.marketplace.fetcher import (
     land_staged_tree,
     stage as _stage_archive,
 )
-from ouroboros.marketplace.isolated_deps import DEPS_STATE_FILENAME, install_isolated_dependencies
+from ouroboros.marketplace.install_specs import install_specs_hash
+from ouroboros.marketplace.isolated_deps import DEPS_STATE_FILENAME, install_isolated_dependencies, read_deps_state
 from ouroboros.marketplace.provenance import (
     delete_provenance,
     read_provenance,
     write_provenance,
 )
 from ouroboros.skill_review_status import skill_review_gate
+from ouroboros.utils import atomic_write_json, read_json_dict
 
 log = logging.getLogger(__name__)
+
+
+def _registry_error_status(exc: Exception) -> int:
+    """Map a registry-client error to the HTTP status the gateway should surface
+    (404 for a missing slug, 429 for rate limiting); 0 means use the default so
+    the install/update routes preserve upstream semantics instead of a blanket 400."""
+    from ouroboros.marketplace.clawhub import ClawHubNotFoundError, ClawHubRateLimitError
+
+    if isinstance(exc, ClawHubNotFoundError):
+        return 404
+    if isinstance(exc, ClawHubRateLimitError):
+        return 429
+    return 0
 
 
 @dataclass
@@ -56,6 +74,9 @@ class InstallResult:
     deps_error: str = ""
     deps_fingerprint: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    # Upstream HTTP status to surface (404/429); 0 means the gateway uses its
+    # default for a failed install (400). Preserves registry semantics end-to-end.
+    error_status: int = 0
     provenance: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -64,6 +85,162 @@ class UninstallResult:
     ok: bool
     sanitized_name: str
     error: str = ""
+
+
+@dataclass
+class PayloadRollbackSnapshot:
+    """Rollback handle for payload, its environment, and affected lifecycle state."""
+
+    drive_root: pathlib.Path
+    skill_name: str
+    target_dir: pathlib.Path
+    backup_dir: Optional[pathlib.Path] = None
+    state_provenance: Optional[Dict[str, Any]] = None
+    lifecycle_state: Dict[str, Optional[bytes]] = field(default_factory=dict)
+    payload_restored: bool = False
+
+
+# Only state that install/review/dependency reconciliation may replace. Owner
+# enable/disable intent and append-only history are never rolled back.
+LIFECYCLE_SNAPSHOT_FILENAMES = (
+    "review.json", "review_job.json", "deps.json", "grants.json", "accepted_rebuttals.json",
+)
+
+
+def snapshot_lifecycle_state(drive_root: pathlib.Path, skill_name: str) -> Dict[str, Optional[bytes]]:
+    from ouroboros.skill_loader import skill_state_dir
+
+    state_dir = skill_state_dir(drive_root, skill_name)
+    return {
+        name: path.read_bytes() if path.is_file() else None
+        for name in LIFECYCLE_SNAPSHOT_FILENAMES
+        for path in (state_dir / name,)
+    }
+
+
+def restore_lifecycle_state(drive_root: pathlib.Path, skill_name: str, snapshot: Dict[str, Optional[bytes]]) -> List[str]:
+    """Byte-restore affected state, reporting each failure independently."""
+    from ouroboros.skill_loader import skill_state_dir
+
+    errors: List[str] = []
+    state_dir = skill_state_dir(drive_root, skill_name)
+    for filename, blob in snapshot.items():
+        path = state_dir / filename
+        try:
+            if blob is None:
+                path.unlink(missing_ok=True)
+            else:
+                tmp = path.with_name(path.name + ".restore.tmp")
+                tmp.write_bytes(blob)
+                tmp.replace(path)
+        except OSError as exc:
+            log.error("rollback could not restore %s for %s", filename, skill_name, exc_info=True)
+            errors.append(f"state:{filename}: {type(exc).__name__}: {exc}")
+    return errors
+
+
+def snapshot_payload_state(
+    drive_root: pathlib.Path,
+    skill_name: str,
+    target_dir: pathlib.Path,
+    *,
+    include_state_provenance: bool = False,
+) -> PayloadRollbackSnapshot:
+    """Copy current live payload/state so a failed install/update can restore it."""
+
+    drive_root = pathlib.Path(drive_root)
+    target_dir = pathlib.Path(target_dir)
+    lifecycle_state = snapshot_lifecycle_state(drive_root, skill_name)
+    backup_dir: Optional[pathlib.Path] = None
+    if target_dir.exists():
+        rollback_root = target_dir.parent / ".rollback"
+        rollback_root.mkdir(parents=True, exist_ok=True)
+        backup_dir = rollback_root / f"{target_dir.name}.{uuid.uuid4().hex}"
+        shutil.copytree(target_dir, backup_dir)
+    return PayloadRollbackSnapshot(
+        drive_root=drive_root,
+        skill_name=skill_name,
+        target_dir=target_dir,
+        backup_dir=backup_dir,
+        state_provenance=read_provenance(drive_root, skill_name) if include_state_provenance else None,
+        lifecycle_state=lifecycle_state,
+    )
+
+
+def _deps_state_path(drive_root: pathlib.Path, skill_name: str) -> pathlib.Path:
+    from ouroboros.skill_loader import skill_state_dir
+
+    return skill_state_dir(drive_root, skill_name) / DEPS_STATE_FILENAME
+
+
+def _write_deps_state(drive_root: pathlib.Path, skill_name: str, state: Dict[str, Any]) -> None:
+    if not state:
+        return
+    atomic_write_json(_deps_state_path(drive_root, skill_name), state, trailing_newline=True)
+
+
+def _valid_existing_clawhub_provenance(
+    drive_root: pathlib.Path,
+    skill_name: str,
+    target_dir: pathlib.Path,
+    *,
+    slug: str,
+) -> Optional[Dict[str, Any]]:
+    sidecar = read_json_dict(pathlib.Path(target_dir) / ".clawhub.json") or {}
+    durable = read_provenance(drive_root, skill_name) or {}
+    if (
+        str(sidecar.get("source") or "") != "clawhub"
+        or str(sidecar.get("slug") or "") != str(slug or "")
+        or str(sidecar.get("sanitized_name") or "") != skill_name
+    ):
+        return None
+    if (
+        str(durable.get("source") or "") != "clawhub"
+        or str(durable.get("slug") or "") != str(slug or "")
+        or str(durable.get("sanitized_name") or "") != skill_name
+    ):
+        return None
+    return durable
+
+
+def _has_repairable_clawhub_partial(drive_root: pathlib.Path, skill_name: str, target_dir: pathlib.Path) -> bool:
+    target = pathlib.Path(target_dir)
+    return (
+        (_deps_state_path(drive_root, skill_name)).is_file()
+        or (target / ".ouroboros_env").exists()
+        or (target / ".clawhub.json").is_file()
+    )
+
+
+def restore_payload_state(snapshot: PayloadRollbackSnapshot, *, restore_state_provenance: bool = False) -> None:
+    """Restore or remove the live payload plus deps/provenance after a failed transaction."""
+
+    target_dir = pathlib.Path(snapshot.target_dir)
+    if not snapshot.payload_restored:
+        if snapshot.backup_dir is not None and not snapshot.backup_dir.is_dir():
+            raise OSError(f"rollback payload is missing: {snapshot.backup_dir}")
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if snapshot.backup_dir is not None:
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.backup_dir.rename(target_dir)
+        # A later state-write failure must never make a retry delete this tree.
+        snapshot.payload_restored = True
+    errors = restore_lifecycle_state(snapshot.drive_root, snapshot.skill_name, snapshot.lifecycle_state)
+    if errors:
+        raise OSError("; ".join(errors))
+    if restore_state_provenance:
+        if snapshot.state_provenance is None:
+            delete_provenance(snapshot.drive_root, snapshot.skill_name)
+        else:
+            write_provenance(snapshot.drive_root, snapshot.skill_name, snapshot.state_provenance)
+
+
+def discard_payload_snapshot(snapshot: PayloadRollbackSnapshot) -> None:
+    """Drop rollback copies after a successful marketplace transaction."""
+
+    if snapshot.backup_dir is not None:
+        shutil.rmtree(snapshot.backup_dir, ignore_errors=True)
 
 
 def _clawhub_skills_root(drive_root: pathlib.Path) -> pathlib.Path:
@@ -101,6 +278,7 @@ class _MarketplaceReviewCtx:
         self.drive_root: pathlib.Path = pathlib.Path(drive_root)
         self.repo_dir: pathlib.Path = pathlib.Path(repo_dir)
         self.task_id: Any = "marketplace_install"
+        self.task_lifecycle_bound = False
         self.current_chat_id: Any = 0
         self.pending_events: List[Any] = []
         self.emit_progress_fn = lambda _msg: None
@@ -144,6 +322,86 @@ def _run_skill_review(
     )
 
 
+def dedupe_marketplace_skill_name(
+    drive_root: pathlib.Path,
+    target_root: pathlib.Path,
+    base_name: str,
+    *,
+    suffix: str,
+) -> str:
+    """Return a skill identity that does not collide with a skill in a different
+    bucket.
+
+    Skill identity is the directory basename and every bucket shares
+    ``data/state/skills/<name>/``; a cross-bucket basename clash (e.g. clawhub
+    ``weather`` vs native ``weather``) makes BOTH skills fail to load. We keep
+    our own bucket directory on reinstall/overwrite (in-bucket names are never
+    treated as a collision) and only rename to dodge a foreign-bucket skill,
+    appending ``-<suffix>`` (then a numeric tail) until the identity is free.
+    """
+    from ouroboros.skill_loader import _sanitize_skill_name, _skill_location_inventory
+
+    try:
+        bucket_root = target_root.resolve()
+    except OSError:
+        bucket_root = target_root
+    foreign_names: set[str] = set()
+    for skill in _skill_location_inventory(drive_root):
+        try:
+            in_bucket = skill.skill_dir.resolve().parent == bucket_root
+        except OSError:
+            in_bucket = False
+        if not in_bucket:
+            foreign_names.add(skill.name)
+    if base_name not in foreign_names:
+        return base_name
+    candidates = [f"{base_name}-{suffix}"] + [f"{base_name}-{suffix}-{i}" for i in range(2, 50)]
+    for candidate in candidates:
+        sanitized = _sanitize_skill_name(candidate)
+        if sanitized != base_name and sanitized not in foreign_names:
+            return sanitized
+    return base_name
+
+
+def _rewrite_staged_identity(staging_dir: pathlib.Path, new_name: str) -> Optional[str]:
+    """After a collision/override rename, make the staged payload self-consistent:
+    set the ``SKILL.md`` frontmatter ``name`` and the ``.clawhub.json`` sidecar
+    ``sanitized_name`` to the final landed name so the directory, sidecar, and
+    manifest all agree. Runtime identity is still the directory basename; this
+    only keeps the informational sidecar/manifest from describing a stale name.
+
+    Returns the recomputed ``translated_manifest_sha256`` of the rewritten
+    ``SKILL.md`` (or ``None`` if it was not rewritten) so the caller can keep the
+    durable provenance digest in sync with the landed file."""
+    new_hash: Optional[str] = None
+    skill_md = staging_dir / "SKILL.md"
+    try:
+        if skill_md.is_file():
+            text = skill_md.read_text(encoding="utf-8")
+            m = re.match(r"^(---\n)(.*?\n)(---\n)(.*)$", text, re.DOTALL)
+            if m:
+                front = re.sub(r"(?m)^name:.*$", f"name: {new_name}", m.group(2), count=1)
+                new_text = m.group(1) + front + m.group(3) + m.group(4)
+                skill_md.write_text(new_text, encoding="utf-8")
+                import hashlib
+                new_hash = hashlib.sha256(new_text.encode("utf-8", errors="replace")).hexdigest()
+    except Exception:
+        log.debug("Failed to rewrite staged SKILL.md name for %s", new_name, exc_info=True)
+    side = staging_dir / ".clawhub.json"
+    try:
+        if side.is_file():
+            data = json.loads(side.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["sanitized_name"] = new_name
+                if new_hash:
+                    # Keep the audit digest matching the rewritten SKILL.md.
+                    data["translated_manifest_sha256"] = new_hash
+                side.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        log.debug("Failed to rewrite staged .clawhub.json for %s", new_name, exc_info=True)
+    return new_hash
+
+
 def install_skill(
     drive_root: pathlib.Path,
     repo_dir: pathlib.Path,
@@ -153,8 +411,12 @@ def install_skill(
     auto_review: bool = True,
     overwrite: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
+    target_name_override: str = "",
 ) -> InstallResult:
     """Install one skill; ``overwrite=True`` is required for replacement.
+
+    ``target_name_override`` pins the landed directory name (used by updates so a
+    re-install stays in its existing directory instead of re-deriving via dedupe).
 
     ``progress_callback`` receives worker-thread stage labels for the UI and
     must stay cheap/non-throwing.
@@ -179,7 +441,7 @@ def install_skill(
     try:
         summary = _registry_info(cleaned_slug)
     except ClawHubClientError as exc:
-        return fail(f"Registry lookup failed: {exc}")
+        return fail(f"Registry lookup failed: {exc}", error_status=_registry_error_status(exc))
 
     if summary.is_plugin:
         return fail(
@@ -195,7 +457,7 @@ def install_skill(
     try:
         archive = _registry_download(cleaned_slug, version=target_version)
     except ClawHubClientError as exc:
-        return fail(f"Download failed: {exc}", summary=summary)
+        return fail(f"Download failed: {exc}", summary=summary, error_status=_registry_error_status(exc))
 
     try:
         # archive.sha256 is a local recomputation check, not a MITM anchor.
@@ -238,10 +500,93 @@ def install_skill(
 
     _progress("Landing into data plane…")
     target_root = _clawhub_skills_root(drive_root)
+    from ouroboros.skill_loader import _sanitize_skill_name
+    # Decide the FINAL landed identity before landing. An update pins the existing
+    # directory via target_name_override so a re-install never drifts to a new dir
+    # when an earlier cross-bucket collision is gone. A fresh install dodges a
+    # collision with another bucket (identity is the directory basename; a clash
+    # would break both skills).
+    original_name = adapter_result.sanitized_name
+    if target_name_override:
+        final_name = _sanitize_skill_name(target_name_override) or original_name
+    else:
+        final_name = dedupe_marketplace_skill_name(
+            drive_root, target_root, original_name, suffix="clawhub"
+        )
+    if final_name != original_name:
+        adapter_result.sanitized_name = final_name
+        adapter_result.target_dirname = final_name
+        # Keep the landed payload self-consistent with the renamed directory.
+        new_manifest_hash = _rewrite_staged_identity(staged.staging_dir, final_name)
+        if isinstance(adapter_result.provenance, dict):
+            adapter_result.provenance["sanitized_name"] = final_name
+            if new_manifest_hash:
+                adapter_result.provenance["translated_manifest_sha256"] = new_manifest_hash
     target_dir = target_root / adapter_result.target_dirname
+    from ouroboros.skill_loader import _skill_location_conflict_error
+
+    identity_error = _skill_location_conflict_error(
+        drive_root,
+        name=adapter_result.sanitized_name,
+        location="clawhub",
+        target_dir=target_dir,
+    )
+    if identity_error:
+        staged.cleanup()
+        return fail(
+            identity_error,
+            sanitized_name=adapter_result.sanitized_name,
+            summary=summary,
+            archive=archive,
+            staged=staged,
+            adapter=adapter_result,
+        )
+    auto_specs = list((adapter_result.provenance.get("install_specs") or {}).get("auto") or [])
+    repair_partial_existing = False
+    if target_dir.exists() and not overwrite and auto_specs:
+        deps_state = read_deps_state(drive_root, adapter_result.sanitized_name, target_dir)
+        existing_provenance = _valid_existing_clawhub_provenance(
+            drive_root,
+            adapter_result.sanitized_name,
+            target_dir,
+            slug=cleaned_slug,
+        )
+        if (
+            str(deps_state.get("status") or "") == "installed"
+            and str(deps_state.get("specs_hash") or "") == install_specs_hash(auto_specs)
+            and existing_provenance is not None
+        ):
+            _progress("Already installed with current dependencies…")
+            _write_deps_state(drive_root, adapter_result.sanitized_name, deps_state)
+            staged.cleanup()
+            return InstallResult(
+                ok=True,
+                sanitized_name=adapter_result.sanitized_name,
+                target_dir=target_dir,
+                summary=summary,
+                archive=archive,
+                staged=staged,
+                adapter=adapter_result,
+                review_status="",
+                deps_status="installed",
+                deps_fingerprint=deps_state,
+                provenance=existing_provenance,
+            )
+        repair_partial_existing = _has_repairable_clawhub_partial(
+            drive_root,
+            adapter_result.sanitized_name,
+            target_dir,
+        )
+    rollback_snapshot = snapshot_payload_state(
+        drive_root,
+        adapter_result.sanitized_name,
+        target_dir,
+        include_state_provenance=True,
+    )
     try:
-        _land_staged_into_data_plane(staged, target_dir, overwrite=overwrite)
+        _land_staged_into_data_plane(staged, target_dir, overwrite=overwrite or repair_partial_existing)
     except Exception as exc:
+        restore_payload_state(rollback_snapshot, restore_state_provenance=True)
         staged.cleanup()
         log.exception("Failed to land staged skill into data plane")
         return fail(
@@ -271,11 +616,13 @@ def install_skill(
     # Seed grants.json for core settings so the owner-grant bridge has one file.
     try:
         from ouroboros.skill_loader import (
-            find_skill,
+            load_skill,
             requested_core_setting_keys,
             save_skill_grants,
         )
-        installed_skill = find_skill(drive_root, adapter_result.sanitized_name)
+        # Load the payload that just landed. Global discovery would also load
+        # unrelated same-name checkouts and create their lifecycle state.
+        installed_skill = load_skill(target_dir, drive_root)
         if installed_skill is not None:
             requested = requested_core_setting_keys(
                 list(installed_skill.manifest.env_from_settings or [])
@@ -302,7 +649,6 @@ def install_skill(
         review_status, review_findings, review_error = _run_skill_review(
             drive_root, repo_dir, adapter_result.sanitized_name
         )
-    auto_specs = list((provenance.get("install_specs") or {}).get("auto") or [])
     if auto_specs:
         deps_status = "pending_review"
         if skill_review_gate(review_status)["executable_review"] and not review_error:
@@ -321,6 +667,11 @@ def install_skill(
                 log.exception("isolated dependency install failed for %s", adapter_result.sanitized_name)
                 deps_status = "failed"
                 deps_error = f"{type(exc).__name__}: {exc}"
+                restore_payload_state(rollback_snapshot, restore_state_provenance=True)
+        if deps_status != "failed":
+            discard_payload_snapshot(rollback_snapshot)
+    else:
+        discard_payload_snapshot(rollback_snapshot)
     _progress("Done")
 
     return InstallResult(
@@ -405,6 +756,11 @@ def uninstall_skill(
     except Exception:
         log.debug("failed to clear deps state for %s", cleaned, exc_info=True)
     delete_provenance(drive_root, cleaned)
+    # CPL4-C11: mark payload-gone so the startup sweep clears the rest of the
+    # owner state (grants preserved as owner authority).
+    from ouroboros.skill_uninstall_state import write_uninstall_tombstone
+
+    write_uninstall_tombstone(drive_root, cleaned, source="clawhub")
     return UninstallResult(True, cleaned)
 
 
@@ -417,6 +773,21 @@ def update_skill(
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> InstallResult:
     """Reinstall by resolving the original slug from persisted provenance."""
+    from ouroboros.skill_loader import _skill_location_conflict_error
+
+    expected_target = _clawhub_skills_root(drive_root) / sanitized_name
+    identity_error = _skill_location_conflict_error(
+        drive_root,
+        name=sanitized_name,
+        location="clawhub",
+        target_dir=expected_target,
+    )
+    if identity_error:
+        return InstallResult(
+            False,
+            sanitized_name,
+            error=identity_error,
+        )
     record = read_provenance(drive_root, sanitized_name)
 
     def _progress(stage: str) -> None:
@@ -452,6 +823,7 @@ def update_skill(
         auto_review=True,
         overwrite=True,
         progress_callback=progress_callback,
+        target_name_override=sanitized_name,
     )
     if was_live and (
         not getattr(result, "ok", False)
@@ -469,8 +841,12 @@ def update_skill(
 
 __all__ = [
     "InstallResult",
+    "PayloadRollbackSnapshot",
     "UninstallResult",
+    "discard_payload_snapshot",
     "install_skill",
+    "restore_payload_state",
+    "snapshot_payload_state",
     "uninstall_skill",
     "update_skill",
 ]

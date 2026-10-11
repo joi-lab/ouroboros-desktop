@@ -170,35 +170,12 @@ def test_no_platform_specific_apis_outside_platform_layer():
         )
 
 
-def test_platform_layer_exists():
-    """platform_layer.py must exist (it's the SSOT for platform abstraction)."""
-    assert ALLOWED_FILE.exists(), (
-        f"ouroboros/platform_layer.py not found at {ALLOWED_FILE}. "
-        f"This file is required — it contains all platform-specific code."
-    )
-
-
 def test_platform_layer_exports_core_symbols():
     """platform_layer.py must export the core cross-platform symbols."""
     from ouroboros.platform_layer import (
         IS_WINDOWS,
         IS_MACOS,
         IS_LINUX,
-        kill_process_tree,
-        terminate_process_tree,
-        force_kill_pid,
-        kill_pid_tree,
-        kill_process_on_port,
-        pid_lock_acquire,
-        pid_lock_release,
-        file_lock_exclusive,
-        file_lock_shared,
-        file_lock_exclusive_nb,
-        file_unlock,
-        create_new_session,
-        get_system_memory,
-        get_cpu_info,
-        git_install_hint,
     )
     # Smoke check: flags are booleans
     assert isinstance(IS_WINDOWS, bool)
@@ -208,42 +185,39 @@ def test_platform_layer_exports_core_symbols():
     assert sum([IS_WINDOWS, IS_MACOS, IS_LINUX]) <= 1
 
 
-def test_normalize_to_posix_handles_windows_style_paths():
-    """_normalize_to_posix must handle Windows-style backslash paths on any OS.
+def test_normalize_repo_path_handles_windows_style_paths():
+    """normalize_repo_path must handle Windows-style backslash paths on any OS.
 
     Regression test for: on Linux/macOS PurePath does NOT convert backslashes,
     so 'ouroboros\\\\tools\\\\registry.py' would bypass SAFETY_CRITICAL_PATHS
     matching if we used PurePath without explicit backslash replacement.
+    (git.py protected-path matching routes through this SSOT.)
     """
-    from ouroboros.tools.git import _normalize_to_posix
+    from ouroboros.runtime_mode_policy import normalize_repo_path
 
     # Windows-style safety-critical path must normalise to POSIX form
-    assert _normalize_to_posix("ouroboros\\tools\\registry.py") == "ouroboros/tools/registry.py"
-    assert _normalize_to_posix("ouroboros\\safety.py") == "ouroboros/safety.py"
-    assert _normalize_to_posix("BIBLE.md") == "BIBLE.md"
+    assert normalize_repo_path("ouroboros\\tools\\registry.py") == "ouroboros/tools/registry.py"
+    assert normalize_repo_path("ouroboros\\safety.py") == "ouroboros/safety.py"
+    assert normalize_repo_path("BIBLE.md") == "BIBLE.md"
 
     # Mixed separators
-    assert _normalize_to_posix("ouroboros/tools\\git.py") == "ouroboros/tools/git.py"
+    assert normalize_repo_path("ouroboros/tools\\git.py") == "ouroboros/tools/git.py"
 
     # Leading ./ stripped
-    assert _normalize_to_posix("./ouroboros/safety.py") == "ouroboros/safety.py"
+    assert normalize_repo_path("./ouroboros/safety.py") == "ouroboros/safety.py"
 
     # Regular POSIX paths unaffected
-    assert _normalize_to_posix("ouroboros/tools/registry.py") == "ouroboros/tools/registry.py"
+    assert normalize_repo_path("ouroboros/tools/registry.py") == "ouroboros/tools/registry.py"
 
 
 @pytest.mark.skipif(not IS_WINDOWS_PLATFORM, reason="Windows-only")
-def test_win32_overlapped_class_cached():
-    """_win32_overlapped_class must return the same class object on every call.
+def test_win32_lock_and_unlock_share_the_same_overlapped_abi():
+    """Both APIs must accept the identical structure class, not just equal layouts.
 
-    ctypes rejects pointer arguments when the underlying Structure class differs
-    even if the layout is identical.  If lock creates one OVERLAPPED class and
-    unlock creates another, UnlockFileEx will raise ctypes.ArgumentError.
+    ctypes rejects pointer arguments for structurally equal but distinct classes.
+    The platform's one Windows ABI declaration owns both native signatures.
     """
-    from ouroboros.platform_layer import _win32_overlapped_class
-    cls1 = _win32_overlapped_class()
-    cls2 = _win32_overlapped_class()
-    assert cls1 is cls2, (
-        "_win32_overlapped_class() returned different class objects — "
-        "this will cause ctypes.ArgumentError in unlock path"
-    )
+    from ouroboros.platform_layer import _OVERLAPPED, _kernel32
+
+    assert _kernel32.LockFileEx.argtypes[-1]._type_ is _OVERLAPPED
+    assert _kernel32.UnlockFileEx.argtypes[-1]._type_ is _OVERLAPPED

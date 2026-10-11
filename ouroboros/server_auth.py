@@ -8,6 +8,9 @@ import hmac
 import html
 import ipaddress
 import os
+import pathlib
+import secrets
+import time
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs
 
@@ -22,14 +25,20 @@ AUTH_COOKIE_NAME = "ouroboros_auth"
 _PUBLIC_HTTP_PATHS = {"/api/health", "/auth/login", "/auth/logout"}
 
 
-def get_configured_network_password() -> str:
-    raw = (os.environ.get(NETWORK_PASSWORD_KEY, "") or "").strip()
+def resolve_network_password(env_value: str | None, settings_loader) -> str:
+    """The resolution order, pure: a non-blank environment value wins, else the settings value,
+    else the empty password (a missing, blank or unreadable settings file included)."""
+    raw = (env_value or "").strip()
     if raw:
         return raw
     try:
-        return str(load_settings().get(NETWORK_PASSWORD_KEY, "") or "").strip()
+        return str(settings_loader().get(NETWORK_PASSWORD_KEY, "") or "").strip()
     except Exception:
         return ""
+
+
+def get_configured_network_password() -> str:
+    return resolve_network_password(os.environ.get(NETWORK_PASSWORD_KEY, ""), load_settings)
 
 
 def is_loopback_host(host: str | None) -> bool:
@@ -69,8 +78,67 @@ def _headers_map(scope: Scope) -> dict[str, str]:
     }
 
 
-def _session_value(password: str) -> str:
-    return hashlib.sha256(f"ouroboros-auth\0{password}".encode("utf-8")).hexdigest()
+# Sessions expire; a leaked cookie is no longer a permanent credential.
+_AUTH_SESSION_TTL_SEC = 30 * 24 * 3600
+_auth_secret_cache: bytes | None = None
+
+
+def _auth_secret() -> bytes:
+    """Server-side random HMAC key, persisted across restarts (0600).
+
+    The old cookie was a bare ``sha256(password)`` — deterministic, never
+    expiring, and forgeable by anyone who ever saw it. Sessions are now
+    HMAC-signed with this key, so they cannot be minted without server state
+    and they die with the key file (one re-login after key loss is accepted).
+    """
+    global _auth_secret_cache
+    if _auth_secret_cache:
+        return _auth_secret_cache
+    try:
+        from ouroboros import config as _cfg
+
+        path = pathlib.Path(_cfg.DATA_DIR) / "state" / "auth_secret.key"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                _auth_secret_cache = bytes.fromhex(text)
+                return _auth_secret_cache
+        secret = secrets.token_hex(32)
+        path.write_text(secret + "\n", encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        _auth_secret_cache = bytes.fromhex(secret)
+    except Exception:
+        # No durable key (read-only data dir): fall back to a process-lifetime
+        # key — sessions survive within the run and re-login after restart.
+        _auth_secret_cache = secrets.token_bytes(32)
+    return _auth_secret_cache
+
+
+def _session_value(password: str, issued_at: int | None = None) -> str:
+    issued = int(issued_at if issued_at is not None else time.time())
+    pw_digest = hashlib.sha256(f"ouroboros-auth\0{password}".encode("utf-8")).hexdigest()
+    signature = hmac.new(
+        _auth_secret(), f"{issued}\0{pw_digest}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{issued}.{signature}"
+
+
+def _cookie_session_valid(cookie_val: str, password: str) -> bool:
+    issued_text, sep, _signature = (cookie_val or "").partition(".")
+    if not sep:
+        return False
+    try:
+        issued = int(issued_text)
+    except (TypeError, ValueError):
+        return False
+    now = time.time()
+    if issued > now + 300 or now - issued > _AUTH_SESSION_TTL_SEC:
+        return False
+    return hmac.compare_digest(cookie_val, _session_value(password, issued))
 
 
 def _cookie_value(scope: Scope, cookie_name: str) -> str:
@@ -107,7 +175,7 @@ def _candidate_password(scope: Scope) -> str:
 
 def _is_authenticated(scope: Scope, password: str) -> bool:
     cookie_val = _cookie_value(scope, AUTH_COOKIE_NAME)
-    if cookie_val and hmac.compare_digest(cookie_val, _session_value(password)):
+    if cookie_val and _cookie_session_valid(cookie_val, password):
         return True
     candidate = _candidate_password(scope)
     return bool(candidate) and hmac.compare_digest(candidate, password)
@@ -212,7 +280,16 @@ async def _handle_login(scope: Scope, receive: Receive, send: Send, password: st
         response = JSONResponse({"ok": True, "next": next_url}, status_code=200)
     else:
         response = RedirectResponse(next_url, status_code=303)
-    response.set_cookie(AUTH_COOKIE_NAME, _session_value(password), httponly=True, samesite="lax")
+    # Secure only when actually served over TLS: setting it on plain-http LAN
+    # would make the browser drop the cookie and lock the user in a login loop.
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        _session_value(password),
+        max_age=_AUTH_SESSION_TTL_SEC,
+        httponly=True,
+        samesite="lax",
+        secure=str(scope.get("scheme") or "").lower() in {"https", "wss"},
+    )
     await response(scope, receive, send)
 
 

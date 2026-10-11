@@ -1,16 +1,10 @@
-# Ouroboros Desktop has moved
+# Ouroboros Desktop moved to razzant/ouroboros
 
 > [!IMPORTANT]
-> This repository is archived and read-only. The official Ouroboros repository is now:
+> This is a read-only archive. Ouroboros is developed in the official repository: **https://github.com/razzant/ouroboros**
 >
-> **https://github.com/razzant/ouroboros**
+> - Download the current version: https://github.com/razzant/ouroboros/releases/latest
+> - Issues, pull requests, discussions and stars: https://github.com/razzant/ouroboros
+> - Website: https://ouroboros-agent.ai/
 
-Please open all issues, pull requests, discussions, and release questions in `razzant/ouroboros`.
-
-This repository is preserved for historical links, old release assets, and existing clones. GitHub does not provide a repository-level redirect for archived repositories; update your remotes manually if needed:
-
-```bash
-git remote set-url origin https://github.com/razzant/ouroboros.git
-```
-
-The original Google Colab version is preserved in the `legacy-google-colab` branch of the official repository.
+This repository held Ouroboros Desktop from February to May 2026; desktop apps installed then still look for updates here. After each stable release these branches are refreshed automatically: `main`. They hold Ouroboros v7.6.0 (official commit 4b37f9622); other branches are historical.

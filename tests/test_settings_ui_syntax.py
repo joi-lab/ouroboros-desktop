@@ -16,8 +16,8 @@ its outer template literal has balanced backticks.
 import pathlib
 import re
 
-
 SETTINGS_UI_JS = pathlib.Path(__file__).parent.parent / "web" / "modules" / "settings_ui.js"
+SETTINGS_JS = pathlib.Path(__file__).parent.parent / "web" / "modules" / "settings.js"
 
 
 def _count_unescaped_backticks(text: str) -> int:
@@ -119,3 +119,12 @@ def test_render_settings_page_no_bare_bracket_backtick():
         "This is the v4.39.2 regression pattern. Lines in body: "
         + str([body[:m.start()].count('\n') + 1 for m in matches])
     )
+
+
+def test_extension_settings_reuse_closed_safe_field_contract():
+    content = SETTINGS_JS.read_text(encoding="utf-8")
+    assert "collectSafeFieldValues, normalizeTone, renderSafeField, setInlineStatus" in content
+    assert "renderSafeField(field, values, fieldOptions)" in content
+    assert "pendingExtensionSettings.has(requestKey)" in content
+    assert "collectSafeFieldValues(form, spec.fields || [])" in content
+    assert "type=\"${escapeHtml(field.type" not in content

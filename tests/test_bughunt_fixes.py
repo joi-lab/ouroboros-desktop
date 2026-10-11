@@ -12,8 +12,6 @@ import json
 import os
 import pathlib
 import sys
-import time
-from unittest import mock
 
 import pytest
 

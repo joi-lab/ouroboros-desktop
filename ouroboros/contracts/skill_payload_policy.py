@@ -35,6 +35,9 @@ SKILL_PAYLOAD_CONTROL_DIRNAMES = frozenset({
     "__pycache__",
 })
 
+PRESENCE_PROFILE_STATE_FILENAME = "presence_profile_state.json"
+PRESENCE_PROFILE_STATE_STEM = "presence_profile_state"
+
 SKILL_OWNER_STATE_FILENAMES = frozenset({
     "enabled.json",
     "grants.json",
@@ -43,10 +46,28 @@ SKILL_OWNER_STATE_FILENAMES = frozenset({
     "review_history.jsonl",
     "accepted_rebuttals.json",
     "clawhub.json",
+    # OuroborosHub publication receipt: forging it would fake the owner's
+    # submission history on the Skills cards and silence the Use Hub version
+    # confirmation's no-record warning.
+    "ouroboroshub.json",
     "self_authored.json",
     "auth_token.json",
     # Owner/lifecycle state: forged deps.json would bypass dependency gates.
     "deps.json",
+    # Durable health vector (live->broken regression memory); forging it would
+    # mask a regression or fake recovery.
+    "health.json",
+    # Owner attestation (C1, v6.39): an owner-only "skip the LLM review for my own
+    # skill" marker. The agent must NEVER forge it — that would self-bypass the immune
+    # system's expensive review. Owner-issued via the owner-only endpoint only.
+    "owner_attestation.json",
+    # Host-owned presence selections and local runtime overrides. A behavior
+    # skill may read its resolved projection, but payload/runtime writes must
+    # not be able to forge the owner's confirmed capability mapping.
+    PRESENCE_PROFILE_STATE_FILENAME,
+    # Uninstall tombstone (CPL4-C11): forging it would let the agent mark a
+    # live skill payload-gone and have the startup sweep clear its owner state.
+    "uninstalled.json",
 })
 
 SKILL_OWNER_STATE_STEMS = (
@@ -57,9 +78,14 @@ SKILL_OWNER_STATE_STEMS = (
     "accepted_rebuttals",
     "enabled",
     "clawhub",
+    "ouroboroshub",
     "deps",
     "self_authored",
     "auth_token",
+    "health",
+    "owner_attestation",
+    PRESENCE_PROFILE_STATE_STEM,
+    "uninstalled",
 )
 
 
@@ -125,7 +151,7 @@ def _clean_data_rel(raw: str) -> str:
 
 def _constraint_payload_root(constraint: Optional[TaskConstraint]) -> str:
     tc = normalize_task_constraint(constraint)
-    if not tc or tc.mode != "skill_repair" or not tc.payload_root:
+    if not tc or not tc.has_selected_skill or not tc.payload_root:
         return ""
     return _clean_data_rel(tc.payload_root)
 
@@ -165,10 +191,11 @@ def resolve_constrained_payload_path(
     drive = Path(drive_root).resolve(strict=False)
     payload_root = safe_relpath(constraint.payload_root)
     payload_parts = PurePosixPath(payload_root).parts
+    buckets = SKILL_PAYLOAD_ALL_BUCKETS if constraint.mode == "normal" else SKILL_PAYLOAD_BUCKETS
     if (
-        len(payload_parts) < 3
+        len(payload_parts) != 3
         or payload_parts[0] != "skills"
-        or payload_parts[1] not in SKILL_PAYLOAD_BUCKETS
+        or payload_parts[1] not in buckets
     ):
         raise ValueError(
             "Repair payload root must be data/skills/{external,clawhub,ouroboroshub}/<skill>"
@@ -213,11 +240,12 @@ def resolve_skill_payload_target(
     drive = Path(drive_root).resolve(strict=False)
     rel, was_absolute = _rel_from_raw(drive, path_text)
     payload_root = _constraint_payload_root(constraint)
+    tc = normalize_task_constraint(constraint)
+    buckets = SKILL_PAYLOAD_ALL_BUCKETS if tc and tc.has_selected_skill and tc.mode == "normal" else SKILL_PAYLOAD_BUCKETS
     if payload_root:
         root_parts = PurePosixPath(payload_root).parts
-        if len(root_parts) < 3 or root_parts[0] != "skills" or root_parts[1] not in SKILL_PAYLOAD_BUCKETS:
+        if len(root_parts) != 3 or root_parts[0] != "skills" or root_parts[1] not in buckets:
             raise SkillPayloadPathError("repair payload root must be data/skills/<bucket>/<skill>")
-        tc = normalize_task_constraint(constraint)
         if tc and tc.skill_name and root_parts[2] != _sanitize_skill_name(tc.skill_name):
             raise SkillPayloadPathError("repair payload root does not match constrained skill name")
         if rel in ("", ".", "./"):
@@ -231,7 +259,7 @@ def resolve_skill_payload_target(
             raise SkillPayloadPathError("path must be explicit or payload-relative under the repair constraint")
 
     parts = PurePosixPath(rel).parts
-    if len(parts) < 3 or parts[0] != "skills" or parts[1] not in SKILL_PAYLOAD_BUCKETS:
+    if len(parts) < 3 or parts[0] != "skills" or parts[1] not in buckets:
         raise SkillPayloadPathError("path must point inside data/skills/<bucket>/<skill>")
     if any(part in {"", ".", ".."} for part in parts):
         raise SkillPayloadPathError("path contains unsafe path segment")
@@ -441,6 +469,33 @@ def _explicit_path_kind(path_text: str, *, repo_dir: Path, drive_root: Path) -> 
     return ""
 
 
+_SKILL_MANIFEST_BASENAMES = frozenset({"skill.md", "skill.json"})
+
+
+def _is_skill_create_signal(path_text: str) -> bool:
+    """A missing payload is a typo for an arbitrary file but a legitimate NEW skill when the write IS
+    the skill manifest at the payload ROOT (``SKILL.md``/``skill.json`` — NOT ``nested/SKILL.md`` and
+    NOT an absolute path) — the explicit authoring signal. Keying CREATE on the root manifest (not on
+    mere directory existence or a bare basename anywhere) restores light skill creation that the
+    f705b37 blanket is_dir gate regressed, while a misspelled or nested path still errors (typo guard)."""
+    raw = str(path_text or "").replace("\\", "/").strip()
+    if raw.startswith("./"):
+        raw = raw[2:]
+    return "/" not in raw and raw.lower() in _SKILL_MANIFEST_BASENAMES
+
+
+def is_skill_create_typo(*, payload_root: Path, bucket: str, rel_within_payload: str) -> bool:
+    """Manifest-first typo guard SSOT, shared by the bucket/skill_name short-form and the explicit
+    ``runtime_data`` ``skills/<bucket>/<skill>/...`` write path. A write into a NON-existent payload
+    is a typo for an arbitrary file, but a legitimate NEW skill when it IS the root manifest
+    (SKILL.md/skill.json) under bucket=external. Returns True when the write must be BLOCKED (missing
+    payload, not a new-external-skill manifest) so neither entry point can silently mkdir a bogus
+    payload from a misspelled name; writing into an EXISTING payload is always allowed."""
+    if payload_root.is_dir():
+        return False
+    return not (bucket == "external" and _is_skill_create_signal(rel_within_payload))
+
+
 def decide_payload_short_form(
     *,
     bucket: str,
@@ -472,11 +527,16 @@ def decide_payload_short_form(
             )
         )
     payload_root = (Path(drive_root) / synth.payload_root).resolve(strict=False)
-    if not payload_root.is_dir():
+    # CREATE-from-scratch is for AGENT-authored skills only: the `external` bucket. The marketplace
+    # buckets (clawhub/ouroboroshub) are installed FROM the marketplace, never authored into a
+    # missing payload, so a missing marketplace payload stays an error (install it, don't create).
+    # SSOT with the explicit runtime_data path via is_skill_create_typo (path_text is payload-relative).
+    if is_skill_create_typo(payload_root=payload_root, bucket=clean_bucket, rel_within_payload=path_text):
         return PayloadShortFormDecision(
             error=(
                 f"skill payload not found: {synth.payload_root}. "
-                "Use an existing skill_name, or omit bucket/skill_name for a repo/data edit."
+                "Use an existing skill_name; for a NEW skill write its manifest (SKILL.md/skill.json) "
+                "under bucket=external; or omit bucket/skill_name for a repo/data edit."
             )
         )
     return PayloadShortFormDecision(constraint=synth)
@@ -489,7 +549,7 @@ def cross_skill_redirect_error(
     """Reject bucket+skill_name when it would escape an active skill_repair task."""
     if not (existing_tc and synth_tc):
         return ""
-    if existing_tc.mode != "skill_repair":
+    if not existing_tc.has_selected_skill:
         return ""
     if existing_tc.skill_name == synth_tc.skill_name:
         return ""
@@ -505,7 +565,7 @@ def constraint_bucket_skill(constraint: Optional[TaskConstraint]) -> tuple[str, 
     """Return the skill payload bucket/name implied by a repair constraint."""
 
     tc = normalize_task_constraint(constraint)
-    if not tc or tc.mode != "skill_repair" or not tc.payload_root:
+    if not tc or not tc.has_selected_skill or not tc.payload_root:
         return "", ""
     parts = PurePosixPath(_clean_data_rel(tc.payload_root)).parts
     if len(parts) >= 3 and parts[0] == "skills":
@@ -520,6 +580,8 @@ __all__ = [
     "SKILL_PAYLOAD_CONTROL_DIRNAMES",
     "SKILL_OWNER_STATE_FILENAMES",
     "SKILL_OWNER_STATE_STEMS",
+    "PRESENCE_PROFILE_STATE_FILENAME",
+    "PRESENCE_PROFILE_STATE_STEM",
     "SkillPayloadPathError",
     "SkillPayloadTarget",
     "PayloadShortFormDecision",

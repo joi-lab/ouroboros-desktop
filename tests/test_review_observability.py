@@ -16,12 +16,9 @@ Verifies that:
 from __future__ import annotations
 
 import json
-import types
 import pathlib
-import tempfile
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -29,6 +26,11 @@ import pytest
 def _make_ctx(tmp_path: pathlib.Path) -> MagicMock:
     ctx = MagicMock()
     ctx.repo_dir = str(tmp_path)
+    # Pin drive_root to a real temp path. Left unset, ``ctx.drive_root`` is an
+    # auto-MagicMock and any production ``ctx.drive_root / "state" / ...`` write
+    # materialises a literal ``MagicMock/mock.drive_root.__truediv__()...`` dir
+    # in the repo CWD (then committed by a careless ``git add -A``).
+    ctx.drive_root = str(tmp_path)
     ctx.task_id = "test-task"
     ctx._review_history = []
     ctx._review_iteration_count = 0
@@ -186,31 +188,8 @@ def test_all_three_models_ok_no_degraded(tmp_path):
 # actually consume ScopeReviewResult instances from real review runs.
 
 
-# ── Test 5: budget_exceeded status on scope ───────────────────────────────────
-
-def test_scope_budget_exceeded_status():
-    """When scope review is skipped due to budget, status must be 'budget_exceeded'."""
-    from ouroboros.tools.scope_review import _handle_prompt_signals, _TouchedContextStatus
-
-    ctx_status = _TouchedContextStatus(status="budget_exceeded", token_count=800_001)
-    result = _handle_prompt_signals(None, ctx_status)
-
-    assert result is not None
-    assert result.blocked is False
-    assert result.status == "budget_exceeded"
-    assert result.model_id == ""  # populated by run_scope_review after return
 
 
-def test_scope_empty_context_status():
-    """Empty context must set status='empty' and block."""
-    from ouroboros.tools.scope_review import _handle_prompt_signals, _TouchedContextStatus
-
-    ctx_status = _TouchedContextStatus(status="empty")
-    result = _handle_prompt_signals(None, ctx_status)
-
-    assert result is not None
-    assert result.blocked is True
-    assert result.status == "empty"
 
 
 # ── Test 6: parse_failure on scope output ─────────────────────────────────────
@@ -548,11 +527,12 @@ def test_last_triad_raw_results_reset_at_start_of_run_unified_review(tmp_path):
     })
 
     with patch.object(review_mod, "run_cmd", return_value="some diff content"), \
+         patch("ouroboros.tools.review_binary_context.capture_staged_diff",
+               return_value="some diff content"), \
          patch.object(review_mod, "_handle_multi_model_review", return_value=mock_review_output), \
          patch.object(review_mod, "_load_checklist_section", return_value="## checklist"), \
          patch.object(review_mod, "_preflight_check", return_value=None), \
-         patch.object(review_mod, "_load_dev_guide_text", return_value=""), \
-         patch.object(review_mod, "_load_architecture_text", return_value=""), \
+         patch.object(review_mod, "load_governance_doc", return_value=""), \
          patch("ouroboros.tools.review_helpers.build_touched_file_pack",
                return_value=("(files)", [])):
         review_mod._run_unified_review(ctx, "test commit")
@@ -574,7 +554,6 @@ def test_parse_failure_does_not_count_toward_quorum(tmp_path):
     was counted as a successful quorum participant, silently undermining epistemic
     integrity.
     """
-    from ouroboros.tools import review as review_mod
     from ouroboros.tools.review import _collect_review_findings
 
     ctx = _make_ctx(tmp_path)
@@ -682,28 +661,6 @@ def test_stale_actor_evidence_cleared_at_commit_start(tmp_path):
     assert "ERROR" in result or "error" in result.lower()  # empty message triggers error
 
 
-# ── Test 10b: scope budget_exceeded has non-zero prompt_chars ────────────────
-
-def test_scope_budget_exceeded_has_prompt_chars(tmp_path):
-    """budget_exceeded ScopeReviewResult must carry prompt_chars > 0.
-
-    Before this fix, _handle_prompt_signals set prompt_chars=0 on the budget_exceeded
-    path, losing the only forensic fact about why scope review was skipped.
-    """
-    from ouroboros.tools.scope_review import ScopeReviewResult, _handle_prompt_signals, _TouchedContextStatus
-
-    token_count = 800_000  # exceeds the 750K gate
-    context_status = _TouchedContextStatus(status="budget_exceeded", token_count=token_count)
-    result = _handle_prompt_signals(None, context_status)
-
-    assert result is not None
-    assert result.status == "budget_exceeded"
-    assert result.prompt_chars > 0, (
-        f"prompt_chars must be non-zero on budget_exceeded path; got {result.prompt_chars}"
-    )
-    assert result.prompt_chars == token_count * 4, (
-        f"prompt_chars should be token_count*4={token_count*4}; got {result.prompt_chars}"
-    )
 
 
 def test_scope_empty_response_distinct_from_error(tmp_path):
@@ -719,9 +676,7 @@ def test_scope_empty_response_distinct_from_error(tmp_path):
     ctx._scope_review_history = {}
     ctx._last_scope_raw_result = {}
 
-    with patch("ouroboros.tools.scope_review._build_scope_prompt",
-               return_value=("some prompt content", None)), \
-         patch("ouroboros.tools.scope_review._call_scope_llm",
+    with patch("ouroboros.tools.scope_review._call_scope_llm",
                return_value=("", {"prompt_tokens": 100, "completion_tokens": 0, "cost": 0.001}, None)), \
          patch("ouroboros.tools.scope_review._get_scope_model", return_value="test-model"):
         result = run_scope_review(ctx, "test commit")

@@ -1,0 +1,17 @@
+--- desktop_env/providers/docker/provider.py
++++ desktop_env/providers/docker/provider.py
+@@ -15,7 +15,13 @@
+ 
+ WAIT_TIME = 3
+ RETRY_INTERVAL = 1
+-LOCK_TIMEOUT = 10
++# Operator patch (Ouroboros v6.76.0): 10s is far too short for the single global
++# port-allocation + container-start lock when several lanes boot VMs at once --
++# `start_emulator` holds this lock across `containers.run`, so a cold
++# happysixd/osworld-docker start (image load, qcow2 mount, KVM setup) routinely
++# exceeds 10s and every other lane dies with filelock.Timeout BEFORE its agent
++# starts (an infra zero indistinguishable from a capability zero in the catalog).
++LOCK_TIMEOUT = 60
+ 
+ 
+ class PortAllocationError(Exception):

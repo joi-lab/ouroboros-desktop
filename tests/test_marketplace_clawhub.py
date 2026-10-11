@@ -72,16 +72,12 @@ def test_clawhub_com_host_no_longer_allowed():
         clawhub_mod._registry_base_url("https://clawhub.com/api/v1")
 
 
-def test_registry_url_strips_query_strings():
+def test_registry_url_strips_query_strings(monkeypatch):
     """Query strings on the registry URL must be discarded."""
     from ouroboros.config import get_clawhub_registry_url
-    import os
 
-    os.environ["OUROBOROS_CLAWHUB_REGISTRY_URL"] = "https://clawhub.ai/api/v1?key=foo"
-    try:
-        assert get_clawhub_registry_url() == "https://clawhub.ai/api/v1"
-    finally:
-        os.environ.pop("OUROBOROS_CLAWHUB_REGISTRY_URL", None)
+    monkeypatch.setenv("OUROBOROS_CLAWHUB_REGISTRY_URL", "https://clawhub.ai/api/v1?key=foo")
+    assert get_clawhub_registry_url() == "https://clawhub.ai/api/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +87,7 @@ def test_registry_url_strips_query_strings():
 
 def test_redirect_to_evil_host_is_blocked():
     """A 30x Location pointing outside the allowlist must raise."""
-    handler = clawhub_mod._AllowlistRedirectHandler()
+    handler = clawhub_mod._redirect_handler()
     fake_req = mock.MagicMock()
     fake_fp = mock.MagicMock()
     fake_headers = {"Location": "https://evil.example.com/x"}
@@ -103,7 +99,7 @@ def test_redirect_to_evil_host_is_blocked():
 
 def test_redirect_to_allowed_host_is_followed():
     """A redirect within the allowlist must not be blocked at the host check."""
-    handler = clawhub_mod._AllowlistRedirectHandler()
+    handler = clawhub_mod._redirect_handler()
     fake_req = mock.MagicMock()
     fake_fp = mock.MagicMock()
     fake_headers = {}

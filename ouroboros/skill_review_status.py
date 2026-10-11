@@ -34,7 +34,9 @@ VALID_SKILL_REVIEW_STATUSES = frozenset({
 
 HARD_CRITICAL_ITEMS = frozenset({
     "manifest_schema",
-    "skill_preflight",
+    # NOTE: skill_preflight is intentionally NOT here — a deterministic preflight
+    # FAIL aggregates to STATUS_PENDING (handled before the severity loop below),
+    # which is non-executable under every enforcement mode (stronger than blocker).
     "permissions_honesty",
     "no_repo_mutation",
     "path_confinement",
@@ -70,8 +72,25 @@ def aggregate_skill_review_status(
     *,
     is_module_widget: bool = False,
     enforcement: Optional[str] = None,
+    review_profile: str = "",
 ) -> str:
-    """Collapse per-reviewer findings into an enforcement-independent verdict."""
+    """Collapse per-reviewer findings into an enforcement-independent verdict.
+
+    The ``official_hub`` profile (hash-verified official OuroborosHub payload)
+    keeps only hard trust-boundary items (``HARD_CRITICAL_ITEMS``) as blockers
+    and downgrades severity-driven hygiene/bug findings to warnings, since the
+    payload already passed review at submission and its bytes are verified
+    against the live catalog. Deterministic preflight/sensitive/binary/path/
+    dependency/grant/enablement gates remain fail-closed outside this function.
+    """
+    # A deterministic preflight FAIL — and the ABI-1 PluginAPI admission
+    # refusal — are structural gate failures, not LLM verdicts. They persist
+    # as STATUS_PENDING (non-executable under every enforcement mode) and MUST
+    # reload that way — never as advisory-overridable BLOCKERS or WARNINGS —
+    # so honor them before the severity-driven aggregation below.
+    if preflight_failed(findings):
+        return STATUS_PENDING
+    is_official_hub = review_profile == "official_hub"
     has_critical_fail = False
     has_warning_fail = False
     is_extension = skill_type == "extension"
@@ -82,7 +101,9 @@ def aggregate_skill_review_status(
         item = finding.get("item")
         item_is_critical = item in HARD_CRITICAL_ITEMS
         if item in SEVERITY_DRIVEN_ITEMS:
-            if item in {"extension_namespace_discipline", "widget_module_safety"} and not is_extension:
+            if is_official_hub:
+                item_is_critical = False
+            elif item in {"extension_namespace_discipline", "widget_module_safety"} and not is_extension:
                 item_is_critical = False
             else:
                 item_is_critical = _severity_blocks(finding)
@@ -108,8 +129,112 @@ def normalize_skill_review_status(status: str) -> str:
     } else STATUS_PENDING)
 
 
-def skill_review_gate(status: str, *, stale: bool = False, enforcement: Optional[str] = None) -> Dict[str, Any]:
-    """Structured, agent-facing explanation of whether a review is executable."""
+def review_status_grandfatherable(status: str) -> bool:
+    """ABI-1 grandfather predicate, shared by the PluginAPI admission refusal
+    path (``skill_review_cycles.plugin_api_admission_refusal_outcome``) and the
+    RC auditor: only a ``clean``/``warnings`` verdict counts as the hash-bound
+    PASS that keeps a plugin_api-less extension loading. Deliberately
+    ENFORCEMENT-INDEPENDENT: advisory enforcement can make a BLOCKERS verdict
+    executable (``skill_review_gate``), but it never makes one a grandfather —
+    the refusal path persists ``pending`` over anything else."""
+    return normalize_skill_review_status(status) in (STATUS_CLEAN, STATUS_WARNINGS)
+
+
+WARNINGS_CONVERGENCE_ROUNDS = 3
+
+
+def count_trailing_warnings_rounds(
+    history: List[Dict[str, Any]],
+    *,
+    current_status: Optional[str] = None,
+) -> int:
+    """Count consecutive most-recent rounds whose verdict is advisory-only warnings.
+
+    Structural (status-based), independent of the exact finding signature, so an
+    advisory whack-a-mole (rotating advisory FAIL findings that never block) is
+    detectable even when the signature changes every round. When ``current_status``
+    is provided it is treated as the not-yet-persisted current round: a
+    non-warnings current round breaks the streak (returns 0); a warnings current
+    round is counted and the tally continues back through ``history``. Legacy
+    ``advisory``/``advisory_pass`` statuses normalize to warnings.
+    """
+    count = 0
+    if current_status is not None:
+        if normalize_skill_review_status(current_status) != STATUS_WARNINGS:
+            return 0
+        count += 1
+    for entry in reversed(list(history or [])):
+        if not isinstance(entry, dict):
+            break
+        if normalize_skill_review_status(entry.get("status")) == STATUS_WARNINGS:
+            count += 1
+        else:
+            break
+    return count
+
+
+def preflight_failed(findings: Any) -> bool:
+    """True when the persisted findings carry a deterministic preflight FAIL.
+
+    The SSOT for the shape is the finding `_run_deterministic_preflight`
+    persists (item=skill_preflight / model=deterministic_preflight) — plus the
+    ABI-1 PluginAPI admission refusal (item/model=plugin_api_admission), the
+    same structural-gate class; the same condition drives the pending
+    aggregation above. UI cards use this fact to offer Repair instead of a
+    Re-review that would deterministically fail again (#335).
+    """
+    for finding in findings or []:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("verdict") == "FAIL" and (
+            finding.get("item") in ("skill_preflight", "plugin_api_admission")
+            or str(finding.get("model") or "") in ("deterministic_preflight", "plugin_api_admission")
+        ):
+            return True
+    return False
+
+
+def skill_review_gate(
+    status: str, *, stale: bool = False, enforcement: Optional[str] = None,
+    findings: Any = None, author_disposition: Any = None, current_hash: str = "",
+) -> Dict[str, Any]:
+    """Structured, agent-facing explanation of whether a review is executable.
+
+    Advisory author acceptance binds changed bytes; Cyber retains judgment even
+    without a prior verdict. Stale describes reviewer evidence, not author intent.
+    Author fields are optional and appear only with a valid author disposition;
+    callers without one retain the frozen gate key set.
+
+    Deterministic hard-gate failures (e.g. skill_preflight) are persisted as
+    STATUS_PENDING by `_run_deterministic_preflight`, so they are non-executable
+    here outside Cyber without needing per-caller findings — only
+    LLM blocker verdicts are overridable by advisory enforcement.
+
+    ``findings`` is optional: a caller that has the persisted findings gets a
+    ``preflight_failed`` key in the gate (the typed fact behind the Repair
+    affordance, #335) plus its companion ``preflight_failed_stale``. Absence
+    of the keys means the caller could not know — they are never fabricated.
+    A STALE review's persisted failure no longer describes the current payload
+    bytes (the owner may have fixed it by hand), so ``preflight_failed`` is
+    True only while the findings are fresh; the recorded-but-stale failure
+    surfaces as ``preflight_failed_stale`` instead, and the card offers BOTH
+    actions: the cheap Re-review (which reruns the preflight) stays primary,
+    with Repair offered based on the last recorded preflight.
+    """
+    from ouroboros.review_records import validate_author_disposition
+
+    author = validate_author_disposition(author_disposition)
+    author_current = bool(current_hash and author and author["subject_hash"] == current_hash)
+    reference = author.get("review_reference") if author else None
+    reference = reference if isinstance(reference, dict) else {}
+    preflight = reference.get("preflight") if isinstance(reference.get("preflight"), dict) else {}
+    current_preflight = bool(author_current and preflight.get("content_hash") == current_hash)
+    preflight_pass = current_preflight and preflight.get("status") == "pass"
+    author_preflight_failed = current_preflight and preflight.get("status") == "failed"
+    terminal_basis = (reference.get("surface") == "skill" and reference.get("basis") in {"unavailable", "partial_feedback"}
+                         and reference.get("job_id") and reference.get("content_hash") and reference.get("finished_at")
+                         and reference.get("status") in {"completed", "succeeded", "failed", "interrupted", "cancelled", "timeout"}
+                         and reference.get("review_status") in {"pending", "failed", "interrupted", "cancelled", "timeout"})
     raw_status = normalize_skill_review_status(status)
     if enforcement is None:
         try:
@@ -118,7 +243,25 @@ def skill_review_gate(status: str, *, stale: bool = False, enforcement: Optional
         except Exception:
             enforcement = "blocking"
     enforcement = str(enforcement or "blocking").lower()
-    if raw_status == STATUS_PENDING:
+    from ouroboros.tools.review_helpers import review_enforcement_blocks
+
+    cyber = not review_enforcement_blocks("blocking")
+    if cyber:
+        executable = True
+        reason = "cyber_authority"
+        summary = ("Cyber Pro permits acting on this payload by Ouroboros's judgment; "
+                   "review status, staleness and failures remain independent evidence, not a PASS.")
+    elif author_preflight_failed:
+        executable = False
+        reason = "review_pending"
+        summary = "Current deterministic preflight failed; author acceptance does not make this payload executable."
+    elif (author_current and author.get("action", "finish") == "finish"
+          and author["enforcement"] == "advisory" and enforcement == "advisory"
+          and (raw_status != STATUS_PENDING or (terminal_basis and preflight_pass))):
+        executable = True
+        reason = "author_accepted_advisory"
+        summary = "The author accepted the current payload under Advisory; original critic evidence and unavailable-review facts remain unchanged."
+    elif raw_status == STATUS_PENDING:
         executable = False
         reason = "review_pending"
         summary = "Review is pending or did not produce an executable verdict."
@@ -150,8 +293,14 @@ def skill_review_gate(status: str, *, stale: bool = False, enforcement: Optional
     return {
         "status": raw_status or STATUS_PENDING,
         "stale": bool(stale),
+        **({"author_accepted": reason == "author_accepted_advisory" or (cyber and author_current),
+            "author_disposition": author} if author else {}),
         "executable_review": bool(executable),
         "blocking_reason": reason,
         "review_enforcement": enforcement,
         "summary": summary,
+        **({
+            "preflight_failed": author_preflight_failed or ((not preflight_pass) and (not stale) and preflight_failed(findings)),
+            "preflight_failed_stale": bool(stale) and preflight_failed(findings),
+        } if findings is not None else {}),
     }

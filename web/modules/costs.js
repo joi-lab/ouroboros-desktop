@@ -14,6 +14,63 @@ function readPositiveBudget(id) {
     return Number.isFinite(value) && value >= min ? value : null;
 }
 
+function optionalFiniteNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+/** Render one legacy breakdown bucket without turning an open zero into free. */
+export function costBucketPresentation(info) {
+    const cost = optionalFiniteNumber(info?.cost);
+    if (cost === null) return 'unknown';
+    const unknown = optionalFiniteNumber(info?.unknown_unmetered) || 0;
+    const nonFinalRows = optionalFiniteNumber(info?.non_final_rows) || 0;
+    const pending = info?.cost_final === false || nonFinalRows > 0 || unknown > 0;
+    if (!pending) return formatUsd2(cost);
+    const unknownLabel = unknown > 0 ? `unmetered=${Math.trunc(unknown)}` : '';
+    const details = [unknownLabel].filter(Boolean).join(', ');
+    if (cost === 0) return details ? `cost pending (${details})` : 'cost pending';
+    return details ? `${formatUsd2(cost)} (pending, ${details})` : `${formatUsd2(cost)} (pending)`;
+}
+
+/** Pure cost-dashboard projection: null/unavailable never renders as $0. */
+export function costDashboardPresentation(data) {
+    if (!data) return { state: 'loading' };
+    const accounting = data.accounting || {};
+    if (accounting.available === false) return { state: 'unavailable' };
+    const accounted = optionalFiniteNumber(accounting.accounted_usd);
+    const confirmed = optionalFiniteNumber(accounting.confirmed_usd);
+    const reserved = optionalFiniteNumber(accounting.reserved_usd);
+    const unresolved = optionalFiniteNumber(accounting.unresolved_upper_bound_usd);
+    const unknown = optionalFiniteNumber(accounting.unknown_unmetered);
+    const calls = optionalFiniteNumber(data.total_calls);
+    if ([accounted, confirmed, reserved, unresolved, unknown, calls].some(value => value === null)) {
+        return { state: 'unavailable' };
+    }
+    const rawLimit = optionalFiniteNumber(accounting.limit_usd);
+    const limit = rawLimit !== null && rawLimit > 0 ? rawLimit : 0;
+    const models = Object.entries(data.by_model || {});
+    // A flag without its cause is not reconstructible. `cost_final: false` holds with every
+    // dollar bucket at $0.00 and `unknown` at 0 — an ESTIMATED zero, or a dispatched row
+    // whose reservation is exactly zero — so the count of open rows rides beside the flag
+    // it explains rather than in a new tile nobody correlates. Absent on an older payload,
+    // and then this says only what it knows instead of inventing a zero.
+    const nonFinal = optionalFiniteNumber(accounting.non_final_rows);
+    const openCause = nonFinal !== null && nonFinal > 0 ? ` (${Math.trunc(nonFinal)} open)` : '';
+    return {
+        state: 'available',
+        accountedLimit: `${formatUsd2(accounted)} / ${limit > 0 ? formatUsd2(limit) : '∞'}`,
+        confirmed: formatUsd2(confirmed),
+        reserved: formatUsd2(reserved),
+        unresolved: formatUsd2(unresolved),
+        unknown: String(Math.trunc(unknown)),
+        final: accounting.cost_final === true ? 'Yes' : `Pending${openCause}`,
+        calls: String(Math.trunc(calls)),
+        topModel: models.length > 0 ? models[0][0] : '-',
+    };
+}
+
 export function initCosts({ state, mount }) {
     const page = document.createElement('div');
     page.id = 'page-costs';
@@ -26,22 +83,27 @@ export function initCosts({ state, mount }) {
                     <button class="btn btn-default btn-sm costs-budget-refresh" id="btn-refresh-costs">Refresh</button>
                 </div>
                 <div class="costs-budget-fields">
-                    <div class="form-field">
-                        <label>Total Budget ($)</label>
-                        <input id="s-budget" type="number" value="10">
+                    <div class="form-field ui-field">
+                        <label for="s-budget">Total Budget ($)</label>
+                        <input id="s-budget" class="ui-control" type="number" value="200">
                     </div>
-                    <div class="form-field">
-                        <label>Per-task Cost Cap ($)</label>
-                        <input id="s-per-task-cost" type="number" value="20">
-                        <div class="settings-inline-note">Soft threshold only. When a task crosses it, Ouroboros is asked to wrap up rather than being hard-killed.</div>
+                    <div class="form-field ui-field">
+                        <label for="s-per-task-cost">Per-task Cost Cap ($)</label>
+                        <input id="s-per-task-cost" class="ui-control" type="number" value="50" aria-describedby="costs-per-task-note">
+                        <div class="settings-inline-note ui-field-help" id="costs-per-task-note">Hard dispatch cap for the whole root task tree. In-flight calls settle normally; increasing the cap does not auto-resume paused work.</div>
                     </div>
                 </div>
                 <button class="btn btn-save costs-budget-save" id="btn-save-budget">Save Budget</button>
                 <div id="budget-save-status" class="settings-inline-status"></div>
             </div>
             <div class="costs-stats-grid">
-                <div class="stat-card"><div class="label">Total Spent</div><div class="value" id="cost-total">$0.00</div></div>
-                <div class="stat-card"><div class="label">Total Calls</div><div class="value" id="cost-calls">0</div></div>
+                <div class="stat-card"><div class="label">Accounted / Limit</div><div class="value" id="cost-accounted-limit">Loading…</div></div>
+                <div class="stat-card"><div class="label">Confirmed</div><div class="value" id="cost-confirmed">—</div></div>
+                <div class="stat-card"><div class="label">Reserved</div><div class="value" id="cost-reserved">—</div></div>
+                <div class="stat-card"><div class="label">Unresolved upper bound</div><div class="value" id="cost-unresolved">—</div></div>
+                <div class="stat-card"><div class="label">Unknown / unmetered</div><div class="value" id="cost-unknown">—</div></div>
+                <div class="stat-card"><div class="label">Cost final</div><div class="value" id="cost-final">Loading…</div></div>
+                <div class="stat-card"><div class="label">Physical attempts</div><div class="value" id="cost-calls">—</div></div>
                 <div class="stat-card"><div class="label">Top Model</div><div class="value cost-top-model" id="cost-top-model">-</div></div>
             </div>
             <div class="costs-tables-grid">
@@ -66,7 +128,7 @@ export function initCosts({ state, mount }) {
     `;
     mount.appendChild(page);
 
-    function renderBreakdownTable(tableId, data, totalCost) {
+    function renderBreakdownTable(tableId, data, totalCost, emptyLabel = 'No data') {
         const tbody = document.querySelector('#' + tableId + ' tbody');
         tbody.innerHTML = '';
         const cell = (className, text, attrs = {}) => {
@@ -89,31 +151,55 @@ export function initCosts({ state, mount }) {
             tr.append(
                 cell('cost-cell-name', name, { title: name }),
                 cell('cost-cell-right', info.calls),
-                cell('cost-cell-right', formatUsd2(info.cost)),
+                cell('cost-cell-right', costBucketPresentation(info)),
                 tdBar,
             );
             tbody.appendChild(tr);
         }
         if (Object.keys(data).length === 0) {
             const tr = document.createElement('tr');
-            tr.appendChild(cell('cost-empty-cell', 'No data', { colspan: '4' }));
+            tr.appendChild(cell('cost-empty-cell', emptyLabel, { colspan: '4' }));
             tbody.appendChild(tr);
         }
     }
 
     async function loadCosts() {
+        const renderLoading = () => {
+            document.getElementById('cost-accounted-limit').textContent = 'Loading…';
+            ['cost-confirmed', 'cost-reserved', 'cost-unresolved', 'cost-unknown',
+                'cost-calls', 'cost-top-model'].forEach((id) => {
+                document.getElementById(id).textContent = '—';
+            });
+            document.getElementById('cost-final').textContent = 'Loading…';
+        };
+        const renderUnavailable = () => {
+            ['cost-accounted-limit', 'cost-confirmed', 'cost-reserved', 'cost-unresolved',
+                'cost-unknown', 'cost-calls', 'cost-top-model'].forEach((id) => {
+                document.getElementById(id).textContent = id === 'cost-accounted-limit' ? 'Unavailable' : '—';
+            });
+            document.getElementById('cost-final').textContent = 'Unavailable';
+            ['cost-by-model', 'cost-by-key', 'cost-by-model-cat', 'cost-by-task-cat']
+                .forEach((id) => renderBreakdownTable(id, {}, 0, 'Unavailable'));
+        };
+        renderLoading();
         try {
             const resp = await apiFetch('/api/cost-breakdown');
             const d = await resp.json();
-            document.getElementById('cost-total').textContent = formatUsd2(d.total_cost || 0);
-            document.getElementById('cost-calls').textContent = d.total_calls || 0;
-            const models = Object.entries(d.by_model || {});
-            document.getElementById('cost-top-model').textContent = models.length > 0 ? models[0][0] : '-';
+            const presentation = costDashboardPresentation(d);
+            if (!resp.ok || presentation.state !== 'available') throw new Error('accounting unavailable');
+            document.getElementById('cost-accounted-limit').textContent = presentation.accountedLimit;
+            document.getElementById('cost-confirmed').textContent = presentation.confirmed;
+            document.getElementById('cost-reserved').textContent = presentation.reserved;
+            document.getElementById('cost-unresolved').textContent = presentation.unresolved;
+            document.getElementById('cost-unknown').textContent = presentation.unknown;
+            document.getElementById('cost-final').textContent = presentation.final;
+            document.getElementById('cost-calls').textContent = presentation.calls;
+            document.getElementById('cost-top-model').textContent = presentation.topModel;
             renderBreakdownTable('cost-by-model', d.by_model || {}, d.total_cost);
             renderBreakdownTable('cost-by-key', d.by_api_key || {}, d.total_cost);
             renderBreakdownTable('cost-by-model-cat', d.by_model_category || {}, d.total_cost);
             renderBreakdownTable('cost-by-task-cat', d.by_task_category || {}, d.total_cost);
-        } catch {}
+        } catch { renderUnavailable(); }
     }
 
     async function loadBudget() {
@@ -137,7 +223,7 @@ export function initCosts({ state, mount }) {
 
     document.getElementById('btn-refresh-costs').addEventListener('click', loadCosts);
 
-    document.getElementById('btn-save-budget').addEventListener('click', async () => {
+    document.getElementById('btn-save-budget').addEventListener('click', async (event) => {
         const statusEl = document.getElementById('budget-save-status');
         const budget = readPositiveBudget('s-budget');
         const perTask = readPositiveBudget('s-per-task-cost');
@@ -145,6 +231,11 @@ export function initCosts({ state, mount }) {
             statusEl.textContent = 'Budget values must be at least 0.01.';
             return;
         }
+        const saveButton = event.currentTarget;
+        saveButton.disabled = true;
+        saveButton.setAttribute('aria-busy', 'true');
+        statusEl.textContent = 'Saving…';
+        statusEl.dataset.tone = 'muted';
         try {
             const resp = await apiFetch('/api/settings', {
                 method: 'POST',
@@ -167,9 +258,14 @@ export function initCosts({ state, mount }) {
             }
             if (data.warnings && data.warnings.length) msg += ' ⚠️ ' + data.warnings.join(' | ');
             statusEl.textContent = msg;
+            statusEl.dataset.tone = (data.warnings?.length || data.restart_required) ? 'warn' : 'ok';
             window.dispatchEvent(new CustomEvent('ouro:settings-updated', { detail: { reason: 'budget saved', source: 'costs' } }));
         } catch (e) {
             statusEl.textContent = 'Error: ' + e.message;
+            statusEl.dataset.tone = 'error';
+        } finally {
+            saveButton.disabled = false;
+            saveButton.removeAttribute('aria-busy');
         }
         setTimeout(() => { statusEl.textContent = ''; }, 4000);
     });

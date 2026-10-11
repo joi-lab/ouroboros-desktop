@@ -5,38 +5,39 @@ import asyncio
 import base64
 import json
 import pathlib
-import queue
-import re
 import sys
-import threading
 import time
 from types import SimpleNamespace
-from typing import Any, Dict
 
 import pytest
 
 from ouroboros import extension_loader
 from ouroboros.contracts.plugin_api import (
     ExtensionRegistrationError,
-    FORBIDDEN_EXTENSION_SETTINGS,
-    PluginAPI,
-    VALID_EXTENSION_PERMISSIONS,
 )
 from ouroboros.skill_loader import (
-    SkillReviewState,
-    compute_content_hash,
     find_skill,
-    save_enabled,
     save_skill_grants,
-    save_review_state,
 )
+
+
+def _payload(result) -> str:
+    """The producer payload before any trailing host note (#447 H1).
+
+    Host notes (safety warning, auto-route note, post-exec tripwires) TRAIL the
+    payload, so a test that pins what the extension itself answered reads the
+    text up to the first appended note."""
+    text = str(result or "")
+    head, sep, _tail = text.partition("\n\n⚠️ ")
+    return head if sep else text
+
 from tests._shared import clean_extension_runtime_state
+from tests.test_extension_route_streaming import collect_response
 from tests.test_extension_loader import (
     _add_fake_native_dep,
     _isolated_site_packages_dir,
     _mark_isolated_deps_installed,
     _prepare_extension,
-    _write_ext_skill,
 )
 
 
@@ -49,12 +50,12 @@ def _clear_loader_state(monkeypatch):
 
 
 def test_native_risk_extension_registers_and_dispatches_out_of_process(tmp_path):
-    from ouroboros.tools.registry import ToolRegistry
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
 
     plugin = (
         "import dummy_pkg\n"
         "def _echo(ctx, message='hi'):\n"
-        "    return f'{dummy_pkg.VALUE}:{message}'\n"
+        "    return f'{dummy_pkg.VALUE}:{message}:{ctx.drive_root}:{ctx.budget_drive_root}:{ctx.task_contract.get(\"objective\")}'\n"
         "def register(api):\n"
         "    api.register_tool(\n"
         "        'echo',\n"
@@ -82,14 +83,109 @@ def test_native_risk_extension_registers_and_dispatches_out_of_process(tmp_path)
     assert tool is not None
     assert tool["out_of_process"] is True
     assert pathlib.Path(tool["skills_repo_path"]) == repo_root
-    registry = ToolRegistry(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=drive_root)
-    assert registry.execute(tool_name, {"message": "ok"}).endswith(":ok")
+    child_drive = tmp_path / "child-drive"
+    child_drive.mkdir()
+    registry = ToolRegistry(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=child_drive)
+    registry.set_context(ToolContext(
+        repo_dir=pathlib.Path(__file__).resolve().parents[1],
+        drive_root=child_drive,
+        budget_drive_root=str(drive_root),
+        task_metadata={"budget_drive_root": str(drive_root)},
+        task_contract={"objective": "native-objective"},
+    ))
+    assert _payload(registry.execute(tool_name, {"message": "ok"})).endswith(f":ok:{child_drive}:{drive_root}:native-objective")
 
 
 def test_extension_child_runner_uses_host_python_for_host_dependencies():
     from ouroboros.extension_process_runner import _child_python
 
     assert pathlib.Path(_child_python()).resolve() == pathlib.Path(sys.executable).resolve()
+
+
+def test_child_extension_load_reuses_one_discovered_peer_snapshot(tmp_path, monkeypatch):
+    from ouroboros import extension_process_runner as runner
+    from ouroboros import skill_loader
+
+    loaded, repo_root, drive_root = _prepare_extension(
+        tmp_path,
+        "child_single_scan",
+        "def register(api):\n    pass\n",
+        permissions=[],
+    )
+    calls = 0
+    real_discover = skill_loader.discover_skill_identity
+
+    def counted_discover(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_discover(*args, **kwargs)
+
+    monkeypatch.setattr(skill_loader, "discover_skill_identity", counted_discover)
+    monkeypatch.setattr("ouroboros.config.load_settings", lambda: {})
+
+    runner._load_child_extension(
+        loaded.name,
+        drive_root,
+        pathlib.Path(__file__).resolve().parents[1],
+        repo_root,
+    )
+
+    assert calls == 1
+
+
+def test_extension_child_returncode_formats_signal_names():
+    from ouroboros.extension_process_runner import _format_child_returncode
+
+    assert "SIGABRT" in _format_child_returncode(-6)
+    assert "SIGABRT" in _format_child_returncode(134)
+
+
+def test_macos_quiet_crash_bootstrap_is_child_scoped(monkeypatch):
+    import types
+
+    from ouroboros import extension_process_runner as runner
+
+    original_abort = runner.os.abort
+    registered = {}
+    monkeypatch.setattr(runner.sys, "platform", "darwin")
+    monkeypatch.setattr(runner.signal, "signal", lambda signum, handler: registered.__setitem__(signum, handler))
+    monkeypatch.setitem(
+        sys.modules,
+        "resource",
+        types.SimpleNamespace(RLIMIT_CORE=4, setrlimit=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.delenv("OUROBOROS_EXTENSION_PROCESS_CHILD", raising=False)
+    assert runner._bootstrap_quiet_child_crash_reporting()["enabled"] is False
+    assert runner.os.abort is original_abort
+
+    monkeypatch.setenv("OUROBOROS_EXTENSION_PROCESS_CHILD", "1")
+    status = runner._bootstrap_quiet_child_crash_reporting()
+    try:
+        assert status["enabled"] is True
+        assert "quiet_sigabrt_handler" in status["actions"]
+        assert "quiet_python_os_abort" in status["actions"]
+        assert registered[runner.signal.SIGABRT] is runner._quiet_sigabrt
+        assert runner.os.abort is not original_abort
+    finally:
+        runner.os.abort = original_abort
+
+
+def test_macos_quiet_sigabrt_handler_exits_without_signal_crash(monkeypatch):
+    from ouroboros import extension_process_runner as runner
+
+    exits = []
+
+    def fake_exit(code):
+        exits.append(code)
+        raise SystemExit(code)
+
+    monkeypatch.setattr(runner.os, "_exit", fake_exit)
+
+    try:
+        runner._quiet_sigabrt(runner.signal.SIGABRT, None)
+    except SystemExit as exc:
+        assert exc.code == 134
+    assert exits == [134]
 
 
 def test_out_of_process_extension_tool_failure_uses_tool_error_prefix(tmp_path):
@@ -159,7 +255,7 @@ def test_out_of_process_extension_child_does_not_receive_settings_as_env(tmp_pat
     tool_name = extension_loader.extension_surface_name("native_env_contract", "check")
     registry = ToolRegistry(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=drive_root)
 
-    assert registry.execute(tool_name, {}).endswith("no-env-leak")
+    assert _payload(registry.execute(tool_name, {})).endswith("no-env-leak")
 
 
 def test_native_risk_extension_abort_during_import_does_not_abort_host(tmp_path):
@@ -224,8 +320,9 @@ def test_native_risk_extension_route_dispatches_out_of_process(tmp_path):
         repo_dir=pathlib.Path(__file__).resolve().parents[1],
     )
 
-    assert result["route"]["kind"] == "json"
-    assert result["route"]["data"] == {
+    events = asyncio.run(collect_response(result, method="POST"))
+    assert events[0]["status"] == 200
+    assert json.loads(b"".join(event.get("body", b"") for event in events)) == {
         "value": "isolated-native-risk",
         "name": "anton",
         "skill": "native_route",
@@ -234,7 +331,7 @@ def test_native_risk_extension_route_dispatches_out_of_process(tmp_path):
     assert pathlib.Path(spec["skills_repo_path"]) == repo_root
 
 
-def test_native_risk_extension_streaming_route_is_materialized_out_of_process(tmp_path):
+def test_native_risk_extension_streaming_route_streams_out_of_process(tmp_path):
     from ouroboros.extension_process_runner import dispatch_extension_route_subprocess
 
     plugin = (
@@ -272,12 +369,12 @@ def test_native_risk_extension_streaming_route_is_materialized_out_of_process(tm
         repo_dir=pathlib.Path(__file__).resolve().parents[1],
     )
 
-    assert result["route"]["kind"] == "response"
-    assert base64.b64decode(result["route"]["body_b64"]) == b"chunk-a-chunk-b"
+    events = asyncio.run(collect_response(result))
+    assert events[0]["status"] == 200
+    assert b"".join(event.get("body", b"") for event in events) == b"chunk-a-chunk-b"
 
 
 def test_native_risk_extension_gateway_route_child_failure_returns_502(tmp_path, monkeypatch):
-    import asyncio
     from types import SimpleNamespace
     from starlette.requests import Request
     from ouroboros.gateway.extensions import api_extension_dispatch
@@ -328,12 +425,12 @@ def test_native_risk_extension_gateway_route_child_failure_returns_502(tmp_path,
 
     response = asyncio.run(api_extension_dispatch(request))
 
-    assert response.status_code == 502
-    assert b"route-child-boom" in response.body
+    events = asyncio.run(collect_response(response))
+    assert events[0]["status"] == 502
+    assert b"route-child-boom" in b"".join(event.get("body", b"") for event in events)
 
 
 def test_native_risk_extension_gateway_route_rejects_oversized_body_before_child(tmp_path, monkeypatch):
-    import asyncio
     from types import SimpleNamespace
     from starlette.requests import Request
     from ouroboros.gateway.extensions import _CHILD_DISPATCH_BODY_CAP, api_extension_dispatch
@@ -414,7 +511,7 @@ def test_isolated_dependency_extension_dispatches_out_of_process_without_native_
     assert tool is not None
     assert tool["out_of_process"] is True
     registry = ToolRegistry(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=drive_root)
-    assert registry.execute(tool_name, {}).endswith("pure-isolated")
+    assert _payload(registry.execute(tool_name, {})).endswith("pure-isolated")
 
 
 def test_isolated_dependency_extension_stdout_does_not_break_child_protocol(tmp_path):
@@ -453,7 +550,7 @@ def test_isolated_dependency_extension_stdout_does_not_break_child_protocol(tmp_
         assert stat.S_IMODE(calls_dir.stat().st_mode) == 0o700
     tool_name = extension_loader.extension_surface_name("isolated_noisy_stdout", "value")
     registry = ToolRegistry(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=drive_root)
-    assert registry.execute(tool_name, {}).endswith("pure-isolated-noisy")
+    assert _payload(registry.execute(tool_name, {})).endswith("pure-isolated-noisy")
 
 
 def test_isolated_dependency_extension_oversized_child_result_is_capped(tmp_path):
@@ -488,7 +585,6 @@ def test_isolated_dependency_extension_oversized_child_result_is_capped(tmp_path
 
 def test_parallel_isolated_extension_children_do_not_sweep_each_other_import_tree(tmp_path):
     import concurrent.futures
-    import time
     from ouroboros.tools.registry import ToolRegistry
 
     plugin = (
@@ -518,8 +614,8 @@ def test_parallel_isolated_extension_children_do_not_sweep_each_other_import_tre
         time.sleep(0.1)
         second = pool.submit(registry.execute, tool_name, {"delay": 0.1})
 
-    assert first.result().endswith("True")
-    assert second.result().endswith("True")
+    assert _payload(first.result()).endswith("True")
+    assert _payload(second.result()).endswith("True")
 
 
 def test_isolated_dependency_extension_child_inherits_runtime_mode(tmp_path, monkeypatch):
@@ -557,15 +653,18 @@ def test_isolated_dependency_extension_child_inherits_runtime_mode(tmp_path, mon
 
 
 def test_isolated_dependency_extension_rejects_unproxied_side_effect_surface(tmp_path):
+    # send_ws_message/on_unload/companion are now supported out-of-process, but a
+    # per-call child cannot host an in-process supervised task — that stays rejected
+    # (a companion_process is the supported alternative).
     plugin = (
         "def register(api):\n"
-        "    api.send_ws_message('notice', {'ok': True})\n"
+        "    api.register_supervised_task('bg', lambda: None)\n"
     )
     loaded, _repo_root, drive_root = _prepare_extension(
         tmp_path,
         "isolated_side_effect",
         plugin,
-        permissions=["ws_handler"],
+        permissions=["supervised_task"],
         extra_frontmatter="dependencies:\n  - dummy_pkg\n",
     )
     _mark_isolated_deps_installed(drive_root, loaded)
@@ -573,7 +672,7 @@ def test_isolated_dependency_extension_rejects_unproxied_side_effect_surface(tmp
     err = extension_loader.load_extension(loaded, lambda: {}, drive_root=drive_root)
 
     assert err is not None
-    assert "send_ws_message is not supported" in err
+    assert "register_supervised_task is not available" in err
 
 
 @pytest.mark.parametrize(
@@ -587,7 +686,7 @@ def test_isolated_dependency_extension_rejects_unproxied_side_effect_surface(tmp
     ],
 )
 def test_out_of_process_catalog_revalidates_parent_namespace(tmp_path, catalog):
-    loaded, _repo_root, _drive_root = _prepare_extension(
+    loaded, _repo_root, drive_root = _prepare_extension(
         tmp_path,
         "catalog_guard",
         "def register(api):\n    pass\n",
@@ -596,10 +695,15 @@ def test_out_of_process_catalog_revalidates_parent_namespace(tmp_path, catalog):
     )
 
     with pytest.raises(ExtensionRegistrationError, match="escaped extension namespace"):
-        extension_loader._register_out_of_process_surfaces(
+        extension_loader._publish_out_of_process_registration(
             loaded,
-            current_hash=loaded.content_hash,
             catalog=catalog,
+            drive_root=drive_root,
+            state_dir=drive_root / "state",
+            settings_reader=lambda: {},
+            granted_keys=[],
+            dependency_site_dirs_enabled=False,
+            current_hash=loaded.content_hash,
         )
 
 
@@ -614,7 +718,7 @@ def test_out_of_process_catalog_revalidates_parent_namespace(tmp_path, catalog):
     ],
 )
 def test_out_of_process_catalog_revalidates_descriptor_shape(tmp_path, catalog):
-    loaded, _repo_root, _drive_root = _prepare_extension(
+    loaded, _repo_root, drive_root = _prepare_extension(
         tmp_path,
         "catalog_guard_shape",
         "def register(api):\n    pass\n",
@@ -623,10 +727,15 @@ def test_out_of_process_catalog_revalidates_descriptor_shape(tmp_path, catalog):
     )
 
     with pytest.raises(ExtensionRegistrationError):
-        extension_loader._register_out_of_process_surfaces(
+        extension_loader._publish_out_of_process_registration(
             loaded,
-            current_hash=loaded.content_hash,
             catalog=catalog(loaded),
+            drive_root=drive_root,
+            state_dir=drive_root / "state",
+            settings_reader=lambda: {},
+            granted_keys=[],
+            dependency_site_dirs_enabled=False,
+            current_hash=loaded.content_hash,
         )
 
 
@@ -712,7 +821,6 @@ def test_native_risk_extension_ws_dispatches_out_of_process(tmp_path):
 
 def test_native_risk_extension_gateway_ws_child_failure_is_log_message(tmp_path, monkeypatch):
     import json as _json
-    from types import SimpleNamespace
     from ouroboros.gateway.ws import _dispatch_extension_message
 
     plugin = (
@@ -753,3 +861,18 @@ def test_native_risk_extension_gateway_ws_child_failure_is_log_message(tmp_path,
     assert payload["type"] == "log"
     assert "child failed" in payload["data"]["message"]
     assert "ws-child-boom" in payload["data"]["message"]
+
+
+@pytest.mark.parametrize("method", ["GET", "post", ""])
+def test_child_route_request_carries_the_dispatched_method(tmp_path, method):
+    """A route registered for GET+POST dispatches on `request.method`, so the
+    child's request proxy must carry the host's method exactly like the
+    in-process Starlette request does (empty falls back to GET)."""
+    from ouroboros.extension_process_runner import _request_from_payload
+
+    request = asyncio.run(_request_from_payload(
+        {"method": method, "path": "/api/extensions/x/settings/save"},
+        tmp_path,
+        pathlib.Path(__file__).resolve().parents[1],
+    ))
+    assert request.method == (method.upper() or "GET")

@@ -68,6 +68,37 @@ else:
           'node-runtime skills will rely on PATH node. Run '
           'scripts/download_node_standalone.sh (or .ps1) before PyInstaller for a release build.')
 
+if os.path.isdir('ripgrep-standalone'):
+    _extra_datas.append(('ripgrep-standalone', 'ripgrep-standalone'))
+else:
+    print('WARNING: ripgrep-standalone/ not found — bundled rg will be absent and '
+          'search_code will rely on PATH rg or the Python fallback. Run '
+          'scripts/download_ripgrep_standalone.sh (or .ps1) before PyInstaller for a release build.')
+
+# Betterleaks is the one secret-scanning engine for outbound skill publication.
+# The package-local installer stages one checksum-pinned platform binary, its
+# license, and identity metadata in this normalized layout. Release build
+# scripts guarantee it is present; ad-hoc PyInstaller runs remain possible but
+# Publish will then report the exact explicit repair command instead of
+# downloading at runtime.
+if os.path.isdir('betterleaks-standalone'):
+    _extra_datas.append(('betterleaks-standalone', 'betterleaks-standalone'))
+else:
+    print('WARNING: betterleaks-standalone/ not found — packaged skill publication '
+          'will report scanner_missing. Run python -m '
+          'ouroboros.betterleaks_runtime install --build-output '
+          'betterleaks-standalone before PyInstaller for a release build.')
+
+# Seed the exact reviewed Claudexor engine closure. The archive stays compressed
+# inside the app and is extracted into Ouroboros's writable data plane on first
+# delegated use; Node remains a separate host-owned bundled runtime.
+if os.path.isdir('claudexor-runtime'):
+    _extra_datas.append(('claudexor-runtime', 'claudexor-runtime'))
+else:
+    print('WARNING: claudexor-runtime/ not found — managed Claudexor installation '
+          'will download the exact pinned archive on first use. Release builds run '
+          'scripts/fetch_claudexor_runtime.py before PyInstaller and must bundle it.')
+
 if _is_windows:
     for _pkg in ('pythonnet', 'clr_loader'):
         try:
@@ -77,6 +108,22 @@ if _is_windows:
             _extra_hiddenimports += _h
         except Exception:
             pass
+
+# tree-sitter-language-pack ships native grammar binaries (.so/.dylib/.pyd) +
+# data that PyInstaller does not collect automatically. Bundle them on every
+# platform so polyglot code intelligence (query_code / inventory symbols for
+# Go/Rust/Java/Ruby/C/... and JS/TS) works out of the box (WS3, v6.33.0). For
+# ad-hoc dev builds we warn-and-continue: structural extraction then degrades
+# VISIBLY (structural_unavailable:<lang>) rather than silently regex-guessing.
+for _pkg in ('tree_sitter', 'tree_sitter_language_pack'):
+    try:
+        _d, _b, _h = _collect_all(_pkg)
+        _extra_datas += _d
+        _extra_binaries += _b
+        _extra_hiddenimports += _h
+    except Exception as _exc:
+        print(f'WARNING: could not collect {_pkg} for bundling ({_exc}); polyglot '
+              'structural extraction will degrade visibly unless the dep is importable at runtime.')
 
 a = Analysis(
     ['launcher.py'],
@@ -89,8 +136,8 @@ a = Analysis(
         ('.gitignore', '.'),
         ('BIBLE.md', '.'),
         ('README.md', '.'),
-        ('requirements.txt', '.'),
-        ('requirements-launcher.txt', '.'),
+        ('requirements-runtime.lock', '.'),
+        ('uv.lock', '.'),
         ('pyproject.toml', '.'),
         ('Makefile', '.'),
         ('server.py', '.'),

@@ -1,0 +1,212 @@
+--- src/systems/ouroboros/run_clbench_bridge_agent.py
++++ src/systems/ouroboros/run_clbench_bridge_agent.py
+@@ -29,6 +29,7 @@
+ import json
+ import os
+ import sys
++import tempfile
+ import time
+ import urllib.request
+ from pathlib import Path
+@@ -439,6 +440,130 @@
+     return _poll_terminal(base, task_id, args.task_timeout_sec)
+ 
+ 
++def _atomic_write_json(path: Path, payload: dict) -> None:
++    """Write ``payload`` through a same-directory temp file + ``os.replace``.
++
++    ``task_outcome.json`` is the ONLY record that an instance existed: ``collect_results``
++    reads the denominator and every row's provenance from it. A ``write_text`` truncates in
++    place, so a crash or a killed run mid-write does not lose an UPDATE, it loses the ROW —
++    the file parses as ``{}`` (or as nothing) and the instance disappears from the very
++    denominator this change exists to preserve. The late-reward fill below rewrites rows that
++    are ALREADY VALID, which is precisely when a torn write costs the most.
++
++    A local seam rather than ``devtools.benchmarks.common.manifests.write_json``: this module
++    lives in the EXTERNAL CL-Bench checkout and only reaches the Ouroboros clone through the
++    sys.path insert ``_launcher`` performs at call time, and that helper additionally imports
++    ``ouroboros.utils``, which the CL-Bench runner venv does not install. Same guarantee
++    (write, flush+fsync, close, then a single atomic rename), no cross-tree import. The
++    descriptor is closed BEFORE the replace, which is also the only form that works on
++    Windows.
++    """
++    path.parent.mkdir(parents=True, exist_ok=True)
++    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as handle:
++            json.dump(payload, handle, indent=2)
++            handle.flush()
++            os.fsync(handle.fileno())
++        os.replace(tmp, path)
++    except BaseException:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++        raise
++
++
++def _write_instance_outcome(run_dir: Path, domain: str, instance_index: int,
++                            outcome: Optional[dict], *, ouroboros_status: str,
++                            cost_usd, runtime_result: Optional[dict] = None) -> None:
++    """Write ONE q###/task_outcome.json row (same schema run_clb.collect_results reads).
++
++    ``ouroboros_status`` is the honest provenance of the row: a real agent-turn row
++    carries the Ouroboros task status, a co-resolved row carries
++    ``auto_resolved_no_agent_turn``.
++
++    ``runtime_result`` is the RUNTIME's own terminal payload, from which
++    ``runtime_outcome`` is projected. ``ouroboros_status`` alone cannot carry it: a task
++    the per-task USD reservation rail truncated reports status "failed" exactly like an
++    honest failure, so an aggregator could not tell a cost-truncated question from a
++    genuinely wrong one. Reward and success are untouched — this ADDS disclosure.
++    """
++    _atomic_write_json(run_dir / "task_outcome.json", {
++        "domain": domain, "instance_index": instance_index,
++        "reward": (outcome or {}).get("reward"),
++        "success": (outcome or {}).get("success"),
++        "ouroboros_status": ouroboros_status,
++        "cost_usd": cost_usd,
++        "runtime_outcome": _runtime_terminal_disclosure(runtime_result),
++    })
++
++
++def _runtime_terminal_disclosure(task_result: Optional[dict]) -> dict:
++    """Local mirror of devtools.benchmarks.common.result_index.runtime_terminal_disclosure.
++
++    A LOCAL seam, deliberately: this module lives in the external CL-Bench checkout and
++    only reaches the Ouroboros clone through `_launcher`'s call-time sys.path insert, so a
++    module-level import of the shared helper would break the standard entrypoint. The
++    shared helper is the SSOT for the vocabulary; "keep the two in sync" as a COMMENT is
++    exactly what failed here (both copies carried four invented codes and missed
++    round_limit/deadline_local), so the mirror is now pinned to the SSOT by
++    tests/test_benchmark_provenance_v6810.py::
++    test_clb_operator_patch_mirrors_the_truncation_ssot_verbatim, which reads this patch
++    file and fails on any divergence.
++    """
++    if not isinstance(task_result, dict) or not task_result:
++        return {"available": False}
++    loop_outcome = task_result.get("loop_outcome")
++    loop_outcome = loop_outcome if isinstance(loop_outcome, dict) else {}
++    resource_limit = task_result.get("resource_limit")
++    if not isinstance(resource_limit, dict):
++        candidate = loop_outcome.get("resource_limit")
++        resource_limit = candidate if isinstance(candidate, dict) else {}
++    reason_code = str(task_result.get("reason_code") or "")
++    return {
++        "available": True,
++        "status": str(task_result.get("status") or ""),
++        "reason_code": reason_code,
++        # MIRROR of result_index.RUNTIME_TRUNCATION_REASON_CODES, sorted. Every code below
++        # is emitted by the runtime; the guard test above fails if this list and the SSOT
++        # ever diverge again.
++        "truncated": reason_code in (
++            "budget_exhausted", "children_unabsorbed", "deadline_local",
++            "finalization_grace", "llm_api_error", "owner_requested_finalization",
++            "provider_unavailable", "round_limit"),
++        "degraded": bool(task_result.get("degraded") or loop_outcome.get("degraded")),
++        "resource_limit": resource_limit,
++    }
++
++
++def _refresh_instance_reward(run_dir: Path, outcome: dict) -> bool:
++    """Fill in a reward that only materialised later, KEEPING the row's provenance.
++
++    Some domains score an instance only at ``task.evaluate()`` time, which the shim
++    runs when the sequence genuinely completes — i.e. AFTER the per-question polls
++    that saw ``reward=None``. The full ``instance_outcomes`` list carries those
++    numbers, so a recorded row whose reward is still null is updated in place.
++    ``ouroboros_status``/``cost_usd`` are preserved: whether the agent had a turn on
++    this instance is a FACT about the run, not something a late score may rewrite.
++    Returns True when a null reward was actually replaced.
++    """
++    path = run_dir / "task_outcome.json"
++    try:
++        row = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return False
++    if not isinstance(row, dict) or row.get("reward") is not None:
++        return False
++    if outcome.get("reward") is None:
++        return False
++    row["reward"] = outcome.get("reward")
++    row["success"] = outcome.get("success")
++    row["reward_source"] = "late_instance_outcomes_fill"
++    _atomic_write_json(path, row)
++    return True
++
++
+ def run_stateful(args, out_root: Path, *, evolution: bool) -> list:
+     """STATEFUL ROLLOUT (CC-comparable): ONE persistent Ouroboros server + ONE CONTINUOUS task across all
+     instances (the schema_drift migration fires mid-sequence, as CC's rollout experiences it). One agent
+@@ -471,21 +596,62 @@
+                 final = _submit_and_poll(eng, prompt, args)
+                 (rd / "ouroboros_task_final.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+                 oc = _api(url, "GET", "/_outcome", timeout=30)
+-                this = next((o for o in reversed(oc.get("instance_outcomes") or [])
+-                             if o.get("instance_index") == idx), None)
++                # Take the WHOLE instance_outcomes list, not just the row matching the
++                # question the agent was handed. The shim collects outcomes with the
++                # official runner's own helpers (_collect_step_outcomes /
++                # _upsert_instance_outcomes over task.get_instance_outcomes()), and ONE
++                # task.step() can close SEVERAL instances at once. The old
++                # "next(... if instance_index == idx)" read dropped every co-resolved
++                # instance on the floor: advance_question() then walked past them and
++                # their rewards never reached any task_outcome.json.
++                by_index = {}
++                for o in (oc.get("instance_outcomes") or []):
++                    if isinstance(o, dict) and isinstance(o.get("instance_index"), int):
++                        by_index[int(o["instance_index"])] = o   # last write wins (upsert order)
++                this = by_index.get(idx)
+                 rew = this.get("reward") if this else None
+                 rewards[idx] = rew
+-                (rd / "task_outcome.json").write_text(json.dumps({
+-                    "domain": args.domain, "instance_index": idx, "reward": rew,
+-                    "success": (this or {}).get("success"), "ouroboros_status": str(final.get("status") or ""),
+-                    "cost_usd": final.get("cost_usd"),
+-                }, indent=2), encoding="utf-8")
++                _write_instance_outcome(rd, args.domain, idx, this,
++                                        ouroboros_status=str(final.get("status") or ""),
++                                        cost_usd=final.get("cost_usd"),
++                                        runtime_result=final)
++                # Co-resolved instances the agent never had a turn on: recorded honestly
++                # with ouroboros_status="auto_resolved_no_agent_turn" and NO agent-turn
++                # artefacts (no prompt.txt / ouroboros_task_final.json / absorb.json),
++                # so a reader can never mistake them for solved-by-agent questions.
++                # cost_usd stays null: the spend belongs to the turn that closed them.
++                for other in sorted(k for k in by_index if k != idx):
++                    rec = by_index[other]
++                    other_rd = out_root / label / args.domain / f"q{other:03d}"
++                    if other in rewards:
++                        # Already recorded. The ONLY thing the fresh list may add is a
++                        # reward that materialised later (evaluate-time scoring); the
++                        # row's agent-turn provenance is never rewritten.
++                        if rewards[other] is None and _refresh_instance_reward(other_rd, rec):
++                            rewards[other] = rec.get("reward")
++                            print(f"[{label}] q{other}: late reward={rec.get('reward')} "
++                                  "(filled from instance_outcomes)", flush=True)
++                        continue
++                    rewards[other] = rec.get("reward")
++                    other_rd.mkdir(parents=True, exist_ok=True)
++                    _write_instance_outcome(other_rd, args.domain, other, rec,
++                                            ouroboros_status="auto_resolved_no_agent_turn",
++                                            cost_usd=None)
++                    print(f"[{label}] q{other}: reward={rec.get('reward')} "
++                          f"auto_resolved_no_agent_turn (closed by the q{idx} step)", flush=True)
+                 absorb = eng.on_instance_boundary()   # budget reset; waits for absorb ONLY if evolution
+                 (rd / "absorb.json").write_text(json.dumps(absorb), encoding="utf-8")
+                 print(f"[{label}] q{idx}: reward={rew} absorb={absorb.get('absorbed')}/{absorb.get('reason')}", flush=True)
+                 adv = driver.advance_question()
+                 steps += 1
+-                # full rollout = 40 (variant size); --num-instances < 40 caps it for a smoke (drift at q20)
++                # Full DB rollout = 40 (variant size); exploitable_poker's default schedule is
++                # 120; --num-instances caps the window for a smoke (DB drift at q20).
++                # ACCEPTED OVERSHOOT (owner decision, v6.76.0): `steps` counts AGENT TURNS,
++                # not instances, so when one step closes several instances the recorded
++                # instance count can exceed --num-instances by the size of that last group.
++                # This is deliberate — the alternative (dropping already-scored instances to
++                # hit the window exactly) would throw away official rewards. Disclose the
++                # actual scored count from result_index.jsonl, never the requested window.
+                 if adv.get("seq_done") or steps >= max(1, args.num_instances):
+                     break
+         finally:

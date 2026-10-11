@@ -138,9 +138,14 @@ def _push_to_github(data: dict[str, Any]) -> str:
     if not token:
         return "error: GITHUB_TOKEN not found"
 
-    user = os.environ.get("GITHUB_USER", "")
-    repo = os.environ.get("GITHUB_REPO", "")
-    repo_slug = f"{user}/{repo}"
+    repo_setting = os.environ.get("GITHUB_REPO", "").strip()
+    if "/" in repo_setting:
+        repo_slug = repo_setting
+    else:
+        user = os.environ.get("GITHUB_USER", "").strip()
+        repo_slug = f"{user}/{repo_setting}" if user and repo_setting else ""
+    if not repo_slug:
+        return "error: GITHUB_REPO not configured (expected owner/repo)"
     file_path = "docs/evolution.json"
     branch = os.environ.get("GITHUB_BRANCH", "ouroboros")
 

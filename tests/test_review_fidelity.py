@@ -297,7 +297,7 @@ class TestCommitGateFreshnessMessages:
 
     def _setup(self):
         """Return (tmp_dir, ctx, repo_dir, drive_root, save_state, load_state, rs_mod)."""
-        from ouroboros.review_state import save_state, load_state, AdvisoryReviewState
+        from ouroboros.review_state import save_state, load_state
         import importlib
         rs_mod = importlib.import_module("ouroboros.review_state")
 
@@ -324,7 +324,7 @@ class TestCommitGateFreshnessMessages:
     def test_fresh_with_open_obligations_shows_all(self, monkeypatch):
         """fresh advisory + >5 obligations: all obligations appear in warning text."""
         from ouroboros.review_state import (
-            AdvisoryReviewState, AdvisoryRunRecord, save_state, compute_snapshot_hash,
+            AdvisoryRunRecord, compute_snapshot_hash,
         )
         from ouroboros.tools.commit_gate import _check_advisory_freshness
 
@@ -358,7 +358,7 @@ class TestCommitGateFreshnessMessages:
     def test_parse_failure_with_open_obligations_shows_all(self):
         """parse_failure advisory + >5 obligations: all obligations appear in warning text."""
         from ouroboros.review_state import (
-            AdvisoryReviewState, AdvisoryRunRecord, save_state, compute_snapshot_hash,
+            AdvisoryRunRecord, compute_snapshot_hash,
         )
         from ouroboros.tools.commit_gate import _check_advisory_freshness
 
@@ -390,7 +390,7 @@ class TestCommitGateFreshnessMessages:
     def test_stale_with_open_obligations_shows_all(self):
         """No fresh advisory (stale/no-run) + >5 obligations: all obligations listed."""
         from ouroboros.review_state import (
-            AdvisoryReviewState, AdvisoryRunRecord, save_state, compute_snapshot_hash,
+            AdvisoryRunRecord,
         )
         from ouroboros.tools.commit_gate import _check_advisory_freshness
 
@@ -788,7 +788,7 @@ class TestPersistencePathNotTruncated:
     def test_long_commit_message_in_obligation_source(self):
         """_update_obligations_from_attempt must store full commit_message in source_attempt_msg."""
         from ouroboros.review_state import (
-            AdvisoryReviewState, CommitAttemptRecord, ObligationItem,
+            AdvisoryReviewState,
         )
 
         long_msg = "fix: " + "B" * 300  # 305 chars — well above old [:200] cap
@@ -946,7 +946,6 @@ class TestGitCommitFailureForensicMetadata:
     def _make_ctx(self, tmp_dir):
         """Build a minimal ToolContext-like object with forensic model metadata."""
         import pathlib
-        from ouroboros.tools.registry import ToolContext
 
         class _MinimalCtx:
             pass
@@ -964,7 +963,7 @@ class TestGitCommitFailureForensicMetadata:
     def test_record_commit_attempt_infra_failure_stores_triad_models(self):
         """_record_commit_attempt with status=failed must persist triad_models."""
         import pathlib, tempfile
-        from ouroboros.review_state import load_state, save_state, AdvisoryReviewState
+        from ouroboros.review_state import load_state
         from ouroboros.tools.git import _record_commit_attempt
 
         with tempfile.TemporaryDirectory() as tmp:

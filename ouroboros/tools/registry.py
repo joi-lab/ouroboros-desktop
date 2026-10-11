@@ -2,1528 +2,256 @@
 
 from __future__ import annotations
 
-import copy
-import hashlib
-import json
+import copy  # noqa: F401 — historical facade surface
+import hashlib  # noqa: F401 — historical facade surface
+import inspect  # noqa: F401 — historical facade surface
 import logging
-import os
-import pathlib
-import re
-import subprocess
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+import os  # noqa: F401 — historical facade surface
+import pathlib  # noqa: F401 — historical facade surface
+import re  # noqa: F401 — historical facade surface
+import subprocess  # noqa: F401 — historical facade surface
+from dataclasses import dataclass, field  # noqa: F401 — historical facade surface
+from typing import Any, Callable, Dict, List, Optional  # noqa: F401 — historical facade surface
 
 from ouroboros.runtime_mode_policy import (
-    PROTECTED_RUNTIME_PATHS,
-    core_patch_notice,
-    is_protected_runtime_path,
-    mode_allows_protected_write,
-    protected_paths_in,
-    protected_write_block_message,
+    PROTECTED_RUNTIME_PATHS,  # noqa: F401 — historical facade surface
+    mode_allows_protected_write,  # noqa: F401 — historical facade surface
+    protected_paths_in,  # noqa: F401 — historical facade surface
+    protected_write_block_message,  # noqa: F401 — historical facade surface
 )
 from ouroboros.tool_capabilities import (
-    CORE_TOOL_NAMES,
-    LOCAL_READONLY_SUBAGENT_MODE,
-    LOCAL_READONLY_SUBAGENT_TOOL_NAMES,
-    META_TOOL_NAMES,
+    ACTING_SUBAGENT_MODE,  # noqa: F401 — historical facade surface
+    ACTING_SUBAGENT_TOOL_NAMES,  # noqa: F401 — historical facade surface
+    CORE_TOOL_NAMES,  # noqa: F401 — historical facade surface
+    LOCAL_READONLY_SUBAGENT_MODE,  # noqa: F401 — historical facade surface
+    LOCAL_READONLY_SUBAGENT_TOOL_NAMES,  # noqa: F401 — historical facade surface
+    META_TOOL_NAMES,  # noqa: F401 — historical facade surface
 )
-from ouroboros.tools.shell_parse import (
-    shell_argv,
-    shell_argv_with_inline,
-    shell_command_string,
-    strip_leading_env_assignments,
-    sudo_noninteractive_violation,
-    unwrap_env_argv,
+from ouroboros.shell_parse import (
+    directory_destination_child_name,  # noqa: F401 — historical facade surface
+    is_absolute_path_text,  # noqa: F401 — historical facade surface
+    path_text_is_inside,  # noqa: F401 — historical facade surface
+    sequential_effective_cwds,  # noqa: F401 — historical facade surface
+    shell_argv,  # noqa: F401 — historical facade surface
+    shell_argv_with_path_tokens,  # noqa: F401 — historical facade surface
+    shell_command_string,  # noqa: F401 — historical facade surface
+    strip_leading_env_assignments,  # noqa: F401 — historical facade surface
+    sudo_noninteractive_violation,  # noqa: F401 — historical facade surface
+    unwrap_env_argv,  # noqa: F401 — historical facade surface
 )
 from ouroboros.tools.shell_guards import (
-    LIGHT_SHELL_WRITER_COMMANDS,
-    PROTECTED_RUNTIME_PATHS_LOWER,
-    SHELL_WRITE_INDICATORS,
-    light_shell_repo_mutation,
-    parse_porcelain_paths,
-    process_shell_guard_args,
-    runtime_data_write_targets,
-    shell_writer_targets_protected,
+    PROTECTED_RUNTIME_PATHS_LOWER,  # noqa: F401 — historical facade surface
+    interpreter_family,  # noqa: F401 — historical facade surface
+    interpreter_inline_code,  # noqa: F401 — historical facade surface
+    interpreter_write_shape,  # noqa: F401 — historical facade surface
+    light_shell_repo_mutation,  # noqa: F401 — historical facade surface
+    non_interpreter_write_shape,  # noqa: F401 — historical facade surface
+    parse_porcelain_paths,  # noqa: F401 — historical facade surface
+    process_shell_guard_args,  # noqa: F401 — historical facade surface
+    runtime_data_guard_targets,  # noqa: F401 — historical facade surface
+    shell_writer_targets_protected,  # noqa: F401 — historical facade surface
+    workspace_executor_state_write_block,  # noqa: F401 — historical facade surface
+    directory_destination_pairs,  # noqa: F401 — historical facade surface
+    writer_target_rows,  # noqa: F401 — historical facade surface
+    writer_target_tokens,  # noqa: F401 — historical facade surface
 )
-from ouroboros.artifacts import task_artifact_dir_path, task_id_for_artifacts
-from ouroboros.tool_access import light_cognitive_or_root_redirect, normalize_root, resolve_shell_cwd, workspace_mode_block_reason
-from ouroboros.utils import safe_relpath
-from ouroboros.contracts.task_constraint import TaskConstraint, normalize_task_constraint, resolve_payload_path
+from ouroboros.tools.deliverables_shell import (
+    direct_deliverable_target_block,  # noqa: F401 — historical facade surface
+    lexical_user_files_block_reason,  # noqa: F401 — historical facade surface
+)
+from ouroboros.artifacts import task_artifact_dir_path, task_id_for_artifacts  # noqa: F401 — historical facade surface
+from ouroboros.protected_artifacts import shell_block_reason as protected_artifact_shell_block_reason  # noqa: F401 — historical facade surface
+from ouroboros.git_shell_policy import run_shell_git_block_reason, workspace_git_safety_violation  # noqa: F401 — historical facade surface
+from ouroboros.tool_access import (
+    active_tool_profile,  # noqa: F401 — historical facade surface
+    binding_targets_system_repo,  # noqa: F401 — historical facade surface
+    build_resolved_resource_binding,  # noqa: F401 — historical facade surface
+    canonical_repo_relative_path,  # noqa: F401 — historical facade surface
+    decide_tool_access,  # noqa: F401 — historical facade surface
+    _deliverables_root_lexical,  # noqa: F401 — historical facade surface
+    _deliverables_root_lexical_alias,  # noqa: F401 — historical facade surface
+    _lexical_path_is_relative_to_casefold,  # noqa: F401 — historical facade surface
+    is_external_workspace,  # noqa: F401 — historical facade surface
+    light_cognitive_or_root_redirect,  # noqa: F401 — historical facade surface
+    normalize_root,  # noqa: F401 — historical facade surface
+    normalize_root_relative,  # noqa: F401 — historical facade surface
+    _path_is_relative_to_casefold,  # noqa: F401 — historical facade surface
+    resource_root_path,  # noqa: F401 — historical facade surface
+    resolve_shell_cwd,  # noqa: F401 — historical facade surface
+    shell_cwd_block_message,  # noqa: F401 — historical facade surface
+    UserFilesPathBlockedError,  # noqa: F401 — historical facade surface
+    user_files_path_block_reason,  # noqa: F401 — historical facade surface
+    workspace_mode_block_reason,  # noqa: F401 — historical facade surface
+)
+from ouroboros.process_interpreters import (  # noqa: F401 — historical facade surface
+    interpreter_attestation,
+    record_interpreter_resolution,
+    resolve_node_postgates,
+    resolve_process_python,
+)
+from ouroboros.utils import safe_relpath  # noqa: F401 — historical facade surface
+from ouroboros.contracts.task_constraint import TaskConstraint, VALID_WRITE_SURFACES, normalize_task_constraint  # noqa: F401 — historical facade surface
 from ouroboros.contracts.skill_payload_policy import (
-    SKILL_OWNER_STATE_FILENAMES,
-    SKILL_OWNER_STATE_STEMS,
-    SKILL_PAYLOAD_CONTROL_DIRNAMES,
-    SKILL_PAYLOAD_CONTROL_FILENAMES,
-    constraint_bucket_skill,
-    cross_skill_redirect_error,
-    decide_payload_short_form,
-    is_skill_payload_control_filename,
-    is_skill_payload_path,
-    resolve_skill_payload_target,
+    SKILL_OWNER_STATE_FILENAMES,  # noqa: F401 — historical facade surface
+    SKILL_OWNER_STATE_STEMS,  # noqa: F401 — historical facade surface
+    SKILL_PAYLOAD_CONTROL_DIRNAMES,  # noqa: F401 — historical facade surface
+    SKILL_PAYLOAD_CONTROL_FILENAMES,  # noqa: F401 — historical facade surface
+    constraint_bucket_skill,  # noqa: F401 — historical facade surface
+    cross_skill_redirect_error,  # noqa: F401 — historical facade surface
+    decide_payload_short_form,  # noqa: F401 — historical facade surface
+    is_skill_payload_control_filename,  # noqa: F401 — historical facade surface
+    is_skill_payload_path,  # noqa: F401 — historical facade surface
+    resolve_skill_payload_target,  # noqa: F401 — historical facade surface
+    synthesize_payload_constraint,  # noqa: F401 — historical facade surface
+)
+
+# v7 D04 split: the owners below were extracted VERBATIM from this module
+# (see each leaf's header); re-exported here so the 80+ historical importers
+# and monkeypatch targets keep working unchanged.
+from ouroboros.tools.tool_catalog import ToolEntry  # noqa: F401 — re-exported moved surface
+from ouroboros.tools.tool_context import BrowserState, ToolContext  # noqa: F401 — re-exported moved surface
+from ouroboros.tools.tool_resolution import (  # noqa: F401 — re-exported moved surface
+    _GENERIC_VCS_TARGET_TOOLS,
+    _IGNORE_ROOT_ARG_TOOLS,
+    _PATH_NORMALIZED_TOOLS,
+    _PROCESS_TARGET_TOOLS,
+    _ROOT_ARG_REPO_WRITE_TOOLS,
+    _SKILL_LIFECYCLE_TARGET_TOOLS,
+    _TARGET_BINDING_OPERATIONS,
+    _TOOL_ARG_ALIASES,
+    _VERIFY_RUN_KINDS,
+    _binding_error_text,
+    _binding_items,
+    _binding_set_is_light_restricted,
+    _binding_set_targets_system_repo,
+    _build_builtin_target_binding,
+    _coerce_real_path,
+    _entry_has_public_param_schema,
+    _entry_public_params,
+    _format_tool_arg_error,
+    _handler_public_params,
+    _light_binding_failure_redirect,
+    _normalize_dispatch_path_args,
+    _normalize_tool_call_args,
+    _payload_write_paths,
+    _prepare_public_builtin_args,
+    _target_binding_operation,
+    active_repo_dir_for,
+    system_repo_dir_for,
+)
+from ouroboros.tools.write_shape import _workspace_write_candidates  # noqa: F401 — historical facade surface
+from ouroboros.tools.registry_guards import (  # noqa: F401 — re-exported moved surface
+    _GITHUB_TOKEN_TOOLS,
+    _WEB_TOOLS,
+    _authorized_managed_update_resolver,
+    _builtin_tool_availability,
+    _disabled_tools,
+    _executor_backend_candidate_allowed,
+    _light_mode_payload_mutation_allowed,
+    _managed_update_code_tool_block,
+    _payload_dispatch_constraint,
+    _resource_allowed,
+    _stray_skill_payload_failsoft,
+)
+from ouroboros.tools.registry_guard_process import (  # noqa: F401 — re-exported moved surface
+    _COMMAND_HEAD_WRAPPERS,
+    _DENIED_READ_OPTIONS,
+    _NESTED_EXECUTION_MARKERS,
+    _NESTED_EXECUTION_TOKENS,
+    _READ_ONLY_INSPECTION_COMMANDS,
+    _SEARCH_TOOL_EXEC_OPTIONS,
+    _TRUSTED_EXECUTABLE_DIRS,
+    _denied_read_option,
+    _format_light_repo_write_note,
+    _git_ref_snapshot,
+    _is_pure_read_inspection,
+    _light_repo_snapshot,
+    _trusted_read_head,
 )
 
 log = logging.getLogger(__name__)
-def _coerce_real_path(value: Any) -> pathlib.Path | None:
-    if value is None or value.__class__.__module__.startswith("unittest.mock"):
-        return None
-    try:
-        return pathlib.Path(os.fspath(value))
-    except TypeError:
-        return None
-def active_repo_dir_for(ctx: Any) -> pathlib.Path:
-    """Return the active repo/workspace root for real and lightweight test contexts."""
-    active = getattr(ctx, "active_repo_dir", None)
-    if callable(active):
-        try:
-            candidate = active()
-        except Exception:
-            candidate = None
-        path = _coerce_real_path(candidate)
-        if path is not None:
-            return path
 
-    workspace_root = getattr(ctx, "workspace_root", None)
-    workspace_path = _coerce_real_path(workspace_root)
-    if workspace_path is not None:
-        workspace_mode = str(getattr(ctx, "workspace_mode", "") or "").strip()
-        if workspace_mode and workspace_mode != "self":
-            return workspace_path
-
-    return pathlib.Path(getattr(ctx, "repo_dir"))
-
-def _detect_runtime_mode_elevation(text_lower: str) -> bool:
-    """Detect shell/script attempts to change ``OUROBOROS_RUNTIME_MODE``."""
-    has_save = "save_settings" in text_lower
-    has_mode_key = "ouroboros_runtime_mode" in text_lower
-    has_dotted_path = "ouroboros.config.save_settings" in text_lower
-    return (has_save and has_mode_key) or has_dotted_path
-
-def _task_constraint_path_allowed(path_text: str, constraint: Optional[TaskConstraint], drive_root: pathlib.Path) -> bool:
-    return is_skill_payload_path(
-        drive_root,
-        path_text or "",
-        constraint=constraint,
-        allow_short_relative=True,
-        allow_control_plane=True,
-    )
-
-def _light_mode_payload_mutation_allowed(
-    *,
-    ctx: Any,
-    tool_name: str,
-    args: Dict[str, Any],
-    runtime_mode: str,
-    effective_constraint: Optional[TaskConstraint],
-    implicit_skill_cwd_allowed: bool,
-    allow_short_relative: bool,
-) -> bool:
-    """Return True for light-mode data skill payload edits that do not touch repo files."""
-
-    if runtime_mode != "light" or tool_name not in {"edit_text", "write_file", "claude_code_edit"}:
-        return False
-    if tool_name == "claude_code_edit":
-        cwd_text = str(args.get("cwd", "") or "")
-        if not cwd_text and effective_constraint and effective_constraint.mode == "skill_repair" and implicit_skill_cwd_allowed:
-            cwd_text = "."
-        elif not cwd_text:
-            return False
-        try:
-            _cwd_path, cwd_root, _allowed_roots = resolve_shell_cwd(ctx, cwd_text)
-            if cwd_root in {"user_files", "task_drive", "artifact_store"}:
-                return True
-        except Exception:
-            pass
-        return is_skill_payload_path(
-            pathlib.Path(ctx.drive_root),
-            cwd_text,
-            constraint=effective_constraint,
-            allow_short_relative=allow_short_relative,
-            allow_control_plane=False,
-        )
-    requested_root = str(args.get("root", "") or "active_workspace")
-    try:
-        requested_root = normalize_root(requested_root)
-    except Exception:
-        requested_root = str(args.get("root", "") or "active_workspace")
-    if requested_root in {"task_drive", "artifact_store", "user_files"}:
-        return True
-    legacy_data_skill_edit = False
-    if tool_name == "edit_text" and requested_root == "active_workspace":
-        try:
-            legacy_target = resolve_skill_payload_target(
-                pathlib.Path(ctx.drive_root),
-                str(args.get("path", "") or ""),
-            )
-            legacy_data_skill_edit = legacy_target.target_path.exists() and not legacy_target.control_plane
-        except Exception:
-            legacy_data_skill_edit = False
-    if requested_root not in {"runtime_data", "skill_payload"} and not legacy_data_skill_edit:
-        return False
-    return is_skill_payload_path(
-        pathlib.Path(ctx.drive_root),
-        str(args.get("path", "") or ""),
-        constraint=effective_constraint,
-        allow_short_relative=allow_short_relative,
-        allow_control_plane=False,
-    )
-
-
-_HEAL_MODE_ALLOWED_TOOLS = frozenset({
-    "read_file",
-    "list_files",
-    "write_file",
-    "edit_text",
-    "claude_code_edit",
-    "list_skills",
-    "skill_review",
-    # Read-only payload syntax validator; no review/enabled/grant mutation.
-    "skill_preflight",
-})
-
-_HEAL_PROTECTED_PAYLOAD_FILENAMES = SKILL_PAYLOAD_CONTROL_FILENAMES
-
-
-_SKILL_OWNER_STATE_STEMS = SKILL_OWNER_STATE_STEMS
-_DETACHED_PROCESS_MARKERS = (
-    "start_new_session",
-    "new_session",
-    "setsid",
-    "preexec_fn",
-    "nohup",
+# v7 F3.1 typed-organ re-homing: the surfaces below moved out of this module
+# (ToolRegistry and its module constants into registry_core, the composition
+# helper into tool_result, the write-block message helpers and the executor
+# backend path mapper into registry_guards); re-exported here so the historical
+# importers and monkeypatch targets keep working unchanged.
+from ouroboros.tools.tool_result import (  # noqa: F401 — re-exported moved surface
+    LegacyTextResultAdapter,
+    ToolResult,
+    _compose_execute_result,
 )
-EMBEDDED_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_.-])/[^\s'\"\\),;\]]+")
-
-
-def _mentions_skill_owner_state(text_lower: str) -> bool:
-    if "state" not in text_lower or "skills" not in text_lower:
-        return False
-    for stem in _SKILL_OWNER_STATE_STEMS:
-        if f"{stem}.json" in text_lower:
-            return True
-        if stem in text_lower and ".json" in text_lower:
-            return True
-    return False
-
-
-def _mentions_detached_process(text_lower: str) -> bool:
-    return any(marker in text_lower for marker in _DETACHED_PROCESS_MARKERS)
-
-
-def _heal_protected_payload_sidecar(path_text: str) -> bool:
-    return is_skill_payload_control_filename(path_text)
-
-
-def _skill_payload_cwd_allowed(cwd_text: str, drive_root: pathlib.Path) -> bool:
-    return is_skill_payload_path(drive_root, cwd_text, allow_control_plane=False)
-
-
-def _heal_claude_code_edit_block(ctx: Any, args: Dict[str, Any], task_constraint: Optional[TaskConstraint]) -> str:
-    expected_bucket, expected_skill = constraint_bucket_skill(task_constraint)
-    requested_bucket = str(args.get("bucket", "") or "").strip()
-    requested_skill = str(args.get("skill_name", "") or "").strip()
-    if (
-        (requested_bucket and requested_bucket != expected_bucket)
-        or (requested_skill and requested_skill != expected_skill)
-    ):
-        return (
-            "⚠️ SKILL_REDIRECT_BLOCKED: active skill_repair "
-            "task is scoped to the selected skill payload."
-        )
-    cwd_text = str(args.get("cwd", "") or ".")
-    if not _task_constraint_path_allowed(cwd_text, task_constraint, pathlib.Path(ctx.drive_root)):
-        return "⚠️ HEAL_MODE_BLOCKED: Repair claude_code_edit cwd is limited to the selected skill payload."
-    return ""
-
-
-# Git via run_shell: only truly read-only subcommands allowed.
-_GIT_READONLY_SUBCOMMANDS = frozenset([
-    "status", "diff", "log", "show", "ls-files",
-    "describe", "rev-parse", "cat-file",
-    "shortlog", "version", "help", "blame",
-    "grep", "reflog",
-])
-
-_WORKSPACE_ALLOWED_TOOLS = frozenset({
-    "read_file",
-    "list_files",
-    "write_file",
-    "edit_text",
-    "claude_code_edit",
-    "search_code",
-    "codebase_digest",
-    "run_command",
-    "run_script",
-    "start_service",
-    "service_status",
-    "service_logs",
-    "stop_service",
-    "vcs_status",
-    "vcs_diff",
-    "chat_history",
-    "recent_tasks",
-    "web_search",
-    "browse_page",
-    "browser_action",
-    "analyze_screenshot",
-    "list_available_tools",
-    "enable_tools",
-})
-_PROCESS_COMMAND_TOOLS = frozenset({"run_command", "run_script", "start_service"})
-_REPO_MUTATION_TOOLS = frozenset({
-    "write_file",
-    "claude_code_edit",
-    "commit_reviewed",
-    "vcs_commit_reviewed",
-    "edit_text",
-    "vcs_revert",
-    "vcs_pull_ff",
-    "vcs_restore",
-    "vcs_rollback",
-    "promote_to_stable",
-    # PR integration tools mutate the local worktree/refs.
-    "fetch_pr_ref",
-    "create_integration_branch",
-    "cherry_pick_pr_commits",
-    "stage_adaptations",
-    "stage_pr_merge",
-})
-
-
-def _light_repo_snapshot(repo_dir: pathlib.Path) -> Optional[Dict[str, Any]]:
-    """Worktree tripwire for light-mode shell writes, not rollback machinery."""
-    try:
-        repo = pathlib.Path(repo_dir)
-        status = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=str(repo), capture_output=True, text=True, timeout=5,
-        )
-        if status.returncode != 0:
-            return None
-        unstaged = subprocess.run(
-            ["git", "diff", "--binary", "--no-ext-diff"],
-            cwd=str(repo), capture_output=True, text=True, timeout=10,
-        )
-        staged = subprocess.run(
-            ["git", "diff", "--cached", "--binary", "--no-ext-diff"],
-            cwd=str(repo), capture_output=True, text=True, timeout=10,
-        )
-        paths = parse_porcelain_paths(status.stdout)
-        digest = hashlib.sha256()
-        digest.update((status.stdout or "").encode("utf-8", errors="replace"))
-        digest.update((unstaged.stdout if unstaged.returncode == 0 else "").encode("utf-8", errors="replace"))
-        digest.update((staged.stdout if staged.returncode == 0 else "").encode("utf-8", errors="replace"))
-        for rel in paths:
-            try:
-                target = (repo / safe_relpath(rel)).resolve(strict=False)
-                target.relative_to(repo.resolve(strict=False))
-                if target.is_file() and rel in (status.stdout or ""):
-                    stat = target.stat()
-                    digest.update(f"{rel}\0{stat.st_size}\0{stat.st_mtime_ns}".encode("utf-8"))
-            except Exception:
-                continue
-        return {"digest": digest.hexdigest(), "paths": paths}
-    except Exception:
-        return None
-
-
-def _format_light_repo_write_block(before: Dict[str, Any], after: Dict[str, Any], result: str, tool_name: str = "run_command") -> str:
-    before_paths = set(before.get("paths") or [])
-    after_paths = set(after.get("paths") or [])
-    touched = sorted(after_paths | before_paths)
-    listed = ", ".join(touched[:30]) if touched else "(status changed; no paths parsed)"
-    if len(touched) > 30:
-        listed += f", ... (+{len(touched) - 30} more)"
-    return (
-        "⚠️ LIGHT_MODE_REPO_WRITE_BLOCKED: runtime_mode=light detected "
-        f"a mutation of the Ouroboros repository after {tool_name}. "
-        "The command result is blocked and no automatic rollback was attempted "
-        "to avoid overwriting concurrent human edits. "
-        f"Affected/dirty paths: {listed}. Switch to advanced/pro for repo writes.\n\n"
-        "Original command output:\n"
-        f"{result}"
-    )
-
-
-def _git_ref_snapshot(repo_dir: pathlib.Path) -> Optional[Dict[str, str]]:
-    try:
-        repo = pathlib.Path(repo_dir)
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo), capture_output=True, text=True, timeout=5,
-        )
-        refs = subprocess.run(
-            ["git", "show-ref", "--head", "--dereference"],
-            cwd=str(repo), capture_output=True, text=True, timeout=5,
-        )
-        if head.returncode != 0 or refs.returncode not in (0, 1):
-            return None
-        digest = hashlib.sha256()
-        digest.update((head.stdout or "").encode("utf-8", errors="replace"))
-        digest.update((refs.stdout or "").encode("utf-8", errors="replace"))
-        return {"head": (head.stdout or "").strip(), "digest": digest.hexdigest()}
-    except Exception:
-        return None
-
-
-def _revert_protected_files(repo_dir, *, runtime_mode: str = "advanced") -> list:
-    """Revert protected files after claude_code_edit unless pro mode is active."""
-    if mode_allows_protected_write(runtime_mode):
-        return []
-    try:
-        unstaged_diff = subprocess.run(
-            ["git", "diff", "--name-only"],
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=5,
-        )
-        staged_diff = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=5,
-        )
-        if unstaged_diff.returncode != 0 and staged_diff.returncode != 0:
-            return []
-        modified = set()
-        if unstaged_diff.returncode == 0:
-            modified.update(unstaged_diff.stdout.strip().splitlines())
-        if staged_diff.returncode == 0:
-            modified.update(staged_diff.stdout.strip().splitlines())
-        reverted = []
-        for rel in sorted(modified):
-            if is_protected_runtime_path(rel):
-                subprocess.run(
-                    ["git", "reset", "HEAD", "--", rel],
-                    cwd=str(repo_dir), capture_output=True, timeout=5,
-                )
-                subprocess.run(
-                    ["git", "checkout", "--", rel],
-                    cwd=str(repo_dir), capture_output=True, timeout=5,
-                )
-                reverted.append(rel)
-        return reverted
-    except Exception:
-        return []
-
-
-def _extract_git_subcommand(cmd_parts: list) -> str:
-    """Extract the git subcommand after global git options."""
-    if not cmd_parts:
-        return ""
-    parts = strip_leading_env_assignments([str(p) for p in cmd_parts])
-    if not parts or pathlib.PurePath(parts[0]).name.lower() != "git":
-        return ""
-    i = 1
-    while i < len(parts):
-        p = parts[i]
-        if p.startswith("-"):
-            if p in ("-C", "-c", "--git-dir", "--work-tree"):
-                i += 2
-            else:
-                i += 1
-        else:
-            return p
-    return ""
-
-
-def _extract_run_shell_git_subcommand(raw_cmd: Any) -> str:
-    parts = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
-    if not parts:
-        return ""
-    first = pathlib.PurePath(parts[0]).name.lower()
-    if first == "git":
-        return _extract_git_subcommand(parts)
-    if first in {"bash", "sh", "zsh"}:
-        inline = shell_command_string(parts)
-        if inline:
-            return _extract_run_shell_git_subcommand(inline)
-    return ""
-
-
-def _workspace_git_safety_violation(raw_cmd: Any, *, active_root: pathlib.Path, cwd: str = "") -> str:
-    root = pathlib.Path(active_root).resolve(strict=False)
-    base = _resolve_workspace_shell_cwd(root, cwd)
-    try:
-        base.relative_to(root)
-        base_inside_root = True
-    except Exception:
-        base_inside_root = False
-    argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
-    if not argv:
-        return ""
-    first = pathlib.PurePath(argv[0]).name.lower()
-    if first in {"bash", "sh", "zsh"}:
-        inline = shell_command_string(argv)
-        return _workspace_git_safety_violation(inline, active_root=root, cwd=str(base) if inline else "") if inline else ""
-    for idx, token in enumerate(argv):
-        if pathlib.PurePath(str(token)).name.lower() != "git":
-            continue
-        parts = argv[idx:]
-        subcmd = ""
-        saw_root_selector = False
-        j = 1
-        while j < len(parts):
-            part = parts[j]
-            if part in {"-C", "--git-dir", "--work-tree"} and j + 1 < len(parts):
-                saw_root_selector = True
-                try:
-                    target = pathlib.Path(parts[j + 1])
-                    if not target.is_absolute():
-                        target = base / target
-                    target.resolve(strict=False).relative_to(root)
-                except Exception:
-                    return f"git {part} escapes the active workspace"
-                j += 2
-                continue
-            if part.startswith("--git-dir=") or part.startswith("--work-tree="):
-                saw_root_selector = True
-                value = part.split("=", 1)[1]
-                try:
-                    target = pathlib.Path(value)
-                    if not target.is_absolute():
-                        target = base / target
-                    target.resolve(strict=False).relative_to(root)
-                except Exception:
-                    return "git root selector escapes the active workspace"
-                j += 1
-                continue
-            if part == "-c":
-                j += 2
-                continue
-            if part.startswith("-"):
-                j += 1
-                continue
-            subcmd = part
-            break
-        if not base_inside_root and not saw_root_selector:
-            return "git cwd escapes the active workspace"
-        if subcmd and subcmd.lower() not in _GIT_READONLY_SUBCOMMANDS:
-            return f"git {subcmd}"
-    return ""
-
-
-def _resolve_workspace_shell_cwd(active_root: pathlib.Path, cwd: str = "") -> pathlib.Path:
-    root = pathlib.Path(active_root).resolve(strict=False)
-    if cwd and str(cwd).strip() not in ("", ".", "./"):
-        raw = pathlib.Path(str(cwd)).expanduser()
-        return raw.resolve(strict=False) if raw.is_absolute() else (root / safe_relpath(str(cwd))).resolve(strict=False)
-    return root
-
-
-@dataclass
-class BrowserState:
-    """Per-task Playwright lifecycle state."""
-
-    pw_instance: Any = None
-    browser: Any = None
-    page: Any = None
-    last_screenshot_b64: Optional[str] = None
-
-
-@dataclass
-class ToolContext:
-    """Tool execution context passed from the agent."""
-
-    repo_dir: pathlib.Path
-    drive_root: pathlib.Path
-    branch_dev: str = "ouroboros"
-    system_repo_dir: Optional[pathlib.Path] = None
-    workspace_root: Optional[pathlib.Path] = None
-    workspace_mode: str = ""
-    memory_mode: str = ""
-    task_metadata: Dict[str, Any] = field(default_factory=dict)
-    pending_events: List[Dict[str, Any]] = field(default_factory=list)
-    current_chat_id: Optional[int] = None
-    current_task_type: Optional[str] = None
-    pending_restart_reason: Optional[str] = None
-    last_push_succeeded: bool = False
-    emit_progress_fn: Callable[[str], None] = field(default=lambda _: None)
-
-    # LLM-driven model/effort switch.
-    active_model_override: Optional[str] = None
-    active_effort_override: Optional[str] = None
-    active_use_local_override: Optional[bool] = None
-
-    # Per-task browser state.
-    browser_state: BrowserState = field(default_factory=BrowserState)
-
-    # Budget tracking for usage events.
-    event_queue: Optional[Any] = None
-    task_id: Optional[str] = None
-
-    # Conversation messages for safety checks.
-    messages: Optional[List[Dict[str, Any]]] = None
-
-    # Structured task constraints, e.g. skill repair payload confinement.
-    task_constraint: Optional[TaskConstraint] = None
-
-    # Task depth for fork-bomb protection.
-    task_depth: int = 0
-
-    # True inside handle_chat_direct, not a queued worker task.
-    is_direct_chat: bool = False
-
-    # Pre-commit review state.
-    _review_advisory: List[Any] = field(default_factory=list)
-    _review_iteration_count: int = 0
-    _review_history: list = field(default_factory=list)
-
-    def active_repo_dir(self) -> pathlib.Path:
-        if self.is_workspace_mode():
-            return pathlib.Path(self.workspace_root)
-        return pathlib.Path(self.repo_dir)
-
-    def is_workspace_mode(self) -> bool:
-        return (
-            self.workspace_root is not None
-            and bool(str(self.workspace_mode or "").strip())
-            and not workspace_mode_block_reason(self)
-        )
-
-    def repo_path(self, rel: str) -> pathlib.Path:
-        root = self.active_repo_dir()
-        resolved = (root / safe_relpath(rel)).resolve()
-        try:
-            resolved.relative_to(root.resolve())
-        except ValueError:
-            raise ValueError(f"Path escapes repo_dir boundary: {rel}")
-        return resolved
-
-    def drive_path(self, rel: str) -> pathlib.Path:
-        resolved = (self.drive_root / safe_relpath(rel)).resolve()
-        try:
-            resolved.relative_to(self.drive_root.resolve())
-        except ValueError:
-            raise ValueError(f"Path escapes drive_root boundary: {rel}")
-        return resolved
-
-    def drive_logs(self) -> pathlib.Path:
-        return (self.drive_root / "logs").resolve()
-
-    def task_drive_root(self) -> pathlib.Path:
-        return (pathlib.Path(self.drive_root).resolve(strict=False) / "task_drives" / task_id_for_artifacts(self)).resolve(strict=False)
-
-
-@dataclass
-class ToolEntry:
-    """Single tool descriptor."""
-
-    name: str
-    schema: Dict[str, Any]
-    handler: Callable  # fn(ctx: ToolContext, **args) -> str
-    is_code_tool: bool = False
-    timeout_sec: int = 360
-
-
-class ToolRegistry:
-    """Tool registry; modules export ``get_tools()``."""
-
-    def __init__(self, repo_dir: pathlib.Path, drive_root: pathlib.Path):
-        self._entries: Dict[str, ToolEntry] = {}
-        self._ctx = ToolContext(repo_dir=repo_dir, drive_root=drive_root)
-        self._load_modules()
-
-    _FROZEN_TOOL_MODULES = [
-        "browser", "ci", "claude_advisory_review", "compact_context", "control",
-        "core", "evolution_stats", "git", "git_rollback", "github", "health",
-        "knowledge", "memory_tools", "plan_review", "recent_tasks", "review", "search", "services", "shell",
-        # External skill surface.
-        "skill_exec",
-        "skill_publish",
-        # Read-only payload validator for heal mode.
-        "skill_preflight",
-        "tool_discovery", "vision",
-    ]
-
-    def _load_modules(self) -> None:
-        """Load frozen or package-discovered tool modules."""
-        import importlib
-        import logging
-        import sys
-
-        if getattr(sys, 'frozen', False):
-            module_names = self._FROZEN_TOOL_MODULES
-        else:
-            import pkgutil
-            import ouroboros.tools as tools_pkg
-            module_names = [
-                m for _, m, _ in pkgutil.iter_modules(tools_pkg.__path__)
-                if not m.startswith("_") and m != "registry"
-            ]
-
-        for modname in module_names:
-            try:
-                mod = importlib.import_module(f"ouroboros.tools.{modname}")
-                if hasattr(mod, "get_tools"):
-                    for entry in mod.get_tools():
-                        self._entries[entry.name] = entry
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "Failed to load tool module %s", modname, exc_info=True)
-
-    def set_context(self, ctx: ToolContext) -> None:
-        self._ctx = ctx
-
-    def register(self, entry: ToolEntry) -> None:
-        """Register a new tool entry."""
-        self._entries[entry.name] = entry
-
-    # Contract.
-
-    def _is_local_readonly_subagent(self) -> bool:
-        task_constraint = normalize_task_constraint(getattr(self._ctx, "task_constraint", None))
-        return bool(task_constraint and task_constraint.mode == LOCAL_READONLY_SUBAGENT_MODE)
-
-    def initial_tool_names(self) -> frozenset[str]:
-        if self._is_local_readonly_subagent():
-            return LOCAL_READONLY_SUBAGENT_TOOL_NAMES
-        return frozenset(set(CORE_TOOL_NAMES) | set(META_TOOL_NAMES))
-
-    def available_tools(self) -> List[str]:
-        workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
-        local_readonly_subagent = self._is_local_readonly_subagent()
-        return [
-            e.name
-            for e in self._entries.values()
-            if not workspace_mode or e.name in _WORKSPACE_ALLOWED_TOOLS
-            if not local_readonly_subagent or e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
-        ]
-
-    def _schema_for_entry(self, entry: ToolEntry) -> Dict[str, Any]:
-        schema = entry.schema
-        if self._is_local_readonly_subagent():
-            if entry.name in {"read_file", "list_files", "search_code"}:
-                schema = copy.deepcopy(schema)
-                root_schema = schema.get("parameters", {}).get("properties", {}).get("root", {})
-                allowed = {"active_workspace", "system_repo"} if entry.name == "search_code" else {"active_workspace", "system_repo", "runtime_data", "task_drive", "artifact_store"}
-                if isinstance(root_schema.get("enum"), list): root_schema["enum"] = [root for root in root_schema["enum"] if root in allowed]
-            elif entry.name in {"browse_page", "browser_action"}:
-                schema = copy.deepcopy(entry.schema)
-                if entry.name == "browse_page":
-                    schema["description"] = "Open an external HTTP(S) URL in headless browser. Returns page content as text, html, markdown, or screenshot (base64 PNG). Local, loopback, private-network, and non-HTTP URLs are blocked for subagents. Use analyze_screenshot to inspect screenshots. Use viewport to test mobile layouts (e.g. '375x812')."
-                if entry.name == "browser_action":
-                    schema["description"] = "Perform action on current external browser page. Actions: click (selector), fill (selector + value), select (selector + value), screenshot (base64 PNG), scroll (value: up/down/top/bottom). JavaScript evaluate is unavailable to local-readonly subagents."
-                    props = schema.get("parameters", {}).get("properties", {})
-                    action_schema = props.get("action", {})
-                    if isinstance((action_enum := action_schema.get("enum")), list):
-                        action_schema["enum"] = [name for name in action_enum if name != "evaluate"]
-                    if isinstance((value_schema := props.get("value", {})), dict): value_schema["description"] = "Value for fill/select or direction for scroll"
-        return {"type": "function", "function": schema}
-
-    def _schemas_for_entry(self, entry: ToolEntry) -> List[Dict[str, Any]]:
-        return [self._schema_for_entry(entry)]
-
-    def schemas(self, core_only: bool = False) -> List[Dict[str, Any]]:
-        workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
-        local_readonly_subagent = self._is_local_readonly_subagent()
-        built_in = [
-            schema
-            for entry in self._entries.values()
-            if not workspace_mode or entry.name in _WORKSPACE_ALLOWED_TOOLS
-            if not local_readonly_subagent or entry.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES
-            for schema in self._schemas_for_entry(entry)
-        ]
-        if local_readonly_subagent:
-            return built_in
-        # Include live extension tool schemas in normal tool discovery.
-        try:
-            from ouroboros.extension_loader import (
-                _tools as _ext_tools,
-                _lock as _ext_lock,
-                is_extension_live as _ext_is_live,
-            )
-            with _ext_lock:
-                extension_schemas = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": tool["name"],
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("schema", {"type": "object", "properties": {}}),
-                        },
-                    }
-                    for tool in _ext_tools.values()
-                    if _ext_is_live(str(tool.get("skill") or ""), pathlib.Path(self._ctx.drive_root))
-                ]
-            if workspace_mode or local_readonly_subagent:
-                extension_schemas = []
-        except Exception:
-            extension_schemas = []
-
-        if not core_only:
-            try:
-                from ouroboros.mcp_client import (
-                    ensure_configured_from_settings as _mcp_ensure_configured,
-                    get_manager as _mcp_get_manager,
-                )
-                _mcp_ensure_configured(refresh=True)
-                mcp_schemas = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": tool["name"],
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("schema", {"type": "object", "properties": {}}),
-                        },
-                    }
-                    for tool in _mcp_get_manager().list_tools_for_registry()
-                ]
-                if workspace_mode or local_readonly_subagent:
-                    mcp_schemas = []
-            except Exception:
-                mcp_schemas = []
-            return built_in + extension_schemas + mcp_schemas
-        # Core tools plus meta-tools for enabling extended tools.
-        result = []
-        for e in self._entries.values():
-            if workspace_mode and not e.name in _WORKSPACE_ALLOWED_TOOLS:
-                continue
-            if local_readonly_subagent and e.name not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
-                continue
-            if (
-                (local_readonly_subagent and e.name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES)
-                or e.name in CORE_TOOL_NAMES
-                or e.name in ("list_available_tools", "enable_tools")
-            ):
-                result.extend(self._schemas_for_entry(e))
-        # Extension tools are discoverable in core-mode; MCP stays opt-in.
-        return result + ([] if local_readonly_subagent else extension_schemas)
-
-    def get_schema_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Return the full schema for a specific tool."""
-        requested = str(name or "").strip()
-        workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
-        local_readonly_subagent = self._is_local_readonly_subagent()
-        if workspace_mode and not requested in _WORKSPACE_ALLOWED_TOOLS:
-            return None
-        if local_readonly_subagent and requested not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
-            return None
-        entry = self._entries.get(requested)
-        if entry:
-            return self._schema_for_entry(entry)
-        try:
-            from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
-        except Exception:
-            _ext_parse_name = None
-        if _ext_parse_name and _ext_parse_name(name):
-            try:
-                from ouroboros.extension_loader import get_tool as _ext_get_tool, is_extension_live as _ext_is_live
-                ext_tool = _ext_get_tool(name)
-            except Exception:
-                ext_tool = None
-            if (
-                ext_tool
-                and not workspace_mode
-                and not local_readonly_subagent
-                and _ext_is_live(str(ext_tool.get("skill") or ""), pathlib.Path(self._ctx.drive_root))
-            ):
-                return {
-                    "type": "function",
-                    "function": {
-                        "name": ext_tool["name"],
-                        "description": ext_tool.get("description", ""),
-                        "parameters": ext_tool.get("schema", {"type": "object", "properties": {}}),
-                    },
-                }
-        try:
-            from ouroboros.mcp_client import (
-                ensure_configured_from_settings as _mcp_ensure_configured,
-                get_manager as _mcp_get_manager,
-                is_mcp_tool_name as _mcp_is_name,
-            )
-            _mcp_ensure_configured(refresh=False)
-        except Exception:
-            _mcp_get_manager = None
-            _mcp_is_name = None
-        if not workspace_mode and not local_readonly_subagent and _mcp_get_manager and _mcp_is_name and _mcp_is_name(requested):
-            mcp_tool = _mcp_get_manager().get_tool(requested)
-            if mcp_tool:
-                return {
-                    "type": "function",
-                    "function": {
-                        "name": mcp_tool["name"],
-                        "description": mcp_tool.get("description", ""),
-                        "parameters": mcp_tool.get("schema", {"type": "object", "properties": {}}),
-                    },
-                }
-        return None
-
-    def get_timeout(self, name: str) -> int:
-        """Return timeout_sec for the named tool (default 360)."""
-        entry = self._entries.get(str(name or "").strip())
-        if entry is not None:
-            return entry.timeout_sec
-        # Extension tools carry timeout_sec in the loader descriptor.
-        try:
-            from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
-        except Exception:
-            _ext_parse_name = None
-        if _ext_parse_name and _ext_parse_name(name):
-            try:
-                from ouroboros.extension_loader import get_tool as _ext_get_tool
-                ext_tool = _ext_get_tool(name)
-            except Exception:
-                ext_tool = None
-            if ext_tool:
-                # Add cleanup grace around the inner async wait_for.
-                return int(ext_tool.get("timeout_sec") or 60) + 3
-        try:
-            from ouroboros.mcp_client import (
-                ensure_configured_from_settings as _mcp_ensure_configured,
-                get_manager as _mcp_get_manager,
-                is_mcp_tool_name as _mcp_is_name,
-            )
-            _mcp_ensure_configured(refresh=False)
-        except Exception:
-            _mcp_get_manager = None
-            _mcp_is_name = None
-        if _mcp_get_manager and _mcp_is_name and _mcp_is_name(name):
-            try:
-                return int(_mcp_get_manager().tool_timeout_sec()) + 3
-            except Exception:
-                return 63
-        return 360
-
-    def _dispatch_extension_tool(self, name: str, ext_tool: Dict[str, Any], args: Optional[Dict[str, Any]]) -> str:
-        """Dispatch live extension tools through the registry's helper module."""
-        from ouroboros.tools.extension_dispatch import dispatch_extension_tool
-
-        return dispatch_extension_tool(self._ctx, name, ext_tool, args)
-
-    def _dispatch_mcp_tool(self, name: str, args: Dict[str, Any]) -> str:
-        """Run a provider-safe MCP tool after the normal safety supervisor."""
-        from ouroboros.safety import check_safety as _mcp_check_safety
-        is_safe, safety_msg = _mcp_check_safety(
-            name,
-            args,
-            messages=getattr(self._ctx, "messages", None),
-            ctx=self._ctx,
-        )
-        if not is_safe:
-            return safety_msg
-        try:
-            from ouroboros.mcp_client import call_mcp_tool as _mcp_call
-            result = _mcp_call(name, args or {})
-        except Exception as exc:
-            return f"⚠️ TOOL_ERROR ({name}): {exc}"
-        return f"{safety_msg}\n\n---\n{result}" if safety_msg else result
-
-    def _run_shell_safety_check(self, args: Dict[str, Any], runtime_mode: str) -> Optional[str]:
-        """Pre-execution run_command filter; returns a block message or ``None``."""
-        raw_cmd = args.get("cmd", args.get("command", ""))
-        workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
-        argv = strip_leading_env_assignments(unwrap_env_argv(shell_argv(raw_cmd)))
-        if sudo_noninteractive_violation(argv):
-            return (
-                "⚠️ SUDO_INTERACTIVE_BLOCKED: sudo must be noninteractive. "
-                "Use sudo -n for commands that can run without a password; "
-                "if sudo -n fails, report validation/install blocked by environment."
-            )
-        if isinstance(raw_cmd, list):
-            cmd_lower = " ".join(str(x) for x in raw_cmd).lower()
-        else:
-            cmd_lower = str(raw_cmd).lower()
-        cmd_path_lower = cmd_lower.replace("\\", "/")
-        while "//" in cmd_path_lower:
-            cmd_path_lower = cmd_path_lower.replace("//", "/")
-        argv_for_write = argv
-        argv_executable = pathlib.PurePath(argv_for_write[0]).name.lower().removesuffix(".exe") if argv_for_write else ""
-        writeish = any(w in cmd_lower for w in SHELL_WRITE_INDICATORS) or (
-            bool(argv_for_write) and argv_executable in LIGHT_SHELL_WRITER_COMMANDS
-        )
-        if workspace_mode and writeish:
-            active_root = active_repo_dir_for(self._ctx).resolve(strict=False)
-            pro_workspace_passthrough = str(runtime_mode or "").strip().lower() == "pro"
-            if not pro_workspace_passthrough and ("../" in cmd_path_lower or cmd_path_lower.startswith("..")):
-                return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell commands may not target paths outside the active workspace."
-            protected_roots = [getattr(self._ctx, "system_repo_dir", None) or getattr(self._ctx, "repo_dir", None)]
-            try:
-                from ouroboros.config import DATA_DIR as _PARENT_DATA_DIR
-                protected_roots.append(_PARENT_DATA_DIR)
-            except Exception:
-                pass
-            meta = getattr(self._ctx, "task_metadata", {}) if isinstance(getattr(self._ctx, "task_metadata", {}), dict) else {}
-            if meta.get("budget_drive_root"):
-                protected_roots.append(meta.get("budget_drive_root"))
-            for root_value in protected_roots:
-                try:
-                    root_path = pathlib.Path(root_value).resolve(strict=False)
-                except Exception:
-                    continue
-                try:
-                    root_path.relative_to(active_root)
-                    continue
-                except Exception:
-                    pass
-                root_text = str(root_path).replace("\\", "/").lower()
-                if root_text and root_text in cmd_path_lower:
-                    return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell command mentions Ouroboros system/data paths."
-            protected_paths = []
-            for root_value in protected_roots:
-                try:
-                    protected_paths.append(pathlib.Path(root_value).resolve(strict=False))
-                except Exception:
-                    continue
-            for token in shell_argv_with_inline(raw_cmd):
-                candidates = [str(token)] if str(token).startswith("/") else []
-                if str(token).startswith(("./", "../")):
-                    candidates.append(str(token))
-                else:
-                    candidates.extend(EMBEDDED_ABSOLUTE_PATH_RE.findall(str(token)))
-                for candidate in candidates:
-                    if candidate == "/dev/null":
-                        continue
-                    candidate_path = pathlib.Path(candidate)
-                    resolved = candidate_path.resolve(strict=False) if candidate_path.is_absolute() else (active_root / candidate_path).resolve(strict=False)
-                    for protected_path in protected_paths:
-                        try:
-                            resolved.relative_to(protected_path)
-                            return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell command mentions Ouroboros system/data paths."
-                        except Exception:
-                            pass
-                    try:
-                        resolved.relative_to(active_root)
-                    except Exception:
-                        if not pro_workspace_passthrough:
-                            return "⚠️ WORKSPACE_SHELL_BLOCKED: write-like shell commands may not target absolute paths outside the active workspace."
-
-        # Elevation pattern: blocked in all modes.
-        if _detect_runtime_mode_elevation(cmd_lower):
-            return (
-                "⚠️ ELEVATION_BLOCKED: shell command pattern looks "
-                "like an OUROBOROS_RUNTIME_MODE elevation attempt "
-                "(mentions ``save_settings`` together with "
-                "``OUROBOROS_RUNTIME_MODE``, or invokes "
-                "``ouroboros.config.save_settings`` directly). "
-                "Runtime mode is owner-controlled — change it by "
-                "stopping the agent and editing settings.json "
-                "directly, then restart."
-            )
-        if _mentions_skill_owner_state(cmd_lower):
-            return (
-                "⚠️ SKILL_STATE_WRITE_BLOCKED: skill review, enablement, "
-                "grants, and marketplace provenance are owner/review "
-                "controlled state. Use skill_review, toggle_skill/the Skills "
-                "UI, or the desktop launcher confirmation flow."
-            )
-        if "state" in cmd_lower and "skills" in cmd_lower and _mentions_detached_process(cmd_lower):
-            return (
-                "⚠️ SKILL_STATE_WRITE_BLOCKED: detached shell processes must "
-                "not target skill state directories. Use the reviewed skill "
-                "lifecycle tools instead."
-            )
-
-        # Light-mode repo-mutation indicators.
-        if runtime_mode == "light" and not workspace_mode:
-            if light_shell_repo_mutation(
-                raw_cmd,
-                repo_dir=pathlib.Path(self._ctx.active_repo_dir()),
-                cwd=str(args.get("cwd") or ""),
-                detect_interpreter_inline=str(args.get("__tool_name") or "") == "run_script",
-            ):
-                return (
-                    "⚠️ LIGHT_MODE_BLOCKED: runtime_mode=light refuses "
-                    "shell commands that mutate the Ouroboros repository. "
-                    "For external deliverables, run with cwd under user_files "
-                    "(for example /Users/<you>/Desktop), root=artifact_store, "
-                    "or root=task_drive. Switch to advanced/pro only for "
-                    "reviewed Ouroboros self-modification."
-                )
-            runtime_data_executable = pathlib.PurePath(argv[0]).name.lower().removesuffix(".exe") if argv else ""
-            runtime_data_scan = writeish or runtime_data_executable in {"python", "python3", "node", "ruby", "perl", "php", "sh", "bash", "zsh"}
-            if runtime_data_scan:
-                operation = "service" if str(args.get("__tool_name") or "") == "start_service" else "shell"
-                try:
-                    work_dir, _cwd_root, _allowed = resolve_shell_cwd(
-                        self._ctx,
-                        str(args.get("cwd") or ""),
-                        operation=operation,
-                    )
-                except Exception:
-                    work_dir = active_repo_dir_for(self._ctx)
-                runtime_data_targets = runtime_data_write_targets(
-                    raw_cmd,
-                    drive_root=pathlib.Path(self._ctx.drive_root),
-                    work_dir=pathlib.Path(work_dir),
-                    allowed_roots=[
-                        pathlib.Path(self._ctx.task_drive_root()),
-                        task_artifact_dir_path(
-                            pathlib.Path(self._ctx.drive_root),
-                            task_id_for_artifacts(self._ctx),
-                            create=False,
-                        ),
-                    ],
-                )
-                if runtime_data_targets:
-                    action = "write under" if writeish else "mention"
-                    return (
-                        "⚠️ LIGHT_MODE_BLOCKED: runtime_mode=light blocks process commands "
-                        f"that {action} runtime_data paths outside this task's task_drive/artifact_store. "
-                        "Use root=artifact_store for canonical deliverables, root=task_drive for "
-                        "scratch, or root=user_files for visible user files. Paths: "
-                        + ", ".join(runtime_data_targets[:5])
-                    )
-
-        # Lexical defense for skill control-plane sidecar writes via shell.
-        if not workspace_mode and any(
-            name in cmd_path_lower
-            for name in (
-                *SKILL_PAYLOAD_CONTROL_FILENAMES,
-                *(SKILL_PAYLOAD_CONTROL_DIRNAMES - {"__pycache__"}),
-            )
-        ) and any(w in cmd_lower for w in SHELL_WRITE_INDICATORS):
-            return (
-                "⚠️ SAFETY_VIOLATION: Shell command would modify a skill "
-                "provenance / launcher seed / dependency marker (.clawhub.json, "
-                ".ouroboroshub.json, .self_authored.json, SKILL.openclaw.md, .seed-origin, "
-                ".ouroboros_env, node_modules). "
-                "Use marketplace lifecycle flows or edit user-authored "
-                "payload files instead."
-            )
-
-        # Protected runtime path writes.
-        if not workspace_mode and shell_writer_targets_protected(raw_cmd):
-            return (
-                "⚠️ CRITICAL SAFETY_VIOLATION: Shell command would modify "
-                "a protected core/contract/release file. Protected: "
-                + ", ".join(sorted(PROTECTED_RUNTIME_PATHS))
-            )
-        if not workspace_mode:
-            for cf in PROTECTED_RUNTIME_PATHS_LOWER:
-                if cf in cmd_path_lower and any(w in cmd_lower for w in SHELL_WRITE_INDICATORS):
-                    return (
-                        "⚠️ CRITICAL SAFETY_VIOLATION: Shell command would modify "
-                        "a protected core/contract/release file. Protected: "
-                        + ", ".join(sorted(PROTECTED_RUNTIME_PATHS))
-                    )
-
-        # GitHub repo create/delete/auth.
-        cmd_words = re.sub(r"\s+", " ", cmd_lower)
-        if "gh repo create" in cmd_words or "gh repo delete" in cmd_words:
-            return "⚠️ SAFETY_VIOLATION: Creating/deleting GitHub repositories requires admin approval."
-        if "gh auth" in cmd_words:
-            return "⚠️ SAFETY_VIOLATION: Modifying GitHub authentication is not permitted."
-
-        # Direct git mutative ban via shell.
-        if workspace_mode:
-            git_violation = _workspace_git_safety_violation(
-                raw_cmd,
-                active_root=active_repo_dir_for(self._ctx),
-                cwd=str(args.get("cwd") or ""),
-            )
-            if git_violation:
-                return (
-                    "⚠️ WORKSPACE_GIT_BLOCKED: run_command may only use read-only git "
-                    f"operations inside the active workspace; blocked {git_violation}."
-                )
-        subcmd = _extract_run_shell_git_subcommand(raw_cmd)
-        if subcmd and subcmd.lower() not in _GIT_READONLY_SUBCOMMANDS:
-            return (
-                f"⚠️ GIT_VIA_SHELL_BLOCKED: `git {subcmd}` must go through "
-                "commit_reviewed which enforces pre-commit "
-                "checks. For read-only git: vcs_status, vcs_diff tools, or "
-                "run_command with git log/show/diff/status."
-            )
-        return None
-
-    def _snapshot_owner_files(self) -> Dict[pathlib.Path, Optional[str]]:
-        from ouroboros import config as _cfg
-        out: Dict[pathlib.Path, Optional[str]] = {}
-        settings_path = pathlib.Path(_cfg.SETTINGS_PATH)
-        try:
-            out[settings_path] = settings_path.read_text(encoding="utf-8") if settings_path.is_file() else None
-        except OSError:
-            out[settings_path] = None
-        root = pathlib.Path(self._ctx.drive_root) / "state" / "skills"
-        if not root.is_dir():
-            return out
-        for path in root.glob("*/*"):
-            if path.name.lower() not in SKILL_OWNER_STATE_FILENAMES:
-                continue
-            try:
-                out[path] = path.read_text(encoding="utf-8")
-            except OSError:
-                out[path] = None
-        return out
-
-    def _restore_owner_files(self, before: Dict[pathlib.Path, Optional[str]]) -> bool:
-        from ouroboros import config as _cfg
-        root = pathlib.Path(self._ctx.drive_root) / "state" / "skills"
-        current = set()
-        if root.is_dir():
-            current.update(
-                path for path in root.glob("*/*")
-                if path.name.lower() in SKILL_OWNER_STATE_FILENAMES
-            )
-        settings_path = pathlib.Path(_cfg.SETTINGS_PATH)
-        current.add(settings_path)
-        changed = False
-        for path in current - set(before):
-            try:
-                path.unlink()
-                changed = True
-            except OSError:
-                pass
-        for path, content in before.items():
-            try:
-                if content is None:
-                    if path.exists():
-                        path.unlink()
-                        changed = True
-                    continue
-                if not path.exists() or path.read_text(encoding="utf-8") != content:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(content, encoding="utf-8")
-                    changed = True
-            except OSError:
-                pass
-        return changed
-
-    def _run_shell_post_checks(
-        self,
-        result: str,
-        *,
-        owner_snapshot: Dict[pathlib.Path, Optional[str]],
-        light_repo_before: Optional[Dict[str, Any]],
-        workspace_refs_before: Optional[Dict[str, str]],
-        tool_name: str = "run_command",
-    ) -> str:
-        import time
-
-        restored_owner_state = False
-        for _ in range(4):
-            time.sleep(0.3)
-            restored_owner_state = self._restore_owner_files(owner_snapshot) or restored_owner_state
-        if restored_owner_state:
-            result = (
-                f"{result}\n\n⚠️ OWNER_STATE_RESTORED: run_command attempted to "
-                "change owner-only settings or skill trust state; protected files were restored."
-            )
-        if light_repo_before is not None:
-            light_repo_after = _light_repo_snapshot(active_repo_dir_for(self._ctx))
-            if (
-                light_repo_after is not None
-                and light_repo_after.get("digest") != light_repo_before.get("digest")
-            ):
-                result = _format_light_repo_write_block(light_repo_before, light_repo_after, result, tool_name=tool_name)
-        if workspace_refs_before is not None:
-            workspace_refs_after = _git_ref_snapshot(active_repo_dir_for(self._ctx))
-            if (
-                workspace_refs_after is not None
-                and workspace_refs_after.get("digest") != workspace_refs_before.get("digest")
-            ):
-                result = (
-                    "⚠️ WORKSPACE_GIT_REF_CHANGED: run_command changed git HEAD or refs "
-                    "inside the external workspace. External workspace runs must leave "
-                    "changes as files/patch artifacts, not commits/tags/resets.\n\n"
-                    "Original command output:\n"
-                    f"{result}"
-                )
-        return result
-
-    def execute(self, name: str, args: Dict[str, Any]) -> str:
-        name = str(name or "").strip()
-        args = dict(args or {})
-        task_constraint = normalize_task_constraint(getattr(self._ctx, "task_constraint", None))
-        local_readonly_subagent = bool(task_constraint and task_constraint.mode == LOCAL_READONLY_SUBAGENT_MODE)
-        if local_readonly_subagent and name not in LOCAL_READONLY_SUBAGENT_TOOL_NAMES:
-            return (
-                "⚠️ LOCAL_READONLY_SUBAGENT_BLOCKED: this subagent may inspect "
-                "local repo/data/history plus web/browser surfaces, but may not "
-                f"call {name!r}. Parent tasks must perform writes, commits, "
-                "review gates, tool expansion, runtime control, skills, MCP, "
-                "extensions, shell, and further delegation."
-            )
-        entry = self._entries.get(name)
-        ext_tool = None
-        _ext_parse_name = None
-        if not local_readonly_subagent:
-            try:
-                from ouroboros.extension_loader import parse_extension_surface_name as _ext_parse_name
-            except Exception:
-                _ext_parse_name = None
-        if entry is None and _ext_parse_name and _ext_parse_name(name):
-            try:
-                from ouroboros.extension_loader import get_tool as _ext_get_tool
-                ext_tool = _ext_get_tool(name)
-            except Exception:
-                ext_tool = None
-
-        if local_readonly_subagent:
-            _mcp_is_name = None
-        else:
-            try:
-                from ouroboros.mcp_client import (
-                    ensure_configured_from_settings as _mcp_ensure_configured,
-                    is_mcp_tool_name as _mcp_is_name,
-                )
-                _mcp_ensure_configured(refresh=False)
-            except Exception:
-                _mcp_is_name = None
-        is_mcp = bool(_mcp_is_name and _mcp_is_name(name))
-
-        workspace_block_reason = ""
-        try:
-            workspace_block_reason = workspace_mode_block_reason(self._ctx)
-        except Exception as exc:
-            workspace_block_reason = f"workspace metadata validation failed: {type(exc).__name__}: {exc}"
-        if workspace_block_reason:
-            return (
-                "⚠️ WORKSPACE_MODE_BLOCKED: invalid external workspace metadata: "
-                f"{workspace_block_reason}. Workspace tasks must not overlap the "
-                "Ouroboros repo, runtime data, or control plane."
-            )
-        workspace_mode = bool(getattr(self._ctx, "is_workspace_mode", lambda: False)())
-        if workspace_mode and (is_mcp or ext_tool or not name in _WORKSPACE_ALLOWED_TOOLS):
-            workspace = str(getattr(self._ctx, "workspace_root", "") or "")
-            return (
-                "⚠️ WORKSPACE_MODE_BLOCKED: this task is running against an external "
-                f"workspace ({workspace}). Tool {name!r} is outside the workspace "
-                "allowlist. Leave workspace changes as files or a patch artifact."
-            )
-        # Hardcoded sandbox: light blocks repo mutation; advanced protects
-        # core/contracts/release; pro still relies on commit review.
-        try:
-            from ouroboros.config import get_runtime_mode as _get_runtime_mode
-            _runtime_mode = _get_runtime_mode()
-        except Exception:
-            _runtime_mode = "advanced"
-
-        heal_no_enable = bool(task_constraint and task_constraint.mode == "skill_repair")
-        if heal_no_enable:
-            heal_skill = task_constraint.skill_name if task_constraint else ""
-            if (
-                name in {"read_file", "list_files", "write_file", "edit_text"}
-                and str(args.get("root", "") or "") == "skill_payload"
-            ):
-                expected_bucket, expected_skill = constraint_bucket_skill(task_constraint)
-                requested_bucket = str(args.get("bucket", "") or "").strip()
-                requested_skill = str(args.get("skill_name", "") or "").strip()
-                if (
-                    (requested_bucket and requested_bucket != expected_bucket)
-                    or (requested_skill and requested_skill != expected_skill)
-                ):
-                    if name in {"write_file", "edit_text"}:
-                        return (
-                            "⚠️ SKILL_REDIRECT_BLOCKED: active skill_repair "
-                            "task is scoped to the selected skill payload."
-                        )
-                    return (
-                        "⚠️ HEAL_MODE_BLOCKED: Repair payload access is limited "
-                        "to the selected skill payload."
-                    )
-            if name in {"read_file", "write_file"} and str(args.get("root", "") or "") == "skill_payload":
-                payload_paths = []
-                maybe_path = str(args.get("path", "") or "")
-                if maybe_path:
-                    payload_paths.append(maybe_path)
-                for f_entry in args.get("files") or []:
-                    if isinstance(f_entry, dict):
-                        payload_paths.append(str(f_entry.get("path", "") or ""))
-                for payload_path in payload_paths or ["."]:
-                    if not _task_constraint_path_allowed(payload_path, task_constraint, pathlib.Path(self._ctx.drive_root)):
-                        return (
-                            "⚠️ HEAL_MODE_BLOCKED: Repair data access is limited "
-                            "to the selected skill payload under data/skills/external "
-                            "data/skills/clawhub, or data/skills/ouroboroshub."
-                        )
-                    if name == "write_file" and _heal_protected_payload_sidecar(payload_path):
-                        return (
-                            "⚠️ HEAL_MODE_BLOCKED: Repair may not edit marketplace "
-                            "or official provenance sidecars (.clawhub.json, "
-                            ".ouroboroshub.json, SKILL.openclaw.md, .seed-origin). "
-                            "Edit the user-authored payload files instead."
-                        )
-            if name == "list_files" and str(args.get("root", "") or "") == "skill_payload":
-                data_dir = str(args.get("dir", args.get("path", "")) or "")
-                if not _task_constraint_path_allowed(data_dir, task_constraint, pathlib.Path(self._ctx.drive_root)):
-                    return (
-                        "⚠️ HEAL_MODE_BLOCKED: Repair data listing is limited "
-                        "to the selected skill payload under data/skills/external "
-                        "data/skills/clawhub, or data/skills/ouroboroshub."
-                    )
-            if name == "edit_text":
-                edit_path = str(args.get("path", "") or "")
-                if not _task_constraint_path_allowed(edit_path, task_constraint, pathlib.Path(self._ctx.drive_root)):
-                    return "⚠️ HEAL_MODE_BLOCKED: Repair edit_text is limited to the selected skill payload."
-                if _heal_protected_payload_sidecar(edit_path):
-                    return (
-                        "⚠️ HEAL_MODE_BLOCKED: Repair may not edit marketplace "
-                        "or official provenance sidecars (.clawhub.json, "
-                        ".ouroboroshub.json, SKILL.openclaw.md, .seed-origin). "
-                        "Edit the user-authored payload files instead."
-                    )
-            if name == "skill_review" and str(args.get("skill", "") or "").strip() != heal_skill:
-                return "⚠️ HEAL_MODE_BLOCKED: Repair may only review the selected skill."
-            if name == "skill_preflight" and str(args.get("skill", "") or "").strip() != heal_skill:
-                return "⚠️ HEAL_MODE_BLOCKED: Repair may only preflight the selected skill."
-            if name == "claude_code_edit":
-                block_msg = _heal_claude_code_edit_block(self._ctx, args, task_constraint)
-                if block_msg:
-                    return block_msg
-            if ext_tool or is_mcp or name not in _HEAL_MODE_ALLOWED_TOOLS:
-                return (
-                    "⚠️ HEAL_MODE_BLOCKED: Repair tasks may inspect/edit skill "
-                    "payloads and run skill_review only. Shell, browser automation, "
-                    "repo mutation, skill execution, extension tools, MCP tools, "
-                    "delegation, and enable/disable flows are unavailable. Use "
-                    "the Skills UI after a fresh executable review."
-                )
-        if is_mcp:
-            return self._dispatch_mcp_tool(name, args)
-        if entry is None:
-            if ext_tool and callable(ext_tool.get("handler")):
-                return self._dispatch_extension_tool(name, ext_tool, args)
-            return f"⚠️ Unknown tool: {name}. Available: {', '.join(sorted(self._entries.keys()))}"
-        raw_bucket = str(args.get("bucket", "") or "")
-        raw_skill_name = str(args.get("skill_name", "") or "")
-        short_path_text = str(args.get("cwd", "") or "") if name == "claude_code_edit" else str(args.get("path", "") or "")
-        short_form_decision = decide_payload_short_form(
-            bucket=raw_bucket,
-            skill_name=raw_skill_name,
-            path_text=short_path_text or ".",
-            repo_dir=pathlib.Path(self._ctx.repo_dir),
-            drive_root=pathlib.Path(self._ctx.drive_root),
-        )
-        synth_constraint = short_form_decision.constraint
-        # Prefer specific skill payload arg errors over generic light-mode block.
-        if (
-            (raw_bucket or raw_skill_name)
-            and short_form_decision.error
-            and name in (
-                "write_file",
-                "edit_text",
-                "claude_code_edit",
-            )
-        ):
-            return f"⚠️ SKILL_PAYLOAD_ARG_ERROR: {short_form_decision.error}"
-        # Real skill_repair constraints beat synthesized short-form constraints.
-        redirect_err = cross_skill_redirect_error(task_constraint, synth_constraint)
-        if redirect_err and name in (
-            "write_file",
-            "edit_text",
-            "claude_code_edit",
-        ):
-            return f"⚠️ SKILL_REDIRECT_BLOCKED: {redirect_err}"
-        # Existing skill_repair constraint remains authoritative.
-        if task_constraint and task_constraint.mode == "skill_repair":
-            effective_constraint = task_constraint
-        else:
-            effective_constraint = synth_constraint or task_constraint
-        allow_short_relative = bool(
-            effective_constraint and effective_constraint.mode == "skill_repair"
-        )
-        light_skill_scoped_str_replace = _light_mode_payload_mutation_allowed(
-        ctx=self._ctx,
-        tool_name=name,
-        args=args,
-        runtime_mode=_runtime_mode,
-        effective_constraint=effective_constraint,
-        implicit_skill_cwd_allowed=bool(task_constraint and task_constraint.mode == "skill_repair"),
-        allow_short_relative=allow_short_relative,
-    )
-        if (
-            _runtime_mode == "light"
-            and name in _REPO_MUTATION_TOOLS
-            and not workspace_mode
-            and not light_skill_scoped_str_replace
-        ):
-            return light_cognitive_or_root_redirect(name, args) or (
-                "⚠️ LIGHT_MODE_BLOCKED: runtime_mode=light blocks Ouroboros "
-                f"self-repo/control-plane mutation via {name!r}. For user-visible "
-                "deliverables use root=user_files (for example Desktop/file.html), "
-                "root=artifact_store for the canonical task artifact, or root=task_drive "
-                "for scratch. Skill payload edits remain allowed only through "
-                "root=skill_payload with bucket and skill_name "
-                "(data/skills/<bucket>/<skill>/) or skill_repair constraints. "
-                "Switch to advanced/pro only for reviewed Ouroboros self-modification."
-            )
-
-        protected_write_paths = []
-        if name in ("write_file", "edit_text"):
-            if name == "write_file":
-                maybe_path = str(args.get("path", "") or "")
-                if maybe_path:
-                    protected_write_paths.append(maybe_path)
-                for f_entry in args.get("files") or []:
-                    if isinstance(f_entry, dict):
-                        protected_write_paths.append(str(f_entry.get("path", "") or ""))
-            elif name == "edit_text":
-                protected_write_paths.append(str(args.get("path", "") or ""))
-            root_name = str(args.get("root", "") or "active_workspace")
-            protected_root = root_name in {"active_workspace", "system_repo"}
-            protected_matches = [] if workspace_mode or not protected_root else protected_paths_in(protected_write_paths)
-            if protected_matches and not mode_allows_protected_write(_runtime_mode):
-                first = protected_matches[0]
-                return protected_write_block_message(
-                    path=first.path,
-                    runtime_mode=_runtime_mode,
-                    action=f"run tool {name!r} against",
-                )
-
-        if name in _PROCESS_COMMAND_TOOLS:
-            if name == "start_service" and _runtime_mode == "light" and not workspace_mode:
-                try:
-                    _, service_cwd_root, _ = resolve_shell_cwd(self._ctx, str(args.get("cwd") or ""), operation="service")
-                except Exception:
-                    service_cwd_root = ""
-                if service_cwd_root == "active_workspace":
-                    return ("⚠️ LIGHT_MODE_BLOCKED: runtime_mode=light refuses start_service against the Ouroboros repository because long-running services can mutate after initial tool checks. For external services, set cwd under user_files, task_drive, or artifact_store; switch to advanced/pro only for reviewed Ouroboros self-modification.")
-            block_msg = self._run_shell_safety_check(
-                process_shell_guard_args(name, args, ctx=self._ctx, runtime_mode=_runtime_mode),
-                _runtime_mode,
-            )
-            if block_msg:
-                return block_msg
-
-        # LLM safety supervisor.
-        from ouroboros.safety import check_safety
-        is_safe, safety_msg = check_safety(
-            name,
-            args,
-            messages=getattr(self._ctx, "messages", None),
-            ctx=self._ctx,
-        )
-        if not is_safe:
-            return safety_msg
-
-        owner_snapshot = self._snapshot_owner_files() if name in _PROCESS_COMMAND_TOOLS else {}
-        light_repo_before = (
-            _light_repo_snapshot(active_repo_dir_for(self._ctx))
-            if name in _PROCESS_COMMAND_TOOLS and _runtime_mode == "light"
-            else None
-        )
-        workspace_refs_before = (
-            _git_ref_snapshot(active_repo_dir_for(self._ctx))
-            if name in _PROCESS_COMMAND_TOOLS and workspace_mode
-            else None
-        )
-        try:
-            result = entry.handler(self._ctx, **args)
-        except TypeError as e:
-            return f"⚠️ TOOL_ARG_ERROR ({name}): {e}"
-        except Exception as e:
-            return f"⚠️ TOOL_ERROR ({name}): {e}"
-        if name in _PROCESS_COMMAND_TOOLS:
-            result = self._run_shell_post_checks(
-                result,
-                owner_snapshot=owner_snapshot,
-                light_repo_before=light_repo_before,
-                workspace_refs_before=workspace_refs_before,
-                tool_name=name,
-            )
-
-        if safety_msg:
-            return f"{safety_msg}\n\n---\n{result}"
-        return result
-
-    def override_handler(self, name: str, handler) -> None:
-        """Override the handler for a registered tool (used for closure injection)."""
-        entry = self._entries.get(name)
-        if entry:
-            self._entries[name] = ToolEntry(
-                name=entry.name,
-                schema=entry.schema,
-                handler=handler,
-                timeout_sec=entry.timeout_sec,
-            )
-
-    @property
-    def CODE_TOOLS(self) -> frozenset:
-        return frozenset(e.name for e in self._entries.values() if e.is_code_tool)
+from ouroboros.tools.registry_guards import (  # noqa: F401 — re-exported moved surface
+    _capability_resource_guard_result,
+    _executor_backend_candidate_path,
+    _managed_update_code_tool_block_result,
+    _subagent_and_update_guard_result,
+    _workspace_write_block_outside_root_message,
+    _workspace_write_block_runtime_message,
+)
+from ouroboros.tools.registry_core import (  # noqa: F401 — re-exported moved surface
+    ToolRegistry,
+    _ACTING_NO_WORKSPACE_PROCESS_RESULT,
+    _ACTING_NO_WORKSPACE_REPO_RESULT,
+    _LIGHT_START_SERVICE_RESULT,
+    _PROCESS_COMMAND_TOOLS,
+    _REPO_MUTATION_TOOLS,
+    _SHELL_GUARDED_TOOLS,
+    _SYSTEM_INTRINSIC_REPO_MUTATION_TOOLS,
+    _configured_delegate_selector,
+    _presence_binding_allowed,
+    _presence_bound_args,
+    _presence_tool_allowed,
+    _protected_write_block_result,
+    _shell_guard_required,
+)
+
+
+
+
+# Commands that can only READ. This is an ALLOWLIST on purpose: an unrecognised
+# command head is treated as executable access, so the enumeration fails CLOSED.
+# (A denylist of "write markers" fails OPEN — every new spelling of a POST walks
+# around it, which is exactly the keyword-gate antipattern BIBLE P5 forbids.)
+# Wrappers that do not themselves act: the real command head follows them.
+# ``git`` reads only through these subcommands.
+# Allowlist MEMBERSHIP IS NOT ENOUGH: several read heads execute or write through their
+# own options. Per command, because short flags are not portable — ``grep -o`` prints
+# matches, ``sort -o`` writes a file. Text reaching here is lowercased, so an upper-case
+# spelling (``git grep -O``, ``fd -X``) collapses onto the same entry.
+# The executable itself must be a bare name or live in a system bin: ``/tmp/evil/grep``
+# and ``./grep`` are shadowing, not inspection.
+
+
+# Spellings that make a shell run a command NESTED inside another one. The read exemption
+# fails closed on all of them: the head-allowlist can only vouch for heads it actually sees,
+# and a nested command's head is not one of them ("echo" vouching for the "curl -X POST" it
+# interpolates). Refusing the CONSTRUCT rather than enumerating the payloads inside it is the
+# point — no list of "what a write looks like" is ever complete (BIBLE P5).
+# Bare tokens the lexer emits for the same constructs (and for a plain subshell). These used to
+# be STRIPPED from the token list before the head was taken, which is precisely how the nested
+# command escaped validation; they are refused instead.
+
+
+# verify_and_record runs the agent's declared `check` like a command, so it must clear the
+# same PRE-EXECUTION shell guards (subagent-secret read, protected-artifact read, sudo,
+# protected-root / workspace-state / light-mode writes) — that pre-exec filter is the
+# security boundary and blocks a forbidden mutation BEFORE the handler runs, so a guarded
+# check cannot mutate protected state and then leave a host-attested PASS receipt. It is
+# deliberately NOT in _PROCESS_COMMAND_TOOLS: those POST-execution checks (light-repo
+# diff, git-ref tripwire) run AFTER the handler has already written the
+# receipt, so they would only annotate the returned text, not gate the durable receipt —
+# adding them would give false assurance while the pre-exec guards already do the gating.
+# Path-bearing file tools whose active_workspace/system_repo path arg is normalized
+# ONCE at dispatch (execute) so the handler AND every guard (protected-path,
+# protected-artifact, shrink) resolve the identical target — no desync bypass.
+# apply_patch/edit_batch are absent because they carry no top-level `path` arg
+# (their paths live inside the patch text / edits[] entries), so this seam has
+# nothing to rewrite. They are NOT exempt from the canonicalization itself: both
+# the dispatch guards below and their handlers run every payload path through
+# `canonical_repo_relative_path`, the same normalization this seam applies.
+
+# Repo-lane write tools that take a top-level `root` arg. Every gate keyed to
+# "a write that lands in the repo working tree" must judge the whole set, not
+# the historical write_file/edit_text pair — a new editing primitive that misses
+# one of these gates is a silently weaker lane, not a new capability.

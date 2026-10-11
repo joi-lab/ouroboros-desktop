@@ -4,18 +4,14 @@ Split from test_commit_gate.py to keep each test module within the ~1000-line li
 """
 import importlib
 import json
+import pathlib
 import os
 import sys
 
-import asyncio
 
 import pytest
 
-from tests._shared import ensure_claude_agent_sdk_mock
-
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-ensure_claude_agent_sdk_mock()
 
 
 def _get_advisory_module():
@@ -23,86 +19,70 @@ def _get_advisory_module():
     return importlib.import_module("ouroboros.tools.claude_advisory_review")
 
 
-# ---------------------------------------------------------------------------
-# Model-drift: resolve_claude_code_model
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "case_id,env_value,expected",
-    [
-        ("returns_env_value", "sonnet", "sonnet"),
-        ("falls_back_to_shipped_default", None, "opus[1m]"),
-        ("strips_whitespace", "  claude-opus-4.6  ", "claude-opus-4.6"),
-    ],
-)
-def test_resolve_claude_code_model(monkeypatch, case_id, env_value, expected):
-    sys.path.insert(0, REPO)
-    gw = importlib.import_module("ouroboros.gateways.claude_code")
-    if env_value is None:
-        monkeypatch.delenv("CLAUDE_CODE_MODEL", raising=False)
-    else:
-        monkeypatch.setenv("CLAUDE_CODE_MODEL", env_value)
-    assert gw.resolve_claude_code_model() == expected
+def _fake_native_result(**overrides):
+    """Advisory delivery result shape (the native episode's rehydrated result)."""
+    from types import SimpleNamespace
+    base = dict(success=True, result_text="", error=None, stderr_tail="",
+                session_id="", cost_usd=0.0, usage={})
+    base.update(overrides)
+    return SimpleNamespace(**base)
 
 
-def test_shell_edit_uses_resolve_claude_code_model_helper():
-    """claude_code_edit path must use resolve_claude_code_model(), not raw os.environ.get."""
-    import inspect
-    sys.path.insert(0, REPO)
-    shell_mod = importlib.import_module("ouroboros.tools.shell")
-    source = inspect.getsource(shell_mod._claude_code_edit)
-    assert "resolve_claude_code_model" in source
-    assert 'os.environ.get("CLAUDE_CODE_MODEL"' not in source
-
-
-def test_advisory_uses_resolve_claude_code_model_helper():
-    """_run_claude_advisory must call resolve_claude_code_model() — no hardcoded 'opus'."""
+def test_advisory_uses_the_shipped_default_model_helper():
+    """_run_claude_advisory resolves its model through _advisory_native_model()
+    (the configured row or the shipped routed default, each through the
+    same-model payable-spelling fallback) — never a hardcoded model and never
+    the retired Claude-SDK resolver."""
     import inspect
     adv_mod = _get_advisory_module()
     source = inspect.getsource(adv_mod._run_claude_advisory)
-    assert "resolve_claude_code_model" in source
+    assert "_advisory_native_model" in source
+    assert "resolve_claude_code_model" not in source
+    native_src = inspect.getsource(adv_mod._advisory_native_model)
+    assert "_same_model_payable_spelling" in native_src
 
 
-def test_advisory_passes_scope_review_effort_to_claude_code(monkeypatch, tmp_path):
+def test_advisory_row_effort_reaches_the_native_slot(monkeypatch, tmp_path):
+    """D-5b survivor: the ADVISORY row's own effort rides the native episode —
+    the scope reviewer's configured effort never leaks in. (The retired
+    Claude-SDK effort plumbing test this replaces asserted the same contract
+    on the removed transport.)"""
     adv_mod = _get_advisory_module()
-    from types import SimpleNamespace
-    from ouroboros.gateways.claude_code import ClaudeCodeResult
-    import ouroboros.gateways.claude_code as gw
 
     captured = {}
 
-    def fake_run_readonly(**kwargs):
-        captured.update(kwargs)
-        return ClaudeCodeResult(
+    def _capture(prompt, repo_dir, ctx_, slot, model, **_):
+        from types import SimpleNamespace
+
+        captured["effort"] = slot.effort or "low"
+        return SimpleNamespace(
             success=True,
             result_text='[{"item":"bible_compliance","verdict":"PASS","reason":"ok","severity":"critical"}]',
-            session_id="sess-effort",
-            cost_usd=0,
-            usage={},
-        )
+            session_id="", cost_usd=0.0, usage={}, error="", stderr_tail="",
+        ), model
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("OUROBOROS_EFFORT_SCOPE_REVIEW", "low")
-    monkeypatch.setattr(gw, "run_readonly", fake_run_readonly)
-    monkeypatch.setattr(adv_mod, "_get_staged_diff", lambda *a, **kw: "diff")
-    monkeypatch.setattr(adv_mod, "_get_changed_file_list", lambda *a, **kw: "M file.py")
-    monkeypatch.setattr(adv_mod, "build_advisory_changed_context", lambda *a, **kw: (["file.py"], "pack", []))
-    monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
-    ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path, pending_events=[], emit_progress_fn=lambda *_: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("OUROBOROS_EFFORT_SCOPE_REVIEW", "xhigh")
+    monkeypatch.delenv("OUROBOROS_REVIEWER_SLOTS", raising=False)
+    monkeypatch.setattr(adv_mod, "_run_advisory_native", _capture)
+    from ouroboros.tools.registry import ToolContext
 
-    adv_mod._run_claude_advisory(tmp_path, "msg", ctx)
-
+    repo = tmp_path / "repo"; repo.mkdir()
+    drive = tmp_path / "data"; drive.mkdir()
+    ctx = ToolContext(repo_dir=repo, drive_root=drive)
+    _items, raw, _model, _chars = adv_mod._run_claude_advisory(
+        repo, "msg", ctx, options={"include_repo_diff": False},
+    )
+    assert not raw.startswith("⚠️ ADVISORY_ERROR"), raw
+    # The legacy default row carries effort "low"; scope xhigh never leaks in.
     assert captured["effort"] == "low"
 
-
-def test_paid_empty_advisory_result_is_error(monkeypatch, tmp_path):
+def test_empty_advisory_result_is_error(monkeypatch, tmp_path):
     adv_mod = _get_advisory_module()
     from types import SimpleNamespace
-    from ouroboros.gateways.claude_code import ClaudeCodeResult
-    import ouroboros.gateways.claude_code as gw
 
     def fake_run_readonly(**kwargs):
-        return ClaudeCodeResult(
+        return _fake_native_result(
             success=True,
             result_text="(no output)",
             session_id="sess-empty",
@@ -111,10 +91,12 @@ def test_paid_empty_advisory_result_is_error(monkeypatch, tmp_path):
         )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(gw, "run_readonly", fake_run_readonly)
+    monkeypatch.setattr(_get_advisory_module(), "_run_advisory_native",
+                        lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                            fake_run_readonly(), model,
+                        ))
     monkeypatch.setattr(adv_mod, "_get_staged_diff", lambda *a, **kw: "diff")
     monkeypatch.setattr(adv_mod, "_get_changed_file_list", lambda *a, **kw: "M file.py")
-    monkeypatch.setattr(adv_mod, "build_advisory_changed_context", lambda *a, **kw: (["file.py"], "pack", []))
     monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
     ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path, pending_events=[], emit_progress_fn=lambda *_: None)
 
@@ -122,8 +104,12 @@ def test_paid_empty_advisory_result_is_error(monkeypatch, tmp_path):
 
     assert items == []
     assert raw.startswith("⚠️ ADVISORY_ERROR:")
-    assert "paid empty output" in raw
-    assert any(ev.get("type") == "advisory_sdk_suspect_result" for ev in ctx.pending_events)
+    assert "empty output" in raw
+    events = [ev for ev in ctx.pending_events if ev.get("type") == "advisory_suspect_result"]
+    assert len(events) == 1
+    assert events[0]["cost_usd"] == 1.23
+    assert events[0]["session_id"] == 'sess-empty'
+    assert events[0]["prompt_chars"] == len("prompt")
 
 
 def test_handle_advisory_error_persists_session_id(monkeypatch, tmp_path):
@@ -162,11 +148,9 @@ def test_handle_advisory_error_persists_session_id(monkeypatch, tmp_path):
 def test_skill_advisory_duplicate_expected_items_warn_not_error(monkeypatch, tmp_path):
     adv_mod = _get_advisory_module()
     from types import SimpleNamespace
-    from ouroboros.gateways.claude_code import ClaudeCodeResult
-    import ouroboros.gateways.claude_code as gw
 
     def fake_run_readonly(**kwargs):
-        return ClaudeCodeResult(
+        return _fake_native_result(
             success=True,
             result_text=json.dumps([
                 {"item": "manifest_schema", "verdict": "PASS", "reason": "ok", "severity": "critical"},
@@ -179,7 +163,10 @@ def test_skill_advisory_duplicate_expected_items_warn_not_error(monkeypatch, tmp
         )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(gw, "run_readonly", fake_run_readonly)
+    monkeypatch.setattr(_get_advisory_module(), "_run_advisory_native",
+                        lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                            fake_run_readonly(), model,
+                        ))
     monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
     ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path, pending_events=[], emit_progress_fn=lambda *_: None)
 
@@ -197,18 +184,67 @@ def test_skill_advisory_duplicate_expected_items_warn_not_error(monkeypatch, tmp
 
     assert len(items) == 3
     assert not raw.startswith("⚠️ ADVISORY_ERROR:")
-    assert any(ev.get("type") == "advisory_contract_warning" for ev in ctx.pending_events)
-    assert not any(ev.get("type") == "advisory_sdk_suspect_result" for ev in ctx.pending_events)
+    events = [ev for ev in ctx.pending_events if ev.get("type") == "advisory_contract_warning"]
+    assert len(events) == 1
+    assert events[0]["cost_usd"] == 0.2
+    assert events[0]["session_id"] == 'sess-duplicate'
+    assert events[0]["prompt_chars"] == len("prompt")
+    assert not any(ev.get("type") == "advisory_suspect_result" for ev in ctx.pending_events)
+
+
+def test_skill_advisory_repeated_bug_hunting_no_contract_warning(monkeypatch, tmp_path):
+    # C6: bug_hunting is severity-driven and legitimately emits one row per
+    # distinct bug; repeated rows must NOT trip duplicates=/count= contract
+    # warnings or the advisory_suspect_result marker.
+    adv_mod = _get_advisory_module()
+    from types import SimpleNamespace
+
+    def fake_run_readonly(**kwargs):
+        return _fake_native_result(
+            success=True,
+            result_text=json.dumps([
+                {"item": "manifest_schema", "verdict": "PASS", "reason": "ok", "severity": "critical"},
+                {"item": "bug_hunting", "verdict": "FAIL", "reason": "bug A", "severity": "advisory"},
+                {"item": "bug_hunting", "verdict": "FAIL", "reason": "bug B", "severity": "advisory"},
+                {"item": "bug_hunting", "verdict": "FAIL", "reason": "bug C", "severity": "critical"},
+            ]),
+            session_id="sess-bughunt",
+            cost_usd=0.2,
+            usage={"prompt_tokens": 100, "completion_tokens": 20},
+        )
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(_get_advisory_module(), "_run_advisory_native",
+                        lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                            fake_run_readonly(), model,
+                        ))
+    monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
+    ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path, pending_events=[], emit_progress_fn=lambda *_: None)
+
+    items, raw, _model, _chars = adv_mod._run_claude_advisory(
+        tmp_path,
+        "skill advisory",
+        ctx,
+        scope="plugin.py",
+        options={
+            "include_repo_diff": False,
+            "review_surface": "skill",
+            "expected_items": ["manifest_schema", "bug_hunting"],
+        },
+    )
+
+    assert len(items) == 4  # every bug row preserved in the output
+    assert not raw.startswith("⚠️ ADVISORY_ERROR:")
+    assert not any(ev.get("type") == "advisory_contract_warning" for ev in ctx.pending_events)
+    assert not any(ev.get("type") == "advisory_suspect_result" for ev in ctx.pending_events)
 
 
 def test_skill_advisory_missing_expected_items_still_errors(monkeypatch, tmp_path):
     adv_mod = _get_advisory_module()
     from types import SimpleNamespace
-    from ouroboros.gateways.claude_code import ClaudeCodeResult
-    import ouroboros.gateways.claude_code as gw
 
     def fake_run_readonly(**kwargs):
-        return ClaudeCodeResult(
+        return _fake_native_result(
             success=True,
             result_text='[{"item":"manifest_schema","verdict":"PASS","reason":"ok","severity":"critical"}]',
             session_id="sess-partial",
@@ -217,7 +253,10 @@ def test_skill_advisory_missing_expected_items_still_errors(monkeypatch, tmp_pat
         )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(gw, "run_readonly", fake_run_readonly)
+    monkeypatch.setattr(_get_advisory_module(), "_run_advisory_native",
+                        lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                            fake_run_readonly(), model,
+                        ))
     monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
     ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path, pending_events=[], emit_progress_fn=lambda *_: None)
 
@@ -233,10 +272,15 @@ def test_skill_advisory_missing_expected_items_still_errors(monkeypatch, tmp_pat
         },
     )
 
-    assert items == []
+    assert [item["item"] for item in items] == ["manifest_schema"]
+    assert "Full reviewer output:" in raw
     assert raw.startswith("⚠️ ADVISORY_ERROR:")
     assert "checklist contract mismatch" in raw
-    assert any(ev.get("type") == "advisory_sdk_suspect_result" for ev in ctx.pending_events)
+    events = [ev for ev in ctx.pending_events if ev.get("type") == "advisory_suspect_result"]
+    assert len(events) == 1
+    assert events[0]["cost_usd"] == 0.2
+    assert events[0]["session_id"] == 'sess-partial'
+    assert events[0]["prompt_chars"] == len("prompt")
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +292,6 @@ def test_advisory_error_message_includes_diagnostic_fields():
     adv_mod = _get_advisory_module()
     diag = {
         "model": "opus",
-        "sdk_version": "0.1.56",
-        "cli_version": "2.1.92",
-        "cli_path": "/app/claude",
         "python": "/usr/bin/python3",
         "prompt_chars": 120000,
         "prompt_tokens_approx": 30000,
@@ -265,9 +306,7 @@ def test_advisory_error_message_includes_diagnostic_fields():
     )
     assert "⚠️ ADVISORY_ERROR:" in msg
     assert "opus" in msg
-    assert "0.1.56" in msg
-    assert "2.1.92" in msg
-    assert "/app/claude" in msg
+    assert "/usr/bin/python3" in msg
     assert "120000" in msg
     assert "30000" in msg or "30,000" in msg
     assert "sess-123" in msg
@@ -284,25 +323,8 @@ def test_get_runtime_diagnostics_never_raises():
     assert diag["prompt_chars"] == 50000
     assert diag["prompt_tokens_approx"] == 12500
     assert diag["touched_paths"] == ["file.py"]
-    assert "sdk_version" in diag
-
-
-def test_get_runtime_diagnostics_reads_runtime_state_attributes(monkeypatch):
-    """Runtime diagnostics must read cli_path/cli_version from ClaudeRuntimeState attributes."""
-    adv_mod = _get_advisory_module()
-    from ouroboros.platform_layer import ClaudeRuntimeState
-
-    monkeypatch.setattr(
-        "ouroboros.platform_layer.resolve_claude_runtime",
-        lambda: ClaudeRuntimeState(
-            cli_path="/app/claude",
-            cli_version="2.1.92",
-        ),
-    )
-    diag = adv_mod._get_runtime_diagnostics("opus", 1234, ["file.py"])
-
-    assert diag["cli_path"] == "/app/claude"
-    assert diag["cli_version"] == "2.1.92"
+    # The retired Claude-SDK/CLI probes must never resurface here.
+    assert "sdk_version" not in diag and "cli_version" not in diag
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +453,9 @@ def test_next_step_guidance_for_skipped_advisory():
     assert "commit_reviewed" in msg, "message should still indicate commit can proceed"
 
 
-def test_next_step_guidance_requires_reaudit_when_obligations_remain():
-    """Open obligations after a blocked review should trigger explicit re-audit guidance."""
+def test_next_step_guidance_leaves_repair_procedure_to_author_when_obligations_remain():
+    """Open obligations keep the outcome duty and the preflight next step, with no
+    mandatory re-read/group/rewrite-plan order."""
     adv_mod = _get_advisory_module()
     from ouroboros.review_state import AdvisoryRunRecord, AdvisoryReviewState, ObligationItem
 
@@ -461,10 +484,73 @@ def test_next_step_guidance_requires_reaudit_when_obligations_remain():
         open_debts=[],
         effective_is_fresh=True,
     )
+    assert "1 open obligation(s)" in msg
+    assert adv_mod.REVIEW_REPAIR_JUDGMENT in msg
     lowered = msg.lower()
-    assert "re-read the full diff" in lowered
-    assert "group obligations by root cause" in lowered
-    assert "rewrite the plan" in lowered
+    assert "re-run preflight_review so it can mark addressed items pass" in lowered
+    for retired in ("re-read the full diff", "group obligations by root cause",
+                    "rewrite the plan", "one finding at a time"):
+        assert retired not in lowered, retired
+
+
+@pytest.mark.parametrize(
+    "case_id,status,effective_is_fresh,stale_from_edit,items,open_debts",
+    [
+        ("missing", None, False, False, [], []),
+        ("stale", "fresh", False, True, [], []),
+        ("parse_failure", "parse_failure", False, False, [], []),
+        ("error", "error", False, False, [], []),
+        (
+            "critical",
+            "fresh",
+            True,
+            False,
+            [{"item": "correctness", "verdict": "FAIL", "severity": "critical"}],
+            [],
+        ),
+        ("open_debt", "fresh", True, False, [], [object()]),
+    ],
+)
+def test_next_step_guidance_offers_both_advisory_choices_and_retains_gates(
+    case_id,
+    status,
+    effective_is_fresh,
+    stale_from_edit,
+    items,
+    open_debts,
+):
+    del case_id
+    adv_mod = _get_advisory_module()
+    from ouroboros.review_state import AdvisoryRunRecord, AdvisoryReviewState
+
+    latest = None
+    if status is not None:
+        latest = AdvisoryRunRecord(
+            snapshot_hash="abc123",
+            commit_message="test",
+            status=status,
+            ts="2026-01-01T00:00:00",
+            items=items,
+        )
+    state = AdvisoryReviewState(advisory_runs=[] if latest is None else [latest])
+    message = adv_mod._next_step_guidance(
+        latest=latest,
+        state=state,
+        stale_from_edit=stale_from_edit,
+        stale_from_edit_ts="2026-01-01T00:01:00" if stale_from_edit else None,
+        open_obs=[],
+        open_debts=open_debts,
+        effective_is_fresh=effective_is_fresh,
+    )
+
+    assert adv_mod.ADVISORY_REVIEW_CHOICE_GUIDANCE in message
+    assert "advisory_review" in message
+    assert "skip_advisory_review=True" in message
+    assert "bypasses only the requirements for advisory freshness" in message
+    assert "records remain visible" in message
+    assert "tests, triad review" in message
+    assert "snapshot/fingerprint revalidation" in message
+    assert "final commit/tag/SHA binding" in message
 
 
 def test_skipped_run_hash_mismatch_reported_as_stale(monkeypatch, tmp_path):
@@ -483,7 +569,7 @@ def test_skipped_run_hash_mismatch_reported_as_stale(monkeypatch, tmp_path):
 
     # Write a skipped run with a fake (stale) hash directly into state
     from ouroboros.review_state import (
-        AdvisoryRunRecord, AdvisoryReviewState, load_state, save_state,
+        AdvisoryRunRecord, AdvisoryReviewState, save_state,
     )
     old_hash = "000000000000000000000000000000000000000000000000"
     run = AdvisoryRunRecord(
@@ -525,8 +611,8 @@ def test_advisory_context_build_failure_is_surfaced(monkeypatch, tmp_path):
     monkeypatch.setattr(adv_mod, "_get_changed_file_list", lambda *args, **kwargs: "M foo.py")
     monkeypatch.setattr(
         adv_mod,
-        "build_advisory_changed_context",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("context pack exploded")),
+        "_build_advisory_prompt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("context assembly exploded")),
     )
 
     from types import SimpleNamespace
@@ -581,193 +667,6 @@ def test_budget_gate_skip_becomes_stale_after_edit(monkeypatch, tmp_path):
 # SDK break-after-ResultMessage fix (spurious exit code 1 prevention)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("mode", ["readonly", "edit"])
-def test_run_async_breaks_after_result_message(mode):
-    """Both ``_run_readonly_async`` and ``_run_edit_async`` use
-    ClaudeSDKClient.receive_response and must stop
-    iterating after ResultMessage. Root cause: the SDK stream can raise
-    when iterated past the ResultMessage because the CLI subprocess has
-    exited and the message reader hits a closed pipe.
-
-    The fix adds a ``break`` after processing ResultMessage. The test
-    verifies that the break prevents the post-ResultMessage Exception
-    from reaching the caller as a failure.
-
-    Parametrized in v5.15.x — previously two near-identical tests
-    test_run_{readonly,edit}_async_breaks_after_result_message, ~150 LOC
-    of duplicated mock setup.
-    """
-    import sys
-
-    sys.path.insert(0, REPO)
-
-    # ---- Shared mock message types ------------------------------------
-    AssistantMsg = type("AssistantMessage", (), {})
-    ResultMsg = type("ResultMessage", (), {})
-
-    class FakeTextBlock:
-        def __init__(self, text):
-            self.text = text
-
-    text_payload = "Edit output" if mode == "edit" else "Hello"
-    session_id = "edit-session-456" if mode == "edit" else "test-session-123"
-    in_tokens = 20 if mode == "edit" else 10
-    out_tokens = 10 if mode == "edit" else 5
-    cost = 0.002 if mode == "edit" else 0.001
-
-    class FakeAssistantMessage(AssistantMsg):
-        def __init__(self):
-            self.content = [FakeTextBlock(text_payload)]
-
-    class FakeResultMessage(ResultMsg):
-        pass
-
-    FakeResultMessage.session_id = session_id
-    FakeResultMessage.total_cost_usd = cost
-    FakeResultMessage.usage = {"input_tokens": in_tokens, "output_tokens": out_tokens}
-    FakeResultMessage.subtype = "success"
-
-    import ouroboros.gateways.claude_code as gw
-
-    class FakeClaudeAgentOptions:
-        def __init__(self, **kwargs):
-            pass
-
-    class FakeHookMatcher:
-        def __init__(self, **kwargs):
-            pass
-
-    orig_AssistantMessage = gw.AssistantMessage
-    orig_ResultMessage = gw.ResultMessage
-    orig_ClaudeAgentOptions = gw.ClaudeAgentOptions
-    orig_ClaudeSDKClient = gw.ClaudeSDKClient
-    orig_HookMatcher = gw.HookMatcher
-
-    try:
-        gw.AssistantMessage = FakeAssistantMessage
-        gw.ResultMessage = FakeResultMessage
-        gw.ClaudeAgentOptions = FakeClaudeAgentOptions
-        gw.HookMatcher = FakeHookMatcher
-
-        class FakeSDKClient:
-            def __init__(self, options=None):
-                self.options = options
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            async def query(self, prompt):
-                pass
-
-            async def receive_response(self):
-                yield FakeAssistantMessage()
-                yield FakeResultMessage()
-                raise Exception(
-                    "Command failed with exit code 1 (exit code: 1)\n"
-                    "Error output: Check stderr output for details"
-                )
-
-        gw.ClaudeSDKClient = FakeSDKClient
-        if mode == "readonly":
-            result = asyncio.run(gw._run_readonly_async(
-                prompt="test",
-                cwd="/tmp",
-                model="opus",
-                max_turns=1,
-                effort=None,
-            ))
-        else:
-            result = asyncio.run(gw._run_edit_async(
-                prompt="test edit",
-                cwd="/tmp",
-                model="opus",
-                max_turns=1,
-            ))
-    finally:
-        gw.AssistantMessage = orig_AssistantMessage
-        gw.ResultMessage = orig_ResultMessage
-        gw.ClaudeAgentOptions = orig_ClaudeAgentOptions
-        gw.ClaudeSDKClient = orig_ClaudeSDKClient
-        gw.HookMatcher = orig_HookMatcher
-
-    assert result.success, f"Expected success but got error: {result.error}"
-    assert result.session_id == session_id
-    assert text_payload in result.result_text
-
-
-@pytest.mark.parametrize(
-    ("cwd", "expected_repo_name"),
-    [
-        ("", None),          # self repo root
-        ("external", "external"),  # nested external git root
-    ],
-)
-def test_claude_code_edit_invalidates_target_repo_root(monkeypatch, tmp_path, cwd, expected_repo_name):
-    """Phase 3: claude_code_edit should invalidate advisory for the nearest git root."""
-    from types import SimpleNamespace
-
-    sys.path.insert(0, REPO)
-    shell_mod = importlib.import_module("ouroboros.tools.shell")
-    git_mod = importlib.import_module("ouroboros.tools.git")
-    gw = importlib.import_module("ouroboros.gateways.claude_code")
-
-    (tmp_path / ".git").mkdir(parents=True, exist_ok=True)
-    target_root = tmp_path
-    if expected_repo_name:
-        target_root = tmp_path / expected_repo_name
-        (target_root / ".git").mkdir(parents=True, exist_ok=True)
-
-    class FakeResult:
-        def __init__(self):
-            self.success = True
-            self.result_text = "ok"
-            self.session_id = "sess-1"
-            self.cost_usd = 0.0
-            self.usage = {}
-            self.changed_files = []
-            self.diff_stat = ""
-            self.validation_summary = ""
-            self.error = ""
-
-        def to_tool_output(self):
-            return json.dumps({"success": True})
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(gw, "resolve_claude_code_model", lambda: "opus")
-    monkeypatch.setattr(gw, "run_edit", lambda **kwargs: FakeResult())
-    monkeypatch.setattr(git_mod, "_acquire_git_lock", lambda ctx: object())
-    monkeypatch.setattr(git_mod, "_release_git_lock", lambda lock: None)
-    monkeypatch.setattr(shell_mod, "_load_project_context", lambda repo_dir: "")
-    monkeypatch.setattr(shell_mod, "_get_diff_stat", lambda repo_dir: "")
-    monkeypatch.setattr(shell_mod, "run_cmd", lambda *args, **kwargs: "")
-
-    change_calls = iter([[], ["foo.py"], ["foo.py"]])
-    monkeypatch.setattr(shell_mod, "_get_changed_files", lambda repo_dir: next(change_calls))
-    invalidate_calls = []
-    monkeypatch.setattr(
-        shell_mod,
-        "_invalidate_advisory",
-        lambda ctx, **kwargs: invalidate_calls.append(kwargs),
-    )
-
-    ctx = SimpleNamespace(
-        repo_dir=tmp_path,
-        drive_root=tmp_path,
-        branch_dev="ouroboros",
-        emit_progress_fn=lambda *_: None,
-        pending_events=[],
-    )
-
-    raw = shell_mod._claude_code_edit(ctx, prompt="edit something", cwd=cwd)
-    assert json.loads(raw)["success"] is True
-    assert len(invalidate_calls) == 1
-    mutation_root = invalidate_calls[0]["mutation_root"]
-    assert mutation_root == target_root
-    assert invalidate_calls[0]["source_tool"] == "claude_code_edit"
-    assert invalidate_calls[0]["changed_paths"] == ["foo.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +702,7 @@ class TestIsChecklistArray:
     def test_valid_multi_item_accepted(self):
         items = [
             {"item": "bible_compliance", "verdict": "PASS"},
-            {"item": "code_quality", "verdict": "FAIL", "reason": "bug"},
+            {"item": "code_quality", "verdict": "FAIL", "severity": "critical", "reason": "bug"},
         ]
         assert self.fn(items) is True
 
@@ -823,7 +722,6 @@ class TestParseAdvisoryOutput:
 
     @pytest.fixture(autouse=True)
     def _import(self):
-        ensure_claude_agent_sdk_mock()
         import importlib
         self.mod = importlib.import_module(
             "ouroboros.tools.claude_advisory_review"
@@ -920,7 +818,6 @@ class TestLLMFallbackExtraction:
 
     @pytest.fixture(autouse=True)
     def _import(self):
-        ensure_claude_agent_sdk_mock()
         import importlib
         self.mod = importlib.import_module("ouroboros.tools.claude_advisory_review")
 
@@ -958,38 +855,187 @@ class TestLLMFallbackExtraction:
         result = self.mod._llm_extract_advisory_items(raw_text, self._make_ctx())
         assert result == expected
 
-    def test_fallback_window_includes_tail_for_long_inputs(self, monkeypatch):
-        """For inputs longer than head+tail budget, _build_fallback_window must preserve
-        the TAIL (where JSON lives) and show a head excerpt + omission note — not a
-        first-N truncation that would discard the JSON at the end."""
-        head_chars = self.mod._FALLBACK_HEAD_CHARS
-        tail_chars = self.mod._FALLBACK_TAIL_CHARS
+    def test_fallback_extraction_inherits_the_owner_deadline(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
 
-        # Build a text that is bigger than the combined budget.
-        # Head = 'A' * head_chars, middle filler, tail contains a distinct marker.
-        tail_marker = "TAIL_JSON_MARKER"
-        filler_size = head_chars + tail_chars + 10_000  # clearly over budget
-        preamble = "A" * filler_size
-        raw_text = preamble + tail_marker
+        captured = {}
+        expected = [self._item("code_quality")]
 
-        window = self.mod._build_fallback_window(raw_text)
+        def fake_chat(_self, **kwargs):
+            captured.update(kwargs)
+            return {"content": json.dumps(expected)}, {"cost": 0.001}
 
-        # Tail marker must be present
-        assert tail_marker in window, "Tail (where JSON lives) must be included in the window"
-        # Omission note must be present for middle-section awareness
-        assert "OMISSION NOTE" in window, "Omission note must mark the skipped middle section"
-        # Window must be shorter than full raw_text
-        assert len(window) < len(raw_text)
+        import ouroboros.llm as llm_mod
+        monkeypatch.setattr(llm_mod.LLMClient, "chat", fake_chat)
+        monkeypatch.setenv("OUROBOROS_FINALIZATION_GRACE_SEC", "1")
+        ctx = self._make_ctx()
+        ctx.task_metadata = {
+            "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(),
+        }
+        assert self.mod._llm_extract_advisory_items("narrative", ctx) == expected
+        assert 0 < captured["timeout"] <= 4.1
+
+    def test_mid_artifact_critical_survives_the_verdict(self, monkeypatch):
+        """A critical raised in the MIDDLE of a long advisory must reach the verdict.
+
+        Extraction used to read a 4K head + 60K tail window: everything between was
+        dropped, so a mid-artifact critical vanished — and because entries may carry
+        `obligation_id`, a surviving advisory row could then close an obligation whose
+        critical had just been cut away. The shared SSOT reads the WHOLE artifact, so
+        either the array is read from it directly or the whole text reaches the
+        extractor — the middle is never cut away before the verdict.
+        """
+        seen = {}
+        expected = [{"item": "bug_hunting", "verdict": "FAIL", "severity": "critical",
+                     "reason": "off-by-one in the mid-artifact path"}]
+
+        def fake_chat(_self, **kwargs):
+            seen["prompt"] = kwargs["messages"][0]["content"]
+            return {"content": json.dumps(expected)}, {"cost": 0.0001}
+
+        import ouroboros.llm as llm_mod
+        monkeypatch.setattr(llm_mod.LLMClient, "chat", fake_chat)
+
+        marker = "MID_ARTIFACT_CRITICAL_MARKER"
+        raw_text = ("A" * 80_000) + marker + json.dumps(expected) + ("B" * 80_000)
+        result = self.mod._llm_extract_advisory_items(raw_text, self._make_ctx())
+
+        assert result == expected
+        if "prompt" in seen:  # if a light-model call was needed, it saw everything
+            assert marker in seen["prompt"]
+            assert "OMISSION NOTE" not in seen["prompt"]
+            assert raw_text in seen["prompt"]
+
+    def test_oversize_artifact_refuses_typed_instead_of_guessing(self, monkeypatch):
+        """Beyond the one-send extraction bound the answer is a typed refusal — never
+        a verdict fabricated from whatever part happened to be visible."""
+        calls = []
+
+        def counting_chat(_self, **kwargs):
+            # Counted, NOT raised: an exception here would be swallowed by the
+            # extractor's own guard and the test would pass for the wrong reason.
+            calls.append(kwargs)
+            return {"content": "[]"}, {"cost": 0.0001}
+
+        import ouroboros.llm as llm_mod
+        from ouroboros.review_execution import _EXTRACT_MAX_CHARS
+        monkeypatch.setattr(llm_mod.LLMClient, "chat", counting_chat)
+
+        raw_text = "x" * (_EXTRACT_MAX_CHARS + 1)
+        assert self.mod._llm_extract_advisory_items(raw_text, self._make_ctx()) == []
+        # No windowed read was attempted at all — the refusal is typed, not a guess.
+        assert calls == [], "extraction ran on an artifact over the one-send bound"
+
+    def test_bare_empty_array_from_the_light_model_is_not_a_clean_verdict(self):
+        """TRAP: the canonicalizer legitimately returns "[]" for "no findings here".
+        Cleanliness is judged on the RAW artifact, so moving it onto the canonical
+        text would fabricate a verified-clean verdict out of a failed extraction."""
+        # The light model's "[]" yields no items...
+        assert self.mod._parse_advisory_output("[]") == []
+        # ...and the raw artifact it came from is NOT clean: no NO_FINDINGS sentinel,
+        # no bare-`[]` body — so the run stays parse_failure rather than clean.
+        assert self.mod._is_clean_verdict("I could not complete the review.") is False
+        assert self.mod._is_clean_verdict("blah blah [] blah") is False
+        # The genuine clean shapes still are clean.
+        assert self.mod._is_clean_verdict("[]") is True
+        assert self.mod._is_clean_verdict(json.dumps({"result": "[]\nNO_FINDINGS"})) is True
+
+    def test_delegated_advisory_asks_the_schema_and_discloses_off_pin(self, monkeypatch):
+        """The delegated advisory rides the SHARED AgentSessionReviewExecutor
+        (phase C unification, 2=B): the schema is asked like every session
+        slot, conformance is trusted only on "passed", and the substrate's
+        own capability-delta vocabulary discloses the landings — the advisory
+        no longer carries a transport dialect of its own."""
+        from ouroboros.review_execution import review_session_output_schema
+
+        monkeypatch.setenv("OUROBOROS_SUBAGENT_HARNESS", "claude")
+        asked = {}
+
+        def fake_runner(**kwargs):
+            invocation = kwargs["invocation"]
+            asked.update({f: getattr(invocation, f) for f in
+                          ("task_id", "surface", "slot_id", "output_schema")})
+            return {
+                "text": '[]', "run_id": "run-9", "route_id": "pinned-route",
+                "model": "m", "spend": None, "spend_estimated": False,
+                "settlement": {}, "schema_asked": True, "conformance": "failed",
+                "effective_route_ids": ["other-route"],
+            }
+
+        import ouroboros.review_execution as rx
+        monkeypatch.setattr(rx, "run_delegated_review_session", fake_runner)
+        result, _model = self.mod._run_advisory_delegated(
+            "prompt", pathlib.Path("/tmp"), self._make_ctx(),
+        )
+
+        assert asked["output_schema"] == review_session_output_schema("advisory_review")
+        assert "minItems" not in asked["output_schema"]["properties"]["findings"]
+        usage = result.usage
+        assert usage["output_conformance"] == "failed"
+        assert usage["verdict_provenance"]["conformance_trusted"] is False
+        reasons = {d["reason"] for d in usage["capability_delta"]}
+        assert {"schema_not_conformed_on_effective_route",
+                "session_ran_off_pinned_route"} <= reasons, reasons
+
+    def test_delegated_advisory_unwraps_a_conformant_clean_envelope(self, monkeypatch):
+        """A schema-conformant session answers with the SESSION envelope
+        ({"findings": [...]}) while every advisory consumer downstream reads the
+        advisory's own ARRAY contract — so a clean {"findings": []} used to land as
+        a paid extraction and then a parse_failure. Conformance-trusted envelopes
+        unwrap to the array shape: clean becomes the bare "[]" sentinel the
+        contract calls clean, findings become the bare array."""
+        import ouroboros.review_execution as rx
+
+        def runner_for(text, conformance):
+            def fake_runner(**kwargs):
+                return {
+                    "text": text, "run_id": "run-9", "route_id": "r", "model": "m",
+                    "spend": None, "spend_estimated": False, "settlement": {},
+                    "schema_asked": True, "conformance": conformance,
+                    "effective_route_ids": ["r"],
+                }
+            return fake_runner
+
+        # monkeypatch, not bare os.environ: a leaked OUROBOROS_SUBAGENT_HARNESS
+        # makes UNRELATED dispatch tests on the same xdist worker walk the
+        # delegation route-health path (parallel-safety rule, DEVELOPMENT.md).
+        monkeypatch.setenv("OUROBOROS_SUBAGENT_HARNESS", "claude")
+        cases = [
+            # (session text, conformance, expected result_text)
+            (json.dumps({"findings": []}), "passed", "[]"),
+            (json.dumps({"findings": [{"item": "i", "verdict": "FAIL",
+                                       "severity": "critical", "reason": "x"}]}),
+             "passed",
+             json.dumps([{"item": "i", "verdict": "FAIL",
+                          "severity": "critical", "reason": "x"}],
+                        ensure_ascii=False)),
+            # NOT conformed but strictly parseable: the shared D19 order's
+            # strict parse settles it — no paid extraction, no envelope trust.
+            ("[]", "failed", "[]"),
+        ]
+        original = rx.run_delegated_review_session
+        try:
+            for text, conformance, expected in cases:
+                rx.run_delegated_review_session = runner_for(text, conformance)
+                result, _model = self.mod._run_advisory_delegated(
+                    "prompt", pathlib.Path("/tmp"), self._make_ctx(),
+                )
+                assert result.result_text == expected, (text, conformance)
+        finally:
+            rx.run_delegated_review_session = original
+        # And the unwrapped clean shape IS the contract's clean verdict.
+        assert self.mod._is_clean_verdict("[]") is True
 
     def test_resolve_fallback_model_no_env_uses_config_default(self, monkeypatch):
-        """When OUROBOROS_MODEL_LIGHT is not set, fallback model comes from SETTINGS_DEFAULTS."""
+        """When OUROBOROS_MODEL_LIGHT is unset, the fallback model falls back to Main
+        (role-model v6.39: empty Light -> Main), never an empty model id."""
         monkeypatch.delenv("OUROBOROS_MODEL_LIGHT", raising=False)
 
         model = self.mod._resolve_fallback_model()
-        from ouroboros.config import SETTINGS_DEFAULTS
-        expected = str(SETTINGS_DEFAULTS.get("OUROBOROS_MODEL_LIGHT", ""))
+        from ouroboros.config import get_light_model
+        expected = get_light_model()
         assert model == expected, (
-            f"Expected config default {expected!r}, got: {model!r}"
+            f"Expected role-model light->main {expected!r}, got: {model!r}"
         )
         assert model, "Fallback model must be non-empty"
 
@@ -999,9 +1045,8 @@ class TestLLMFallbackExtraction:
         model = self.mod._resolve_fallback_model()
         assert model == "openai::gpt-4o-mini"
 
-    def test_fallback_normalises_fail_without_severity_to_critical(self, monkeypatch):
-        """FAIL items missing 'severity' from the LLM fallback must be normalised to 'critical'
-        so _handle_advisory_pre_review() never silently downgrades blocking findings."""
+    def test_fallback_does_not_invent_severity_for_an_incomplete_finding(self, monkeypatch):
+        """An extractor's incomplete FAIL remains unparsed, not host-classified."""
         # Simulate LLM returning a FAIL item with no severity (schema-incomplete output)
         raw_items = [
             {"item": "code_quality", "verdict": "FAIL", "reason": "bug found"},
@@ -1014,11 +1059,7 @@ class TestLLMFallbackExtraction:
         monkeypatch.setattr(llm_mod.LLMClient, "chat", fake_chat)
 
         result = self.mod._llm_extract_advisory_items("narrative with no json", self._make_ctx())
-        assert len(result) == 1
-        assert result[0]["verdict"] == "FAIL"
-        assert result[0]["severity"] == "critical", (
-            "FAIL without severity must be normalised to 'critical' — not left empty"
-        )
+        assert result == []
 
     def test_fallback_returns_empty_on_llm_failure(self, monkeypatch):
         """When the LLM call raises an exception, fallback must return [] gracefully."""
@@ -1047,20 +1088,19 @@ class TestLLMFallbackExtraction:
 
         # _run_claude_advisory calls _parse_advisory_output first; mock run_readonly
         # to return a clean JSON array (direct parse succeeds)
-        import ouroboros.gateways.claude_code as gw
-        from ouroboros.gateways.claude_code import ClaudeCodeResult
 
         def fake_run_readonly(**kwargs):
-            return ClaudeCodeResult(
+            return _fake_native_result(
                 success=True,
                 result_text=json.dumps(expected),
                 session_id="sess-test",
             )
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-        monkeypatch.setattr(gw, "run_readonly", fake_run_readonly)
-        monkeypatch.setattr(self.mod, "build_advisory_changed_context",
-                            lambda *a, **kw: ([], "", set()))
+        monkeypatch.setattr(_get_advisory_module(), "_run_advisory_native",
+                        lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                            fake_run_readonly(), model,
+                        ))
         monkeypatch.setattr(self.mod, "_get_staged_diff",
                             lambda *a, **kw: "diff --git a/foo.py b/foo.py")
         monkeypatch.setattr(self.mod, "_get_changed_file_list",
@@ -1075,3 +1115,231 @@ class TestLLMFallbackExtraction:
 
         assert items == expected
         assert fallback_called == [], "Fallback must NOT be called when direct parse succeeds"
+
+
+class TestAdvisoryCleanSentinel:
+    """The advisory prompt asks for `[] + NO_FINDINGS` as a clean verdict
+    (REVIEW_JSON_ARRAY_CONTRACT). Before this contract was honored here, a
+    reviewer that found nothing was recorded as `parse_failure`, which burned a
+    full serial preflight suite per retry and never surfaced the real cause.
+    Triad already implemented the sentinel; advisory did not.
+    """
+
+    def _run_handler(self, tmp_path, monkeypatch, raw_text):
+        from unittest import mock
+        from ouroboros.tools import claude_advisory_review as adv
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake-for-test")
+        monkeypatch.setattr(
+            adv, "_run_claude_advisory",
+            lambda repo_dir, commit_message, ctx, **kwargs: (adv._parse_advisory_output(raw_text), raw_text, "opus", 10),
+        )
+        # Release-metadata preflight (BIBLE P9) runs before the SDK branch under
+        # test. These cases pin the sentinel verdict, not release admission, and
+        # ``tmp_path`` is no Git worktree — isolate the admission read rather than
+        # let its honest "source unavailable" answer stand in for a verdict.
+        monkeypatch.setattr(adv, "_release_metadata_preflight", lambda *a, **kw: None)
+        monkeypatch.setattr(adv, "_get_staged_diff", lambda repo_dir, paths=None: "diff --git a/x.py b/x.py")
+        monkeypatch.setattr(
+            adv, "_get_changed_file_list",
+            lambda repo_dir, paths=None: (
+                "M  x.py\nM  VERSION\nM  pyproject.toml\n"
+                "M  web/package.json\nM  README.md\nM  docs/ARCHITECTURE.md"
+            ),
+        )
+        monkeypatch.setattr(adv, "check_worktree_readiness", lambda *a, **kw: [])
+        monkeypatch.setattr(adv, "_check_worktree_version_sync_shared", lambda *a, **kw: "")
+        monkeypatch.setattr(adv, "compute_snapshot_hash", lambda *a, **kw: "deadbeef")
+
+        ctx = mock.MagicMock()
+        ctx.repo_dir = str(tmp_path)
+        ctx.drive_root = tmp_path
+        ctx.emit_progress_fn = lambda *a, **kw: None
+        ctx.task_id = "t-clean"
+        return json.loads(adv._handle_advisory_pre_review(ctx, commit_message="test commit"))
+
+    def test_sentinel_qualified_empty_array_is_a_clean_run(self, tmp_path, monkeypatch):
+        result = self._run_handler(tmp_path, monkeypatch, "[]\nNO_FINDINGS")
+        assert result.get("status") == "fresh", f"clean advisory misclassified: {result!r}"
+        assert result.get("critical_count") == 0
+        assert "No findings" in (result.get("message") or "")
+        assert "Fix issues" not in (result.get("message") or "")
+
+    def test_bare_empty_array_is_clean_matching_triad(self, tmp_path, monkeypatch):
+        result = self._run_handler(tmp_path, monkeypatch, "[]")
+        assert result.get("status") == "fresh", f"bare [] must match triad semantics: {result!r}"
+
+    def test_empty_array_in_refusal_prose_stays_parse_failure(self, tmp_path, monkeypatch):
+        raw = "I cannot review this diff because it is too large. []"
+        result = self._run_handler(tmp_path, monkeypatch, raw)
+        assert result.get("status") == "parse_failure", (
+            f"refusal prose must not pass as clean: {result!r}"
+        )
+
+    def test_sentinel_without_an_array_is_not_clean(self, tmp_path, monkeypatch):
+        """The sentinel alone is refusal prose. Accepting it would let any
+        reviewer opt out of the gate by saying the word."""
+        result = self._run_handler(
+            tmp_path, monkeypatch, "I cannot review this diff. NO_FINDINGS")
+        assert result.get("status") == "parse_failure", (
+            f"sentinel-only response must not pass as clean: {result!r}"
+        )
+
+    def test_unparseable_array_with_sentinel_is_not_clean(self, tmp_path, monkeypatch):
+        result = self._run_handler(tmp_path, monkeypatch, '[{"item": broken\nNO_FINDINGS')
+        assert result.get("status") == "parse_failure"
+
+    @pytest.mark.parametrize("severity,expected", [("high", "parse_failure"), (" CRITICAL ", "fresh")])
+    def test_row_contract_is_preserved_in_the_durable_advisory_result(self, tmp_path, monkeypatch, severity, expected):
+        from ouroboros.tools import claude_advisory_review as advisory
+
+        raw = json.dumps([{"item": "check", "verdict": " fail ", "severity": severity, "reason": "bug"}])
+        result = self._run_handler(tmp_path, monkeypatch, raw)
+        assert result["status"] == expected
+        record = advisory.load_state(tmp_path).latest()
+        assert record.status == expected and record.raw_result == raw
+        if expected == "fresh":
+            assert result["critical_count"] == 1
+            assert record.items[0]["severity"] == "critical"
+        else:
+            assert record.items == []
+
+
+class TestEmptyArrayIsVerifiedClean:
+    """The shared predicate both advisory and triad classify with. A reviewer
+    must not be able to opt out of the gate by emitting the sentinel word."""
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("[]\nNO_FINDINGS", True),
+        ("[]", True),
+        ("[] NO_FINDINGS", True),          # sentinel must never make it worse
+        ("[]\r\nNO_FINDINGS", True),        # CRLF
+        ("[ ]\nNO_FINDINGS", True),
+        ("[]\nNO_FINDINGS\nHope that helps!", False),
+        ("```json\n[]\n```", True),
+        ("```json\n[]\n```\nNO_FINDINGS", True),   # fencing model puts the sentinel after the fence
+        ("```\n[]\n```\nNO_FINDINGS", True),
+        ("```JSON\n[]\n```", True),               # tag case must not matter
+        ("```json\n[]\n```\nI cannot review this", False),
+        ("prose ```[]``` NO_FINDINGS", False),
+        ("```json\n[1]\n```\nNO_FINDINGS", False),
+        ("I cannot review this diff. NO_FINDINGS", False),
+        ("NO_FINDINGS", False),
+        ("I cannot review this. [] Please retry.", False),
+        ("I cannot review this diff. []\nNO_FINDINGS", False),
+        ("Everything checks out.\n[]\nNO_FINDINGS", False),
+        ("[] NO_FINDINGS trailing prose", False),
+        ('[{"item": "x", "verdict": "FAIL"}]\nNO_FINDINGS', False),
+        ('[{"item": broken\nNO_FINDINGS', False),
+        ("", False),
+    ])
+    def test_clean_verdict_requires_a_real_empty_array(self, raw, expected):
+        from ouroboros.triad_review import empty_array_is_verified_clean
+        assert empty_array_is_verified_clean(raw) is expected, repr(raw)
+
+    @pytest.mark.parametrize("raw,expected", [
+        ('{"result": "[]\\nNO_FINDINGS"}', True),
+        ('{"result": "[]"}', True),
+        ('{"result": "I cannot review this. []\\nNO_FINDINGS"}', False),
+        ("[]\nNO_FINDINGS", True),
+        ("I cannot review this diff. NO_FINDINGS", False),
+    ])
+    def test_clean_check_sees_through_the_sdk_envelope(self, raw, expected):
+        """_parse_advisory_output unwraps {"result": ...}; the clean check must
+        read the same payload or the fix misses exactly the wrapped shape."""
+        from ouroboros.tools.claude_advisory_review import _is_clean_verdict
+        assert _is_clean_verdict(raw) is expected, repr(raw)
+
+    def test_clean_sentinel_skips_the_paid_fallback_model(self, monkeypatch, tmp_path):
+        """A sentinel-qualified clean verdict has nothing to extract, so the
+        fallback extraction model must not be paid for."""
+        from types import SimpleNamespace
+        adv_mod = _get_advisory_module()
+        called = []
+        monkeypatch.setattr(adv_mod, "_llm_extract_advisory_items",
+                            lambda raw, ctx: called.append(raw) or [])
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setattr(adv_mod, "_run_advisory_native",
+                            lambda prompt, repo_dir, ctx_, slot, model, **_: (
+                                _fake_native_result(
+                                    result_text="[]\nNO_FINDINGS", session_id="s",
+                                    usage={"prompt_tokens": 10, "completion_tokens": 1},
+                                ), model))
+        monkeypatch.setattr(adv_mod, "_get_staged_diff", lambda *a, **kw: "diff")
+        monkeypatch.setattr(adv_mod, "_get_changed_file_list", lambda *a, **kw: "M f.py")
+        monkeypatch.setattr(adv_mod, "_build_advisory_prompt", lambda *a, **kw: "prompt")
+        ctx = SimpleNamespace(repo_dir=tmp_path, drive_root=tmp_path,
+                              pending_events=[], emit_progress_fn=lambda *_: None)
+
+        adv_mod._run_claude_advisory(tmp_path, "msg", ctx)
+
+        assert called == [], "clean sentinel must not pay for fallback extraction"
+
+
+class TestReviewRunFailureReason:
+    """`review_status` used to drop the per-run cause, so N identical
+    deterministic failures read as N generic `parse_failure` rows."""
+
+    def _run(self, status="parse_failure", raw=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(status=status, raw_result=raw, items=[], snapshot_hash="h",
+                               commit_message="m", ts="t", snapshot_summary="s", attempt=1,
+                               bypass_reason="", repo_key="", tool_name="", task_id="",
+                               model_used="opus", duration_sec=48.35, prompt_chars=786401)
+
+    def test_rejected_clean_sentinel_is_named(self):
+        from ouroboros.review_evidence import _review_status_run_to_dict
+        data = _review_status_run_to_dict(self._run(raw="[]\nNO_FINDINGS"))
+        assert data["failure_reason"] == "clean_sentinel_rejected"
+
+    def test_sentinel_bearing_prose_is_not_called_a_rejected_clean_verdict(self):
+        """The diagnostic asks the shared predicate, so refusal prose carrying
+        the sentinel is reported as prose — not as a contract regression."""
+        from ouroboros.review_evidence import _review_status_run_to_dict
+        data = _review_status_run_to_dict(
+            self._run(raw="I cannot review this diff. []\nNO_FINDINGS"))
+        assert data["failure_reason"] == "non_json_prose"
+
+    def test_shapes_are_distinguished(self):
+        from ouroboros.review_evidence import _review_status_run_to_dict
+        assert _review_status_run_to_dict(self._run(raw=""))["failure_reason"] == "empty_response"
+        assert _review_status_run_to_dict(self._run(raw="[{bad"))["failure_reason"] == "malformed_array"
+        assert _review_status_run_to_dict(self._run(raw="sorry"))["failure_reason"] == "non_json_prose"
+
+    def test_fresh_run_has_no_failure_reason_but_keeps_diagnostics(self):
+        from ouroboros.review_evidence import _review_status_run_to_dict
+        data = _review_status_run_to_dict(self._run(status="fresh", raw="[]"))
+        assert data["failure_reason"] is None
+        assert not any("raw" in k and k != "failure_reason" for k in data), (
+            "the projection must not echo untrusted reviewer text to the model")
+        assert data["duration_sec"] == 48.35
+        assert data["model_used"] == "opus"
+        assert data["prompt_chars"] == 786401
+
+
+class TestReviewContractModes:
+    """Findings-only mode offers an all-clear; required-matrix mode must not,
+    because its parser rejects an empty array as missing every row."""
+
+    def test_matrix_contract_has_no_all_clear_branch(self):
+        from ouroboros.triad_review import (
+            REVIEW_JSON_ARRAY_CONTRACT, REVIEW_JSON_MATRIX_CONTRACT,
+        )
+        assert "NO_FINDINGS" in REVIEW_JSON_ARRAY_CONTRACT
+        assert "NO_FINDINGS" not in REVIEW_JSON_MATRIX_CONTRACT
+        assert "one entry per required checklist item" in REVIEW_JSON_MATRIX_CONTRACT
+
+    def test_rendered_scope_prompt_offers_no_all_clear(self):
+        """The scope parser rejects an empty array as all eight items missing,
+        so the prompt it is paired with must not advertise the sentinel."""
+        from ouroboros.tools.review_synthesis import build_scope_review_prompt
+
+        rendered = "".join(
+            part for part in build_scope_review_prompt(
+                "files", scope_checklist="cl", canonical_docs="docs",
+                intent_context="intent", history_block="hist", diff_text="diff",
+                repo_pack_placeholder="atlas", critical_calibration="calib",
+            ) if isinstance(part, str)
+        )
+        assert "NO_FINDINGS" not in rendered
+        assert "one entry per required checklist item" in rendered

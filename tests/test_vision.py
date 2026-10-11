@@ -2,12 +2,113 @@
 
 import sys
 import os
+import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 import pathlib
+import pytest
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+
+@pytest.mark.serial
+def test_vision_query_with_timeout_returns_without_waiting_for_hung_worker(monkeypatch):
+    import ouroboros.tools.vision as vision
+
+    monkeypatch.setattr(vision, "NESTED_SETTLEMENT_MARGIN_SEC", 0.05)
+    started = time.monotonic()
+    with unittest.TestCase().assertRaises(TimeoutError):
+        vision._vision_query_with_timeout(
+            None, prompt="x", images=[], model="m", timeout=0.01, _test_sleep_sec=2,
+        )
+    assert time.monotonic() - started < 0.5
+
+
+def test_vlm_tool_envelopes_follow_the_supported_timeout_setting(monkeypatch):
+    from ouroboros.config import NESTED_SETTLEMENT_MARGIN_SEC
+    from ouroboros.tools.vision import get_tools
+
+    monkeypatch.setenv("OUROBOROS_VISION_CAPTION_TIMEOUT_SEC", "1000")
+    by_name = {tool.name: tool for tool in get_tools()}
+    assert by_name["analyze_screenshot"].timeout_sec == 1000 + (2 * NESTED_SETTLEMENT_MARGIN_SEC)
+    assert by_name["vlm_query"].timeout_sec == 1000 + (2 * NESTED_SETTLEMENT_MARGIN_SEC)
+    assert by_name["view_image"].timeout_sec == 30
+
+
+def test_vlm_child_settlement_window_is_above_provider_bound(monkeypatch):
+    import json
+    import types
+
+    from ouroboros.config import NESTED_SETTLEMENT_MARGIN_SEC
+    from ouroboros.tools import shell
+    from ouroboros.tools.vision import _vision_query_with_timeout
+
+    captured = {}
+
+    def fake_run(_argv, **kwargs):
+        payload_path = _argv[-1]
+        with open(payload_path, encoding="utf-8") as fh:
+            captured["payload"] = json.load(fh)
+        captured["child_timeout"] = kwargs["timeout"]
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"receipt_id": captured["payload"]["_receipt_id"],
+                               "custody": None, "capture": None, "kind": "success", "text": "done", "usage": {},
+                               "ledger_attempt_ids": [], "error": "", "problem": {}, "operation_id": "",
+                               "model_role": "vision", "route": {}, "unknown": False, "control_reason": "",
+                               "model_result": None}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(shell, "_tracked_subprocess_run", fake_run)
+    text, _usage = _vision_query_with_timeout(
+        None, prompt="x", images=[], model="m", timeout=7,
+    )
+
+    assert text == "done"
+    assert captured["payload"]["timeout"] == 7
+    assert captured["child_timeout"] == 7 + NESTED_SETTLEMENT_MARGIN_SEC
+
+
+def test_vlm_nested_windows_fit_inside_owner_deadline(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import ouroboros.loop_tool_execution as loop_tools
+    from ouroboros.config import NESTED_SETTLEMENT_MARGIN_SEC
+    from ouroboros.tools.vision import _vision_timeout_for_context
+
+    monkeypatch.setenv("OUROBOROS_FINALIZATION_GRACE_SEC", "0")
+    monkeypatch.setenv("OUROBOROS_VISION_CAPTION_TIMEOUT_SEC", "90")
+    monkeypatch.delenv("OUROBOROS_TOOL_TIMEOUT_SEC", raising=False)
+    monkeypatch.setattr(loop_tools, "load_settings", lambda: {})
+    ctx = SimpleNamespace(task_metadata={
+        "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=100)).isoformat(),
+    })
+    provider_timeout = _vision_timeout_for_context(ctx)
+    tools = SimpleNamespace(_ctx=ctx, get_timeout=lambda _name: 150)
+    outer_timeout = loop_tools._get_tool_timeout(tools, "vlm_query")
+
+    assert 0 < provider_timeout <= 40
+    assert provider_timeout + NESTED_SETTLEMENT_MARGIN_SEC < outer_timeout <= 100
+
+
+def test_vlm_does_not_start_inside_nested_settlement_reserve(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from ouroboros.tools.vision import _vision_timeout_for_context
+
+    monkeypatch.setenv("OUROBOROS_FINALIZATION_GRACE_SEC", "120")
+    monkeypatch.setenv("OUROBOROS_VISION_CAPTION_TIMEOUT_SEC", "90")
+    ctx = SimpleNamespace(task_metadata={
+        "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(),
+    })
+
+    with pytest.raises(TimeoutError, match="insufficient owner-deadline window"):
+        _vision_timeout_for_context(ctx)
 
 
 class TestLLMVisionQuery(unittest.TestCase):
@@ -21,7 +122,7 @@ class TestLLMVisionQuery(unittest.TestCase):
 
         captured_messages = []
 
-        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto"):
+        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto", **kwargs):
             captured_messages.extend(messages)
             return {"content": "I see a test image."}, {"prompt_tokens": 10, "completion_tokens": 5}
 
@@ -51,7 +152,7 @@ class TestLLMVisionQuery(unittest.TestCase):
         client = LLMClient(api_key="test-key")
         captured_messages = []
 
-        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto"):
+        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto", **kwargs):
             captured_messages.extend(messages)
             return {"content": "Base64 image description."}, {}
 
@@ -76,7 +177,7 @@ class TestLLMVisionQuery(unittest.TestCase):
         client = LLMClient(api_key="test-key")
         captured_messages = []
 
-        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto"):
+        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto", **kwargs):
             captured_messages.extend(messages)
             return {"content": "Two images."}, {}
 
@@ -99,13 +200,55 @@ class TestLLMVisionQuery(unittest.TestCase):
 
         client = LLMClient(api_key="test-key")
 
-        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto"):
+        def mock_chat(messages, model, tools=None, reasoning_effort="low", max_tokens=1024, tool_choice="auto", **kwargs):
             return {"content": "Text only."}, {}
 
         client.chat = mock_chat
 
         text, _ = client.vision_query(prompt="Hello", images=[])
         self.assertEqual(text, "Text only.")
+
+    def test_vision_query_forces_short_no_proxy_timeout(self):
+        """vision_query uses a one-shot client timeout instead of the global tool timeout."""
+        from ouroboros.llm import LLMClient
+
+        client = LLMClient(api_key="test-key")
+        captured = {}
+
+        def mock_chat(**kwargs):
+            captured.update(kwargs)
+            return {"content": "ok"}, {}
+
+        client.chat = mock_chat
+
+        text, _ = client.vision_query(prompt="Hello", images=[], reasoning_effort="medium", timeout=75.0)
+
+        self.assertEqual(text, "ok")
+        self.assertEqual(captured["reasoning_effort"], "medium")
+        self.assertTrue(captured["no_proxy"])
+        self.assertEqual(captured["timeout"], 75.0)
+
+
+    def test_downscale_image_enforces_provider_byte_cap(self):
+        from PIL import Image
+        import io
+        import random
+        from unittest.mock import patch
+
+        from ouroboros.tools import vision
+
+        rng = random.Random(0)
+        raw_pixels = bytes(rng.getrandbits(8) for _ in range(256 * 256 * 3))
+        img = Image.frombytes("RGB", (256, 256), raw_pixels)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        with patch.object(vision, "_VLM_MAX_PROVIDER_BYTES", 20_000), \
+             patch.object(vision, "_VLM_MAX_IMAGE_SIDE", 256):
+            capped, mime = vision._downscale_image_for_vlm(buf.getvalue(), "image/png")
+
+        self.assertEqual(mime, "image/jpeg")
+        self.assertLessEqual(len(capped), 20_000)
 
 
 class TestAnalyzeScreenshotTool(unittest.TestCase):
@@ -139,20 +282,46 @@ class TestAnalyzeScreenshotTool(unittest.TestCase):
 
         ctx = self._make_ctx(with_screenshot=True)
 
-        with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client:
+        with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client, \
+             patch("ouroboros.tools.vision._vision_query_with_timeout") as mock_vlm:
             mock_client = MagicMock()
-            mock_client.vision_query.return_value = ("Beautiful UI.", {"prompt_tokens": 100, "completion_tokens": 20})
+            mock_client.default_model.return_value = "openai/gpt-5.5"
             mock_get_client.return_value = mock_client
+            mock_vlm.return_value = ("Beautiful UI.", {"prompt_tokens": 100, "completion_tokens": 20})
 
             result = _analyze_screenshot(ctx, prompt="Describe the UI.")
 
         self.assertEqual(result, "Beautiful UI.")
-        mock_client.vision_query.assert_called_once()
-        call_kwargs = mock_client.vision_query.call_args
+        mock_vlm.assert_called_once()
+        call_kwargs = mock_vlm.call_args
         # Check that base64 image was passed
         images = call_kwargs[1].get("images") or call_kwargs[0][1]
         self.assertEqual(len(images), 1)
         self.assertIn("base64", images[0])
+        # C2.1/C2.2: the VLM call must use a VISION-CAPABLE model (routed to a
+        # capable slot), not blindly the active/default model.
+        from ouroboros.provider_models import supports_vision
+        self.assertTrue(supports_vision(call_kwargs[1]["model"]))
+        self.assertEqual(call_kwargs[1]["reasoning_effort"], "medium")
+        self.assertEqual(call_kwargs[1]["timeout"], 90.0)
+
+    def test_analyze_screenshot_failure_is_tool_error_prefixed(self):
+        from ouroboros.tools.vision import _analyze_screenshot
+        from ouroboros.loop_tool_execution import _extract_result_metadata, _is_tool_execution_failure
+
+        ctx = self._make_ctx(with_screenshot=True)
+        with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client, \
+             patch("ouroboros.tools.vision._vision_query_with_timeout") as mock_vlm:
+            mock_client = MagicMock()
+            mock_client.default_model.return_value = "openai/gpt-5.5"
+            mock_get_client.return_value = mock_client
+            mock_vlm.side_effect = RuntimeError("provider failed")
+
+            result = _analyze_screenshot(ctx, prompt="Describe the UI.")
+
+        self.assertTrue(result.startswith("⚠️ VLM_ANALYSIS_FAILED"))
+        self.assertTrue(_is_tool_execution_failure(True, result))
+        self.assertEqual(_extract_result_metadata("analyze_screenshot", result, True)["status"], "vlm_error")
 
 
 class TestVlmQueryTool(unittest.TestCase):
@@ -181,15 +350,16 @@ class TestVlmQueryTool(unittest.TestCase):
 
         ctx = self._make_ctx()
 
-        with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client:
+        with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client, \
+             patch("ouroboros.tools.vision._vision_query_with_timeout") as mock_vlm:
             mock_client = MagicMock()
-            mock_client.vision_query.return_value = ("A logo.", {})
             mock_get_client.return_value = mock_client
+            mock_vlm.return_value = ("A logo.", {})
 
             result = _vlm_query(ctx, prompt="What is the logo?", image_url="https://example.com/logo.png")
 
         self.assertEqual(result, "A logo.")
-        call_kwargs = mock_client.vision_query.call_args
+        call_kwargs = mock_vlm.call_args
         images = call_kwargs[1].get("images") or call_kwargs[0][1]
         self.assertEqual(images[0]["url"], "https://example.com/logo.png")
 
@@ -203,20 +373,22 @@ class TestVlmQueryTool(unittest.TestCase):
 
     def test_vlm_query_with_file_path(self):
         """vlm_query reads a local PNG from uploads dir and passes base64 to VLM."""
-        import tempfile
         import base64 as b64mod
         from ouroboros.tools.vision import _vlm_query
 
         ctx = self._make_ctx()
 
-        # Minimal valid 1x1 PNG (89 bytes)
-        png_bytes = (
-            b'\x89PNG\r\n\x1a\n'
-            b'\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
-            b'\x08\x02\x00\x00\x00\x90wS\xde'
-            b'\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N'
-            b'\x00\x00\x00\x00IEND\xaeB`\x82'
-        )
+        # A GENUINELY decodable 1x1 PNG. The hand-rolled literal that lived here
+        # was labelled "minimal valid" but carried a broken IDAT stream; it only
+        # passed because nothing decoded it. The payload builder now rejects an
+        # undecodable image at build time (a truncated PNG used to reach the
+        # provider and come back as a non-retryable 400), so the fixture has to
+        # be a real picture.
+        import io as _io
+        from PIL import Image as _Image
+        _buf = _io.BytesIO()
+        _Image.new("RGB", (1, 1), (255, 0, 0)).save(_buf, format="PNG")
+        png_bytes = _buf.getvalue()
 
         tmpdir, uploads = self._make_uploads_dir()
         img_path = uploads / "test.png"
@@ -224,15 +396,16 @@ class TestVlmQueryTool(unittest.TestCase):
 
         try:
             with patch("ouroboros.tools.vision._allowed_file_roots", return_value=[uploads]):
-                with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client:
+                with patch("ouroboros.tools.vision._get_llm_client") as mock_get_client, \
+                     patch("ouroboros.tools.vision._vision_query_with_timeout") as mock_vlm:
                     mock_client = MagicMock()
-                    mock_client.vision_query.return_value = ("A small PNG.", {})
                     mock_get_client.return_value = mock_client
+                    mock_vlm.return_value = ("A small PNG.", {})
 
                     result = _vlm_query(ctx, prompt="What is this?", file_path=str(img_path))
 
             self.assertEqual(result, "A small PNG.")
-            call_kwargs = mock_client.vision_query.call_args
+            call_kwargs = mock_vlm.call_args
             images = call_kwargs[1].get("images") or call_kwargs[0][1]
             self.assertEqual(len(images), 1)
             self.assertIn("base64", images[0])
@@ -278,7 +451,6 @@ class TestVlmQueryTool(unittest.TestCase):
     def test_vlm_query_path_outside_uploads_rejected(self):
         """vlm_query rejects paths outside the allowed uploads directory."""
         from ouroboros.tools.vision import _vlm_query
-        import tempfile
 
         ctx = self._make_ctx()
         tmpdir, uploads = self._make_uploads_dir()
@@ -295,8 +467,8 @@ class TestVlmQueryTool(unittest.TestCase):
             import shutil
             shutil.rmtree(tmpdir)
 
-    def test_vlm_query_data_dir_env_isolation(self):
-        """When OUROBOROS_DATA_DIR is set, only that dir's uploads/ is allowed (not ~/Ouroboros/data/uploads)."""
+    def test_vlm_query_configured_data_dir_isolation(self):
+        """Without a task context, image roots use config's resolved installation root."""
         import shutil
         import os as os_mod
         from ouroboros.tools.vision import _vlm_query
@@ -305,7 +477,7 @@ class TestVlmQueryTool(unittest.TestCase):
         # Configure a custom data dir
         tmpdir, custom_uploads = self._make_uploads_dir()
         # The "default" home uploads path is different
-        home_uploads = pathlib.Path("~/Ouroboros/data/uploads").expanduser().resolve()
+        pathlib.Path("~/Ouroboros/data/uploads").expanduser().resolve()
 
         # Create a valid PNG in home_uploads area (mocked via a separate temp dir)
         home_tmp, _ = self._make_uploads_dir()
@@ -316,14 +488,18 @@ class TestVlmQueryTool(unittest.TestCase):
         img_path.write_bytes(png_bytes)
 
         try:
-            # With OUROBOROS_DATA_DIR pointing to custom tmpdir, home path is NOT allowed
-            with patch.dict(os_mod.environ, {"OUROBOROS_DATA_DIR": str(pathlib.Path(tmpdir))}):
+            # config resolves the installation environment once; the image reader
+            # must use that owner rather than reconstructing another home root.
+            with patch.dict(os_mod.environ, {"OUROBOROS_DATA_DIR": str(pathlib.Path(tmpdir))}), \
+                    patch("ouroboros.config.DATA_DIR", pathlib.Path(tmpdir)):
                 # We call the real _allowed_file_roots (not patched) here
                 from ouroboros.tools.vision import _allowed_file_roots
                 roots = _allowed_file_roots()
-                # Only one allowed root: the custom uploads
-                self.assertEqual(len(roots), 1)
+                # Two configured roots: the custom uploads AND the skill-state
+                # tree (state/skills), where reviewed skills write screenshots.
+                self.assertEqual(len(roots), 2)
                 self.assertEqual(roots[0], pathlib.Path(tmpdir).resolve() / "uploads")
+                self.assertEqual(roots[1], pathlib.Path(tmpdir).resolve() / "state" / "skills")
                 # Attempt to read image from home_uploads_mock — should be rejected
                 with patch("ouroboros.tools.vision._allowed_file_roots", return_value=roots):
                     result = _vlm_query(ctx, prompt="test", file_path=str(img_path))
@@ -368,6 +544,199 @@ class TestVlmQueryTool(unittest.TestCase):
         tools = registry.available_tools()
         self.assertIn("analyze_screenshot", tools, "analyze_screenshot must be registered")
         self.assertIn("vlm_query", tools, "vlm_query must be registered")
+
+
+# --- Typed local-image failures at the registry boundary (P4 Work B) ---------
+#
+# The registry types a builtin's string result by its first-line
+# ``⚠️ IDENTIFIER`` marker, so vision's identifier-less prose refusals
+# ("⚠️ File not found: x.png") were recorded as status=ok in tools.jsonl, the
+# outcome classifier and the acceptance packet. These exercise the PUBLIC tools
+# through ``ToolRegistry.execute_result`` — the real boundary, not the handler.
+
+
+def _real_png_bytes() -> bytes:
+    """A genuinely decodable 1x1 RGBA PNG (zlib/struct, no PIL fixture files)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    idat = zlib.compress(b"\x00" + bytes((255, 0, 0, 255)))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+
+def _vision_registry(tmp_path, monkeypatch):
+    """A real ToolRegistry whose vision roots are one isolated uploads dir."""
+    import ouroboros.safety as safety
+    import ouroboros.tools.vision as vision
+    from ouroboros.tools.registry import ToolRegistry
+
+    uploads = tmp_path / "isolated_uploads"
+    uploads.mkdir()
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    registry._ctx.messages = []
+    monkeypatch.setattr(safety, "check_safety", lambda *_a, **_k: (True, ""))
+    monkeypatch.setattr(vision, "_allowed_file_roots", lambda *_a, **_k: [uploads])
+    return registry, uploads
+
+
+def test_view_image_missing_file_is_a_typed_error_at_the_registry(tmp_path, monkeypatch):
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+
+    result = registry.execute_result("view_image", {"path": str(uploads / "missing.png")})
+
+    assert result.status == "error"
+    assert result.code == "TOOL_ARG_ERROR"
+    assert "not found" in result.text.lower()
+    assert registry._ctx.messages == []
+
+
+def test_vlm_query_missing_file_is_typed_and_never_builds_a_client(tmp_path, monkeypatch):
+    import ouroboros.tools.vision as vision
+
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+
+    def _no_client():
+        raise AssertionError("a refused local file must not construct a VLM client")
+
+    monkeypatch.setattr(vision, "_get_llm_client", _no_client)
+
+    result = registry.execute_result(
+        "vlm_query", {"prompt": "what is this?", "file_path": str(uploads / "missing.png")},
+    )
+
+    assert result.status == "error"
+    assert result.code == "TOOL_ARG_ERROR"
+    assert "not found" in result.text.lower()
+    assert registry._ctx.messages == []
+
+
+def test_view_image_success_stays_ok_and_attaches_the_image_block(tmp_path, monkeypatch):
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+    img = uploads / "chart.png"
+    img.write_bytes(_real_png_bytes())
+
+    result = registry.execute_result("view_image", {"path": str(img)})
+
+    assert (result.status, result.code) == ("ok", "OK"), result.text
+    blocks = [
+        block
+        for message in registry._ctx.messages
+        for block in (message.get("content") or [])
+        if isinstance(block, dict) and block.get("type") == "image_url"
+    ]
+    assert len(blocks) == 1, registry._ctx.messages
+    assert blocks[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    source = pathlib.Path(blocks[0]["_source_path"])
+    assert source.parent == tmp_path / "uploads" / "views", source
+    assert source.exists()
+
+
+def test_view_image_policy_denial_keeps_its_blocked_status(tmp_path, monkeypatch):
+    import ouroboros.protected_artifacts as protected_artifacts
+
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+    img = uploads / "protected.png"
+    img.write_bytes(_real_png_bytes())
+    monkeypatch.setattr(
+        protected_artifacts,
+        "block_reason_for_path",
+        lambda *_a, **_k: "⚠️ RESOURCE_POLICY_BLOCKED: synthetic",
+    )
+
+    result = registry.execute_result("view_image", {"path": str(img)})
+
+    # The policy owner already typed its own refusal; vision must not re-type it.
+    assert result.status == "blocked", (result.status, result.code, result.text)
+    assert "synthetic" in result.text
+    assert registry._ctx.messages == []
+
+
+def test_view_image_non_image_and_outside_root_are_argument_errors(tmp_path, monkeypatch):
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+    notes = uploads / "notes.txt"
+    notes.write_bytes(b"this is plain text, not an image")
+    outside = tmp_path / "elsewhere.png"
+    outside.write_bytes(_real_png_bytes())
+
+    not_an_image = registry.execute_result("view_image", {"path": str(notes)})
+    off_root = registry.execute_result("view_image", {"path": str(outside)})
+
+    assert (not_an_image.status, not_an_image.code) == ("error", "TOOL_ARG_ERROR")
+    assert "supported image" in not_an_image.text.lower()
+    assert (off_root.status, off_root.code) == ("error", "TOOL_ARG_ERROR")
+    assert registry._ctx.messages == []
+
+
+def test_view_image_provider_payload_cap_keeps_vlm_error(tmp_path, monkeypatch):
+    """The provider cap is a provider limit (like the base64 path), not a bad argument."""
+    import ouroboros.tools.vision as vision
+
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+    img = uploads / "huge.png"
+    img.write_bytes(_real_png_bytes())
+
+    def over_cap(_raw, _mime):
+        raise vision._ProviderCapExceeded("⚠️ VLM_IMAGE_TOO_LARGE: image payload exceeds 6MB provider cap")
+
+    monkeypatch.setattr(vision, "_image_payload_from_bytes", over_cap)
+    result = registry.execute_result("view_image", {"path": str(img)})
+    assert (result.status, result.code) == ("error", "VLM_ERROR")
+    assert "VLM_IMAGE_TOO_LARGE" in result.text
+    assert registry._ctx.messages == []
+
+
+def test_vlm_query_provider_capability_gap_keeps_vlm_error(tmp_path, monkeypatch):
+    import ouroboros.tools.vision as vision
+
+    registry, uploads = _vision_registry(tmp_path, monkeypatch)
+    img = uploads / "chart.png"
+    img.write_bytes(_real_png_bytes())
+    monkeypatch.setattr(vision, "_get_llm_client", lambda: object())
+    monkeypatch.setattr(vision, "_resolve_vlm_model", lambda *_a, **_k: "")
+
+    result = registry.execute_result(
+        "vlm_query", {"prompt": "what is this?", "file_path": str(img)},
+    )
+
+    assert result.status == "error"
+    assert result.code == "VLM_ERROR", result.text
+
+
+def test_vlm_query_without_any_image_argument_is_typed(tmp_path, monkeypatch):
+    registry, _uploads = _vision_registry(tmp_path, monkeypatch)
+
+    result = registry.execute_result("vlm_query", {"prompt": "what is this?"})
+
+    assert (result.status, result.code) == ("error", "TOOL_ARG_ERROR")
+
+
+def test_attach_outside_a_registry_call_publishes_nothing(tmp_path, monkeypatch):
+    """The host's same-round auto-attach caller runs OUTSIDE any builtin
+    invocation: no sidecar slot is installed and the ctx carries no sidecar
+    attribute, so the loader's publish is a no-op and the (ok, message) contract
+    is unchanged."""
+    import ouroboros.tools.vision as vision
+
+    uploads = tmp_path / "isolated_uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(vision, "_allowed_file_roots", lambda *_a, **_k: [uploads])
+    ctx = SimpleNamespace(messages=[], drive_root=str(tmp_path))
+
+    ok, message = vision.attach_local_image_to_context(ctx, str(uploads / "missing.png"))
+
+    assert ok is False
+    assert "not found" in message.lower()
+    assert not hasattr(ctx, "_active_builtin_tool_result")
+    assert ctx.messages == []
 
 
 if __name__ == "__main__":

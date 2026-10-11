@@ -1,0 +1,73 @@
+--- src/systems/ouroboros/_docker_launcher.py
++++ src/systems/ouroboros/_docker_launcher.py
+@@ -185,6 +185,7 @@
+         _r = str(resume).strip().lower()
+         self.resume_mode = ("splice" if _r == "splice" else "continuation") if self.resume else ""
+         self._last_task_id = None
++        self.runtime_attestation: dict = {}
+         from devtools.benchmarks.common.server_runner import (  # noqa: E402
+             build_isolated_settings, seed_owner_state, free_port, absorbed_cycles_done)
+         from supervisor.state import reset_per_task_budget, ISOLATED_BENCHMARK_SENTINEL  # noqa: E402
+@@ -269,6 +270,54 @@
+             ov["OUROBOROS_RESUME_CAPTURE"] = "1"
+         return ov
+ 
++    def _attest_runtime(self, clone: pathlib.Path) -> None:
++        """Runtime attestation for the CLB *docker* path (v6.76.0, plan item D3).
++
++        The host-engine path gets this for free: `_launcher.OuroborosEngine` boots a real
++        `IsolatedServer`, whose `_wait_ready()` carries the shared attestation. THIS class
++        is only a thin stand-in for `IsolatedServer` (own `_DockerServer`, own health gate)
++        and never calls `_wait_ready`, so without this hook the supported docker path would
++        run unattested. It sits right after the health+settle gate and BEFORE any paid task
++        is dispatched, so a version skew stops the run instead of poisoning its numbers.
++
++        Uses the SHARED devtools helper — no second attestation implementation:
++            runtime_attestation(base_url, repo_dir, *, expected_version="", timeout=10)
++        `repo_dir` is a REQUIRED POSITIONAL — it is how the local HEAD (the commit half of
++        owner decision Q7=B) is reported — so the mounted clone is passed as the second
++        argument. Requires an Ouroboros bench clone at v6.75.0 or newer, where the helper
++        lands with that signature.
++
++        Policy lives in the HELPER, not here: it already fails closed on skew / unreachable
++        runtime / unknown commit, and already honours the named escape
++        OBO_ALLOW_EVOLVED_VOLUME (a legitimately evolved /obo/repo volume changes VERSION on
++        purpose), recording `overridden: true` when it was used. So this hook keeps no second
++        copy of that decision: it labels the record, stores it, and prints it.
++        """
++        try:
++            from devtools.benchmarks.common.manifests import (
++                allow_evolved_volume, runtime_attestation)
++        except ImportError as exc:
++            raise RuntimeError(
++                "CLB docker runtime attestation requires devtools/benchmarks/common/manifests."
++                f"runtime_attestation (Ouroboros bench clone >= v6.75.0): {exc}"
++            ) from exc
++        expected = ""
++        version_path = pathlib.Path(clone) / "VERSION"
++        try:
++            expected = version_path.read_text(encoding="utf-8").strip()
++        except OSError:
++            expected = ""
++        att = dict(runtime_attestation(self._server.base_url, pathlib.Path(clone),
++                                       expected_version=expected, timeout=10) or {})
++        att["expected_version"] = expected
++        att["source"] = "clb_docker_launcher"
++        att["allow_evolved_volume"] = allow_evolved_volume()
++        self.runtime_attestation = att
++        print(f"[ouroboros-docker] runtime attestation: "
++              f"served={att.get('runtime_version') or '?'} clone_version={expected or '?'} "
++              f"head={str(att.get('repo_head') or '?')[:12]} reason={att.get('reason') or 'ok'} "
++              f"overridden={bool(att.get('overridden'))}", flush=True)
++
+     def _start(self) -> None:
+         if self._started:
+             return
+@@ -369,6 +418,7 @@
+                         ok = False
+                         break
+             if ok:
++                self._attest_runtime(clone)
+                 self._started = True
+                 return
+             logs = subprocess.run(["docker", "logs", "--tail", "30", self._cname],

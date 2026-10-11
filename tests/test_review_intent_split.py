@@ -17,6 +17,15 @@ v4.33.0 separates the two:
 
 from __future__ import annotations
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _packet_default_panel(monkeypatch):
+    """This module pins the PACKET assembly of the default panel; the shipped
+    default triad reads the work itself since #1334, so pin packet explicitly."""
+    monkeypatch.setattr("ouroboros.reviewer_slot_config.DEFAULT_TRIAD_DELIVERY", "")
+
 
 class TestResolveIntentSubjectOnly:
     def test_subject_only_from_multiline_commit_message(self):
@@ -130,3 +139,64 @@ class TestBuildGoalSectionInformationalContext:
         # Commit body still available as informational narrative
         assert "## Informational context" in section
         assert "many details here" in section
+
+
+def test_triad_prompt_keeps_distinct_goal_and_scope_in_production_wiring(
+    tmp_path, monkeypatch,
+):
+    import json
+    from types import SimpleNamespace
+
+    import ouroboros.tools.review as review
+
+    captured = {}
+
+    def fake_run_cmd(cmd, cwd=None):
+        if cmd == ["git", "diff", "--cached", "--name-status"]:
+            return "M\tx.py"
+        if cmd == ["git", "diff", "--cached", "--name-only"]:
+            return "x.py"
+        if cmd[:3] == ["git", "diff", "--cached"]:
+            return "diff --git a/x.py b/x.py\n+x = 1"
+        return ""
+
+    def capture_review(*_args, **kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return json.dumps({"results": []})
+
+    monkeypatch.setattr(review, "run_cmd", fake_run_cmd)
+    import ouroboros.tools.review_binary_context as _rbc
+    monkeypatch.setattr(_rbc, "capture_staged_diff",
+                        lambda _repo, *, unified=3: "diff --git a/x.py b/x.py\n+x = 1")
+    monkeypatch.setattr(review, "_preflight_check", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(review, "_load_checklist_section", lambda: "checklist")
+    monkeypatch.setattr(review, "load_governance_doc", lambda *_args, **_kwargs: "governance")
+    monkeypatch.setattr(review, "build_touched_file_pack", lambda *_args, **_kwargs: ("files", []))
+    monkeypatch.setattr(review._cfg, "get_review_models", lambda: ["test/reviewer"])
+    monkeypatch.setattr(review._cfg, "get_review_enforcement", lambda: "blocking")
+    monkeypatch.setattr(review, "_handle_multi_model_review", capture_review)
+    ctx = SimpleNamespace(
+        repo_dir=tmp_path,
+        drive_root=tmp_path,
+        task_id="intent-split",
+        _review_iteration_count=0,
+        _last_review_block_reason="",
+        _last_triad_models=[],
+        _last_review_critical_findings=[],
+        _last_triad_raw_results=[],
+        _review_degraded_reasons=[],
+        _review_history=[],
+    )
+
+    review._run_unified_review(
+        ctx,
+        "release: phase 1",
+        goal="GOAL_SENTINEL",
+        scope="SCOPE_SENTINEL",
+    )
+
+    prompt = captured["prompt"]
+    assert "GOAL_SENTINEL" in prompt
+    assert "## Scope of this change" in prompt
+    assert "SCOPE_SENTINEL" in prompt
+    assert "Scope affects only pre-existing unchanged code outside the diff" in prompt

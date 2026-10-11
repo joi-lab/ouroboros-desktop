@@ -10,7 +10,6 @@ import os
 import pathlib
 import re
 import subprocess
-import sys
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -63,7 +62,8 @@ def _ensure_clean_worktree(repo_root: pathlib.Path) -> None:
     if status:
         raise SystemExit(
             "Refusing to build repo.bundle from a dirty working tree. "
-            "Commit or stash changes first so the embedded managed repo matches the packaged code."
+            "Commit or stash changes first so the embedded managed repo matches the packaged code.\n"
+            + status
         )
 
 
@@ -90,6 +90,13 @@ def _validate_source_branch(repo_root: pathlib.Path, source_branch: str) -> None
 def _origin_url(repo_root: pathlib.Path) -> str:
     try:
         return _git_output(repo_root, "config", "--get", "remote.origin.url")
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def _remote_url(repo_root: pathlib.Path, remote_name: str) -> str:
+    try:
+        return _git_output(repo_root, "config", "--get", f"remote.{remote_name}.url")
     except subprocess.CalledProcessError:
         return ""
 
@@ -278,7 +285,7 @@ def build_bundle(
     version = _read_version(repo_root)
     release_tag = _resolve_release_tag(repo_root, version)
     _ensure_source_sha_tracks_branch(repo_root, source_sha, source_branch)
-    remote_url = _normalize_remote_url(_origin_url(repo_root))
+    remote_url = _normalize_remote_url(_remote_url(repo_root, managed_remote_name) or _origin_url(repo_root))
 
     output_bundle.parent.mkdir(parents=True, exist_ok=True)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)

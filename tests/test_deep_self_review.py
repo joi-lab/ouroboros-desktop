@@ -3,117 +3,29 @@
 from __future__ import annotations
 
 import os
-import pathlib
 from unittest import mock
 
 import pytest
 
-from ouroboros.deep_self_review import (
-    _is_probably_binary,
-    build_review_pack,
-    is_review_available,
-    run_deep_self_review,
-)
+from ouroboros.provider_models import OPENAI_DIRECT_DEFAULTS
+from ouroboros.deep_self_review import deep_review_route
+from ouroboros.tools.review_helpers import _is_probably_binary
 
 
-def _make_dulwich_mock(file_list: list[str]):
-    """Return a mock for dulwich.repo.Repo that yields the given file list from open_index()."""
-    mock_index = mock.Mock()
-    mock_index.__iter__ = mock.Mock(return_value=iter(f.encode() for f in file_list))
-    mock_repo = mock.Mock()
-    mock_repo.open_index.return_value = mock_index
-    mock_repo_cls = mock.Mock(return_value=mock_repo)
-    return mock_repo_cls
+class TestApiRouteAvailability:
+    """Availability (`deep_review_route`) of the SYNTHESIZED api row: no `deep_review`
+    row saved, so the legacy model key is the migration source and the api rules
+    apply — the routed model's credentials, and the direct-OpenAI resolution
+    (with its -pro rewrite) for a stored OpenRouter spelling."""
 
-
-@pytest.fixture
-def tmp_repo(tmp_path):
-    """Create a minimal git repo with tracked files."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "main.py").write_text("print('hello')\n", encoding="utf-8")
-    (repo / "lib.py").write_text("def add(a, b): return a + b\n", encoding="utf-8")
-    return repo
-
-
-@pytest.fixture
-def tmp_drive(tmp_path):
-    """Create a drive root with some memory files."""
-    drive = tmp_path / "drive"
-    drive.mkdir()
-    mem = drive / "memory"
-    mem.mkdir()
-    (mem / "identity.md").write_text("I am Ouroboros.\n", encoding="utf-8")
-    (mem / "scratchpad.md").write_text("Working notes.\n", encoding="utf-8")
-    know = mem / "knowledge"
-    know.mkdir()
-    (know / "patterns.md").write_text("## Patterns\n- Error class A\n", encoding="utf-8")
-    return drive
-
-
-class TestBuildReviewPack:
-    def test_reads_tracked_files(self, tmp_repo, tmp_drive):
-        """git ls-files output determines which repo files are included."""
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "lib.py"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "### main.py" in pack
-        assert "### lib.py" in pack
-        assert "print('hello')" in pack
-        assert stats["file_count"] >= 2
-
-        atlas = mock.Mock(
-            status="budget_exceeded",
-            manifest={"estimated_total_tokens": 950_000},
-            omitted=(),
-            selected=(),
-            text="small atlas",
-        )
-        with (
-            mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])),
-            mock.patch("ouroboros.deep_self_review.compile_review_context_atlas", return_value=atlas),
-        ):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-        assert pack == ""
-        assert "exceeded hard budget" in stats["skipped"][0]
-        assert stats["context_manifest"]["estimated_total_tokens"] == 950_000
-
-    def test_includes_memory_whitelist(self, tmp_repo, tmp_drive):
-        """Memory whitelist files from drive_root are included."""
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: drive/memory/identity.md" in pack
-        assert "I am Ouroboros." in pack
-        assert "## FILE: drive/memory/scratchpad.md" in pack
-        assert "## FILE: drive/memory/knowledge/patterns.md" in pack
-
-    def test_includes_improvement_backlog_when_present(self, tmp_repo, tmp_drive):
-        (tmp_drive / "memory" / "knowledge" / "improvement-backlog.md").write_text(
-            "# Improvement Backlog\n\n### ibl-1\n- summary: Fix recurring review blocker\n",
-            encoding="utf-8",
-        )
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])):
-            pack, _stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: drive/memory/knowledge/improvement-backlog.md" in pack
-        assert "Fix recurring review blocker" in pack
-
-    def test_skips_missing_memory(self, tmp_repo, tmp_drive):
-        """Missing memory files are silently skipped."""
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        # registry.md, WORLD.md, index-full.md don't exist — should not appear
-        assert "registry.md" not in pack
-        assert "WORLD.md" not in pack
-        assert "index-full.md" not in pack
-
-
-class TestIsReviewAvailable:
     def test_openrouter(self):
-        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test"}, clear=False):
-            available, model = is_review_available()
+        with mock.patch.dict(
+            os.environ,
+            {"OPENROUTER_API_KEY": "sk-or-test", "OUROBOROS_MODEL_DEEP_SELF_REVIEW": "openai/gpt-5.5-pro"},
+            clear=True,
+        ):
+            reason, model = deep_review_route()
+            available = not reason
         assert available is True
         assert model == "openai/gpt-5.5-pro"
 
@@ -123,15 +35,45 @@ class TestIsReviewAvailable:
             # Ensure OPENROUTER_API_KEY and OPENAI_BASE_URL are not set
             os.environ.pop("OPENROUTER_API_KEY", None)
             os.environ.pop("OPENAI_BASE_URL", None)
-            available, model = is_review_available()
+            reason, model = deep_review_route()
+            available = not reason
         assert available is True
-        assert model == "openai::gpt-5.5-pro"
+        # The direct route lands on the PROVIDER default, not a mechanical
+        # `openai::` + router-slug rewrite: `-pro` is an OpenRouter routing slug
+        # that 404s on api.openai.com (live-probed 2026-07-29).
+        assert model == OPENAI_DIRECT_DEFAULTS["deep_self_review"]
+        assert not model.endswith("-pro")
 
     def test_none(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            available, model = is_review_available()
+            reason, model = deep_review_route()
+            available = not reason
         assert available is False
         assert model is None
+
+    def test_direct_provider_prefix_requires_matching_key_even_with_openrouter(self):
+        with mock.patch.dict(
+            os.environ,
+            {"OPENROUTER_API_KEY": "sk-or-test", "OUROBOROS_MODEL_DEEP_SELF_REVIEW": "anthropic::claude-opus-4.8"},
+            clear=True,
+        ):
+            reason, model = deep_review_route()
+            available = not reason
+
+        assert available is False
+        assert model is None
+
+    def test_direct_provider_prefix_available_with_matching_key(self):
+        with mock.patch.dict(
+            os.environ,
+            {"ANTHROPIC_API_KEY": "sk-ant-test", "OUROBOROS_MODEL_DEEP_SELF_REVIEW": "anthropic::claude-opus-4.8"},
+            clear=True,
+        ):
+            reason, model = deep_review_route()
+            available = not reason
+
+        assert available is True
+        assert model == "anthropic::claude-opus-4.8"
 
 
 class TestRequestToolEmitsEvent:
@@ -144,8 +86,8 @@ class TestRequestToolEmitsEvent:
 
         ctx = FakeCtx()
         with mock.patch(
-            "ouroboros.deep_self_review.is_review_available",
-            return_value=(True, "openai/gpt-5.5-pro"),
+            "ouroboros.deep_self_review.deep_review_route",
+            return_value=("", "openai/gpt-5.5-pro"),
         ):
             result = _request_deep_self_review(ctx, "test reason")
         assert len(ctx.pending_events) == 1
@@ -156,7 +98,7 @@ class TestRequestToolEmitsEvent:
         assert "Deep self-review" in result
 
     def test_unavailable_returns_error(self):
-        """When no API key is available, returns error without emitting event."""
+        """An unavailable ROW returns the typed reason without emitting an event."""
         from ouroboros.tools.control import _request_deep_self_review
 
         class FakeCtx:
@@ -164,85 +106,13 @@ class TestRequestToolEmitsEvent:
 
         ctx = FakeCtx()
         with mock.patch(
-            "ouroboros.deep_self_review.is_review_available",
-            return_value=(False, None),
+            "ouroboros.deep_self_review.deep_review_route",
+            return_value=("no provider credentials for openai/x", None),
         ):
             result = _request_deep_self_review(ctx, "test reason")
         assert len(ctx.pending_events) == 0
-        assert "unavailable" in result
-
-
-class TestVendoredFilesExcluded:
-    def test_minified_js_skipped(self, tmp_repo, tmp_drive):
-        """Files with .min.js suffix are excluded from the review pack."""
-        (tmp_repo / "lib.min.js").write_text("!function(){var a=1;}()\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "lib.min.js"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "vendored_minified" in str(stats["skipped"])
-        assert "## FILE: lib.min.js" not in pack
-
-    def test_chart_umd_skipped(self, tmp_repo, tmp_drive):
-        """chart.umd.min.js (vendored Chart.js) is excluded by name and appears in OMITTED section."""
-        (tmp_repo / "chart.umd.min.js").write_text("!function(t,e){/* chart.js minified */}()\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "chart.umd.min.js"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: chart.umd.min.js" not in pack
-        assert any("chart.umd.min.js" in s for s in stats["skipped"])
-        # Omission section must be present and mention the file
-        assert "## OMITTED FILES" in pack
-        assert "chart.umd.min.js" in pack
-
-    def test_min_css_skipped(self, tmp_repo, tmp_drive):
-        """Files with .min.css suffix are excluded."""
-        (tmp_repo / "style.min.css").write_text("body{margin:0}a{color:red}\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "style.min.css"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: style.min.css" not in pack
-        assert any("style.min.css" in s for s in stats["skipped"])
-
-    def test_regular_js_included(self, tmp_repo, tmp_drive):
-        """Regular (non-minified) JS files are NOT excluded."""
-        (tmp_repo / "app.js").write_text("console.log('hello');\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "app.js"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "### app.js" in pack
-        assert "console.log('hello');" in pack
-        assert not any("app.js" in s for s in stats["skipped"])
-
-    def test_omission_section_after_memory_whitelist(self, tmp_repo, tmp_drive):
-        """OMITTED FILES section is appended after both repo and memory passes, capturing all skips.
-
-        Simulates a memory-whitelist read error by patching pathlib.Path.read_text so that
-        identity.md raises PermissionError, ensuring it lands in skipped and the OMITTED section.
-        """
-        (tmp_repo / "lib.min.js").write_text("minified\n")
-        (tmp_drive / "memory" / "identity.md").write_text("I am Ouroboros.\n")
-        target_path = str(tmp_drive / "memory" / "identity.md")
-
-        original_read_text = pathlib.Path.read_text
-
-        def patched_read_text(self, encoding="utf-8", errors="replace"):
-            if str(self) == target_path:
-                raise PermissionError("mocked read error")
-            return original_read_text(self, encoding=encoding, errors=errors)
-
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "lib.min.js"])):
-            with mock.patch("pathlib.Path.read_text", patched_read_text):
-                pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## OMITTED FILES" in pack
-        omitted_section_pos = pack.index("## OMITTED FILES")
-        # Vendored file listed in omitted section
-        assert "lib.min.js" in pack[omitted_section_pos:]
-        # Memory read error captured in skipped
-        memory_errors = [s for s in stats["skipped"] if "identity.md" in s and "read error" in s]
-        assert memory_errors, "identity.md read error should appear in skipped"
-        # And it appears in the OMITTED section too
-        assert "identity.md" in pack[omitted_section_pos:]
+        assert result.startswith("❌ Deep self-review unavailable: no provider credentials for openai/x")
+        assert "Review lanes" in result
 
 
 class TestIsProbablyBinary:
@@ -281,7 +151,7 @@ class TestIsProbablyBinary:
 
     def test_only_first_sniff_bytes_read(self, tmp_path):
         """_is_probably_binary only reads _BINARY_SNIFF_BYTES bytes, not the whole file."""
-        from ouroboros.deep_self_review import _BINARY_SNIFF_BYTES
+        from ouroboros.tools.review_helpers import _BINARY_SNIFF_BYTES
         # File is mostly text but has NUL in the first 8KB window
         payload = b"text data\x00more" + b"a" * (_BINARY_SNIFF_BYTES * 2)
         f = tmp_path / "big.bin"
@@ -299,88 +169,6 @@ class TestIsProbablyBinary:
         """Missing file returns False (let caller handle read failure)."""
         f = tmp_path / "does_not_exist.bin"
         assert _is_probably_binary(f) is False
-
-    def test_unlisted_extension_binary_excluded_from_pack(self, tmp_repo, tmp_drive):
-        """Binary file with unlisted extension (.bin) is excluded via content sniffer."""
-        (tmp_repo / "model.bin").write_bytes(b"GGUF\x00" + b"\x00\xff" * 100)
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "model.bin"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: model.bin" not in pack
-        assert any("model.bin" in s for s in stats["skipped"])
-
-
-class TestBinaryFilesExcluded:
-    def test_png_skipped(self, tmp_repo, tmp_drive):
-        """PNG images are excluded — reading them produces garbage replacement chars."""
-        (tmp_repo / "screenshot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "screenshot.png"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: screenshot.png" not in pack
-        assert any("screenshot.png" in s for s in stats["skipped"])
-
-    def test_jpg_skipped(self, tmp_repo, tmp_drive):
-        """JPEG images are excluded."""
-        (tmp_repo / "logo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "logo.jpg"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: logo.jpg" not in pack
-        assert any("logo.jpg" in s for s in stats["skipped"])
-
-    def test_svg_skipped(self, tmp_repo, tmp_drive):
-        """SVG files are excluded (provider icons can be large XML)."""
-        (tmp_repo / "icon.svg").write_text("<svg><circle r='10'/></svg>\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "icon.svg"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: icon.svg" not in pack
-        assert any("icon.svg" in s for s in stats["skipped"])
-
-    def test_ico_skipped(self, tmp_repo, tmp_drive):
-        """ICO files are excluded."""
-        (tmp_repo / "favicon.ico").write_bytes(b"\x00\x00\x01\x00" + b"\x00" * 50)
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "favicon.ico"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: favicon.ico" not in pack
-        assert any("favicon.ico" in s for s in stats["skipped"])
-
-    def test_python_source_not_skipped(self, tmp_repo, tmp_drive):
-        """Python source files (.py) are NOT excluded by the binary filter."""
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "### main.py" in pack
-
-
-class TestSkipDirPrefixes:
-    def test_assets_dir_excluded(self, tmp_repo, tmp_drive):
-        """Files under assets/ are excluded (README screenshots, app icons)."""
-        assets = tmp_repo / "assets"
-        assets.mkdir()
-        (assets / "chat.png").write_bytes(b"\x89PNG\r\n" + b"\x00" * 100)
-        (assets / "logo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 50)
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "assets/chat.png", "assets/logo.jpg"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "## FILE: assets/chat.png" not in pack
-        assert "## FILE: assets/logo.jpg" not in pack
-        assert any("assets/chat.png" in s for s in stats["skipped"])
-        assert any("assets/logo.jpg" in s for s in stats["skipped"])
-        assert "### main.py" in pack  # non-assets file still present
-
-    def test_web_dir_not_excluded(self, tmp_repo, tmp_drive):
-        """Files under web/ (SPA modules) are NOT excluded."""
-        web = tmp_repo / "web" / "modules"
-        web.mkdir(parents=True)
-        (web / "chat.js").write_text("// chat module\n")
-        with mock.patch("dulwich.repo.Repo", _make_dulwich_mock(["main.py", "web/modules/chat.js"])):
-            pack, stats = build_review_pack(tmp_repo, tmp_drive)
-
-        assert "### web/modules/chat.js" in pack
-        assert not any("web/modules/chat.js" in s for s in stats["skipped"])
 
 
 class TestNoProxyLlmChat:
@@ -407,8 +195,9 @@ class TestNoProxyLlmChat:
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         }
 
-        with mock.patch("httpx.Client", side_effect=capturing_httpx_client):
-            with mock.patch("openai.OpenAI") as mock_openai_cls:
+        # Resolve the SDK before mocking the HTTP class it inherits on import.
+        with mock.patch("openai.OpenAI") as mock_openai_cls:
+            with mock.patch("httpx.Client", side_effect=capturing_httpx_client):
                 mock_oa = mock.Mock()
                 mock_oa.chat.completions.create.return_value = mock_resp
                 mock_openai_cls.return_value = mock_oa
@@ -417,6 +206,7 @@ class TestNoProxyLlmChat:
                     llm.chat(
                         messages=[{"role": "user", "content": "hi"}],
                         model="openai/gpt-5.5-pro",
+                        max_tokens=8,
                         no_proxy=True,
                     )
 
@@ -446,8 +236,8 @@ class TestNoProxyLlmChat:
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         }
 
-        with mock.patch("httpx.Client", TrackingClient):
-            with mock.patch("openai.OpenAI") as mock_openai_cls:
+        with mock.patch("openai.OpenAI") as mock_openai_cls:
+            with mock.patch("httpx.Client", TrackingClient):
                 mock_oa = mock.Mock()
                 mock_oa.chat.completions.create.return_value = mock_resp
                 mock_openai_cls.return_value = mock_oa
@@ -456,6 +246,7 @@ class TestNoProxyLlmChat:
                     llm.chat(
                         messages=[{"role": "user", "content": "hi"}],
                         model="openai/gpt-5.5-pro",
+                        max_tokens=8,
                         no_proxy=True,
                     )
 
@@ -476,8 +267,8 @@ class TestNoProxyLlmChat:
 
         llm = LLMClient()
 
-        with mock.patch("httpx.Client", TrackingClient):
-            with mock.patch("openai.OpenAI") as mock_openai_cls:
+        with mock.patch("openai.OpenAI") as mock_openai_cls:
+            with mock.patch("httpx.Client", TrackingClient):
                 mock_oa = mock.Mock()
                 mock_oa.chat.completions.create.side_effect = RuntimeError("boom")
                 mock_openai_cls.return_value = mock_oa
@@ -487,6 +278,7 @@ class TestNoProxyLlmChat:
                         llm.chat(
                             messages=[{"role": "user", "content": "hi"}],
                             model="openai/gpt-5.5-pro",
+                            max_tokens=8,
                             no_proxy=True,
                         )
 
@@ -504,10 +296,10 @@ class TestNoProxyLlmChat:
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
 
-        with mock.patch("httpx.Client") as mock_httpx_cls:
-            mock_http = mock.Mock()
-            mock_httpx_cls.return_value = mock_http
-            with mock.patch("openai.OpenAI") as mock_openai_cls:
+        with mock.patch("openai.OpenAI") as mock_openai_cls:
+            with mock.patch("httpx.Client") as mock_httpx_cls:
+                mock_http = mock.Mock()
+                mock_httpx_cls.return_value = mock_http
                 mock_oa = mock.Mock()
                 mock_oa.chat.completions.create.return_value = mock_resp
                 mock_openai_cls.return_value = mock_oa
@@ -516,6 +308,7 @@ class TestNoProxyLlmChat:
                         llm.chat(
                             messages=[{"role": "user", "content": "hi"}],
                             model="openai/gpt-5.5-pro",
+                            max_tokens=8,
                             no_proxy=True,
                         )
                     mock_cost.assert_not_called()
@@ -549,6 +342,7 @@ class TestNoProxyLlmChat:
                     llm.chat(
                         messages=[{"role": "user", "content": "hi"}],
                         model="openai/gpt-5.5-pro",
+                        max_tokens=8,
                         no_proxy=False,
                     )
                     mock_get.assert_called_once()
@@ -556,66 +350,76 @@ class TestNoProxyLlmChat:
         # no_proxy=False must not construct a new httpx.Client
         assert len(new_clients) == 0
 
-    def test_run_deep_self_review_calls_llm_with_no_proxy(self, tmp_repo, tmp_drive):
-        """run_deep_self_review passes no_proxy=True to llm.chat."""
-        from ouroboros.deep_self_review import run_deep_self_review
-        small_pack = "x" * 100
-        manifest = {"status": "ok", "selected_count": 1}
-        mock_llm = mock.Mock()
-        mock_llm.chat.return_value = ({"content": "Review result."}, {"cost": 0.01})
 
-        with mock.patch(
-            "ouroboros.deep_self_review.build_review_pack",
-            return_value=(
-                small_pack,
-                {
-                    "file_count": 1,
-                    "total_chars": len(small_pack),
-                    "skipped": [],
-                    "context_manifest": manifest,
-                },
-            ),
-        ):
-            result, usage = run_deep_self_review(
-                repo_dir=tmp_repo,
-                drive_root=tmp_drive,
-                llm=mock_llm,
-                emit_progress=lambda x: None,
-                event_queue=None,
-                model="openai/gpt-5.5-pro",
+def test_direct_openai_deep_review_sends_a_real_openai_model_id():
+    """PHYSICAL-PAYLOAD proof, not a defaults-table assertion.
+
+    An owner may pin the slug `openai/gpt-5.6-sol-pro`. That `-pro`
+    suffix is an OpenRouter routing slug, NOT an OpenAI model id: live-probed
+    2026-07-29, `gpt-5.6-sol-pro` on api.openai.com /v1/chat/completions returns
+    404, while pro reasoning exists only on /v1/responses as
+    `reasoning.mode="pro"` (200) — and /v1/chat/completions rejects a `reasoning`
+    parameter outright (400 "Unknown parameter"). Every LLM call in llm.py is a
+    chat.completions call, so the direct-OpenAI deep-review slot ships plain Sol
+    and this test pins what actually reaches the wire.
+    """
+    import os
+    from unittest import mock
+
+    from ouroboros.llm import LLMClient
+    from ouroboros.provider_models import OPENAI_DIRECT_DEFAULTS
+
+    slot = OPENAI_DIRECT_DEFAULTS["deep_self_review"]
+    assert slot.startswith("openai::"), slot
+
+    mock_resp = mock.Mock()
+    mock_resp.model_dump.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+    with mock.patch("openai.OpenAI") as mock_openai_cls:
+        mock_oa = mock.Mock()
+        mock_oa.chat.completions.create.return_value = mock_resp
+        mock_openai_cls.return_value = mock_oa
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-direct-test"}, clear=False):
+            LLMClient().chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model=slot, max_tokens=8, no_proxy=True,
             )
+        assert mock_oa.chat.completions.create.called
+        payload = mock_oa.chat.completions.create.call_args.kwargs
 
-        assert result == "Review result."
-        mock_llm.chat.assert_called_once()
-        _, kwargs = mock_llm.chat.call_args
-        assert kwargs.get("no_proxy") is True, "llm.chat must be called with no_proxy=True"
-        sidecar = tmp_drive / "state" / "deep_self_review_context.json"
-        assert sidecar.is_file()
-        assert '"context_manifest"' in sidecar.read_text(encoding="utf-8")
-        assert '"selected_count": 1' in sidecar.read_text(encoding="utf-8")
+    # The id on the wire is a REAL OpenAI model, never the OpenRouter slug.
+    assert payload["model"] == "gpt-5.6-sol"
+    assert not payload["model"].endswith("-pro")
+    # ...and no `reasoning` object is smuggled onto a chat.completions call, which
+    # the live API rejects with 400 (the only pro carrier is the Responses API).
+    assert "reasoning" not in payload
+    assert "reasoning" not in (payload.get("extra_body") or {})
 
 
-class TestReviewPackOverflow:
-    def test_explicit_error_on_overflow(self, tmp_repo, tmp_drive):
-        """When pack exceeds ~920K tokens, run_deep_self_review returns an error."""
-        # Create a pack that's way too large (> 3.68M chars ≈ 920K tokens)
-        huge_pack = "x" * 4_000_000
-        mock_llm = mock.Mock()
+def test_direct_fallback_preserves_an_explicit_real_model_pin():
+    """Only router-only `-pro` slugs are substituted by the provider default; an
+    owner's explicit pin of a REAL OpenAI model keeps the mechanical rewrite."""
+    import os
+    from unittest import mock
 
-        with mock.patch(
-            "ouroboros.deep_self_review.build_review_pack",
-            return_value=(huge_pack, {"file_count": 100, "total_chars": 4_000_000, "skipped": []}),
-        ):
-            result, usage = run_deep_self_review(
-                repo_dir=tmp_repo,
-                drive_root=tmp_drive,
-                llm=mock_llm,
-                emit_progress=lambda x: None,
-                event_queue=None,
-                model="test-model",
-            )
+    from ouroboros.provider_models import OPENAI_DIRECT_DEFAULTS
 
-        assert "too large" in result
-        assert "920,000" in result
-        assert usage == {}
-        mock_llm.chat.assert_not_called()
+    env = {"OPENAI_API_KEY": "sk-test"}
+    with mock.patch.dict(os.environ, env, clear=False):
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        os.environ.pop("OPENAI_BASE_URL", None)
+        os.environ.pop("OUROBOROS_REVIEWER_SLOTS", None)
+        with mock.patch.dict(os.environ, {"OUROBOROS_MODEL_DEEP_SELF_REVIEW": "openai/gpt-5.5"}):
+            reason, model = deep_review_route()
+            available = not reason
+        assert available is True
+        assert model == "openai::gpt-5.5", "an explicit real-model pin survives"
+        with mock.patch.dict(os.environ, {"OUROBOROS_MODEL_DEEP_SELF_REVIEW": "openai/gpt-5.5-pro"}):
+            reason, model = deep_review_route()
+            available = not reason
+        assert available is True
+        assert model == OPENAI_DIRECT_DEFAULTS["deep_self_review"], (
+            "a router-only -pro slug lands on the provider default"
+        )

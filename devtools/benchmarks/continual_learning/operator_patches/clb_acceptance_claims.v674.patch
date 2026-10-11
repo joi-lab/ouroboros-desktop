@@ -1,0 +1,169 @@
+--- src/systems/ouroboros/run_clbench_bridge_agent.py
++++ src/systems/ouroboros/run_clbench_bridge_agent.py
+@@ -91,16 +91,48 @@
+ )
+ _STEER_NOTES = {"unit1": _STEER_NOTE_UNIT1}
+ 
++# v6.74.0 (owner-approved knowledge nudge): ask the agent to keep ONE durable
++# knowledge topic per task and record what worked / what failed / reusable
++# facts. Lives in the steer_note slot (BEFORE _ACTION_NOTE) so the how-to-act
++# mechanics stay the prompt's tail — the measured displacement failure mode.
++_KNOWLEDGE_TOPIC_NOTE = (
++    "\n\nKeep one durable knowledge topic for this task: create or update a knowledge entry "
++    "named after the task (knowledge_write) and record what worked, what failed, and any "
++    "reusable facts or pitfalls you discovered, so later questions benefit."
++)
++
++# v6.74.0 (C2): advisory Observable Acceptance Claims for the host acceptance
++# reviewer — the deliverable is the ACCEPTED terminal ANSWER receipt, never a
++# prose restatement, and an INCORRECT receipt does not satisfy acceptance.
++# answer_protocol stays EMPTY on purpose: a final-answer text line would
++# re-legitimise the very channel the grader ignores.
++CLB_ACCEPTANCE_CLAIMS = [
++    {
++        "claim": (
++            "The deliverable is the last terminal ANSWER receipt accepted by task.step() "
++            "through the clbench_remote skill's submit_action tool; a prose restatement of "
++            "an answer is not a deliverable, and an INCORRECT receipt does not satisfy "
++            "acceptance."
++        ),
++        "surface": "clbench_remote submit_action receipt",
++        "support": "the final submit_action tool result acknowledging the terminal ANSWER",
++        "priority": "must",
++    },
++]
++
+ 
+ def resolve_steer_note(discipline: str) -> str:
+-    """'' -> no steer (default); a known key -> the built-in note; any other
+-    non-empty string -> literal custom steer text (prefixed for prompt joining)."""
++    """'' -> the knowledge nudge only; a known key -> the built-in note; any other
++    non-empty string -> literal custom steer text (prefixed for prompt joining).
++    The knowledge-topic nudge is APPENDED in every case (v6.74.0)."""
+     d = (discipline or "").strip()
+     if not d:
+-        return ""
+-    if d in _STEER_NOTES:
+-        return _STEER_NOTES[d]
+-    return "\n\n" + d
++        base = ""
++    elif d in _STEER_NOTES:
++        base = _STEER_NOTES[d]
++    else:
++        base = "\n\n" + d
++    return base + _KNOWLEDGE_TOPIC_NOTE
+ # Ouroboros-native analog of CC's MEMORY.md instruction (parity: CC is explicitly told to learn+store
+ # across turns; without this our agent writes ZERO memory and the rollout can't beat stateless). Points
+ # to Ouroboros's OWN memory tools, not CC's MEMORY.md. Toggled by --memory-instruction for the A/B.
+@@ -209,10 +241,37 @@
+             time.sleep(5)
+             continue
+         if str(latest.get("status") or "") in final:
+-            return latest
++            return _await_cost_finality(base, task_id, latest)
+         time.sleep(8)
+ 
+ 
++def _await_cost_finality(base: str, task_id: str, result: dict, grace_sec: float = 60.0) -> dict:
++    """Bounded wait for the post-task cost checkpoint (v6.74.0, C5): the
++    ``task_cost_finalized`` event exists ONLY for completed/degraded outcomes,
++    so other terminal statuses read immediately; past the grace the
++    partial-marked result is returned as-is (disclosed, never blocking)."""
++    status = str(result.get("status") or "").lower()
++    if status not in {"completed", "degraded"}:
++        return result
++    pending = (
++        result.get("cost_final") is False
++        or result.get("cost_with_children_partial") is True
++    )
++    if not pending:
++        return result
++    deadline = time.time() + max(0.0, float(grace_sec))
++    latest = result
++    while time.time() < deadline:
++        time.sleep(2)
++        try:
++            latest = _api(base, "GET", "/api/tasks/" + task_id, timeout=30)
++        except Exception:
++            return result
++        if latest.get("cost_final") or latest.get("cost_with_children_partial") is False:
++            return latest
++    return latest
++
++
+ def run_one_question(engine, domain: str, i: int, num_instances: int, run_dir: Path, args) -> dict:
+     """ONE Ouroboros task solves ONE CL-Bench question i (agent curls the shim). Returns {reward, ...}."""
+     run_dir.mkdir(parents=True, exist_ok=True)
+@@ -226,7 +285,8 @@
+         agent_shim_url = engine.shim_url_for_agent(url) if hasattr(engine, "shim_url_for_agent") else url
+         _publish_target(engine.data_root, agent_shim_url)   # skill resolves the shim from shim_target.txt
+         first_obs = _api(url, "GET", "/observation", timeout=30)  # host-side fetch: the actual question + schema
+-        prompt = _build_prompt(first_obs, memory_mode=getattr(args, "memory_instruction", None))  # CC-mirrored
++        prompt = _build_prompt(first_obs, memory_mode=getattr(args, "memory_instruction", None),
++                               steer_note=resolve_steer_note(getattr(args, "discipline", "")))  # CC-mirrored
+         (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+ 
+         base = engine.server.base_url
+@@ -243,6 +303,7 @@
+             "actor_id": "clbench-driver",
+             "source": "clbench-driver",
+             "timeout_sec": args.task_timeout_sec,
++            "acceptance_claims": CLB_ACCEPTANCE_CLAIMS,
+             "metadata": {"source": "clbench-driver", "delegation_role": "root"},
+         }
+         created, last_exc = None, None
+@@ -356,7 +417,8 @@
+     body = {
+         "description": prompt, "memory_mode": engine.mm, "disabled_tools": DISABLED_TOOLS,
+         "actor_id": "clbench-driver", "source": "clbench-driver",
+-        "timeout_sec": args.task_timeout_sec, "metadata": {"source": "clbench-driver", "delegation_role": "root"},
++        "timeout_sec": args.task_timeout_sec, "acceptance_claims": CLB_ACCEPTANCE_CLAIMS,
++        "metadata": {"source": "clbench-driver", "delegation_role": "root"},
+     }
+     created, last_exc = None, None
+     for _ in range(6):
+@@ -400,7 +462,8 @@
+                     break
+                 rd = out_root / label / args.domain / f"q{idx:03d}"
+                 rd.mkdir(parents=True, exist_ok=True)
+-                prompt = _build_prompt(obs, memory_mode=getattr(args, "memory_instruction", None))
++                prompt = _build_prompt(obs, memory_mode=getattr(args, "memory_instruction", None),
++                                       steer_note=resolve_steer_note(getattr(args, "discipline", "")))
+                 (rd / "prompt.txt").write_text(prompt, encoding="utf-8")
+                 final = _submit_and_poll(eng, prompt, args)
+                 (rd / "ouroboros_task_final.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+--- src/systems/ouroboros/_live_bridge.py
++++ src/systems/ouroboros/_live_bridge.py
+@@ -583,6 +583,7 @@
+             "actor_id": "clbench-driver",
+             "source": "clbench-driver",
+             "timeout_sec": timeout,
++            "acceptance_claims": _rb.CLB_ACCEPTANCE_CLAIMS,
+             "metadata": {"source": "clbench-driver", "delegation_role": "root"},
+         }
+         if self.chunk_questions and self._resume_root and self.chunk_resume_mode != "none":
+--- src/systems/ouroboros/test_live_parity.py
++++ src/systems/ouroboros/test_live_parity.py
+@@ -332,14 +332,18 @@
+ 
+ # ------------------------------------------------- 7b. discipline steer (opt-in)
+ def test_discipline_steer_off_by_default_and_resolvable():
+-    # default OFF: the validated CC-parity prompt must stay byte-stable
+-    assert rb.resolve_steer_note("") == ""
+-    assert rb.resolve_steer_note(None) == ""
++    # v6.74.0: the knowledge-topic nudge is ALWAYS appended in the steer slot
++    # (before _ACTION_NOTE); the discipline steer itself stays opt-in.
++    assert rb.resolve_steer_note("") == rb._KNOWLEDGE_TOPIC_NOTE
++    assert rb.resolve_steer_note(None) == rb._KNOWLEDGE_TOPIC_NOTE
+     # built-in key resolves to the unit-1 note; unknown text passes through literally
+     note = rb.resolve_steer_note("unit1")
+     assert note.startswith("\n\nOperating discipline")
+     assert "re-inspect the live metadata" in note and "arbitrate" in note
+-    assert rb.resolve_steer_note("custom steer line") == "\n\ncustom steer line"
++    assert note.endswith(rb._KNOWLEDGE_TOPIC_NOTE)
++    assert rb.resolve_steer_note("custom steer line") == (
++        "\n\ncustom steer line" + rb._KNOWLEDGE_TOPIC_NOTE
++    )
+     # zero task knowledge: no domain nouns may creep into the built-in note
+     for banned in ("SQL", "poker", "cohort", "prc", "schema_drift", "tablib", "pytest"):
+         assert banned not in note, f"domain noun {banned!r} leaked into the generic steer"

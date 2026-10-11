@@ -1,0 +1,14 @@
+--- src/systems/ouroboros/run_clbench_bridge_agent.py
++++ src/systems/ouroboros/run_clbench_bridge_agent.py
+@@ -54,7 +54,10 @@ DOMAINS = (
+ # host, outside the container), not of tool restriction. The earlier web/vision self-handicap
+ # (vlm_query/screenshot/browse_page/web_search/...) is retired; the task-body key stays for
+ # protocol stability.
+-DISABLED_TOOLS: list[str] = []
++import os as _os
++# Operator patch 2026-07-23: honor CLBENCH_SOLVE_DISABLED_TOOLS from env (forwarded by
++# run_clb.py) so a no-swarm submittable run can disable schedule_subagent. Empty -> default [].
++DISABLED_TOOLS: list[str] = [t.strip() for t in _os.environ.get("CLBENCH_SOLVE_DISABLED_TOOLS", "").split(",") if t.strip()]
+ 
+ 
+ _SCHEMA_PROMPT_HEAD = "\n\nYou MUST respond with valid JSON matching this schema exactly:\n"
