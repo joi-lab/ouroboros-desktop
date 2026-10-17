@@ -7,4 +7,4 @@
 > - Issues, pull requests, discussions and stars: https://github.com/razzant/ouroboros
 > - Website: https://ouroboros-agent.ai/
 
-This repository held Ouroboros Desktop from February to May 2026; desktop apps installed then still look for updates here. After each stable release these branches are refreshed automatically: `main`. They hold Ouroboros v7.6.0 (official commit 4b37f9622); other branches are historical.
+This repository held Ouroboros Desktop from February to May 2026; desktop apps installed then still look for updates here. After each stable release these branches are refreshed automatically: `main`, `ouroboros`. They hold Ouroboros v7.7.0 (official commit e41596c38); other branches are historical.
