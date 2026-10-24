@@ -1,8 +1,12 @@
 # Secrets
 .env
 .env.*
+!deploy/**/.env.example
 *.key
 *.pem
+
+# Local deploy metadata (host runtime)
+.deploy/
 
 # IDE
 .cursor/
