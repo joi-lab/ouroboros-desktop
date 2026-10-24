@@ -23,6 +23,7 @@ from ouroboros.deadline_utils import parse_deadline_ts
 _TEXT_ADDRESS = re.compile(r"row:(-?\d+)@(.*)#([0-9a-f]{12,64})")
 _DIGEST = re.compile(r"[0-9a-f]{12,64}")
 _HINT_FIELDS = ("task_id", "client_message_id", "type")
+_ADDRESS_PAGE = 500  # rows whose ordinals and legacy hints one read looks up (``dp.ordinals_of`` pages at 500)
 _LINEAGE_FIELDS = ("task_id", "parent_task_id", "root_task_id")
 
 
@@ -97,7 +98,10 @@ def _normalized(address: Any) -> Dict[str, Any]:
 
 def stored_address(root: Any, entry: ds.Row) -> Dict[str, Any]:
     """Content identity, with an imported physical hint or a new SQL coordinate."""
-    legacy = ds.legacy_address(root, entry.seq) if entry.stream == "chat" else None
+    return _stored_address(entry, ds.legacy_address(root, entry.seq) if entry.stream == "chat" else None)
+
+
+def _stored_address(entry: ds.Row, legacy: Optional[Tuple[str, int]]) -> Dict[str, Any]:
     address = row_address(entry.row, gen=legacy[0], line=legacy[1]) if legacy else row_address(entry.row)
     if legacy is None:
         address["hint"]["seq"] = entry.seq
@@ -204,11 +208,33 @@ def generation_cursor(root: Any, meta: Dict[str, Any]) -> Tuple[int, bool]:
 
 
 def _addressed(root: Any, entries: Iterable[ds.Row]) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
+    """Each row with its stored address and stream position, looked up a page at a time: the
+    ordinals and the legacy hints of ``_ADDRESS_PAGE`` rows in one read each, never one per row
+    (every room's open rows come through here, and Main's view reads them each turn)."""
+    page = []
     for entry in entries:
         if is_a2a_chat_id(entry.row.get("chat_id", 1)):
             continue
-        ordinal = dp.ordinal_at(root, "chat", entry.seq)
-        yield stored_address(root, entry), entry.row, ordinal.pos
+        page.append(entry)
+        if len(page) == _ADDRESS_PAGE:
+            yield from _addressed_page(root, page)
+            page = []
+    yield from _addressed_page(root, page)
+
+
+def _addressed_page(root: Any, page: list) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
+    if not page:
+        return
+    legacy = ds.legacy_addresses(root, [entry.seq for entry in page if entry.stream == "chat"])
+    try:
+        ordinals = dp.ordinals_of(root, "chat", [entry.seq for entry in page])
+    except ds.StoreBusy:
+        raise
+    except ds.StoreError:
+        ordinals = None  # a unit's counts are unsettled (``dp._uncovered``): the rows before it still answer, one by one
+    for entry in page:
+        ordinal = ordinals.get(entry.seq) if ordinals is not None else dp.ordinal_at(root, "chat", entry.seq)
+        yield _stored_address(entry, legacy.get(entry.seq)), entry.row, ordinal.pos
 
 
 def iter_rows(root: Any, *, from_addr: Any = None, lower: int = 0,

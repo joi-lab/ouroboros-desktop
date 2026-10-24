@@ -850,6 +850,21 @@ def legacy_address(root: Any, seq: int) -> Optional[Tuple[str, int]]:
     return None if record is None else (record["gen"], record["line"])
 
 
+def legacy_addresses(root: Any, seqs: Iterable[int]) -> Dict[int, Tuple[str, int]]:
+    """``legacy_address`` of many rows in one read (a statement per 500 rows): the same first
+    ``(gen, line)`` of the ``legacy_seq`` order each single probe answers; no entry for a row
+    appended here."""
+    wanted = sorted({int(seq) for seq in seqs})
+    found: Dict[int, Tuple[str, int]] = {}
+    with transaction(root, write=False) as conn:
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            for record in conn.execute("SELECT seq, gen, line FROM legacy_addresses INDEXED BY legacy_seq "
+                                       f"WHERE seq IN ({','.join('?' * len(chunk))}) ORDER BY seq, gen, line", chunk):
+                found.setdefault(record["seq"], (record["gen"], record["line"]))
+    return found
+
+
 def legacy_generation(root: Any, gen: str) -> Optional[Dict[str, Any]]:
     """The imported chat segment whose first-line signature is ``gen`` (the first in chain order
     when the signature repeats, as the chain reader chose): its ledger row -- ``id`` (the unit),
