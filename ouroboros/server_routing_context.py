@@ -438,12 +438,6 @@ def _decision_turn_metadata(ctx: Any, chat_id: int, client_message_id: str, task
     steer delivery). P5-clean: surfaces state only; the agent picks the target by
     judgment among answer / tell_task / start_task / move_to_project."""
     md = dict(task_metadata) if isinstance(task_metadata, dict) else {}
-    try:  # a fact like the manifests below: its failure never holds back the owner's message
-        from ouroboros.live_works import live_works_present
-        md["live_works_present"] = live_works_present(ctx.DRIVE_ROOT)
-    except Exception:
-        log.warning("Unable to build the live-works present", exc_info=True)
-        md["live_works_present"] = {"error": "live_works_present_unavailable"}
     addressable_here = _addressable_root_tasks(ctx, chat_id)
     running_here = [row for row in addressable_here if row.get("status") == "running"]
     project_id = str(md.get("project_id") or "").strip() or _project_id_for_registered_chat(
