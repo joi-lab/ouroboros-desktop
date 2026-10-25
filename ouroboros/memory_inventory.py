@@ -212,7 +212,11 @@ def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
         return {}
     facts, authority = membership_facts(root), _authority(store)
     grouped: Dict[str, List[Entry]] = {}
-    for entry in _projection_rows(root, frontier):
+    projected = _projection_rows(root, frontier)
+    # The rows' task lineages in one read a generation (``RoomResolver.warm``), not one read per task.
+    facts.rooms.warm({str(entry[1].get(key) or "") for entry in projected
+                      for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+    for entry in projected:
         for room in rooms_of_row(entry[1], facts):
             grouped.setdefault(room, []).append(entry)
     rooms: Dict[str, List[Entry]] = {}

@@ -295,6 +295,27 @@ def test_b9_the_memory_reader_looks_rows_up_a_page_at_a_time(measured):
         assert rows > 150 * k and begins <= 3 * pages + 3, (k, rows, begins)
 
 
+def _main_view_begins(root: pathlib.Path, rows: int) -> int:
+    """Read transactions of one cold Main view over ``rows`` open rows spread across 241 rooms."""
+    from ouroboros import memory_view as mv
+    from tests import _memory_capture_shape as shape
+
+    root.mkdir(parents=True)
+    with CostMeter(root) as meter:  # the stores' per-thread connections open under the meter, so it sees their reads
+        made = shape.open_rows(root, rows)
+        tagged("view", lambda: mv.capture_memory_view(root, made["task"], made["spec"]))
+    return meter.snapshot("view")["counts"].get("begins", 0)
+
+
+def test_b9_main_view_reads_grow_with_pages_of_open_rows_not_with_rows(tmp_path):
+    """The whole view behind each Main turn, not only its row reader: its rows' positions, texts, rooms
+    and authors are read a page at a time. Twice the open rows over the same 241 rooms cost the extra
+    page's reads only; the view that looked each row up alone spent 2,615 read transactions on 1,300."""
+    small, large = _main_view_begins(tmp_path / "small", 650), _main_view_begins(tmp_path / "large", 1_300)
+    extra_pages = -(-1_300 // 500) - -(-650 // 500)
+    assert large - small <= 3 * extra_pages, (small, large)
+
+
 # ---- B6: the rest law of the named maintenance jobs ---------------------------------------------
 
 def second_run(run: Callable[[pathlib.Path], Any], root: pathlib.Path) -> Dict[str, int]:

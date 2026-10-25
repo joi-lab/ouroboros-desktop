@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Iterable, Literal, Mapping, Tuple
 
 from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, WEB_UI_CHAT_ID
 
@@ -576,20 +576,53 @@ def task_lineage_lookup(drive_root: Any):
     """
     cache: dict[str, Any] = {}
 
+    def lineage_of(tid: str, result: Any) -> dict[str, Any] | None:
+        from ouroboros.task_results import resolve_task_lineage  # D15->D17 lazy-only
+
+        return resolve_task_lineage(tid, metadata=result) if isinstance(result, dict) and result else None
+
     def lookup(task_id: Any) -> dict[str, Any] | None:
         tid = _text(task_id)
         if tid and tid not in cache:
             from ouroboros.store import StoreError
-            from ouroboros.task_results import load_task_result, resolve_task_lineage  # D15->D17 lazy-only
+            from ouroboros.task_results import load_task_result  # D15->D17 lazy-only
 
             try:
                 result = load_task_result(Path(drive_root), tid, strict=True)
             except (OSError, ValueError, StoreError):
                 result = None
-            cache[tid] = resolve_task_lineage(tid, metadata=result) if isinstance(result, dict) and result else None
+            cache[tid] = lineage_of(tid, result)
         return cache.get(tid)
 
+    def warm(task_ids: Any) -> None:
+        """The same answers for many ids, from ONE read (``task_results.admitted_results``); a store
+        that cannot be read leaves each id to its own lookup, as before."""
+        wanted = sorted({tid for tid in map(_text, task_ids) if tid and tid not in cache})
+        if not wanted:
+            return
+        from ouroboros.store import StoreError
+        from ouroboros.task_results import admitted_results  # D15->D17 lazy-only
+
+        try:
+            results = admitted_results(Path(drive_root), wanted)
+        except (OSError, StoreError):
+            return
+        for tid in wanted:
+            cache[tid] = lineage_of(tid, results.get(tid))
+
+    lookup.warm = warm  # type: ignore[attr-defined]
     return lookup
+
+
+def warm_lineage(lineage: Mapping[str, Any], entries: Iterable[Tuple[Mapping[str, Any], Any]]) -> None:
+    """Read at once the task results ``row_author`` will ask ``lineage_lookup`` about for these
+    ``(row, pos)``: the outgoing rows without lineage fields written before the epoch."""
+    epoch, warm = lineage.get("lineage_epoch"), getattr(lineage.get("lineage_lookup"), "warm", None)
+    if warm is None or not isinstance(epoch, Mapping) or type(epoch.get("pos")) is not int:
+        return
+    warm({_text(row.get("task_id")) for row, pos in entries
+          if type(pos) is int and pos < epoch["pos"] and _direction(row) == "out"
+          and not any(_text(row.get(key)) for key in _LINEAGE_FIELDS)})
 
 
 class RoomLabelResolver:
@@ -722,6 +755,7 @@ __all__ = [
     "row_author",
     "row_class",
     "task_lineage_lookup",
+    "warm_lineage",
     "RoomLabelResolver",
     "source_continuation_note",
     "is_presence_task",

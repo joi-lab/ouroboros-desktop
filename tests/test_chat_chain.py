@@ -529,6 +529,9 @@ def test_addressed_reads_look_rows_up_a_page_at_a_time(tmp_path, monkeypatch):
     room = list(cc.iter_room_rows(tmp_path, "1001"))
     assert room == [entry for entry in expected if entry[1].get("chat_id") == 1001] and len(room) == 234
     assert len(opened) <= 3 * pages + 3, len(opened)
+    opened.clear()  # the rows behind the addresses: the coordinates in one read, the legacy hints in another
+    assert cc.rows_by_address(tmp_path, [entry[0] for entry in expected]) == {a["row_sha256"]: r for a, r, _p in expected}
+    assert len(opened) == 2, len(opened)
 
 
 def test_an_unsettled_unit_still_answers_the_rows_before_it_and_a_busy_store_stops_the_page(tmp_path, monkeypatch):

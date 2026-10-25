@@ -14,7 +14,7 @@ import heapq
 import json
 import pathlib
 import re
-from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Tuple
 
 from ouroboros import dialogue_store as ds, dialogue_positions as dp
 from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
@@ -157,6 +157,30 @@ def resolve_row(root: Any, address: Any, *, stream: str = "chat") -> Tuple[Optio
     return None, {"status": "row_missing"}
 
 
+def rows_by_address(root: Any, addresses: Iterable[Any], *, stream: str = "chat") -> Dict[str, Dict[str, Any]]:
+    """``resolve_row``'s row for each address, keyed by the address's ``row_sha256``; the hinted ones are
+    read together (by SQL coordinate, or by legacy ``(gen, line)``) and accepted on the same identity
+    check, and an address its hint does not answer is resolved alone, as ``resolve_row`` goes on to do."""
+    wanted: Dict[str, Dict[str, Any]] = {}
+    for address in addresses:
+        wanted.setdefault(str(address["row_sha256"]), _normalized(address))
+    coordinates = {key: norm["hint"]["seq"] for key, norm in wanted.items() if type(norm["hint"].get("seq")) is int}
+    pairs = {key: (norm["hint"]["gen"], norm["hint"]["line"]) for key, norm in wanted.items()
+             if key not in coordinates and stream == "chat" and norm["hint"].get("gen") and type(norm["hint"].get("line")) is int}
+    at = ds.rows_at(root, stream, coordinates.values()) if coordinates else {}
+    legacy = ds.legacy_candidates_of(root, pairs.values()) if pairs else {}
+    found: Dict[str, Dict[str, Any]] = {}
+    for key, norm in wanted.items():
+        hinted = ([at[coordinates[key]]] if coordinates[key] in at else []) if key in coordinates else legacy.get(pairs.get(key), [])
+        row = next((entry.row for entry in hinted
+                    if _same_row(entry.row, norm) and source_row_id(entry.row).startswith(norm["row_sha256"])), None)
+        if row is None:
+            row, _found = resolve_row(root, norm, stream=stream)
+        if row is not None:
+            found[key] = row
+    return found
+
+
 def stream_position_of(root: Any, address: Any) -> Optional[int]:
     row, found = resolve_row(root, address)
     if row is None:
@@ -207,18 +231,21 @@ def generation_cursor(root: Any, meta: Dict[str, Any]) -> Tuple[int, bool]:
     return 0, True
 
 
-def _addressed(root: Any, entries: Iterable[ds.Row]) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
-    """Each row with its stored address and stream position, looked up a page at a time: the
-    ordinals and the legacy hints of ``_ADDRESS_PAGE`` rows in one read each, never one per row
-    (every room's open rows come through here, and Main's view reads them each turn)."""
-    page = []
+def _addressed(root: Any, entries: Iterable[ds.Row], keep: Optional[Callable[[ds.Row], bool]] = None,
+               ) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
+    """Each row ``keep`` takes (every one without it), outside A2A, with its stored address and stream
+    position, looked up a page at a time: the ordinals and the legacy hints of a page's rows in one read
+    each, never one per row (every room's open rows come through here, and Main's view reads them each
+    turn). A page is ``_ADDRESS_PAGE`` source rows examined, kept or not, so a filtered reader that stops
+    early reads at most a page beyond what it used."""
+    page, examined = [], 0
     for entry in entries:
-        if is_a2a_chat_id(entry.row.get("chat_id", 1)):
-            continue
-        page.append(entry)
-        if len(page) == _ADDRESS_PAGE:
+        examined += 1
+        if not is_a2a_chat_id(entry.row.get("chat_id", 1)) and (keep is None or keep(entry)):
+            page.append(entry)
+        if examined == _ADDRESS_PAGE:
             yield from _addressed_page(root, page)
-            page = []
+            page, examined = [], 0
     yield from _addressed_page(root, page)
 
 
@@ -328,14 +355,14 @@ def iter_room_rows(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: A
     tasks = None if task_ids is None else {str(task) for task in task_ids}
     after, before = _period_bounds(period)
 
-    def selected():
-        for entry in room_rows(root, room_id, lower=lower, upper=upper):
-            row = entry.row
-            if tasks is not None and not tasks.intersection(str(row.get(field) or "") for field in _LINEAGE_FIELDS):
-                continue
-            if after is not None or before is not None:
-                moment = parse_deadline_ts(row.get("ts"))
-                if moment is None or (after is not None and moment < after) or (before is not None and moment > before):
-                    continue
-            yield entry
-    return _addressed(root, selected())
+    def selected(entry: ds.Row) -> bool:
+        row = entry.row
+        if tasks is not None and not tasks.intersection(str(row.get(field) or "") for field in _LINEAGE_FIELDS):
+            return False
+        if after is not None or before is not None:
+            moment = parse_deadline_ts(row.get("ts"))
+            if moment is None or (after is not None and moment < after) or (before is not None and moment > before):
+                return False
+        return True
+    filtered = tasks is not None or after is not None or before is not None
+    return _addressed(root, room_rows(root, room_id, lower=lower, upper=upper), selected if filtered else None)

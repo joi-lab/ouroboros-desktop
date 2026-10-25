@@ -48,7 +48,7 @@ from ouroboros.chronicle_store import (CHILD_DRAFT_RIGHT, DELEGATED_FOCUS_ROLES,
                                        is_late_review_mark, source_time_span)
 from ouroboros.contracts.chat_id_policy import WEB_UI_CHAT_ID
 from ouroboros.dialogue_provenance import (RoomLabelResolver, is_presence_task, render_memory_row, render_row_text,
-                                           row_class)
+                                           row_class, warm_lineage)
 from ouroboros.memory_view_account import account_entries, account_lines, accounts_line, told_map
 from ouroboros.memory_view_legacy import INDENT, indented as _indented, retold_lines
 from ouroboros.utils import append_jsonl, sha256_text, utc_now_iso
@@ -454,14 +454,8 @@ Entry = Tuple[Dict[str, Any], Dict[str, Any], int]
 
 
 def _row_texts(root: pathlib.Path, entries: List[Entry]) -> Dict[str, Dict[str, Any]]:
-    """Read exactly the selected row identities from the dialogue store."""
-    rows = {}
-    for address, _meta, _pos in entries:
-        if address["row_sha256"] not in rows:
-            row, _status = chat_chain.resolve_row(root, address)
-            if row is not None:
-                rows[address["row_sha256"]] = row
-    return rows
+    """Read exactly the selected row identities from the dialogue store, together (``rows_by_address``)."""
+    return chat_chain.rows_by_address(root, [address for address, _meta, _pos in entries])
 
 
 def _row_head(entry: Entry, author: Mapping[str, Any]) -> str:
@@ -796,6 +790,8 @@ def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
         by_room = {spec.room_id: memory_inventory.open_room_rows(root, spec.room_id)}
     else:
         by_room = {}
+    # The authors of rows written before the lineage epoch, read at once for every room (not one task at a time).
+    warm_lineage(lineage, ((meta, pos) for entries in by_room.values() for _address, meta, pos in entries))
     room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story)
             if spec.room_id is not None else None)
     live = _live_rooms(store, root, spec, label, by_room, notes, lineage) if spec.live_rooms != "none" else []
