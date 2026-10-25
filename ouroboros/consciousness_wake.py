@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import pathlib
 import re
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ from ouroboros.consciousness_authority import (
 )
 from ouroboros.context_health import safe_read
 from ouroboros.dialogue_provenance import is_presence_task
+
+log = logging.getLogger(__name__)
 
 PROMPT_REL = pathlib.Path("prompts") / "CONSCIOUSNESS.md"
 WAKE_OBSERVATION_KEY = "wake_observation"  # task metadata: the bound observation's source and projection
@@ -110,16 +113,17 @@ def previous_wake_text(drive_root: Any, task_id: str, *, now: float) -> str:
         return "none"
     try:
         row = read_document(drive_root, task_id)
+        if not row:
+            return "unreadable"
+        stamp = _parse_iso(terminal_time_fact(row).get("occurred_at"))
+        ago = _ago(now - stamp) if stamp is not None else "at an unknown time"
+        line = f"«{row['wake_summary']}»" if row.get("wake_summary") else "no line"
+        outcome = "Interrupted" if row.get("status") == "interrupted" else OUTCOME_PHASE_HEADLINE[outcome_phase(row, {})]
+        return (f"{task_id}, {outcome} {ago}; "
+                f"its line: {line}; its note: «{row.get('result') or ''}»")
     except Exception:
+        log.debug("consciousness: previous wake %s is unreadable", task_id, exc_info=True)
         return "unreadable"
-    if not row:
-        return "unreadable"
-    stamp = _parse_iso(terminal_time_fact(row).get("occurred_at"))
-    ago = _ago(now - stamp) if stamp is not None else "at an unknown time"
-    line = f"«{row['wake_summary']}»" if row.get("wake_summary") else "no line"
-    outcome = "Interrupted" if row.get("status") == "interrupted" else OUTCOME_PHASE_HEADLINE[outcome_phase(row, {})]
-    return (f"{task_id}, {outcome} {ago}; "
-            f"its line: {line}; its note: «{row.get('result') or ''}»")
 
 
 def _clip_preview(value: Any, limit: int = 100) -> str:
