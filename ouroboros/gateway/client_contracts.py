@@ -351,6 +351,13 @@ class RecentWake(TypedDict):
     ledger_integrity_degraded: NotRequired[Optional[bool]]
 
 
+class RecentWakesView(TypedDict):
+    """Recent-wakes fields of /api/consciousness; status fields remain an open JSON shape."""
+
+    recent_wakes: Optional[List[RecentWake]]
+    recent_wakes_coverage: str
+
+
 class PlaceConnectRequest(TypedDict):
     """Connect Silent; ids default to empty. An instance label is prefixed with the service."""
 
@@ -718,7 +725,7 @@ __all__ = [
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
     "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
-    "RecentWake", "RecentWakeCheck",
+    "RecentWake", "RecentWakeCheck", "RecentWakesView",
     "PlaceConnectRequest", "PlaceIcon", "PlaceReadiness", "PlaceSummary", "PlaceDisconnectRequest",
     "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",

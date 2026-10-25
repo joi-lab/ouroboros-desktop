@@ -44,10 +44,12 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     monkeypatch.setattr(clock, "status_snapshot", lambda: dict(snapshot))
     monkeypatch.setattr(server, "_consciousness", clock)
     monkeypatch.setattr(state, "load_state", lambda: {"bg_consciousness_enabled": True})
-    def wakes(root, places, *, live_wake_task_id):
+    def wakes(root, places, *, live_wake_task_id, ids):
         assert live_wake_task_id == snapshot.get("live_wake_task_id", "")
         assert places == snapshot["places_brief"]
+        assert ids == ["wake"]
         return [{"task_id": "wake"}]
+    monkeypatch.setattr(view, "_wake_ids", lambda *args: ["wake"])
     monkeypatch.setattr(view, "recent_wakes", wakes)
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
     panel = json.loads(response.body)
@@ -116,3 +118,20 @@ def test_stored_control_and_unconstructed_clock_are_visible(monkeypatch, tmp_pat
     assert panel["enabled"] is enabled
     assert {key: panel[key] for key in fallback} == fallback
     assert ("not constructed" in panel["detail"]) == (not constructed and enabled is True)
+
+
+@pytest.mark.parametrize("selected_count", [0, 49, 50])
+def test_recent_wake_coverage_names_the_selection_cap_even_with_pruned_documents(monkeypatch, tmp_path, selected_count):
+    from tests._wake_summary_shared import seed_wake
+
+    document = seed_wake(tmp_path)
+    ids = [document["task_id"], *[f"pruned-{i}" for i in range(selected_count - 1)]] if selected_count else []
+    reads = []
+    monkeypatch.setattr(view, "_wake_ids", lambda *args: reads.append(args) or ids)
+    clock = object.__new__(BackgroundConsciousness)
+    clock._drive_root = tmp_path
+    monkeypatch.setattr(clock, "status_snapshot", lambda: {"places_brief": []})
+    panel = clock.details_snapshot(True)
+    assert len(reads) == 1 and len(panel["recent_wakes"]) == bool(selected_count)
+    prefix = "the latest 50 " if selected_count == 50 else ""
+    assert panel["recent_wakes_coverage"] == prefix + "wakes that reached a model call in the last 48 h"

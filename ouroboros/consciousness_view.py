@@ -6,6 +6,8 @@ from typing import Any
 
 from ouroboros.usage_origin import cause_label
 
+RECENT_WAKE_LIMIT = 50
+
 
 def _clock_of(iso_value: Any) -> str:
     """``HH:MM`` in the server's local time for an ISO instant (``?`` when absent)."""
@@ -156,7 +158,7 @@ def _wake_ids(drive_root, now: float) -> list[str]:
             "WHERE category = 'consciousness' AND ts_last_epoch >= ? AND root_task_id != '' "
             f"AND {_MONEY_KIND} AND state != 'released' AND (ts_dispatched IS NOT NULL "
             "OR kind IN ('subscription_session', 'external_unmetered')) "
-            "GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT 50",
+            f"GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT {RECENT_WAKE_LIMIT}",
             (now - ROOT_HORIZON_SEC,))]
 
 
@@ -195,7 +197,8 @@ def _wake_phase(row: dict, clock_live: bool) -> str:
     return "running" if activity == "working" else activity
 
 
-def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None) -> list[dict]:
+def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None,
+                 ids: list[str] | None = None) -> list[dict]:
     """At most 50 wakes that reached a model call in the last 48 h, newest first.
 
     Wakes that never reached a model call are not listed. Selection uses the
@@ -210,7 +213,8 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
     from ouroboros.terminal_time import terminal_time_fact
     from ouroboros.task_finalization import quiet_finish
 
-    ids = _wake_ids(drive_root, time.time() if now is None else now)
+    if ids is None:
+        ids = _wake_ids(drive_root, time.time() if now is None else now)
     if not ids:
         return []
     documents = display_documents(drive_root, ids)
