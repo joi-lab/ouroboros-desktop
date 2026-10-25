@@ -134,7 +134,7 @@ def readmit_placement(drive_root: Any, task: dict, *, repo_dir: Any, running: An
     kind = (metadata.get("resource_intent") or {}).get("kind")
     owner = str(metadata.get("root_task_id") or task.get("root_task_id") or task.get("id") or "")
     body = kind in (None, "", "system_repo") and any(
-        find(lineage, drive_root, strict=True) for lineage in (owner, continuation_predecessor(task)) if lineage)
+        find(lineage, drive_root) for lineage in (owner, continuation_predecessor(task)) if lineage)
     pinned = body or kind in {"explicit_resource", "explicit_none"}
     # Placement pins room identity; readmission consumes its current generation.
     with project_admission_guard(drive_root, {**binding["placement_admission"], "frozen": True}) as project:

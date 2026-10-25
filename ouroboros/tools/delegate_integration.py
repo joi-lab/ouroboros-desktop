@@ -392,7 +392,7 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
 
 
 def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str, invocation_id: str, *,
-                        independent: bool = False, start: str = "") -> Tuple[Optional[Any], Optional[ToolResult]]:
+                        start: str = "") -> Tuple[Optional[Any], Optional[ToolResult]]:
     """Provision the C1 private execution snapshot for one mutating run.
 
     Registered durably (worktree registry) and described durably (baseline manifest
@@ -401,9 +401,9 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
     Returns ``(handle, None)`` or ``(None, typed_refusal)``.
 
     ``start`` is an investigation's starting folder inside the ``target_root`` worktree
-    (``delegate_directory.snapshot_checkout``): the whole worktree is cloned, and the
+    (``delegate_directory.snapshot_checkout``): the whole worktree is copied, and the
     returned handle's ``path`` is the matching folder, which the run, its custody,
-    named evidence and a continuation use; the registry keeps the clone root that
+    named evidence and a continuation use; the copy's record keeps the copy root that
     capture and release address.
     """
     from dataclasses import replace
@@ -413,8 +413,7 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
     task_id = str(getattr(ctx, "task_id", "") or "")
     try:
         folder = pathlib.Path(start or target_root).resolve().relative_to(pathlib.Path(target_root).resolve())
-        handle = provision_execution_snapshot(
-            target_root=target_root, task_id=task_id, snapshot_id=invocation_id, independent=independent)
+        handle = provision_execution_snapshot(target_root=target_root, task_id=task_id, snapshot_id=invocation_id)
     except Exception as exc:
         return None, _fail(
             "delegate_start", "execution_snapshot_failed",
@@ -451,10 +450,7 @@ def _snapshot_facts(handle: Any) -> Dict[str, Any]:
     if getattr(handle, "adopted_from", ""):  # a continuation's predecessor snapshot
         facts: Dict[str, Any] = {"reused_from_run": handle.adopted_from}
     else:
-        file_baseline = getattr(handle, "file_baseline", {}) or {}
         facts = {"entries": int(getattr(handle, "entry_count", 0) or 0),
-                 "untracked_files": len(getattr(handle, "untracked_baseline", {}) or {}) + len(file_baseline),
-                 "file_input_bytes": sum(int(item.get("size", 0) or 0) for item in file_baseline.values()),
                  "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0)}
     nested = sorted(str(row.get("path") or "") for row in getattr(handle, "excluded_untracked", ()) or ()
                     if isinstance(row, dict) and row.get("reason") == "nested_repository")
@@ -488,14 +484,11 @@ def _record_baseline_manifest(drive: pathlib.Path, task_id: str, invocation_id: 
             "baseline_tree": handle.baseline_tree,
             "manifest_digest": handle.manifest_digest,
             "entry_count": handle.entry_count,
-            "file_input_count": len(getattr(handle, "file_baseline", {})),
-            "file_input_bytes": sum(item.get("size", 0) for item in getattr(handle, "file_baseline", {}).values()),
             "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0),
             "target_root": handle.target_root,
             "target_head": handle.target_head,
             "execution_root": handle.path,
             "excluded_untracked": list(handle.excluded_untracked),
-            "capture_warnings": list(getattr(handle, "capture_warnings", ())),
             **extra,
         }, trailing_newline=True)
     except Exception:

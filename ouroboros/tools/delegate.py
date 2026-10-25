@@ -549,8 +549,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                 else:
                     if error := git_directory_options_refusal(checkout, directory_strategy, scope_paths):
                         return _fail("delegate_start", "directory_execution_unavailable", error, definitely_unrun=True)
-                    snapshot, snap_error = _provision_snapshot(ctx, drive, checkout, invocation_id, start=target_root,
-                                                               independent=preparation.investigation)
+                    snapshot, snap_error = _provision_snapshot(ctx, drive, checkout, invocation_id, start=target_root)
                 if snap_error:
                     _settle_refused_provision(ctx, gateway, snap_error, invocation_id, history_facts)
                     return snap_error
