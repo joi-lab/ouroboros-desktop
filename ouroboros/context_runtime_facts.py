@@ -396,21 +396,37 @@ def storage_fact(data_root: Any) -> Optional[Dict[str, Any]]:
 
 
 # The body's own facts: bounds here are transport and memory limits, never judgments. Each item is one
-# line of text, not a nested object: the Runtime section is indented JSON, and the fact must cost the
-# context no more than the health lines it replaced (the owner's Nano window).
+# short line of text (the Runtime section is indented JSON), because the fact must cost the context no
+# more than the lines it replaced (the owner's Nano window): clocks are HH:MM of observed_at's day
+# (MM-DD HH:MM on another day), counts carry no sums of holds, and no phrase carries a verdict.
 _SUPERVISOR_TAIL_BYTES = 256_000  # the same bounded tail the health block reads
-_OWNER_TURNS_SHOWN = 3  # receipts rendered per context; the ring keeps DIRECT_TURNS_KEPT
+_OWNER_TURNS_SHOWN = 2  # receipts rendered per context (three do not fit the fact's byte budget); the ring keeps 100
 _STALL_ENDS = {"direct_turn_stall": "direct_turn_stall_end", "host_duty_stall": "host_duty_stall_end",
                "supervisor_loop_stall": "supervisor_loop_stall_end"}
+_STALL_WORDS = {"direct_turn_stall": "turn", "host_duty_stall": "duty", "supervisor_loop_stall": "loop"}
+_STALLS_KEY = "stalls (end not observed in window)"
 _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqlite")
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
-VITALS_READER = "query_data(kind='supervisor_log', op='jsonl', filter={'field': 'type', 'op': 'contains', 'value': 'direct_turn'})"
-VITALS_NOTE = ("My body's facts as of observed_at, no verdict: whether a wait matters, what to change and whether "
-               f"to tell my human are mine to decide; more rows: {VITALS_READER}")
+VITALS_READER = "query_data(kind='supervisor_log', op='jsonl', filter={'field':'type','op':'contains','value':'direct_turn'})"
+VITALS_NOTE = f"No verdict here, the weighing is mine; rows: {VITALS_READER}"
+WAL_GATE = "WAL needs SQLite ≥3.51.3; an Update keeps this interpreter, a reinstall replaces it"
 
 
-def _when(stamp: Any) -> str:
-    return str(stamp or "")[:19]  # the journal's microseconds buy the mind nothing
+def _clock(stamp: Any, today: Any) -> str:
+    """HH:MM of a UTC stamp, with its day (MM-DD) only when that is not observed_at's day."""
+    text = str(stamp or "")
+    if len(text) < 16:
+        return text
+    return text[11:16] if text[:10] == str(today or "")[:10] else f"{text[5:10]} {text[11:16]}"
+
+
+def _sec(value: Any) -> str:
+    return f"{float(value):.1f} s" if isinstance(value, (int, float)) else "unknown"
+
+
+def _site(site: Any) -> str:
+    text = str(site or "")
+    return text.split(".", 1)[1] if text.startswith(("ouroboros.", "supervisor.")) else text
 
 
 def _stall_key(row: Dict[str, Any]) -> tuple:
@@ -446,56 +462,61 @@ def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
     return found
 
 
-def _sec(value: Any) -> str:
-    return f"{float(value):.1f} s" if isinstance(value, (int, float)) else "unknown"
-
-
-def _owner_turn(row: Dict[str, Any], ended: Dict[str, Any]) -> str:
-    """One receipt as one line: when, how long my human waited to the first request (the handler's
-    wait when the acceptance stamp was unknown), the slowest phase, the dispatch basis, the turn's
-    own transactions, and the stall episode's top frame when its end row is still in the tail."""
+def _owner_turn(row: Dict[str, Any], ended: Dict[str, Any], today: Any) -> str:
+    """One receipt in one line: when, the chat, how long my human waited to my first request (the
+    handler's own wait when the acceptance stamp was unknown), the slowest phase, the dispatch basis
+    when it was not a seen send, the turn's transactions per store (r/w) and chronicle opens, the stall
+    episode's top frame when its end row is still in the tail, and a journal row that was not written."""
     wait = row.get("owner_wait_sec")
-    waited = (f"human waited {_sec(wait)} to first request" if wait is not None
-              else f"thread waited {_sec(row.get('handler_wait_sec'))} (acceptance stamp unknown)")
-    parts = [f"{_when(row.get('ts'))} chat {row.get('chat_id')}: {waited}"
-             + (f", slowest {row['slowest_phase']} {_sec(row.get('slowest_phase_sec'))}" if row.get("slowest_phase") else "")
-             + f", {row.get('dispatch')}"]
+    text = f"{_clock(row.get('ts'), today)} chat {row.get('chat_id')} waited " + (
+        _sec(wait) if wait is not None else f"{_sec(row.get('handler_wait_sec'))} from entry (acceptance stamp unknown)")
+    if row.get("slowest_phase"):
+        text += f", slowest {row['slowest_phase']} {_sec(row.get('slowest_phase_sec'))}"
+    if row.get("dispatch") not in (None, "observed_send"):
+        text += f", {row['dispatch']}"
     meter = row.get("meter") if isinstance(row.get("meter"), dict) else {}
-    counts = [f"{key} {value}" for key, value in meter.items() if "." in key and not key.endswith("_sec") and not key.endswith(".sec")]
-    if counts:
-        parts.append(", ".join(counts) + f", holds {sum(value for key, value in meter.items() if key.endswith('.sec')):.2f} s")
+    stores: Dict[str, str] = {}
+    for key, value in meter.items():
+        if key.endswith("_sec") or key.endswith(".sec"):
+            continue
+        kind, _dot, side = key.partition(".")
+        stores[kind] = stores.get(kind, "") + (f" {value}" if side == "locked" else f" {value}{side[:1]}")
+    if stores:
+        text += "; txns " + " · ".join(f"{kind}{counts}" for kind, counts in stores.items())
     frames = (ended.get(str(row.get("execution_id") or "")) or {}).get("top_frames")
     if isinstance(frames, list) and frames and isinstance(frames[0], dict) and frames[0].get("frame"):
-        parts.append(f"top frame {frames[0]['frame']}")
+        text += f"; top {str(frames[0]['frame']).rsplit('/', 1)[-1]}"
     if row.get("journal") == "not_written":
-        parts.append("journal row not written")
-    return "; ".join(parts)
+        text += "; journal row not written"
+    return text
 
 
-def _stall(kind: str, row: Dict[str, Any]) -> str:
+def _stall(kind: str, row: Dict[str, Any], today: Any) -> str:
     where = " ".join(str(row[key]) for key in ("phase", "duty") if row.get(key))
-    ids = ", ".join(f"{key} {row[key]}" for key in ("task_id", "execution_id") if row.get(key))
-    stood = next((row[key] for key in ("stood_sec", "running_sec", "stalled_sec") if isinstance(row.get(key), (int, float))), None)
-    return (f"{kind} {where} since {_when(row.get('ts'))}".replace("  ", " ") + (f", {_sec(stood)} at onset" if stood is not None else "")
-            + (f" ({ids}; end not observed in window)" if ids else " (end not observed in window)"))
+    ident = str(row.get("task_id") or row.get("execution_id") or "")
+    return " ".join(part for part in (_STALL_WORDS.get(kind, kind), ident, where, "since", _clock(row.get("ts"), today)) if part)
 
 
-def _busy_minute(row: Dict[str, Any]) -> str:
-    """The newest ``supervisor_load`` row: sums, counts and maxima with their sites, never a share of time."""
-    text = f"{_when(row.get('ts'))}: event lag max {_sec(row.get('max_event_lag_sec'))} in {_sec(row.get('window_sec'))}"
+def _busy_minute(row: Dict[str, Any], today: Any) -> str:
+    """The newest ``supervisor_load`` row in one line: the worst event lag; per store, holds as
+    count/summed seconds by side, the longest hold's site after its store; the queue lock's holds."""
+    text = f"{_clock(row.get('ts'), today)}: lag ≤{_sec(row.get('max_event_lag_sec'))}"
     locks = row.get("store_locks")
     if isinstance(locks, dict) and locks and "error" not in locks:
-        buckets = [(f"{kind}.{side}", bucket) for kind, sides in locks.items() if isinstance(sides, dict)
-                   for side, bucket in sides.items() if isinstance(bucket, dict)]
-        if buckets:
-            longest = max(buckets, key=lambda item: float(item[1].get("max_sec") or 0.0))
-            text += "; store holds " + ", ".join(
-                f"{name} n={bucket.get('count')} sum={_sec(bucket.get('total_sec'))} max={_sec(bucket.get('max_sec'))}"
-                for name, bucket in buckets)
-            if longest[1].get("max_site"):
-                text += f", longest at {longest[1]['max_site']}"
-    if isinstance(row.get("queue_lock"), dict) and row["queue_lock"]:
-        text += "; queue lock " + ", ".join(f"{key} {value}" for key, value in row["queue_lock"].items())
+        longest, parts = (0.0, "", ""), []
+        for kind, sides in locks.items():
+            if not isinstance(sides, dict):
+                continue
+            parts.append(f"{kind} " + " ".join(f"{side[:1]}{bucket.get('count')}/{float(bucket.get('total_sec') or 0.0):.1f} s"
+                                               for side, bucket in sides.items() if isinstance(bucket, dict)))
+            for bucket in sides.values():
+                if isinstance(bucket, dict) and float(bucket.get("max_sec") or 0.0) >= longest[0] and bucket.get("max_site"):
+                    longest = (float(bucket.get("max_sec") or 0.0), kind, _site(bucket["max_site"]))
+        if parts:
+            text += "; holds " + ", ".join(part + (f" ({longest[2]})" if part.startswith(longest[1] + " ") else "") for part in parts)
+    queue = row.get("queue_lock")
+    if isinstance(queue, dict) and queue.get("count"):
+        text += f"; queue {queue.get('count')}/{float(queue.get('hold_total_sec') or 0.0):.1f} s"
     return text
 
 
@@ -508,9 +529,6 @@ def _runtime_facts(root: pathlib.Path) -> Tuple[str, str]:
 
     from ouroboros import store
 
-    version = sqlite3.sqlite_version_info
-    fixed = (version >= (3, 51, 3) or (version[:2] == (3, 50) and version[2] >= 7)
-             or (version[:2] == (3, 44) and version[2] >= 6))  # store._journal_mode's gate
     journal: Dict[str, str] = {}
     for rel in _STORE_FILES:
         path = root / rel
@@ -525,49 +543,46 @@ def _runtime_facts(root: pathlib.Path) -> Tuple[str, str]:
             log.debug("journal mode unreadable: %s", path, exc_info=True)
     runtime = f"python {platform.python_version()}, sqlite {sqlite3.sqlite_version}"
     if journal:
-        runtime += "; journal " + ", ".join(f"{name}={mode}" for name, mode in journal.items())
-    gate = ""
-    if "rollback" in journal.values():
-        gate = (f"WAL needs SQLite 3.51.3+ (or 3.50.7/3.44.6; this {sqlite3.sqlite_version} {'passes' if fixed else 'does not pass'}), "
-                "enforced file locks, a local filesystem; an update keeps the interpreter")
-    return runtime, gate
+        runtime += ", journal " + ", ".join(f"{name}={mode}" for name, mode in journal.items())
+    return runtime, WAL_GATE if "rollback" in journal.values() else ""
 
 
 def _last_update(root: pathlib.Path) -> str:
-    """The retained managed update's before/after samples in one line; "" without a retained attempt."""
+    """The retained managed update in one line: outcome and target, the first request's wait before
+    and after, RSS before and after (named peak when a side only knew its high-water mark), the duty
+    overruns the newest side counted; "" without a retained attempt."""
     from ouroboros.update_generation_facts import projection
 
     facts = projection(drive_root=root)
     if not isinstance(facts, dict):
         return ""
-    sides = []
-    for side in ("before", "after"):
-        sample = facts.get(side)
-        if not isinstance(sample, dict):
-            continue
-        text = f"{side} {_when(sample.get('observed_at'))}"
-        if sample.get("rss_bytes") is not None:
-            text += f" rss {int(sample['rss_bytes']) // 1048576} MiB ({sample.get('rss_measure')})"
-        if sample.get("cpu_percent") is not None:
-            text += f" cpu {float(sample['cpu_percent']):.1f}% of {_sec(sample.get('cpu_interval_seconds'))}"
-        if sample.get("duty_overruns"):
-            text += " duty overruns " + ", ".join(f"{name} {count}" for name, count in sample["duty_overruns"].items())
-        dispatch = sample.get("direct_message_first_dispatch")
-        if isinstance(dispatch, dict):
-            text += f" first dispatch {dispatch.get('task_id')} {_sec(dispatch.get('seconds'))}"
-        sides.append(text)
-    return f"{facts.get('outcome')} to {str(facts.get('target_sha') or '')[:12]}: " + "; ".join(sides)
+    sides = [(name, facts[name]) for name in ("before", "after") if isinstance(facts.get(name), dict)]
+    text = f"{facts.get('outcome')} {str(facts.get('target_sha') or '')[:12]}"
+    if not sides:
+        return text
+    dispatch = {name: (sample.get("direct_message_first_dispatch") or {}).get("seconds") for name, sample in sides}
+    text += ": first request " + " → ".join(f"{name} {_sec(dispatch[name]) if dispatch[name] is not None else 'none'}" for name, _s in sides)
+    if any(sample.get("rss_bytes") is not None for _n, sample in sides):
+        text += "; rss " + " → ".join(f"{int(sample['rss_bytes']) // 1048576}" if sample.get("rss_bytes") is not None else "?"
+                                      for _n, sample in sides) + " MiB"
+        if any(sample.get("rss_measure") == "peak" for _n, sample in sides):
+            text += " (peak)"
+    overruns = next((sample["duty_overruns"] for _n, sample in reversed(sides) if sample.get("duty_overruns")), None)
+    if overruns:
+        text += "; duty overruns " + ", ".join(f"{name} {count}" for name, count in overruns.items())
+    return text
 
 
 def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]:
     """The body's own dated facts beside ``storage``, one line each: the last owner turns from this
-    serving process's receipt ring (wait, slowest phase, dispatch basis, own transactions; the top
-    frame of a stall episode whose end row is still in the tail), stall onsets whose end was not
-    observed in the journal's bounded tail (never «current»), the last busy minute (sums, counts,
-    maxima and sites, never a percentage), the runtime (CPython, SQLite, journal per store, the WAL
-    gate), the retained update's before/after, the boot row, and a note that names the journal's
-    reader. Every absent source omits its key; a pooled worker says its owner-turn part is unknown.
-    Never raises."""
+    serving process's receipt ring (wait, slowest phase, dispatch basis when unobserved, own
+    transactions; the top frame of a stall episode whose end row is still in the tail), stall onsets
+    whose end was not observed in the journal's bounded tail (never «current»), the last busy minute
+    (counts and summed seconds per store and side, the longest hold's site, never a percentage), the
+    runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a rollback journal),
+    the retained update's before/after, the boot row, and a note that names the journal's reader.
+    Every absent source omits its key; a pooled worker says its owner-turn part is unknown. Never
+    raises."""
     import os
 
     root = pathlib.Path(data_root)
@@ -575,21 +590,20 @@ def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]
     try:
         tail = _supervisor_tail(root)
         if os.environ.get("OUROBOROS_IN_WORKER") == "1":
-            fact["owner_turns_note"] = ("unknown here: a pooled worker serves no owner turns; the serving process "
-                                        "keeps their receipts (the direct_turn rows of logs/supervisor.jsonl)")
+            fact["owner_turns_note"] = "unknown in a pooled worker; the serving process keeps the receipts"
         else:
             from supervisor.active_activity import direct_turns
 
             turns = direct_turns(limit=_OWNER_TURNS_SHOWN)
             if turns:
-                fact["owner_turns"] = [_owner_turn(row, tail["ended"]) for row in turns]
+                fact["owner_turns"] = [_owner_turn(row, tail["ended"], observed_at) for row in turns]
             else:
-                fact["owner_turns_note"] = "no owner turn's receipt recorded since this process started"
-        stalls = [_stall(kind, row) for (kind, _key), row in tail["open"].items()]
+                fact["owner_turns_note"] = "none since this process started"
+        stalls = [_stall(kind, row, observed_at) for (kind, _key), row in tail["open"].items()]
         if stalls:
-            fact["stalls"] = stalls
+            fact[_STALLS_KEY] = stalls
         if isinstance(tail.get("load"), dict):
-            fact["last_busy_minute"] = _busy_minute(tail["load"])
+            fact["busy_minute"] = _busy_minute(tail["load"], observed_at)
         fact["runtime"], gate = _runtime_facts(root)
         if gate:
             fact["wal_gate"] = gate
@@ -598,7 +612,7 @@ def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]
             fact["last_update"] = update
         boot = tail.get("boot")
         if isinstance(boot, dict):
-            fact["boot"] = (f"{_when(boot.get('ts'))} {boot.get('branch') or boot.get('git_branch')}@"
+            fact["boot"] = (f"{_clock(boot.get('ts'), observed_at)} {boot.get('branch') or boot.get('git_branch')}@"
                             f"{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
         fact["note"] = VITALS_NOTE
     except Exception:  # a fact about the body never breaks the Runtime section
@@ -620,7 +634,7 @@ def vitals_line(fact: Optional[Dict[str, Any]]) -> str:
     if not isinstance(fact, dict):
         return ""
     parts = [f"body as of {fact.get('observed_at')}"]
-    for key in ("owner_turns", "owner_turns_note", "stalls", "last_busy_minute", "runtime", "wal_gate", "last_update", "boot"):
+    for key in ("owner_turns", "owner_turns_note", _STALLS_KEY, "busy_minute", "runtime", "wal_gate", "last_update", "boot"):
         value = fact.get(key)
         if isinstance(value, list) and value:
             parts.append(f"{key.replace('_', ' ')} " + " | ".join(str(item) for item in value))
