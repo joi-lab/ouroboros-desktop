@@ -101,6 +101,21 @@ def quiet_finish(row: Dict[str, Any]) -> bool:
     return row.get("wake_silent") is True and not row.get("owner_message_sent") and not terminal_host_notice_text(row)
 
 
+def wake_cause_title(metadata: Dict[str, Any]) -> str:
+    """The host's admission title; the authored title slot stays empty."""
+    from ouroboros.consciousness_authority import wake_cause
+    from ouroboros.usage_origin import cause_label
+
+    cause = wake_cause(metadata)
+    if cause == "own_clock":
+        return "Own time"
+    if cause == "focus":
+        focus, place = metadata.get("focus") or {}, (metadata.get("presence") or {}).get("place") or {}
+        return str(focus.get("label") or cause_label(
+            str(metadata.get("consciousness_cause") or "place:" + str(focus.get("place_id") or "")), [place]))
+    return ""
+
+
 def terminal_notice_text(result: Dict[str, Any]) -> str:
     """The same terminal notices on transports with one text body or no event stream."""
     return "\n\n".join(part for part in (

@@ -1136,9 +1136,7 @@ def run_presence_turn(
 
         bind_review_wait(agent, lease=lease, event=event, task_id=task_id, identity=identity,
                          drive_root=Path(drive_root))
-        # The generic agent's RUNNING writer logs and continues on failure. Presence cannot:
-        # after a crash, absence of that row would otherwise authorize a second model/tool effect.
-        # This existing task-result authority is published and read back BEFORE handle_task.
+        # Read back RUNNING before execution: absence could authorize a duplicate after a crash.
         from ouroboros.task_results import write_task_result
         from ouroboros.task_status import execution_owner_record
 
@@ -1162,6 +1160,8 @@ def run_presence_turn(
         except (OSError, ValueError, StoreError) as exc:
             raise PresenceTurnError("presence_start_unwritable", "source_event_id", turn_ref=task_id) from exc
         try:
+            from supervisor.worker_chat_lane import name_wake_on_admission
+            name_wake_on_admission(drive_root, task)
             lease.intake_agent = agent
             events = agent.handle_task(task)
             # Unlike a pooled worker, this runner has no end-of-task event drain.
@@ -1172,11 +1172,11 @@ def run_presence_turn(
         except BaseException:  # its executor ended without a terminal: record that end, never a re-run
             _notify_unresolved_turn(Path(drive_root), task_id)
             raise
-        # The model can have a draft reply before every allowed route refuses quota, and the
-        # terminal write can fail after the start barrier. The durable terminal cause, not that
-        # draft or the presence_result envelope, determines whether the transport may
-        # acknowledge the original event; a row still RUNNING here is an unproven effect.
+        # Only the durable terminal proves the outcome; a draft or RUNNING row cannot authorize acknowledgement.
         terminal = _stored_turn(Path(drive_root), task_id, identity)
+        if terminal.get("wake_summary"):
+            from supervisor.worker_chat_lane import _broadcast_task_named
+            _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": terminal["wake_summary"]})
         row = next((item for item in events if item.get("type") == "presence_result"), None)
         refusal = _terminal_refusal(terminal)
         if refusal:

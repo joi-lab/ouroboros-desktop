@@ -63,7 +63,8 @@ def test_previous_wake_reads_one_document_and_keeps_the_whole_note(tmp_path, mon
     assert row["result"] in text and "{daily_usd}" in text, "authored placeholders are not rendered again"
 
 
-@pytest.mark.parametrize("status,word", [("completed", "Done"), ("failed", "Failed"), ("cancelled", "Stopped")])
+@pytest.mark.parametrize("status,word", [("completed", "Done"), ("failed", "Failed"),
+                                        ("cancelled", "Stopped"), ("interrupted", "Interrupted")])
 def test_previous_wake_uses_card_outcome_words_and_never_guesses_completion_time(tmp_path, status, word):
     row = seed_wake(tmp_path, status=status, outcome_axes={}, terminal_time=None)
     previous = wake.previous_wake_text(tmp_path, row["task_id"], now=T0)
@@ -75,7 +76,7 @@ def test_previous_wake_distinguishes_absence_and_unreadability(tmp_path, monkeyp
     from ouroboros import task_store
     from ouroboros.store import StoreError
 
-    assert wake.previous_wake_text(tmp_path, "missing", now=T0) == "none"
+    assert wake.previous_wake_text(tmp_path, "missing", now=T0) == "unreadable"
     reads = []
 
     def broken(root, task_id):
@@ -87,6 +88,50 @@ def test_previous_wake_distinguishes_absence_and_unreadability(tmp_path, monkeyp
     assert reads == []
     assert wake.previous_wake_text(tmp_path, "previous", now=T0) == "unreadable"
     assert reads == ["previous"]
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("failure", ["write", "readback"])
+def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(clock, monkeypatch, failure, restart):
+    from ouroboros import artifacts, chat_chain
+    from ouroboros.consciousness import BackgroundConsciousness, OBSERVATION_STATE_KEY, OWN_WAKE_STATE_KEY
+
+    template = REPO.joinpath("prompts/CONSCIOUSNESS.md").read_text(encoding="utf-8")
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(template, encoding="utf-8")
+    assert clock.clock.tick(T0 + clock_tests.FLOOR) == "launched"
+    accepted_a = clock.store[OBSERVATION_STATE_KEY]
+    seed_wake(clock.root, task_id="wake0001", result="A's whole note.", wake_summary="A's line.")
+    clock.receipt["task_id"] = "wake0002"
+    clock.clock._next_wake_at = T0 + 2 * clock_tests.FLOOR
+    with monkeypatch.context() as fault:
+        if failure == "write":
+            def failed_write(*a, **kw):
+                raise OSError("input source write failed")
+            fault.setattr(chat_chain, "retain_memory_source", failed_write)
+        else:
+            read = artifacts.read_actor_source_bytes
+            fault.setattr(artifacts, "read_actor_source_bytes", lambda root, task, ref:
+                          read(root, task, ref) if task == "wake0001" else b"bad readback")
+        assert clock.clock.tick(T0 + 2 * clock_tests.FLOOR) == "launched"
+    assert clock.store[OBSERVATION_STATE_KEY] == accepted_a
+    assert clock.store[OWN_WAKE_STATE_KEY]["task_id"] == "wake0002"
+    seed_wake(clock.root, task_id="wake0002", status="interrupted", outcome_axes={}, terminal_time=None,
+              result="B's whole note.\n\nStill unfinished.", wake_summary="B's line.")
+    seed_wake(clock.root, task_id="newer-foreign", result="Never use the newest task's note.")
+    if restart:
+        clock.clock = BackgroundConsciousness(clock.root, clock.root / "repo", lambda: 7,
+                                              now=T0 + 2 * clock_tests.FLOOR)
+        assert clock.clock._last_wake_task_id == "wake0002"
+    clock.receipt["task_id"] = "wake0003"
+    now = T0 + 3 * clock_tests.FLOOR
+    clock.clock._next_wake_at = now
+    expected = wake.previous_wake_text(clock.root, "wake0002", now=now)
+    assert "Interrupted" in expected and "B's whole note.\n\nStill unfinished." in expected
+    assert clock.clock.tick(now) == "launched"
+    launch = clock.launches[-1]
+    for rendered in (launch["text"], launch["task"]["metadata"]["wake_observation"]["projection_text"]):
+        assert f"- previous wake: {expected}\n" in rendered
+        assert "A's whole note." not in rendered and "Never use the newest task's note." not in rendered
 
 
 @pytest.mark.parametrize("has_previous", [True, False])

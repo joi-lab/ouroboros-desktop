@@ -163,6 +163,7 @@ def _record_forced_finalization(
     # answer (`_forced_final_answer`) and the no-spend host-fallback fence
     # path (`_handle_budget_exceeded` -> `_forced_fallback_result`).
     ctx.accumulated_usage.setdefault("terminal_origin", TERMINAL_ORIGIN_HOST_NOTICE)
+    ctx.accumulated_usage.pop("wake_summary", None)  # Only the accepting exit can publish the author's sentence.
     # Every rail returns this candidate's bytes. A wake's quiet selection stays
     # internal here too (the pipeline publishes only the host's outcome notice);
     # an ordinary replacement or the host's own fallback text is speech.

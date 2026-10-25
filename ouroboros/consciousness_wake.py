@@ -113,11 +113,12 @@ def previous_wake_text(drive_root: Any, task_id: str, *, now: float) -> str:
     except Exception:
         return "unreadable"
     if not row:
-        return "none"
+        return "unreadable"
     stamp = _parse_iso(terminal_time_fact(row).get("occurred_at"))
     ago = _ago(now - stamp) if stamp is not None else "at an unknown time"
     line = f"«{row['wake_summary']}»" if row.get("wake_summary") else "no line"
-    return (f"{task_id}, {OUTCOME_PHASE_HEADLINE[outcome_phase(row, {})]} {ago}; "
+    outcome = "Interrupted" if row.get("status") == "interrupted" else OUTCOME_PHASE_HEADLINE[outcome_phase(row, {})]
+    return (f"{task_id}, {outcome} {ago}; "
             f"its line: {line}; its note: «{row.get('result') or ''}»")
 
 
@@ -331,9 +332,9 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     title = _clip_preview(result.get("description") or result.get("text") or row.get("text"), 100)
     project = str(row.get("project_id") or result.get("project_id") or "")
     where = f" in project {projects.get(project, project)}" if project else ""
+    summary = f": {result['wake_summary']}" if result.get("wake_summary") else ""
     if kind in {"direct_turn", "direct_turn_summary"}:
-        return (f"- {'wake' if is_consciousness_origin(metadata) else 'direct turn'} {task_id} {status}{where}, {when}"
-                + (f": {result['wake_summary']}" if result.get("wake_summary") else ""))
+        return f"- {'wake' if is_consciousness_origin(metadata) else 'direct turn'} {task_id} {status}{where}, {when}{summary}"
     if is_presence_task(result):
         if isinstance(metadata.get("presence_unknown_outcome"), dict):
             from ouroboros.dialogue_provenance import render_row_text
@@ -343,11 +344,11 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
             retained = {"task_id": task_id, "type": "task_summary", "text": "",
                         "presence_recovery": retained_turn_facts(result, task_id),
                         "source_event": presence.get("event"), "source_text": presence.get("observed_text")}
-            return f"- Presence turn {task_id} {status}{where}, {when}; {render_row_text(retained)}"
+            return f"- Presence turn {task_id} {status}{where}, {when}; {render_row_text(retained)}{summary}"
         outcome = str(metadata.get("presence_outcome") or "unknown")
         work = str(metadata.get("presence_work_ref") or "")
         return (f"- Presence turn {task_id} {status}{where}, {when}; Presence outcome={outcome}; see get_task_result"
-                + (f"; deferred work={work}" if work else ""))
+                + (f"; deferred work={work}" if work else "") + summary)
     parent = str(row.get("parent_task_id") or result.get("parent_task_id") or "")
     role = str(row.get("delegation_role") or result.get("delegation_role") or "")
     noun = f"child task {task_id} of {parent}" if role == "subagent" and parent else f"task {task_id}"

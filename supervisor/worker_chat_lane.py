@@ -236,6 +236,23 @@ def _broadcast_task_named(msg: dict) -> None:
         log.debug("task_named broadcast failed", exc_info=True)
 
 
+def name_wake_on_admission(drive_root: Any, task: dict) -> None:
+    """Publish the wake's cause before its first frame, using the namer's enrichment seam."""
+    from ouroboros.task_finalization import wake_cause_title
+    from ouroboros.task_results import STATUS_RUNNING, load_task_result, write_task_result
+
+    name = wake_cause_title(task.get("metadata") or {})
+    if not name:
+        return
+    try:
+        task_id = str(task["id"])
+        current = load_task_result(drive_root, task_id) or {}
+        write_task_result(drive_root, task_id, current.get("status") or STATUS_RUNNING, suggested_name=name)
+        _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": name})
+    except Exception:
+        log.debug("wake admission title failed for %s", task.get("id"), exc_info=True)
+
+
 def _run_chat_task(
     agent: Any,
     chat_id: int,
@@ -453,6 +470,7 @@ def _admit_chat_task(
         attach_task_contract(task)
         from ouroboros.tool_access_roots import freeze_tool_profile
         freeze_tool_profile(task)
+        name_wake_on_admission(_pool().DRIVE_ROOT, task)
 
         # Announce the authoritative start immediately (owner decision 2A):
         # the client's `Sending...` retires on this receipt (once the census
