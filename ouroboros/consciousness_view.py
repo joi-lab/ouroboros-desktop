@@ -184,6 +184,25 @@ def _quiet(row: dict) -> bool:
     return row.get("wake_silent") is True and not row.get("owner_message_sent") and not terminal_host_notice_text(row)
 
 
+def _wake_phase(row: dict, clock_live: bool) -> str:
+    """Terminal card outcome, or the existing work classifier over stored activity facts."""
+    from ouroboros.gateway.work_status import classify_member
+    from ouroboros.project_dialogue import outcome_phase
+    from ouroboros.task_status import FINAL_STATUSES
+    from ouroboros.work_stop import stop_presentation
+
+    status = str(row.get("status") or "")
+    if status in FINAL_STATUSES:
+        return outcome_phase(row, {})
+    phase = {"running": "working", "requested": "queued", "scheduled": "queued",
+             "queued": "queued", "paused": "budget_paused"}.get(status, "working" if clock_live else "unknown")
+    stop = stop_presentation(row)
+    if stop["stop"] or stop["waiting"]:
+        phase = "budget_paused"
+    activity = classify_member({**row, "activity_id": row["task_id"], "phase": phase}, row)["activity"]
+    return "running" if activity == "working" else activity
+
+
 def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None) -> list[dict]:
     """At most 50 wakes that reached a model call in the last 48 h, newest first.
 
@@ -193,7 +212,6 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
     the dialogue task index. Missing historical evidence stays unknown.
     """
     from ouroboros.consciousness_authority import wake_cause
-    from ouroboros.project_dialogue import outcome_phase
     from ouroboros.task_results import TASK_COST_META_FIELDS
     from ouroboros.task_status import FINAL_STATUSES
     from ouroboros.task_store import display_documents
@@ -210,19 +228,21 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
             continue
         row = json.loads(documents[task_id])
         metadata = row.get("metadata") or {}
-        cause = wake_cause(metadata)
+        # Category-only legacy roots use the allowance's own-clock fallback.
+        cause = "focus" if wake_cause(metadata) == "focus" else "own"
         focus = metadata.get("focus") or {}
         place_id = str(focus.get("place_id") or "")
-        rows.append({"task_id": task_id, "cause": cause, "place_id": place_id,
+        usage = (row.get("loop_outcome") or {}).get("usage") or {}
+        rows.append({"task_id": task_id, "cause": cause,
                      "chat_id": row.get("chat_id"), "conversation": str(focus.get("conversation_key") or ""),
                      "place_label": cause_label(f"place:{place_id}", places or ()) if place_id else "",
                      "started_at": row.get("started_at"),
-                     "first_reply_at": first_reply_at(drive_root, task_id) if cause == "focus" else None,
+                     **({"first_reply_at": first_reply_at(drive_root, task_id)} if cause == "focus" else {}),
                      "ended_at": terminal_time_fact(row)["occurred_at"],
                      "live": live_wake_task_id == task_id or row.get("status") not in FINAL_STATUSES,
-                     "phase": outcome_phase(row, {}), "quiet": _quiet(row),
-                     "tool_calls": row.get("tool_calls"),
-                     "rounds": ((row.get("loop_outcome") or {}).get("usage") or {}).get("total_rounds"),
+                     "phase": _wake_phase(row, live_wake_task_id == task_id), "quiet": _quiet(row),
+                     **({"tool_calls": row["tool_calls"]} if "tool_calls" in row else {}),
+                     **({"rounds": usage["total_rounds"]} if "total_rounds" in usage else {}),
                      "checks": row.get("safety_checks", []), "note": notes.get(task_id),
                      **({"summary": row["wake_summary"]} if "wake_summary" in row else {}),
                      **({"said_owner": bool(row["owner_message_sent"])} if "owner_message_sent" in row else {}),

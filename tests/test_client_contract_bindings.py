@@ -314,15 +314,25 @@ def test_every_request_and_header_fact_is_published_for_the_journeys():
 
 @pytest.mark.parametrize("with_summary", [False, True])
 @pytest.mark.parametrize("live", [False, True])
-def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_summary, live):
+@pytest.mark.parametrize("cause,status,wait,phase", [
+    ("own_clock", "completed", {}, "done"), ("own_clock", "running", {}, "running"),
+    ("focus", "running", {"state": "waiting", "quiz_id": "q1"}, "waiting"),
+    ("focus", "scheduled", {}, "queued"), ("focus", "paused", {}, "paused"),
+    ("own_clock", "interrupted", {}, "unknown"),
+])
+def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_summary, live, cause, status, wait, phase):
     from ouroboros import usage_accounting
     from ouroboros.consciousness import BackgroundConsciousness
     from ouroboros.task_results import TASK_COST_META_FIELDS
     from tests._store_shared import seed_result
 
     root = client.app.state.drive_root
-    document = json.loads((REPO / "tests/fixtures/wake_document_214a31b6.json").read_text())
+    document = json.loads((REPO / "tests/fixtures/wake_document_214a31b6.json").read_text(encoding="utf-8"))
     task_id = document["task_id"]
+    document["metadata"]["wake_cause"] = cause
+    if status != "completed":
+        document.update(status=status, outcome_axes={}, owner_wait=wait)
+        document.pop("terminal_time")
     if with_summary:
         document.update(wake_summary="Проверил состояние; нового решения не требуется.", owner_message_sent=True)
     seed_result(root, task_id, document)
@@ -340,15 +350,22 @@ def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_sum
     assert not validate_ingress(row, shape)
     assert set(row) <= _declared("RecentWake")
     assert set(TASK_COST_META_FIELDS) <= _declared("RecentWake")
-    assert row["live"] is live and row["quiet"] is (not with_summary)
+    assert row["live"] is (live or status != "completed") and row["quiet"] is (not with_summary)
+    assert row["phase"] == ("running" if status == "interrupted" and live else phase)
+    assert row["cause"] == ("focus" if cause == "focus" else "own")
+    assert ("first_reply_at" in row) is (cause == "focus")
+    assert "place_id" not in row and "tool_calls" not in row
+    assert row["cost_presentation"] == document["cost_presentation"]
     assert row["note"] == document["result"]
     assert ("summary" in row) is with_summary and ("said_owner" in row) is with_summary
     assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
-    for field, invalid in (("live", "false"), ("phase", "completed"), ("ended_at", 7),
+    for field, invalid in (("live", "false"), ("phase", "completed"), ("cause", "own_clock"), ("ended_at", 7),
                            ("tool_calls", "16"), ("checks", [{"chip": "checked", "tool": 7}]),
                            ("cost_presentation", {"scope": "root_tree"})):
         assert validate_ingress({**row, field: invalid}, shape), field
     assert validate_ingress({key: value for key, value in row.items() if key != "task_id"}, shape)
+    assert not validate_ingress({key: value for key, value in row.items()
+                                 if key not in {"tool_calls", "rounds", "first_reply_at"}}, shape)
 
 
 def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):

@@ -322,20 +322,19 @@ class RecentWake(TypedDict):
 
     task_id: str
     chat_id: Optional[int]
-    cause: str
-    place_id: str
+    cause: Literal["own", "focus"]
     place_label: str
     conversation: str
     started_at: Optional[str]
-    first_reply_at: Optional[str]
+    first_reply_at: NotRequired[Optional[str]]
     ended_at: Optional[str]
     live: bool
-    phase: Literal["working", "done", "warn", "error", "cancelled"]
+    phase: Literal["running", "waiting", "queued", "paused", "unknown", "working", "done", "warn", "error", "cancelled"]
     quiet: bool
     summary: NotRequired[str]
     note: Optional[str]
-    tool_calls: Optional[int]
-    rounds: Optional[int]
+    tool_calls: NotRequired[Optional[int]]
+    rounds: NotRequired[Optional[int]]
     checks: List[RecentWakeCheck]
     said_owner: NotRequired[bool]
     accounted_upper_bound_usd: NotRequired[Optional[float]]

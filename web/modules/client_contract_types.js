@@ -526,20 +526,19 @@
  * @typedef {Object} RecentWake
  * @property {string} task_id
  * @property {?number} chat_id
- * @property {string} cause
- * @property {string} place_id
+ * @property {'own'|'focus'} cause
  * @property {string} place_label
  * @property {string} conversation
  * @property {?string} started_at
- * @property {?string} first_reply_at
+ * @property {?string=} first_reply_at
  * @property {?string} ended_at
  * @property {boolean} live
- * @property {'working'|'done'|'warn'|'error'|'cancelled'} phase
+ * @property {'running'|'waiting'|'queued'|'paused'|'unknown'|'working'|'done'|'warn'|'error'|'cancelled'} phase
  * @property {boolean} quiet
  * @property {string=} summary
  * @property {?string} note
- * @property {?number} tool_calls
- * @property {?number} rounds
+ * @property {?number=} tool_calls
+ * @property {?number=} rounds
  * @property {Array<RecentWakeCheck>} checks
  * @property {boolean=} said_owner
  * @property {?number=} accounted_upper_bound_usd

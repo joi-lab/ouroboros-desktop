@@ -27,7 +27,7 @@ def _call(root, monkeypatch, task_id, *, at=NOW - 60, category="consciousness", 
 
 @pytest.fixture
 def wake(tmp_path, monkeypatch):
-    document = json.loads(FIXTURE.read_text())
+    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
     seed_result(tmp_path, document["task_id"], document)
     _call(tmp_path, monkeypatch, document["task_id"])
     monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
@@ -92,9 +92,10 @@ def test_real_terminal_wake_uses_terminal_fact_and_card_phase(tmp_path, wake):
     assert row["note"] == wake["result"] and "omitted" not in row["note"]
     assert "summary" not in row and "said_owner" not in row
     assert not {"finished_at", "outcome", "unmetered", "cost_usd"} & row.keys()
-    assert row["first_reply_at"] is None and row["conversation"] == ""
+    assert row["cause"] == "own" and row["conversation"] == ""
+    assert "first_reply_at" not in row and "place_id" not in row
     assert row["rounds"] == 9  # accepted solve responses, not 13 physical calls
-    assert row["tool_calls"] is None  # the old document has no typed count
+    assert "tool_calls" not in row  # the old document has no typed count
 
 
 def test_clock_identity_alone_can_keep_a_terminal_wake_live(tmp_path, wake):
@@ -102,10 +103,12 @@ def test_clock_identity_alone_can_keep_a_terminal_wake_live(tmp_path, wake):
         row, = view.recent_wakes(tmp_path, [], live_wake_task_id=live_id)
         assert row["live"] is expected
         assert row["ended_at"] == wake["terminal_time"]["occurred_at"]
+        assert row["phase"] == "done"  # clock identity never overwrites a known outcome
 
 
 @pytest.mark.parametrize("status,phase,live", [
-    ("running", "working", True), ("interrupted", "working", True), ("paused", "working", True),
+    ("running", "running", True), ("interrupted", "unknown", True), ("paused", "paused", True),
+    ("scheduled", "queued", True), ("requested", "queued", True), ("queued", "queued", True),
     ("completed", "done", False), ("failed", "error", False), ("cancelled", "cancelled", False),
     ("rejected_duplicate", "warn", False),
 ])
@@ -118,6 +121,44 @@ def test_status_is_independent_of_missing_terminal_time(tmp_path, wake, status, 
     row, = view.recent_wakes(tmp_path, [])
     assert row["live"] is live and row["ended_at"] is None
     assert row["phase"] == phase and row["quiet"] is False
+
+
+@pytest.mark.parametrize("clock_live", [False, True])
+@pytest.mark.parametrize("status,owner_wait,phase", [
+    ("running", {}, "running"),
+    ("running", {"state": "waiting", "quiz_id": "q1"}, "waiting"),
+    ("running", {"state": "resumed", "owner_wait_state": "resumed", "quiz_id": "q1"}, "running"),
+    ("running", {"state": "answered", "wait_for_answer": True}, "running"),
+    ("running", {"state": "open", "quiz_id": "q1"}, "unknown"),
+    ("scheduled", {}, "queued"),
+    ("scheduled", {"state": "waiting", "quiz_id": "q1"}, "waiting"),
+    ("paused", {}, "paused"),
+])
+def test_live_wakes_keep_the_task_activity_word(tmp_path, wake, status, owner_wait, phase, clock_live):
+    wake.update(status=status, owner_wait=owner_wait, outcome_axes={}, wake_silent=False)
+    wake.pop("terminal_time")
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [], live_wake_task_id=wake["task_id"] if clock_live else "")
+    assert row["live"] is True and row["ended_at"] is None
+    assert row["phase"] == phase
+
+
+@pytest.mark.parametrize("clock_live", [False, True])
+def test_unconfirmed_status_needs_clock_evidence_to_say_running(tmp_path, wake, clock_live):
+    wake.update(status="interrupted", outcome_axes={}, wake_silent=False)
+    wake.pop("terminal_time")
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [], live_wake_task_id=wake["task_id"] if clock_live else "other")
+    assert row["phase"] == ("running" if clock_live else "unknown")
+
+
+@pytest.mark.parametrize("pause_state,phase", [("paused", "paused"), ("released", "queued")])
+def test_scheduled_wake_keeps_the_durable_pause_word(tmp_path, wake, pause_state, phase):
+    wake.update(status="scheduled", outcome_axes={}, budget_pause={"state": pause_state})
+    wake.pop("terminal_time")
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [], live_wake_task_id=wake["task_id"])
+    assert row["phase"] == phase and row["live"] is True
 
 
 def test_terminal_time_for_another_attempt_is_unknown(tmp_path, wake):
@@ -173,7 +214,19 @@ def test_cost_and_checks_pass_through_without_invented_facts(tmp_path, wake, mon
         assert {k: row[k] for k in TASK_COST_META_FIELDS if k in row} == {
             k: wake[k] for k in TASK_COST_META_FIELDS if k in wake}
         assert row["checks"] == (wake["safety_checks"] if present else [])
-        assert row["rounds"] == (9 if present else None)
+        assert row.get("rounds") == (9 if present else None)
+        assert ("rounds" in row) is present
+
+
+@pytest.mark.parametrize("checks", [[], [
+    {"chip": "not_checked", "tool": "read_file"}, {"chip": "not_checked", "tool": "run_command"},
+    {"chip": "warned", "tool": "send_message"}, {"chip": "held", "tool": "send_message"},
+]])
+def test_check_chips_and_tools_are_the_stored_facts(tmp_path, wake, checks):
+    wake["safety_checks"] = checks
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["checks"] == checks
 
 
 def test_typed_counts_keep_zero_and_known_values(tmp_path, wake):
@@ -197,7 +250,31 @@ def test_unrelated_newer_tasks_and_unstarted_wakes_do_not_hide_a_wake(tmp_path, 
     _call(tmp_path, monkeypatch, "legacy", at=NOW)
     rows = view.recent_wakes(tmp_path, [])
     assert [r["task_id"] for r in rows] == ["legacy", wake["task_id"]]
-    assert rows[0]["cause"] == ""
+    assert rows[0]["cause"] == "own"  # the allowance's legacy category fallback
+
+
+def test_selection_uses_the_category_time_index(tmp_path, monkeypatch, wake):
+    from contextlib import contextmanager
+
+    queries = []
+    real_read = usage_store.read
+    @contextmanager
+    def traced(*args, **kwargs):
+        assert kwargs["allow_stale"] is True
+        with real_read(*args, **kwargs) as txn:
+            txn.conn.set_trace_callback(queries.append)
+            try:
+                yield txn
+            finally:
+                txn.conn.set_trace_callback(None)
+    monkeypatch.setattr(usage_store, "read", traced)
+    assert [row["task_id"] for row in view.recent_wakes(tmp_path, [])] == [wake["task_id"]]
+    query, = [sql for sql in queries if sql.startswith("SELECT root_task_id FROM attempts")]
+    with real_read(tmp_path, allow_stale=True) as txn:
+        plan = [row[3] for row in txn.conn.execute("EXPLAIN QUERY PLAN " + query)]
+    assert any("SEARCH attempts USING INDEX attempts_category_time (category=? AND ts_last_epoch>?)" in step
+               for step in plan), plan
+    assert not any("SCAN attempts" in step for step in plan), plan
 
 
 def test_selection_is_distinct_bounded_and_ordered_by_ledger_time(tmp_path, monkeypatch, wake):
@@ -341,4 +418,4 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path,
     assert row["phase"] == "done" and row["live"] is False
     assert row["conversation"] == "chat:a:r" and row["chat_id"] == -7
     labelled, = view.recent_wakes(tmp_path, [{"place_id": "mail", "label": "Inbox"}])
-    assert labelled["place_label"] == "Inbox"
+    assert labelled["cause"] == "focus" and labelled["place_label"] == "Inbox"
