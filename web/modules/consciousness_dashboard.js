@@ -97,11 +97,12 @@ export function dashboardPlaceRowHtml(place, { awake = false } = {}) {
     const unknown = place.spent24hUsd == null;
     const spend = unknown ? tr('places.money.unknown', 'unknown') : usdText(place.spent24hUsd);
     const spendWords = unknown ? tr('places.money.aria', 'spend unknown') : fmt('{spend} spent', { spend });
+    const readiness = place.readiness ? tr(`places.readiness.${place.readiness.text}`, place.readiness.text) : '';
     return `<li><button type="button" class="consciousness-dash-place" data-place-open="${escapeHtml(place.id)}"
             aria-label="${escapeHtml(fmt('Open {place}{awake}: {status}; {spend} in 24 hours', { place: place.label,
-                awake: awake ? tr('places.awake', ', awake here now') : '', status: placeStatusText(place), spend: spendWords }))}">
+                awake: awake ? tr('places.awake', ', awake here now') : '', status: [placeStatusText(place), readiness].filter(Boolean).join('; '), spend: spendWords }))}">
         <span class="consciousness-dash-place-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 18)}</span><span class="consciousness-place-name" data-i18n-authored>${escapeHtml(place.label)}</span>${awake ? dots() : ''}</span>
-        <span class="consciousness-dash-place-meta">${escapeHtml(placeStatusText(place))}${place.readiness?.text ? `${SEP}<span data-tone="${escapeHtml(place.readiness.tone)}">${escapeHtml(tr(`places.readiness.${place.readiness.text}`, place.readiness.text))}</span>` : ''}</span>
+        <span class="consciousness-dash-place-meta">${escapeHtml(placeStatusText(place))}${readiness ? `${SEP}<span data-tone="${escapeHtml(place.readiness.tone)}">${escapeHtml(readiness)}</span>` : ''}</span>
         <span class="consciousness-spend${unknown ? ' is-none' : ''}">${escapeHtml(spend)}</span>
     </button></li>`;
 }

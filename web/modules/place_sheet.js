@@ -51,8 +51,8 @@ function wakesHtml(place) {
         const chosen = place.wakes.find((wake) => wake.fact === fact);
         const authored = typeof item === 'object';
         const label = authored ? item.label : capitalized(wakeFactWord(fact));
-        return `<li><label class="place-wake-item"><input type="checkbox" data-place-act="${chosen ? 'remove-wake' : 'add-wake'}" data-fact="${escapeHtml(fact)}"${chosen ? ' checked' : ''}>
-            <span${authored ? ' data-i18n-authored' : ''}>${escapeHtml(label)}</span>${chosen ? chipHtml(tr(`places.author.${chosen.author}`, authorWord(chosen.author)), 'neutral') : ''}</label></li>`;
+        return `<li class="place-wake-item"><label class="place-wake-toggle ui-hit-area"><input class="ui-checkbox" type="checkbox" data-place-act="${chosen ? 'remove-wake' : 'add-wake'}" data-fact="${escapeHtml(fact)}"${chosen ? ' checked' : ''}>
+            <span${authored ? ' data-i18n-authored' : ''}>${escapeHtml(label)}</span></label>${chosen ? chipHtml(tr(`places.author.${chosen.author}`, authorWord(chosen.author)), 'neutral') : ''}</li>`;
     }).join('');
     const service = `<span data-i18n-authored>${escapeHtml(place.label.split(' · ')[0])}</span>`;
     return `<p class="place-sheet-note">${fmt('A checked kind calls it here at once, when {service} reports it.', { service })}</p>
@@ -141,9 +141,10 @@ export function placeSheetBodyHtml(place, ui = {}) {
     const view = { drafts: {}, status: {}, ...ui };
     if (view.removed) place = { ...place, notes: [], ownerAccounts: [], accountCandidates: [] };
     return [
-        view.conflict ? statusLine({ text: tr('places.conflict', 'Changed elsewhere; your text is kept.'), tone: 'warn' }) : '',
-        view.removed ? statusLine({ text: tr('places.disconnected', 'This place is disconnected.'), tone: 'muted' })
-            : statusLine(view.readiness || (place.readiness && { ...place.readiness, text: tr(`places.readiness.${place.readiness.text}`, place.readiness.text) })),
+        view.conflict || view.removed || view.readiness || place.readiness ? section('readiness', '',
+            (view.conflict ? statusLine({ text: tr('places.conflict', 'Changed elsewhere; your text is kept.'), tone: 'warn' }) : '')
+            + (view.removed ? statusLine({ text: tr('places.disconnected', 'This place is disconnected.'), tone: 'muted' })
+                : statusLine(view.readiness || (place.readiness && { ...place.readiness, text: tr(`places.readiness.${place.readiness.text}`, place.readiness.text) }))), view) : '',
         view.removed ? '' : section('state', '', stateHtml(place, view), view),
         view.removed ? '' : section('wakes', tr('places.calls', 'What calls it here'), wakesHtml(place), view),
         section('accounts', 'Your accounts here', accountsHtml(place, view), view),

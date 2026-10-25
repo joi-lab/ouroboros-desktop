@@ -62,6 +62,10 @@ test('a place row: icon, label, state and wakes in words, the day\'s spend; unkn
     assert.match(strip(slack), /Slack · Acme active · wakes for direct messages, mentions and replies · 2 open turns · Connector on \$0\.88/);
     assert.match(slack, /class="status-mark consciousness-mark"/);
     assert.match(slack, /aria-label="Open Slack · Acme, awake here now: /);
+    assert.match(slack, /aria-label="[^"]*Connector on/);
+    const off = dashboardPlaceRowHtml({ ...places[0], readiness: { text: 'Off in Skills', tone: 'warn' } });
+    assert.match(off, /aria-label="[^"]*Off in Skills/);
+    assert.doesNotMatch(off, /Connector on/);
     assert.match(dashboardPlaceRowHtml(places[1]), /class="consciousness-spend is-none">unknown</);
     assert.match(dashboardPlaceRowHtml(places[1]), /spend unknown/);
     assert.doesNotMatch(dashboardPlaceRowHtml(places[1]), /nothing spent|\$0\.00 spent/);

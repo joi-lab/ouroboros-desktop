@@ -231,8 +231,10 @@ textarea.ui-control.consciousness-owner-words {
     color: var(--system-text);
 }
 .place-wake-list, .place-note-list { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
-.place-wake-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); }
-.place-wake-item > .btn { margin-inline-start: auto; }
+.place-wake-item { display: flex; flex-wrap: nowrap; align-items: center; min-height: 32px; gap: var(--space-2); color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); }
+.place-wake-toggle { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; gap: var(--space-2); cursor: pointer; }
+.place-wake-toggle > span { min-width: 0; overflow-wrap: anywhere; }
+.place-wake-item > .ui-chip { flex: 0 0 auto; margin-inline-start: auto; }
 .place-wake-offers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .place-accounts { display: flex; flex-direction: column; gap: var(--space-2); }
 .place-account .harness-account-meta, .place-connector-row .harness-account-meta { color: var(--text-meta); }
@@ -247,6 +249,7 @@ textarea.ui-control.consciousness-owner-words {
 .place-note-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .place-field-row { display: flex; align-items: center; gap: var(--space-2); }
 .place-field-row .ui-control { flex: 1 1 auto; min-width: 0; }
+.place-field-row .ui-model-chooser { flex: 1 1 auto; min-width: 0; }
 .place-field-row .btn { flex: 0 0 auto; }
 .place-disconnect-confirm { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius-inner); background: var(--surface-tray); }
 @container placesheet (max-width: 480px) {
