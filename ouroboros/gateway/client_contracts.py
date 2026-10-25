@@ -278,6 +278,11 @@ class OwnerEffortRangeRequest(TypedDict):
     project_id: NotRequired[str]
 
 
+class OwnerSubagentsModeRequest(TypedDict):
+    mode: Literal["off", "auto", "swarm"]
+    project_id: NotRequired[str]
+
+
 class OwnerSafetyModeRequest(TypedDict):
     kind: NotRequired[Literal["your_work", "consciousness"]]
     mode: Literal["full", "light", "off"]
@@ -594,7 +599,7 @@ __all__ = [
     "SettingsReadResponse", "SettingsWriteRefusal",
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
-    "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
+    "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSubagentsModeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
     "PlaceConnectRequest", "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",
     "ProjectListResponse", "ProjectCreateResponse", "ProjectUpdateRequest", "ProjectUpdateResponse",

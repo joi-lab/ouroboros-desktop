@@ -210,14 +210,16 @@ def _actor_project(scope: tuple[Path, Mapping]) -> str:
 def _with_cognition(snapshot: TaskSettingsSnapshot, cognition: Mapping) -> TaskSettingsSnapshot:
     from ouroboros.composer_cognition import cognition_overrides
     from ouroboros.context_mode_compat import VALID_CONTEXT_MODES
-    from ouroboros.settings_scales import EFFORT_SCALE, effort_rank
+    from ouroboros.settings_scales import EFFORT_SCALE, effort_rank, VALID_SUBAGENTS_MODES
 
     effort = cognition.get("effort_range")
-    if (cognition.get("context_mode") not in VALID_CONTEXT_MODES or not isinstance(effort, Mapping)
+    if (cognition.get("subagents_mode", "auto") not in VALID_SUBAGENTS_MODES
+            or cognition.get("context_mode") not in VALID_CONTEXT_MODES or not isinstance(effort, Mapping)
             or any(effort.get(key) not in EFFORT_SCALE for key in ("min", "recommended", "max"))
             or effort_rank(effort["min"]) > effort_rank(effort["max"])):
         raise ValueError("Saved actor cognition is invalid")
     values = cognition_overrides(cognition)
+    values.pop("OUROBOROS_SUBAGENTS_MODE")  # this axis is live, never restored from an actor snapshot
     values["OUROBOROS_CONTEXT_MODE_AUTO_LOW"] = cognition.get("context_mode_auto_low", "false")
     return replace(snapshot, settings=MappingProxyType({**snapshot.settings, **values}),
                    environ=MappingProxyType({**snapshot.environ, **values}))
@@ -250,6 +252,7 @@ def captured_cognition() -> dict | None:
     if snapshot is None:
         return None
     cognition = cognition_from_settings(snapshot.environ)
+    cognition.pop("subagents_mode")
     marker = snapshot.environ.get("OUROBOROS_CONTEXT_MODE_AUTO_LOW", "")
     if cognition["context_mode"] == "low" and not owner_declared_low(marker):
         cognition["context_mode_auto_low"] = marker
@@ -279,6 +282,26 @@ def live_effort_range() -> dict[str, str]:
         return effort_range(settings)
     root, _actor = snapshot.actor_scope
     return read_cognition(root, _actor_project(snapshot.actor_scope), settings=settings)["effort_range"]
+
+
+def live_subagents_mode() -> str:
+    """Current stored own-room choice, independent of task/checkpoint settings."""
+    from ouroboros import config
+    from ouroboros.composer_cognition import read_cognition
+
+    settings = config.load_settings()
+    snapshot = _TASK_SETTINGS.get()
+    if snapshot is None or snapshot.actor_scope is None:
+        return config.normalize_subagents_mode(settings.get("OUROBOROS_SUBAGENTS_MODE"))
+    return read_cognition(snapshot.actor_scope[0], _actor_project(snapshot.actor_scope), settings=settings)["subagents_mode"]
+
+
+def effective_subagents_mode() -> str:
+    """Settings can withhold the catalog without changing the saved room choice."""
+    from ouroboros import config
+    from ouroboros.subagent_runtime import subagents_availability
+
+    return live_subagents_mode() if subagents_availability(config.load_settings()) == "available" else "off"
 
 
 def read_environ() -> Mapping:

@@ -717,6 +717,7 @@ class EffortRange(TypedDict):  # helper min ≤ max; primary recommended is inde
 
 
 class ProjectCognition(TypedDict):
+    subagents_mode: Literal["off", "auto", "swarm"]
     context_mode: str
     effort_range: EffortRange
 
@@ -725,6 +726,13 @@ class OwnerEffortRangeResponse(TypedDict):
     ok: bool
     effort_range: EffortRange
     project_id: str
+    cognition: ProjectCognition
+
+
+class OwnerSubagentsModeResponse(TypedDict):
+    ok: bool
+    project_id: str
+    subagents_mode: Literal["off", "auto", "swarm"]
     cognition: ProjectCognition
 
 
@@ -753,6 +761,8 @@ class StateResponse(WorkStateFields):
     supervisor_error: Optional[str]
     runtime_mode: str
     context_mode: str
+    subagents_mode: Literal["off", "auto", "swarm"]  # Main stored choice
+    subagents_availability: Literal["available", "disabled", "unsaved"]
     context_mode_auto_low: bool  # frozen compatibility field, always False (persistent auto-Low is retired)
     effort_range: EffortRange  # the owner's effort range (POST /api/owner/effort-range), the tolerant read
     safety_mode: str
@@ -1537,7 +1547,7 @@ __all__ = [
     "TaskContinueRequest", "TaskContinueResponse", "ContinuationOffer",
     "TaskHurryRequest", "TaskHurryResponse",
     "OwnerHurryProjection",
-    "EffortRange", "OwnerEffortRangeResponse",
+    "EffortRange", "OwnerEffortRangeResponse", "OwnerSubagentsModeResponse",
     "LogTailResponse",
     "StorageCount", "StorageCounting", "StorageError", "StoragePart", "StoragePlace", "StorageResponse",
     "StorageRest", "StorageVolume",

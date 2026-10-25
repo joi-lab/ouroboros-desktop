@@ -32,6 +32,8 @@
  * @property {BootDocument=} boot  // the boot phases (same object as /api/health.boot); the Starting… header paints them
  * @property {string} runtime_mode
  * @property {string} context_mode
+ * @property {"off"|"auto"|"swarm"} subagents_mode
+ * @property {"available"|"disabled"|"unsaved"} subagents_availability
  * @property {boolean} context_mode_auto_low  // frozen compatibility field; always false
  * @property {EffortRange} effort_range  // the owner's effort range (POST /api/owner/effort-range), the tolerant read
  * @property {string} safety_mode
@@ -234,7 +236,7 @@
  * @property {string} content
  * @property {string=} sender_session_id
  * @property {string=} client_message_id
- * @property {boolean=} force_plan
+ * @property {boolean=} force_plan  // Deprecated for one release; accepted and ignored.
  * @property {Array<Object>=} attachments  // [{filename, display_name, mime}] — image uploads become native blocks (v6.26.0)
  * @property {number=} chat_id     // multi-project thread routing (v6.32.0); main chat = 1
  * @property {string=} project_id  // per-project memory scope (v6.32.0)
@@ -886,7 +888,16 @@
  */
 
 /**
+ * @typedef {Object} OwnerSubagentsModeResponse
+ * @property {boolean} ok
+ * @property {string} project_id
+ * @property {"off"|"auto"|"swarm"} subagents_mode
+ * @property {ProjectCognition} cognition
+ */
+
+/**
  * @typedef {Object} ProjectCognition
+ * @property {"off"|"auto"|"swarm"} subagents_mode
  * @property {string} context_mode
  * @property {EffortRange} effort_range
  */

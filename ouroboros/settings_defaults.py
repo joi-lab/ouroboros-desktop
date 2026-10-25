@@ -216,6 +216,7 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # legacy/undecided read. The former review-lane keys are RETIRED (see
     # REVIEW_POOL_MIGRATED_SETTING_KEYS) and migrate into this catalog on read.
     "OUROBOROS_SUBAGENTS": "",
+    "OUROBOROS_SUBAGENTS_MODE": "auto",
     # INSTALL-TIME facts: the agent-preset generation this install received, and WHEN onboarding last completed
     # (recorded on EVERY completion). Endpoint-authored and disk-only — see ENDPOINT_AUTHORED_SETTINGS.
     "OUROBOROS_SUBSCRIPTION_PRESET_VERSION": "",

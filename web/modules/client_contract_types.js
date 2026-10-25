@@ -501,6 +501,12 @@
  */
 
 /**
+ * @typedef {Object} OwnerSubagentsModeRequest
+ * @property {"off"|"auto"|"swarm"} mode
+ * @property {string=} project_id
+ */
+
+/**
  * @typedef {Object} OwnerSafetyModeRequest
  * @property {'your_work'|'consciousness'=} kind
  * @property {'full'|'light'|'off'} mode

@@ -171,6 +171,13 @@ def model_visible_subagent_catalog(settings: Mapping[str, Any]) -> dict[str, Any
     return {"rows": rows}
 
 
+def subagents_availability(settings: Mapping[str, Any]) -> str:
+    """Global catalog availability for the capsule; never rewrites room choices."""
+    if model_visible_subagent_catalog(settings):
+        return "available"
+    return "unsaved" if offered_subagents(settings).source in {SOURCE_UNDECIDED, SOURCE_INVALID} else "disabled"
+
+
 def current_model_visible_subagent_catalog() -> dict[str, Any]:
     """Read the current normalized settings and return the stable catalog."""
 
