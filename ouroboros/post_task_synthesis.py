@@ -5,8 +5,8 @@ The best-effort work the post-task orchestrator
 task ends: the tool-trace summary, the free host facts row, the fallback
 memory draft or candidate and scratchpad compression,
 plus the shared pre-synthesis usage snapshot and the compact review
-projection. No stage writes lessons, the Pattern Register or the backlog:
-the acting mind authors those (``knowledge_write``). Extracted from
+projection. No stage writes lessons or knowledge notes: the acting mind
+authors those (``knowledge_write``). Extracted from
 agent_task_pipeline.py; the pipeline re-exports every name, so historical
 imports and monkeypatch targets keep working."""
 

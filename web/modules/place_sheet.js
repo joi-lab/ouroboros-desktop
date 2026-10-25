@@ -7,13 +7,14 @@
 import { bindDialogFocus } from './ui_interactions.js';
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { renderSegmentedField } from './page_header.js';
+import { mountPlaceHistory, placeRoomsHtml } from './place_history.js';
 import { chipHtml, skillIconHtml } from './skill_presentation.js';
-import { connectPlace, disconnectPlace, PLACES_CHANGED_EVENT, readPlaces, updatePlace } from './consciousness_api.js';
+import { connectPlace, disconnectPlace, PLACES_CHANGED_EVENT, readPlaces, readPlaceRooms, updatePlace } from './consciousness_api.js';
 import {
     PLACE_STATES, SILENT_CARD, accountIdText, authorWord, capitalized, listWords, placeScopeText, placeStateOf, wakeFactWord,
 } from './consciousness_words.js';
 
-/** The one «Connect a place» control (Dashboard and Settings draw this, never their own); a press opens the flow. */
+/** The one «Connect a place» control (Dashboard, Settings and connector details draw this, never their own); a press opens the flow. */
 export const connectPlaceButtonHtml = () => '<button type="button" class="btn btn-default btn-sm" data-place-connect>Connect a place</button>';
 
 /** Ask the Skills page for one installed skill's card, or Browse filtered to connectors. */
@@ -73,15 +74,15 @@ function wakesHtml(place) {
 
 function accountsHtml(place, ui) {
     const rows = place.ownerAccounts.map((account) => `<div class="harness-account-row place-account">
-            <div class="harness-account-main"><strong>${escapeHtml(account.label || account.actorId)}</strong></div>
-            <div class="harness-account-meta">${escapeHtml(['you', account.confirmedAt ? `confirmed on ${shortDate(account.confirmedAt)}` : 'confirmed',
+            <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
+            <div class="harness-account-meta" data-i18n-authored>${escapeHtml(['you', account.confirmedAt ? `confirmed on ${shortDate(account.confirmedAt)}` : 'confirmed',
                 account.label && account.label !== account.actorId ? account.actorId : ''].filter(Boolean).join(' · '))}</div>
-            <div class="harness-account-actions"><button type="button" class="btn btn-ghost btn-sm" data-place-act="revoke" data-actor="${escapeHtml(account.actorId)}" aria-label="Not my account: remove ${escapeHtml(account.label || account.actorId)}">Remove</button></div>
+            <div class="harness-account-actions"><button type="button" class="btn btn-ghost btn-sm" data-place-act="revoke" data-actor="${escapeHtml(account.actorId)}" aria-label="Remove account confirmation">Remove</button></div>
         </div>`).join('');
     const mine = new Set(place.ownerAccounts.map((account) => account.actorId));
     const candidates = place.accountCandidates.filter((account) => !mine.has(account.actorId)).map((account) => `<div class="harness-account-row place-account">
-            <div class="harness-account-main"><strong>${escapeHtml(account.label || account.actorId)}</strong></div>
-            <div class="harness-account-meta">${escapeHtml(account.label ? account.actorId : 'seen here')}</div>
+            <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
+            <div class="harness-account-meta" data-i18n-authored>${escapeHtml(account.label ? account.actorId : 'seen here')}</div>
             <div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(account.actorId)}" data-actor-label="${escapeHtml(account.label)}">This is me</button></div>
         </div>`).join('');
     const form = ui.adding ? `<div class="place-account-form">
@@ -97,7 +98,7 @@ function accountsHtml(place, ui) {
 
 function notesHtml(place, ui) {
     const items = place.notes.map((note) => `<li class="place-note${OWNER_VOICE.has(note.author) ? ' is-owner' : ''}">
-            <p>${escapeHtml(note.text)}</p>
+            <p data-i18n-authored>${escapeHtml(note.text)}</p>
             <div class="place-note-foot">${chipHtml(authorWord(note.author), 'neutral')}${note.id
                 ? `<button type="button" class="btn btn-ghost btn-sm" data-place-act="remove-note" data-note="${escapeHtml(note.id)}">Remove</button>` : ''}</div>
         </li>`).join('');
@@ -134,8 +135,8 @@ function moreHtml(place, ui) {
 
 function footHtml(place, ui) {
     if (ui.confirmDisconnect) {
-        return `<div class="place-disconnect-confirm" role="group" aria-label="Disconnect ${escapeHtml(place.label)}">
-            <p>Disconnect ${escapeHtml(place.label)}? It stops hearing and acting here; the room's history stays.</p>
+        return `<div class="place-disconnect-confirm" role="group" aria-label="Disconnect Place">
+            <p>Disconnect <span data-i18n-authored>${escapeHtml(place.label)}</span>? It stops hearing and acting here; the room's history stays.</p>
             <div class="place-sheet-actions"><button type="button" class="btn btn-danger btn-sm" data-place-act="disconnect-yes">Disconnect</button><button type="button" class="btn btn-default btn-sm" data-place-act="disconnect-no">Keep it</button></div>
         </div>`;
     }
@@ -150,7 +151,8 @@ export function placeSheetBodyHtml(place, ui = {}) {
     const view = { drafts: {}, status: {}, ...ui };
     return [
         section('state', '', stateHtml(place, view), view),
-        section('wakes', 'Wakes it at once', wakesHtml(place), view),
+        section('conversations', 'Conversations', placeRoomsHtml(view.roomIndex), view),
+        section('wakes', 'Wakes it at once', wakesHtml(place, view), view),
         section('accounts', 'Your accounts here', accountsHtml(place, view), view),
         section('notes', 'Notes', notesHtml(place, view), view),
         section('folder', 'Working folder', folderHtml(place, view), view),
@@ -165,11 +167,12 @@ function sheetShell(titleHtml, metaText, modifier = '') {
     const dialog = document.createElement('dialog');
     dialog.className = `document-reader place-sheet${modifier ? ` ${modifier}` : ''}`;
     dialog.setAttribute('aria-labelledby', 'place-sheet-title');
+    dialog.setAttribute('aria-modal', 'true');
     dialog.innerHTML = `<div class="document-reader-panel">
         <div class="document-reader-head">
             <div class="document-reader-identity">
                 <h2 class="document-reader-title place-sheet-title" id="place-sheet-title">${titleHtml}</h2>
-                <div class="document-reader-meta" data-place-meta>${escapeHtml(metaText)}</div>
+                <div class="document-reader-meta" data-place-meta data-i18n-authored>${escapeHtml(metaText)}</div>
             </div>
             <div class="document-reader-actions"></div>
             <button type="button" class="btn btn-default document-reader-close" data-place-close>Close</button>
@@ -179,7 +182,7 @@ function sheetShell(titleHtml, metaText, modifier = '') {
     return dialog;
 }
 
-function showSheet(dialog, { returnFocus, onClose }) {
+function showSheet(dialog, { returnFocus, onClose, onBack }) {
     const body = dialog.querySelector('[data-place-body]');
     let closed = false;
     let disposeFocus = null;
@@ -191,14 +194,16 @@ function showSheet(dialog, { returnFocus, onClose }) {
         dialog.remove();
         onClose?.();
     };
-    dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
+    const back = () => { if (!onBack?.()) close(); };
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); back(); });
+    dialog.addEventListener('close', close);
     dialog.addEventListener('click', (event) => {
         if (event.target === dialog || event.target.closest('[data-place-close]')) close();
     });
     dialog.addEventListener('keydown', () => body.classList.remove('is-quiet-focus'), { once: true });
     document.body.appendChild(dialog);
     if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
-    disposeFocus = bindDialogFocus(dialog, { initialFocus: body, returnFocus, onEscape: close });
+    disposeFocus = bindDialogFocus(dialog, { initialFocus: body, returnFocus, onEscape: back });
     return { close, body, get closed() { return closed; } };
 }
 
@@ -239,18 +244,64 @@ const DONE_WORDS = {
  * the sheet. `update`, `disconnect` are injectable for tests.
  */
 export function openPlaceSheet(place, { returnFocus = document.activeElement, onClose = null, update = updatePlace,
-    disconnect = disconnectPlace } = {}) {
+    disconnect = disconnectPlace, readRooms = readPlaceRooms } = {}) {
     let current = place;
-    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false };
-    const dialog = sheetShell(`<span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 22)}</span><span>${escapeHtml(place.label)}</span>`,
+    let history = null, selected = null, editorScroll = 0;
+    let roomController = null;
+    let roomGeneration = 0;
+    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false, roomIndex: { rooms: null } };
+    const dialog = sheetShell(`<span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 22)}</span><span data-place-title data-i18n-authored>${escapeHtml(place.label)}</span>`,
         placeSheetMetaText(place));
-    const sheet = showSheet(dialog, { returnFocus, onClose: () => { window.removeEventListener(PLACES_CHANGED_EVENT, onExternal); onClose?.(); } });
+    const sheet = showSheet(dialog, { returnFocus, onBack: () => {
+        if (!history) return false;
+        backToPlace(); return true;
+    }, onClose: () => {
+        roomGeneration += 1; roomController?.abort(); history?.close();
+        window.removeEventListener(PLACES_CHANGED_EVENT, onExternal); onClose?.();
+    } });
     const { body } = sheet;
+    const editor = document.createElement('div'); editor.className = 'place-sheet-editor';
+    const reader = document.createElement('div'); reader.hidden = true;
+    body.append(editor, reader);
+
+    function backToPlace() {
+        const id = selected?.room_chat_id;
+        history?.close(); history = null; selected = null;
+        reader.hidden = true; editor.hidden = false;
+        paint(); body.scrollTop = editorScroll;
+        editor.querySelector(`[data-place-room="${id}"]`)?.focus({ preventScroll: true });
+    }
+
+    function openRoom(room) {
+        if (ui.busy || sheet.closed) return;
+        editorScroll = body.scrollTop; selected = room;
+        editor.hidden = true; reader.hidden = false;
+        history = mountPlaceHistory(reader, current, room, { onBack: backToPlace });
+        paint(); body.scrollTop = 0;
+        reader.querySelector('[data-history-back]')?.focus({ preventScroll: true });
+    }
+
+    async function loadRooms() {
+        roomController?.abort(); roomController = new AbortController(); const version = ++roomGeneration;
+        ui.roomIndex = { rooms: null }; paint();
+        try {
+            const value = await readRooms(current.id, { signal: roomController.signal });
+            if (sheet.closed || version !== roomGeneration) return;
+            ui.roomIndex = value;
+        } catch (error) {
+            if (sheet.closed || version !== roomGeneration) return;
+            ui.roomIndex = { error: error?.message || String(error) };
+        }
+        paint();
+    }
 
     function paint() {
+        if (sheet.closed) return;
         const scroll = body.scrollTop;
-        const focusKey = body.contains(document.activeElement) ? focusKeyOf(document.activeElement) : '';
-        body.innerHTML = placeSheetBodyHtml(current, ui);
+        const active = document.activeElement;
+        const focusKey = editor.contains(active) ? focusKeyOf(active) : '';
+        const selection = active?.selectionStart == null ? null : [active.selectionStart, active.selectionEnd, active.selectionDirection];
+        editor.innerHTML = placeSheetBodyHtml(current, ui);
         body.querySelectorAll(`[data-place-state] [data-effort-value]`).forEach((button) => {
             const chosen = button.dataset.effortValue === current.state;
             button.classList.toggle('active', chosen);
@@ -259,9 +310,16 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         });
         body.querySelector('[data-place-state]')?.setAttribute('aria-labelledby', 'place-state-label');
         body.scrollTop = scroll;
-        if (focusKey) body.querySelector(focusKey)?.focus();
+        if (focusKey) {
+            const field = editor.querySelector(focusKey);
+            field?.focus({ preventScroll: true });
+            if (selection) field?.setSelectionRange?.(...selection);
+        }
+        body.scrollTop = scroll;
+        dialog.querySelector('[data-place-title]').textContent = selected?.label || selected?.address || current.label;
+        history?.updatePlace(current);
         const meta = dialog.querySelector('[data-place-meta]');
-        if (meta) meta.textContent = placeSheetMetaText(current);
+        if (meta) meta.textContent = selected ? current.label : placeSheetMetaText(current);
     }
 
     async function write(action, options = {}) {
@@ -273,15 +331,16 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
             paint();
             return;
         }
+        const submitted = { ...ui.drafts };
         ui.busy = true;
         ui.status = { [key]: { text: 'Saving…', tone: 'muted' } };
         paint();
         try {
             current = await update(current.id, change);
-            if (action === 'add-note') ui.drafts.note = '';
-            if (action === 'confirm-typed') { ui.drafts.actorId = ''; ui.drafts.actorLabel = ''; ui.adding = false; }
-            if (action === 'save-folder') delete ui.drafts.folder;
-            if (action === 'save-model') delete ui.drafts.model;
+            if (action === 'add-note' && ui.drafts.note === submitted.note) ui.drafts.note = '';
+            if (action === 'confirm-typed' && ui.drafts.actorId === submitted.actorId && ui.drafts.actorLabel === submitted.actorLabel) { ui.drafts.actorId = ''; ui.drafts.actorLabel = ''; ui.adding = false; }
+            if (action === 'save-folder' && ui.drafts.folder === submitted.folder) delete ui.drafts.folder;
+            if (action === 'save-model' && ui.drafts.model === submitted.model) delete ui.drafts.model;
             ui.status = { [key]: { text: DONE_WORDS[action](current), tone: 'ok' } };
         } catch (error) {
             ui.status = { [key]: { text: error?.message || String(error), tone: 'error' } };
@@ -304,7 +363,14 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
     body.addEventListener('toggle', (event) => {
         if (event.target.classList?.contains('place-more')) ui.moreOpen = event.target.open;
     }, true);
-    body.addEventListener('click', async (event) => {
+    editor.addEventListener('click', async (event) => {
+        if (event.target.closest('[data-place-rooms-retry]')) { void loadRooms(); return; }
+        const roomButton = event.target.closest('[data-place-room]');
+        if (roomButton) {
+            const room = ui.roomIndex.rooms?.find((row) => String(row.room_chat_id) === roomButton.dataset.placeRoom);
+            if (room) openRoom(room);
+            return;
+        }
         const segment = event.target.closest('[data-place-state] [data-effort-value]');
         if (segment) {
             if (segment.dataset.effortValue !== current.state) await write('state', { value: segment.dataset.effortValue });
@@ -334,11 +400,14 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
             actor: button.dataset.actor || '', actorLabel: button.dataset.actorLabel || '' });
     });
     paint();
+    void loadRooms();
     return { close: sheet.close, get closed() { return sheet.closed; }, get place() { return current; } };
 }
 
 // A repaint keeps the owner's focus on the same control (the press that asked for it, or the field).
 function focusKeyOf(node) {
+    const room = node.closest?.('[data-place-room]');
+    if (room) return `[data-place-room="${room.dataset.placeRoom}"]`;
     const act = node.closest?.('[data-place-act]');
     if (act) {
         const extra = ['fact', 'note', 'actor'].map((name) => act.dataset[name] ? `[data-${name}="${CSS.escape(act.dataset[name])}"]` : '').join('');
@@ -366,7 +435,7 @@ export function connectListHtml({ connectors = null, error = '', status = {} } =
         <p class="place-sheet-note">Connecting a place lets it hear there and, while the place is Active, speak and act there. You choose its state after connecting.</p>
         <div class="place-accounts">${open.map((connector) => `<div class="harness-account-row place-connector-row">
             <div class="harness-account-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(connector.icon, 18)}</span><strong>${escapeHtml(connector.label)}</strong></div>
-            <div class="harness-account-meta">${escapeHtml([connector.destination.replace(/^vendor:/, 'Connects '),
+            <div class="harness-account-meta" data-i18n-authored>${escapeHtml([connector.destination.replace(/^vendor:/, 'Connects '),
                 connector.wakes.length ? `suggests waking for ${listWords(connector.wakes.map(wakeFactWord))}` : ''].filter(Boolean).join(' · '))}</div>
             <div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-connect-act="connect" data-connector="${escapeHtml(connector.connector)}">Connect</button></div>
             ${statusLine(status[connector.connector])}
@@ -375,7 +444,7 @@ export function connectListHtml({ connectors = null, error = '', status = {} } =
 }
 
 /** Open the Connect flow; a connected place opens its own sheet at once. */
-export function openConnectPlace({ returnFocus = document.activeElement, read = readPlaces, connect = connectPlace } = {}) {
+export function openConnectPlace({ returnFocus = document.activeElement, read = readPlaces, connect = connectPlace, connector = '' } = {}) {
     const dialog = sheetShell('Connect a place', 'From the connectors installed here', 'place-connect');
     const sheet = showSheet(dialog, { returnFocus });
     const view = { connectors: null, error: '', status: {} };
@@ -384,7 +453,7 @@ export function openConnectPlace({ returnFocus = document.activeElement, read = 
         view.error = '';
         view.connectors = null;
         paint();
-        try { view.connectors = (await read()).connectors; } catch (error) { view.error = `Couldn’t read the connectors: ${error?.message || error}`; }
+        try { view.connectors = (await read()).connectors.filter((row) => !connector || row.connector === connector); } catch (error) { view.error = `Couldn’t read the connectors: ${error?.message || error}`; }
         if (!sheet.closed) paint();
     };
     sheet.body.addEventListener('click', async (event) => {

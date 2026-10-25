@@ -25,7 +25,12 @@ from ouroboros.utils import append_jsonl, utc_now_iso, write_bytes_atomic
 INDEX_FILE = "index-full.md"
 UNKNOWN_STAMP = "unknown"  # a history stamp the writer could not name; legacy rows read the same way
 OVERVIEW_TOPIC = "overview"
-ALWAYS_ACTIVE_TOPICS = frozenset({OVERVIEW_TOPIC, "patterns", "improvement-backlog"})
+# Only the overview, the shared orientation every integrating context loads, must stay active.
+ALWAYS_ACTIVE_TOPICS = frozenset({OVERVIEW_TOPIC})
+# Topics with one global home whichever room addresses them. ``patterns`` and
+# ``improvement-backlog`` are ordinary notes; they keep their old global address
+# so an earlier call from a project room still reaches the one existing note.
+GLOBAL_ADDRESS_TOPICS = frozenset({OVERVIEW_TOPIC, "patterns", "improvement-backlog"})
 _INDEX_HEADER = "# Knowledge Base Index\n<!-- ouroboros:knowledge-index:1 -->\n\n"
 _LEGACY_INDEX_MARKER = "\n<!-- ouroboros:legacy-knowledge-index -->\n"
 
@@ -337,6 +342,8 @@ def render_knowledge_index(rows: tuple[dict[str, Any], ...], legacy_context: str
         summary = row.get("summary")
         if include_summaries and isinstance(summary, str) and summary:
             line += "\n" + "\n".join("  " + part for part in summary.splitlines())
+        elif include_summaries and state != "archived" and not row.get("read_error") and not row.get("parse_error"):
+            line += " (no summary)"  # a gap the author sees; nothing is synthesized from the body
         if row.get("read_error") or row.get("parse_error") or row.get("archive_error"):
             line += "\n  (source metadata unavailable; read the original note)"
         entries.append(line)
@@ -580,7 +587,7 @@ def write_knowledge_note(
     if mode not in {"overwrite", "append", "edit", "archive", "restore"} or not isinstance(content, str):
         raise ValueError("content must be Markdown text; mode must be overwrite, append, edit, archive or restore")
     if (lifecycle and content) or (mode == "archive" and address.topic in ALWAYS_ACTIVE_TOPICS):
-        raise ValueError("archive/restore take no content; overview, patterns and improvement-backlog must stay active")
+        raise ValueError("archive/restore take no content; the overview must stay active")
     if not isinstance(reason, str) or (mode == "archive" and not reason.strip()) or (reason and mode != "archive"):
         raise ValueError("reason is required for archive and used only with archive")
     if mode != "edit" and old_str is not None:
@@ -656,9 +663,9 @@ def write_knowledge_note(
                  "change_chars": len(updated.text) - len(old_text), "removed_headings": removed_headings,
                  "body_changed": old_body != raw[updated.source.body_span.start_byte:] if known else None,
                  "summary_changed": old_summary != updated.summary if known else None}
-        # Capture both complete versions before replacing source bytes, as the
-        # Pattern Register already does. A capture is not a commit receipt; a
-        # failed publication returns its actual current source, never success.
+        # Capture both complete versions before replacing source bytes. A capture
+        # is not a commit receipt; a failed publication returns its actual
+        # current source, never success.
         history = {"ts": utc_now_iso(), "task_id": task_id, "topic": address.topic, "mode": mode,
                    "address": address.as_dict(), "publication": "source_capture",
                    "writer": writer or UNKNOWN_STAMP, "route": route or UNKNOWN_STAMP,

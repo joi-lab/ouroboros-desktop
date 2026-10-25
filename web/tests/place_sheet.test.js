@@ -27,7 +27,7 @@ test('Active · Silent · Paused in one control; the note says what the chosen s
     assert.match(html, /What it does here/);
     assert.match(html, /Lives here: listens, wakes when its list says so, speaks and acts\./);
     assert.doesNotMatch(html, /place-silent-card/);
-    assert.match(placeSheetBodyHtml(mail), /Away from this place: no wakes, no actions\. Still connected\./);
+    assert.match(placeSheetBodyHtml(mail), /Away from this place: no wakes, no actions\. Still connected; reported events are saved\./);
 });
 
 test('Silent shows the host\'s card: the note and, verbatim, what it blocks and what it cannot', () => {
@@ -83,8 +83,8 @@ test('Add mine names the identifier the place\'s service knows you by', () => {
 
 test('notes keep their authors: the owner\'s in the owner\'s voice, Ouroboros\'s own as its own', () => {
     const html = placeSheetBodyHtml(slack);
-    assert.match(html, /<li class="place-note is-owner">\s*<p>Отвечай коротко и по делу\.<\/p>/);
-    assert.match(html, /<li class="place-note">\s*<p>Лена ведёт релизы\.<\/p>/);
+    assert.match(html, /<li class="place-note is-owner">\s*<p data-i18n-authored>Отвечай коротко и по делу\.<\/p>/);
+    assert.match(html, /<li class="place-note">\s*<p data-i18n-authored>Лена ведёт релизы\.<\/p>/);
     assert.match(strip(html), /Лена ведёт релизы\. added by Ouroboros Remove/);
     assert.match(placeSheetBodyHtml(mail), /<li class="place-note is-owner">/, 'a carried-over note was the owner\'s');
     assert.match(html, /the Safety Supervisor treats yours as your instructions/);
@@ -99,7 +99,8 @@ test('working folder is an address; the model lives under More; Disconnect asks 
     assert.match(html, /data-place-act="open-connector">Open connector page</);
     assert.match(html, /data-place-act="disconnect">Disconnect</);
     const asking = placeSheetBodyHtml(slack, { confirmDisconnect: true });
-    assert.match(asking, /Disconnect Slack · Acme\? It stops hearing and acting here; the room's history stays\./);
+    assert.match(strip(asking), /Disconnect Slack · Acme \? It stops hearing and acting here; the room's history stays\./);
+    assert.match(asking, /data-i18n-authored>Slack · Acme<\/span>/);
     assert.match(asking, /data-place-act="disconnect-yes">Disconnect</);
 });
 

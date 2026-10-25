@@ -140,8 +140,8 @@ def _run_post_task_processing_async(
 ) -> None:
     """Run best-effort post-task work off the reply path.
 
-    No stage authors a lesson, the Pattern Register or the backlog; that is the
-    acting mind's ordinary ``knowledge_write``. ``on_reflection`` is a split Project
+    No stage authors a lesson or a knowledge note; that is the acting mind's
+    ordinary ``knowledge_write``. ``on_reflection`` is a split Project
     root's canonical chooser entry; the promotion stage hands it the sealed final.
     An owner Pause ends the remaining stages at once, disclosed like a Stop;
     nothing is saved to resume.

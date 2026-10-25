@@ -32,9 +32,14 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "run": "task_drives/{child}/delegated_runs/{id}.json",
           "verification_receipts": "task_results/artifacts/{id}/verification_receipts.jsonl",
           "storage": "state/storage_measurement.json",  # the last two finished storage counts (installation-wide)
+          "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
 _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification_receipts"}
 _STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
+# Each knowledge history row holds both complete versions of its note, so the ordinary
+# 8 MiB log window would cover hours of writes; this read budget covers far more of them.
+_HISTORY_SCAN_BYTES = 256 * 1024 * 1024
+_HISTORY_BODY_FIELDS = ("old_content", "new_content")
 _SELECTOR = re.compile(r"(?:[^.\[\]]+|\[(?:\d+|\*)\])(?:\.[^.\[\]]+|\[(?:\d+|\*)\])*")
 
 
@@ -208,20 +213,48 @@ def _jsonl(path, where, tail, cap):
             if not line.strip():
                 continue
             value = json.loads(line)
-            if where:
-                try:
-                    field = _select(value, where["field"])
-                except SelectorError:
-                    continue
-                if where["op"] == "eq":
-                    matches = field == where["value"]
-                else:
-                    matches = isinstance(field, (str, list, dict)) and where["value"] in field
-                if not matches:
-                    continue
+            if where and not _matches(value, where):
+                continue
             rows.append((line, value))
     raw = bytes(whole) if whole is not None else b"".join(row[0] for row in rows)
     return raw, [row[1] for row in rows], partial, consumed
+
+
+def _matches(value, where):
+    try:
+        field = _select(value, where["field"])
+    except SelectorError:
+        return False
+    if where["op"] == "eq":
+        return field == where["value"]
+    return isinstance(field, (str, list, dict)) and where["value"] in field
+
+
+def _knowledge_history(path, where, tail):
+    """The newest ``tail`` matching knowledge writes, each without its two note bodies.
+
+    Facts a row lacks stay absent (old rows carry no publication stamp); the current
+    text is ``knowledge_read``. A window past the read budget is said as truncated.
+    """
+    rows, partial = deque(maxlen=tail or None), False
+    with path.open("rb") as stream:
+        if path.stat().st_size > _HISTORY_SCAN_BYTES:
+            stream.seek(-_HISTORY_SCAN_BYTES, 2)
+            stream.readline()  # discard the possibly partial leading record
+            partial = True
+        for line in stream:
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if isinstance(value, dict):
+                for field in _HISTORY_BODY_FIELDS:
+                    value.pop(field, None)
+            if where and not _matches(value, where):
+                continue
+            rows.append(value)
+    value = list(rows)
+    raw = _canonical(value)
+    return raw, value, partial, len(raw)
 
 
 def _retained_run(canonical, identity, child):
@@ -263,6 +296,9 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if kind == "run" and root.parts[-2:] == ("task_drives", child):
         relative = f"delegated_runs/{identity}.json"
     path = _path(ctx, root, relative)
+    if kind == "knowledge_history":
+        raw, value, partial, consumed = _knowledge_history(path, where, tail)
+        return raw, value, True, partial, consumed, False
     if op == "jsonl":
         raw, value, partial, consumed = _jsonl(path, where, tail, cap)
         return raw, value, False, partial, consumed, False
@@ -307,6 +343,8 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
             raise ValueError("tail is JSONL-only; state_file is skill_state-only")
         if kind == "storage" and child_task_id:
             raise ValueError("storage is installation-wide; it has no child selector")
+        if kind == "knowledge_history" and child_task_id:
+            raise ValueError("knowledge_history is the installation's global knowledge; it has no child selector")
         native = (ctx.task_metadata or {}).get("native_data_root")
         canonical, owner = Path(native or canonical_data_root(ctx)).resolve(), "native_pin" if native else "canonical"
         caller = root = Path(ctx.drive_root).resolve()
@@ -361,7 +399,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
         else:
             if kind not in _FILES and kind != "task_result" or state_file not in _STATES:
                 raise ValueError("invalid kind or state_file")
-            is_lines = kind.endswith("_log") or kind == "verification_receipts"
+            is_lines = kind.endswith("_log") or kind in {"verification_receipts", "knowledge_history"}
             if (op == "jsonl") != is_lines:
                 raise ValueError("this kind requires " + ("jsonl" if is_lines else "json"))
             identities = ids if ids is not None else ([ctx.task_id] if kind == "verification_receipts" else [""])
@@ -379,7 +417,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 # The installation queue lives with its owner; child_task_id keeps child-local meaning.
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
-            elif kind == "storage":
+            elif kind in {"storage", "knowledge_history"}:
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
             values, remaining, retained = {}, sql.MAX_BYTES, 0
@@ -443,6 +481,8 @@ def get_tools():
         "save_as retains exact whole-record bytes in the calling task's artifact_store with path/sha256/size/source. "
         "Projections use sorted UTF-8 JSON; store documents and multi-ID bundles are flagged reconstructed. "
         "format=text saves one selected string exactly. Complete tool output is retained before any delivery cut. "
+        "kind=knowledge_history lists global knowledge writes (when, topic, mode, writer, focus, task, summary, sizes, "
+        "change delta) without the note bodies, about 1 KB a row (raise max_bytes or lower tail); knowledge_read gives the current text. "
         "Results name their data plane; the owner's default queue files and blob fallback need the caller's existing read of each file."),
         "parameters": {"type": "object", "required": ["op"], "properties": {
             "op": {"enum": ["sql", "json", "jsonl", "blob"], "type": "string"},
@@ -459,7 +499,7 @@ def get_tools():
             "filter": {"type": "object", "required": ["field", "op", "value"], "additionalProperties": False,
                        "properties": {"field": {"type": "string"}, "op": {"type": "string", "enum": ["eq", "contains"]}, "value": {}}},
             "tail": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 100,
-                     "description": "JSONL: last matching rows; 0 reads from start. An 8 MiB scan window reports scan_truncated."},
+                     "description": "JSONL: last matching rows; 0 reads from start. An 8 MiB scan window (256 MiB for knowledge_history) reports scan_truncated."},
             "max_rows": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
             "max_bytes": {"type": "integer", "minimum": 256, "maximum": sql.MAX_BYTES, "default": 65536},
             "snapshot": {"type": "boolean", "description": "SQL snapshot; default true for money, false otherwise."},

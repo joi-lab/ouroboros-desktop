@@ -126,7 +126,7 @@ def prepare_task_drive(parent_drive_root: pathlib.Path, task_id: str, memory_mod
     """Create a forked or empty execution drive; other modes keep the parent.
 
     Forks copy identity/world/registry and global knowledge except on Project
-    tasks, which copy only the shared patterns file. Memory initializes empties.
+    tasks, which copy no knowledge file. Memory initializes empties.
     """
 
     mode = str(memory_mode or "shared").strip().lower()
@@ -1103,10 +1103,8 @@ def _copy_stable_memory(parent: pathlib.Path, child: pathlib.Path, *, project_id
     parent_memory = parent / "memory"
     child_memory = child / "memory"
     project = bool(str(project_id or "").strip())
-    # Projects inherit shared patterns, never the global knowledge topics/index.
+    # A project child inherits none of the global knowledge topics or index.
     paths = ["identity.md", "WORLD.md", "registry.md"]
-    if project:
-        paths.append("knowledge/patterns.md")
     for rel in paths:
         src = parent_memory / rel
         if src.is_file():

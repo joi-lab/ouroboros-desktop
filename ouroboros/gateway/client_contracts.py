@@ -316,6 +316,31 @@ class PlaceConnectRequest(TypedDict):
     conversation_id: NotRequired[str]
 
 
+class PlaceRoomSummary(TypedDict):
+    """One captured local conversation; an unknown open-focus count stays null."""
+
+    room_chat_id: int
+    unanswered_count: Optional[int]
+    address: str
+    label: Optional[str]  # latest captured arrival's conversation title/name, absent stays null
+    last_at: str  # latest captured arrival, not latest remote message or outgoing receipt
+    conversation_id: str
+    thread_id: str
+
+
+class PlaceRoomsCoverage(TypedDict):
+    """Discovery scope and store-wide chat import/gaps, not provider completeness."""
+    discovery: Literal['arrivals']
+    importing: bool
+    gaps: bool
+
+
+class PlaceRoomsResponse(TypedDict):
+    place_id: str
+    rooms: List[PlaceRoomSummary]
+    coverage: PlaceRoomsCoverage
+
+
 class PlaceOwnerAccountRequest(TypedDict):
     """Confirm a person; omitted account_id uses the place's account."""
 

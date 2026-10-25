@@ -79,6 +79,20 @@ class ChatHistoryCard(TypedDict):
     revision: int
 
 
+class PlaceHistoryAttention(TypedDict, total=False):
+    decision: Required[Literal['heard', 'focus_started']]
+    reason: str  # retained heard reason; no inferred matched wake
+
+
+class PlaceHistoryFacts(TypedDict, total=False):
+    """Retained room speech/notices only. Absence is unknown, never delivered or woken."""
+
+    kind: Required[Literal['message', 'notice', 'delivery']]
+    delivery_state: Literal['authored', 'accepted', 'delivered', 'failed', 'uncertain']
+    attention: PlaceHistoryAttention
+    owner_confirmed: bool  # current stored account confirmation, never inferred from role=user
+
+
 class ChatHistoryMessage(TypedDict, total=False):
     """One ``GET /api/chat/history`` row. Every row has the six required keys; a stored row also
     has ``history_id`` and ``history_position``. Live frames call ``text`` ``content``.
@@ -97,6 +111,7 @@ class ChatHistoryMessage(TypedDict, total=False):
     system_type: Required[str]  # the row's kind; "" for an ordinary message
     task_id: Required[str]
     presence_contact: PresenceContact
+    place_history: PlaceHistoryFacts
     wait_ended_at: str
     row_address: str
     reply_to: Dict[str, Any]
@@ -233,6 +248,6 @@ class ChatHistoryResponse(TypedDict, total=False):
 
 
 __all__ = [
-    "ChatHistoryPosition", "PresenceContact", "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
+    "ChatHistoryPosition", "PresenceContact", "PlaceHistoryAttention", "PlaceHistoryFacts", "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
     "ChatHistoryCoverage", "ChatHistoryWindow", "ChatHistoryAnchor", "ChatHistoryResponse",
 ]

@@ -531,9 +531,12 @@ class ChronicleStore:
                                       "accepted": bool(accepted), "reason": reason, "author": author}])
 
     def mark(self, target_ref: Dict[str, Any], text: str, author: Dict[str, Any], *, room_id: Any,
-             scope: str = "room", quote: Optional[str] = None, record_id: Optional[str] = None) -> PublishResult:
+             scope: str = "room", quote: Optional[str] = None, record_id: Optional[str] = None,
+             anchor: Optional[Dict[str, Any]] = None) -> PublishResult:
         record = {"kind": "mark", "room_id": str(room_id), "target_ref": target_ref, "text": text,
                   "author": author, "scope": scope, "quote": quote, "visibility": "full"}
+        if anchor is not None:
+            record["anchor"] = anchor  # an action the mark meets me at (``mark_anchors``)
         if record_id:
             record["id"] = str(record_id)
         return self.publish([record])
@@ -776,6 +779,11 @@ class ChronicleStore:
     def _rule_mark(self, db, record):
         if record.get("scope", "room") not in ("room", "global"):
             return _refuse("invalid", "scope is room or global")
+        if "anchor" in record:
+            from ouroboros.mark_anchors import anchor_problem
+
+            if problem := anchor_problem(record["anchor"]):
+                return _refuse("invalid", problem)
         target = record.get("target_ref")
         if not isinstance(target, dict) or not target:
             return _refuse("invalid", "target_ref names a chronicle record, chat row, task or retained source")

@@ -13,7 +13,7 @@ export const AUTONOMY_LEVELS = Object.freeze([
 export const PLACE_STATES = Object.freeze([
     { value: 'active', label: 'Active', word: 'active', note: 'Lives here: listens, wakes when its list says so, speaks and acts.' },
     { value: 'silent', label: 'Silent', word: 'silent', note: 'Hears everything here and changes nothing: no messages, reactions, edits or moderation.' },
-    { value: 'paused', label: 'Paused', word: 'paused', note: 'Away from this place: no wakes, no actions. Still connected.' },
+    { value: 'paused', label: 'Paused', word: 'paused', note: 'Away from this place: no wakes, no actions. Still connected; reported events are saved.' },
 ]);
 
 /** What Silent enforces, said by the host (verbatim, owner 21.10). */

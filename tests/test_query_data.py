@@ -494,3 +494,32 @@ def test_storage_kind_reads_the_saved_count_from_the_installation_root_and_refus
     refused = call(ctx, op="json", kind="storage", child_task_id="second")
     assert refused["status"] == "error" and "installation-wide" in refused["message"]
     assert call(ctx, op="json", kind="storage", ids=["x"])["status"] == "error"
+
+
+def test_knowledge_history_lists_writes_without_bodies_from_the_installation_root(ctx, monkeypatch):
+    """``kind="knowledge_history"``: global knowledge writes, newest first-in-window, bodies left
+    out; a fact an old row lacks stays absent; a child selector is refused; a window past the
+    read budget is said as truncated."""
+    from ouroboros.tools import query_data
+
+    rows = [{"ts": "2026-10-20T00:00:00Z", "topic": "patterns", "mode": "overwrite", "writer": "turn",
+             "old_content": "OLD_BODY", "new_content": "NEW_BODY", "new_chars": 8, "summary": "Classes."},
+            {"ts": "2026-10-21T00:00:00Z", "topic": "lessons/tests", "mode": "edit", "publication": "source_capture",
+             "old_content": "A", "new_content": "B", "new_chars": 1, "summary": "Exit codes."}]
+    write(ctx, "memory/knowledge_history.jsonl", b"".join(json.dumps(r).encode() + b"\n" for r in rows))
+    result = call(ctx, op="jsonl", kind="knowledge_history", tail=10)
+    assert result["status"] == "ok" and result["source"]["kind"] == "knowledge_history"
+    assert result["reconstructed"] is True and result["source"]["scan_truncated"] is False
+    assert [r["topic"] for r in result["data"]] == ["patterns", "lessons/tests"]
+    assert "OLD_BODY" not in json.dumps(result) and "NEW_BODY" not in json.dumps(result)
+    assert "publication" not in result["data"][0] and result["data"][1]["publication"] == "source_capture"
+    narrowed = call(ctx, op="jsonl", kind="knowledge_history", filter={"field": "topic", "op": "contains", "value": "lessons"})
+    assert [r["summary"] for r in narrowed["data"]] == ["Exit codes."]
+    assert call(ctx, op="jsonl", kind="knowledge_history", tail=1, select="[0].topic")["data"] == "lessons/tests"
+    assert call(ctx, op="json", kind="knowledge_history")["status"] == "error"  # a log reads as JSONL
+    monkeypatch.setattr("ouroboros.tools.query_data._child_root", lambda *_a: pytest.fail("history has no child"))
+    refused = call(ctx, op="jsonl", kind="knowledge_history", child_task_id="second")
+    assert refused["status"] == "error" and "global knowledge" in refused["message"]
+    monkeypatch.setattr(query_data, "_HISTORY_SCAN_BYTES", 120)
+    clipped = call(ctx, op="jsonl", kind="knowledge_history")
+    assert clipped["status"] == "ok" and clipped["source"]["scan_truncated"] is True

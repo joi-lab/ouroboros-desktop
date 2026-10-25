@@ -13,12 +13,12 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D03 | Context assembly, fit & compaction | 25 | 0 |
 | D04 | Tool execution: registry, access & typed results | 23 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 43 | 0 |
-| D06 | Review stack | 95 | 0 |
+| D06 | Review stack | 94 | 0 |
 | D07 | Delegation, subagents & Claudexor | 91 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 73 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 40 | 0 |
-| D11 | Gateway, server & Web UI | 102 | 0 |
+| D11 | Gateway, server & Web UI | 103 | 0 |
 | D12 | Settings & configuration | 25 | 0 |
 | D13 | Safety, guards & runtime mode | 11 | 0 |
 | D14 | Skills & extensions | 69 | 0 |
@@ -411,7 +411,6 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/dialogue_evidence.py`
 - `ouroboros/plan_intention_ledger.py`
 - `ouroboros/plan_record.py`
-- `ouroboros/plan_review_facts.py`
 - `ouroboros/preflight_inventory.py`
 - `ouroboros/preflight_node.py`
 - `ouroboros/preflight_qualification.py`
@@ -786,6 +785,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/onboarding_host.py`
 - `ouroboros/gateway/owner_effort.py`
 - `ouroboros/gateway/owner_settings.py`
+- `ouroboros/gateway/place_history.py`
 - `ouroboros/gateway/places_api.py`
 - `ouroboros/gateway/projects.py`
 - `ouroboros/gateway/reply_preparation.py`
@@ -977,6 +977,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/improvement_backlog.py`
 - `ouroboros/knowledge.py`
 - `ouroboros/late_review_marks.py`
+- `ouroboros/mark_anchors.py`
 - `ouroboros/memory.py`
 - `ouroboros/memory_fallback.py`
 - `ouroboros/memory_inventory.py`
@@ -987,7 +988,6 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/plan_collection_job.py`
 - `ouroboros/post_task_evolution.py`
 - `ouroboros/project_facts.py`
-- `ouroboros/reflection.py`
 - `ouroboros/semantic_dedup.py`
 - `ouroboros/tools/chronicle.py`
 - `ouroboros/tools/evolution_stats.py`

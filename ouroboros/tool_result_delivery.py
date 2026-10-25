@@ -108,15 +108,31 @@ def typed_result_facts(row: Mapping[str, Any]) -> Dict[str, Any]:
     return facts
 
 
-def prepare_producer_sources(results: Sequence[Mapping[str, Any]], drive_root: Any, task_id: str) -> list:
-    """Retain clean producer text before measuring its model-visible locator."""
+def prepare_producer_sources(results: Sequence[Mapping[str, Any]], drive_root: Any, task_id: str,
+                             notes: Sequence[str] = ()) -> list:
+    """Retain clean producer text before measuring its model-visible locator.
+
+    A row the host notes only at delivery (``notes``, aligned with ``results``) keeps the
+    note as ``delivery_note`` and its own result as that clean text.
+    """
     rows = [dict(row) for row in results]
-    for row in rows:
+    for index, row in enumerate(rows):
         producer_text = getattr(row.get("tool_result"), "producer_text", None)
-        if producer_text is not None:
+        note = notes[index] if index < len(notes) else ""
+        if note:
+            row["delivery_note"] = note
+        if producer_text is not None or note:
+            clean = row["result"] if producer_text is None else producer_text
             row["producer_source_ref"] = (persist_result_source(drive_root, task_id,
-                str(row["tool_call_id"]) + ".producer", producer_text) if drive_root is not None else {})
+                str(row["tool_call_id"]) + ".producer", clean) if drive_root is not None else {})
     return rows
+
+
+def with_delivery_note(row: Mapping[str, Any], text: str) -> str:
+    """What the mind is shown: ``text`` with the row's delivery note trailing it. Measurement
+    and the transcript use this; the host readers of a result keep ``text``."""
+    note = row.get("delivery_note")
+    return f"{text}\n\n{note}" if note else text
 
 
 def with_producer_source(row: Mapping[str, Any], text: str) -> str:

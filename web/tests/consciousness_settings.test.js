@@ -442,12 +442,12 @@ test('Consciousness: Advises · Acts · Evolves with notes, the allowance and ta
     assert.equal(consciousnessModelText({ OUROBOROS_MODEL_CONSCIOUSNESS: 'openai::gpt-5.6' }), 'gpt-5.6');
 });
 
-test('the Settings places list: icon, label, state word, unanswered count; each row opens its sheet', () => {
+test('the Settings places list: icon, authored label, state word, open focus count; each row opens its sheet', () => {
     const { places } = normalizePlacesResponse(FIXTURE.places);
     const html = settingsPlacesHtml({ places });
     assert.equal((html.match(/data-place-open=/g) || []).length, 3);
-    assert.match(html, /<span class="consciousness-place-name">Slack · Acme<\/span>\s*<span class="consciousness-place-facts">active · 2 unanswered<\/span>/);
-    assert.match(html, /aria-label="Open Mail · inbox: paused"/);
+    assert.match(html, /<span class="consciousness-place-name" data-i18n-authored>Slack · Acme<\/span>\s*<span class="consciousness-place-facts">active · 2 open focuses<\/span>/);
+    assert.doesNotMatch(html, /aria-label="[^"]*Mail · inbox/, 'authored names stay in the protected visible label');
     assert.match(settingsPlacesHtml({ places: [] }), /No place yet\. Connect one from an installed connector\./);
     assert.match(settingsPlacesHtml({ error: 'Places could not be read: HTTP 404' }), /data-tone="warn"/);
 });

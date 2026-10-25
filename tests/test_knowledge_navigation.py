@@ -94,7 +94,7 @@ def test_context_reads_overview_once_and_navigation_skips_full_body_structure(tm
     monkeypatch.setattr(Path, "read_bytes", read)
     monkeypatch.setattr(markdown_source, "_markdown_parser", parse)
     env = SimpleNamespace(drive_path=lambda name: tmp_path / name)
-    text = "\n".join(context.build_knowledge_sections(env, include_pattern_body=False))
+    text = "\n".join(context.build_knowledge_sections(env))
     assert "Shared understanding." in text and "Meaning" in text
     assert "Earlier legacy prose." not in text
     assert reads.count(address.path) == 1

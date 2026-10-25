@@ -359,13 +359,17 @@ def test_improvement_backlog_digest_is_actor_scoped(tmp_path):
         )
         assert "## Improvement Backlog" not in messages[0]["content"][-1]["text"]
 
-    for task_type in ("evolution", "deep_self_review"):
-        messages, _ = build_llm_messages(
-            env=FakeEnv(), memory=Memory(drive_root=tmp_path),
-            task={"id": task_type, "type": task_type, "text": "improve"})
-        dynamic_text = messages[0]["content"][-1]["text"]
-        assert "## Improvement Backlog" in dynamic_text
-        assert "Reduce recurring task friction around REVIEW_BLOCKED" in dynamic_text
+    messages, _ = build_llm_messages(
+        env=FakeEnv(), memory=Memory(drive_root=tmp_path),
+        task={"id": "evolution", "type": "evolution", "text": "improve"})
+    dynamic_text = messages[0]["content"][-1]["text"]
+    assert "## Improvement Backlog" in dynamic_text
+    assert "Reduce recurring task friction around REVIEW_BLOCKED" in dynamic_text
+    # A deep self-review reads its own memory packet (deep_self_review), not this section.
+    messages, _ = build_llm_messages(
+        env=FakeEnv(), memory=Memory(drive_root=tmp_path),
+        task={"id": "deep", "type": "deep_self_review", "text": "review"})
+    assert "## Improvement Backlog" not in messages[0]["content"][-1]["text"]
 
 
 class TestRuntimeEnvSection:

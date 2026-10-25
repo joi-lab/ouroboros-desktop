@@ -66,9 +66,8 @@ _MEMORY_WHITELIST = [
     "memory/scratchpad.md",
     "memory/registry.md",
     "memory/WORLD.md",
+    "memory/knowledge/overview.md",
     "memory/knowledge/index-full.md",
-    "memory/knowledge/patterns.md",
-    "memory/knowledge/improvement-backlog.md",
 ]
 
 # The role half of the reviewer prompt, shared by both deliveries; the "how to
@@ -80,9 +79,9 @@ Primary directive: The Constitution (BIBLE.md) is your absolute reference.
 Every finding must be checked against it.
 
 What to look for: bugs, crashes, race conditions,
-BIBLE.md violations (P0–P12), contradictions between code and docs,
+violations of the principles in BIBLE.md, contradictions between code and docs,
 security gaps, dead code, missing error handling, architectural issues,
-known error patterns from patterns.md that remain unfixed, and ideas how to improve Ouroboros to work better and better comply with the Bible."""
+failure classes the inlined knowledge describes whose causes remain unrepaired, and ideas how to improve Ouroboros to work better and better comply with the Bible."""
 
 # The repository is inspected with tools; tier-1 governance and memory arrive
 # inline. No second tool read is needed for those exact delivered documents.
@@ -519,7 +518,7 @@ def _retrieving_task(repo_dir: pathlib.Path, drive_root: pathlib.Path, *,
     if not bible.strip():
         raise RuntimeError("BIBLE.md is missing at the repository root — a deep self-review has no constitution to check against")
     # The memory whitelist, inlined byte-exact, and the typed memory fact every
-    # delivery carries: ``{"inlined": n, "total": 7, "dispositions": {rel:
+    # delivery carries: ``{"inlined": n, "total": 6, "dispositions": {rel:
     # inlined | missing | empty | oversized | read_error}}`` — one disposition
     # per whitelisted path (task text, usage fact, provenance header), never a
     # silent skip.

@@ -204,6 +204,7 @@ ouroboros/ — agent core and shared runtime (§6)
   consciousness.py, consciousness_wake.py — the background alarm admitting an ordinary Main turn through the supervisor tick; the wake input and `wake_task_metadata` envelope (§6 Background consciousness)
   consciousness_authority.py, consciousness_allowance.py — dispatch-bound autonomy ceilings and the rolling 24-hour allowance (§6 Background consciousness and Evolution)
   chat_chain.py, chat_references.py, chronicle_store.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts and separate common-view selections, disposable index (§6)
+  mark_anchors.py — a mark tied to a tool (optional call text) or a path trails that call's result once per task (§6 Post-task work)
   chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
   consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
@@ -310,11 +311,9 @@ ouroboros/ — agent core and shared runtime (§6)
   desktop_autostart.py, windows_autostart.py — Host sign-in adapter table: Windows registry, macOS LaunchAgent, Linux systemd/XDG state (Runtime topology below)
   plan_intention_ledger.py — An ask's `intention` review-ledger record; never a verdict
   plan_record.py — The per-task plan record (schema 3): revisions, asks, typed replies, folds, legacy import (§6 Plan construction and review)
-  plan_review_facts.py — Plan facts for the late-settlement row: counts and the objection fold, never a score (§6 Post-task work)
   provider_models.py — Model-ID helpers; `ACTIVE_MODEL_SETTING_KEYS` / `LEGACY_MODEL_SETTING_KEYS` keeps Heavy out of live route selection
   runtime_mode_policy.py — Protected-path policy (§6 Safety and runtime mode)
   schedule_contract.py — Schedule id, 5-field cron and IANA timezone validation SSOT
-  reflection.py — The reflection log's routed store (history and late-settlement host rows) and the one failed-call reading (§6 Post-task work)
   post_task_evolution.py — The worker's durable promotion signal for the supervisor idle tick (§6 Background consciousness and Evolution)
   repo_remotes.py — Role-based remotes: `managed` is the read/update-only official source, `origin` the personal target from the GitHub token
   review_evidence.py — Same-execution commit-review evidence (§6 Commit review evidence) and the durable commit/advisory review record of a task or checkout; execution facts are visibility only
@@ -579,7 +578,7 @@ ouroboros/ — agent core and shared runtime (§6)
 
 `POST /api/tasks` creates an ordinary managed root (§4); the CLI refuses any `delegation_role` other than `root`, and only `schedule_subagent` creates children. Admission reserves the task id and a worker-pool slot under one queue lock, off the HTTP event loop, so a cancelled HTTP waiter never cancels an admitted task; unconfirmed persistence answers 503 `unconfirmed` and keeps the row. Attachments are copied into the effective task drive before enqueue; a stored artifact reference is no host-path authority.
 
-Workspace tasks default to `memory_mode=forked`; `shared` is refused for an external workspace and runs on a forked child drive in project scope. The stored `memory_mode` says what was requested and `drive_root` where the task executes, so isolation never depends on relabelling the request. The mode isolates the execution drive and knowledge seed; identity, world-map and scratchpad writes still land on the canonical root. Forked and empty drives live under `data/state/headless_tasks/<task_id>/data`: a fork copies `identity.md`, `WORLD.md`, `registry.md` and global knowledge (only `knowledge/patterns.md` for project forks); dialogue, scratchpad, mailbox and history never cross, and the child's context still comes from repository governance and the canonical root's shared memory. `memory_export.json` is an explicit artifact, never auto-merged.
+Workspace tasks default to `memory_mode=forked`; `shared` is refused for an external workspace and runs on a forked child drive in project scope. The stored `memory_mode` says what was requested and `drive_root` where the task executes, so isolation never depends on relabelling the request. The mode isolates the execution drive and knowledge seed; identity, world-map and scratchpad writes still land on the canonical root. Forked and empty drives live under `data/state/headless_tasks/<task_id>/data`: a fork copies `identity.md`, `WORLD.md`, `registry.md` and global knowledge (none of it for project forks); dialogue, scratchpad, mailbox and history never cross, and the child's context still comes from repository governance and the canonical root's shared memory. `memory_export.json` is an explicit artifact, never auto-merged.
 
 `--detach` returns after durable admission; `--no-stream` polls to completion. `ouroboros run` exits 0 only for a completed lifecycle with a clean execution axis, no failed or degraded objective and a finished artifact bundle (`_is_terminal_success`), so shell automation cannot read "the model answered" as "the deliverable exists"; `--patch`/`--patch-out` are stricter and trust `workspace_patch.json`, which distinguishes an omitted, no-op and failed patch (§6 Headless finalization and workspace patch capture). An explicitly partial cost gets a bounded finality wait (`_await_cost_finality`) before its partial flags stay visible. Schedules enqueue ordinary tasks (no second scheduler, §5); skill `scheduled_tasks` only suggest (`skill_schedule_suggestions.py`). A blank timezone means the DST-aware system zone (fixed offset only when that zone is unrecoverable); the schedule digest rides task and consciousness context.
 
@@ -699,7 +698,7 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── dialogue_meta.json     ← chronicle import cursor and nomination source
 │   │   ├── chronicle/             ← records.jsonl (append-only authority), index.sqlite3 (disposable)
 │   │   ├── WORLD.md               ← my world map
-│   │   ├── knowledge/             ← topic files, patterns.md (Pattern Register), improvement-backlog.md
+│   │   ├── knowledge/             ← topic files (patterns.md, improvement-backlog.md: ordinary notes)
 │   │   ├── deep_review.md         ← deep-self-review output
 │   │   ├── registry.md            ← memory awareness map
 │   │   └── owner_mailbox/         ← per-task owner messages

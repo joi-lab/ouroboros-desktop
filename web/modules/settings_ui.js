@@ -117,7 +117,7 @@ const PROVIDER_CARDS = [
         ],
         testProvider: 'minimax',
         testInputs: { 's-minimax-key': 'MINIMAX_API_KEY', 's-minimax-region': 'MINIMAX_REGION' },
-        note: 'Pick MiniMax as the source in Models or Agents, then choose MiniMax-M3 or MiniMax-M2.7. Leave Region empty for <code>global_en</code>; use <code>cn_zh</code> for the China endpoint.',
+        note: 'Pick MiniMax as the source in Models or Agents, then choose MiniMax-M3 or MiniMax-M3.1-Flash. Leave Region empty for <code>global_en</code>; use <code>cn_zh</code> for the China endpoint.',
     },
     {
         id: 'deepseek', title: 'DeepSeek', icon: '', hint: 'Direct OpenAI-compatible runtime (v4 family)', advanced: true,
@@ -464,7 +464,7 @@ export function renderSettingsPage() {
                     <div class="form-section">
                         <h3>Post-Task Self-Evolution</h3>
                         <div class="settings-section-copy">
-                            After an eligible task, Ouroboros can optionally run one reviewed self-improvement cycle: the worker asks a light model whether to promote a backlog item, writes a durable request, and the supervisor starts a one-shot campaign later on an idle tick if all gates pass.
+                            After an eligible task, Ouroboros can optionally run one reviewed self-improvement cycle: the worker asks the Main model whether one improvement is worth a cycle now, writes a durable request, and the supervisor starts a one-shot campaign later on an idle tick if all gates pass.
                             <br><strong>Configuration authority:</strong> outside Cyber Pro, only the owner can enable this. Cyber Pro also lets the agent configure it; selecting Cyber Pro does not enable evolution automatically. Changes apply on the next task.
                         </div>
                         <div class="settings-effort-card">

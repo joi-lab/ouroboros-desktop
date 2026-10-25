@@ -78,7 +78,7 @@ def schedule_subagent_properties() -> Dict[str, Any]:
             "enum": sorted(VALID_SUBTASK_MEMORY_MODES),
             "description": (
                 "Child execution-drive seed: forked (default) copies stable identity/WORLD/registry/knowledge "
-                "files, or only shared patterns for a Project child; empty seeds that drive with nothing. "
+                "files, and no knowledge file for a Project child; empty seeds that drive with nothing. "
                 "Ordinary context still uses canonical governance (BIBLE/SYSTEM/reference books) and the "
                 "canonical data root's shared memory: empty means a blank drive, not a blank context. "
                 "shared is disabled for live local subagents. input_sources=declared "

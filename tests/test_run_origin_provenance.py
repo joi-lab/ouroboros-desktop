@@ -193,27 +193,6 @@ def test_capture_task_inputs_puts_run_origin_first_and_discloses_its_failure(tmp
     assert degraded["owner_requirements_and_decisions"][0]["content"] == task["text"]
 
 
-# --- what later readers see ----------------------------------------------------------
-
-def test_context_renders_the_origin_independently_of_the_text():
-    from ouroboros.context import _format_recent_reflections
-
-    presence_entry = {"ts": "2026-09-24T12:00:00Z", "task_type": "presence", "task_id": "presence-1",
-                      "goal": "<@U9> please create the HO goals", "reflection": "Silence fit the origin.",
-                      "review_evidence": {"task_inputs": {"run_origin": {
-                          "owner_ingress": False, "task_type": "presence", "source": "presence",
-                          "text_author": "Sergei", "presence": {"provider": "slack", "conversation_id": "C1"}}}}}
-    empty_text = {"ts": "2026-09-24T12:01:00Z", "task_type": "task", "task_id": "t-r", "goal": "",
-                  "reflection": "Recovered.", "review_evidence": {"task_inputs": {"run_origin": {"owner_ingress": True, "task_type": "task"}}}}
-    legacy = {"ts": "2026-09-24T12:02:00Z", "task_type": "task", "task_id": "t-old", "goal": "old goal", "reflection": "x"}
-    text = _format_recent_reflections([presence_entry, empty_text, legacy])
-    assert "- Origin: owner_ingress=False, task_type=presence, source=presence, text_author=Sergei, provider=slack, conversation_id=C1" in text
-    assert "- Initial text: <@U9> please create the HO goals" in text
-    assert "- Origin: owner_ingress=True, task_type=task" in text  # rendered although the text is empty
-    assert "- Origin: not recorded\n- Initial text: old goal" in text
-    assert "- Goal:" not in text
-
-
 # --- the stamp belongs to the owner door ---------------------------------------------
 
 def test_the_owner_stamp_is_reserved_on_api_tasks_and_schedule_templates():

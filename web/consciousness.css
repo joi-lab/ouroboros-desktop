@@ -216,6 +216,7 @@ textarea.ui-control.consciousness-owner-words {
 .place-sheet-section { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; max-width: 720px; margin: 0 auto; }
 .place-sheet-section > h3 { margin: 0; color: var(--text-primary); font-size: var(--type-section); line-height: var(--line-title); font-weight: 600; }
 .place-sheet-section p { margin: 0; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); overflow-wrap: anywhere; }
+.place-history-plain { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); }
 .place-sheet-section .place-sheet-note, .place-sheet-note { color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
 .place-sheet-status { margin: 0; font-size: var(--type-meta); line-height: var(--line-meta); }
 .place-sheet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
@@ -257,3 +258,29 @@ textarea.ui-control.consciousness-owner-words {
 /* ---- Skills cards: a connector wears the icon its connector ships ----------------------------------------------- */
 .skills-card-icon { display: inline-flex; flex: 0 0 auto; align-self: center; color: var(--text-primary); margin-inline-end: 2px; }
 .skills-card-icon svg { display: block; }
+
+/* The selected conversation replaces the editor inside its sheet. Authored voices use the mockup's reading rows. */
+.place-sheet-editor { display: flex; flex-direction: column; gap: var(--space-5); }
+.place-sheet-editor[hidden] { display: none; }
+.place-room-row { grid-template-columns: minmax(0, 1fr) auto; }
+.place-room-row > .place-sheet-note { grid-column: 1 / -1; }
+.place-convo { gap: var(--space-3); }
+.place-convo-rows { display: flex; flex-direction: column; gap: var(--space-4); }
+.place-convo-row { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.place-convo-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
+.place-convo-who { color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); font-weight: 600; overflow-wrap: anywhere; }
+.place-convo-row.is-assistant .place-convo-who { color: var(--assistant-sender); }
+.place-convo-row.is-owner .place-convo-who { color: var(--user-sender); }
+.place-convo-row time { font-variant-numeric: tabular-nums; }
+.place-convo-fact::before { content: '·'; margin-inline-end: var(--space-2); }
+.place-convo-text { color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); overflow-wrap: anywhere; }
+.place-convo-text.chat-markdown > :first-child { margin-top: 0; }
+.place-convo-text.chat-markdown > :last-child { margin-bottom: 0; }
+.place-convo-row.is-system { padding: var(--space-2) var(--space-4); border-radius: var(--radius-inner); background: var(--system-bubble-bg); }
+.place-convo-row.is-system .place-convo-who { color: var(--system-sender); }
+.place-convo-row.is-system .place-convo-text { color: var(--system-text); }
+.place-convo-edge { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+@container placesheet (max-width: 480px) {
+    .place-room-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+    .place-room-row .consciousness-place-facts { text-align: start; }
+}

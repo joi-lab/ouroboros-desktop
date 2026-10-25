@@ -197,9 +197,9 @@ def migration_problems(drive_root: Any) -> list[dict]:
     return list(_read(drive_root).get("migration", {}).get("problems", []))
 
 
-def place_room_index(drive_root: Any, place_id: str) -> list[dict]:
+def place_room_index(drive_root: Any, place_id: str, *, details: bool = False) -> list[dict]:
     from ouroboros.place_arrivals import room_index
-    return room_index(drive_root, get_place(drive_root, place_id))
+    return room_index(drive_root, get_place(drive_root, place_id), details=details)
 
 
 def get_place(drive_root: Any, place_id: str) -> Place:

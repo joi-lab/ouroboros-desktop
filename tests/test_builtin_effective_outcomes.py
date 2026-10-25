@@ -55,9 +55,9 @@ def invoke(tmp_path, monkeypatch):
     ("EVOLUTION_COMMIT_ORPHANED", "TOOL_ERROR"),
     ("EVOLUTION_PUBLICATION_STOPPED", "LEGACY_BLOCKED"),
 ])
-def test_confirmed_identifiers_reach_existing_trace_and_reflection_consumers(identifier, code):
+def test_confirmed_identifiers_reach_existing_trace_consumers(identifier, code):
+    from ouroboros._outcome_tool_errors import _OK_TOOL_STATUSES
     from ouroboros.loop_tool_execution import _typed_execution_failure, _typed_result_metadata
-    from ouroboros.reflection import _trace_call_errored
 
     text = f"⚠️ {identifier}: source-confirmed result\nretained detail"
     result = LegacyTextResultAdapter.from_text("fixture_builtin", text)
@@ -65,7 +65,7 @@ def test_confirmed_identifiers_reach_existing_trace_and_reflection_consumers(ide
     assert dict(result.meta) == {}  # text never proves no effect or settles custody
     failed = _typed_execution_failure(True, result)
     facts = _typed_result_metadata("fixture_builtin", text, failed, result)
-    assert failed and _trace_call_errored({**facts, "is_error": failed})
+    assert failed and facts["status"] not in _OK_TOOL_STATUSES
     assert facts["status"] == TOOL_CODE_SPECS[code].outcome_bucket
     assert facts["tool_result_code"] == code
 
@@ -363,16 +363,15 @@ def test_recent_tasks_snapshot_refusal_differs_from_partial_read(invoke, monkeyp
 
 
 def _assert_consumers(result, code):
-    from ouroboros._outcome_tool_errors import _classify_tool_errors
+    from ouroboros._outcome_tool_errors import _OK_TOOL_STATUSES, _classify_tool_errors
     from ouroboros.loop_tool_execution import _typed_execution_failure, _typed_result_metadata
-    from ouroboros.reflection import _trace_call_errored
 
     assert result.code == code, result.text
     failed = _typed_execution_failure(True, result)
     facts = _typed_result_metadata("census", result.text, failed, result)
     row = {"tool": "census", "result": result.text, **facts, "is_error": failed}
     assert facts["status"] == TOOL_CODE_SPECS[code].outcome_bucket
-    assert _trace_call_errored(row) == failed
+    assert (row["status"] in _OK_TOOL_STATUSES) is not failed
     classified = _classify_tool_errors({"tool_calls": [row]})
     if TOOL_CODE_SPECS[code].status == "ok":
         assert not any(classified.values())

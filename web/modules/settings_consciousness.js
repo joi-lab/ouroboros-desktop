@@ -72,13 +72,12 @@ export function consciousnessSectionHtml() {
         </details>`;
 }
 
-/** One row of the places list: icon, label, state word, unanswered count; the whole row opens the sheet. */
+/** One row of the places list: icon, label, state word, open focus count; the whole row opens the sheet. */
 export function settingsPlaceRowHtml(place) {
-    const count = Number.isInteger(place.unanswered) && place.unanswered > 0 ? `${place.unanswered} unanswered` : '';
-    return `<li><button type="button" class="consciousness-place-row" data-place-open="${escapeHtml(place.id)}"
-            aria-label="${escapeHtml(`Open ${place.label}: ${[placeStateWord(place.state), count].filter(Boolean).join(', ')}`)}">
+    const count = Number.isInteger(place.unanswered) && place.unanswered > 0 ? `${place.unanswered} open ${place.unanswered === 1 ? 'focus' : 'focuses'}` : '';
+    return `<li><button type="button" class="consciousness-place-row" data-place-open="${escapeHtml(place.id)}">
         <span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 18)}</span>
-        <span class="consciousness-place-name">${escapeHtml(place.label)}</span>
+        <span class="consciousness-place-name" data-i18n-authored>${escapeHtml(place.label)}</span>
         <span class="consciousness-place-facts">${escapeHtml([placeStateWord(place.state), count].filter(Boolean).join(' · '))}</span>
     </button></li>`;
 }

@@ -59,6 +59,7 @@ from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, Chronicl
                                        draft_signer, source_time_span, verify_quotes)
 from ouroboros.dialogue_provenance import memory_row_header, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
+from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
 from ouroboros.memory_view_account import source_change_lines
 from ouroboros.tool_capabilities import tool_result_limit
 from ouroboros.tools.registry import ToolEntry
@@ -557,6 +558,8 @@ def _record_header(record: Dict[str, Any], period: Optional[memory_inventory.Per
     if record.get("kind") == "mark":
         parts += [f"scope {record.get('scope')}", f"target {_target_label(record.get('target_ref'))}",
                   f"visibility {record.get('visibility')}"]
+        if isinstance(record.get("anchor"), dict):
+            parts.append(f"meets me at {describe_anchor(record['anchor'])}")
     for part in (record.get("status"), _covers_summary(record, period), _stamp_summary(record.get("host_stamp"))):
         if part:
             parts.append(str(part))
@@ -972,7 +975,8 @@ def _mark_target(ctx: Any, root: Path, store: ChronicleStore, a: Dict[str, Any])
 
 def _memory_mark(ctx: Any, text: str = "", node_id: str = "", address: str = "", task_id: str = "",
                  source_ref: Any = None, quote: Optional[str] = None, room_id: Any = None, scope: str = "room",
-                 mark_id: str = "", visibility: str = "", release_id: str = "", reason: str = "") -> str:
+                 mark_id: str = "", visibility: str = "", release_id: str = "", reason: str = "",
+                 anchor: Any = None) -> str:
     try:
         root = _root(ctx)
         store, author = _activated(root), focus_signature(ctx)
@@ -985,6 +989,8 @@ def _memory_mark(ctx: Any, text: str = "", node_id: str = "", address: str = "",
                 return _arg_error(ctx, "a mark names exactly one target: node_id, address, task_id or source_ref")
             if quote is not None and (not isinstance(quote, str) or not quote):
                 return _arg_error(ctx, "quote is an exact non-empty substring of the target")
+            if anchor is not None and (problem := anchor_problem(anchor)):
+                return _arg_error(ctx, problem)
             target, room, refusal = _mark_target(ctx, root, store, {
                 "node_id": node_id, "address": address, "task_id": task_id, "source_ref": source_ref, "quote": quote})
             if refusal:
@@ -993,7 +999,7 @@ def _memory_mark(ctx: Any, text: str = "", node_id: str = "", address: str = "",
             if room_id is not None and str(room_id).strip() != "":
                 room = str(room_id).strip()
             result = store.mark(target, str(text or ""), author, room_id=room or _room(ctx, root, None),
-                                scope=str(scope or "room"), quote=quote)
+                                scope=str(scope or "room"), quote=quote, anchor=anchor)
     except _NotActivated as exc:
         return _not_activated(ctx, exc)
     except ValueError as exc:
@@ -1069,6 +1075,9 @@ def chronicle_tools() -> List[ToolEntry]:
         "visibility": {"type": "string", "enum": ["full", "meaning"]},
         "release_id": {"type": "string", "description": "Release an active mark (with reason); its history stays."},
         "reason": string,
+        "anchor": {"type": "object", "additionalProperties": False,
+                   "description": "Optional action this mark meets me at: {tool, text?} is a tool name, optionally with text its call's arguments must contain; {path} is a file or directory path a call names. The host adds the mark's words to the result of the first such call in each task (a room mark: that room's work only); it compares literally and never refuses the call.",
+                   "properties": {"tool": string, "text": string, "path": string}},
     }
 
     def schema(name: str, description: str, properties: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
@@ -1087,6 +1096,6 @@ def chronicle_tools() -> List[ToolEntry]:
             read, []), _memory_read),
         ToolEntry("memory_mark", schema(
             "memory_mark",
-            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release it (release_id, reason) when it no longer holds.",
+            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target; an optional anchor ties the mark to an action, so its words also meet me in that action's result. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release it (release_id, reason) when it no longer holds.",
             mark, []), _memory_mark),
     ]

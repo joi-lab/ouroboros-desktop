@@ -1508,6 +1508,9 @@ def _assemble_history_response(
     # like any missing-result row; the client's durable task-detail read shows
     # "Outcome unavailable". Never stamp it terminal here: no result is not Done.
 
+    from ouroboros.gateway.place_history import annotate_place_history
+    annotate_place_history(messages, selections["chat"][0], data_dir, result_cache[_READS])
+
     # Hidden source evidence shares ordinary keyed replay. It carries no new
     # review/cost authority and never consumes the conversation quota.
     messages.extend(replay_evidence_rows(messages, replay_evidence))
