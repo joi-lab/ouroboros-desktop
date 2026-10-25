@@ -31,7 +31,7 @@ pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 ROOM_FACTS = """(scope) => {
     const root = scope === 'main' ? document.querySelector('#page-chat') : document.querySelector('#project-panel');
     const trigger = root?.querySelector('.rw-trigger');
-    const surface = root?.querySelector('.rw-surface');
+    const surface = trigger ? document.getElementById(trigger.getAttribute('aria-controls')) : null;  // the room's work Shade, never the chip's
     const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
     const shown = (el) => Boolean(el) && !el.hidden, markOf = (el) => (shown(el) ? `${el.dataset.shape} ${el.dataset.hue}` : '');
     const rows = [...(surface?.querySelectorAll('.rw-row') || [])].map((row) => {
@@ -1010,7 +1010,7 @@ def test_project_shade_hold_outside_press_switch_and_latest_root(room_ui):
     assert (held["word"], held["secondary"], held["tone"]) == ("Waiting", "Waiting for Project access", "held"), held
     settle_unfold(page, "project")
     geometry = page.evaluate("""() => { const box = s => document.querySelector(s).getBoundingClientRect();
-        const bar = box('#project-panel .project-panel-bar'), shade = box('#project-panel .rw-shade'), panel = box('#project-panel');
+        const bar = box('#project-panel .project-panel-bar'), shade = box('#project-panel .rw-shade:not(.cx-shade)'), panel = box('#project-panel');
         return {bar: [bar.left, bar.bottom, bar.right], shade: [shade.left, shade.top, shade.right, shade.bottom],
                 panel: [panel.left, panel.right], vh: innerHeight}; }""")
     assert abs(geometry["shade"][1] - geometry["bar"][1]) <= 1.5, geometry
@@ -1129,7 +1129,7 @@ _BAR_GEOMETRY = """(scope) => {
     const neighbours = [...bar.querySelectorAll('button, .chat-budget-pill')]
         .filter((el) => visible(el) && el !== trigger && !trigger.contains(el) && !el.closest('.rw-shade-anchor'))
         .map((el) => ({ name: el.id || el.dataset.chatCommand || String(el.className).split(' ')[0], ...box(el) }));
-    const shade = bar.parentElement.querySelector('.rw-shade') || bar.querySelector('.rw-shade');
+    const shade = document.getElementById(trigger.getAttribute('aria-controls'));  // the work Shade, not the chip's
     const alpha = (color) => { const m = color.match(/rgba?\\(([^)]+)\\)/); if (!m) return color === 'transparent' ? 0 : 1;
         const parts = m[1].split(/[ ,/]+/).filter(Boolean); return parts.length > 3 ? parseFloat(parts[3]) : 1; };
     const reachable = [...(shade?.querySelectorAll('.rw-more, .rw-main') || [])].filter(visible).every((el) => {

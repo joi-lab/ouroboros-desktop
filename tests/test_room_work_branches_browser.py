@@ -218,7 +218,7 @@ LEAKS = r"""(scope) => {
     };
     const shown = (el) => Boolean(el) && !el.hidden && el.getClientRects().length > 0;
     const trigger = root?.querySelector('.rw-trigger');
-    const surface = root?.querySelector('.rw-surface');
+    const surface = trigger ? document.getElementById(trigger.getAttribute('aria-controls')) : null;  // the room's work Shade, never the chip's
     const waitNote = trigger?.querySelector('.rw-sr');
     if (waitNote && !waitNote.hidden) note('trigger .rw-sr (wait note)', waitNote.textContent);
     note('surface[aria-label]', surface?.getAttribute('aria-label'));
@@ -276,11 +276,11 @@ NAMES = """(scope) => {
 
 SHADE_GEOMETRY = """() => { const box = s => { const r = document.querySelector(s).getBoundingClientRect();
         return {x: r.x, y: r.y, right: r.right, bottom: r.bottom}; };
-    const shade = document.querySelector('#project-panel .rw-shade');
+    const shade = document.querySelector('#project-panel .rw-shade:not(.cx-shade)');
     const reachable = [...shade.querySelectorAll('.rw-more, .rw-main[tabindex="0"], .rw-pill')].filter((el) => el.getClientRects().length)
         .every((el) => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
             return Boolean(hit) && (hit === el || el.contains(hit)); });
-    return {bar: box('#project-panel .project-panel-bar'), shade: box('#project-panel .rw-shade'),
+    return {bar: box('#project-panel .project-panel-bar'), shade: box('#project-panel .rw-shade:not(.cx-shade)'),
             panel: box('#project-panel'), vw: innerWidth, vh: innerHeight, reachable,
             overflow: document.documentElement.scrollWidth - innerWidth}; }"""
 

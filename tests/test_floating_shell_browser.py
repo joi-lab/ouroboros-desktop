@@ -193,7 +193,7 @@ def test_work_navigation_clears_persistent_history_error(shell_ui, chat_id, keyb
     page.locator(f"{host} .chat-history-status").wait_for(state="visible")
     page.locator(f"{host} .rw-trigger").click()
     page.locator(f'{host} .rw-row[data-id="gap-work"] .rw-main').click()
-    page.wait_for_function("host => document.querySelector(host + ' .rw-shade').hidden", arg=host)
+    page.wait_for_function("host => document.querySelector(host + ' .rw-shade:not(.cx-shade)').hidden", arg=host)
     facts = page.evaluate("""host => {
         const root = document.querySelector(host);
         return {card: root.querySelector('.chat-live-card[data-task-id="gap-work"]').getBoundingClientRect().top,
@@ -313,12 +313,12 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
             assert geometry["trigger"]["height"] >= 44
         title = page.locator('#project-panel .app-page-title')
         title.click()
-        page.wait_for_selector('#project-panel .rw-shade:not([hidden])')
+        page.wait_for_selector('#project-panel .rw-shade:not(.cx-shade):not([hidden])')
         title.click()
-        page.wait_for_selector('#project-panel .rw-shade', state='hidden', timeout=2000)
+        page.wait_for_selector('#project-panel .rw-shade:not(.cx-shade)', state='hidden', timeout=2000)
         page.locator("#project-panel .rw-trigger").focus()
         page.keyboard.press("Enter")
-        page.wait_for_selector("#project-panel .rw-shade:not([hidden])")
+        page.wait_for_selector("#project-panel .rw-shade:not(.cx-shade):not([hidden])")
         page.screenshot(path=str(tmp_path / f"project-shade-{width}-{theme}.png"))
         capture(page, f"project-shade-{width}-{theme}-{ui['engine']}")
         record(f"floating-{width}-{theme}-{ui['engine']}", {"main": facts, "project": geometry,
