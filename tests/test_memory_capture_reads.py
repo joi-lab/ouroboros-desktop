@@ -62,10 +62,12 @@ def test_rows_by_address_answers_as_resolve_row_and_a_wrong_hint_still_finds_its
 
 
 def test_a_filtered_room_reader_that_stops_early_reads_at_most_a_page_beyond_what_it_used(tmp_path, monkeypatch):
-    for i in range(2):
-        ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "out", "task_id": "wanted", "text": f"wanted {i}"})
-    for i in range(5_000):
-        ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "out", "task_id": f"other{i % 50}", "text": f"other {i}"})
+    from tests._dialogue import import_all, seed
+
+    seed(tmp_path, live={"chat": [{"chat_id": 1, "direction": "out", "ts": f"2026-09-01T{i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}+00:00",
+                                   **({"task_id": "wanted", "text": f"wanted {i}"} if i < 2 else
+                                      {"task_id": f"other{i % 50}", "text": f"other {i}"})} for i in range(5_002)]})
+    import_all(tmp_path)  # one import, not 5,002 write transactions
     probes = _counted(monkeypatch, ds, "probe_rows")
     first = list(itertools.islice(cc.iter_room_rows(tmp_path, "1", task_ids=["wanted"]), 2))
     assert [row["text"] for _address, row, _pos in first] == ["wanted 0", "wanted 1"]

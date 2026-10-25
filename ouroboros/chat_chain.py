@@ -120,6 +120,11 @@ def _same_row(row: Dict[str, Any], wanted: Dict[str, Any]) -> bool:
     return _row_chat_id(row) == wanted["chat_id"] and str(row.get("ts") or "") == wanted["ts"]
 
 
+def _hint_answers(row: Dict[str, Any], wanted: Dict[str, Any]) -> bool:
+    """A row a hint names answers the address when it is the same row and its content identity is the digest."""
+    return _same_row(row, wanted) and source_row_id(row).startswith(wanted["row_sha256"])
+
+
 def resolve_row(root: Any, address: Any, *, stream: str = "chat") -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """Resolve a content identity, checking hints and then indexed chat/time candidates.
 
@@ -135,7 +140,7 @@ def resolve_row(root: Any, address: Any, *, stream: str = "chat") -> Tuple[Optio
     elif stream == "chat" and hint.get("gen") and type(hint.get("line")) is int:
         hinted = ds.legacy_candidates(root, hint["gen"], hint["line"])
     for entry in hinted:
-        if _same_row(entry.row, wanted) and source_row_id(entry.row).startswith(wanted["row_sha256"]):
+        if _hint_answers(entry.row, wanted):
             return entry.row, _resolved(root, entry)
     candidates = ds.rows_by_identity(root, wanted["chat_id"], wanted["ts"], stream=stream)
     if wanted["chat_id"] == 1:
@@ -179,8 +184,7 @@ def rows_by_address(root: Any, addresses: Iterable[Any], *, stream: str = "chat"
             seq = norm["hint"].get("seq")
             hinted = (([at[seq]] if seq in at else []) if type(seq) is int
                       else legacy.get(_legacy_hint(norm), []) if stream == "chat" else [])
-            row = next((entry.row for entry in hinted
-                        if _same_row(entry.row, norm) and source_row_id(entry.row).startswith(norm["row_sha256"])), None)
+            row = next((entry.row for entry in hinted if _hint_answers(entry.row, norm)), None)
             if row is None:
                 row, _found = resolve_row(root, norm, stream=stream)
             if row is not None:
