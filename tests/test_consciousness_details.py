@@ -1,7 +1,9 @@
 """The Dashboard and state fallback share control truth and every clock status."""
 
 import asyncio
+import datetime as dt
 import json
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -9,6 +11,9 @@ from starlette.requests import Request
 from ouroboros import consciousness_view as view
 from ouroboros.consciousness import BackgroundConsciousness
 from ouroboros.gateway.state import api_consciousness
+
+
+NOW = dt.datetime(2027, 1, 15, 12, tzinfo=dt.timezone.utc).timestamp()
 
 
 @pytest.mark.parametrize("facts,status", [
@@ -22,11 +27,14 @@ from ouroboros.gateway.state import api_consciousness
     ({"last_wake_outcome": "pausing"}, "wake_paused"),
     ({"last_wake_outcome": "unknown"}, "wake_outcome_unknown"),
     ({"last_wake_outcome": "failed"}, "wake_failed"),
+    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "owner_turn_live": True}, "due"),
+    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "due"),
 ])
 def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path, facts, status):
     import server
     from supervisor import state
 
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
     snapshot = {"enabled": True, "next_wake_at": "2027-01-15T12:30:00+00:00",
                 "allowance_resets_at": "2027-01-15T18:00:00+00:00", "spent_24h_usd": 21.5,
                 "daily_usd": 20, "unknown_unmetered": 2, "integrity_degraded": True, **facts}
@@ -49,6 +57,42 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert panel["places"] == [{"place_id": "mail"}] and panel["recent_wakes"] == [{"task_id": "wake"}]
     assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("wake,owner", [("", False), ("", True), ("wake", False), ("wake", True)])
+@pytest.mark.parametrize("deadline", ["2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z",
+                                     "2027-01-15T12:00:01Z", "", "invalid"])
+def test_due_headline_needs_a_due_clock_and_current_work(monkeypatch, wake, owner, deadline):
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
+    facts = {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
+    result = view.describe_consciousness_state(facts, True)
+    due = deadline in {"2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z"}
+    if due and (wake or owner):
+        assert result["status"] == "due"
+        assert result["detail"] == "Due; waiting for current work."
+    else:
+        assert result["status"] == ("thinking" if wake else "sleeping")
+        assert "waiting for current work" not in result["detail"]
+    assert result["next_wake_at"] == deadline  # projection never moves the alarm
+    assert facts == {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
+
+
+@pytest.mark.parametrize("enabled,status", [(None, "unknown"), (False, "disabled")])
+def test_due_work_never_overrides_unknown_or_disabled_control(monkeypatch, enabled, status):
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
+    result = view.describe_consciousness_state({"next_wake_at": "2027-01-15T11:59:59Z",
+                                              "live_wake_task_id": "wake", "owner_turn_live": True}, enabled)
+    assert result["status"] == status and "waiting for current work" not in result["detail"]
+
+
+@pytest.mark.parametrize("owner_live", [False, True])
+def test_snapshot_keeps_the_owner_activity_fact(monkeypatch, tmp_path, owner_live):
+    monkeypatch.setattr(BackgroundConsciousness, "_read_state", staticmethod(lambda: {"bg_consciousness_enabled": True}))
+    clock = BackgroundConsciousness(tmp_path, tmp_path, lambda: 1, now=NOW)
+    monkeypatch.setattr(clock, "live_turns", lambda: ("", owner_live))
+    monkeypatch.setattr(clock, "_allowance_view", lambda now: {})
+    monkeypatch.setattr(clock, "_context_facts", lambda window: {"places": [], "counted_roots": []})
+    assert clock.status_snapshot()["owner_turn_live"] is owner_live
 
 
 @pytest.mark.parametrize("constructed", [False, True])

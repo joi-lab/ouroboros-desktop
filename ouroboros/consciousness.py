@@ -437,7 +437,7 @@ class BackgroundConsciousness:
             log.debug("consciousness: graceful stop of wake %s failed", task_id, exc_info=True)
 
     def status_snapshot(self) -> Dict[str, Any]:
-        wake, _owner = self.live_turns()
+        wake, owner_live = self.live_turns()
         window = self._allowance_view(time.time())
         context = self._context_facts(window)
         values = (self._enabled, get_consciousness_autonomy(), _iso(self._next_wake_at),
@@ -446,7 +446,7 @@ class BackgroundConsciousness:
                   len(context["counted_roots"]), int(get_consciousness_max_tasks()), wake,
                   int(window.get("unknown_unmetered") or 0), bool(window.get("integrity_degraded")))
         places = context.pop("places")
-        return {**dict(zip(SNAPSHOT_KEYS, values)), **context,
+        return {**dict(zip(SNAPSHOT_KEYS, values)), **context, "owner_turn_live": owner_live,
                 "places_brief": [{key: place.get(key) for key in ("place_id", "label", "state", "unanswered")}
                                  for place in places] if places is not None else None}
 

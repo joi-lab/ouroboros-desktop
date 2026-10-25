@@ -689,7 +689,7 @@ def test_status_snapshot_carries_the_alarm_facts(clock):
         "enabled", "level", "next_wake_at", "last_wake_at", "last_wake_task_id",
         "last_wake_outcome", "last_error", "spent_24h_usd", "daily_usd", "allowance_resets_at",
         "tasks_running", "max_tasks", "live_wake_task_id", "unknown_unmetered", "integrity_degraded",
-        "spend_by_cause", "counted_roots", "places_brief",
+        "spend_by_cause", "counted_roots", "places_brief", "owner_turn_live",
     }
     assert snapshot["enabled"] is True and snapshot["level"] == "act"
     assert snapshot["unknown_unmetered"] == 0 and snapshot["integrity_degraded"] is False

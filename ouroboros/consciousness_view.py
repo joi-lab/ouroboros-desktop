@@ -17,15 +17,21 @@ def _clock_of(iso_value: Any) -> str:
 
 def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None) -> dict:
     """Project the alarm clock's snapshot into one honest status + detail line
-    (``None``: the stored control is unknown, never read as off — #1307)."""
+    for the client headline (``None``: stored control is unknown, never off — #1307)."""
+    from ouroboros.deadline_utils import parse_deadline_ts
+
     outcome = str(snapshot.get("last_wake_outcome") or "")
     next_at = _clock_of(snapshot.get("next_wake_at"))
+    deadline = parse_deadline_ts(str(snapshot.get("next_wake_at") or ""))
     if requested_enabled is None:
         status, detail = "unknown", "The stored consciousness control is unknown: runtime state is unavailable or recovering."
     elif not requested_enabled:
         status, detail = "disabled", "Background consciousness is off."
     elif not snapshot:
         status, detail = "stopped", "Enabled in state, but the alarm clock was not constructed (supervisor init failed)."
+    elif (snapshot.get("live_wake_task_id") or snapshot.get("owner_turn_live")) \
+            and deadline is not None and deadline.timestamp() <= time.time():
+        status, detail = "due", "Due; waiting for current work."
     elif snapshot.get("live_wake_task_id"):
         status, detail = "thinking", f"Wake-up {snapshot['live_wake_task_id']} is running as a Main turn."
     elif outcome == "skipped:waiting_for_first_conversation":
@@ -187,7 +193,7 @@ def _quiet(row: dict) -> bool:
 def _wake_phase(row: dict, clock_live: bool) -> str:
     """Terminal card outcome, or the existing work classifier over stored activity facts."""
     from ouroboros.gateway.work_status import classify_member
-    from ouroboros.project_dialogue import outcome_phase
+    from ouroboros.project_dialogue import outcome_phase, owner_wait_projection
     from ouroboros.task_status import FINAL_STATUSES
     from ouroboros.work_stop import stop_presentation
 
@@ -199,7 +205,13 @@ def _wake_phase(row: dict, clock_live: bool) -> str:
     stop = stop_presentation(row)
     if stop["stop"] or stop["waiting"]:
         phase = "budget_paused"
-    activity = classify_member({**row, "activity_id": row["task_id"], "phase": phase}, row)["activity"]
+    facts = {**row, "activity_id": row["task_id"], "phase": phase}
+    wait = facts.pop("owner_wait", None) or {}
+    if wait.get("quiz_id"):
+        quiz = (row.get("owner_quiz") or {}).get(wait["quiz_id"]) or {}
+        facts["owner_wait"] = {**owner_wait_projection(wait["quiz_id"], wait, quiz),
+                               "quiz_id": wait["quiz_id"], "quiz_state": quiz.get("state", "unknown")}
+    activity = classify_member(facts, row)["activity"]
     return "running" if activity == "working" else activity
 
 

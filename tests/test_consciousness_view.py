@@ -127,7 +127,7 @@ def test_status_is_independent_of_missing_terminal_time(tmp_path, wake, status, 
 @pytest.mark.parametrize("status,owner_wait,phase", [
     ("running", {}, "running"),
     ("running", {"state": "waiting", "quiz_id": "q1"}, "waiting"),
-    ("running", {"state": "resumed", "owner_wait_state": "resumed", "quiz_id": "q1"}, "running"),
+    ("running", {"state": "resumed", "quiz_id": "q1"}, "running"),
     ("running", {"state": "answered", "wait_for_answer": True}, "running"),
     ("running", {"state": "open", "quiz_id": "q1"}, "unknown"),
     ("scheduled", {}, "queued"),
@@ -150,6 +150,16 @@ def test_unconfirmed_status_needs_clock_evidence_to_say_running(tmp_path, wake, 
     seed_result(tmp_path, wake["task_id"], wake)
     row, = view.recent_wakes(tmp_path, [], live_wake_task_id=wake["task_id"] if clock_live else "other")
     assert row["phase"] == ("running" if clock_live else "unknown")
+
+
+@pytest.mark.parametrize("quiz_state,phase", [("open", "waiting"), ("answered", "running"), ("closed", "running")])
+def test_question_projection_keeps_answered_waits_from_looking_blocked(tmp_path, wake, quiz_state, phase):
+    wake.update(status="running", outcome_axes={}, owner_wait={"state": "waiting", "quiz_id": "q1"},
+                owner_quiz={"q1": {"state": quiz_state, "wait_for_answer": True}})
+    wake.pop("terminal_time")
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["phase"] == phase
 
 
 @pytest.mark.parametrize("pause_state,phase", [("paused", "paused"), ("released", "queued")])
