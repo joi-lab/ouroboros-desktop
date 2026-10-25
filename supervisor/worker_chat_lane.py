@@ -162,19 +162,23 @@ def handle_chat_direct(
 ) -> None:
     # The turn's own thread begins its execution at its first statement, so a turn that
     # stops before admission decides it still says where it stands (server_liveness);
-    # its registration adopts it.
+    # its registration adopts it. The thread's store transactions and chronicle opens are
+    # metered for the turn's receipt (its scope: this thread, this turn).
+    from ouroboros import store_timing
     from supervisor.active_activity import get_direct_activity_registry
 
     client_msg_id = str((task_metadata or {}).get("client_message_id") or "")
     registry = get_direct_activity_registry()
     execution = registry.begin_execution(chat_id, client_message_id=client_msg_id)
     try:
-        if not owner_conversation_admitted(chat_id, client_msg_id):
-            return
-        _handle_chat_direct_locked(
-            chat_id, text, image_data,
-            task_constraint=task_constraint, task_metadata=task_metadata,
-        )
+        with store_timing.metered() as meter:
+            execution.meter = meter
+            if not owner_conversation_admitted(chat_id, client_msg_id):
+                return
+            _handle_chat_direct_locked(
+                chat_id, text, image_data,
+                task_constraint=task_constraint, task_metadata=task_metadata,
+            )
     finally:
         registry.end_execution(execution)
 

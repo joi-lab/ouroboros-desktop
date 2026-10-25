@@ -53,6 +53,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
+from ouroboros import store_timing
 from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
 from ouroboros.utils import append_jsonl, assert_test_data_path, utc_now_iso
 
@@ -267,6 +268,7 @@ class ChronicleStore:
         fd = acquire_exclusive_file_lock(self.lock_path, timeout_sec=10, stale_sec=90, owner_aware_stale=True)
         if fd is None:
             raise TimeoutError("chronicle publication lock unavailable")
+        store_timing.count("chronicle.locked")  # a read that takes no lock counts "chronicle.read"
         db = None
         try:
             try:

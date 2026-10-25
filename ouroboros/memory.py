@@ -834,16 +834,6 @@ class Memory:
             lines.extend(f"  {e.get('type', '?')}: {short(str(e.get('error', '')), 120)}" for e in errors[-10:])
         return "\n".join(lines)
 
-    def summarize_supervisor(self, entries: List[Dict[str, Any]]) -> str:
-        if not entries:
-            return ""
-        for e in reversed(entries):
-            if e.get("type") in ("launcher_start", "restart", "boot"):
-                branch = e.get("branch") or e.get("git_branch") or "?"
-                sha = short(str(e.get("sha") or e.get("git_sha") or ""), 12)
-                return f"{e['type']}: {e.get('ts', '')} branch={branch} sha={sha}"
-        return ""
-
     def _default_scratchpad(self) -> str:
         return f"# Scratchpad\n\nUpdatedAt: {utc_now_iso()}\n\n(empty — write anything here)\n"
 
