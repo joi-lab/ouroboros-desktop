@@ -18,26 +18,25 @@ const amount = (value) => {
     return Number.isFinite(number) ? number : null;
 };
 
-/** `{name?, svg?}` or null: the connector's icon as the host projected it (Lane D sanitizes the geometry). */
+/** Host-sanitized icon geometry; keep the discriminator used by renderSkillIcon. */
 export function normalizeIcon(raw) {
-    if (typeof raw === 'string') return raw ? { name: raw, svg: '' } : null;
     const icon = object(raw);
-    if (!icon) return null;
-    const name = text(icon.name);
-    const svg = text(icon.svg);
-    return name || svg ? { name, svg } : null;
+    return icon ? { ...icon } : null;
 }
 
 /** One PlaceSummary (contract §2) in the browser's names. */
 export function normalizePlace(raw) {
     const place = object(raw) || {};
     const connector = text(place.connector);
-    const connectorLabel = text(place.connector_label) || connector;
+    const connectorLabel = text(place.label) || connector;
     const status = object(place.status);
     return {
         id: text(place.place_id),
         connector,
         connectorLabel,
+        revision: count(place.revision),
+        readiness: object(place.readiness),
+        rooms: list(place.rooms).map((room) => ({ chatId: count(room?.room_chat_id) })),
         provider: text(place.provider),
         accountId: text(place.account_id),
         conversationId: text(place.conversation_id),
@@ -74,7 +73,7 @@ export function normalizeConnector(raw) {
     const name = text(connector.connector);
     return {
         connector: name,
-        label: text(connector.connector_label) || name,
+        label: text(connector.label) || name,
         icon: normalizeIcon(connector.icon),
         destination: text(connector.destination),
         wakes: [...new Set(list(connector.wakes).map((item) => text(object(item) ? item.fact : item)).filter(Boolean))],
@@ -94,23 +93,25 @@ export function normalizePlacesResponse(raw) {
     };
 }
 
-/** One recent wake (contract §1), newest first as the server orders them. */
+const WAKE_COST_KEYS = ['accounted_upper_bound_usd', 'accounted_upper_bound_usd_with_children',
+    'cost_presentation', 'cost_accounting_status', 'cost_accounting_error', 'cost_final',
+    'cost_with_children_partial', 'unknown_unmetered', 'non_final_rows', 'reserved_usd',
+    'unresolved_upper_bound_usd', 'ledger_integrity_degraded'];
+
+/** Frozen RecentWake: phases and terminality are server facts, never timestamp guesses. */
 export function normalizeWake(raw) {
     const wake = object(raw) || {};
     return {
-        taskId: text(wake.task_id),
-        cause: text(wake.cause),
-        placeId: text(wake.place_id),
-        placeLabel: text(wake.place_label),
-        startedAt: text(wake.started_at),
-        firstReplyAt: text(wake.first_reply_at),
-        finishedAt: text(wake.finished_at),
-        outcome: text(wake.outcome),
-        costUsd: amount(wake.accounted_upper_bound_usd),  // an accounted upper bound, not settled spend
-        unmetered: wake.unmetered === true,
+        taskId: text(wake.task_id), chatId: count(wake.chat_id), cause: text(wake.cause),
+        placeLabel: text(wake.place_label), conversation: text(wake.conversation),
+        startedAt: text(wake.started_at), endedAt: text(wake.ended_at), firstReplyAt: text(wake.first_reply_at),
+        live: wake.live === true, phase: text(wake.phase), quiet: wake.quiet === true,
+        saidOwner: typeof wake.said_owner === 'boolean' ? wake.said_owner : null,
+        toolCalls: count(wake.tool_calls), rounds: count(wake.rounds),
         checks: list(wake.checks).map((check) => ({ chip: text(check?.chip), tool: text(check?.tool) }))
             .filter((check) => check.chip),
-        summary: text(wake.summary),
+        summary: text(wake.summary), note: text(wake.note),
+        cost: Object.fromEntries(WAKE_COST_KEYS.filter((key) => key in wake).map((key) => [key, wake[key]])),
     };
 }
 
@@ -127,6 +128,7 @@ export function normalizeConsciousness(raw, { enabled } = {}) {
         enabled: known,
         status: text(bg.status),
         detail: text(bg.detail),
+        coverage: text(bg.recent_wakes_coverage),
         level: text(bg.level),
         nextWakeAt: text(bg.next_wake_at),
         lastWakeAt: text(bg.last_wake_at),

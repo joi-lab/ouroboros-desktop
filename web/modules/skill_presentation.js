@@ -279,7 +279,7 @@ export function trustValueText(source = {}) {
 export function skillIconHtml(icon, size = 18) {
     const render = pageIcons.renderSkillIcon;
     if (typeof render === 'function') {
-        try { return render(icon || {}, size); } catch { /* the house glyph below */ }
+        try { return render(icon?.kind === 'svg' ? icon : {}, { size }); } catch { /* the house glyph below */ }
     }
     return pageIcons.controlIcon(icon?.name || '', size);
 }
@@ -302,3 +302,6 @@ export function countsAsYoursText(item) {
     const injects = permissions.some((permission) => String(permission || '').split(':')[0] === 'inject_chat');
     return injects && !connectsServices(item).length ? 'Messages from here count as yours' : '';
 }
+
+/** A connector's contribution supplies its public label; ids remain canonical. */
+export const skillTitle = (skill) => skill.title || skill.contributes?.find((row) => row.provides === 'place' && row.label)?.label || skill.name;

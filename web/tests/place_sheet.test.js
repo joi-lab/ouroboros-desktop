@@ -15,8 +15,8 @@ const [slack, community, mail] = places;
 const strip = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 test('the head names the connector and how much of it the place covers', () => {
-    assert.equal(placeSheetMetaText(slack), 'Slack · whole account · T024BE7LD');
-    assert.equal(placeSheetMetaText(community), 'Telegram · one conversation · -100123');
+    assert.equal(placeSheetMetaText(slack), 'Slack · Acme · whole account · T024BE7LD');
+    assert.equal(placeSheetMetaText(community), 'Telegram · Ouroboros community · one conversation · -100123');
 });
 
 test('Active · Silent · Paused in one control; the note says what the chosen state does', () => {
@@ -127,6 +127,8 @@ test('each press asks for exactly one contract change, never a guess', () => {
 test('Connect lists the installed connectors not yet connected; none sends the owner to Browse › Connectors', () => {
     assert.match(connectListHtml({}), /Reading the installed connectors…/);
     const html = connectListHtml({ connectors });
+    assert.match(connectListHtml({ connectors: [{ ...connectors[0], connected: false }] }), /Slack<\//);
+    assert.doesNotMatch(connectListHtml({ connectors: [{ ...connectors[0], connected: false }] }), />slack-bridge</);
     assert.equal((html.match(/data-connect-act="connect"/g) || []).length, 1);
     assert.match(strip(html), /AgentRQ Connects AgentRQ · suggests waking for direct messages Connect/);
     assert.doesNotMatch(html, /data-connector="slack-bridge"/, 'a connected one is not offered again');

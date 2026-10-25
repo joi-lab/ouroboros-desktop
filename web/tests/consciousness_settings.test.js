@@ -70,7 +70,10 @@ test('the client reads the contract shapes once: places, connectors, the snapsho
     assert.equal(places[0].notes[0].id, 'n1');
     assert.equal(places[0].ownerAccounts[0].label, '@anton.r');
     assert.equal(places[1].icon.name, 'chat');
-    assert.equal(places[2].icon, null);
+    assert.deepEqual(places[2].icon, {});
+    assert.equal(places[0].revision, 1);
+    assert.equal(places[0].icon.kind, 'svg');
+    assert.equal(connectors[0].label, 'Slack');
     assert.equal(places[1].spent24hUsd, null, 'an unknown spend stays unknown');
     assert.equal(places[2].spent24hUsd, 0, 'a real zero is a fact');
     assert.deepEqual(connectors.map((entry) => [entry.connector, entry.connected]), [['slack-bridge', true], ['agentrq-bridge', false]]);
@@ -83,9 +86,12 @@ test('the client reads the contract shapes once: places, connectors, the snapsho
     assert.equal(state.recentWakes, null, '/api/state carries no wakes');
 
     const full = normalizeConsciousness(FIXTURE.consciousness);
-    assert.equal(full.recentWakes.length, 4);
-    assert.deepEqual(full.recentWakes[2].checks.map((check) => check.chip), ['checked', 'sent_despite']);
-    assert.equal(full.recentWakes[3].costUsd, null);
+    const old = full.recentWakes.find((wake) => wake.taskId === '214a31b6');
+    assert.equal(old.live, false);
+    assert.equal(old.phase, 'done');
+    assert.equal(old.cost.cost_presentation.tracked_amount, null);
+    assert.deepEqual(old.checks, [{ chip: 'checked', tool: 'run_command' }]);
+    assert.equal(full.recentWakes.find((wake) => wake.taskId === 'w-running').live, true);
     assert.equal(normalizeConsciousness({}).enabled, null, 'an absent control is unknown, never off');
 });
 

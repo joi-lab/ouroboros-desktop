@@ -1,3 +1,7 @@
+import { tr, fmt } from './i18n.js';
+import { taskPresentation } from './log_events.js';
+import { taskCostMeta } from './chat_activity.js';
+
 // The owner's words for consciousness, places and safety (owner's final names, 21.10), in one place.
 // Stored values never change: only these words do, so a relabel is one line here. Pure data and pure
 // helpers over host facts; nothing here reads the network or the page.
@@ -144,8 +148,46 @@ export function durationText(from, to) {
     const end = Date.parse(String(to || ''));
     if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '';
     const seconds = Math.round((end - start) / 1000);
-    if (seconds < 60) return `${seconds} s`;
+    if (seconds < 60) return fmt('{n} s', { n: seconds });
     const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return `${minutes} min`;
-    return `${Math.round(minutes / 60)} h`;
+    if (minutes < 60) return fmt('{n} min', { n: minutes });
+    return fmt('{n} h', { n: Math.round(minutes / 60) });
+}
+
+/** The card's terminal family and the server's distinct active phases. */
+export function wakePhaseText(wake) {
+    const active = { waiting: 'Waiting', queued: 'Queued', paused: 'Paused', unknown: 'State unknown' };
+    if (wake.phase in active) return tr(`task.phase.${wake.phase}`, active[wake.phase]);
+    if (['running', 'working', 'done', 'warn', 'error', 'cancelled'].includes(wake.phase)) {
+        return taskPresentation(wake.phase === 'running' ? 'working' : wake.phase, !wake.live && wake.quiet).headline;
+    }
+    return tr('task.phase.unknown', 'State unknown');
+}
+
+export function wakeFactsText(wake) {
+    return [
+        wake.toolCalls === null ? '' : fmt(wake.toolCalls === 1 ? '{n} tool call' : '{n} tool calls', { n: wake.toolCalls }),
+        wake.rounds === null ? '' : fmt(wake.rounds === 1 ? '{n} round' : '{n} rounds', { n: wake.rounds }),
+    ].filter(Boolean).join(' · ');
+}
+
+export function wakeCheckText(check) {
+    const words = {
+        checked: 'Safety Supervisor checked {tool}', warned: 'Safety Supervisor warned about {tool}',
+        held: 'Safety Supervisor held {tool}', sent_despite: '{tool} sent despite the check',
+        not_checked: 'not checked ({tool})',
+    };
+    return words[check.chip] ? fmt(words[check.chip], { tool: check.tool }) : '';
+}
+
+/** Keep the card's scoped cost projection; word openness and unknown without a false zero. */
+export function wakeCostText(wake) {
+    const meta = taskCostMeta(wake.cost)[0];
+    if (!meta || meta === 'Cost unknown' || meta === 'cost unavailable') return tr('consciousness.spend_unknown', 'spend unknown');
+    // These are the card's closed presentation templates, never authored text.
+    const words = meta.startsWith('Tracked: up to ') ? fmt('Tracked: up to {amount}', { amount: meta.slice(15) })
+        : meta.startsWith('Tracked: ') ? fmt('Tracked: {amount}', { amount: meta.slice(9) })
+            : meta.startsWith('up to ') ? fmt('up to {amount}', { amount: meta.slice(6) }) : meta;
+    return wake.live || wake.cost.cost_presentation?.accounting_open || wake.cost.cost_presentation?.tracked_final === false
+        ? fmt('{cost} so far', { cost: words }) : words;
 }

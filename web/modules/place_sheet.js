@@ -242,7 +242,7 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
     disconnect = disconnectPlace } = {}) {
     let current = place;
     const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false };
-    const dialog = sheetShell(`<span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 22)}</span><span>${escapeHtml(place.label)}</span>`,
+    const dialog = sheetShell(`<span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 22)}</span><span data-i18n-authored>${escapeHtml(place.label)}</span>`,
         placeSheetMetaText(place));
     const sheet = showSheet(dialog, { returnFocus, onClose: () => { window.removeEventListener(PLACES_CHANGED_EVENT, onExternal); onClose?.(); } });
     const { body } = sheet;
@@ -365,7 +365,7 @@ export function connectListHtml({ connectors = null, error = '', status = {} } =
     return `<section class="place-sheet-section">
         <p class="place-sheet-note">Connecting a place lets it hear there and, while the place is Active, speak and act there. You choose its state after connecting.</p>
         <div class="place-accounts">${open.map((connector) => `<div class="harness-account-row place-connector-row">
-            <div class="harness-account-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(connector.icon, 18)}</span><strong>${escapeHtml(connector.label)}</strong></div>
+            <div class="harness-account-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(connector.icon, 18)}</span><strong data-i18n-authored>${escapeHtml(connector.label)}</strong></div>
             <div class="harness-account-meta">${escapeHtml([connector.destination.replace(/^vendor:/, 'Connects '),
                 connector.wakes.length ? `suggests waking for ${listWords(connector.wakes.map(wakeFactWord))}` : ''].filter(Boolean).join(' · '))}</div>
             <div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-connect-act="connect" data-connector="${escapeHtml(connector.connector)}">Connect</button></div>
