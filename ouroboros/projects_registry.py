@@ -5,8 +5,10 @@ rediscovery. Store-marker recovery creates fresh incarnations, not lost folders/
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import time
 import uuid
 import pathlib
 import threading
@@ -18,6 +20,7 @@ from ouroboros.composer_cognition import ensure_project_cognition, main_cognitio
 from ouroboros.contracts.schema_versions import with_schema_version
 from ouroboros.project_facts import sanitize_project_id
 from ouroboros.store import StoreBusy, open_store
+from ouroboros import utils
 from ouroboros.utils import atomic_write_json, json_snapshot, read_json_dict, utc_now_iso, strip_markdown
 
 log = logging.getLogger(__name__)
@@ -355,6 +358,28 @@ def all_task_project_bindings(drive_root: Any, *, strict: bool = False) -> Dict[
             raise
         log.debug("all_task_project_bindings failed", exc_info=True)
     return out
+
+
+_PROCESS_STAMP = uuid.uuid4().hex[:8]  # this process's code shapes the map it answers
+
+
+def bindings_revision(drive_root: Any) -> str:
+    """An opaque stamp of what ``all_task_project_bindings`` answers in this process: the file
+    identities of the bindings and of the registry naming their projects. ``""`` when no stamp can
+    prove the bytes unchanged: unreadable, or changed within a clock tick (``utils._RACY_NS``)."""
+    started, stamps = time.time_ns(), [_PROCESS_STAMP]
+    for path in (_bindings_path(drive_root), _registry_path(drive_root)):
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            stamps.append(None)
+            continue
+        except OSError:
+            return ""
+        if max(info.st_mtime_ns, info.st_ctime_ns) >= started - utils._RACY_NS:
+            return ""
+        stamps.append(utils.file_identity(info))
+    return hashlib.sha256(repr(stamps).encode("utf-8")).hexdigest()[:16]
 
 
 def project_binding_for_task(drive_root: Any, task_id: str, *, strict: bool = False,
