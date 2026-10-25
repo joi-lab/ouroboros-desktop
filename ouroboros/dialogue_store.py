@@ -178,13 +178,13 @@ def probed_tier(root: Any) -> str:
     return TIER_ENFORCED if kernel_file_locks_enforced(pathlib.Path(root) / "state" / LOCK_NAME) else TIER_NAME
 
 
-def header_tier(root: Any) -> Optional[str]:
-    """The tier the file's header names; ``None`` for a missing or foreign file."""
-    return store.header_tier(path(root), _APPLICATION_ID)
+def header_tier(root: Any, identity: Optional[tuple] = None) -> Optional[str]:
+    """The tier the file's header names; ``None`` for a missing or foreign file (read once per file ``identity``)."""
+    return store.header_tier(path(root), _APPLICATION_ID, identity)
 
 
-def _tier(root: pathlib.Path) -> str:
-    tier = header_tier(root)
+def _tier(root: pathlib.Path, identity: Optional[tuple] = None) -> str:
+    tier = header_tier(root, identity)
     if tier is None:
         if present(root):
             raise StoreLost(f"dialogue store unreadable or foreign, never replaced: {path(root)}")
@@ -276,6 +276,8 @@ def retier(root: Any) -> Optional[str]:
     if current is None or current == wanted:
         return None
     with store.process_lock(path(root)), store.name_lock(root, IMPORT_LOCK_NAME, timeout_sec=WAIT_SEC, stale_sec=600.0):
+        known = (str(path(root)), store.file_identity(path(root)))
+        store._TIERS[known] = None  # the header changes in place: read it every time until the new tier commits
         try:
             store.prepare_handoff(path(root), current, wait_sec=WAIT_SEC, seam=False)  # closes this process's handles
             with contextlib.closing(store.connect(path(root), current, wait_sec=WAIT_SEC)) as conn:
@@ -285,6 +287,7 @@ def retier(root: Any) -> Optional[str]:
                 store.commit(conn)
         except sqlite3.Error as exc:
             raise _typed(exc) from exc
+        store._TIERS[known] = wanted
     return current
 
 
@@ -307,20 +310,22 @@ def transaction(root: Any, *, write: bool, wait_sec: float = WAIT_SEC) -> Iterat
     in-memory schema for a read of a root that holds no dialogue at all."""
     wait_sec = store.bounded_wait(wait_sec)
     root = pathlib.Path(root)
-    if not present(root):
+    identity = store.file_identity(path(root))  # one stat: the presence and the file its header's tier is kept for
+    if identity is None:
         if write or holds_dialogue_files(root):
             ensure(root)
         else:
             with store_empty.empty_store(_SCHEMA) as conn, store.transaction(conn, write=False):
                 yield conn
             return
-    tier = _tier(root)
+    tier = _tier(root, identity)
     with contextlib.ExitStack() as stack:
         if tier == TIER_NAME:
             stack.enter_context(store.name_lock(root, LOCK_NAME, timeout_sec=wait_sec))
-        try:
-            conn = stack.enter_context(store.connection(path(root), tier, wait_sec=wait_sec, opener=_open))
-            with store.transaction(conn, write=write, commit_wait_sec=wait_sec if tier == TIER_ENFORCED else None):
+        try:  # a name-tier lease states its file again, behind the lock it may have waited for
+            conn = stack.enter_context(store.connection(path(root), tier, wait_sec=wait_sec, opener=_open,
+                                                        identity=identity if tier == TIER_ENFORCED else None))
+            with store.transaction(conn, write=write):  # the lease set the wait a write's COMMIT spends
                 yield conn
         except sqlite3.Error as exc:
             raise _typed(exc) from exc
