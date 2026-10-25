@@ -154,7 +154,7 @@ def test_original_late_child_and_continuing_outputs_keep_identity_across_restart
     journal.write_text("{}")
 
     def consume(row):
-        seen = json.loads(journal.read_text())  # a restarted consumer has no in-memory dedupe
+        seen = json.loads(journal.read_text(encoding="utf-8"))  # a restarted consumer has no in-memory dedupe
         for output in [*row.get("outputs", []), row]:
             if output.get("text"):
                 assert output.get("output_ref"), "the consumer cannot invent a missing identity"
@@ -169,7 +169,7 @@ def test_original_late_child_and_continuing_outputs_keep_identity_across_restart
             for ref in ("original", "continuing", "late-child"):
                 consume(poll(restarted, ref))
         assert poll(restarted, "failed-original")["status"] == "failed"
-    seen = json.loads(journal.read_text())
+    seen = json.loads(journal.read_text(encoding="utf-8"))
     assert set(seen) == {original_id, first_ref, final_ref, child_ref}
     assert seen[child_ref]["task_id"] == "late-child"
     assert len({row["text"] for row in seen.values()}) == 1  # identical text is four independent outputs

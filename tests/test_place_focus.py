@@ -40,7 +40,7 @@ def test_focus_no_ceiling_host_actor_prompt(focus):
     assert "capability_ceiling" not in task["task_contract"]
     assert task["_is_direct_chat"] and task["_presence_turn"]
     assert meta["root_cost_ceiling_usd"] <= 2 and "configure_presence" in meta["disabled_tools"]
-    template = Path("prompts/FOCUS.md").read_text()
+    template = Path("prompts/FOCUS.md").read_text(encoding="utf-8")
     assert {key for _lit, key, _fmt, _conv in string.Formatter().parse(template) if key} == set(PLACEHOLDERS)
     rendered = frame_focus_content(task, "The untrusted event")
     assert "The untrusted event" in rendered and "Already started: task1" in rendered
@@ -177,7 +177,7 @@ def test_place_arrival_is_context_only_and_deduplicated(focus):
             _accepting_owner_messages=True, _busy=True, _current_task_id="another-author")
         assert offer_to_author(root, task, event)
         assert offer_to_author(root, task, event)
-        rows = [json.loads(line) for line in _mailbox_path(root, "another-author").read_text().splitlines()]
+        rows = [json.loads(line) for line in _mailbox_path(root, "another-author").read_text(encoding="utf-8").splitlines()]
         assert len(rows) == 1 and rows[0]["provenance"] in CONTEXT_ONLY_TASK_PROVENANCES
         messages = []
         deliver_task_message(rows[0], "another-author", None, messages.append)

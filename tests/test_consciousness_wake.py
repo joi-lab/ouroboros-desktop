@@ -138,8 +138,8 @@ def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(cl
 def test_launch_captures_previous_wake_before_binding_the_new_id(clock, has_previous):
     row = seed_wake(clock.root, wake_summary="Проверил состояние системы.") if has_previous else None
     clock.clock._last_wake_task_id = row["task_id"] if row else ""
-    template = REPO.joinpath("prompts/CONSCIOUSNESS.md").read_text()
-    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(template)
+    template = REPO.joinpath("prompts/CONSCIOUSNESS.md").read_text(encoding="utf-8")
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(template, encoding="utf-8")
     now = clock_tests.T0 + clock_tests.FLOOR
     expected = wake.previous_wake_text(clock.root, clock.clock._last_wake_task_id, now=now)
     assert clock.clock.tick(now=now) == "launched"
@@ -650,7 +650,7 @@ def test_template_names_only_its_placeholders_and_the_wake_hints():
         b"and what would be worth understanding, continuing, or changing?\n")
     assert "no message is sent; the summary still names the wake" in template
     assert "Finish with summary: one plain sentence in your human's language" in template
-    assert "what you heard and did here" in (REPO / "prompts/FOCUS.md").read_text()
+    assert "what you heard and did here" in (REPO / "prompts/FOCUS.md").read_text(encoding="utf-8")
 
 
 # --- the server projection --------------------------------------------------------

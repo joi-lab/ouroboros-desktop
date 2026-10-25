@@ -65,7 +65,7 @@ def test_non_summary_rows_do_not_acquire_terminal_flags():
 @pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")])
 def test_stored_wake_and_history_share_phase_and_quiet_facts(tmp_path, silent, notice):
     fixture = Path(__file__).parent / "fixtures" / "wake_document_214a31b6.json"
-    document = json.loads(fixture.read_text())
+    document = json.loads(fixture.read_text(encoding="utf-8"))
     document.update(wake_silent=silent, terminal_host_notice=notice)
     task_id = document["task_id"]
     stored = seed_result(tmp_path, task_id, document)

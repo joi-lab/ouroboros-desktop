@@ -85,7 +85,7 @@ def test_empty_and_malformed_sources_preserved(tmp_path):
     path.write_text("{broken")
     with pytest.raises(p.PlaceError, match="repair"):
         p.load_places(other)
-    assert path.read_text() == "{broken"
+    assert path.read_text(encoding="utf-8") == "{broken"
     assert not p.places_path(other).exists()
     path.unlink()
     assert p.load_places(other) == []

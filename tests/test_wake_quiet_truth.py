@@ -54,7 +54,7 @@ def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path,
     assert len(captured) == 1
     assert captured[0]["quiet_effective"] is (not sent)
     assert captured[0].get("wake_summary", "") == summary
-    durable = [json.loads(line) for line in (tmp_path / "logs/events.jsonl").read_text().splitlines()]
+    durable = [json.loads(line) for line in (tmp_path / "logs/events.jsonl").read_text(encoding="utf-8").splitlines()]
     done = next(row for row in durable if row.get("type") == "task_done")
     assert done["quiet_effective"] is (not sent)
     assert done.get("wake_summary", "") == summary
