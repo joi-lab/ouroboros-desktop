@@ -115,7 +115,8 @@ def probe(output):
                         page.screenshot(path=str(output / f"summary-{engine.name}-{width}-{'telegram' if telegram else 'browser'}.png"))
                         page.clock.install()
                         page.locator('[data-wake="w-summary"] summary').click()
-                        page.wait_for_function("document.querySelector('[data-wake=\"w-summary\"] details').open")
+                        # The note mounts on the toggle event, which the browser queues after `open` flips: wait for the mount.
+                        page.wait_for_selector('[data-wake="w-summary"] .consciousness-wake-note p')
                         page.evaluate("""() => {
                             const row = document.querySelector('[data-wake="w-summary"]');
                             const note = row.querySelector('.consciousness-wake-note');
