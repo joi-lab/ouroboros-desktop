@@ -163,6 +163,45 @@ def remembered_listing(live: pathlib.Path) -> Callable[..., list]:
     return listing
 
 
+# live log -> {archive: (file identity, task ids it holds, its gaps)}: the newest ARCHIVE_BACKFILL_MAX
+_ARCHIVE_TASKS: Dict[str, Dict[str, tuple]] = {}
+
+
+def task_archive_parser(live: pathlib.Path, task_id: str) -> Callable[..., list]:
+    """``iter_jsonl_objects`` (``iter_objects``' signature) for ONE task's window of LIVE's log.
+
+    A rotated archive is written once, so the task ids it holds are kept per file identity: an
+    archive without TASK_ID's rows is not parsed again for that task, and the gaps it met are
+    replayed. The live file, and an archive that holds the task, parse as ever. Only archives a
+    read can consult (the newest ``ARCHIVE_BACKFILL_MAX`` of this log) are kept.
+    """
+    held = _ARCHIVE_TASKS.setdefault(str(live), {})
+
+    def parse(path: pathlib.Path, *, tail_bytes: Optional[int] = None, gap_reasons: Optional[set] = None) -> list:
+        path = pathlib.Path(path)
+        if path == live or tail_bytes is not None:
+            return list(iter_jsonl_objects(path, tail_bytes=tail_bytes, gap_reasons=gap_reasons))
+        found: set = set()
+        try:
+            with path.open("rb") as handle:
+                identity, known = utils.file_identity(os.fstat(handle.fileno())), held.get(str(path))
+                if known is not None and known[0] == identity and task_id not in known[1]:
+                    rows, found = [], set(known[2])
+                else:
+                    rows = list(iter_jsonl_objects(path, gap_reasons=found, _handle=handle))
+                    held[str(path)] = (identity, frozenset(str(row.get("task_id", "")).strip() for row in rows),
+                                       frozenset(found))
+                    for stale in sorted(held)[:-ARCHIVE_BACKFILL_MAX]:
+                        del held[stale]
+        except FileNotFoundError:
+            rows = []
+        if gap_reasons is not None:
+            gap_reasons.update(found)
+        return rows
+
+    return parse
+
+
 def read_jsonl_segment_with_gaps(
     path: pathlib.Path,
     *,
@@ -342,5 +381,5 @@ def coverage_line(coverage: dict) -> str:
 
 __all__ = [
     "ARCHIVE_BACKFILL_MAX", "TAIL_WINDOW_START_BYTES", "archive_segments", "coverage_line",
-    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries", "remembered_listing",
+    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries", "remembered_listing", "task_archive_parser",
 ]

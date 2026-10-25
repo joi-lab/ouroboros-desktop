@@ -78,3 +78,49 @@ def test_a_callers_own_seams_keep_their_fresh_listing(logs, monkeypatch):
     for _ in range(2):
         memory.read_task_recent("events.jsonl", "fresh", 200, stat=pathlib.Path.stat)
     assert len(listed) == 2
+
+
+def _archive_parses(monkeypatch, root) -> list:
+    seen, real = [], jsonl_tail.iter_jsonl_objects
+    monkeypatch.setattr(jsonl_tail, "iter_jsonl_objects", lambda path, *args, **kwargs: (
+        seen.append(pathlib.Path(path).name) if pathlib.Path(path).parent == root / "archive" else None)
+        or real(path, *args, **kwargs))
+    return seen
+
+
+def test_an_archive_without_the_tasks_rows_is_not_parsed_again_for_it(logs, monkeypatch):
+    _write(logs / "archive" / "events_20261002T000000.jsonl", [{"task_id": "other"}, "{torn"])  # a recorded gap
+    parsed, memory = _archive_parses(monkeypatch, logs), Memory(drive_root=logs)
+
+    first = memory.read_task_recent("events.jsonl", "fresh", 200)
+    assert len(parsed) == 3 and first[0] == [] and first[1]["gaps"] == ["malformed_jsonl"]
+    assert memory.read_task_recent("events.jsonl", "fresh", 200) == first  # the same coverage, gaps replayed
+    assert len(parsed) == 3
+    memory.read_task_recent("events.jsonl", "other", 200)  # a task every archive holds: parsed as ever
+    assert len(parsed) == 6
+
+
+def test_an_archive_that_holds_the_task_or_was_replaced_is_parsed(logs, monkeypatch):
+    memory = Memory(drive_root=logs)
+    assert memory.read_task_recent("events.jsonl", "late", 200)[0] == []
+    newest = logs / "archive" / "events_20261003T000000.jsonl"
+    utils.write_text_atomic(newest, newest.read_text(encoding="utf-8") + json.dumps({"task_id": "late"}) + "\n")
+    parsed = _archive_parses(monkeypatch, logs)
+
+    rows, coverage = memory.read_task_recent("events.jsonl", "late", 200)
+    assert rows == [{"task_id": "late"}] and parsed == [newest.name]  # the older two still hold none of it
+    assert memory.read_task_recent("events.jsonl", "late", 200) == (rows, coverage)
+    assert parsed.count(newest.name) == 2
+
+
+def test_only_the_archives_a_read_can_consult_are_kept(logs, monkeypatch):
+    monkeypatch.setattr(utils, "_RACY_NS", 0)
+    memory = Memory(drive_root=logs)
+    for stamp in ("20261004T000000", "20261005T000000"):
+        memory.read_task_recent("events.jsonl", "fresh", 200)
+        _rotate(logs, stamp)
+    memory.read_task_recent("events.jsonl", "fresh", 200)
+
+    kept = jsonl_tail._ARCHIVE_TASKS[str(memory.logs_path("events.jsonl"))]
+    assert sorted(pathlib.Path(path).name for path in kept) == [
+        "events_20261003T000000.jsonl", "events_20261004T000000.jsonl", "events_20261005T000000.jsonl"]

@@ -617,7 +617,8 @@ class Memory:
         section discloses it; ``read_file`` on the log pages the rest).
         ``iter_objects``, ``list_archives`` and ``stat`` are the reader's parser,
         archive-listing and metadata seams, passed through unchanged; without any,
-        the log's ``archive/`` listing is reused until the log rotates.
+        the log's ``archive/`` listing is reused until the log rotates and an
+        archive that holds none of this task's rows is not parsed again for it.
         """
         if log_name in {"chat.jsonl", "progress.jsonl"}:
             from ouroboros import dialogue_store as ds
@@ -642,7 +643,7 @@ class Memory:
                         "live_size": upper, "live_window": upper - lower}
             return [entry.row for entry in reversed(records)], coverage
 
-        from ouroboros.jsonl_tail import read_rotated_jsonl_entries, remembered_listing
+        from ouroboros.jsonl_tail import read_rotated_jsonl_entries, remembered_listing, task_archive_parser
         from ouroboros.tool_call_log import counts_as_call, logical_calls
 
         wanted = str(task_id or "").strip()
@@ -661,6 +662,7 @@ class Memory:
         coverage: Dict[str, Any] = {"task_id": wanted, "source": f"logs/{log_name}"}
         if iter_objects is None and list_archives is None and stat is None:
             list_archives = remembered_listing(self.logs_path(log_name))
+            iter_objects = task_archive_parser(self.logs_path(log_name), wanted) if wanted else None
         try:
             rows = read_rotated_jsonl_entries(
                 self.logs_path(log_name), self.drive_root / "archive", stem,
