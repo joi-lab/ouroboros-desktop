@@ -159,6 +159,21 @@ def test_internal_work_and_earlier_sends_remain(wake):
     assert not quiet_finish(stored)
 
 
+@pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("tool", ["send_links", "send_file"])
+def test_send_family_prevents_a_quiet_finish(wake, live, tool):
+    path = wake.root / "note.txt"
+    path.write_text("A source for you.", encoding="utf-8")
+    arguments = {"file_path": str(path)} if tool == "send_file" else {
+        "title": "A source for you", "links": [{"label": "Source", "url": "https://example.org/"}]}
+    text, usage, trace, bus = wake.run([call(tool, arguments), finish("Private note.", silent=True)], live=live)
+    events = drained(bus) if live else wake.ctx.pending_events
+    assert any(row.get("type") == ("send_document" if tool == "send_file" else "send_links") for row in events)
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert stored["wake_silent"] is True and stored.get("owner_message_sent") is True
+    assert not quiet_finish(stored)
+
+
 @pytest.mark.parametrize("cause", ["own_clock", "focus"])
 @pytest.mark.parametrize("action,silent", [("finish", True), ("finish", False), ("stop", False)])
 def test_wake_summary_titles_the_stored_wake_without_changing_its_words(wake, cause, action, silent):
@@ -182,6 +197,17 @@ def test_absent_summary_keeps_the_existing_title(wake, summary):
     _, stored = emit(wake, text, usage, trace, bus=bus)
     assert "wake_summary" not in usage and "wake_summary" not in stored
     assert stored["suggested_name"] == before["suggested_name"]
+
+
+@pytest.mark.parametrize("arguments", [{}, {"summary": ""}, {"summary": None}])
+def test_ordinary_finish_accepts_an_omitted_empty_or_null_summary(wake, arguments):
+    from ouroboros.tools.control_runtime import _finish_task
+
+    wake.ctx.task_metadata = {}
+    result = _finish_task(wake.ctx, action="finish", answer="x", **arguments)
+    assert "completion_requested" in result and "TOOL_ERROR" not in result
+    assert wake.ctx._completion_request["answer"] == "x"
+    assert "wake_summary" not in wake.ctx._completion_request
 
 
 @pytest.mark.parametrize("cause,title", [("own_clock", "Own time"), ("focus", "Research room")])
@@ -664,8 +690,11 @@ INTERNAL = "INTERNAL: journal read, nothing new."
 
 
 @pytest.mark.parametrize("summary", ["", "Checked the journal."])
-def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch, summary):
-    wait = _park_after_selection(wake, monkeypatch, [finish(INTERNAL, silent=True, summary=summary)])
+@pytest.mark.parametrize("sent", [False, True])
+def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch, summary, sent):
+    responses = [call("send_user_message", {"text": "A visible progress update."})] if sent else []
+    wait = _park_after_selection(wake, monkeypatch, [*responses, finish(INTERNAL, silent=True, summary=summary)])
+    assert bool(getattr(wake.ctx, "_owner_message_sent", False)) is sent
     _resume_in_new_process(wake, monkeypatch, wait)
     text, usage, trace, bus = wake.run([{"content": ""}])
     assert usage.get("wake_silent") is True and text == INTERNAL
@@ -674,6 +703,8 @@ def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monke
     assert stored["result"] == INTERNAL and stored.get("wake_silent") is True
     assert stored.get("wake_summary", "") == summary and usage.get("wake_summary", "") == summary
     assert "summary" not in stored
+    assert bool(stored.get("owner_message_sent")) is sent
+    assert quiet_finish(stored) is (not sent)
 
 
 @pytest.mark.parametrize("summary", ["", "Checked the tests."])

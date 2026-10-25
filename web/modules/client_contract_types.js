@@ -572,6 +572,12 @@
  * @property {?boolean=} ledger_integrity_degraded
  */
 
+/** Recent-wakes fields of the open consciousness panel.
+ * @typedef {Object} RecentWakesView
+ * @property {Array<RecentWake>|null} recent_wakes
+ * @property {string} recent_wakes_coverage
+ */
+
 /** Places declarations live in a sibling to keep the client envelope module within its size band. */
 /** @typedef {import('./place_contract_types.js').PlaceConnectRequest} PlaceConnectRequest */
 /** @typedef {import('./place_contract_types.js').PlaceIcon} PlaceIcon */

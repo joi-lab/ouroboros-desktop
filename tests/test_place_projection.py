@@ -161,7 +161,25 @@ def test_usage_store_outage_is_only_unknown_money(client, monkeypatch):
     assert client.get("/api/places").status_code == 200
 
 
-def test_model_reads_the_same_place_projection(tmp_path, connector):
+def test_model_reads_stored_fields_of_the_same_place_projection(tmp_path, connector):
     from ouroboros.consciousness_view import place_views
     projection.connect_declared_place(tmp_path, "connector")
-    assert place_views(tmp_path) == projection.places_view(tmp_path)["places"]
+    brief, = place_views(tmp_path, {"spend_by_cause": []})
+    full, = projection.places_view(tmp_path)["places"]
+    # Full owner views replace the stored reply destination with the declared service destination.
+    assert {key: value for key, value in brief.items() if key != "destination"} == {
+        key: full[key] for key in brief if key != "destination"}
+    assert not {"icon", "readiness", "account_candidates"} & brief.keys()
+
+
+def test_places_endpoint_keeps_full_connector_projection(client, connector, monkeypatch):
+    skill, _ = connector
+    client.post("/api/places", json={"connector": "connector"})
+    calls = []
+    monkeypatch.setattr("ouroboros.skill_loader.discover_skills", lambda root: calls.append(root) or [skill])
+    response = client.get("/api/places")
+    assert response.status_code == 200 and len(calls) == 1
+    row, = response.json()["places"]
+    assert row["icon"] == icon_spec("ui/icon.svg", SVG)
+    assert row["readiness"] == {"text": "Connector on", "tone": "ok"}
+    assert row["account_candidates"] == []

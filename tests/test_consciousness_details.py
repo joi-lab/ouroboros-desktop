@@ -28,7 +28,7 @@ NOW = dt.datetime(2027, 1, 15, 12, tzinfo=dt.timezone.utc).timestamp()
     ({"last_wake_outcome": "unknown"}, "wake_outcome_unknown"),
     ({"last_wake_outcome": "failed"}, "wake_failed"),
     ({"next_wake_at": "2027-01-15T11:59:59+00:00", "owner_turn_live": True}, "due"),
-    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "due"),
+    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "thinking"),
 ])
 def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path, facts, status):
     import server
@@ -37,16 +37,19 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
     snapshot = {"enabled": True, "next_wake_at": "2027-01-15T12:30:00+00:00",
                 "allowance_resets_at": "2027-01-15T18:00:00+00:00", "spent_24h_usd": 21.5,
-                "daily_usd": 20, "unknown_unmetered": 2, "integrity_degraded": True, **facts}
+                "daily_usd": 20, "unknown_unmetered": 2, "integrity_degraded": True,
+                "places_brief": [{"place_id": "mail", "label": "Inbox"}], **facts}
     clock = object.__new__(BackgroundConsciousness)
     clock._drive_root = tmp_path
     monkeypatch.setattr(clock, "status_snapshot", lambda: dict(snapshot))
     monkeypatch.setattr(server, "_consciousness", clock)
     monkeypatch.setattr(state, "load_state", lambda: {"bg_consciousness_enabled": True})
-    monkeypatch.setattr(view, "place_views", lambda root: [{"place_id": "mail"}])
-    def wakes(root, places, *, live_wake_task_id):
+    def wakes(root, places, *, live_wake_task_id, ids):
         assert live_wake_task_id == snapshot.get("live_wake_task_id", "")
+        assert places == snapshot["places_brief"]
+        assert ids == ["wake"]
         return [{"task_id": "wake"}]
+    monkeypatch.setattr(view, "_wake_ids", lambda *args: ["wake"])
     monkeypatch.setattr(view, "recent_wakes", wakes)
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
     panel = json.loads(response.body)
@@ -54,7 +57,7 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert panel["status"] == status and panel["detail"]
     assert {key: panel[key] for key in fallback} == fallback
     assert clock.details_snapshot(True) == panel
-    assert panel["places"] == [{"place_id": "mail"}] and panel["recent_wakes"] == [{"task_id": "wake"}]
+    assert "places" not in panel and panel["recent_wakes"] == [{"task_id": "wake"}]
     assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 
@@ -67,7 +70,7 @@ def test_due_headline_needs_a_due_clock_and_current_work(monkeypatch, wake, owne
     facts = {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
     result = view.describe_consciousness_state(facts, True)
     due = deadline in {"2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z"}
-    if due and (wake or owner):
+    if due and owner and not wake:
         assert result["status"] == "due"
         assert result["detail"] == "Due; waiting for current work."
     else:
@@ -115,3 +118,20 @@ def test_stored_control_and_unconstructed_clock_are_visible(monkeypatch, tmp_pat
     assert panel["enabled"] is enabled
     assert {key: panel[key] for key in fallback} == fallback
     assert ("not constructed" in panel["detail"]) == (not constructed and enabled is True)
+
+
+@pytest.mark.parametrize("selected_count", [0, 49, 50])
+def test_recent_wake_coverage_names_the_selection_cap_even_with_pruned_documents(monkeypatch, tmp_path, selected_count):
+    from tests._wake_summary_shared import seed_wake
+
+    document = seed_wake(tmp_path)
+    ids = [document["task_id"], *[f"pruned-{i}" for i in range(selected_count - 1)]] if selected_count else []
+    reads = []
+    monkeypatch.setattr(view, "_wake_ids", lambda *args: reads.append(args) or ids)
+    clock = object.__new__(BackgroundConsciousness)
+    clock._drive_root = tmp_path
+    monkeypatch.setattr(clock, "status_snapshot", lambda: {"places_brief": []})
+    panel = clock.details_snapshot(True)
+    assert len(reads) == 1 and len(panel["recent_wakes"]) == bool(selected_count)
+    prefix = "the latest 50 " if selected_count == 50 else ""
+    assert panel["recent_wakes_coverage"] == prefix + "wakes that reached a model call in the last 48 h"

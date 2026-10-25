@@ -346,6 +346,7 @@ def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_sum
     assert assert_bound("GET /api/consciousness", response) == "application/json"
     panel = response.json()
     row, = panel["recent_wakes"]
+    assert "places" not in panel
     shape = contract_typed_dict("RecentWake")
     assert not validate_ingress(row, shape)
     assert set(row) <= _declared("RecentWake")
@@ -359,6 +360,8 @@ def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_sum
     assert row["note"] == document["result"]
     assert ("summary" in row) is with_summary and ("said_owner" in row) is with_summary
     assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
+    history = {key: panel[key] for key in _declared("RecentWakesView")}
+    assert not validate_ingress(history, contract_typed_dict("RecentWakesView"))
     for field, invalid in (("live", "false"), ("phase", "completed"), ("cause", "own_clock"), ("ended_at", 7),
                            ("tool_calls", "16"), ("checks", [{"chip": "checked", "tool": 7}]),
                            ("cost_presentation", {"scope": "root_tree"})):
@@ -366,6 +369,48 @@ def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_sum
     assert validate_ingress({key: value for key, value in row.items() if key != "task_id"}, shape)
     assert not validate_ingress({key: value for key, value in row.items()
                                  if key not in {"tool_calls", "rounds", "first_reply_at"}}, shape)
+
+
+@pytest.mark.parametrize("source", ["usage", "tasks"])
+@pytest.mark.parametrize("typed", [True, False])
+def test_recent_wake_read_unavailability_keeps_the_panel(client, monkeypatch, source, typed):
+    from ouroboros import consciousness_view, store, usage_store
+    from ouroboros.consciousness import BackgroundConsciousness
+    from tests._wake_summary_shared import seed_wake
+
+    root = client.app.state.drive_root
+    document = seed_wake(root)
+    clock = object.__new__(BackgroundConsciousness)
+    clock._drive_root = root
+    monkeypatch.setattr(clock, "status_snapshot", lambda: {
+        "enabled": True, "next_wake_at": "2027-01-15T12:30:00Z", "spent_24h_usd": 2.5, "places_brief": []})
+    client.app.state.describe_consciousness = lambda: clock.details_snapshot(True)
+    error = (usage_store.UsageLockUnavailable if source == "usage" else store.StoreBusy)("busy") if typed else ValueError("unexpected failure")
+    calls = []
+
+    def unavailable(root, **kwargs):
+        calls.append(kwargs)
+        raise error
+
+    if source == "usage":
+        monkeypatch.setattr(usage_store, "read", unavailable)
+    else:
+        monkeypatch.setattr(consciousness_view, "_wake_ids", lambda *args: [document["task_id"]])
+        monkeypatch.setattr(store, "open_store", unavailable)
+    if not typed:
+        with pytest.raises(ValueError, match="unexpected failure"):
+            client.get("/api/consciousness")
+    else:
+        response = client.get("/api/consciousness")
+        assert response.status_code == 200
+        panel = response.json()
+        reason = "usage ledger busy." if source == "usage" else "task store busy."
+        assert panel["recent_wakes"] is None
+        assert panel["recent_wakes_coverage"] == "Recent wakes could not be read: " + reason
+        assert panel["status"] == "sleeping" and panel["spent_24h_usd"] == 2.5
+        history = {key: panel[key] for key in _declared("RecentWakesView")}
+        assert not validate_ingress(history, contract_typed_dict("RecentWakesView"))
+    assert calls == ([{"allow_stale": True}] if source == "usage" else [{"write": False}])
 
 
 def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):

@@ -457,18 +457,29 @@ class BackgroundConsciousness:
 
     def details_snapshot(self, requested_enabled: bool | None) -> Dict[str, Any]:
         """The full read-only panel; the state endpoint keeps its small snapshot."""
-        from ouroboros.consciousness_view import describe_consciousness_state, place_views, recent_wakes
+        from ouroboros.consciousness_view import RECENT_WAKE_LIMIT, _wake_ids, describe_consciousness_state, recent_wakes
+        from ouroboros.store import StoreBusy
+        from ouroboros.usage_store import UsageLockUnavailable
+
         snapshot = describe_consciousness_state(self.status_snapshot(), requested_enabled)
-        places = place_views(self._drive_root)
-        return {**snapshot, "places": places, "recent_wakes": recent_wakes(
-                    self._drive_root, places, live_wake_task_id=snapshot.get("live_wake_task_id", "")),
-                "recent_wakes_coverage": "wakes that reached a model call in the last 48 h"}
+        coverage = "wakes that reached a model call in the last 48 h"
+        try:
+            ids = _wake_ids(self._drive_root, time.time())
+            wakes = recent_wakes(self._drive_root, snapshot.get("places_brief"),
+                                 live_wake_task_id=snapshot.get("live_wake_task_id", ""), ids=ids)
+            if len(ids) == RECENT_WAKE_LIMIT:
+                coverage = f"the latest {RECENT_WAKE_LIMIT} " + coverage
+        except UsageLockUnavailable:
+            wakes, coverage = None, "Recent wakes could not be read: usage ledger busy."
+        except StoreBusy:
+            wakes, coverage = None, "Recent wakes could not be read: task store busy."
+        return {**snapshot, "recent_wakes": wakes, "recent_wakes_coverage": coverage}
 
     def _context_facts(self, window) -> dict:
         from ouroboros.consciousness_view import cause_views, place_views, root_views
         from supervisor.queue import live_consciousness_roots
         try:
-            places = place_views(self._drive_root)
+            places = place_views(self._drive_root, window)
         except Exception:
             places = None
         return {"spend_by_cause": cause_views(window.get("spend_by_cause"), places),

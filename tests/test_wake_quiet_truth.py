@@ -63,7 +63,7 @@ def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path,
 @pytest.mark.parametrize("destination", ["current", "main"])
 @pytest.mark.parametrize("accepted", [True, False])
 def test_owner_send_flag_records_only_accepted_deliveries(tmp_path, monkeypatch, destination, accepted):
-    from ouroboros.tools import control_runtime, owner_delivery
+    from ouroboros.tools import control_runtime
     from ouroboros import presence_owner_contact
 
     ctx = SimpleNamespace(current_chat_id=1, task_id="wake", task_metadata={}, drive_logs=lambda: tmp_path)
@@ -75,7 +75,8 @@ def test_owner_send_flag_records_only_accepted_deliveries(tmp_path, monkeypatch,
             raise OSError("delivery unavailable")
         return "live"
 
-    monkeypatch.setattr(owner_delivery, "deliver_owner_event", deliver)
+    ctx.event_queue = SimpleNamespace(put_nowait=deliver)
+    ctx.pending_events = SimpleNamespace(append=deliver)
     monkeypatch.setattr(presence_owner_contact, "send_main_message", deliver)
     if accepted or destination == "main":
         control_runtime._send_user_message(ctx, "An update.", destination=destination)

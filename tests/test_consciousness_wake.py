@@ -90,6 +90,32 @@ def test_previous_wake_distinguishes_absence_and_unreadability(tmp_path, monkeyp
     assert reads == ["previous"]
 
 
+@pytest.mark.parametrize("failure", ["read", "projection", "none"])
+def test_previous_wake_failure_does_not_block_launch(clock, monkeypatch, caplog, failure):
+    from ouroboros import task_store, terminal_time
+
+    row = seed_wake(clock.root, result="The whole previous note.\nLast line.")
+    clock.clock._last_wake_task_id = row["task_id"]
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(
+        "- previous wake: {previous_wake}\n", encoding="utf-8")
+
+    def broken(*args, **kwargs):
+        raise ValueError("previous wake unavailable")
+
+    if failure == "read":
+        monkeypatch.setattr(task_store, "read_document", broken)
+    elif failure == "projection":
+        monkeypatch.setattr(terminal_time, "terminal_time_fact", broken)
+    with caplog.at_level("DEBUG", logger="ouroboros.consciousness_wake"):
+        assert clock.clock.tick(clock.clock.next_wake_at) == "launched"
+    text = clock.launches[-1]["text"]
+    if failure == "none":
+        assert row["result"] in text and "unreadable" not in text
+    else:
+        assert "- previous wake: unreadable\n" in text
+        assert any(row["task_id"] in record.message and record.exc_info for record in caplog.records)
+
+
 @pytest.mark.parametrize("restart", [False, True])
 @pytest.mark.parametrize("failure", ["write", "readback"])
 def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(clock, monkeypatch, failure, restart):

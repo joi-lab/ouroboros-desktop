@@ -6,6 +6,8 @@ from typing import Any
 
 from ouroboros.usage_origin import cause_label
 
+RECENT_WAKE_LIMIT = 50
+
 
 def _clock_of(iso_value: Any) -> str:
     """``HH:MM`` in the server's local time for an ISO instant (``?`` when absent)."""
@@ -29,11 +31,10 @@ def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None)
         status, detail = "disabled", "Background consciousness is off."
     elif not snapshot:
         status, detail = "stopped", "Enabled in state, but the alarm clock was not constructed (supervisor init failed)."
-    elif (snapshot.get("live_wake_task_id") or snapshot.get("owner_turn_live")) \
-            and deadline is not None and deadline.timestamp() <= time.time():
-        status, detail = "due", "Due; waiting for current work."
     elif snapshot.get("live_wake_task_id"):
         status, detail = "thinking", f"Wake-up {snapshot['live_wake_task_id']} is running as a Main turn."
+    elif snapshot.get("owner_turn_live") and deadline is not None and deadline.timestamp() <= time.time():
+        status, detail = "due", "Due; waiting for current work."
     elif outcome == "skipped:waiting_for_first_conversation":
         status, detail = "waiting_for_first_conversation", "No owner chat is bound yet; the first conversation binds it."
     elif outcome == "skipped:allowance_exhausted":
@@ -69,14 +70,15 @@ def describe_consciousness(clock) -> dict:
     requested = bool(enabled) if known else None
     if clock is not None:
         return clock.details_snapshot(requested)
-    return {**describe_consciousness_state({}, requested), "places": [], "recent_wakes": []}
+    return {**describe_consciousness_state({}, requested), "recent_wakes": []}
 
 
-def place_views(drive_root) -> list[dict]:
-    """The same PlaceSummary used by the owner's Places surface (D15 → D20 is lazy)."""
-    from ouroboros.place_projection import places_view
+def place_views(drive_root, allowance=None) -> list[dict]:
+    """Stored PlaceSummary facts, using the caller's allowance without connector discovery."""
+    from ouroboros.place_projection import place_view
+    from ouroboros.places import load_places
 
-    return places_view(drive_root)["places"]
+    return [place_view(drive_root, place, allowance=allowance, brief=True) for place in load_places(drive_root)]
 
 
 def places_text(views) -> str:
@@ -156,7 +158,7 @@ def _wake_ids(drive_root, now: float) -> list[str]:
             "WHERE category = 'consciousness' AND ts_last_epoch >= ? AND root_task_id != '' "
             f"AND {_MONEY_KIND} AND state != 'released' AND (ts_dispatched IS NOT NULL "
             "OR kind IN ('subscription_session', 'external_unmetered')) "
-            "GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT 50",
+            f"GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT {RECENT_WAKE_LIMIT}",
             (now - ROOT_HORIZON_SEC,))]
 
 
@@ -195,7 +197,8 @@ def _wake_phase(row: dict, clock_live: bool) -> str:
     return "running" if activity == "working" else activity
 
 
-def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None) -> list[dict]:
+def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None,
+                 ids: list[str] | None = None) -> list[dict]:
     """At most 50 wakes that reached a model call in the last 48 h, newest first.
 
     Wakes that never reached a model call are not listed. Selection uses the
@@ -210,7 +213,8 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
     from ouroboros.terminal_time import terminal_time_fact
     from ouroboros.task_finalization import quiet_finish
 
-    ids = _wake_ids(drive_root, time.time() if now is None else now)
+    if ids is None:
+        ids = _wake_ids(drive_root, time.time() if now is None else now)
     if not ids:
         return []
     documents = display_documents(drive_root, ids)
@@ -237,7 +241,7 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
                      **({"tool_calls": row["tool_calls"]} if "tool_calls" in row else {}),
                      **({"rounds": usage["total_rounds"]} if "total_rounds" in usage else {}),
                      "checks": row.get("safety_checks", []), "note": notes.get(task_id),
-                     **({"summary": row["wake_summary"]} if "wake_summary" in row else {}),
+                     **({"summary": row["wake_summary"]} if isinstance(row.get("wake_summary"), str) and row["wake_summary"] else {}),
                      **({"said_owner": bool(row["owner_message_sent"])} if "owner_message_sent" in row else {}),
                      **{k: row[k] for k in TASK_COST_META_FIELDS if k in row}})
     return rows

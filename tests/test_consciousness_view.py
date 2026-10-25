@@ -107,6 +107,30 @@ def test_real_terminal_wake_uses_terminal_fact_and_card_phase(tmp_path, wake):
     assert "tool_calls" not in row  # the old document has no typed count
 
 
+@pytest.mark.parametrize("summary", ["", "Проверил состояние; решения не нужно."])
+def test_admitted_wake_running_reset_never_publishes_null_summary(tmp_path, monkeypatch, summary):
+    from ouroboros.gateway.schema import contract_typed_dict, validate_ingress
+    from ouroboros.task_finalization import terminal_result_fields
+    from ouroboros.task_results import load_task_result, write_task_result
+    from supervisor.worker_chat_lane import name_wake_on_admission
+
+    task_id = "admitted-wake"
+    metadata = {"initiator": "consciousness", "wake_cause": "own_clock"}
+    name_wake_on_admission(tmp_path, {"id": task_id, "metadata": metadata})
+    write_task_result(tmp_path, task_id, "running", task_attempt=0, metadata=metadata,
+                      started_at="2026-10-24T07:00:00+00:00", chat_id=1, _is_direct_chat=True)
+    assert load_task_result(tmp_path, task_id)["wake_summary"] is None
+    usage = {"wake_silent": True, "terminal_origin": "model_final", **({"wake_summary": summary} if summary else {})}
+    write_task_result(tmp_path, task_id, "completed", result="Whole note.",
+                      _terminal_observed=True, **terminal_result_fields(usage))
+    _call(tmp_path, monkeypatch, task_id)
+    row, = view.recent_wakes(tmp_path, [], now=NOW)
+    assert ("summary" in row) is bool(summary)
+    if summary:
+        assert row["summary"] == summary
+    assert not validate_ingress(row, contract_typed_dict("RecentWake"))
+
+
 def test_clock_identity_alone_can_keep_a_terminal_wake_live(tmp_path, wake):
     for live_id, expected in ((wake["task_id"], True), ("another-wake", False), ("", False)):
         row, = view.recent_wakes(tmp_path, [], live_wake_task_id=live_id)
@@ -196,8 +220,8 @@ def test_summary_is_only_authored_summary_and_note_is_whole(tmp_path, wake, summ
     seed_result(tmp_path, wake["task_id"], wake)
     row, = view.recent_wakes(tmp_path, [])
     assert row["note"] == note and "omitted" not in row["note"]
-    assert ("summary" in row) is (summary is not None)
-    if summary is not None:
+    assert ("summary" in row) is bool(summary)
+    if summary:
         assert row["summary"] == summary
 
 
