@@ -304,19 +304,21 @@ def test_worktree_root_isolation_guard(tmp_path):
 
 
 def test_worktree_prune_guards_outside_root(tmp_path):
-    # A corrupt registry entry pointing OUTSIDE the worktree root must never cause deletion.
+    # A corrupt record pointing OUTSIDE the worktree root must never cause deletion,
+    # even once its task is proven over and the pass retires the record.
+    from ouroboros.task_results import write_task_result
     repo = tmp_path / "repo"
     _init_repo(repo, {"a.txt": "hi\n"})
     data = tmp_path / "data"; data.mkdir()
     wtroot = tmp_path / "wtroot"
     outside = tmp_path / "precious"; outside.mkdir()
     (outside / "keep.txt").write_text("x", encoding="utf-8")
-    sw._save_registry(
-        [{"task_id": "evil", "path": str(outside), "branch": "", "repo_dir": str(repo), "created_at": 0.0}],
-        data_dir=data,
-    )
-    sw.prune_orphans(worktree_root=wtroot, data_dir=data, retention_days=0)
+    sw._put_record({"task_id": "evil", "path": str(outside), "branch": "", "repo_dir": str(repo),
+                    "created_at": 0.0}, data_dir=data)
+    write_task_result(data, "evil", "completed")
+    report = sw.prune_orphans(worktree_root=wtroot, data_dir=data, retention_days=0, live=lambda _task: False)
     assert outside.exists() and (outside / "keep.txt").exists()  # guard prevented deletion
+    assert report == {"removed": 1, "kept": 0} and sw.list_worktrees(data_dir=data) == []  # only the record went
 
 
 def test_worktree_prune_missing(tmp_path):
@@ -1337,8 +1339,8 @@ def test_provision_genesis_project_is_durable_and_isolated(tmp_path):
     assert pathlib.Path(h.path).exists() and (pathlib.Path(h.path) / ".git").exists()
     assert h.base_sha  # seed commit exists
     assert sw._is_within(pathlib.Path(h.path), proot)
-    # NOT added to the worktree registry (durable, not GC-tracked).
-    assert all(e.get("path") != h.path for e in sw._load_registry(data))
+    # NOT given a copy record (durable, not GC-tracked).
+    assert all(e.get("path") != h.path for e in sw._records(data))
     # remove only inside projects root; refuses arbitrary paths.
     assert sw.remove_genesis_project(str(tmp_path / "elsewhere")) is False
     assert sw.remove_genesis_project(h.path, projects_root=proot) is True

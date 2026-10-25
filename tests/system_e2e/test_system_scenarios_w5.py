@@ -184,15 +184,18 @@ def _capture_dir(data_root: pathlib.Path, task_id: str, snapshot_id: str) -> pat
 
 
 def _registry_rows(data_root: pathlib.Path, snapshot_id: str) -> list:
-    """The durable snapshot-registry rows for one snapshot id (empty = released)."""
-    path = pathlib.Path(data_root) / "state" / "subagent_worktrees.json"
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    rows = raw.get("worktrees") if isinstance(raw, dict) else raw
-    return [row for row in (rows or []) if isinstance(row, dict)
-            and str(row.get("snapshot_id") or "") == str(snapshot_id)]
+    """The durable copy records for one snapshot id (empty = disposed): one file per copy
+    under ``state/private_copies``."""
+    rows = []
+    for path in sorted((pathlib.Path(data_root) / "state" / "private_copies").glob("*.json")):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not path.name.startswith(".") and isinstance(row, dict) \
+                and str(row.get("snapshot_id") or "") == str(snapshot_id):
+            rows.append(row)
+    return rows
 
 
 # ===========================================================================
@@ -407,10 +410,12 @@ def test_s25_mutating_delegated_patch_conflict_is_refused_and_keeps_its_material
             resolved = _custody_rows(oracle, "delegate_run_patch_apply_resolved", run_id)
             assert resolved and resolved[-1].get("reason") == "baseline_drift", resolved
 
-            # -- the resolution material SURVIVES: snapshot, registry, patch ---
-            assert _registry_rows(server.data_root, snapshot_id), (
-                "the conflicted run's snapshot row was released")
-            assert pathlib.Path(execution_root).is_dir()
+            # -- the resolution material SURVIVES: record, pinned result, patch ---
+            [record] = _registry_rows(server.data_root, snapshot_id) or [{}]
+            assert record.get("result_sha"), "the conflicted run's copy record was released"
+            # Its saved result is the patch plus the pinned commit C; the checkout itself went.
+            assert record.get("checkout_released") and not pathlib.Path(execution_root).exists(), record
+            assert _git(["rev-parse", "--verify", record["result_ref"]], workspace) == record["result_sha"]
             cap_dir = _capture_dir(server.data_root, task_id, snapshot_id)
             assert (cap_dir / "workspace.patch").is_file()
             manifest = json.loads((cap_dir / "workspace_patch.json").read_text(encoding="utf-8"))
