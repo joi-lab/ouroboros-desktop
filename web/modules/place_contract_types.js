@@ -87,3 +87,30 @@
  * @property {string=} revoke_owner_account
  * @property {number=} expected_revision
  */
+
+/**
+ * A captured local conversation, not a complete remote-provider history.
+ * @typedef {Object} PlaceRoomSummary
+ * @property {number} room_chat_id
+ * @property {number|null} unanswered_count
+ * @property {string} address
+ * @property {string|null} label
+ * @property {string} last_at  // latest captured arrival
+ * @property {string} conversation_id
+ * @property {string} thread_id
+ */
+
+/**
+ * Store-wide chat import/gaps, not provider completeness.
+ * @typedef {Object} PlaceRoomsCoverage
+ * @property {'arrivals'} discovery
+ * @property {boolean} importing
+ * @property {boolean} gaps
+ */
+
+/**
+ * @typedef {Object} PlaceRoomsResponse
+ * @property {string} place_id
+ * @property {Array<PlaceRoomSummary>} rooms
+ * @property {PlaceRoomsCoverage} coverage
+ */

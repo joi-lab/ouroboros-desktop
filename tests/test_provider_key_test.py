@@ -16,6 +16,7 @@ import ouroboros.gateway.models as provider_api
 from ouroboros.llm import LLMClient
 from ouroboros.usage_accounting import current_usage_scope
 from tests._usage_store_testing import ledger_rows
+from tests._safety_fixtures import settings_install as install
 
 
 class _Request:
@@ -82,6 +83,59 @@ def _bypass_accounting(monkeypatch):
 
     monkeypatch.setattr(llm_attempt, "execute_physical_attempt", execute)
     return observed
+
+
+@pytest.mark.parametrize("slot", ["safety", "light", "main"])
+@pytest.mark.parametrize("consumer", ["credential-plan", "provider-test"])
+def test_safety_routes_reach_credential_plan_and_provider_test_without_losing_inheritance(install, monkeypatch, slot, consumer):
+    from ouroboros import config
+    from ouroboros.model_slots import get_safety_model
+    from ouroboros.provider_models import declared_model_settings, provider_credential_plan
+    from ouroboros.settings_integrity import TaskSettingsSnapshot, task_settings_scope
+
+    route = "zai::owner-checker"
+    document = {
+        "OPENAI_API_KEY": "fixture-openai-key", "ZAI_API_KEY": "fixture-zai-key",
+        "OUROBOROS_MODEL": "openai::owner-main", "OUROBOROS_MODEL_LIGHT": "openai::owner-light",
+        "OUROBOROS_MODEL_SAFETY": "", "OUROBOROS_MODEL_FALLBACKS": "",
+    }
+    document[{"safety": "OUROBOROS_MODEL_SAFETY", "light": "OUROBOROS_MODEL_LIGHT", "main": "OUROBOROS_MODEL"}[slot]] = route
+    if slot == "main":
+        document["OUROBOROS_MODEL_LIGHT"] = ""
+    install.write_text(json.dumps(document))
+    loaded = config.load_settings()
+    before = install.read_bytes()
+    if consumer == "credential-plan":
+        declared = declared_model_settings(loaded)
+        plan = provider_credential_plan(loaded)
+        assert plan["providers"]["zai"] == [route]
+        assert "ZAI_API_KEY" in plan["planned_keys"] and plan["fail_open"] is False
+        if slot == "safety":
+            assert declared["OUROBOROS_MODEL_SAFETY"] == route
+            without_pin = provider_credential_plan({**loaded, "OUROBOROS_MODEL_SAFETY": ""})
+            assert "ZAI_API_KEY" not in without_pin["planned_keys"]
+        else:
+            assert "OUROBOROS_MODEL_SAFETY" not in declared
+    projected = {}
+    config.apply_settings_to_env(loaded, environ=projected)
+    with task_settings_scope(TaskSettingsSnapshot(settings=loaded, environ=projected)):
+        assert get_safety_model() == route
+
+    if consumer == "credential-plan":
+        return
+    # Exercise the gateway, probe and request builder. Only the physical peer is fake.
+    remote, targets = _Remote([_Completion()]), []
+    def fake_remote(_client, target):
+        targets.append(target)
+        return remote
+    monkeypatch.setattr(LLMClient, "_new_remote_client", fake_remote)
+    _bypass_accounting(monkeypatch)
+    status, body = _post({"provider_id": "zai"})
+    assert status == 200 and body == {"ok": True}
+    assert len(remote.calls) == len(targets) == 1
+    assert targets[0]["provider"] == "zai" and targets[0]["api_key"] == "fixture-zai-key"
+    assert remote.calls[0]["model"] == "owner-checker"
+    assert install.read_bytes() == before
 
 
 @pytest.mark.parametrize(

@@ -784,8 +784,9 @@ def _log_dialogue(
         "text": text,
         "format": "markdown" if direction == "out" else "",
         "source": f"presence:{event.provider}",
-        "sender_label": str(event.actor.get("display_name") or event.actor.get("username") or ""),
-        "sender_session_id": str(event.actor.get("platform_actor_id") or event.actor.get("id") or ""),
+        **({"sender_label": str(event.actor.get("display_name") or event.actor.get("username") or ""),
+            "sender_session_id": str(event.actor.get("platform_actor_id") or event.actor.get("id") or "")}
+           if direction == "in" else {}),
         "client_message_id": event.source_event_id,
         "presence_event_identity": presence_event_identity(str(task["metadata"]["presence"]["binding_id"]), event),
         "transport": {

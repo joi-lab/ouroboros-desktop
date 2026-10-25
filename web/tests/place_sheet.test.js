@@ -224,7 +224,7 @@ test('Active · Silent · Paused in one control; the note says what the chosen s
     assert.match(html, /What it does here/);
     assert.match(html, /Lives here: listens, wakes when its list says so, speaks and acts\./);
     assert.doesNotMatch(html, /place-silent-card/);
-    assert.match(placeSheetBodyHtml(mail), /Away from this place: no wakes, no actions\. Still connected\./);
+    assert.match(placeSheetBodyHtml(mail), /Away from this place: no wakes, no actions\. Still connected; reported events are saved\./);
 });
 
 test('Silent shows the host\'s card: the note and, verbatim, what it blocks and what it cannot', () => {
@@ -310,6 +310,7 @@ test('working folder is an address; the model lives under More; Disconnect asks 
     assert.match(html, /data-place-act="disconnect">Disconnect</);
     const asking = placeSheetBodyHtml(slack, { confirmDisconnect: true });
     assert.match(strip(asking), /Disconnect Slack · Acme \? It stops hearing and acting here; the room's history stays\./);
+    assert.match(asking, /data-i18n-authored>Slack · Acme<\/span>/);
     assert.match(asking, /data-place-act="disconnect-yes">Disconnect</);
 });
 

@@ -509,8 +509,10 @@ def _guard_safety_mode_lowering(settings: dict, *, allow_safety_lowering: bool =
     owner-only outside Cyber Pro (mirrors the context-mode ratchet, BIBLE P3)."""
     if runtime_mode_at_least(get_runtime_mode(), "cyber_pro"):
         return
+    raw = _settings_integrity.read_settings_json_verified(SETTINGS_PATH)
+    previous = normalize_consciousness_safety(raw if isinstance(raw, dict) else {})
     for key in ("OUROBOROS_SAFETY_MODE", "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE"):
-        previous_mode = normalize_safety_mode(_settings_file_value(key, "full"))
+        previous_mode = normalize_safety_mode(previous.get(key, "full"))
         next_mode = normalize_safety_mode(settings.get(key, previous_mode))
         if _SAFETY_MODE_RANK[next_mode] < _SAFETY_MODE_RANK[previous_mode] and not allow_safety_lowering:
             raise PermissionError(
@@ -692,6 +694,7 @@ def verify_settings_integrity() -> str | None:
 
 from ouroboros.safety_config import (  # noqa: F401 -- the settings API stays config.*
     get_safety_mode, safety_configuration, _guard_safety_configuration, _migrate_consciousness_safety,
+    normalize_consciousness_safety,
 )
 
 log = logging.getLogger(__name__)
@@ -718,7 +721,8 @@ def normalize_settings_raw(raw: dict) -> dict:
 
     A settings document on disk is written by whatever release the owner last used, so a
     reader's first job is to translate it into today's vocabulary: coerce every known key to
-    the type its default declares, fold the deprecated per-subsystem retention keys into the
+    the type its default declares, seed absent consciousness coverage from saved owner coverage,
+    fold the deprecated per-subsystem retention keys into the
     unified one, seed the shared review-cycle cap from the retired acceptance-pass count,
     turn the former review lanes into reviewer rows of the subagent catalog (``review_pool_migration``:
     pure, once per document digest; one that cannot finish keeps its keys for the owner's next save),
@@ -741,7 +745,7 @@ def normalize_settings_raw(raw: dict) -> dict:
     (``retired_key_sets_seen`` -> ``server_maintenance._startup_retired_settings_notice``)."""
     from ouroboros.retention import LEGACY_RETENTION_KEYS, pick_legacy_retention_seed
 
-    loaded = coerce_settings_raw(raw)
+    loaded = normalize_consciousness_safety(coerce_settings_raw(raw))
     # Prefer a CUSTOMIZED legacy retention value so a rename never orphans it; an
     # all-defaults file collapses to the unified default.
     if "OUROBOROS_GC_RETENTION_DAYS" not in loaded:

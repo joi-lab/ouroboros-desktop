@@ -306,10 +306,27 @@
  */
 
 /**
+ * Retained attention only; no exact wake match is inferred.
+ * @typedef {Object} PlaceHistoryAttention
+ * @property {'heard'|'focus_started'} decision
+ * @property {string=} reason
+ */
+
+/**
+ * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
+ * @typedef {Object} PlaceHistoryFacts
+ * @property {'message'|'notice'|'delivery'} kind
+ * @property {('authored'|'accepted'|'delivered'|'failed'|'uncertain')=} delivery_state
+ * @property {PlaceHistoryAttention=} attention
+ * @property {boolean=} owner_confirmed  // current stored account confirmation
+ */
+
+/**
  * One `GET /api/chat/history` row (live frames call `text` `content`). A row may also carry the
  * task-progress and outcome fields of a live `chat` frame (`ChatOutbound`). Replay-evidence rows
  * (`quiz_answer`, `quiz_closed`, `task_evidence`, or `summary_kind` + `historical_terminal`) are never shown.
  * @typedef {Object} ChatHistoryMessage
+ * @property {PlaceHistoryFacts=} place_history
  * @property {PresenceContact=} presence_contact
  * @property {string=} wait_ended_at
  * @property {string=} row_address
@@ -562,6 +579,9 @@
 /** @typedef {import('./place_contract_types.js').PlaceSummary} PlaceSummary */
 /** @typedef {import('./place_contract_types.js').PlaceDisconnectRequest} PlaceDisconnectRequest */
 /** @typedef {import('./place_contract_types.js').PlaceOwnerAccountRequest} PlaceOwnerAccountRequest */
+/** @typedef {import('./place_contract_types.js').PlaceRoomSummary} PlaceRoomSummary */
+/** @typedef {import('./place_contract_types.js').PlaceRoomsCoverage} PlaceRoomsCoverage */
+/** @typedef {import('./place_contract_types.js').PlaceRoomsResponse} PlaceRoomsResponse */
 /** @typedef {import('./place_contract_types.js').PlaceUpdateRequest} PlaceUpdateRequest */
 
 /**

@@ -85,7 +85,7 @@ export async function openConnectorSettings(connector, openSettingsTab) {
 }
 
 export function openConnectPlace({ returnFocus = document.activeElement, read = readPlaces, connect = connectPlace,
-    readStatus = readPlaceConnector, openPlace = openPlaceSheet, openSettingsTab = null } = {}) {
+    readStatus = readPlaceConnector, openPlace = openPlaceSheet, openSettingsTab = null, connector = '' } = {}) {
     const dialog = sheetShell(escapeHtml(tr('places.connect', 'Connect a place')), tr('places.connect.from', 'From the connectors installed here'), 'place-connect');
     const abort = new AbortController();
     const sheet = showSheet(dialog, { returnFocus, onClose: () => abort.abort() });
@@ -96,6 +96,8 @@ export function openConnectPlace({ returnFocus = document.activeElement, read = 
         view.error = ''; view.connectors = null; paint();
         try { Object.assign(view, await read({ signal: abort.signal })); }
         catch (error) { view.error = fmt('Could not read the connectors: {reason}', { reason: error?.message || error }); }
+        // A connector's own card opens the flow filtered to that connector.
+        if (connector && view.connectors) view.connectors = view.connectors.filter((row) => row.connector === connector);
         paint();
     };
     const loadChoices = async () => {

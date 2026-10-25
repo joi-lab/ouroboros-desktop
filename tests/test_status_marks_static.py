@@ -97,7 +97,7 @@ warning | web/onboarding.css | .settings-inline-note[data-tone="warn"] | color
 warning | web/onboarding.css | .settings-inline-status[data-tone="warn"] | color
 warning | web/onboarding.css | .wizard-inline-note[data-tone="warn"] | color
 warning | web/onboarding.css | .wizard-test-result[data-tone="warn"] | border-color, color
-# The System voice: its bubble, sender and text, quotes of a System message, the skill review it shows.
+# The System voice: its bubble, sender and text (chat and the Place reader), quotes of a System message, the skill review it shows.
 system | web/style.css | .chat-bubble.system | background
 system | web/style.css | .chat-bubble.system .message | color
 system | web/style.css | .chat-bubble.system .sender | color
@@ -111,6 +111,9 @@ system | web/style.css | .skill-review-summary-button:hover | background
 system | web/style.css | .skill-review-summary-main | color
 system | web/style.css | .skill-review-toggle-label | color
 system | web/style.css | :root[data-theme="light"] .skill-review-summary-main | color
+system | web/consciousness.css | .place-convo-row.is-system | background
+system | web/consciousness.css | .place-convo-row.is-system .place-convo-text | color
+system | web/consciousness.css | .place-convo-row.is-system .place-convo-who | color
 system | web/consciousness.css | .place-sheet-section p.place-silent-card | background, color
 # Data categories, not statuses: the Logs task category, code highlighting, the Storage temporary segment.
 data | web/style.css | .log-type.tasks | color

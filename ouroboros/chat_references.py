@@ -33,8 +33,8 @@ def reference_from_row(row: dict) -> dict:
     role = "assistant" if answer else {"in": "user", "out": "assistant", "system": "system"}.get(
         row.get("direction"), "system")
     return {"address": format_address(row_address(row)), "chat_id": int(row.get("chat_id", 1)),
-            "role": role, "author_label": str(row.get("sender_label") or
-                                               {"user": "You", "assistant": "Ouroboros", "system": "System"}[role]),
+            "role": role, "author_label": (str(row.get("sender_label") or "You") if role == "user"
+                                             else {"assistant": "Ouroboros", "system": "System"}[role]),
             "kind": kind, "snippet": " ".join(str(answer or row.get("text") or row.get("caption") or "").split())[:160],
             "ts": str(row.get("ts") or ""), "task_id": str(row.get("task_id") or "")}
 

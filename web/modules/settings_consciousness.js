@@ -74,12 +74,11 @@ export function consciousnessSectionHtml() {
         </details>`;
 }
 
-/** One projected place: authored name, state, open turns and connector readiness. */
+/** One row of the places list: icon, authored label, state word, open turns and connector readiness; the row's text is its accessible name. */
 export function settingsPlaceRowHtml(place) {
     const count = Number.isInteger(place.unanswered) && place.unanswered > 0 ? fmt('{n} open turns', { n: place.unanswered }) : '';
     const readiness = place.readiness ? tr(`places.readiness.${place.readiness.text}`, place.readiness.text) : '';
-    return `<li><button type="button" class="consciousness-place-row" data-place-open="${escapeHtml(place.id)}"
-            aria-label="${escapeHtml(fmt('Open {place}: {facts}', { place: place.label, facts: [placeStateWord(place.state), count, readiness].filter(Boolean).join(', ') }))}">
+    return `<li><button type="button" class="consciousness-place-row" data-place-open="${escapeHtml(place.id)}">
         <span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 18)}</span>
         <span class="consciousness-place-name" data-i18n-authored>${escapeHtml(place.label)}</span>
         <span class="consciousness-place-facts">${escapeHtml([placeStateWord(place.state), count, readiness].filter(Boolean).join(' · '))}</span>

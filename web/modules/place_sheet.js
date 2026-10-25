@@ -7,7 +7,8 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { tr, fmt } from './i18n.js';
 import { fetchJson } from './api_client.js';
 import { bindModelChoosers, modelChooserHtml, updateModelChooser } from './model_chooser.js';
-import { disconnectPlace, normalizePlace, PLACES_CHANGED_EVENT, readPlaceConnector, updatePlace } from './consciousness_api.js';
+import { disconnectPlace, normalizePlace, PLACES_CHANGED_EVENT, readPlaceConnector, readPlaceRooms, updatePlace } from './consciousness_api.js';
+import { mountPlaceHistory, placeRoomsHtml } from './place_history.js';
 import {
     PLACE_STATES, SILENT_CARD, WAKE_FACT_WORDS, accountIdText, authorWord, capitalized, placeStateOf, placeStateWord, wakeFactWord,
 } from './consciousness_words.js';
@@ -146,6 +147,7 @@ export function placeSheetBodyHtml(place, ui = {}) {
             + (view.removed ? statusLine({ text: tr('places.disconnected', 'This place is disconnected.'), tone: 'muted' })
                 : statusLine(view.readiness || (place.readiness && { ...place.readiness, text: tr(`places.readiness.${place.readiness.text}`, place.readiness.text) }))), view) : '',
         view.removed ? '' : section('state', '', stateHtml(place, view), view),
+        view.removed ? '' : section('conversations', tr('places.conversations', 'Conversations'), placeRoomsHtml(view.roomIndex || { rooms: null }), view),
         view.removed ? '' : section('wakes', tr('places.calls', 'What calls it here'), wakesHtml(place), view),
         section('accounts', 'Your accounts here', accountsHtml(place, view), view),
         section('notes', 'Notes', notesHtml(place, view), view),
@@ -175,7 +177,7 @@ export function sheetShell(titleHtml, metaText, modifier = '') {
     return dialog;
 }
 
-export function showSheet(dialog, { returnFocus, onClose }) {
+export function showSheet(dialog, { returnFocus, onClose, onBack }) {
     const body = dialog.querySelector('[data-place-body]');
     let closed = false;
     let disposeFocus = null;
@@ -187,14 +189,15 @@ export function showSheet(dialog, { returnFocus, onClose }) {
         dialog.remove();
         onClose?.();
     };
-    dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
+    const back = () => { if (!onBack?.()) close(); };
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); back(); });
     dialog.addEventListener('click', (event) => {
         if (event.target === dialog || event.target.closest('[data-place-close]')) close();
     });
     dialog.addEventListener('keydown', () => body.classList.remove('is-quiet-focus'), { once: true });
     document.body.appendChild(dialog);
     if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
-    disposeFocus = bindDialogFocus(dialog, { initialFocus: body, returnFocus, onEscape: close });
+    disposeFocus = bindDialogFocus(dialog, { initialFocus: body, returnFocus, onEscape: back });
     return { close, body, get closed() { return closed; } };
 }
 
@@ -232,23 +235,63 @@ const DONE_WORDS = {
 
 /** Open one projected place; requests keep its revision and drafts survive a refused or concurrent write. */
 export function openPlaceSheet(place, { returnFocus = document.activeElement, onClose = null, update = updatePlace,
-    disconnect = disconnectPlace, readStatus = readPlaceConnector, readModels = (init) => fetchJson('/api/model-catalog', init) } = {}) {
+    disconnect = disconnectPlace, readStatus = readPlaceConnector, readModels = (init) => fetchJson('/api/model-catalog', init),
+    readRooms = readPlaceRooms } = {}) {
     let current = place;
-    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false };
+    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false, roomIndex: { rooms: null } };
     let disposeModels = () => {}, modelsRead = false;
+    let history = null, selected = null, editorScroll = 0, roomController = null, roomGeneration = 0;
     const abort = new AbortController();
     const dialog = sheetShell(`<span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 22)}</span><span data-place-label data-i18n-authored>${escapeHtml(place.label)}</span>`,
         placeSheetMetaText(place));
-    const sheet = showSheet(dialog, { returnFocus, onClose: () => { abort.abort(); disposeModels(); window.removeEventListener(PLACES_CHANGED_EVENT, onExternal); onClose?.(); } });
+    const sheet = showSheet(dialog, { returnFocus, onBack: () => { if (!history) return false; backToPlace(); return true; },
+        onClose: () => { abort.abort(); disposeModels(); roomGeneration += 1; roomController?.abort(); history?.close(); window.removeEventListener(PLACES_CHANGED_EVENT, onExternal); onClose?.(); } });
     const { body } = sheet;
+    // The editor holds the sections; a captured conversation opens in the reader beside it (one sheet, Back returns).
+    const editor = document.createElement('div'); editor.className = 'place-sheet-editor';
+    const reader = document.createElement('div'); reader.hidden = true;
+    body.append(editor, reader);
+
+    function backToPlace() {
+        const id = selected?.room_chat_id;
+        history?.close(); history = null; selected = null;
+        reader.hidden = true; editor.hidden = false;
+        paint(); body.scrollTop = editorScroll;
+        editor.querySelector(`[data-place-room="${id}"]`)?.focus({ preventScroll: true });
+    }
+
+    function openRoom(room) {
+        if (ui.busy || sheet.closed || !current) return;
+        editorScroll = body.scrollTop; selected = room;
+        editor.hidden = true; reader.hidden = false;
+        history = mountPlaceHistory(reader, current, room, { onBack: backToPlace });
+        paint(); body.scrollTop = 0;
+        reader.querySelector('[data-history-back]')?.focus({ preventScroll: true });
+    }
+
+    async function loadRooms() {
+        roomController?.abort(); roomController = new AbortController(); const version = ++roomGeneration;
+        ui.roomIndex = { rooms: null }; paint();
+        try {
+            const value = await readRooms(place.id, { signal: roomController.signal });
+            if (sheet.closed || version !== roomGeneration) return;
+            ui.roomIndex = value;
+        } catch (error) {
+            if (sheet.closed || version !== roomGeneration) return;
+            ui.roomIndex = { error: error?.message || String(error) };
+        }
+        paint();
+    }
 
     function paint() {
         if (sheet.closed) return;
         const scroll = body.scrollTop;
-        const focusKey = body.contains(document.activeElement) ? focusKeyOf(document.activeElement) : '';
+        const active = document.activeElement;
+        const focusKey = editor.contains(active) ? focusKeyOf(active) : '';
+        const selection = active?.selectionStart == null ? null : [active.selectionStart, active.selectionEnd, active.selectionDirection];
         disposeModels();
-        body.innerHTML = placeSheetBodyHtml(current || place, ui);
-        disposeModels = bindModelChoosers(body);
+        editor.innerHTML = placeSheetBodyHtml(current || place, ui);
+        disposeModels = bindModelChoosers(editor);
         body.querySelectorAll('[data-place-act]').forEach((control) => { control.disabled = ui.busy || ui.removed; });
         body.querySelectorAll(`[data-place-state] [data-effort-value]`).forEach((button) => {
             const chosen = button.dataset.effortValue === current?.state;
@@ -258,10 +301,16 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         });
         body.querySelector('[data-place-state]')?.setAttribute('aria-labelledby', 'place-state-label');
         body.scrollTop = scroll;
-        if (focusKey) body.querySelector(focusKey)?.focus();
+        if (focusKey) {
+            const field = editor.querySelector(focusKey);
+            field?.focus({ preventScroll: true });
+            if (selection) field?.setSelectionRange?.(...selection);
+        }
+        if (current) history?.updatePlace(current);
         const meta = dialog.querySelector('[data-place-meta]');
         if (meta) meta.innerHTML = `<span data-i18n-authored>${escapeHtml((current || place).label)}</span> · ${escapeHtml(ui.removed ? tr('places.disconnected.word', 'disconnected') : tr(`places.state.${current.state}`, placeStateWord(current.state)))}`;
-        dialog.querySelector('[data-place-label]').textContent = (current || place).label;
+        if (selected && meta) meta.textContent = (current || place).label;
+        dialog.querySelector('[data-place-label]').textContent = selected?.label || selected?.address || (current || place).label;
     }
 
     function failed(error, key) {
@@ -324,6 +373,13 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         } catch { ui.status.more = { text: tr('places.models.unavailable', 'Model suggestions could not be read; your model is kept.'), tone: 'warn' }; paint(); }
     }, true);
     body.addEventListener('click', async (event) => {
+        if (event.target.closest('[data-place-rooms-retry]')) { void loadRooms(); return; }
+        const roomButton = event.target.closest('[data-place-room]');
+        if (roomButton) {
+            const room = ui.roomIndex.rooms?.find((row) => String(row.room_chat_id) === roomButton.dataset.placeRoom);
+            if (room) openRoom(room);
+            return;
+        }
         const segment = event.target.closest('[data-place-state] [data-effort-value]');
         if (segment) {
             if (segment.dataset.effortValue !== current?.state) await write('state', { value: segment.dataset.effortValue });
@@ -357,11 +413,14 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         if (current?.source?.url === place.source.url && typeof data.text === 'string') ui.readiness = { text: data.text, tone: data.tone, authored: true };
         paint();
     }).catch(() => { ui.status.state = { text: tr('places.status.unavailable', 'The connector status could not be read.'), tone: 'warn' }; paint(); });
+    void loadRooms();
     return { close: sheet.close, get closed() { return sheet.closed; }, get place() { return current; } };
 }
 
 // A repaint keeps the owner's focus on the same control (the press that asked for it, or the field).
 function focusKeyOf(node) {
+    const room = node.closest?.('[data-place-room]');
+    if (room) return `[data-place-room="${room.dataset.placeRoom}"]`;
     const act = node.closest?.('[data-place-act]');
     if (act) {
         const extra = ['fact', 'note', 'actor'].map((name) => act.dataset[name] ? `[data-${name}="${CSS.escape(act.dataset[name])}"]` : '').join('');
