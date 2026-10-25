@@ -131,7 +131,9 @@ export function createRoomWork({
     const list = element('div', 'rw-list');
     const note = element('p', 'rw-note');
     note.hidden = true;
-    surface.append(list, note);
+    // The commands a narrow bar keeps in its Shade (Main's Restart and budget: page_header.js); empty, it takes no room.
+    const extras = element('div', 'rw-extras');
+    surface.append(list, note, extras);
     // A zero-height anchor under the bar: the Shade follows the bar's real height at every width. Main's
     // header floats over the transcript, so its anchor is the header's own last child at its bottom edge.
     const shadeAnchor = element('div', 'rw-shade-anchor');
@@ -701,7 +703,7 @@ export function createRoomWork({
 
     function paintTrigger() {
         const text = [clean(statusBadge.textContent), clean(statusBadge.dataset.step)].filter(Boolean).join(' · ');
-        const listed = rows.length > 0;
+        const listed = rows.length > 0 || extras.children.length > 0;
         // Word, tone, mark and what waits for the owner come together from the chat's producer
         // (work_status.roomStatusView via setStatus); the control paints them and never ranks row tones or reads a
         // class name for a second opinion. Before the producer's first answer the room is not online yet: an unknown
@@ -932,6 +934,8 @@ export function createRoomWork({
         }
     });
     listen(back, 'click', goBack);
+    // A command chosen in the Shade is the end of this look (Restart asks its own question, the budget opens Costs).
+    listen(extras, 'click', () => close({ restoreFocus: false }));
     listen(doc, 'pointerdown', (event) => {
         // A press lasts until the click its release makes (a touch's mouse events follow its pointerup), so a
         // focus move inside it, its own or a closing menu handing focus back, folds nothing under the pointer.
@@ -1044,6 +1048,7 @@ export function createRoomWork({
     render();
     return {
         update: schedule,
+        extras,
         close: () => close({ restoreFocus: false }),
         // The room leaves the screen: the list closes and the saved passage no longer applies.
         leave() {

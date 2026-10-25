@@ -27,6 +27,7 @@ web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules n
     project_reference.js — the one Project pointer control and the only raiser of `ouro:open-project` (DESIGN "References and actions")
     project_activity.js, work_status.js, work_types.js, status_mark.js — Project marks and room words from the server's `rooms`/`works`; their typedefs (§3 Liveness census)
     room_work.js, project_read_state.js — a room's header work list without execution authority; its read receipt (§3 Project rooms)
+    chat_header.js, consciousness_status.js — a room's bar (Restart, Panic, the budget) and its consciousness chip with its Shade (DESIGN "Page header")
     model_wait.js — model-wait views and owner actions inside chat cards (§6 Quota and auth waits)
     task_checkpoints.js, cancel_presentation.js, dashboard.js, logs.js, worker_sha_presentation.js, costs.js, files.js — typed checkpoints and cancellation-cause text shared by Chat and Logs; Dashboard, Logs, worker-SHA presentation, Costs (unknown is not free), Files (§3)
     skills.js, skill_*.js — Skills page: Installed, Browse and Sources, cards, sheet, dialogs, Skill Review cards, publish (§3 Skills and Widgets)

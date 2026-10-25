@@ -397,8 +397,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 .nav-row:focus,
 .nav-section-toggle:focus,
 .app-tab:focus,
-.chat-header-btn:focus,
-.chat-header-more > summary:focus {
+.chat-header-btn:focus {
     outline: none;
 }
 
@@ -407,8 +406,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 .nav-row:focus-visible,
 .nav-section-toggle:focus-visible,
 .app-tab:focus-visible,
-.chat-header-btn:focus-visible,
-.chat-header-more > summary:focus-visible {
+.chat-header-btn:focus-visible {
     outline: 2px solid var(--focus-accent-border);
     outline-offset: -2px;
 }
@@ -1371,8 +1369,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 /* Main's header is one bar like a Project's, one row in every layout (DESIGN "Page header"): the title with the
    room's status right after it, then the agent's commands. The commands keep their width and the title block
-   yields to them, its status word dropping whole while the mark stays (room_work.js); a narrow bar has Restart and
-   the budget inside ⋯ (page_header.js). A wider face (Linux sets these words wider) moves nothing to a second row. */
+   yields to them, its status word dropping whole while the mark stays (room_work.js); the consciousness chip follows
+   the title block and keeps its width; a narrow bar has Restart and the budget inside the status Shade (page_header.js).
+   A wider face (Linux sets these words wider) moves nothing to a second row. */
 .chat-page-header {
     position: absolute;
     top: 0;
@@ -1453,12 +1452,6 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     }
 }
 
-.chat-header-btn.on {
-    border-color: var(--accent-35);
-    background: var(--accent-dim);
-    color: var(--accent-light);
-}
-
 .chat-header-btn.danger {
     border-color: rgba(239, 68, 68, 0.22);
     color: var(--status-error-fg);
@@ -1469,77 +1462,6 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
         border-color: rgba(239, 68, 68, 0.40);
         background: rgba(239, 68, 68, 0.08);
     }
-}
-
-.chat-header-more {
-    position: relative;
-    flex: 0 0 auto;
-}
-
-.chat-header-more > summary {
-    list-style: none;
-    display: inline-flex;
-    align-items: center;
-}
-.chat-header-more-glyph { display: none; }
-.chat-header-more-glyph > svg { display: block; width: 20px; height: 20px; }
-
-.chat-header-more > summary::-webkit-details-marker {
-    display: none;
-}
-
-.chat-header-menu {
-    position: absolute;
-    top: calc(100% + var(--space-2));
-    right: 0;
-    z-index: var(--z-header-menu);
-    min-width: 150px;
-    padding: var(--space-2);
-    border: 1px solid var(--surface-border);
-    border-radius: var(--radius-md);
-    background: rgba(var(--shell-rgb), 0.92);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-.chat-header-menu-item {
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: var(--type-body);
-    text-align: left;
-    padding: var(--space-2) var(--space-3);
-    cursor: pointer;
-}
-
-@media (hover: hover) {
-    .chat-header-menu-item:hover {
-        color: var(--text-primary);
-        background: var(--menu-item-hover);
-    }
-}
-
-/* Evolve/Consciousness live in this menu now; show their on-state in place. */
-.chat-header-menu-item.on {
-    color: var(--accent-light);
-    font-weight: 700;
-}
-
-.chat-header-menu-item.danger {
-    color: var(--status-error-fg);
-}
-
-/* A mode inside More is on: the collapsed More capsule takes its tone, with no dot of its own. */
-.chat-header-more > summary.has-active {
-    border-color: var(--accent-35);
-    background: var(--accent-dim);
-    color: var(--accent-light);
 }
 
 /* The budget: a neutral fact (spent / limit and its bar). It turns amber only while a task the spending limit
@@ -1589,8 +1511,10 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     border-radius: 1px;
     background: var(--text-meta);
     transition: width 0.4s ease;
-    width: 0;
+    width: var(--budget-fill, 0);
 }
+/* The pill names itself only where it stands as a row (the narrow bar's status Shade, room_work.css). */
+.chat-budget-word { display: none; }
 
 .chat-budget-pill[data-attention="1"] .chat-budget-text { color: var(--status-warn-fg); }
 .chat-budget-pill[data-attention="1"] .chat-budget-bar { background: var(--amber-dim); }
@@ -3955,37 +3879,11 @@ html[data-layout="stack"] .chat-header-actions {
     flex-wrap: nowrap;
     gap: var(--space-2);
 }
-html[data-layout="stack"] .chat-header-more > summary {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    justify-content: center;
-    border-radius: var(--pill-radius);
-}
-html[data-layout="stack"] .chat-header-more-word { display: none; }
-html[data-layout="stack"] .chat-header-more-glyph { display: inline-flex; }
 html[data-layout="stack"] .chat-page-note {
     left: var(--space-3);
     max-width: calc(100% - 2 * var(--space-3));
     padding: 2px 0 var(--space-2);
 }
-/* Inside ⋯ (page_header.js places them there when the bar is too narrow for the full row) the budget is a
-   full-width row and Restart the last row. */
-.chat-header-menu:has(> .chat-budget-pill) {
-    min-width: 220px;
-}
-.chat-header-menu > .chat-budget-pill {
-    width: 100%;
-    min-width: 0;
-    align-items: stretch;
-    text-align: left;
-}
-.chat-header-menu > .chat-header-btn {
-    width: 100%;
-    justify-content: flex-start;
-    text-align: left;
-}
-
 #chat-input-area,
 .chat-input-area {
     /* Bottom fade darkens transcript before the frosted input without trapping scroll. */
@@ -10228,12 +10126,10 @@ body.keyboard-open .project-panel {
 
 /* Sheets: what floats over moving content (menus, the composer's field) takes the float surface and shadow; the
    shared menu and model list take it in ui.css, so setup has it too. */
-:root[data-theme] :is(.chat-header-menu, .task-control-menu, .marketplace-modal) {
+:root[data-theme] :is(.task-control-menu, .marketplace-modal) {
     border-color: transparent; border-radius: var(--radius-object); background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-/* More lost the old header's continuous backing: its own sheet must remain readable without blur. */
-:root[data-theme] .chat-header-menu { background: var(--chip-float); }
 :root[data-theme] .chat-field {
     background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
@@ -10253,9 +10149,6 @@ body.keyboard-open .project-panel {
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
     transition: var(--motion-tone);
 }
-:root[data-theme] .chat-header-menu > :is(.chat-header-btn.ui-chrome-control, .chat-budget-pill.ui-chrome-control) {
-    background: var(--surface-capsule);
-}
 @media (hover: hover) {
     :root[data-theme] :is(.chat-header-btn.ui-chrome-control, .shell-icon-control):hover {
         border-color: transparent; background: var(--chip-float-hover); box-shadow: var(--elev-rest);
@@ -10264,15 +10157,11 @@ body.keyboard-open .project-panel {
     :root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control:hover { background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control:hover { border-color: transparent; background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"]:hover { background: linear-gradient(var(--tone-amber-hover), var(--tone-amber-hover)), var(--chip-float); }
-    :root[data-theme] .chat-header-menu > :is(.chat-header-btn.ui-chrome-control, .chat-budget-pill.ui-chrome-control):hover {
-        background: var(--surface-capsule-hover);
-    }
 }
 :root[data-theme] :is(.project-panel-close, .mobile-nav-toggle, .nav-drawer-close) { border-radius: var(--pill-radius); }
 :root[data-theme] .chat-header-btn.danger.ui-chrome-control { background: linear-gradient(var(--tone-red), var(--tone-red)), var(--chip-float); color: var(--panic-ink); }
 /* The dark danger tone is already the capsule's neutral veil. Stacking it twice washes out Panic's red ink. */
 :root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control { background: var(--chip-float); }
-:root[data-theme] .chat-header-more > summary.has-active.ui-chrome-control { background: var(--tone-crimson-soft); color: var(--tone-crimson-soft-ink); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control {
     border-color: transparent; background: var(--chip-float); box-shadow: var(--elev-rest); transition: var(--motion-tone);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);

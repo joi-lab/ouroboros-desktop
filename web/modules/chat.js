@@ -1,8 +1,8 @@
 import { escapeHtmlAttr, escapeHtmlText as escapeHtml } from './utils.js';
 import { bindMarkdownTables, destroyChatMarkdown, enhanceChatMarkdown, mountChatMarkdown, renderChatMarkdown } from './chat_markdown.js';
-import { bindHeaderControlPlacement, renderPageHeader } from './page_header.js';
+import { renderPageHeader } from './page_header.js';
 import { strokeIcon } from './page_icons.js';
-import { mainHeaderActionsHtml } from './chat_header.js';
+import { createRoomHeader, mainHeaderActionsHtml } from './chat_header.js';
 import { pageLabel } from './pages.js';
 import { showToast } from './toast.js';
 import { tx } from './i18n.js';
@@ -53,8 +53,6 @@ import {
     createTaskResumeButton,
     requestStop,
 } from './task_control_menu.js';
-import { openConfirmDialog } from './confirm_dialog.js';
-import { chooseAndSendReview } from './review_command.js';
 import { composerMarkup, createComposer } from './composer.js';
 import { effortFact } from './effort_chip.js';
 import { mountEmptyChatWelcome } from './welcome_preference.js';
@@ -115,7 +113,6 @@ import {
     chatThreadAccepts,
     clearStickyCardState,
     sendPanic,
-    confirmAndSendRestart,
     computeHydratedDirectActivities,
     documentMessageKey,
     durableChatMediaUrl,
@@ -256,17 +253,14 @@ export function createChatInstance({
     const input = byId('input');
     const inputArea = byId('input-area');
     const statusBadge = byId('status');
-    const headerActions = byId('header-actions');
     const pageHeader = page.querySelector('.chat-page-header') || (asPanel ? container?.closest?.('.project-panel')?.querySelector?.('.project-panel-bar') : null);
     const pageNote = page.querySelector('.chat-page-note');
-    const budgetPill = byId('budget-pill');
-    const disposeHeaderPlacement = asPanel ? () => {} : bindHeaderControlPlacement({ headerActions, budgetPill });
     const scrollBottomBtn = byId('scroll-bottom');
     const scrollActivityDot = scrollBottomBtn?.querySelector('.chat-scroll-activity-dot');
     let nestedSubagentsExpanded = false;
     let _remoteActivityDepth = 0;
-    // The composer (composer.js), wired once the room's feed owners exist.
-    let composer = null;
+    // The composer (composer.js), wired once the room's feed owners exist; Main's bar (chat_header.js) once its status is.
+    let composer = null, header = null;
 
     // Destroyed instances ignore late async work and animation frames.
     let destroyed = false;
@@ -527,31 +521,8 @@ export function createChatInstance({
     }
 
     function syncHeaderControlState(data) {
-        headerActions?.querySelectorAll('[data-chat-command]').forEach((button) => {
-            const cmd = button.dataset.chatCommand;
-            const state = cmd === 'evolve' ? [data?.evolution_enabled, data?.evolution_state?.detail]
-                : cmd === 'bg' ? [data?.bg_consciousness_enabled, data?.bg_consciousness_state?.detail] : null;
-            if (state) {
-                const unknown = state[0] == null;
-                button.classList.toggle('on', state[0] === true);
-                button.dataset.tone = unknown ? 'warn' : '';
-                button.textContent = `${cmd === 'bg' ? 'Consciousness' : 'Evolve'}${unknown ? ' · unknown' : ''}`;
-                button.title = state[1] || (unknown ? 'State unknown' : 'Toggle mode');
-            }
-        });
-        // More reflects active background mode.
-        const moreSummary = headerActions?.querySelector('.chat-header-more > summary');
-        if (moreSummary) {
-            const anyActive = !!data?.evolution_enabled || !!data?.bg_consciousness_enabled;
-            moreSummary.classList.toggle('has-active', anyActive);
-        }
         composer?.syncState(data);
-        const budget = headerBudgetPresentation(data);
-        const budgetText = byId('budget-text');
-        const budgetFill = byId('budget-bar-fill');
-        if (budgetText) budgetText.textContent = budget.label;
-        if (budgetFill) budgetFill.style.width = `${budget.fillPct}%`;
-        if (budgetPill) budgetPill.dataset.attention = budget.attention ? '1' : '0';
+        header?.update(data);
     }
 
     // Main: a moved work's card is its portal (work_portal.js); Continue episodes share one card (task_episodes.js).
@@ -2892,60 +2863,6 @@ export function createChatInstance({
 
     installChatResizeObservers();
 
-    headerActions?.addEventListener('click', async (event) => {
-        const button = event.target.closest('[data-chat-command]');
-        if (!button) return;
-        button.closest('details')?.removeAttribute('open');
-        const command = button.dataset.chatCommand;
-        if (command === 'evolve') {
-            const next = !button.classList.contains('on');
-            button.classList.toggle('on', next);
-            ws.send({ type: 'command', cmd: `/evolve ${next ? 'start' : 'stop'}` });
-            return;
-        }
-        if (command === 'bg') {
-            const next = !button.classList.contains('on');
-            button.classList.toggle('on', next);
-            ws.send({ type: 'command', cmd: `/bg ${next ? 'start' : 'stop'}` });
-            return;
-        }
-        if (command === 'review') return chooseAndSendReview({ openConfirmDialog, ws });
-        if (command === 'restart') {
-            await confirmAndSendRestart({ openConfirmDialog, ws });
-            return;
-        }
-        if (command === 'panic') sendPanic({ ws });
-    });
-
-    // Native <details> needs outside-click/Escape dismissal; destroy removes
-    // these retained handler refs.
-    let documentClickHandler = null;
-    let documentKeydownHandler = null;
-    if (!asPanel) {
-        const collapseHeaderMenus = (predicate) => {
-            let collapsed = false;
-            page.querySelectorAll('details.chat-header-more[open]').forEach((details) => {
-                if (predicate(details)) { details.removeAttribute('open'); collapsed = true; }
-            });
-            return collapsed;
-        };
-        documentClickHandler = (event) => {
-            collapseHeaderMenus((details) => !details.contains(event.target));
-        };
-        document.addEventListener('click', documentClickHandler);
-        documentKeydownHandler = (event) => {
-            // An open menu owns its Escape.
-            if (event.key === 'Escape' && !event.defaultPrevented && collapseHeaderMenus(() => true)) event.preventDefault();
-        };
-        document.addEventListener('keydown', documentKeydownHandler);
-    }
-
-    budgetPill?.addEventListener('click', () => {
-        budgetPill.closest('details')?.removeAttribute('open');
-        if (typeof openDashboardTab === 'function') openDashboardTab('costs');
-        else if (typeof openSettingsTab === 'function') openSettingsTab('costs');
-    });
-
     let headerControlInterval = null;
     if (asPanel) {
         // Late panels missed socket open; seed from the socket and latest snapshot, its works included: a working
@@ -3561,6 +3478,9 @@ export function createChatInstance({
         works: () => workState, liveCardRecords, pendingSubmissions, pendingSuggestedNames,
         cancelRunFromCard, refreshHeaderControlState, captureVisibleTimelineAnchor, restoreVisibleTimelineAnchor,
         historyPager, showLatest, hostReady: hostStart.ready });
+    // Main's bar: Restart, Panic, the budget and the consciousness chip; a Project's bar is app.js's.
+    header = asPanel ? null : createRoomHeader({ bar: pageHeader, ws, shade: roomWork, openDashboardTab,
+        refreshState: refreshHeaderControlState });
 
     return {
         page,
@@ -3627,9 +3547,7 @@ export function createChatInstance({
             mainWaiting?.destroy();
             window.removeEventListener('ouro:page-shown', handlePageShown);
             document.removeEventListener('visibilitychange', handlePageShown);
-            if (documentClickHandler) document.removeEventListener('click', documentClickHandler);
-            if (documentKeydownHandler) document.removeEventListener('keydown', documentKeydownHandler);
-            disposeHeaderPlacement();
+            header?.destroy();
             chatResizeObserver?.disconnect();
             chatResizeObserver = null;
             historyResyncScheduler.cancel();

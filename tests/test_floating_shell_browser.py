@@ -240,6 +240,11 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
         activity("main-work", "thinking"),
         activity("project-work", "thinking", chat_id=42, project_id=project["id"]),
     ], history={1: reading(14), 42: reading(14, room="Project")})
+    # Consciousness sleeps until its next wake: the bar's chip says it and opens its Shade.
+    census = transport.body
+    transport.body = lambda **kwargs: {**census(**kwargs), "bg_consciousness_enabled": True,
+                                       "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00+00:00",
+                                                                  "spent_24h_usd": 1.5, "daily_usd": 20}}
 
     def history(route):
         chat_id = int(parse_qs(urlparse(route.request.url).query).get("chat_id", ["1"])[0])
@@ -247,6 +252,7 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
                             "has_more": True, "page_cursor": "recent", "next_cursor": "older"})
 
     page.route("**/api/chat/history*", history)
+    page.route("**/api/consciousness", lambda route: route.fulfill(json={"enabled": True, "recent_wakes": []}))
     try:
         page.goto(ui["url"] + "/")
         page.wait_for_selector("#page-chat .rw-trigger")
@@ -265,15 +271,13 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
         assert facts["toast"]["bottom"] <= facts["composer"]["top"]
         assert not page.locator("#page-chat .chat-page-note").is_visible()
         assert "Shown messages may have gaps" in page.locator("#page-chat .chat-load-older-note").inner_text()
-        page.click("#page-chat .chat-header-more > summary")
-        # The real menu remains hit-testable beside the toast, without activating a command.
-        page.locator('#page-chat [data-chat-command="bg"]').click(trial=True)
-        if theme == 'dark':
-            backing = page.locator('#page-chat .chat-header-menu').evaluate(
-                "el => getComputedStyle(el).backgroundColor")
-            assert backing.startswith('rgba(') and float(backing.rsplit(',', 1)[1].rstrip(')')) >= 0.98, backing
-        page.screenshot(path=str(tmp_path / f"main-more-{width}-{theme}.png"))
-        capture(page, f"main-more-{width}-{theme}-{ui['engine']}")
+        # The consciousness chip opens its Shade, hit-testable beside the toast, without activating a command.
+        page.click("#page-chat .cx-chip:not([hidden])")
+        page.locator('#page-chat .cx-shade .cx-toggle').click(trial=True)
+        backing = page.locator('#page-chat .cx-shade').evaluate("el => getComputedStyle(el).backgroundColor")
+        assert backing.startswith('rgb(') or float(backing.rsplit(',', 1)[1].rstrip(')')) >= 0.98, backing
+        page.screenshot(path=str(tmp_path / f"main-shade-{width}-{theme}.png"))
+        capture(page, f"main-shade-{width}-{theme}-{ui['engine']}")
         if width == 390:
             evidence = Path(os.environ.get("OUROBOROS_UI_EVIDENCE_DIR", tmp_path))
             page.locator('#page-chat .chat-page-header').screenshot(
@@ -284,7 +288,8 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
             facts["capsuleBackingWithoutBlur"] = page.locator('#page-chat .app-page-title-row').evaluate(
                 "el => ({color: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage})")
             no_blur.evaluate("el => el.remove()")
-        page.click("#page-chat .chat-header-more > summary")
+        page.click("#page-chat .cx-chip")
+        page.wait_for_selector("#page-chat .cx-shade", state="hidden")
         page.click(".toast-stack--room .toast-dismiss")
         page.wait_for_selector(".toast-stack--room .toast", state="detached")
         if width < 720:

@@ -6,7 +6,7 @@
 // the status and the places, and the wakes say they are not reported. Unknown is said, never zero.
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { statusMarkHtml } from './status_mark.js';
-import { strokeIcon } from './page_icons.js';
+import { controlIcon } from './page_icons.js';
 import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
@@ -15,8 +15,8 @@ import { connectPlaceButtonHtml, openConnectPlace, openPlaceSheet } from './plac
 
 const SEP = ' · ';
 const REFRESH_MS = 20000;
-// Its own time: the house brain glyph (Lucide geometry), beside the words that say it.
-const OWN_GLYPH = strokeIcon('<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>', 14);
+// Its own time: the house brain glyph, beside the words that say it.
+const OWN_GLYPH = controlIcon('brain', 14);
 // Work running now: the house status mark's moving dots, in the surface's own ink.
 const dots = () => statusMarkHtml('consciousness-mark', { shape: 'moving', hue: 'ink' });
 const facts = (parts) => parts.filter(Boolean).map((part) => `<span class="consciousness-fact">${part}</span>`).join(SEP);
@@ -31,6 +31,15 @@ export function liveWake(snapshot) {
 // A line never starts with a separator: the dot keeps to the word before it («Slack · Acme» wraps before «Slack»).
 const keepDots = (text) => String(text || '').replace(/ · /g, '\u00a0· ');
 
+// A state the host tells apart from sleeping (ouroboros/consciousness_view.py) keeps its own words: its word, then
+// what the next alarm does. Its whole sentence stays the host's `detail`.
+const NOT_SLEEPING = Object.freeze({
+    wake_failed: ['Last wake failed', 'next try'], wake_rejected: ['Last wake refused', 'next try'],
+    wake_paused: ['Last wake paused', 'next check'], wake_outcome_unknown: ['Last wake unconfirmed', 'next check'],
+    allowance_unknown: ['Allowance unknown', 'retry at'], waiting_for_first_conversation: ['Waiting for the first conversation'],
+    stopped: ['Not running'],
+});
+
 /** The headline: what it is doing now, in words, with the moving mark only while work runs. */
 export function headlineView(snapshot) {
     const live = snapshot.enabled === false ? null : liveWake(snapshot);
@@ -43,6 +52,8 @@ export function headlineView(snapshot) {
         return { text: `Waiting for the allowance${frees ? ` · frees at ${frees}` : ''}`, moving: false };
     }
     const next = clockText(snapshot.nextWakeAt);
+    const [word, then] = NOT_SLEEPING[snapshot.status] || [];
+    if (word) return { text: then && next ? `${word} · ${then} ${next}` : word, moving: false };
     return { text: next ? `Sleeping until ${next}` : 'Sleeping', moving: false };
 }
 
@@ -116,7 +127,7 @@ export function placesCardHtml(places, { error = '', awakeIn = '' } = {}) {
         <p class="consciousness-foot">Allowance, own tasks and concurrent conversations: <button type="button" class="consciousness-inline-link ui-hit-area" data-cx-act="settings">Settings ›</button></p>`;
 }
 
-const OUTCOME_WORDS = {
+export const OUTCOME_WORDS = {
     message: 'replied', silent: 'stayed silent', tool_delivered: 'sent through its tools', deferred: 'started work',
     completed: 'done', failed: 'failed', cancelled: 'stopped',
 };
