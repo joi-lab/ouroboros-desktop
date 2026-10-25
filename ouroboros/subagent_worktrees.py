@@ -657,7 +657,9 @@ def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = 
     excluded: List[Dict[str, Any]] = []
     try:
         if real_index.is_file():
-            shutil.copyfile(real_index, index)
+            # The index's own time stays: Git re-reads an entry written in that same tick
+            # (racily clean), so a same-size edit is never trusted as unchanged.
+            shutil.copy2(real_index, index)
         else:
             _git_env(source, "read-tree", "--empty", env=env)
         listed = _git_env(source, "ls-files", "-v", "-z", env=env).stdout.split(b"\0")
