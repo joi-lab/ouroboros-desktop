@@ -37,6 +37,90 @@ def test_finished_wake_publishes_its_own_title_once(clock, monkeypatch, summary,
                       if summary and callback == "own_clock" else [])
 
 
+@pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
+def test_previous_wake_reads_one_document_and_keeps_the_whole_note(tmp_path, monkeypatch, summary):
+    from ouroboros import task_store
+
+    row = seed_wake(tmp_path, **({"wake_summary": summary} if summary else {}))
+    row["result"] += "\n\n" + "Своя мысль с {daily_usd}. " * 3000 + "\nLast whole line."
+    seed_result(tmp_path, row["task_id"], row)
+    reads, original = [], task_store.read_document
+
+    def read(root, task_id):
+        reads.append(task_id)
+        return original(root, task_id)
+
+    monkeypatch.setattr(task_store, "read_document", read)
+    now = wake._parse_iso(row["terminal_time"]["occurred_at"]) + 3600
+    previous = wake.previous_wake_text(tmp_path, row["task_id"], now=now)
+    assert reads == [row["task_id"]]
+    assert previous == (f"{row['task_id']}, Done 1 h 0 min ago; its line: "
+        + (f"«{summary}»" if summary else "no line") + f"; its note: «{row['result']}»")
+    text = wake.render_wake_message(REPO, reason="heartbeat", last_wake_at=now - 3600, now=now,
+        level="act", disabled_tools=[], spent_usd=0, daily_usd=20, running=0, max_tasks=2,
+        interval=3600, events="nothing new", previous_wake=previous)
+    assert f"- previous wake: {previous}\n" in text
+    assert row["result"] in text and "{daily_usd}" in text, "authored placeholders are not rendered again"
+
+
+@pytest.mark.parametrize("status,word", [("completed", "Done"), ("failed", "Failed"), ("cancelled", "Stopped")])
+def test_previous_wake_uses_card_outcome_words_and_never_guesses_completion_time(tmp_path, status, word):
+    row = seed_wake(tmp_path, status=status, outcome_axes={}, terminal_time=None)
+    previous = wake.previous_wake_text(tmp_path, row["task_id"], now=T0)
+    assert previous.startswith(f"{row['task_id']}, {word} at an unknown time; its line: no line;")
+    assert previous.endswith(f"its note: «{row['result']}»")
+
+
+def test_previous_wake_distinguishes_absence_and_unreadability(tmp_path, monkeypatch):
+    from ouroboros import task_store
+    from ouroboros.store import StoreError
+
+    assert wake.previous_wake_text(tmp_path, "missing", now=T0) == "none"
+    reads = []
+
+    def broken(root, task_id):
+        reads.append(task_id)
+        raise StoreError("unreadable task")
+
+    monkeypatch.setattr(task_store, "read_document", broken)
+    assert wake.previous_wake_text(tmp_path, "", now=T0) == "none"
+    assert reads == []
+    assert wake.previous_wake_text(tmp_path, "previous", now=T0) == "unreadable"
+    assert reads == ["previous"]
+
+
+@pytest.mark.parametrize("has_previous", [True, False])
+def test_launch_captures_previous_wake_before_binding_the_new_id(clock, has_previous):
+    row = seed_wake(clock.root, wake_summary="Проверил состояние системы.") if has_previous else None
+    clock.clock._last_wake_task_id = row["task_id"] if row else ""
+    template = REPO.joinpath("prompts/CONSCIOUSNESS.md").read_text()
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(template)
+    now = clock_tests.T0 + clock_tests.FLOOR
+    expected = wake.previous_wake_text(clock.root, clock.clock._last_wake_task_id, now=now)
+    assert clock.clock.tick(now=now) == "launched"
+    launch = clock.launches[-1]
+    assert clock.clock._last_wake_task_id == clock.receipt["task_id"]
+    assert f"- previous wake: {expected}\n" in launch["text"]
+    assert f"- previous wake: {expected}\n" in launch["task"]["metadata"]["wake_observation"]["projection_text"]
+
+
+@pytest.mark.parametrize("announced", [True, False])
+@pytest.mark.parametrize("summary", ["Проверил состояние системы: всё спокойно.", ""])
+def test_only_direct_turns_with_authored_lines_join_the_observation_text(tmp_path, announced, summary):
+    row = seed_wake(tmp_path, **({"wake_summary": summary} if summary else {}))
+    now = wake._parse_iso(row["terminal_time"]["occurred_at"]) + 60
+    if announced:
+        _chat(tmp_path, _summary(row["task_id"], now - 30))
+    observation = wake.observe_wake(tmp_path, boundary=None, since=now - 3600, now=now, reason="heartbeat")
+    line = next(line for kind, _, line in observation.events if kind.startswith("direct_turn"))
+    assert (line in observation.full_text()) is bool(summary)
+    if summary:
+        assert line.endswith(": " + summary)
+    else:
+        assert "its line" not in line and row["result"] not in line
+    assert row["result"] not in observation.full_text(), "the whole note has its separate previous-wake slot"
+
+
 def _iso(ts):
     return wake._iso(ts)
 
@@ -484,6 +568,7 @@ def test_render_substitutes_every_placeholder_and_keeps_every_event(tmp_path, mo
     assert "toggle_evolution, request_restart" in text
     assert "allowance known spend (last 24 h): 4.00 / 20.00 USD" in text and "tasks running: 1/2" in text
     assert "next interval: 3300 s" in text
+    assert "previous_wake" in wake.PLACEHOLDERS and "- previous wake: none" in text
     assert "- wake cause: the scheduled wake time; events never move it, they are listed as observed" in text
     assert text.count("- task t") == 15 and "more; see" not in text  # every terminal stays an event
     quiet = wake.render_wake_message(
@@ -515,6 +600,12 @@ def test_template_names_only_its_placeholders_and_the_wake_hints():
         assert hint in template, hint
     assert "a heartbeat, a task that finished, a project digest" not in template
     assert "up to 10 rounds" not in template and "300 seconds" not in template
+    assert template.splitlines(keepends=True)[0].encode() == (
+        b"You are Ouroboros. No one has asked for a task; this turn is yours. What matters to you now, "
+        b"and what would be worth understanding, continuing, or changing?\n")
+    assert "no message is sent; the summary still names the wake" in template
+    assert "Finish with summary: one plain sentence in your human's language" in template
+    assert "what you heard and did here" in (REPO / "prompts/FOCUS.md").read_text()
 
 
 # --- the server projection --------------------------------------------------------

@@ -234,6 +234,13 @@
 
 ## 7. Skills payloads, tasks, uploads, projects, services
 
+Task-document fields share the containing document's lifetime; none has a separate store or remover.
+
+| Field | Writer | Readers | Bound and remover |
+| --- | --- | --- | --- |
+| Task field `wake_summary` (also `suggested_name`) | `tools/control_runtime._finish_task` stages the wake's whitespace-normalised `summary`; `loop_delivery` accepts it; `task_finalization.terminal_result_fields` writes both keys together | `consciousness._wake_finished` emits `task_named`; `terminal_projection`, `supervisor/events_task_done` and `gateway/history` carry the sentence to the card; `consciousness_view` reads it for the wake row; `consciousness_wake` supplies the previous wake and observed direct-turn lines | One optional authored sentence per wake, no host character cap; removed with its task document |
+| Task field `owner_message_sent` | `tools/control_runtime._send_user_message` marks accepted owner delivery (live or queued, including focus-to-Main); the accepting `loop_delivery` exit and `task_finalization.terminal_result_fields` persist `True` | `task_finalization.quiet_finish`, shared by terminal projection, both supervisor terminal writers and the wake view | One boolean per task; absent on older records, removed with its task document |
+
 | Path | Writer | Marker | Retention | Reset |
 |---|---|---|---|---|
 | `skills/{native,clawhub,ouroboroshub,external}/<name>/**` (+`.staging/`, `skills/<bucket>/.staging/<name>-<id>`, `skills/<bucket>/.rollback/<name>.<id>` and `<name>.previous`, `.ouroboros_env/` with `cache/ tmp/ home/`) | `ouroboros/marketplace/*`, `skill_builtin.py`, `skill_source_install.py`, `skill_install_record.py`, agent self-authoring | provenance sidecars `schema_version: 1`; env `fingerprint.json: 1` | [record] no age GC (payloads are installed software); rollback copies last through pending review, then restore or become the one `.previous` copy; partial restores keep evidence; staging rmtree'd per install, crash orphans recognized by name fragments; package caches live with the skill | bucket recreated empty; built-ins never re-installed (deletion intent preserved); orphaned `state/skills/` rows keep grants, the publication receipt and the tombstone after the tombstone sweep |
