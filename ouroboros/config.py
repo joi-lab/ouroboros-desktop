@@ -797,7 +797,7 @@ def serialize_settings(settings: dict) -> str:
 
 
 def load_settings(*, migrate: bool = False) -> dict:
-    """A read takes no lock file and writes nothing; the boot's ``migrate`` persists the compatibility upgrades."""
+    """A read takes no lock file and writes nothing; ``migrate`` (boot, onboarding) persists the compatibility upgrades."""
     fd = _acquire_settings_lock() if migrate else None
     try:
         return load_settings_lock_held(_settings_lock_held=fd is not None)
@@ -807,8 +807,8 @@ def load_settings(*, migrate: bool = False) -> dict:
 
 def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
     """The same read, for a caller that ALREADY holds the (not re-entrant) settings lock: a write
-    precondition needs the effective settings as of NOW. Only under that lock (a writer, or the boot's
-    ``load_settings(migrate=True)`` once it acquired it) are the raw compatibility upgrades persisted: the
+    precondition needs the effective settings as of NOW. Only under that lock (a writer, or a
+    ``load_settings(migrate=True)`` that acquired it) are the raw compatibility upgrades persisted: the
     raw mapping plus the normalized pair, never a defaults-merged document; a lock-free read writes nothing."""
     from ouroboros.review_pool_migration import apply_at_read_seam, environment_overridable_keys
     from ouroboros.server_runtime import SAVED_MODEL_ROLE_KEYS, authored_model_slots, propose_unauthored_model_slots

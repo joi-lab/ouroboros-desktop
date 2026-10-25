@@ -1122,8 +1122,8 @@ async def lifespan(app):
     )
 
     # Boot APPLIES the provider normalization in-process and persists none of it
-    # (mirror of launcher_onboarding.prepare_first_run_settings); its read is the
-    # one that persists the two compatibility upgrades (``migrate=True``). Two
+    # (mirror of launcher_onboarding.prepare_first_run_settings); its read does
+    # persist the two compatibility upgrades (``migrate=True``). Two
     # normalizations, two re-derivations: the VOCABULARY one is the read seam
     # every reader applies (config.normalize_settings_raw); the PROVIDER one is
     # re-derived by every consumer that needs the route — the task-start

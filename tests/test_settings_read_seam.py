@@ -172,15 +172,15 @@ def test_reading_settings_writes_nothing_to_disk(isolated_settings):
     assert not pathlib.Path(str(isolated_settings) + ".lock").exists()
 
 
-def test_the_one_read_that_writes_is_the_boots_context_compatibility_migration(isolated_settings):
+def test_the_one_read_that_writes_is_the_migrating_context_compatibility_read(isolated_settings):
     """The single, deliberate exception, pinned rather than assumed.
 
     A document that carries a context mode WITHOUT the false provenance marker is
     ambiguous for the BIBLE P3 scope gate, and the one-window compatibility migration
     resolves it by writing the canonical pair back — under the settings lock, through
-    the live-data guard. Only the boot's `load_settings(migrate=True)` does that: it
-    performs exactly ONE write and is stable from then on. An ordinary `load_settings`
-    and `_owner_read_settings_raw` perform NONE on the same file: a read is a read.
+    the live-data guard. Only `load_settings(migrate=True)` (the boot, onboarding
+    completion) does that: it performs exactly ONE write and is stable from then on. An
+    ordinary `load_settings` and `_owner_read_settings_raw` perform NONE: a read is a read.
 
     This is easy to miss because a fixture whose document has no context keys makes any
     "a read writes nothing" assertion pass vacuously — which is how a live settings file
@@ -521,8 +521,8 @@ def test_every_settings_writer_puts_the_one_serializers_bytes_on_disk(isolated_s
     """One serializer, one spelling. Each of the five writers, driven through its real
     entry point, leaves exactly ``serialize_settings(document).encode("utf-8")`` on disk:
     the three prologue-routed savers produce identical bytes for identical content, and
-    the two exempt writers — the context-pair migration, the boot's one READ that
-    writes, and the Colab generator for the Drive root — produce the serializer's bytes
+    the two exempt writers — the context-pair migration, the one READ that writes
+    (``migrate=True``), and the Colab generator for the Drive root — produce the serializer's bytes
     for what they persist. The writers once disagreed on ``ensure_ascii``, and a writer
     that re-derived the JSON text itself agreed with the serializer only by coincidence:
     mutate the serializer and that writer keeps its old spelling while the others follow.
@@ -565,7 +565,7 @@ def test_every_settings_writer_puts_the_one_serializers_bytes_on_disk(isolated_s
     _save_settings(isolated_settings, dict(document))
     on_disk["packaged_cli._save_settings"] = isolated_settings.read_bytes()
 
-    # The boot's migration is the one read that writes: an ambiguous Low makes it persist.
+    # The migrating read is the one read that writes: an ambiguous Low makes it persist.
     _seed(isolated_settings, {**document, "OUROBOROS_CONTEXT_MODE": "low"})
     cfg.load_settings(migrate=True)
     on_disk["context_mode_compat.normalize_and_persist_context_mode_compat"] = (
