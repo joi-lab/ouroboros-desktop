@@ -12,6 +12,7 @@ from tests.test_native_owner_wait_browser import chat_connection
 from tests._shared import producer_evidence_dir
 from tests.test_ui_coherence_browser import pill_landing
 from tests.test_ui_smoke_playwright import direct_server_with_data as direct_server_with_data  # noqa: F401
+from tests.ui_console_errors import PageErrors
 from tests.system_e2e.harness import (
     ArtifactOracle, KeylessIsolatedServer, ScriptedStubModel, keyless_settings,
     wait_durable_result, wait_until, write_settings_file,
@@ -43,8 +44,7 @@ def test_quiet_cards_keep_live_and_reloaded_presentation(direct_server_with_data
     with sync_playwright() as pw:
         browser = getattr(pw, engine).launch()
         page = browser.new_page(viewport={"width": 1100, "height": 900}, reduced_motion="reduce")
-        errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        errors = PageErrors(page, engine)
         page.add_init_script(f"({_CAPTURE_TEST_SOCKET})(); ({_OBSERVE_STATE_READS})();")
         try:
             page.goto(fixture["url"], wait_until="domcontentloaded")
@@ -90,7 +90,7 @@ def test_quiet_cards_keep_live_and_reloaded_presentation(direct_server_with_data
                 expect(page.get_by_text("The published answer.", exact=True)).to_have_count(1)
                 assert "Internal quiet words" not in page.locator('#chat-messages').inner_text()
                 page.screenshot(path=str(evidence / f"{engine}-{visit}.png"), animations="disabled")
-            assert not errors, errors
+            assert not errors.unexpected(), errors
         finally:
             browser.close()
 

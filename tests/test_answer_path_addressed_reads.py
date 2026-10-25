@@ -90,12 +90,16 @@ def _packed_history(root, k):
 
 def _sender(root, monkeypatch):
     """The supervisor's send seam with a local bridge; frames are what the owner's chat received."""
-    from ouroboros import utils
+    from ouroboros import dialogue_store, utils
     from supervisor import events_chat_delivery, message_bus
     from supervisor.event_observation import ObservedEventQueue
-    from tests.test_dialogue_retry import bridge, seed
+    from tests.test_dialogue_retry import bridge
 
-    seed(root, monkeypatch)
+    # The dialogue in the test's journal: ``test_dialogue_retry.seed`` pins rollback journals for its
+    # contention cases, and a pin taken after the packed history's WAL store exists makes the store's
+    # next open refuse that store.
+    dialogue_store.append(root, "chat", {"ts": "seed", "chat_id": 1, "text": "seed"})
+    dialogue_store._plan_first(root)
     frames = bridge(root, monkeypatch)
     queue = ObservedEventQueue()
     monkeypatch.setattr(events_chat_delivery, "_DELIVERED_MESSAGE_IDS", deque(maxlen=256))
@@ -119,8 +123,9 @@ def _owed_answer(root, task_id):
     return event
 
 
+@pytest.mark.parametrize("journal", ["PERSIST", "WAL"])
 @pytest.mark.parametrize("index", ["validated", "stale", "contended", "damaged"])
-def test_send_message_receipt_capture_is_flat_across_evidence_packs(tmp_path, monkeypatch, index):
+def test_send_message_receipt_capture_is_flat_across_evidence_packs(tmp_path, monkeypatch, index, journal):
     """The delivering task names its own handle, so the capture reads that task's own sidecars,
     found by their names: the packs directory is never listed (one listing returns every pack's
     names), and the names the capture probes are counted and compared at both sizes.
@@ -130,12 +135,22 @@ def test_send_message_receipt_capture_is_flat_across_evidence_packs(tmp_path, mo
     since (re-validation is a whole-index ``quick_check``); ``contended``: the packer holds the
     index lock past the send's acquisition slice (the 22.10 stalls: every sidecar opened and
     parsed); ``damaged``: the cache must be rebuilt from every sidecar. The answer still reaches
-    the chat and keeps its retained receipt on both sizes."""
-    from ouroboros import evidence_packs, store
+    the chat and keeps its retained receipt on both sizes.
+
+    ``journal`` is chosen before the first store exists and read back from each store's header:
+    the store's own choice (WAL only on a fixed SQLite and a proven local filesystem) would give
+    each host just one of the two."""
+    from ouroboros import dialogue_store, evidence_packs, store
     from supervisor import events_chat_delivery
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: journal)
 
     def boundary(root, _facts):
         ctx, frames = _sender(root, monkeypatch)
+        journals = {path.name: store.wal_file(path)
+                    for path in (store.store_path(root), dialogue_store.path(root),
+                                 evidence_packs.packs_dir(root) / evidence_packs.INDEX_NAME)}
+        assert journals == dict.fromkeys(journals, journal == "WAL")
         assert events_chat_delivery._handle_send_message(_owed_answer(root, "warm-up"), ctx)
         event = _owed_answer(root, "turn")
         holder = None

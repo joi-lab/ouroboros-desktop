@@ -133,8 +133,8 @@ ouroboros/ — agent core and shared runtime (§6)
   vision_routing.py, vision_image_limits.py, image_preparation.py — owner-mode image routing for Main, explicit VLM/caption sends, route limits and byte preparation (§6 Vision and local image evidence)
   fallback_cooldown.py — per-process 429-aware cooldown for the `OUROBOROS_MODEL_FALLBACKS` chain; advisory
   model_concurrency.py — per-(model, use_local) semaphore (`OUROBOROS_MODEL_MAX_CONCURRENCY`), per-process only: one task's loop, children and pings cannot exhaust a model's rate limit
-  project_naming.py — SSOT for LLM-first project naming with deterministic fallback: admission (no model call), card conversion, the lazy turn namer
-  ui_translation.py — the translation generator: one worker thread per process, accounted light-model batches; free text resolves to a tag or `language_needs_model`
+  project_naming.py — admission names, bounded Light naming with fallback, card conversion and lazy turn naming (§7)
+  ui_translation.py — one translation worker, accounted Light batches and free-text language resolution (`language_needs_model`; §7)
   ui_language.py, i18n_memory.py — the interface-language fact and the per-language translation memory `state/i18n/<tag>.json`, provenance owner > imported > generated (§7 `OUROBOROS_UI_LANGUAGE`)
   loop_tool_execution.py, tool_call_log.py — tool dispatch, results, per-invocation counting
   deadline_utils.py — deadline parsing and the transport-vs-logical wait seam

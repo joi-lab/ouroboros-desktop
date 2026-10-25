@@ -22,7 +22,7 @@ An owner endpoint changes one decision in a document it does not own, so `_owner
 
 ### LLM output token budgets
 
-Providers name the output budget differently: OpenRouter and Anthropic-compatible calls send `max_tokens`, official direct OpenAI Chat `max_completion_tokens`. Model-name prefixes are not capability authority; only exact-route, success-confirmed wire evidence adapts a request. The budgets are floors, lowered only by a route's known maximum response; the constants are the numeric SSOT:
+OpenRouter/Anthropic-compatible output budgets use `max_tokens`; direct OpenAI Chat uses `max_completion_tokens`. Only successful exact-route wire evidence adapts requests, never model-name prefixes. Budgets are floors, lowered by a known route maximum; constants own the numbers:
 
 | Surface | Output-token budget |
 |---------|---------------------|
@@ -36,6 +36,8 @@ Providers name the output budget differently: OpenRouter and Anthropic-compatibl
 | Update letter LIGHT one-shot (`update_letter.UPDATE_LETTER_MAX_TOKENS`) | 1,024 |
 | Project naming LIGHT one-shot (`project_naming.llm_project_name`) | 256 |
 | Provider Test (`llm_probe.PROVIDER_TEST_MAX_TOKENS`) | 16 |
+
+Naming/translation share one deadline across preparation, slots and recovery; naming captures it before scheduling so workers cannot renew it. Earlier bounds win; detached naming refreshes cost without publishing a title.
 
 ### Default settings
 
@@ -87,7 +89,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_SERVED_MODEL_REDOS | 2 | Redos of a round another model answered, each a new operation (clamped 0-5) |
 | OUROBOROS_MODEL_MAX_CONCURRENCY | 3 | Concurrent physical calls of one model on one provider route (credential, endpoint), shared by every process of the installation with a fair queue; routes the managed Claudexor engine serves are left to the engine (`model_concurrency.py`) |
 | OUROBOROS_MODEL_SLOT_MAX_WAIT_SEC | 180 | Concurrency-slot wait bound |
-| OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming call ceiling |
+| OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming operation ceiling |
 | OUROBOROS_PROJECT_NAMING_ASYNC_TIMEOUT_SEC | 8 | Inline naming bound when a card becomes a project (`gateway/projects.py`) |
 | OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC | 120 | Update-letter calendar ceiling over slot wait and every send (`update_letter.py`) |
 | OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC | 120 | One translation batch, slot wait and call together (`ui_translation.py`) |

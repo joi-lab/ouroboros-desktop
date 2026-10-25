@@ -12,6 +12,7 @@ import pytest
 
 from ouroboros.test_evidence import diagnostic_directory
 from tests.test_update_letter_browser import BOOT, WEB
+from tests.ui_console_errors import PageErrors
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
@@ -72,8 +73,7 @@ def test_apply_discloses_before_post_and_applied_card_restores_locally(engine, w
             browser = getattr(pw, engine).launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=width < 980)
-                errors = []
-                page.on("pageerror", lambda error: errors.append(str(error)))
+                errors = PageErrors(page, engine)
                 page.route("**/api/**", respond)
                 url = f"http://127.0.0.1:{server.server_port}/fixture"
                 for button, strategy in [("#btn-update-primary", "auto_merge"), ("#btn-update-replace", "replace")]:
@@ -111,7 +111,7 @@ def test_apply_discloses_before_post_and_applied_card_restores_locally(engine, w
                 page.wait_for_function("document.querySelector('#btn-update-primary').disabled")
                 assert [json.loads(body) for path, body in calls if path == "/api/git/rollback"] == [{"target": base}]
                 assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-                assert errors == []
+                assert not errors.unexpected(), errors
             finally:
                 browser.close()
     finally:

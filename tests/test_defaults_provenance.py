@@ -638,7 +638,8 @@ def _catalog_fetch(settings, monkeypatch):
 
     sent = []
 
-    async def fetch(_client, provider, _label, api_key, base_url):
+    async def fetch(_client, provider, _label, api_key, base_url, *, record_image_input=False):
+        assert record_image_input is False
         sent.append((provider, api_key, base_url))
         return []
 

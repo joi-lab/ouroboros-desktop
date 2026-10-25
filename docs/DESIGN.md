@@ -37,7 +37,7 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
 1. **The room is plain.** Page, sidebar and panel backgrounds are the room colour or
    one step off it. Never a gradient, glow, wash, texture or animation behind content.
 2. **Objects rest; they are not outlined.** A bubble, card or group is one flat fill
-   on the *rest* shadow: no gradient on it and no light along its edge. What floats over moving content (the Shade, menus, the
+   on the *rest* shadow: no gradient on it and no light along its edge. What floats over moving content (the work list, menus, the
    composer field, dialogs, the drawer, ↓ latest) takes the *float* shadow. Inside an object a
    group or row is a *tray*, a soft neutral fill without a shadow, and fills never
    stack. Only fields keep a hairline, because an editable box must read as editable;
@@ -45,9 +45,11 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
    room a shadow barely shows, so each neutral height is also a lighter surface: a white
    veil over whatever lies under it (room, object, capsule). Room capsules use the neutral veil. Inside the dark
    Ouroboros voice, trays and capsules use opaque lighter steps of that voice, with opaque readable ink. What floats
-   over moving content is glass. The Shade is the one exception: it
-   continues its bar's ink and hangs on the float shadow, so the bar and its Shade read as
-   one surface unfolding.
+   over moving content wears its own material, whatever its ARIA role or parent bar. The work list (owner 2A, 25.10),
+   menus, popovers and the shared modal dialogs (confirmations, an import, a skill's details) have an opaque neutral
+   backing so underlying words cannot bleed through. The rest keep their own paint: the composer field, a note over
+   the transcript (Main's history note, the voice offer), toasts and float capsules stay glass, and the document
+   reader and file dialogs keep their near-opaque modal sheet over a scrim.
 3. **Colour says who and what.** Each voice colours its own objects: the owner blue,
    Ouroboros rose (its answers and its work cards alike), System amber (gold on dark), a
    Project fuchsia. A role keeps its hue family in both themes and the theme gives it its
@@ -101,7 +103,7 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
 | --- | --- | --- |
 | Room · sidebar | `#ffffff` · `#fafbfc` | `#0f0f11` · `#0f0f11` |
 | Object · tray | `#ffffff` · neutral 3 % | white 5.5 % · white 4.5 % |
-| Capsule (hover) · float | `#ffffff` (`#f5f6f8`) · `#ffffff` | white 9 % (13.5 %) · `rgb(32 32 34 / .92)` |
+| Capsule (hover) · float · sheet | `#ffffff` (`#f5f6f8`) · `#ffffff` · `#ffffff` | white 9 % (13.5 %) · `rgb(32 32 34 / .92)` · white 9 % on `#0f0f11`, opaque |
 | Glass on controls and sheets over content | none | `blur(18px)` |
 | Owner · Ouroboros · task card | `#e9eef9` · `#fdf2f4` · `#fff8f9` | sapphire `#103e7f` · cherry `#76162b` · cherry `#76162b` |
 | System, resting like every voice and without an edge | amber 12 %, name `#805000` | white 5.5 %, a gold name `#f7cb58` |
@@ -125,7 +127,7 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
 
 - Radii by role, both themes: capsule `999px` (every one-line control and chip) · object `18px`
   (bubbles, cards, groups, menus, answer cards) · inner `12px` (trays and rows inside an object) ·
-  sheet `24px` (the Shade's lower corners, the composer's field).
+  sheet `24px` (the work list, the composer's field).
 - Type: the system face (SF Pro on Apple), 12 / 14 / 16 / 24; weight 400 to read,
   500 for a status word, a root's title or a setting's name, 600 for labels,
   controls and a setting's value.
@@ -133,7 +135,7 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
 - Motion: 120 ms for colour and shadow (`--motion-tone`); no press motion; the
   three-dot loop only while work runs. A surface that comes, goes or fades rides one
   curve, `--ease-sheet`, for `--motion-open` (340 ms, coming in), `--motion-close`
-  (280 ms, going out) or `--motion-fade` (180 ms, a menu or the Shade; what leaves eases
+  (280 ms, going out) or `--motion-fade` (180 ms, a menu or the work list; what leaves eases
   in); it moves by position, opacity and a small scale, never blur. Three folds change a
   height: the capsule row and the reply strip on that curve, and a deck of notes between works,
   whose height lands at once inside the reading write while its cards glide in by position and opacity. The handover between places
@@ -562,7 +564,7 @@ runtime; known queued, active or finalizing work keeps its own factual label. A
 durably accepted incoming message likewise proves acceptance, not that its task
 has begun or a model has read it.
 
-The Update indicator names the real stage, then the last confirmed outcome or explicit uncertainty. It opens the existing Updates panel, never a second apply flow. The owner may dismiss that result from the indicator only; the panel retains it until the next admitted attempt, with actual saved-local-work references and accessible diagnostics. A pre-admission refusal stays with the request. A busy-work refusal offers explicit retry, never a delayed automatic restart. Connection or version alone proves no successful update. Unknown remains neutral; confirmed completion uses the success triple and a failed/refused/rolled-back attempt the error triple.
+The Update indicator names the real stage, then a failed or unconfirmed outcome until the owner hides it with the close beside it (this browser, that attempt; the record is untouched). It opens the existing Updates panel, never a second apply flow. A confirmed success never wears the indicator (owner 1B): the panel retains it until the next admitted attempt, with actual saved-local-work references and accessible diagnostics, and it never masks a newer available version. A pre-admission refusal stays with the request. A busy-work refusal offers explicit retry, never a delayed automatic restart. Connection or version alone proves no successful update. Unknown remains neutral and a failed/refused/rolled-back attempt takes the error triple; a needed restart keeps its words, without a close.
 
 Status, owner action, and urgent notification are separate product concepts:
 
@@ -577,6 +579,16 @@ Status, owner action, and urgent notification are separate product concepts:
 - **Urgent notification** is a rare, time-sensitive interruption. It uses the
   product's explicit incident/notification seam, not a red status or a failed
   task as a proxy.
+
+A status names what ends it, by role, and what the owner may still need stays where its fact lives. An announcement
+(a toast) says its news once and may end after its time, hover and focus pausing it, whatever its tone: the problem,
+needed restart or unconfirmed outcome it announces is kept in its authoritative view (a card, the Updates record, the
+in-feed history edge) until that fact changes or the owner resolves it. A notice the owner may hide is hidden on the
+notice itself, per browser, never in its record (the Update indicator, owner 1B, 25.10). A plain acknowledgement in
+place may end by itself, but where the line is its fact's only home (Costs' budget save) an error, a warning or a
+needed restart stays until the next save replaces it. A current fact ends with its fact; unread ends when the message
+is shown; a retained record (Updates, history, the Settings save result, `Input saved`) lives with its record, with
+no timer. Toasts and statuses older than this rule are checked against it when touched.
 
 Activity schedule rows use the same factual status rule: `active`, `disabled`,
 `consumed once · history`, `withdrawn` and `deletion pending · work in flight`
@@ -665,11 +677,12 @@ a refused addressing act carries the host-composed `cause` sentence
 the System row and the picker toast), a landed act carries none, and an unknown
 reason stays raw. A provider failure quotes only the provider's own sentence (a
 long one, or one its producer already cut, shortened in words beside the Logs
-pointer); without one it names the host's classification of the failure (beside
-the provider's own error code and parameter when an engine relays them, as the
-provider's) and points at the Logs, which keep the host's record of it (a stream
-error's sentence only as a bounded excerpt, so no row promises more): neither an
-exception's text nor an engine's composed diagnostic reaches the owner's row.
+pointer); a fallback notice names the failure class first (owner decision 25.10).
+A terminal row without one names the host's classification (beside an
+engine-relayed error code and parameter, as the provider's) and points at the
+Logs, which keep the host's record (a stream error's sentence as an excerpt):
+neither an exception's text nor an engine's composed diagnostic reaches the
+owner's row.
 Host text speaks only for the host's own actions, counts and signed quotes; a
 source it could not read is unknown, never zero. A terminal whose preserved
 output was never reviewed shows that output labelled, not hidden: a short
@@ -751,7 +764,7 @@ not move them into the migrated set in section 8.
 
 Every surface that says what a work or a room is doing draws one small family of
 marks (`web/modules/status_mark.js`, the `.status-mark` recipe in `web/ui.css`): a
-Project row, Main's row, the Projects header, ☰, a room's status, a Shade row, a
+Project row, Main's row, the Projects header, ☰, a room's status, a work-list row, a
 task card's chip, a question's head, a skill's job. A mark carries two facts in two
 channels, and nothing else draws a work's or a room's status dot, bar or ring (a
 status sentence's or a composer chip's dot is its tone, §4).
@@ -1047,7 +1060,7 @@ preference when it opens and on every reconnect; there is no file watcher.
   control ink (`--text-primary`) and its own line; one that already reads as a
   control may stay in meta ink. Overriding `display` on a summary drops the
   native marker, so draw it. What opens has one coherent boundary tied to its
-  trigger: what a bar discloses unfolds from the bar's bottom edge as its Shade,
+  trigger: what a bar discloses hangs under its capsules as the work list,
   and opening moves no neighbouring target. **Floating chrome stays readable:** over scrolling
   content, closed or open, content never shows through its text, and state tints
   sit on that backing. Text controls in one floating group share height and
@@ -1262,7 +1275,7 @@ then one mark, as on the sidebar's rows; no frame at rest, a neutral
 tint on hover and while open, a caret when it opens. A work is one request with
 its Continue episodes and whatever of them still lives (helpers, delegated
 runs still working, post-answer upkeep); the server gives each work and each room
-one status, and every surface (bar, Shade, sidebar, cards, tray) words that
+one status, and every surface (bar, work list, sidebar, cards, tray) words that
 one status without deciding its own; Activity's rows keep their queue words, said
 as the chip says them (never a raw phase code), and take the work's controls. A
 card without a projected work (a child, Main's owner-action message, a replayed
@@ -1280,9 +1293,9 @@ owner's own Stop press (moving), and `Starting…` with the boot phases that ref
 (no mark). The transcript's typing bubble shows only while the room's work moves and
 no card speaks for it. The title
 ellipsizes first, and a new word never moves a neighbour or resizes the bar.
-When there is work to show, pressing the status, or ↓/↑ on it, unfolds that
-room's work and only that room's as one Shade under the bar, the same in every
-room: one row per work, the owner's unconfirmed sends, and unfinished cards an
+When there is work to show, pressing the status, or ↓/↑ on it, opens that
+room's work and only that room's as one floating list under the bar's capsules, the same in every
+room (an opaque sheet of its own from the status capsule to the bar's last control, Main's history note waiting behind it): one row per work, the owner's unconfirmed sends, and unfinished cards an
 incomplete read has not confirmed (shown unknown, without controls). A Project
 with nothing else keeps its latest represented root card. A row names its work (its
 coined name or the request's title, never `Continue: …`, else the owner's
@@ -2631,7 +2644,7 @@ not cause stays silent). Sending, copying and other toggles stay silent, as in
 Telegram, and nothing depends on a haptic (`web/modules/haptics.js`).
 
 **Layers and dismissal.** The drawer and the Project panel are layers in one
-stack (`web/modules/layers.js`); dialogs, menus and the Shade keep their own
+stack (`web/modules/layers.js`); dialogs, menus and the work list keep their own
 Escape and outside-press dismissal. Escape, ×, a press on the scrim close the
 topmost layer and only it; the system or browser Back and Telegram's Back close
 what is on top: a dialog over a layer first, then the layer. While a layer is

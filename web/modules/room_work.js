@@ -1,9 +1,9 @@
 /**
  * The room's work status in its bar (DESIGN "Room work status"). The bar's one status control, right after
  * the room's title, paints the word, tone and mark the chat's producer gives it (the room in the server's work
- * projection, work_status.roomStatusView; status_mark.js draws the mark) and opens this room's work as one Shade under
- * the bar, in Main and a Project alike. Presentation only, over the chat instance's own owners; it keeps no task
- * state, phase vocabulary, poller, pager, question index or permission:
+ * projection, work_status.roomStatusView; status_mark.js draws the mark) and opens this room's work as one floating
+ * list under the bar's capsules, in Main and a Project alike. Presentation only, over the chat instance's own owners;
+ * it keeps no task state, phase vocabulary, poller, pager, question index or permission:
  *   membership  this room's works (`works()`, the instance's reconciled projection: one row per work, helpers and
  *               Continue episodes inside it), the owner's unconfirmed sends (`pendingSubmissions`); a Project with
  *               nothing else keeps its latest represented root card
@@ -29,7 +29,7 @@ import {
 import { showToast } from './toast.js';
 import { motionMs, reducedMotion } from './motion.js';
 
-// The closed Shade rises back under the bar as it fades (room_work.css rw-unfold, reversed).
+// The closed list rises back as it fades (room_work.css rw-unfold, reversed).
 const SHADE_FOLDS = [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-6px)' }];
 const NAME_CHARS = 160;
 const REPLY_CHARS = 60;
@@ -119,7 +119,7 @@ export function createRoomWork({
     if (titleRow) titleRow.appendChild(trigger);
     else badgeParent?.insertBefore(trigger, badgeNext);
 
-    // ---- the surface: one Shade in every room, unfolding from the bottom edge of the room's bar
+    // ---- the surface: one floating list in every room, hung under the room's bar (room_work.css)
     const surface = element('div', 'rw-surface rw-shade');
     surface.id = `${uid}-surface`;
     surface.hidden = true;
@@ -132,7 +132,7 @@ export function createRoomWork({
     const note = element('p', 'rw-note');
     note.hidden = true;
     surface.append(list, note);
-    // A zero-height anchor under the bar: the Shade follows the bar's real height at every width. Main's
+    // A zero-height anchor under the bar: the list follows the bar's real height at every width. Main's
     // header floats over the transcript, so its anchor is the header's own last child at its bottom edge.
     const shadeAnchor = element('div', 'rw-shade-anchor');
     shadeAnchor.appendChild(surface);
@@ -141,6 +141,25 @@ export function createRoomWork({
     else page.appendChild(shadeAnchor);
     // The element that says "open" for CSS: the Project panel, or Main's header.
     const openHost = panel || (asPanel ? null : bar);
+
+    // The list hangs under the bar's capsules (room_work.css): from the status capsule's left edge to the right edge
+    // of the bar's last visible control (a toolbar's own box reaches past its capsules), below the capsule. Measured
+    // where the bar really laid them out, written as three custom properties on the anchor, and measured again
+    // whenever the open list paints.
+    function placeSurface() {
+        if (!bar || !titleRow || !shadeAnchor.isConnected) return;
+        const edge = shadeAnchor.getBoundingClientRect();
+        const capsule = titleRow.getBoundingClientRect();
+        const ends = [...bar.querySelectorAll('button, summary')]
+            .filter((node) => node.getClientRects().length && !titleRow.contains(node) && !shadeAnchor.contains(node)
+                && !node.closest('.chat-header-menu'))
+            .map((node) => node.getBoundingClientRect().right);
+        const end = ends.length ? Math.max(...ends) : edge.right;
+        const px = (value) => `${Math.round(value)}px`;
+        shadeAnchor.style.setProperty('--rw-left', px(Math.max(0, capsule.left - edge.left)));
+        shadeAnchor.style.setProperty('--rw-right', px(Math.max(0, edge.right - end)));
+        shadeAnchor.style.setProperty('--rw-top', px(capsule.bottom - edge.top));
+    }
 
     // ---- Back to reading: one explicit return to the passage a navigation left
     const back = element('button', 'rw-back');
@@ -657,6 +676,7 @@ export function createRoomWork({
         paintTrigger();
         paintNote();
         if (!open) return;
+        placeSurface();
         const keys = new Set(rows.map((row) => row.key));
         for (const [key, view] of views) {
             if (!keys.has(key)) { view.el.remove(); views.delete(key); expanded.delete(key); }
@@ -739,7 +759,7 @@ export function createRoomWork({
     }
 
     // ---- behaviour
-    // The Shade folds away the way it unfolded: closed at once (its state, its focus), it stays drawn, inert, until its
+    // The list folds away the way it unfolded: closed at once (its state, its focus), it stays drawn, inert, until its
     // motion ends; opened again meanwhile, it stops folding where it is.
     let folding = null;
     function foldAway() {
@@ -1009,7 +1029,7 @@ export function createRoomWork({
         next?.focus?.({ preventScroll: true });
         next?.scrollIntoView?.({ block: 'nearest' });
     });
-    // The Project panel's own close dismisses a Shade that lives outside the room's page.
+    // The Project panel's own close dismisses a list that lives outside the room's page.
     listen(doc, 'click', (event) => {
         if (open && event.target?.closest?.('#project-panel-close')) close({ restoreFocus: false });
     }, true);
@@ -1029,10 +1049,11 @@ export function createRoomWork({
             // Use the existing paint frame: resizing an observed capsule inside delivery
             // would produce an undelivered-notifications loop warning in WebKit.
             fitNeeded = true; schedule();
-        }
+        } else if (open) schedule();  // another capsule of the bar moved: the open list follows its edges
     }) : null;
     sizer?.observe(bar);
     if (titleRow) sizer?.observe(titleRow);
+    for (const node of bar?.children || []) if (node !== shadeAnchor && node !== titleRow) sizer?.observe(node);
 
     function schedule() {
         if (destroyed || scheduled) return;

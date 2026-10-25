@@ -281,6 +281,7 @@ SHADE_GEOMETRY = """() => { const box = s => { const r = document.querySelector(
         .every((el) => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
             return Boolean(hit) && (hit === el || el.contains(hit)); });
     return {bar: box('#project-panel .project-panel-bar'), shade: box('#project-panel .rw-shade'),
+            capsule: box('#project-panel .app-page-title-row'),
             panel: box('#project-panel'), vw: innerWidth, vh: innerHeight, reachable,
             overflow: document.documentElement.scrollWidth - innerWidth}; }"""
 
@@ -353,8 +354,9 @@ def test_translated_chrome_long_names_coarse_pointer(branch_ui, width, theme):
     if not (shade and shade["x"] >= -0.5 and shade["x"] + shade["w"] <= geometry["vw"] + 0.5
             and shade["bottom"] <= geometry["vh"] + 0.5):
         problems.append(f"the Shade leaves the viewport: {shade} vw={geometry['vw']} vh={geometry['vh']}")
-    if shade and abs(shade["y"] - bar["bottom"]) > 1.5:
-        problems.append(f"the Shade does not unfold from the bar's bottom edge: {shade} {bar}")
+    capsule = geometry["capsule"]
+    if shade and (abs((shade["y"] - capsule["bottom"]) - 8) > 1.5 or abs(shade["x"] - capsule["x"]) > 1.5):
+        problems.append(f"the work list does not hang under its status capsule: {shade} {capsule} (bar {bar})")
     if geometry["overflow"] > 0:
         problems.append(f"page overflows horizontally by {geometry['overflow']}px")
     if not geometry["reachable"]:
@@ -422,8 +424,9 @@ def test_translated_chrome_long_names_coarse_pointer(branch_ui, width, theme):
     out["shade_leaks"] = leaks(page, "project")
     rw.capture(page, f"coarse-{tag}-project-open")
     shade = out["shade"]
-    if abs(shade["shade"]["y"] - shade["bar"]["bottom"]) > 1.5:
-        problems.append(f"the Shade is not under its bar: {shade}")
+    if (abs((shade["shade"]["y"] - shade["capsule"]["bottom"]) - 8) > 1.5
+            or abs(shade["shade"]["x"] - shade["capsule"]["x"]) > 1.5):
+        problems.append(f"the work list does not hang under its status capsule: {shade}")
     if shade["shade"]["x"] < -0.5 or shade["shade"]["right"] > shade["vw"] + 0.5 or shade["overflow"] > 0:
         problems.append(f"the Shade leaves the viewport: {shade}")
     if not shade["reachable"]:

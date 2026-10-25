@@ -5818,17 +5818,36 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
    success: it is a pointer to Dashboard -> Updates, the shared neutral capsule
    (.btn.btn-default.btn-sm, docs/DESIGN.md "Status and chips"). Uncommitted
    local changes ARE a caveat about what an update would do, the owner's turn
-   in the amber tone; an attempt's outcome takes the green or red tone and an
-   unknown one stays neutral. A tone outranks the shared hover, so a finger's
-   lingering hover keeps it; a hovering pointer deepens it. */
+   in the amber tone; a failed attempt takes the red tone and an unknown one
+   stays neutral; a confirmed success has no capsule (owner 1B). A tone outranks
+   the shared hover, so a finger's lingering hover keeps it; a hovering pointer
+   deepens it. */
 .update-pill { margin: 6px 8px; }
 :root[data-theme] .update-pill:is(.has-local, [data-tone="warn"]):not(:disabled) { background: var(--tone-amber); color: var(--status-warn-fg); }
-:root[data-theme] .update-pill[data-tone="ok"]:not(:disabled) { background: var(--tone-green); color: var(--status-ok-fg); }
 :root[data-theme] .update-pill[data-tone="error"]:not(:disabled) { background: var(--tone-red); color: var(--status-error-fg); }
 @media (hover: hover) {
     :root[data-theme] .update-pill:is(.has-local, [data-tone="warn"]):not(:disabled):hover { background: var(--tone-amber-hover); }
-    :root[data-theme] .update-pill[data-tone="ok"]:not(:disabled):hover { background: var(--tone-green-hover); }
     :root[data-theme] .update-pill[data-tone="error"]:not(:disabled):hover { background: var(--tone-red-hover); }
+}
+/* The notice (update_status.js): the capsule and, for a failed or unconfirmed outcome, the close that ends it, drawn
+   inside the capsule's end so its coming and going moves no neighbour. The close takes the capsule's ink. */
+.update-notice { position: relative; display: inline-flex; align-items: center; min-width: 0; max-width: 100%; margin: 6px 4px 6px 8px; }
+.update-notice[hidden] { display: none; }
+.update-notice > .update-pill { min-width: 0; max-width: 100%; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.update-notice > .update-pill.has-close { padding-right: 30px; }
+.update-notice-close {
+    position: absolute; right: 4px; top: 50%; width: 24px; height: 24px; margin-top: -12px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; background: transparent; color: var(--text-primary); cursor: pointer;
+}
+.update-notice-close[hidden] { display: none; }
+.update-notice-close > svg { display: block; width: 14px; height: 14px; }
+.update-pill[data-tone="error"] + .update-notice-close { color: var(--status-error-fg); }
+.update-notice-close:active { filter: var(--press); }
+/* Flush inside the capsule's end, so the ring stays in the capsule, clear of its edge and its last word (DESIGN §3). */
+.update-notice-close:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: -2px; }
+@media (hover: hover) {
+    .update-notice-close:hover { background: rgba(var(--neutral-rgb), 0.16); }
 }
 
 .settings-embedded-content {
@@ -6387,8 +6406,6 @@ button.skills-mark { cursor: pointer; min-height: 0; }
 .skills-mark-popup {
     max-width: min(360px, var(--ui-popup-max-width, 360px));
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-object);
-    color: var(--text-primary);
     font-size: var(--type-body);
     line-height: var(--line-body);
 }
@@ -10227,14 +10244,14 @@ body.keyboard-open .project-panel {
 }
 :root[data-theme] .settings-footer { background: var(--surface-object); }
 
-/* Sheets: what floats over moving content (menus, the composer's field) takes the float surface and shadow; the
-   shared menu and model list take it in ui.css, so setup has it too. */
+/* Sheets: what floats over moving content takes the float shadow. A menu and a dialog have the popups' opaque backing
+   (--popup-float, which .ui-popup wears in ui.css, so setup has it too); the composer's field stays glass. */
 :root[data-theme] :is(.chat-header-menu, .task-control-menu, .marketplace-modal) {
-    border-color: transparent; border-radius: var(--radius-object); background: var(--surface-float); box-shadow: var(--elev-float);
+    border-color: transparent; border-radius: var(--radius-object); background: var(--popup-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-/* More lost the old header's continuous backing: its own sheet must remain readable without blur. */
-:root[data-theme] .chat-header-menu { background: var(--chip-float); }
+/* More lost the old header's continuous backing: its sheet is the capsules' step, opaque like the work list's. */
+:root[data-theme] .chat-header-menu { background: var(--sheet-float); }
 :root[data-theme] .chat-field {
     background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
@@ -10248,7 +10265,7 @@ body.keyboard-open .project-panel {
    every state; hover deepens its fill, a press deepens it again, a chosen or switched-on one takes its tone. The bars'
    controls (the Project bar's close and the phone's menu button among them) are neutral capsules; Panic is danger,
    the budget neutral and amber only while a spending limit's stop waits for the owner. The room's status stays
-   a bare sentence inside the title capsule that opens its Shade (room_work.css). */
+   a bare sentence inside the title capsule that opens its work list (room_work.css). */
 :root[data-theme] :is(.chat-header-btn.ui-chrome-control, .shell-icon-control) {
     border-color: transparent; background: var(--chip-float); color: var(--text-primary); box-shadow: var(--elev-rest);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
