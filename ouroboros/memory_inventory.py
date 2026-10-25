@@ -284,6 +284,7 @@ class LegacyUnit:
 _RowSet = Tuple[FrozenSet[str], Optional[Dict[str, Any]], int]  # row_sha256 set, time span, first position
 _RETELLING_CHARS: Dict[str, Dict[str, int]] = {}
 _UNITS: Dict[str, Tuple[Tuple[Any, ...], List[LegacyUnit]]] = {}
+_ROW_SETS: Dict[str, Tuple[Tuple[Any, ...], Dict[str, _RowSet]]] = {}
 
 
 FALLBACK_REFUSAL_PREFIX = "fallback_refusal:"
@@ -324,6 +325,20 @@ def _legacy_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int,
     return sets
 
 
+def _cached_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int, int]]],
+                     facts: MembershipFacts) -> Dict[str, _RowSet]:
+    """``_legacy_row_sets`` under its own key, the ranges and the membership facts: a retained unit's
+    exact range holds rows the old memory had already read, and a new row lands after every one of
+    them, so the turn that wrote a row or a page reads none of them again (on the owner's install, a
+    few reads for each of hundreds of units on every Main turn)."""
+    key, cached = (facts.fingerprint(), frozenset(ranges.items())), _ROW_SETS.get(str(root.resolve()))
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    sets = _legacy_row_sets(root, ranges, facts)
+    _ROW_SETS[str(root.resolve())] = (key, sets)
+    return sets
+
+
 def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
     key = str(store.data_root.resolve())
     known = _RETELLING_CHARS.get(key, {})
@@ -355,7 +370,7 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
     ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
               if (span := _exact_range(pointer)) is not None}
-    row_sets = _legacy_row_sets(root, ranges, facts)
+    row_sets = _cached_row_sets(root, ranges, facts)
     units = []
     for pointer in pointers:
         record_id, room = pointer["node_id"], str(pointer["room_id"])

@@ -101,3 +101,19 @@ def test_legacy_authors_are_read_together_and_answer_as_one_lookup_a_task(tmp_pa
     monkeypatch.setattr(mv, "warm_lineage", lambda *_args: None)
     assert mv.capture_memory_view(tmp_path, made["task"], made["spec"]) == warmed
     assert len(alone) == 240  # the same authors, one task result at a time
+
+
+def test_legacy_units_read_their_rows_once_while_their_ranges_and_rooms_stand(tmp_path, monkeypatch):
+    from ouroboros import memory_inventory as mi
+    from ouroboros.chronicle_store import ChronicleStore
+
+    shape.legacy_authorship(tmp_path, 3)
+    store = ChronicleStore(tmp_path)
+    first = mi.legacy_units(store, tmp_path)
+    assert any(unit.rows for unit in first)
+    computed = _counted(monkeypatch, mi, "_legacy_row_sets")
+    ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "in", "text": "a row of this turn"})  # the stream end moves
+    assert mi.legacy_units(store, tmp_path) == first and computed == []
+    facts = mi.membership_facts(tmp_path)  # a task bound to a Project: the rooms' facts change, the rows are read again
+    monkeypatch.setattr(mi, "membership_facts", lambda _root: facts._replace(bindings={**facts.bindings, "late": 4242}))
+    assert mi.legacy_units(store, tmp_path) == first and computed == ["_cached_row_sets"]
