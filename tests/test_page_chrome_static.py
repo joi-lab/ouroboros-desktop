@@ -296,8 +296,11 @@ def test_server_navigation_and_chat_static_contracts():
     assert 'request.query_params.get("force")' in control_source
     assert "window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: pageName } }));" in app_source
     assert "evo-consciousness-detail" in evo_source
-    assert "data?.evolution_state?.detail" in chat_source
-    assert "data?.bg_consciousness_state?.detail" in chat_source
+    # A room's bar says consciousness and a running campaign by its chip (DESIGN "Page header"); no More menu repeats them.
+    status_source = _read("web/modules/consciousness_status.js")
+    assert "normalizeConsciousness(data.bg_consciousness_state || {}, { enabled: data.bg_consciousness_enabled })" in status_source
+    assert "const evolving = data.evolution_enabled === true;" in status_source
+    assert "evolution_state" not in chat_source and "bg_consciousness_state" not in chat_source
     # The composer's markup and send path live in composer.js, mounted by chat.js.
     composer_source = _read("web/modules/composer.js")
     assert "${composerMarkup()}" in chat_source
