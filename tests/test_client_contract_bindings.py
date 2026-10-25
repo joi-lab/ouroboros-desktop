@@ -10,6 +10,7 @@ has exactly one field-identical JSDoc twin among the browser modules.
 from __future__ import annotations
 
 import importlib
+import json
 import pathlib
 import re
 import threading
@@ -309,6 +310,45 @@ def test_every_request_and_header_fact_is_published_for_the_journeys():
              if entry.get("request", {}).get("content_type") == "application/json" and not entry["request"]["schemas"]]
     # The only bodies still published as plain JSON are documents of setting keys.
     assert sorted(plain) == ["POST /api/settings", "POST /api/ui/preferences"], plain
+
+
+@pytest.mark.parametrize("with_summary", [False, True])
+@pytest.mark.parametrize("live", [False, True])
+def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_summary, live):
+    from ouroboros import usage_accounting
+    from ouroboros.consciousness import BackgroundConsciousness
+    from ouroboros.task_results import TASK_COST_META_FIELDS
+    from tests._store_shared import seed_result
+
+    root = client.app.state.drive_root
+    document = json.loads((REPO / "tests/fixtures/wake_document_214a31b6.json").read_text())
+    task_id = document["task_id"]
+    if with_summary:
+        document.update(wake_summary="Проверил состояние; нового решения не требуется.", owner_message_sent=True)
+    seed_result(root, task_id, document)
+    usage_accounting.record_unmetered_external_dispatch(
+        task_id, drive_root=root, task_id=task_id, root_task_id=task_id, category="consciousness")
+    clock = object.__new__(BackgroundConsciousness)
+    clock._drive_root = root
+    monkeypatch.setattr(clock, "status_snapshot", lambda: {"live_wake_task_id": task_id if live else ""})
+    client.app.state.describe_consciousness = lambda: clock.details_snapshot(True)
+    response = client.get("/api/consciousness")
+    assert assert_bound("GET /api/consciousness", response) == "application/json"
+    panel = response.json()
+    row, = panel["recent_wakes"]
+    shape = contract_typed_dict("RecentWake")
+    assert not validate_ingress(row, shape)
+    assert set(row) <= _declared("RecentWake")
+    assert set(TASK_COST_META_FIELDS) <= _declared("RecentWake")
+    assert row["live"] is live and row["quiet"] is (not with_summary)
+    assert row["note"] == document["result"]
+    assert ("summary" in row) is with_summary and ("said_owner" in row) is with_summary
+    assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
+    for field, invalid in (("live", "false"), ("phase", "completed"), ("ended_at", 7),
+                           ("tool_calls", "16"), ("checks", [{"chip": "checked", "tool": 7}]),
+                           ("cost_presentation", {"scope": "root_tree"})):
+        assert validate_ingress({**row, field: invalid}, shape), field
+    assert validate_ingress({key: value for key, value in row.items() if key != "task_id"}, shape)
 
 
 def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):

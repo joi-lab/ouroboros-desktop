@@ -514,6 +514,49 @@
  */
 
 /**
+ * One stored safety check, retaining both its chip and the tool it checked.
+ * @typedef {Object} RecentWakeCheck
+ * @property {string} chip
+ * @property {string} tool
+ */
+
+/**
+ * `GET /api/consciousness` recent_wakes: ledger-selected facts, never authored by the view.
+ * CostPresentation is the task card's existing carrier (api_types.js).
+ * @typedef {Object} RecentWake
+ * @property {string} task_id
+ * @property {?number} chat_id
+ * @property {string} cause
+ * @property {string} place_id
+ * @property {string} place_label
+ * @property {string} conversation
+ * @property {?string} started_at
+ * @property {?string} first_reply_at
+ * @property {?string} ended_at
+ * @property {boolean} live
+ * @property {'working'|'done'|'warn'|'error'|'cancelled'} phase
+ * @property {boolean} quiet
+ * @property {string=} summary
+ * @property {?string} note
+ * @property {?number} tool_calls
+ * @property {?number} rounds
+ * @property {Array<RecentWakeCheck>} checks
+ * @property {boolean=} said_owner
+ * @property {?number=} accounted_upper_bound_usd
+ * @property {?number=} accounted_upper_bound_usd_with_children
+ * @property {?CostPresentation=} cost_presentation
+ * @property {'available'|'unavailable'=} cost_accounting_status
+ * @property {string=} cost_accounting_error
+ * @property {boolean=} cost_final
+ * @property {boolean=} cost_with_children_partial
+ * @property {?number=} unknown_unmetered
+ * @property {?number=} non_final_rows
+ * @property {?number=} reserved_usd
+ * @property {?number=} unresolved_upper_bound_usd
+ * @property {?boolean=} ledger_integrity_degraded
+ */
+
+/**
  * Connect an installed connector; omitted account and conversation ids default to empty.
  * @typedef {Object} PlaceConnectRequest
  * @property {string} connector

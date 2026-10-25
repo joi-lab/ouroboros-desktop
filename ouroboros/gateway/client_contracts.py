@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ouroboros.cost_projection import CostPresentation
+
 try:  # Python 3.11+
     from typing import Literal, NotRequired, Required, TypedDict  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - CI supports Python 3.10.
@@ -308,6 +310,48 @@ class OwnerEnabledRequest(TypedDict):
     enabled: bool
 
 
+class RecentWakeCheck(TypedDict):
+    """One stored safety check, retaining both its chip and the tool it checked."""
+
+    chip: str
+    tool: str
+
+
+class RecentWake(TypedDict):
+    """GET /api/consciousness recent_wakes: ledger-selected facts, never authored by the view."""
+
+    task_id: str
+    chat_id: Optional[int]
+    cause: str
+    place_id: str
+    place_label: str
+    conversation: str
+    started_at: Optional[str]
+    first_reply_at: Optional[str]
+    ended_at: Optional[str]
+    live: bool
+    phase: Literal["working", "done", "warn", "error", "cancelled"]
+    quiet: bool
+    summary: NotRequired[str]
+    note: Optional[str]
+    tool_calls: Optional[int]
+    rounds: Optional[int]
+    checks: List[RecentWakeCheck]
+    said_owner: NotRequired[bool]
+    accounted_upper_bound_usd: NotRequired[Optional[float]]
+    accounted_upper_bound_usd_with_children: NotRequired[Optional[float]]
+    cost_presentation: NotRequired[Optional[CostPresentation]]
+    cost_accounting_status: NotRequired[Literal["available", "unavailable"]]
+    cost_accounting_error: NotRequired[str]
+    cost_final: NotRequired[bool]
+    cost_with_children_partial: NotRequired[bool]
+    unknown_unmetered: NotRequired[Optional[int]]
+    non_final_rows: NotRequired[Optional[int]]
+    reserved_usd: NotRequired[Optional[float]]
+    unresolved_upper_bound_usd: NotRequired[Optional[float]]
+    ledger_integrity_degraded: NotRequired[Optional[bool]]
+
+
 class PlaceConnectRequest(TypedDict):
     """Connect an installed connector; omitted account and conversation ids default to empty."""
 
@@ -595,7 +639,7 @@ __all__ = [
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
     "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
-    "PlaceConnectRequest", "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
+    "RecentWake", "RecentWakeCheck", "PlaceConnectRequest", "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",
     "ProjectListResponse", "ProjectCreateResponse", "ProjectUpdateRequest", "ProjectUpdateResponse",
     "ProjectFromTaskRequest", "ProjectTaskBinding", "ProjectFromTaskResponse",
