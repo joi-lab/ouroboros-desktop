@@ -236,7 +236,7 @@ const DONE_WORDS = {
 /** Open one projected place; requests keep its revision and drafts survive a refused or concurrent write. */
 export function openPlaceSheet(place, { returnFocus = document.activeElement, onClose = null, update = updatePlace,
     disconnect = disconnectPlace, readStatus = readPlaceConnector, readModels = (init) => fetchJson('/api/model-catalog', init),
-    readRooms = readPlaceRooms } = {}) {
+    readRooms = readPlaceRooms, openRoomChatId = null } = {}) {
     let current = place;
     const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false,
         serviceLabel: place.serviceLabel || place.provider, roomIndex: { rooms: null } };
@@ -277,6 +277,10 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
             const value = await readRooms(place.id, { signal: roomController.signal });
             if (sheet.closed || version !== roomGeneration) return;
             ui.roomIndex = value;
+            // A Dashboard door names the conversation; it opens once the index knows that room.
+            const wanted = openRoomChatId; openRoomChatId = null;
+            const room = wanted ? (value.rooms || []).find((item) => item.room_chat_id === wanted) : null;
+            if (room) { openRoom(room); if (history) return; }
         } catch (error) {
             if (sheet.closed || version !== roomGeneration) return;
             ui.roomIndex = { error: error?.message || String(error) };

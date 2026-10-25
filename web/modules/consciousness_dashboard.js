@@ -127,8 +127,9 @@ export function wakeRowHtml(wake, { open = false } = {}) {
     const note = wake.note ? `<p class="consciousness-wake-note-label">${escapeHtml(tr('consciousness.own_note', 'Its own note'))}</p>
         <div class="consciousness-wake-note ui-rich-content" data-i18n-authored>${escapeHtml(wake.note)}</div>` : '';
     const costDetail = costPresentationDetail(wake.cost.cost_presentation);
-    // This door lands Main cards; captured place conversations have their own sheet reader.
-    const door = wake.chatId === 1 && wake.taskId ? `<button type="button" class="consciousness-inline-link ui-hit-area" data-cx-open-task="${escapeHtml(wake.taskId)}" data-chat-id="${wake.chatId}">${escapeHtml(tr('consciousness.open_main', 'Open in Main'))} ↗</button>` : '';
+    // Main cards open in Main; a focus opens its captured conversation in the place sheet.
+    const door = wake.chatId === 1 && wake.taskId ? `<button type="button" class="consciousness-inline-link ui-hit-area" data-cx-open-task="${escapeHtml(wake.taskId)}" data-chat-id="${wake.chatId}">${escapeHtml(tr('consciousness.open_main', 'Open in Main'))} ↗</button>`
+        : wake.cause === 'focus' && wake.chatId ? `<button type="button" class="consciousness-inline-link ui-hit-area" data-cx-open-room="${wake.chatId}">${escapeHtml(tr('consciousness.open_room', 'Open the conversation'))} ↗</button>` : '';
     const line = wake.summary ? `<p class="consciousness-wake-summary" data-i18n-authored>${escapeHtml(wake.summary)}</p>`
         : wake.note ? `<p class="consciousness-wake-lead" data-i18n-authored>${escapeHtml(noteLeadText(wake.note))}</p>`
             : counts ? `<p class="consciousness-wake-facts is-line">${counts}</p>` : '';
@@ -198,7 +199,7 @@ export function paintWakeRows(region, wakes, coverage, opened, put, release = de
 
 /** Mount the tab into its Dashboard panel. */
 export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, read = readConsciousness,
-    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces,
+    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces, openSheet = openPlaceSheet,
     markdown = { mount: mountChatMarkdown, enhance: enhanceChatMarkdown, destroy: destroyChatMarkdown } } = {}) {
     if (!mount) return { refresh: () => {}, destroy() {} };
     mount.innerHTML = `<div class="settings-embedded-content"><div class="costs-scroll scroll-fade-y">
@@ -308,10 +309,18 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
             window.dispatchEvent(new CustomEvent('ouro:open-task', { detail: { task_id: door.dataset.cxOpenTask, chat_id: Number(door.dataset.chatId) } }));
             return;
         }
+        const roomDoor = event.target.closest('[data-cx-open-room]');
+        if (roomDoor) {
+            const chatId = Number(roomDoor.dataset.cxOpenRoom);
+            const place = (places || []).find((entry) => entry.rooms.some((room) => room.chatId === chatId));
+            if (place) openSheet(place, { returnFocus: roomDoor, openRoomChatId: chatId });
+            else { roomDoor.disabled = true; roomDoor.textContent = tr('consciousness.room_unavailable', 'Conversation unavailable'); }
+            return;
+        }
         const row = event.target.closest('[data-place-open]');
         if (row) {
             const place = (places || []).find((entry) => entry.id === row.dataset.placeOpen);
-            if (place) openPlaceSheet(place, { returnFocus: row });
+            if (place) openSheet(place, { returnFocus: row });
             return;
         }
         const connect = event.target.closest('[data-place-connect]');

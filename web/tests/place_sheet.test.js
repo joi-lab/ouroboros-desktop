@@ -348,3 +348,26 @@ test('each press asks for exactly one contract change, never a guess', () => {
     assert.deepEqual(placeChangeFor('save-model', mail, { drafts: { model: '' } }), { model: '' }, 'empty uses the consciousness model');
     assert.equal(placeChangeFor('unknown', slack, {}), null);
 });
+
+test('openRoomChatId opens the captured conversation once the index knows it; an unknown room keeps the editor', async (t) => {
+    const { document } = sheetDom(t);
+    // The reader clears its host with replaceChildren, which this bookkeeping stub lacks.
+    NodeStub.prototype.replaceChildren = function (...nodes) { this.children = []; nodes.forEach((node) => this.appendChild(node)); };
+    t.after(() => { delete NodeStub.prototype.replaceChildren; });
+    const room = { room_chat_id: 1099511627777, address: 'Slack #general', unanswered_count: 0, label: null, last_at: '', conversation_id: 'C1', thread_id: '' };
+    const index = { place_id: slack.id, rooms: [room], coverage: 'captured_place_events' };
+    const sheet = openPlaceSheet(slack, { readRooms: async () => index, openRoomChatId: 1099511627777 });
+    t.after(() => sheet.close());
+    await settled(); await settled();
+    const body = document.body.querySelector('[data-place-body]');
+    const editor = body.querySelector('.place-sheet-editor');
+    assert.equal(editor.hidden, true, 'the reader shows the named conversation');
+    assert.ok(body.querySelector('[data-history-back]'), 'Back returns to the place');
+    const other = openPlaceSheet(slack, { readRooms: async () => index, openRoomChatId: 42 });
+    t.after(() => other.close());
+    await settled(); await settled();
+    const bodies = document.body.querySelectorAll('[data-place-body]');
+    const second = bodies[bodies.length - 1];
+    assert.equal(second.querySelector('.place-sheet-editor').hidden, false, 'an unknown room leaves the place editor open');
+    assert.match(second.textContent, /Slack #general/, 'the conversations list still names the captured room');
+});

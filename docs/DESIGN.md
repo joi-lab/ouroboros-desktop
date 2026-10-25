@@ -1817,8 +1817,8 @@ The allowance says “Some calls have no price” and “next check at”, never
 that the check will permit more work. Visible and accessible words agree.
 
 “Open in Main ↗” opens the existing card by its task and chat identity through
-the around-history reader. Focus cards have no Dashboard door; captured place
-conversations open from the place sheet. Refresh preserves an
+the around-history reader. A focus row's door opens its captured conversation
+in the place sheet, where Back returns to the place. Refresh preserves an
 open row's actual nodes, disclosure, focus, selection and reading position;
 changed content and order wait until it closes. Host words use `tr`/`fmt`;
 summaries, notes and place labels stay under `data-i18n-authored`.

@@ -74,6 +74,10 @@ test('summary is authored, note is whole and disclosed, only flagged checks get 
     assert.doesNotMatch(namedHtml, /Safety Supervisor checked update_memory|unmetered|omitted/);
     assert.match(namedHtml, /data-cx-open-task="w-summary" data-chat-id="1">Open in Main ↗/);
     assert.doesNotMatch(wakeRowHtml({ ...named, cause: 'focus', chatId: 1099511627777, placeLabel: 'Slack' }), /data-cx-open-task/);
+    const focusRow = wakeRowHtml({ ...named, cause: 'focus', chatId: 1099511627777, placeLabel: 'Slack' });
+    assert.match(focusRow, /data-cx-open-room="1099511627777"/, 'a focus row opens its captured conversation');
+    assert.match(focusRow, /Open the conversation/);
+    assert.doesNotMatch(wakeRowHtml({ ...named, cause: 'focus', chatId: 0, placeLabel: 'Slack' }), /data-cx-open-room/, 'no room, no door');
     assert.match(wakesCardHtml(full().recentWakes, full().coverage), /wakes that reached a model call in the last 48 h/);
 });
 
@@ -320,4 +324,31 @@ test('the committed wake document uses only the neutral home path', () => {
     const document = fs.readFileSync(new URL('../../tests/fixtures/wake_document_214a31b6.json', import.meta.url), 'utf8');
     assert.match(document, /\/Users\/owner\//);
     assert.deepEqual([...new Set([...document.matchAll(/\/Users\/([A-Za-z0-9_-]+)/g)].map(match => match[1]))], ['owner']);
+});
+
+test('a focus row door opens the place sheet on that conversation; an unknown room says so', async (t) => {
+    const cleanups = [];
+    const { mount } = setup({ after: cleanup => cleanups.push(cleanup) });
+    let controller;
+    t.after(() => { controller?.destroy(); cleanups.forEach(cleanup => cleanup()); });
+    Object.defineProperty(NodeStub.prototype, 'content', { configurable: true, get() { return this; } });
+    t.after(() => { delete NodeStub.prototype.content; });
+    NodeStub.prototype.getBoundingClientRect = () => ({ top: 0 });
+    t.after(() => { delete NodeStub.prototype.getBoundingClientRect; });
+    const slack = { ...normalizePlacesResponse(FIXTURE.places).places[0], rooms: [{ chatId: 1099511627777 }] };
+    const snapshot = { ...full(), recentWakes: [
+        { ...wake('214a31b6'), taskId: 'focus-known', cause: 'focus', chatId: 1099511627777, placeLabel: 'Slack' },
+        { ...wake('214a31b6'), taskId: 'focus-lost', cause: 'focus', chatId: 1099511627778, placeLabel: 'Gone' }] };
+    const opened = [];
+    controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
+        read: async () => snapshot, readPlacesFn: async () => ({ places: [slack], connectors: [], migrationProblems: [] }),
+        openSheet: (place, options) => opened.push([place.id, options.openRoomChatId]) });
+    await controller.refresh();
+    const [known, lost] = mount.querySelectorAll('[data-cx-open-room]');
+    await mount.fire('click', { target: known });
+    assert.deepEqual(opened, [[slack.id, 1099511627777]], 'the sheet opens on the row\'s conversation');
+    await mount.fire('click', { target: lost });
+    assert.equal(opened.length, 1, 'no place owns that room: nothing opens');
+    assert.equal(lost.disabled, true);
+    assert.match(lost.textContent, /Conversation unavailable/);
 });
