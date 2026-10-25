@@ -577,8 +577,9 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
     from ouroboros.artifact_storage import compress_in_place
     from ouroboros.artifacts import stream_artifact_file
     from ouroboros.headless import ARTIFACT_STATUS_READY_NO_CHANGES, ARTIFACT_STATUS_READY_WITH_CHANGES
-    from ouroboros.subagent_worktrees import GitFailed, _git_env, capture_result_commit
+    from ouroboros.subagent_worktrees import GitFailed, _git_env, _nul_paths, capture_result_commit
     from ouroboros.utils import atomic_write_json, utc_now_iso
+    from ouroboros.workspace_patch_rules import NAMED_EVIDENCE_EXCLUSION
 
     patch_path = cap_dir / "workspace.patch"
     base = entry.baseline_sha
@@ -600,10 +601,16 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
         changed = [path for code, path in pairs if code and code != "A"]
         diffstat = _git_env(clone, "diff-tree", "-r", "--stat", "--no-renames", base, result["result_sha"],
                             env=env).stdout.decode("utf-8", "replace").strip()
+        # Each new file held out of C under the evidence folder, in the reason every reader of an
+        # exclusion knows (format_patch_exclusions counts it as evidence, never a lost deliverable).
+        held = sorted(set(_nul_paths(_git_env(clone, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                                              "--", evidence, env=env).stdout))
+                      - set(_nul_paths(_git_env(clone, "ls-tree", "-r", "-z", "--name-only", base, "--", evidence,
+                                                env=env).stdout))) if evidence else []
     except (GitFailed, OSError) as exc:
         manifest.update(status="failed", patch_size=0, sha256="", diffstat="", current_head="",
                         errors=[{"type": "result_commit_failed", "message": str(exc),
-                                 "stderr": str(getattr(exc, "stderr", b"") or "")}])
+                                 "stderr": os.fsdecode(getattr(exc, "stderr", None) or b"")}])
         atomic_write_json(cap_dir / "workspace_patch.json", manifest, trailing_newline=True)
         return manifest
     size, digest = 0, ""
@@ -613,12 +620,14 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
         size, digest = measured["size"], measured["sha256"]
     else:
         patch_path.unlink(missing_ok=True)
+    excluded = [row for row in result["excluded"] if row.get("reason") != "named_evidence"] + [
+        {"path": path, "reason": NAMED_EVIDENCE_EXCLUSION} for path in held]
     manifest.update(
         status=ARTIFACT_STATUS_READY_WITH_CHANGES if size else ARTIFACT_STATUS_READY_NO_CHANGES,
         current_head=result["head"], patch_size=size, sha256=digest, diffstat=diffstat,
-        tracked_changed=changed, untracked_included=added, untracked_excluded=list(result["excluded"]),
+        tracked_changed=changed, untracked_included=added, untracked_excluded=excluded,
         counts={"tracked_changed": len(changed), "tracked_excluded": 0, "untracked_included": len(added),
-                "untracked_excluded": len(result["excluded"]), "sensitive_blocked": 0},
+                "untracked_excluded": len(excluded), "sensitive_blocked": 0},
         result_commit=result["result_sha"], result_tree=result["result_tree"],
         result_ref=result["result_ref"], baseline_ref=result["baseline_ref"])
     atomic_write_json(cap_dir / "workspace_patch.json", manifest, trailing_newline=True)
