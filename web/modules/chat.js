@@ -11,6 +11,7 @@ import { ORIGIN_ADDRESSED_NOTICE_TYPES, childRowPlacement, replayConcludesTask }
 import { appendProjectRow, decorateProjectRow, PROJECT_ROW_TYPES, refreshProjectAnswerFold, syncSavedProjectContext } from './project_answer.js';
 import { createWorkPortals, isPortal, reconcilePortalNotes } from './work_portal.js';
 import { createTaskEpisodes } from './task_episodes.js';
+import { markSwarmLabel, syncSwarmReceipt } from './swarm_presentation.js';
 import { createChatMedia, decorateContactSource, showTaskIncidentToast } from './chat_media.js';
 import { attachmentCaption, attachmentViews, createUnconfirmedSends } from './chat_attachments.js';
 import { createChatDecision } from './chat_decision.js';
@@ -1056,13 +1057,14 @@ export function createChatInstance({
         });
     }
 
-    // Refresh files/history; retain lifecycle.
+    // Refresh files/history and a Swarm root's receipt line; retain lifecycle.
     function noteTaskDetails(record, detail) {
         const files = syncSettledItems(record, detail);
         const history = syncHistoryRetentionItem(record, detail);
         const chain = episodes.note(record, detail);
+        const receipt = syncSwarmReceipt(record, detail);
         return Boolean((files || history) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
-            || chain;
+            || chain || receipt;
     }
 
     function hydrateCardReviews(taskId, revision = null) {
@@ -2211,7 +2213,7 @@ export function createChatInstance({
         decorateContactSource(bubble, opts.presenceContact);
         if (attachments.length) chatMedia.mountAttachments(bubble, attachments, shown);
         if (!isProgress && shown) chatMedia.attachCopyControl(bubble, String(shown));
-        if (!isProgress) replies.decorate(bubble, opts.reply);
+        if (!isProgress) { replies.decorate(bubble, opts.reply); markSwarmLabel(messagesDiv, opts.reply, bubble); }
         // Legacy start/transfer rows without task or Project stay plain text with Copy; an answer tied to
         // another room's work ends with that Project reference, unfolded.
         const projectRow = PROJECT_ROW_TYPES.has(systemType);
@@ -2475,7 +2477,7 @@ export function createChatInstance({
                             ? { skill: msg.skill, jobId: msg.job_id, ...(msg.record_id ? { recordId: msg.record_id } : {}) }
                             : null,
                     });
-                    if (msg.role === 'user') { markIngressSaved(messagesDiv, msg); replies.adopt(msg); unconfirmed.settle(msg); }
+                    if (msg.role === 'user') { markIngressSaved(messagesDiv, msg); markSwarmLabel(messagesDiv, msg); replies.adopt(msg); unconfirmed.settle(msg); }
                 }
                 _historyRow = null;
                 // Persisted terminals without task_summary (crash/timeout/cancel) also settle
@@ -3271,7 +3273,7 @@ export function createChatInstance({
                 textPlaceholder: msg.text_placeholder === true, reply: msg,
                 },
             ));
-            withStableViewport(() => markIngressSaved(messagesDiv, msg) | replies.adopt(msg));
+            withStableViewport(() => markIngressSaved(messagesDiv, msg) | replies.adopt(msg) | markSwarmLabel(messagesDiv, msg));
             unconfirmed.settle(msg);
             syncChatStatus();
             return;

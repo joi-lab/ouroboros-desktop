@@ -22,7 +22,7 @@ export const SUBAGENT_MEANINGS = Object.freeze({
     swarm: "Don't economise: independent views of several models, critics, one synthesis. Costs more.",
 });
 export const SUBAGENT_RULE = 'Applies to new steps in this chat; running helpers finish.';
-// Why only Off can be chosen (`/api/state.subagents_availability`); `available` or an unknown answer locks nothing.
+// Why only Off can be chosen (`subagents_availability` in the room's state); `available` or an unknown answer locks nothing.
 export const SUBAGENT_LOCKS = Object.freeze({
     disabled: 'Subagents are turned off in Settings › Agents',
     unsaved: 'Subagents are not set up yet',
@@ -30,7 +30,7 @@ export const SUBAGENT_LOCKS = Object.freeze({
 const modeOf = (mode) => (SUBAGENT_MODES.includes(mode) ? mode : 'auto');
 
 /* The ring: the rail, Ouroboros at its centre, three helpers on the rail (only lit ones take a colour). */
-const RING = '<circle class="chat-subagents-rail" cx="92" cy="92" r="70" fill="none" stroke-width="20"></circle>'
+export const SUBAGENTS_RING = '<circle class="chat-subagents-rail" cx="92" cy="92" r="70" fill="none" stroke-width="20"></circle>'
     + '<circle class="chat-subagents-core" cx="92" cy="92" r="25"></circle>'
     + '<circle class="chat-subagents-helper" data-helper="1" cx="152.6" cy="127" r="22"></circle>'
     + '<circle class="chat-subagents-helper" data-helper="2" cx="92" cy="22" r="22"></circle>'
@@ -161,7 +161,7 @@ export function createSubagentsControl({
     el.setAttribute('aria-label', 'Subagents');
     el.dataset.known = 'false';
     el.innerHTML = '<button type="button" class="chat-capsule-head ui-hit-area chat-subagents-head" aria-expanded="false">'
-        + `<span class="chat-capsule-glyph" aria-hidden="true"><svg viewBox="0 0 184 184">${RING}</svg></span>`
+        + `<span class="chat-capsule-glyph" aria-hidden="true"><svg viewBox="0 0 184 184">${SUBAGENTS_RING}</svg></span>`
         + '<span class="chat-capsule-name">Subagents</span><span class="chat-capsule-value" data-i18n-skip></span>'
         + `<span class="chat-subagents-lock" aria-hidden="true">${LOCK}</span></button>`
         + '<div class="chat-capsule-body"></div>';

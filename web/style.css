@@ -2107,6 +2107,13 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 .msg-time-full {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
+/* A message the host accepted while its room was on Swarm: the quiet word before its time, the Subagents ring in the
+   time line's own ink (DESIGN "Composer owner controls"). */
+.msg-swarm { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: -2px; }
+.msg-swarm > svg { width: 13px; height: 13px; flex: none; }
+.msg-swarm .chat-subagents-rail { stroke: currentColor; stroke-opacity: 0.32; }
+.msg-swarm :is(.chat-subagents-core, .chat-subagents-helper) { fill: currentColor; }
+.msg-swarm-sep { margin-inline: var(--space-1); }
 
 .chat-bubble:hover .msg-time {
     opacity: 0.8;
@@ -2616,6 +2623,14 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
    word in the text flow (an inline-flex box would park the dot at the far right of the wrapped fact). */
 .chat-live-meta-part > .chat-live-meta-text:not(.chat-live-effort) {
     display: inline-block;
+}
+
+/* A Swarm root's one receipt line, first in its foot, in the meta line's type (DESIGN "Composer owner controls"). */
+.chat-live-swarm-receipt {
+    color: var(--text-secondary);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    overflow-wrap: anywhere;
 }
 
 
