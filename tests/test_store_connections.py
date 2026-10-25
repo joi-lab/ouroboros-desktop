@@ -668,3 +668,47 @@ def test_a_released_drive_moves_and_the_files_that_take_its_path_bring_their_own
         with dialogue_store.transaction(root, write=False) as conn:
             assert conn.execute("SELECT count(*) FROM dialogue").fetchone()[0] == 0
     assert leased == [store.TIER_NAME, store.TIER_NAME, store.TIER_ENFORCED, store.TIER_ENFORCED]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows replaces no file a cached connection holds open")
+def test_a_name_tier_lease_states_its_file_after_the_lock_it_waited_for(tmp_path, monkeypatch):
+    """A name-tier read waits for the name lock; its holder may replace the store meanwhile (a lifecycle
+    owner publishing a new file by rename). The lease states the file once it holds the lock, so it reads
+    the file that is there now and not the one its thread's idle cached connection still has open."""
+    from ouroboros import dialogue_store
+
+    old, new = tmp_path / "root", tmp_path / "staged"
+    for root, text in ((old, "old"), (new, "new")):
+        dialogue_store.create(root, tier=store.TIER_NAME)
+        with dialogue_store.transaction(root, write=True) as conn:
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('which', ?)", (json.dumps(text),))
+    warmed, holding, waiting = threading.Event(), threading.Event(), threading.Event()
+    seen, failures, real_lock = [], [], store.name_lock
+
+    def name_lock(*args, **kwargs):  # the reader asks for the lock only after its lease's first stat
+        if threading.current_thread() is worker and holding.is_set():
+            waiting.set()
+        return real_lock(*args, **kwargs)
+
+    monkeypatch.setattr(store, "name_lock", name_lock)
+
+    def reader():
+        try:
+            with dialogue_store.transaction(old, write=False) as conn:  # warm: an idle cached connection stays
+                seen.append(json.loads(conn.execute("SELECT value FROM meta WHERE key='which'").fetchone()["value"]))
+            warmed.set()
+            assert holding.wait(10)
+            with dialogue_store.transaction(old, write=False) as conn:  # waits for the lock held below
+                seen.append(json.loads(conn.execute("SELECT value FROM meta WHERE key='which'").fetchone()["value"]))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(target=reader)
+    worker.start()
+    assert warmed.wait(10)
+    with real_lock(old, dialogue_store.LOCK_NAME, timeout_sec=10):
+        holding.set()
+        assert waiting.wait(10)  # the reader stated its file and now waits for this lock
+        os.replace(dialogue_store.path(new), dialogue_store.path(old))
+    worker.join(30)
+    assert not worker.is_alive() and failures == [] and seen == ["old", "new"]
