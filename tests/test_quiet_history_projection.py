@@ -1,14 +1,16 @@
 """Quiet terminal facts survive the browser history boundary and result retention."""
 import json
+from pathlib import Path
 
 import pytest
 
-from ouroboros import dialogue_store
+from ouroboros import consciousness_view, dialogue_store, usage_accounting
 from ouroboros.gateway.history import _assemble_history_response, _copy_task_summary_metadata
 from ouroboros.projects_registry import bind_task_to_project, create_project
 from ouroboros.task_results import write_task_result
 from ouroboros.task_store import delete_document
 from ouroboros.terminal_projection import _project_row
+from tests._store_shared import seed_result
 
 
 @pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")],
@@ -57,3 +59,24 @@ def test_non_summary_rows_do_not_acquire_terminal_flags():
     projected = {}
     _copy_task_summary_metadata(projected, {"type": "message", "wake_silent": True, "quiet_effective": True})
     assert projected == {}
+
+
+@pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")])
+def test_stored_wake_and_history_share_phase_and_quiet_facts(tmp_path, silent, notice):
+    fixture = Path(__file__).parent / "fixtures" / "wake_document_214a31b6.json"
+    document = json.loads(fixture.read_text())
+    document.update(wake_silent=silent, terminal_host_notice=notice)
+    task_id = document["task_id"]
+    stored = seed_result(tmp_path, task_id, document)
+    usage_accounting.record_unmetered_external_dispatch(
+        task_id, drive_root=tmp_path, task_id=task_id, root_task_id=task_id, category="consciousness")
+    terminal = _project_row(task_id, stored, {}, {"chat_id": stored["chat_id"]})
+    dialogue_store.append(tmp_path, "chat", terminal)
+    history = json.loads(_assemble_history_response(tmp_path, stored["chat_id"], 50, 200))
+    summary = next(row["historical_terminal"] for row in history["messages"] if "historical_terminal" in row)
+    wake, = consciousness_view.recent_wakes(tmp_path, [])
+    assert wake["quiet"] is (silent and not bool(notice))
+    assert wake["quiet"] == summary["quiet_effective"]
+    assert wake["phase"] == summary["phase"] == "done"
+    assert wake["ended_at"] == terminal["terminal_time"]["occurred_at"]
+    assert wake["note"] == document["result"]

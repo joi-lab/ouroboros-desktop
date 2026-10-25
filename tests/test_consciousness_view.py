@@ -1,11 +1,37 @@
 """Facts use typed place/index seams and keep missing evidence distinct from zero."""
 
+import datetime as dt
+import json
 import pathlib
+from types import SimpleNamespace
 
 import pytest
 
-from ouroboros import consciousness_view as view, places
+from ouroboros import consciousness_view as view, places, usage_accounting as ua, usage_store
 from ouroboros.consciousness_wake import PLACEHOLDERS, render_wake_message
+from tests._store_shared import seed_result
+from tests.fixtures_usage_store import _request, _settle
+
+
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "wake_document_214a31b6.json"
+NOW = dt.datetime(2026, 10, 24, 8, tzinfo=dt.timezone.utc).timestamp()
+
+
+def _call(root, monkeypatch, task_id, *, at=NOW - 60, category="consciousness", **fields):
+    stamp = dt.datetime.fromtimestamp(at, dt.timezone.utc).isoformat()
+    with monkeypatch.context() as clock:
+        clock.setattr(usage_store, "utc_now_iso", lambda: stamp)
+        return _settle(root, cost=0, cost_final=True, task_id=task_id, root_task_id=task_id,
+                       category=category, **fields)
+
+
+@pytest.fixture
+def wake(tmp_path, monkeypatch):
+    document = json.loads(FIXTURE.read_text())
+    seed_result(tmp_path, document["task_id"], document)
+    _call(tmp_path, monkeypatch, document["task_id"])
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
+    return document
 
 
 def test_places_context_has_every_place_and_room_without_reading_history(monkeypatch, tmp_path):
@@ -54,41 +80,216 @@ def test_prompt_carries_labels_counts_and_one_allowance():
     assert "allowance known spend (last 24 h): at least 2.50 / 20.00 USD" in text
 
 
-@pytest.mark.parametrize("money,amount", [({}, None), ({"accounted_upper_bound_usd": 2.5}, 2.5),
-                                        ({"accounted_upper_bound_usd": 2.5, "cost_usd": 3.0}, 3.0)])
-def test_recent_wakes_read_a_bounded_existing_index(monkeypatch, tmp_path, money, amount):
-    from ouroboros import dialogue_store, task_store
-    calls = []
-    monkeypatch.setattr(task_store, "newest_ids", lambda root, *, limit: calls.append(limit) or ["focus", "owner", "own"])
-    documents = {"focus": {"metadata": {"wake_cause": "focus", "focus": {"place_id": "mail"}}, "status": "completed", **money},
-                 "owner": {"metadata": {}}, "own": {"metadata": {"wake_cause": "own_clock"}}}
-    monkeypatch.setattr(task_store, "documents_by_ids", lambda root, ids: documents)
-    monkeypatch.setattr(dialogue_store, "iter_probes", lambda *a, **kw: iter(()))
-    rows = view.recent_wakes(tmp_path, [{"place_id": "mail", "label": "Inbox"}])
-    assert calls == [50] and [row["task_id"] for row in rows] == ["focus", "own"]
-    assert rows[0]["place_label"] == "Inbox" and rows[0]["first_reply_at"] is None
-    assert rows[0]["accounted_upper_bound_usd"] == amount
-    assert rows[1]["accounted_upper_bound_usd"] is None
-    assert all("cost_usd" not in row for row in rows)
+def test_real_terminal_wake_uses_terminal_fact_and_card_phase(tmp_path, wake):
+    from ouroboros.project_dialogue import OUTCOME_PHASE_HEADLINE
+
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["task_id"] == wake["task_id"] and row["chat_id"] == 1
+    assert row["live"] is False and row["quiet"] is True
+    assert row["ended_at"] == wake["terminal_time"]["occurred_at"]
+    assert row["ended_at"] not in (wake["ts"], wake["updated_at"])
+    assert row["phase"] == "done" and OUTCOME_PHASE_HEADLINE[row["phase"]] == "Done"
+    assert row["note"] == wake["result"] and "omitted" not in row["note"]
+    assert "summary" not in row and "said_owner" not in row
+    assert not {"finished_at", "outcome", "unmetered", "cost_usd"} & row.keys()
+    assert row["first_reply_at"] is None and row["conversation"] == ""
+    assert row["rounds"] == 9  # accepted solve responses, not 13 physical calls
+    assert row["tool_calls"] is None  # the old document has no typed count
 
 
-@pytest.mark.parametrize("outcome", ["message", "silent", "tool_delivered", "deferred", ""])
-def test_focus_outcome_and_bounded_single_line_preview(monkeypatch, tmp_path, outcome):
-    from ouroboros import dialogue_store, task_store
-    from ouroboros.consciousness_wake import _clip_preview
+def test_clock_identity_alone_can_keep_a_terminal_wake_live(tmp_path, wake):
+    for live_id, expected in ((wake["task_id"], True), ("another-wake", False), ("", False)):
+        row, = view.recent_wakes(tmp_path, [], live_wake_task_id=live_id)
+        assert row["live"] is expected
+        assert row["ended_at"] == wake["terminal_time"]["occurred_at"]
 
-    text = "First line\n" + "several words\t" * 400
-    document = {"metadata": {"wake_cause": "focus", "presence_outcome": outcome},
-                "status": "completed", "result": text}
-    monkeypatch.setattr(task_store, "newest_ids", lambda *a, **kw: ["wake"])
-    monkeypatch.setattr(task_store, "documents_by_ids", lambda *a: {"wake": document})
-    monkeypatch.setattr(dialogue_store, "iter_probes", lambda *a, **kw: iter(()))
-    row = view.recent_wakes(tmp_path, [])[0]
-    assert row["outcome"] == (outcome or "completed")
-    assert row["summary"] == _clip_preview(text) and len(row["summary"]) < 120
-    assert "\n" not in row["summary"] and "\t" not in row["summary"] and "chars omitted" in row["summary"]
-    document["result"] = "Short answer"
-    assert view.recent_wakes(tmp_path, [])[0]["summary"] == "Short answer"
+
+@pytest.mark.parametrize("status,phase,live", [
+    ("running", "working", True), ("interrupted", "working", True), ("paused", "working", True),
+    ("completed", "done", False), ("failed", "error", False), ("cancelled", "cancelled", False),
+    ("rejected_duplicate", "warn", False),
+])
+def test_status_is_independent_of_missing_terminal_time(tmp_path, wake, status, phase, live):
+    wake.update(status=status, outcome_axes={}, wake_silent=False)
+    wake.pop("terminal_time")
+    # Enrichment timestamps and the retired field cannot stand in for occurrence.
+    wake["finished_at"] = wake["updated_at"]
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["live"] is live and row["ended_at"] is None
+    assert row["phase"] == phase and row["quiet"] is False
+
+
+def test_terminal_time_for_another_attempt_is_unknown(tmp_path, wake):
+    wake["terminal_time"]["attempt"]["task_attempt"] += 1
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["ended_at"] is None and row["live"] is False
+
+
+@pytest.mark.parametrize("summary", [None, "Проверил состояние; нового решения не требуется.", ""])
+@pytest.mark.parametrize("note", ["Short note", "First line\n" + "several words\t" * 400])
+def test_summary_is_only_authored_summary_and_note_is_whole(tmp_path, wake, summary, note):
+    wake["result"] = note
+    if summary is not None:
+        wake["wake_summary"] = summary
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["note"] == note and "omitted" not in row["note"]
+    assert ("summary" in row) is (summary is not None)
+    if summary is not None:
+        assert row["summary"] == summary
+
+
+@pytest.mark.parametrize("silent,owner,notice,quiet", [
+    (True, None, "", True), (True, False, "", True), (True, True, "", False),
+    (True, None, "A tool failed.", False), (False, None, "", False), ("true", None, "", False),
+])
+def test_quiet_uses_delivery_facts(tmp_path, wake, silent, owner, notice, quiet):
+    wake.update(wake_silent=silent, terminal_host_notice=notice)
+    if owner is not None:
+        wake["owner_message_sent"] = owner
+    seed_result(tmp_path, wake["task_id"], wake)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["quiet"] is quiet
+    assert ("said_owner" in row) is (owner is not None)
+    if owner is not None:
+        assert row["said_owner"] is owner
+
+
+@pytest.mark.parametrize("money", [{}, {"accounted_upper_bound_usd": 2.5, "reserved_usd": 1.0},
+                                  {"cost_presentation": None, "cost_accounting_status": "unavailable",
+                                   "cost_accounting_error": "ledger unavailable"}])
+def test_cost_and_checks_pass_through_without_invented_facts(tmp_path, wake, money):
+    from ouroboros.task_results import TASK_COST_META_FIELDS
+
+    wake.update(money)
+    for present in (True, False):
+        if not present:
+            for key in (*TASK_COST_META_FIELDS, "safety_checks", "loop_outcome"):
+                wake.pop(key, None)
+        seed_result(tmp_path, wake["task_id"], wake)
+        row, = view.recent_wakes(tmp_path, [])
+        assert {k: row[k] for k in TASK_COST_META_FIELDS if k in row} == {
+            k: wake[k] for k in TASK_COST_META_FIELDS if k in wake}
+        assert row["checks"] == (wake["safety_checks"] if present else [])
+        assert row["rounds"] == (9 if present else None)
+
+
+def test_typed_counts_keep_zero_and_known_values(tmp_path, wake):
+    for calls, rounds in ((0, 0), (16, 9)):
+        wake["tool_calls"] = calls
+        wake["loop_outcome"]["usage"]["total_rounds"] = rounds
+        seed_result(tmp_path, wake["task_id"], wake)
+        row, = view.recent_wakes(tmp_path, [])
+        assert row["tool_calls"] == calls and row["rounds"] == rounds
+
+
+def test_unrelated_newer_tasks_and_unstarted_wakes_do_not_hide_a_wake(tmp_path, monkeypatch, wake):
+    for n in range(60):
+        seed_result(tmp_path, f"owner-{n}", {**wake, "task_id": f"owner-{n}", "metadata": {},
+                                          "ts": "2026-10-24T08:00:00Z"})
+    seed_result(tmp_path, "no-call", {**wake, "task_id": "no-call"})
+    seed_result(tmp_path, "started-work", {**wake, "task_id": "started-work"})
+    _call(tmp_path, monkeypatch, "started-work", category="consciousness_task")
+    # The category is authority even when old task metadata cannot name the cause.
+    seed_result(tmp_path, "legacy", {**wake, "task_id": "legacy", "metadata": {}})
+    _call(tmp_path, monkeypatch, "legacy", at=NOW)
+    rows = view.recent_wakes(tmp_path, [])
+    assert [r["task_id"] for r in rows] == ["legacy", wake["task_id"]]
+    assert rows[0]["cause"] == ""
+
+
+def test_selection_is_distinct_bounded_and_ordered_by_ledger_time(tmp_path, monkeypatch, wake):
+    ids = [f"wake-{n:02}" for n in range(55)]
+    for n, task_id in enumerate(ids):
+        seed_result(tmp_path, task_id, {**wake, "task_id": task_id})
+        _call(tmp_path, monkeypatch, task_id, at=NOW - n)
+    # Many newer calls of one root still occupy exactly one wake row.
+    for _ in range(55):
+        _call(tmp_path, monkeypatch, ids[0], at=NOW)
+    assert [r["task_id"] for r in view.recent_wakes(tmp_path, [])] == ids[:50]
+
+
+def test_ledger_child_attempt_selects_its_root_not_the_child(tmp_path, wake):
+    seed_result(tmp_path, "child", {**wake, "task_id": "child", "parent_task_id": wake["task_id"]})
+    _settle(tmp_path, cost=0, cost_final=True, task_id="child", root_task_id=wake["task_id"],
+            category="consciousness")
+    assert [row["task_id"] for row in view.recent_wakes(tmp_path, [])] == [wake["task_id"]]
+
+
+def test_the_allowance_horizon_is_reapplied_without_a_new_write(tmp_path, monkeypatch, wake):
+    from ouroboros.consciousness_allowance import ROOT_HORIZON_SEC
+
+    boundary = NOW - 60 + ROOT_HORIZON_SEC
+    assert len(view.recent_wakes(tmp_path, [], now=boundary)) == 1
+    assert view.recent_wakes(tmp_path, [], now=boundary + 1) == []
+    # Fresh calls in another category cannot refresh the wake selection.
+    _call(tmp_path, monkeypatch, wake["task_id"], at=boundary + 1, category="task")
+    assert view.recent_wakes(tmp_path, [], now=boundary + 1) == []
+
+
+@pytest.mark.parametrize("state,dispatched,listed", [
+    ("open", False, False), ("open", True, True), ("released", False, False),
+    ("released", True, False), ("unresolved", True, True),
+])
+def test_only_dispatched_attempts_not_proven_unsent_are_calls(tmp_path, wake, state, dispatched, listed):
+    task_id = "attempted-wake"
+    seed_result(tmp_path, task_id, {**wake, "task_id": task_id})
+    reservation = ua.reserve_attempt(_request(tmp_path, task_id=task_id, root_task_id=task_id,
+                                              category="consciousness"))
+    if dispatched:
+        ua.mark_dispatched(reservation)
+    if state == "released":
+        ua.release_attempt(reservation, "before_dispatch_failed:ConnectError", proven_unsent=True)
+    elif state == "unresolved":
+        ua.mark_unresolved(reservation, "provider went dark")
+    ids = [r["task_id"] for r in view.recent_wakes(tmp_path, [])]
+    assert (task_id in ids) is listed
+
+
+@pytest.mark.parametrize("kind", ["subscription_session", "external_unmetered"])
+def test_subscription_and_external_wakes_are_calls(tmp_path, wake, kind):
+    task_id = "subscription-wake"
+    seed_result(tmp_path, task_id, {**wake, "task_id": task_id})
+    fields = dict(drive_root=tmp_path, task_id=task_id, root_task_id=task_id, category="consciousness")
+    if kind == "subscription_session":
+        ua.record_subscription_session(task_id, route="claudexor:codex", **fields)
+    else:
+        ua.record_unmetered_external_dispatch(task_id, **fields)
+    assert task_id in [r["task_id"] for r in view.recent_wakes(tmp_path, [])]
+
+
+def test_display_read_and_one_result_query_keep_the_note_out_of_full_body_reads(tmp_path, monkeypatch, wake):
+    from ouroboros import task_store
+    from ouroboros import store
+    from contextlib import contextmanager
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("recent wakes must not materialize full task documents")
+    monkeypatch.setattr(task_store, "documents_by_ids", forbidden)
+    monkeypatch.setattr(task_store, "read_document", forbidden)
+    queries = []
+    real_open = store.open_store
+    @contextmanager
+    def traced(*args, **kwargs):
+        with real_open(*args, **kwargs) as txn:
+            txn.conn.set_trace_callback(queries.append)
+            yield txn
+    monkeypatch.setattr(store, "open_store", traced)
+    row, = view.recent_wakes(tmp_path, [])
+    assert row["note"] == wake["result"]
+    assert len([q for q in queries if "json_extract(body, '$.result')" in q]) == 1
+
+
+def test_pruned_task_document_does_not_break_other_wake_rows(tmp_path, monkeypatch, wake):
+    from ouroboros.task_store import delete_document
+
+    seed_result(tmp_path, "retained", {**wake, "task_id": "retained"})
+    _call(tmp_path, monkeypatch, "retained", at=NOW)
+    assert len(view.recent_wakes(tmp_path, [])) == 2
+    assert delete_document(tmp_path, wake["task_id"])
+    assert [row["task_id"] for row in view.recent_wakes(tmp_path, [])] == ["retained"]
 
 
 def test_reply_time_reads_only_exact_task_rows_and_uses_earliest_instant(monkeypatch, tmp_path):
@@ -114,14 +315,16 @@ def test_reply_time_reads_only_exact_task_rows_and_uses_earliest_instant(monkeyp
     assert calls == [(tmp_path, "chat", [("task_id", "wake")])] * 2
 
 
-def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path):
+def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path, wake):
     from ouroboros import dialogue_store
     from ouroboros.task_results import write_task_result
-    from tests._store_shared import seed_result
 
-    seed_result(tmp_path, "wake", {"status": "running", "metadata": {"wake_cause": "focus"},
-                                  "started_at": "2026-10-21T10:00:00Z"})
-    outgoing = {"task_id": "wake", "ts": "2026-10-21T10:00:15Z", "direction": "out", "chat_id": -7,
+    wake.update(status="running", outcome_axes={}, wake_silent=False, chat_id=-7,
+                metadata={"wake_cause": "focus", "focus": {"place_id": "mail", "conversation_key": "chat:a:r"}})
+    wake.pop("terminal_time")
+    seed_result(tmp_path, wake["task_id"], wake)
+    task_id = wake["task_id"]
+    outgoing = {"task_id": task_id, "ts": "2026-10-21T10:00:15Z", "direction": "out", "chat_id": -7,
                 "source": "presence:mail", "text": "answer", "transport": {"delivery": {"state": "authored"}}}
     # A result/draft is not a released automatic reply.
     dialogue_store.append(tmp_path, "chat", {**outgoing, "source": "task", "type": "task_summary"})
@@ -132,6 +335,10 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path)
     dialogue_store.append(tmp_path, "chat", {**outgoing, "type": "presence_delivery", "source": "skill:mail",
         "ts": "2026-10-21T10:00:30Z", "transport": {"delivery": {
             "state": "accepted", "reported_at": "2026-10-21T10:00:10Z"}}})
-    write_task_result(tmp_path, "wake", "completed", metadata={"wake_cause": "focus", "presence_outcome": "message"})
+    write_task_result(tmp_path, task_id, "completed", metadata={**wake["metadata"], "presence_outcome": "message"})
     row = view.recent_wakes(tmp_path, [])[0]
-    assert row["first_reply_at"] == "2026-10-21T10:00:10Z" and row["outcome"] == "message"
+    assert row["first_reply_at"] == "2026-10-21T10:00:10Z"
+    assert row["phase"] == "done" and row["live"] is False
+    assert row["conversation"] == "chat:a:r" and row["chat_id"] == -7
+    labelled, = view.recent_wakes(tmp_path, [{"place_id": "mail", "label": "Inbox"}])
+    assert labelled["place_label"] == "Inbox"

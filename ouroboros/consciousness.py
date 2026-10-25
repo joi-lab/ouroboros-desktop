@@ -455,8 +455,9 @@ class BackgroundConsciousness:
         from ouroboros.consciousness_view import describe_consciousness_state, place_views, recent_wakes
         snapshot = describe_consciousness_state(self.status_snapshot(), requested_enabled)
         places = place_views(self._drive_root)
-        return {**snapshot, "places": places, "recent_wakes": recent_wakes(self._drive_root, places),
-                "recent_wakes_coverage": "wake turns among the 50 newest task rows"}
+        return {**snapshot, "places": places, "recent_wakes": recent_wakes(
+                    self._drive_root, places, live_wake_task_id=snapshot.get("live_wake_task_id", "")),
+                "recent_wakes_coverage": "wakes that reached a model call in the last 48 h"}
 
     def _context_facts(self, window) -> dict:
         from ouroboros.consciousness_view import cause_views, place_views, root_views

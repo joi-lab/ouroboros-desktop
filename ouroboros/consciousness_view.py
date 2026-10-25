@@ -1,5 +1,7 @@
 """Read-only consciousness facts from places, current roots and durable results."""
 
+import json
+import time
 from typing import Any
 
 from ouroboros.usage_origin import cause_label
@@ -150,33 +152,79 @@ def first_reply_at(drive_root, task_id: str) -> str | None:
     return first[1] if first else None
 
 
-def recent_wakes(drive_root, places) -> list[dict]:
-    """Wake facts among the 50 newest task rows, with explicit snapshot coverage.
+def _wake_ids(drive_root, now: float) -> list[str]:
+    """The allowance's category/time index, newest distinct wake roots first."""
+    from ouroboros import usage_store
+    from ouroboros.consciousness_allowance import ROOT_HORIZON_SEC, _MONEY_KIND
 
-    Task selection is bounded; reply rows use the dialogue task index and checks
-    the five-chip task record. Missing historical evidence stays absent.
+    with usage_store.read(drive_root, allow_stale=True) as txn:
+        return [record[0] for record in txn.conn.execute(
+            "SELECT root_task_id FROM attempts INDEXED BY attempts_category_time "
+            "WHERE category = 'consciousness' AND ts_last_epoch >= ? AND root_task_id != '' "
+            f"AND {_MONEY_KIND} AND state != 'released' AND (ts_dispatched IS NOT NULL "
+            "OR kind IN ('subscription_session', 'external_unmetered')) "
+            "GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT 50",
+            (now - ROOT_HORIZON_SEC,))]
+
+
+def _wake_notes(drive_root, ids: list[str]) -> dict:
+    """One PK-addressed read of the whole results excluded from display documents."""
+    from ouroboros.store import open_store
+
+    with open_store(drive_root, write=False) as txn:
+        return dict(txn.conn.execute(
+            "SELECT task_id, json_extract(body, '$.result') FROM task_bodies "
+            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)))
+
+
+def _quiet(row: dict) -> bool:
+    # TODO(L2): quiet_finish — replace with the shared task_finalization predicate.
+    from ouroboros.task_finalization import terminal_host_notice_text
+
+    return row.get("wake_silent") is True and not row.get("owner_message_sent") and not terminal_host_notice_text(row)
+
+
+def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None) -> list[dict]:
+    """At most 50 wakes that reached a model call in the last 48 h, newest first.
+
+    Wakes that never reached a model call are not listed. Selection uses the
+    allowance's ledger horizon; reservations alone are not calls. Facts come
+    from display documents, whole notes from one PK read, focus replies from
+    the dialogue task index. Missing historical evidence stays unknown.
     """
     from ouroboros.consciousness_authority import wake_cause
-    from ouroboros.cost_projection import cost_projection
-    from ouroboros.consciousness_wake import _clip_preview
-    from ouroboros.task_store import documents_by_ids, newest_ids
+    from ouroboros.project_dialogue import outcome_phase
+    from ouroboros.task_results import TASK_COST_META_FIELDS
+    from ouroboros.task_status import FINAL_STATUSES
+    from ouroboros.task_store import display_documents
+    from ouroboros.terminal_time import terminal_time_fact
 
-    ids = newest_ids(drive_root, limit=50)
-    documents = documents_by_ids(drive_root, ids)
+    ids = _wake_ids(drive_root, time.time() if now is None else now)
+    if not ids:
+        return []
+    documents = display_documents(drive_root, ids)
+    notes = _wake_notes(drive_root, ids)
     rows = []
     for task_id in ids:
-        row = documents[task_id]
+        if task_id not in documents:
+            continue
+        row = json.loads(documents[task_id])
         metadata = row.get("metadata") or {}
         cause = wake_cause(metadata)
-        if not cause:
-            continue
         focus = metadata.get("focus") or {}
         place_id = str(focus.get("place_id") or "")
         rows.append({"task_id": task_id, "cause": cause, "place_id": place_id,
+                     "chat_id": row.get("chat_id"), "conversation": str(focus.get("conversation_key") or ""),
                      "place_label": cause_label(f"place:{place_id}", places or ()) if place_id else "",
-                     "started_at": row.get("started_at"), "first_reply_at": first_reply_at(drive_root, task_id),
-                     "finished_at": row.get("finished_at"), "outcome": metadata.get("presence_outcome") or row.get("status", "unknown"),
-                     "accounted_upper_bound_usd": cost_projection(row)["accounted_upper_bound_usd"],
-                     "unmetered": bool(row.get("unknown_unmetered")),
-                     "checks": row.get("safety_checks", []), "summary": _clip_preview(row.get("result"))})
+                     "started_at": row.get("started_at"),
+                     "first_reply_at": first_reply_at(drive_root, task_id) if cause == "focus" else None,
+                     "ended_at": terminal_time_fact(row)["occurred_at"],
+                     "live": live_wake_task_id == task_id or row.get("status") not in FINAL_STATUSES,
+                     "phase": outcome_phase(row, {}), "quiet": _quiet(row),
+                     "tool_calls": row.get("tool_calls"),
+                     "rounds": ((row.get("loop_outcome") or {}).get("usage") or {}).get("total_rounds"),
+                     "checks": row.get("safety_checks", []), "note": notes.get(task_id),
+                     **({"summary": row["wake_summary"]} if "wake_summary" in row else {}),
+                     **({"said_owner": bool(row["owner_message_sent"])} if "owner_message_sent" in row else {}),
+                     **{k: row[k] for k in TASK_COST_META_FIELDS if k in row}})
     return rows

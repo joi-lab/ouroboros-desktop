@@ -36,7 +36,10 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     monkeypatch.setattr(server, "_consciousness", clock)
     monkeypatch.setattr(state, "load_state", lambda: {"bg_consciousness_enabled": True})
     monkeypatch.setattr(view, "place_views", lambda root: [{"place_id": "mail"}])
-    monkeypatch.setattr(view, "recent_wakes", lambda root, places: [{"task_id": "wake"}])
+    def wakes(root, places, *, live_wake_task_id):
+        assert live_wake_task_id == snapshot.get("live_wake_task_id", "")
+        return [{"task_id": "wake"}]
+    monkeypatch.setattr(view, "recent_wakes", wakes)
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
     panel = json.loads(response.body)
     fallback = server.app.app.state.describe_bg_consciousness_state(True)
@@ -44,6 +47,7 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert {key: panel[key] for key in fallback} == fallback
     assert clock.details_snapshot(True) == panel
     assert panel["places"] == [{"place_id": "mail"}] and panel["recent_wakes"] == [{"task_id": "wake"}]
+    assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 
 
@@ -57,7 +61,7 @@ def test_stored_control_and_unconstructed_clock_are_visible(monkeypatch, tmp_pat
     clock._drive_root = tmp_path
     monkeypatch.setattr(clock, "status_snapshot", lambda: {"enabled": not enabled})
     monkeypatch.setattr(view, "place_views", lambda root: [])
-    monkeypatch.setattr(view, "recent_wakes", lambda root, places: [])
+    monkeypatch.setattr(view, "recent_wakes", lambda root, places, **kw: [])
     monkeypatch.setattr(server, "_consciousness", clock if constructed else None)
     monkeypatch.setattr(state, "load_state", lambda: {} if enabled is None else {"bg_consciousness_enabled": enabled})
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
