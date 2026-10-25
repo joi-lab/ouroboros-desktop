@@ -371,3 +371,29 @@ test('openRoomChatId opens the captured conversation once the index knows it; an
     assert.equal(second.querySelector('.place-sheet-editor').hidden, false, 'an unknown room leaves the place editor open');
     assert.match(second.textContent, /Slack #general/, 'the conversations list still names the captured room');
 });
+
+test('the sheet is an explicit modal whose native close disposes it (the shared Back relies on both)', async (t) => {
+    const { document } = sheetDom(t);
+    let closed = 0;
+    const sheet = openPlaceSheet(slack, { onClose: () => { closed += 1; } });
+    const dialog = document.body.querySelector('dialog');
+    assert.equal(dialog.getAttribute('aria-modal'), 'true', 'layers.back answers only an explicit modal');
+    await dialog.fire('close');
+    assert.equal(sheet.closed, true, 'a native close runs the same disposal as Close');
+    assert.equal(closed, 1);
+    assert.equal(document.body.querySelector('dialog'), null, 'the closed dialog leaves the DOM');
+});
+
+test('the reader state keeps the authored place name out of the translation overlay', async (t) => {
+    const { document } = sheetDom(t);
+    NodeStub.prototype.replaceChildren = function (...nodes) { this.children = []; nodes.forEach((node) => this.appendChild(node)); };
+    t.after(() => { delete NodeStub.prototype.replaceChildren; });
+    const room = { room_chat_id: 1099511627777, address: 'Slack #general', unanswered_count: 0, label: null, last_at: '', conversation_id: 'C1', thread_id: '' };
+    const sheet = openPlaceSheet(slack, { readRooms: async () => ({ place_id: slack.id, rooms: [room], coverage: 'captured_place_events' }), openRoomChatId: 1099511627777 });
+    t.after(() => sheet.close());
+    await settled(); await settled();
+    const meta = document.body.querySelector('[data-place-meta]');
+    const authored = meta.querySelector('[data-i18n-authored]');
+    assert.ok(authored, 'the label sits in an authored span');
+    assert.equal(authored.textContent, slack.label);
+});

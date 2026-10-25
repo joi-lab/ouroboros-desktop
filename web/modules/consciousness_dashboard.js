@@ -273,8 +273,15 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         regions.status.textContent = snapshot ? '' : 'Reading…';
         let next = null;
         let readError = '';
-        try { next = await read(); } catch {
-            try { next = await readFallback(); } catch (error) { readError = error?.message || String(error); }
+        try { next = await read(); } catch (error) {
+            // A server without the panel (404) is read from its state; any other failure keeps the painted rows and says so.
+            const served = error?.status !== 404;
+            if (served) readError = error?.message || String(error);
+            try {
+                const state = await readFallback();
+                next = served ? { ...state, recentWakes: snapshot?.recentWakes ?? null,
+                    coverage: snapshot?.recentWakes ? snapshot.coverage : fmt('Recent wakes could not be read: {error}', { error: readError }) } : state;
+            } catch (fallbackError) { readError = fallbackError?.message || String(fallbackError); }
         }
         if (destroyed || current !== generation) return;
         if (next) snapshot = next;
@@ -312,9 +319,12 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         const roomDoor = event.target.closest('[data-cx-open-room]');
         if (roomDoor) {
             const chatId = Number(roomDoor.dataset.cxOpenRoom);
-            const place = (places || []).find((entry) => entry.rooms.some((room) => room.chatId === chatId));
+            const owner = () => (places || []).find((entry) => entry.rooms.some((room) => room.chatId === chatId));
+            let place = owner();
+            // A conversation captured after the last Places read is not absence: read once more before saying so.
+            if (!place) { await refreshPlaces({ force: true }); place = owner(); }
             if (place) openSheet(place, { returnFocus: roomDoor, openRoomChatId: chatId });
-            else { roomDoor.disabled = true; roomDoor.textContent = tr('consciousness.room_unavailable', 'Conversation unavailable'); }
+            else if (roomDoor.isConnected !== false) { roomDoor.disabled = true; roomDoor.textContent = tr('consciousness.room_unavailable', 'Conversation unavailable'); }
             return;
         }
         const row = event.target.closest('[data-place-open]');

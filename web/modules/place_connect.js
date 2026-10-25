@@ -137,7 +137,8 @@ export function openConnectPlace({ returnFocus = document.activeElement, read = 
         view.busy = true; view.status = { text: tr('places.connect.busy', 'Connecting…'), tone: 'muted' }; paint();
         try {
             const place = await connect({ connector: view.selected.connector, ...choice });
-            if (!sheet.closed) { sheet.close(); openPlace(place, { returnFocus }); }
+            // The list projection joins the declared service name later; the flow already holds it.
+            if (!sheet.closed) { sheet.close(); openPlace({ ...place, serviceLabel: place.serviceLabel || view.selected.label }, { returnFocus }); }
         } catch (error) { view.status = { text: error?.message || String(error), tone: 'error' }; }
         finally { view.busy = false; paint(); }
     });

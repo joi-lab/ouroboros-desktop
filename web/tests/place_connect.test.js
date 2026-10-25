@@ -165,6 +165,6 @@ test('the live Connect flow fetches choices lazily, retries a failure, and opens
     assert.equal(sheet.body.querySelector('[data-i18n-authored][role="status"]').textContent, 'Ready for you');
     await click('[data-choice="0"]');
     assert.deepEqual(writes, [{ connector: 'github', accountId: 'writer', conversationId: 'repo.123', label: 'example/project' }]);
-    assert.deepEqual(opened, [place]);
+    assert.deepEqual(opened, [{ ...place, serviceLabel: 'GitHub' }], 'the sheet opens with the declared service name, before any list projection');
     assert.equal(document.body.querySelector('dialog'), null);
 });

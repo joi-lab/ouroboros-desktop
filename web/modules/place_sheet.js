@@ -163,6 +163,7 @@ export function sheetShell(titleHtml, metaText, modifier = '') {
     const dialog = document.createElement('dialog');
     dialog.className = `document-reader place-sheet${modifier ? ` ${modifier}` : ''}`;
     dialog.setAttribute('aria-labelledby', 'place-sheet-title');
+    dialog.setAttribute('aria-modal', 'true');  // the shared Back (layers.back) answers only an explicit modal
     dialog.innerHTML = `<div class="document-reader-panel">
         <div class="document-reader-head">
             <div class="document-reader-identity">
@@ -191,6 +192,7 @@ export function showSheet(dialog, { returnFocus, onClose, onBack }) {
     };
     const back = () => { if (!onBack?.()) close(); };
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); back(); });
+    dialog.addEventListener('close', close);  // a native close (the shared Back's fallback) disposes the sheet too
     dialog.addEventListener('click', (event) => {
         if (event.target === dialog || event.target.closest('[data-place-close]')) close();
     });
@@ -314,7 +316,7 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         if (current) history?.updatePlace(current);
         const meta = dialog.querySelector('[data-place-meta]');
         if (meta) meta.innerHTML = `<span data-i18n-authored>${escapeHtml((current || place).label)}</span> · ${escapeHtml(ui.removed ? tr('places.disconnected.word', 'disconnected') : tr(`places.state.${current.state}`, placeStateWord(current.state)))}`;
-        if (selected && meta) meta.textContent = (current || place).label;
+        if (selected && meta) meta.innerHTML = `<span data-i18n-authored>${escapeHtml((current || place).label)}</span>`;
         dialog.querySelector('[data-place-label]').textContent = selected?.label || selected?.address || (current || place).label;
     }
 

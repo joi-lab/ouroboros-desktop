@@ -340,15 +340,56 @@ test('a focus row door opens the place sheet on that conversation; an unknown ro
         { ...wake('214a31b6'), taskId: 'focus-known', cause: 'focus', chatId: 1099511627777, placeLabel: 'Slack' },
         { ...wake('214a31b6'), taskId: 'focus-lost', cause: 'focus', chatId: 1099511627778, placeLabel: 'Gone' }] };
     const opened = [];
+    let reads = 0;
     controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
-        read: async () => snapshot, readPlacesFn: async () => ({ places: [slack], connectors: [], migrationProblems: [] }),
+        read: async () => snapshot,
+        // The first read predates the second room's capture; the door's own re-read finds it.
+        readPlacesFn: async () => ({ places: [++reads === 1 ? slack : { ...slack, rooms: [...slack.rooms, { chatId: 1099511627778 }] }], connectors: [], migrationProblems: [] }),
         openSheet: (place, options) => opened.push([place.id, options.openRoomChatId]) });
     await controller.refresh();
-    const [known, lost] = mount.querySelectorAll('[data-cx-open-room]');
+    const [known, later] = mount.querySelectorAll('[data-cx-open-room]');
     await mount.fire('click', { target: known });
     assert.deepEqual(opened, [[slack.id, 1099511627777]], 'the sheet opens on the row\'s conversation');
+    assert.equal(reads, 1, 'an indexed room needs no second read');
+    await mount.fire('click', { target: later });
+    assert.equal(reads, 2, 'an unknown room reads Places once more before saying anything');
+    assert.deepEqual(opened[1], [slack.id, 1099511627778], 'a room captured after the mount-time read opens');
+    assert.equal(later.disabled, false);
+    const orphan = { ...wake('214a31b6'), taskId: 'focus-orphan', cause: 'focus', chatId: 1099511627779, placeLabel: 'Gone' };
+    snapshot.recentWakes = [...snapshot.recentWakes, orphan];
+    await controller.refresh();
+    const lost = mount.querySelectorAll('[data-cx-open-room]')[2];
     await mount.fire('click', { target: lost });
-    assert.equal(opened.length, 1, 'no place owns that room: nothing opens');
+    assert.equal(reads, 3);
+    assert.equal(opened.length, 2, 'a room no place owns even after a fresh read opens nothing');
     assert.equal(lost.disabled, true);
     assert.match(lost.textContent, /Conversation unavailable/);
+});
+
+test('a served panel failure keeps the painted rows and says so; only a 404 reads the state as the panel', async (t) => {
+    const cleanups = [];
+    const { mount } = setup({ after: cleanup => cleanups.push(cleanup) });
+    let controller;
+    t.after(() => { controller?.destroy(); cleanups.forEach(cleanup => cleanup()); });
+    Object.defineProperty(NodeStub.prototype, 'content', { configurable: true, get() { return this; } });
+    t.after(() => { delete NodeStub.prototype.content; });
+    NodeStub.prototype.getBoundingClientRect = () => ({ top: 0 });
+    t.after(() => { delete NodeStub.prototype.getBoundingClientRect; });
+    let failure = null;
+    controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
+        read: async () => { if (failure) throw failure; return full(); },
+        readFallback: async () => fromState(),
+        readPlacesFn: async () => normalizePlacesResponse(FIXTURE.places) });
+    await controller.refresh();
+    const rows = mount.querySelectorAll('[data-wake]').length;
+    assert.ok(rows > 0, 'the fixture paints wake rows');
+    failure = Object.assign(new Error('HTTP 500'), { status: 500 });
+    await controller.refresh();
+    assert.equal(mount.querySelectorAll('[data-wake]').length, rows, 'a served failure keeps the rows');
+    assert.match(mount.querySelector('[data-cx-status]').textContent, /Could not read consciousness: HTTP 500/);
+    assert.doesNotMatch(mount.querySelector('[data-cx-wakes]').innerHTML, /does not report its recent wakes yet/);
+    failure = Object.assign(new Error('HTTP 404'), { status: 404 });
+    await controller.refresh();
+    assert.match(mount.querySelector('[data-cx-wakes]').innerHTML, /does not report its recent wakes yet/, 'a server without the panel');
+    assert.equal(mount.querySelector('[data-cx-status]').textContent, '');
 });

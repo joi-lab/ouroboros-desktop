@@ -188,7 +188,8 @@ export function wakeCheckText(check) {
         held: 'Safety Supervisor held {tool}', sent_despite: '{tool} sent despite the check',
         not_checked: 'not checked ({tool})',
     };
-    return words[check.chip] ? fmt(words[check.chip], { tool: check.tool }) : '';
+    const tool = { place_reply: tr('consciousness.tool.reply', 'the reply'), send_user_message: tr('consciousness.tool.message', 'the message') }[check.tool] || check.tool;
+    return words[check.chip] ? fmt(words[check.chip], { tool }) : '';
 }
 
 /** Keep the card's scoped cost projection; word openness and unknown without a false zero. */
