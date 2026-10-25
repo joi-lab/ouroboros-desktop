@@ -103,17 +103,108 @@ def test_legacy_authors_are_read_together_and_answer_as_one_lookup_a_task(tmp_pa
     assert len(alone) == 240  # the same authors, one task result at a time
 
 
-def test_legacy_units_read_their_rows_once_while_their_ranges_and_rooms_stand(tmp_path, monkeypatch):
+def _legacy_units_fresh(root):
+    """``legacy_units`` computed from nothing this process remembers."""
     from ouroboros import memory_inventory as mi
     from ouroboros.chronicle_store import ChronicleStore
 
-    shape.legacy_authorship(tmp_path, 3)
+    for name in ("_UNITS", "_SPAN_ROWS", "_ROW_SETS", "_SEALED", "_RETELLING_CHARS"):
+        getattr(mi, name, {}).pop(str(root.resolve()), None)
+    return mi.legacy_units(ChronicleStore(root), root)
+
+
+def test_legacy_units_read_their_spans_once_and_count_rooms_with_current_lineage(tmp_path, monkeypatch):
+    from ouroboros import memory_inventory as mi
+    from ouroboros.chronicle_store import ChronicleStore
+    from tests import _memory_inventory_shared as shared
+    from tests._store_shared import seed_result
+
+    shared.world(tmp_path)
     store = ChronicleStore(tmp_path)
-    first = mi.legacy_units(store, tmp_path)
-    assert any(unit.rows for unit in first)
-    computed = _counted(monkeypatch, mi, "_legacy_row_sets")
-    ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "in", "text": "a row of this turn"})  # the stream end moves
-    assert mi.legacy_units(store, tmp_path) == first and computed == []
-    facts = mi.membership_facts(tmp_path)  # a task bound to a Project: the rooms' facts change, the rows are read again
-    monkeypatch.setattr(mi, "membership_facts", lambda _root: facts._replace(bindings={**facts.bindings, "late": 4242}))
-    assert mi.legacy_units(store, tmp_path) == first and computed == ["_cached_row_sets"]
+    before = {unit.record_id: unit.rows for unit in mi.legacy_units(store, tmp_path)}
+    assert any(before.values())
+    read = _counted(monkeypatch, cc, "iter_rows")
+    read_rooms = _counted(monkeypatch, cc, "iter_room_rows")
+    # A task the old memory saw without a result is admitted under the bound root: its row leaves Main for Alpha.
+    seed_result(tmp_path, "t1", {"status": "completed", "chat_id": 1, "root_task_id": "bound", "parent_task_id": "bound"})
+    ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "in", "text": "a row of this turn"})
+    after = mi.legacy_units(store, tmp_path)
+    assert read == [] and read_rooms == []  # the spans' rows are not read again
+    assert after == _legacy_units_fresh(tmp_path) and {unit.record_id: unit.rows for unit in after} != before
+
+
+def test_legacy_rows_are_the_rooms_rows_the_room_reader_returns(tmp_path):
+    """The span rows filtered by the room rule are each unit's rows as the room reader returned them."""
+    from ouroboros import memory_inventory as mi
+    from ouroboros.chronicle_store import ChronicleStore
+    from tests import _memory_inventory_shared as shared, _memory_production_shape as production
+
+    for root, build in ((tmp_path / "shared", shared.world), (tmp_path / "production", production.production)):
+        root.mkdir()
+        build(root)
+        store, facts = ChronicleStore(root), mi.membership_facts(root)
+        ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in store.legacy_pointer_rows()
+                  if (span := mi._exact_range(pointer)) is not None}
+        assert ranges
+        by_room = {}
+        for record_id, (room, bounds) in ranges.items():
+            entries = mi._room_entries(root, store, room, bounds)
+            stamps = [row.get("ts") for _address, row, _pos in entries]
+            by_room[record_id] = (frozenset(address["row_sha256"] for address, _row, _pos in entries),
+                                  mi.source_time_span(stamps) if stamps else None, entries[0][2] if entries else -1)
+        assert mi._legacy_row_sets(root, ranges, facts) == by_room
+
+
+def test_terminal_link_rooms_read_the_writers_lineages_together(tmp_path, monkeypatch):
+    from ouroboros import projects_registry
+
+    store = shape.terminal_links(tmp_path, 40)
+    reads = _counted(monkeypatch, projects_registry, "_read_lineage")
+    mv._story_pages(store, lambda room, *_args: str(room), {})
+    assert len(reads) <= 2, reads  # 40 writers' lineages, one read each before
+
+
+def test_rows_by_address_takes_the_text_form_and_the_first_address_of_a_key_that_resolves(tmp_path):
+    shape.open_rows(tmp_path, 12, rooms=2)
+    address, row, _pos = next(cc.iter_rows(tmp_path))
+    text = cc.format_address(address)  # the text form carries a 12-hex digest, its key
+    assert cc.rows_by_address(tmp_path, [text]) == {cc._normalized(text)["row_sha256"]: row}
+    wrong = {**address, "ts": "2026-01-01T00:00:00+00:00", "hint": {}}  # same digest, a time no row has
+    assert cc.rows_by_address(tmp_path, [wrong, address]) == {address["row_sha256"]: row}
+
+
+def test_warm_lineage_reads_every_task_the_author_rule_asks_about():
+    from ouroboros.dialogue_provenance import row_author, warm_lineage
+
+    asked, warmed = [], []
+
+    def lookup(task_id):
+        asked.append(task_id)
+        return None
+
+    lookup.warm = lambda ids: warmed.extend(sorted(ids))
+    lineage = {"lineage_epoch": {"pos": 10}, "lineage_lookup": lookup}
+    rows = [({"direction": "out", "task_id": "out"}, 1), ({"task_id": "no-direction"}, 2),
+            ({"direction": "in", "task_id": "owner"}, 3), ({"direction": "system", "task_id": "host"}, 4),
+            ({"direction": "out", "task_id": "later"}, 12), ({"direction": "out", "task_id": "kid", "parent_task_id": "p"}, 5)]
+    warm_lineage(lineage, rows)
+    for row, pos in rows:
+        row_author(row, pos=pos, **lineage)
+    assert sorted(set(asked)) == warmed == ["no-direction", "out"]
+
+
+def test_documents_by_ids_keys_each_document_by_its_stored_row(tmp_path):
+    from ouroboros import task_results, task_store
+    from tests._store_shared import seed_result
+
+    import sqlite3
+    from ouroboros.store import store_path
+
+    seed_result(tmp_path, "good", {"status": "completed", "root_task_id": "good", "is_root_task": True})
+    seed_result(tmp_path, "zbad", {"status": "completed", "root_task_id": "elsewhere"})
+    with sqlite3.connect(store_path(tmp_path)) as conn:  # a damaged body that names another task
+        conn.execute("UPDATE task_bodies SET body=json_set(body, '$.task_id', 'good') WHERE task_id='zbad'")
+    documents = task_store.documents_by_ids(tmp_path, ["good", "zbad"])
+    assert documents["good"]["root_task_id"] == "good" and documents["zbad"]["root_task_id"] == "elsewhere"
+    admitted = task_results.admitted_results(tmp_path, ["good", "zbad"])
+    assert admitted["good"]["root_task_id"] == "good" and admitted["zbad"] is None  # a body naming another task is refused

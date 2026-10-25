@@ -616,12 +616,13 @@ def task_lineage_lookup(drive_root: Any):
 
 def warm_lineage(lineage: Mapping[str, Any], entries: Iterable[Tuple[Mapping[str, Any], Any]]) -> None:
     """Read at once the task results ``row_author`` will ask ``lineage_lookup`` about for these
-    ``(row, pos)``: the outgoing rows without lineage fields written before the epoch."""
+    ``(row, pos)``: the rows without lineage fields written before the epoch that are neither the owner's
+    (``in``) nor the host's (``system``), as ``row_author`` reaches ``_pre_epoch_author``."""
     epoch, warm = lineage.get("lineage_epoch"), getattr(lineage.get("lineage_lookup"), "warm", None)
     if warm is None or not isinstance(epoch, Mapping) or type(epoch.get("pos")) is not int:
         return
     warm({_text(row.get("task_id")) for row, pos in entries
-          if type(pos) is int and pos < epoch["pos"] and _direction(row) == "out"
+          if type(pos) is int and pos < epoch["pos"] and _direction(row) not in ("in", "system")
           and not any(_text(row.get(key)) for key in _LINEAGE_FIELDS)})
 
 

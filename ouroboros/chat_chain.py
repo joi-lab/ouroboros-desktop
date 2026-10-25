@@ -158,27 +158,40 @@ def resolve_row(root: Any, address: Any, *, stream: str = "chat") -> Tuple[Optio
 
 
 def rows_by_address(root: Any, addresses: Iterable[Any], *, stream: str = "chat") -> Dict[str, Dict[str, Any]]:
-    """``resolve_row``'s row for each address, keyed by the address's ``row_sha256``; the hinted ones are
-    read together (by SQL coordinate, or by legacy ``(gen, line)``) and accepted on the same identity
-    check, and an address its hint does not answer is resolved alone, as ``resolve_row`` goes on to do."""
-    wanted: Dict[str, Dict[str, Any]] = {}
+    """``resolve_row``'s row for each address, keyed by its ``row_sha256`` (as given, or as normalized from
+    the text form); the hinted ones are read together (by SQL coordinate, or by legacy ``(gen, line)``)
+    and accepted on the same identity check, an address its hint does not answer is resolved alone, as
+    ``resolve_row`` goes on to do, and the first address of a key that resolves answers for it."""
+    wanted: Dict[str, list] = {}
     for address in addresses:
-        wanted.setdefault(str(address["row_sha256"]), _normalized(address))
-    coordinates = {key: norm["hint"]["seq"] for key, norm in wanted.items() if type(norm["hint"].get("seq")) is int}
-    pairs = {key: (norm["hint"]["gen"], norm["hint"]["line"]) for key, norm in wanted.items()
-             if key not in coordinates and stream == "chat" and norm["hint"].get("gen") and type(norm["hint"].get("line")) is int}
-    at = ds.rows_at(root, stream, coordinates.values()) if coordinates else {}
-    legacy = ds.legacy_candidates_of(root, pairs.values()) if pairs else {}
+        norm = _normalized(address)
+        key = str(address["row_sha256"]) if isinstance(address, dict) and "row_sha256" in address else norm["row_sha256"]
+        wanted.setdefault(key, []).append(norm)
+    norms = [norm for listed in wanted.values() for norm in listed]
+    coordinates = [norm["hint"]["seq"] for norm in norms if type(norm["hint"].get("seq")) is int]
+    pairs = [_legacy_hint(norm) for norm in norms if type(norm["hint"].get("seq")) is not int and stream == "chat"
+             and _legacy_hint(norm)]
+    at = ds.rows_at(root, stream, coordinates) if coordinates else {}
+    legacy = ds.legacy_candidates_of(root, pairs) if pairs else {}
     found: Dict[str, Dict[str, Any]] = {}
-    for key, norm in wanted.items():
-        hinted = ([at[coordinates[key]]] if coordinates[key] in at else []) if key in coordinates else legacy.get(pairs.get(key), [])
-        row = next((entry.row for entry in hinted
-                    if _same_row(entry.row, norm) and source_row_id(entry.row).startswith(norm["row_sha256"])), None)
-        if row is None:
-            row, _found = resolve_row(root, norm, stream=stream)
-        if row is not None:
-            found[key] = row
+    for key, listed in wanted.items():
+        for norm in listed:
+            seq = norm["hint"].get("seq")
+            hinted = (([at[seq]] if seq in at else []) if type(seq) is int
+                      else legacy.get(_legacy_hint(norm), []) if stream == "chat" else [])
+            row = next((entry.row for entry in hinted
+                        if _same_row(entry.row, norm) and source_row_id(entry.row).startswith(norm["row_sha256"])), None)
+            if row is None:
+                row, _found = resolve_row(root, norm, stream=stream)
+            if row is not None:
+                found[key] = row
+                break
     return found
+
+
+def _legacy_hint(norm: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+    hint = norm["hint"]
+    return (str(hint["gen"]), hint["line"]) if hint.get("gen") and type(hint.get("line")) is int else None
 
 
 def stream_position_of(root: Any, address: Any) -> Optional[int]:

@@ -79,8 +79,12 @@ def capture_terminal_rows(root, records):
             final = row.get("direction") == "out" and not row.get("is_progress") and (
                 row.get("terminal_origin") or row.get("task_terminal_status") or row.get("task_phase") == "finalizing")
             if task_id in tasks and (host or final) and not is_a2a_chat_id(row.get("chat_id", 1)):
-                chosen.append((entry, task_id, memory_inventory.rooms_of_row(memory_inventory.row_meta(row), facts)))
-        # The page's terminal rows are addressed together: one lookup a page, never one a row.
+                chosen.append((entry, task_id))
+        # The page's terminal rows: their task lineages in one read, then their rooms; addressed together.
+        facts.rooms.warm({str(entry.row.get(key) or "") for entry, _task in chosen
+                          for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+        chosen = [(entry, task_id, memory_inventory.rooms_of_row(memory_inventory.row_meta(entry.row), facts))
+                  for entry, task_id in chosen]
         for (address, row, pos), (_entry, task_id, rooms) in zip(
                 chat_chain._addressed(root, [entry for entry, _task, _rooms in chosen]), chosen):
             for room in rooms:

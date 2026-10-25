@@ -48,7 +48,7 @@ import hashlib
 import json
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
@@ -284,7 +284,7 @@ class LegacyUnit:
 _RowSet = Tuple[FrozenSet[str], Optional[Dict[str, Any]], int]  # row_sha256 set, time span, first position
 _RETELLING_CHARS: Dict[str, Dict[str, int]] = {}
 _UNITS: Dict[str, Tuple[Tuple[Any, ...], List[LegacyUnit]]] = {}
-_ROW_SETS: Dict[str, Tuple[Tuple[Any, ...], Dict[str, _RowSet]]] = {}
+_SPAN_ROWS: Dict[str, Dict[Tuple[int, int], List[Entry]]] = {}
 
 
 FALLBACK_REFUSAL_PREFIX = "fallback_refusal:"
@@ -312,30 +312,38 @@ def _exact_range(pointer: Mapping[str, Any]) -> Optional[Tuple[int, int]]:
     return span[0], span[1]
 
 
+def _span_rows(root: pathlib.Path, spans: Iterable[Tuple[int, int]]) -> Dict[Tuple[int, int], List[Entry]]:
+    """Every stream row of each retained span, read once a process: a unit's exact range holds rows the
+    old memory had already read, and a new row lands after every range, so a span's rows never change
+    (on the owner's install 23 spans over the stream's first 12,400 rows, about 10 MB held until exit)."""
+    known = _SPAN_ROWS.setdefault(str(root.resolve()), {})
+    for start, end in sorted(set(spans) - set(known)):
+        lower, upper = chat_chain.position_boundary(root, start), chat_chain.position_boundary(root, end)
+        known[(start, end)] = [(address, row_meta(row), pos) for address, row, pos in
+                               chat_chain.iter_rows(root, lower=lower, upper=upper)]
+    return known
+
+
 def _legacy_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int, int]]],
                      facts: MembershipFacts) -> Dict[str, _RowSet]:
-    """Each retained unit's own room and ordinal interval, without reading the preceding chain."""
-    store = ChronicleStore(root)
+    """Each retained unit's own room and ordinal interval, without reading the preceding chain: its span's
+    rows (``_span_rows``) that the room rule puts in its room under the current membership facts, the
+    rows' task lineages read together first, so a recovered lineage or a new binding counts at once."""
+    spans = _span_rows(root, {bounds for _room, bounds in ranges.values()})
+    facts.rooms.warm({str(entry[1].get(key) or "") for bounds in {bounds for _room, bounds in ranges.values()}
+                      for entry in spans[bounds] for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+    rooms: Dict[Tuple[int, int], List[FrozenSet[str]]] = {}
     sets = {}
     for record_id, (room, bounds) in ranges.items():
-        entries = _room_entries(root, store, room, bounds)
+        if not str(room).lstrip("-").isdigit():  # the room-less retelling names no chat (``_room_entries``)
+            sets[record_id] = (frozenset(), None, -1)
+            continue
+        if bounds not in rooms:
+            rooms[bounds] = [rooms_of_row(entry[1], facts) for entry in spans[bounds]]
+        entries = [entry for entry, held in zip(spans[bounds], rooms[bounds]) if room in held]
         stamps = [row.get("ts") for _addr, row, _pos in entries]
         sets[record_id] = (frozenset(address["row_sha256"] for address, _row, _pos in entries),
                            source_time_span(stamps) if stamps else None, entries[0][2] if entries else -1)
-    return sets
-
-
-def _cached_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int, int]]],
-                     facts: MembershipFacts) -> Dict[str, _RowSet]:
-    """``_legacy_row_sets`` under its own key, the ranges and the membership facts: a retained unit's
-    exact range holds rows the old memory had already read, and a new row lands after every one of
-    them, so the turn that wrote a row or a page reads none of them again (on the owner's install, a
-    few reads for each of hundreds of units on every Main turn)."""
-    key, cached = (facts.fingerprint(), frozenset(ranges.items())), _ROW_SETS.get(str(root.resolve()))
-    if cached is not None and cached[0] == key:
-        return cached[1]
-    sets = _legacy_row_sets(root, ranges, facts)
-    _ROW_SETS[str(root.resolve())] = (key, sets)
     return sets
 
 
@@ -370,7 +378,7 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
     ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
               if (span := _exact_range(pointer)) is not None}
-    row_sets = _cached_row_sets(root, ranges, facts)
+    row_sets = _legacy_row_sets(root, ranges, facts)
     units = []
     for pointer in pointers:
         record_id, room = pointer["node_id"], str(pointer["room_id"])
