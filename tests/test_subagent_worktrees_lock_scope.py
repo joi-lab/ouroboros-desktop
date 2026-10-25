@@ -25,6 +25,7 @@ import pytest
 from ouroboros import body_candidate
 from ouroboros import subagent_worktrees as wt
 from ouroboros.platform_layer import _lock_identity, pid_is_alive
+from ouroboros.unindexed import COPIES
 from tests._delegated_transport_shared import _owned_gateway_uses_each_test_transport  # noqa: F401
 from tests.test_delegated_full_access import full_run  # noqa: F401
 from tests.test_delegated_run_isolation import _git, _nanny_ctx, _seed_target
@@ -48,7 +49,7 @@ def _lock_held(path, data) -> bool:
 def _nothing_left(target, snaps, data, snapshot_id):
     assert wt.find_execution_snapshot(snapshot_id, data_dir=data) is None
     assert _git(target, "for-each-ref", "refs/ouroboros/").stdout == ""
-    assert not list(snaps.glob("dlg_*"))
+    assert not [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")]
     assert not list((target / ".git" / "worktrees").glob("dlg_*"))
     assert not list((data / "state" / "private_copies").glob("*.json"))
 
@@ -221,7 +222,7 @@ def test_a_provisioning_refusal_is_definitely_unrun_and_carries_git_s_words(tmp_
     assert payload["definitely_unrun"] is True and _startup_refusal_definite(payload)
     assert "GitFailed" in payload["detail"] and "cannot lock ref" in payload["detail"], payload["detail"]
     assert not set(REFUSAL_FACT_KEYS) & set(payload), "a git failure carries no lock facts"
-    assert not list((tmp_path / "snaps").glob("dlg_*"))
+    assert not [*(tmp_path / "snaps").glob("dlg_*"), *(tmp_path / "snaps").glob(f"{COPIES}/dlg_*")]
 
     def broken(**kw):
         raise RuntimeError("git exploded")
@@ -368,7 +369,7 @@ def test_a_failure_after_the_record_leaves_nothing(tmp_path, monkeypatch, failin
     with pytest.raises(wt.GitFailed, match=f"injected {failing} failure"):
         _provision(target, snaps, data, snapshot_id="snapLockB")
     _nothing_left(target, snaps, data, "snapLockB")
-    assert not _lock_held(snaps / "dlg_t1_snapLockB", data)
+    assert not _lock_held(snaps / COPIES / "dlg_t1_snapLockB", data)
 
 
 def test_a_failure_after_the_checkout_leaves_nothing_and_a_crash_is_gc_reclaimable(tmp_path, monkeypatch):
@@ -391,7 +392,7 @@ def test_a_failure_after_the_checkout_leaves_nothing_and_a_crash_is_gc_reclaimab
     with pytest.raises(OSError, match="checkout failed"):
         _provision(target, snaps, data, snapshot_id="snapCrash")
     assert wt.find_execution_snapshot("snapCrash", data_dir=data) is not None
-    assert list(snaps.glob("dlg_*")) and "refs/ouroboros/delegated/snapCrash" in _git(
+    assert list(snaps.glob(f"{COPIES}/dlg_*")) and "refs/ouroboros/delegated/snapCrash" in _git(
         target, "for-each-ref", "refs/ouroboros/").stdout
     report = wt.prune_execution_snapshots(set(), worktree_root=snaps, data_dir=data, live=lambda _task: False)
     assert report == {"removed": [], "kept": ["snapCrash"]}, "not before its task is proven over"

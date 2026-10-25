@@ -534,7 +534,17 @@ def _launch_attempt(queue, candidate, worker, token: str, *, lane: bool, generat
                                           candidate["id"], strict=True) or {}
                 unsubmitted = copy.deepcopy({"task_id": candidate["id"], "task_attempt": candidate["_attempt"],
                     "source": candidate["_working_recovery"], "claim": _deadline_launch_claim(stored)})
-            projections = _commit_launch(queue, candidate, unsubmitted)
+            from ouroboros.server_restart import agent_restart_boundary, agent_restart_holds
+
+            if not agent_restart_boundary.acquire(blocking=False):
+                return None  # the inline caller may own Q: never wait behind an off-lane commit
+            try:
+                with queue._queue_lock:
+                    if witness is None and agent_restart_holds(candidate):
+                        return False
+                projections = _commit_launch(queue, candidate, unsubmitted)
+            finally:
+                agent_restart_boundary.release()
             if projections is None or projections is False:
                 return projections  # unresolved (None) or refused (False): the same row stays queued
             from ouroboros.obligations import drive_started
@@ -696,7 +706,11 @@ def _choose_candidate(queue, remaining, unresolved_invalid_id_set, refused_this_
         cold_holders = cold_project_holders(_pool().PENDING)
         chosen_idx = None
         for i, candidate in enumerate(_pool().PENDING):
+            from ouroboros.server_restart import agent_restart_holds
             from supervisor.events_budget import budget_resume_dispatch_allowed
+
+            if _unsent(candidate) is None and agent_restart_holds(candidate):
+                continue
 
             resume_allowed = budget_resume_dispatch_allowed(queue, candidate)
             # A row its own exact pause or hold keeps queued is not repaired: the selection a paused

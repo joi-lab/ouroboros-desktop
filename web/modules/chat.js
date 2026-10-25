@@ -100,6 +100,7 @@ import {
     createTimelineAnchors,
     insertTimelineNode,
     liveCardProjectionChanged,
+    replayedEvidenceTs,
     syncLiveCardToggle,
     updateLiveTimelineItem,
     upsertToolFoldRow,
@@ -273,7 +274,7 @@ export function createChatInstance({
     // Every ws.on subscription's disposer, released together in destroy().
     const wsDisposers = [];
     const onWs = (event, fn) => wsDisposers.push(ws.on(event, fn));
-    const replies = createChatReplies({ chatId, feed: messagesDiv, input, key: storeKey('ouro_chat_reply'),
+    const replies = createChatReplies({ chatId, feed: messagesDiv, input, composerArea: inputArea, key: storeKey('ouro_chat_reply'),
         reading: () => reading, onDomWrite: withStableViewport, history: () => historyReveal,
         navigate: revealQuotedSource, present: () => !destroyed && isInstanceVisible() });
     const chatMedia = createChatMedia({
@@ -808,7 +809,10 @@ export function createChatInstance({
             }
             updateLiveCardCount(record);
             renderLiveCardMeta(record);
-            reanchorTaskCard(record, rawTs, { suppressDomInsert });
+            // A timestamp-free current-work carrier intentionally belongs at the page end.
+            // Dated carriers may carry earlier evidence past an intervening owner message.
+            const anchor = Number.isFinite(Date.parse(rawTs)) ? replayedEvidenceTs(metrics.tool_evidence, rawTs) : rawTs;
+            reanchorTaskCard(record, anchor, { suppressDomInsert });
             ensureLiveCardVisible(record, { suppressDomInsert });
             return Boolean(changed || liveCardProjectionChanged(before, record));
         });
@@ -3428,6 +3432,8 @@ export function createChatInstance({
                 source: msg.source || '',
                 initiator: msg.initiator || '',
                 taskId: explicitTaskId, reply: msg,
+                // The saved row's own name, as history keys it; this frame's client_message_id is the owner's.
+                clientMessageId: msg.row_client_message_id || '',
                 // A placed row whose card is not in this chat keeps its record link.
                 evidenceRef: isPlacedCardRow(msg) ? cardRowEvidenceRef(msg) : null,
             });

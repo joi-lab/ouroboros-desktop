@@ -219,7 +219,7 @@ READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
     "search_code", "query_code", "query_data", "recent_tasks",
     "web_search", "chat_history",
     "vcs_read", "service_status", "service_logs",
-    "get_task_result", "list_projects", "memory_read",
+    "get_task_result", "list_projects", "memory_read", "search_ui_translations",
 })
 
 # Enqueue-only tools safe to emit in parallel within one tool-call round.
@@ -468,10 +468,10 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     "integrate_delegated_patch", "integrate_subagent_patch",
     # writes a local task artifact; Observe does not grant general file writes
     "generate_evolution_stats",
-    # the world beyond the repository: forms, skills, project notes
+    # the world beyond the repository: forms, skills, project notes, the owner's interface wording
     "browser_action", "submit_skill_to_hub", "toggle_skill", "skill_owner_action",
     "skill_install", "skill_update",
-    "journal_write", "workpad_write",
+    "journal_write", "workpad_write", "pin_ui_translation",
     "github_write", "pr_merge",
 })
 

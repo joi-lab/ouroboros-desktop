@@ -52,9 +52,6 @@ _TERMINAL_TOKENS = (
 # constant from the sticky set; "dynamic" is a variable or expression that can
 # carry one, which counts because the reducer, not the caller, decides.
 TERMINAL_WRITERS = {
-    # Advances only derived fan-out facts; the locked projector preserves the
-    # CURRENT status, including a concurrently completed terminal result.
-    ('ouroboros/swarm_rollup.py::load_swarm_rollup', 'row["status"]'): 'dynamic',
     # Selects an already retained actor account; its locked projector preserves
     # CURRENT lifecycle, including terminal state, and compares the prior pointer.
     ('ouroboros/review_history_view.py::publish_review_history_view', '"running"'): 'dynamic',

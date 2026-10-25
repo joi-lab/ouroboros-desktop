@@ -82,6 +82,7 @@ D20 = "Presence"
 "ouroboros/question_answers.py" = "D11"
 "ouroboros/room_reader.py" = "D11"
 "ouroboros/tools/control_relay.py" = "D05"
+"ouroboros/tools/control_ui_translation.py" = "D05"
 "ouroboros/openrouter_cost.py" = "D02"
 "ouroboros/obligations.py" = "D11"
 "ouroboros/startup_migrations.py" = "D11"
@@ -137,6 +138,7 @@ D20 = "Presence"
 "ouroboros/agent_task_pipeline.py" = "D01"
 "ouroboros/anthropic_native_custody.py" = "D02"
 "ouroboros/argv_budget.py" = "D13"
+"ouroboros/artifact_directories.py" = "D05"
 "ouroboros/artifact_storage.py" = "D05"
 "ouroboros/artifacts.py" = "D05"
 "ouroboros/chat_uploads.py" = "D05"
@@ -456,6 +458,7 @@ D20 = "Presence"
 "ouroboros/packaged_cli.py" = "D18"
 "ouroboros/packaged_cli_install.py" = "D18"
 "ouroboros/force_remove.py" = "D18"  # the permission-granting recursive removal every retirer of a copied tree shares
+"ouroboros/unindexed.py" = "D18"  # the .noindex names new generated copies are born under, shared by their makers
 "ouroboros/platform_layer.py" = "D18"
 "ouroboros/platform_win32_abi.py" = "D18"
 "ouroboros/post_task_checkpoint.py" = "D01"
@@ -536,6 +539,7 @@ D20 = "Presence"
 "ouroboros/review_execution_projection.py" = "D06"
 "ouroboros/review_ledger.py" = "D06"
 "ouroboros/review_native_episode.py" = "D06"
+"ouroboros/review_native_images.py" = "D06"
 "ouroboros/review_owner_custody.py" = "D06"
 "ouroboros/review_pool_migration.py" = "D06"
 "ouroboros/review_pool_receipts.py" = "D06"
@@ -828,6 +832,7 @@ D20 = "Presence"
 "ouroboros/image_preparation.py" = "D02"
 "ouroboros/workspace_admission.py" = "D17"
 "ouroboros/workspace_executor.py" = "D17"
+"ouroboros/workspace_executor_paths.py" = "D17"
 "ouroboros/docker_process_observer.py" = "D17"
 "ouroboros/workspace_patch_rules.py" = "D17"
 "ouroboros/workspace_preflight.py" = "D17"
@@ -1141,6 +1146,7 @@ allowed = [
   "D17->D04",
   "D17->D05",
   "D17->D06",
+  "D17->D07",
   "D17->D08",
   "D17->D11",
   "D17->D12",
@@ -1269,7 +1275,6 @@ lazy_only = [
   "D16->D11",
   "D16->D15",
   "D17->D02",
-  "D17->D07",
   "D17->D09",
   "D17->D13",
   "D17->D20",

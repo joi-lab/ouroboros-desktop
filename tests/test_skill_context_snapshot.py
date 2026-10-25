@@ -148,7 +148,7 @@ def test_readiness_revocation_withdraws_once_without_rehashing(publisher, monkey
     assert maybe_append_skill_snapshots(ctx, messages, root)
     monkeypatch.setattr(skill_loader, "compute_content_hash", lambda *a, **k: pytest.fail("per-round payload hash"))
     monkeypatch.setattr(extension_liveness, "discover_skill_identity", lambda *a, **k: pytest.fail("per-round discovery"))
-    monkeypatch.setattr(extension_liveness, "discover_skill_peers", lambda *a, **k: pytest.fail("per-round peer scan"))
+    monkeypatch.setattr(extension_liveness, "discover_conflict_peers", lambda *a, **k: pytest.fail("per-round peer scan"))
     if mode == "disabled":
         save_enabled(root, skill.name, False)
     elif mode == "ungranted":

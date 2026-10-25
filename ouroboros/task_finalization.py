@@ -855,7 +855,8 @@ def build_swarm_efficiency(env: Any, task: Dict[str, Any]) -> Dict[str, Any] | N
 
     Swarm intent with no observed fan-out stays explicit; requested counts and
     lanes never claim actual concurrency, dispatch lanes or child-wait time.
-    Legacy rows catch up once; later calls decode only the unconsumed suffix.
+    Producer-owned facts need no shared-journal read. This explicit observation
+    catches up legacy history; missing/damaged history cannot claim zero.
     """
     task_id = str(task.get("id") or task.get("task_id") or "")
     if not task_id:
@@ -868,12 +869,22 @@ def build_swarm_efficiency(env: Any, task: Dict[str, Any]) -> Dict[str, Any] | N
         drive_root = getattr(env, "drive_root", None)
         if drive_root is None:
             return None
-        facts = load_swarm_rollup(drive_root, task_id)
-        child_ids = facts.get("child_ids", [])
         from ouroboros.swarm_receipt import publish
-        if (not (task.get("parent_task_id") or metadata.get("parent_task_id"))
-                and str(task.get("root_task_id") or metadata.get("root_task_id") or task_id) == task_id):
-            publish(task.get("budget_drive_root") or drive_root, task_id, task=task)
+        try:
+            facts = load_swarm_rollup(drive_root, task_id)
+        finally:
+            if (not (task.get("parent_task_id") or metadata.get("parent_task_id"))
+                    and str(task.get("root_task_id") or metadata.get("root_task_id") or task_id) == task_id):
+                canonical = pathlib.Path(task.get("budget_drive_root") or drive_root)
+                if canonical.resolve() != pathlib.Path(drive_root).resolve():
+                    try:
+                        load_swarm_rollup(canonical, task_id)
+                    except Exception:
+                        log.debug("canonical swarm history unavailable", exc_info=True)
+                # Other known actors/usage still deserve a provisional receipt
+                # when fan-out is unavailable. Publishing never repairs history.
+                publish(canonical, task_id, task=task)
+        child_ids = facts.get("child_ids", [])
         if not child_ids:
             if swarm_intent:
                 # Absence proves neither a planned count nor a plain-task intent.

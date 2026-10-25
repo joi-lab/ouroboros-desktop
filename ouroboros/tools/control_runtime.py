@@ -100,12 +100,34 @@ def _prepare_self_change(ctx: ToolContext, resume: str = "", in_place: bool = Fa
     )
 
 
+def _restart_receipt_failure(ctx: ToolContext, receipt: dict, text: str) -> str:
+    """Keep an unknown ACK distinct from a known refusal, with the same request identity."""
+    refused = receipt.get("status") in {"refused", "released"}
+    return _publish_tool_result(ctx, ToolResult(
+        status="blocked" if refused else "unavailable",
+        code="LEGACY_BLOCKED" if refused else "LEGACY_UNAVAILABLE", text=text,
+        meta={"request_id": receipt["request_id"], "restart_status": receipt["status"],
+              **({"refusal": receipt["refusal"]} if receipt.get("refusal") else {})},
+    ))
+
+
 def _request_restart(ctx: ToolContext, reason: str, adopt_commit: str = "") -> str:
+    from ouroboros.tools.control_events import request_restart_intent
+
+    prior = getattr(ctx, "pending_restart_request", None)
+    if prior and (prior["task_id"], prior["task_attempt"]) == (str(ctx.task_id or ""), int(getattr(ctx, "task_attempt", None) or 1)):
+        receipt = request_restart_intent(ctx, prior["reason"])
+        return ("Restart requested. The previously acknowledged request is unchanged." if receipt.get("status") in {"accepted", "ready"}
+                else _restart_receipt_failure(ctx, receipt,
+                    f"RESTART_{receipt['status'].upper()}: request {prior['request_id']}; no new request sent."))
     block_reason = _evolution_restart_block_reason(ctx)
     if block_reason:
         return f"⚠️ RESTART_BLOCKED: in evolution mode, {block_reason}."
     is_evolution = str(ctx.current_task_type or "") == "evolution"
-    restart_reason = str(reason or "").strip() or "agent_requested_restart"
+    stated = str(reason or "").strip()
+    restart_reason = stated or "agent_requested_restart"
+    import json
+
     from ouroboros import body_adoption, body_candidate
 
     serving_dir = body_candidate.serving_repo_dir_for(ctx)
@@ -168,9 +190,19 @@ def _request_restart(ctx: ToolContext, reason: str, adopt_commit: str = "") -> s
                 f"be persisted ({exc})."
             )
     ctx.pending_restart_reason = restart_reason
+    receipt = request_restart_intent(ctx, restart_reason, evolution=is_evolution)
+    if receipt.get("status") not in {"accepted", "ready"}:
+        return _restart_receipt_failure(ctx, receipt,
+                f"RESTART_{receipt['status'].upper()}: request {receipt['request_id']}. "
+                "Host acceptance is not confirmed; do not claim that new work is held. "
+                "Calling again checks this same request.")
     ctx.last_push_succeeded = False
     ctx.last_reviewed_commit_sha = ""
-    return f"Restart requested: {restart_reason}.{adoption_note}"
+    # The reason is the caller's own text, kept exact for the restart binding: quoted after the host's facts,
+    # never stated as one of them.
+    said = (f" Reason (the caller's own words): {json.dumps(stated, ensure_ascii=False)}." if stated
+            else " No reason was given; the host default agent_requested_restart is recorded.")
+    return f"Restart requested.{adoption_note}{said}"
 
 
 def self_change_tool_entries() -> list:
@@ -194,7 +226,8 @@ def self_change_tool_entries() -> list:
         ToolEntry("request_restart", {
             "name": "request_restart",
             "description": (
-                "Ask supervisor to restart runtime after a reviewed local commit or a non-evolution clean no-op; "
+                "Ask supervisor to restart runtime after this task finalizes; confirmed acceptance holds new "
+                "independent work, including Main, for Restart. An unconfirmed reply proves no acceptance. "
                 "evolution requires its exact active commit receipt. A restart alone adopts nothing: pass "
                 "adopt_commit (the exact reviewed commit of your body candidate) to adopt it locally at this "
                 "restart, after the running generation's readers have stopped."),
@@ -522,6 +555,7 @@ def _update_identity(ctx: ToolContext, content: str, expected_revision: str | No
         )
     from ouroboros.memory import Memory
     from ouroboros.tool_access import canonical_data_root
+    from ouroboros.tool_access_reads import canonical_runtime_reader
 
     # One identity, every room (P1): who I am does not change with the room I
     # am speaking in, so a project room or an external conversation revises the
@@ -537,9 +571,10 @@ def _update_identity(ctx: ToolContext, content: str, expected_revision: str | No
         mem.identity_path(), expected_revision, lambda _old: content,
         journal=mem.identity_journal_path(), author=focus_signature(ctx),
         source_type=str((getattr(ctx, "task_metadata", {}) or {}).get("delegation_role") or "task"))
+    reader = "\nCanonical identity reader:\n" + canonical_runtime_reader(ctx, canonical_data_root(ctx), "memory/identity.md")
     if not publication.ok:
         return _publish_tool_result(ctx, ToolResult(status="blocked", code="RESOURCE_CONSTRAINT_BLOCKED",
-            text=publication_refusal(publication, "memory/identity.md")))
+            text=publication_refusal(publication, "canonical memory/identity.md") + reader))
     old_content = publication.old_content
     result = f"OK: identity updated ({len(content)} chars); revision={publication.revision}"
     old_len = len(old_content)
@@ -550,7 +585,7 @@ def _update_identity(ctx: ToolContext, content: str, expected_revision: str | No
             "but full rewrites should be rare and reflect genuine self-creation — not a trivial turn. "
             "Read before writing (P12) and prefer evolving over replacing wholesale."
         )
-    return result
+    return result + reader
 
 
 def _update_world(ctx: ToolContext, content: str, expected_revision: str | None = None) -> str:

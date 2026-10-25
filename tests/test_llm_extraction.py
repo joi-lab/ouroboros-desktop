@@ -105,7 +105,7 @@ _MIXIN_OWNERS = {
     (llm_messages, "_MessageShapingMixin"): (
         "_REASONING_CONTENT_BLOCK_TYPES _content_with_system_notice_marker "
         "_copy_messages_with_cache_policy "
-        "_has_replayed_reasoning_metadata _is_deferrable_image_user_turn _model_family "
+        "_has_replayed_reasoning_metadata _order_complete_tool_episodes _model_family "
         "_normalize_system_message_placement _replace_image_blocks_with_placeholder "
         "_strip_openrouter_roundtrip_metadata sanitize_reasoning_on_model_switch"
     ),
@@ -225,6 +225,8 @@ def test_llm_client_member_inventory_is_unchanged():
     (5) Explicit OpenRouter receipt reconciliation retires the unused
     ``_fetch_generation_cost`` compatibility stub and its empty mixin.
     (6) Window authority removes the callerless oversized context probe.
+    (7) Structural tool-episode ordering (#2135) replaces the image predicate
+    with ``_order_complete_tool_episodes`` so eviction preserves answer adjacency.
     """
     assert _defined_members(pathlib.Path(llm.__file__), "LLMClient") == _PARENT_MEMBERS
     moved = {name for names in _MIXIN_OWNERS.values() for name in names.split()}
@@ -232,7 +234,7 @@ def test_llm_client_member_inventory_is_unchanged():
     assert hashlib.sha256(
         json.dumps(composed, separators=(",", ":")).encode()
 
-    ).hexdigest() == "bdd42e3c4c129b607307047308ebea5455aa1191933d90f458dd204e08b9a1e4"
+    ).hexdigest() == "b98327ee5143ed47baae991156278084127f751d1df3675fc5bfad316a83fb55"
     for name in composed:
         assert hasattr(LLMClient, name), name
 

@@ -10,7 +10,6 @@ import stat
 import pathlib
 import re
 import shutil
-import zipfile
 from contextlib import nullcontext, suppress
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -1308,95 +1307,6 @@ def copy_file_to_task_artifacts(ctx: Any, source_path: Union[pathlib.Path, str],
     return record
 
 
-def iter_artifact_tree(root: pathlib.Path) -> Iterable[pathlib.Path]:
-    """Enumerate the full tree without following directory links or hiding I/O failures."""
-    def failed(exc: OSError) -> None:
-        raise exc
-    for directory, dirs, files in os.walk(root, onerror=failed, followlinks=False):
-        dirs.sort()
-        for name in sorted([*dirs, *files]):
-            path = pathlib.Path(directory) / name
-            path.lstat()  # A disappearing or unreadable member is not an empty entry.
-            yield path
-
-
-def copy_directory_to_task_artifacts(
-    ctx: Any,
-    source_path: Union[pathlib.Path, str],
-    *,
-    kind: str = "process_output_directory",
-    member_paths: Iterable[pathlib.Path] | None = None,
-    artifact_dir: pathlib.Path | None = None,
-) -> List[Dict[str, Any]]:
-    """Package a generated directory as a manifest ledger plus zip artifact."""
-
-    source = pathlib.Path(source_path).expanduser().resolve(strict=False)
-    if not source.is_dir():
-        return []
-    if artifact_dir is None:
-        artifact_dir = task_artifact_dir_path(ctx.drive_root, task_id_for_artifacts(ctx), create=True)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    if member_paths is None:
-        members = sorted(p for p in iter_artifact_tree(source) if p.is_file() and not p.is_symlink())
-    else:
-        members = sorted(pathlib.Path(p) for p in member_paths)
-    from ouroboros.store import is_wal_index  # shared memory no raw reader opens; a copy rebuilds its own
-
-    indexes = [p for p in members if is_wal_index(p)]
-    excluded = [{"path": os.path.relpath(p, source).replace(os.sep, "/"), "reason": "SQLite WAL index"} for p in indexes]
-    members = [p for p in members if p not in indexes]
-    file_records: List[Dict[str, Any]] = []
-    tree_hasher = sha256(str(source).encode("utf-8", errors="replace") + b"\0")
-    tmp_zip_path = temporary_sibling(artifact_dir / "directory.zip")
-    tmp_ledger_path = temporary_sibling(artifact_dir / "directory.json")
-    try:
-        with zipfile.ZipFile(tmp_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in members:
-                if path.is_symlink() or not path.is_file():
-                    raise OSError(f"directory member is unavailable: {path}")
-                try:
-                    rel = path.resolve(strict=True).relative_to(source).as_posix()
-                except ValueError as exc:
-                    raise OSError(f"directory member escapes its source: {path}") from exc
-                with archive.open(rel, "w", force_zip64=True) as member:
-                    measured = stream_artifact_file(path, member)
-                tree_hasher.update(rel.encode("utf-8", errors="replace") + b"\0")
-                tree_hasher.update(measured["sha256"].encode("ascii") + b"\0")
-                file_records.append({"path": rel, **measured})
-        safe_stem = source.name.replace("/", "_").replace("\\", "_") or "directory"
-        tree_digest = tree_hasher.hexdigest()[:8]
-        ledger_path = artifact_dir / f"{safe_stem}.{tree_digest}.manifest.json"
-        zip_path = artifact_dir / f"{safe_stem}.{tree_digest}.zip"
-        atomic_write_json(
-            tmp_ledger_path,
-            {
-                "schema_version": 1,
-                "kind": kind,
-                "source_path": str(source),
-                "file_count": len(file_records),
-                "files": file_records,
-                **({"excluded": excluded} if excluded else {}),
-                "zip_name": zip_path.name,
-            },
-            trailing_newline=True,
-        )
-        tmp_zip_path.replace(zip_path)
-        tmp_ledger_path.replace(ledger_path)
-    except Exception:
-        for tmp_path in (tmp_zip_path, tmp_ledger_path):
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise
-    records = [
-        artifact_record(ledger_path, kind=f"{kind}_manifest", source_path=str(source)),
-        artifact_record(zip_path, kind=kind, source_path=str(source)),
-    ]
-    _register_task_artifact_records(artifact_dir, records)
-    return records
-
-
 def collect_task_artifact_records(
     drive_root: Union[pathlib.Path, str], task_id: str, *, measure: bool = True, strict: bool = False,
     require_registered: bool = False, anchor: Any = None,
@@ -1498,3 +1408,7 @@ def merge_artifact_records(*groups: Iterable[Dict[str, Any]]) -> List[Dict[str, 
             if existing.get("name") and fresh.get("kind") == "task_artifact":
                 merged[key]["name"] = existing["name"]
     return list(merged.values())
+
+
+# Public artifact API; directory packaging owns traversal and virtual member names.
+from ouroboros.artifact_directories import iter_artifact_tree, copy_directory_to_task_artifacts  # noqa: E402,F401

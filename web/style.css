@@ -5818,17 +5818,36 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
    success: it is a pointer to Dashboard -> Updates, the shared neutral capsule
    (.btn.btn-default.btn-sm, docs/DESIGN.md "Status and chips"). Uncommitted
    local changes ARE a caveat about what an update would do, the owner's turn
-   in the amber tone; an attempt's outcome takes the green or red tone and an
-   unknown one stays neutral. A tone outranks the shared hover, so a finger's
-   lingering hover keeps it; a hovering pointer deepens it. */
+   in the amber tone; a failed attempt takes the red tone and an unknown one
+   stays neutral; a confirmed success has no capsule (owner 1B). A tone outranks
+   the shared hover, so a finger's lingering hover keeps it; a hovering pointer
+   deepens it. */
 .update-pill { margin: 6px 8px; }
 :root[data-theme] .update-pill:is(.has-local, [data-tone="warn"]):not(:disabled) { background: var(--tone-amber); color: var(--status-warn-fg); }
-:root[data-theme] .update-pill[data-tone="ok"]:not(:disabled) { background: var(--tone-green); color: var(--status-ok-fg); }
 :root[data-theme] .update-pill[data-tone="error"]:not(:disabled) { background: var(--tone-red); color: var(--status-error-fg); }
 @media (hover: hover) {
     :root[data-theme] .update-pill:is(.has-local, [data-tone="warn"]):not(:disabled):hover { background: var(--tone-amber-hover); }
-    :root[data-theme] .update-pill[data-tone="ok"]:not(:disabled):hover { background: var(--tone-green-hover); }
     :root[data-theme] .update-pill[data-tone="error"]:not(:disabled):hover { background: var(--tone-red-hover); }
+}
+/* The notice (update_status.js): the capsule and, for a failed or unconfirmed outcome, the close that ends it, drawn
+   inside the capsule's end so its coming and going moves no neighbour. The close takes the capsule's ink. */
+.update-notice { position: relative; display: inline-flex; align-items: center; min-width: 0; max-width: 100%; margin: 6px 4px 6px 8px; }
+.update-notice[hidden] { display: none; }
+.update-notice > .update-pill { min-width: 0; max-width: 100%; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.update-notice > .update-pill.has-close { padding-right: 30px; }
+.update-notice-close {
+    position: absolute; right: 4px; top: 50%; width: 24px; height: 24px; margin-top: -12px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; background: transparent; color: var(--text-primary); cursor: pointer;
+}
+.update-notice-close[hidden] { display: none; }
+.update-notice-close > svg { display: block; width: 14px; height: 14px; }
+.update-pill[data-tone="error"] + .update-notice-close { color: var(--status-error-fg); }
+.update-notice-close:active { filter: var(--press); }
+/* Flush inside the capsule's end, so the ring stays in the capsule, clear of its edge and its last word (DESIGN §3). */
+.update-notice-close:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: -2px; }
+@media (hover: hover) {
+    .update-notice-close:hover { background: rgba(var(--neutral-rgb), 0.16); }
 }
 
 .settings-embedded-content {
@@ -6387,8 +6406,6 @@ button.skills-mark { cursor: pointer; min-height: 0; }
 .skills-mark-popup {
     max-width: min(360px, var(--ui-popup-max-width, 360px));
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-object);
-    color: var(--text-primary);
     font-size: var(--type-body);
     line-height: var(--line-body);
 }
@@ -9717,75 +9734,154 @@ body.keyboard-open .project-panel {
     text-overflow: clip;
 }
 
-/* Notes between works (chat_relay_deck.js; DESIGN "Replies"): the sender's Project reference, time,
-   blue owner quotations, and one inline more/less control in the work card's material. Every consecutive relay
-   joins a deck; the front card names earlier cards with owner words. The rows keep their own identity/actions. */
+/* Notes between works (chat_relay_deck.js; DESIGN "Replies"): a relay row's bubble is the note card. Its head is an
+   address (sender → receiver · time); consecutive notes lie as one stack with the newest card in front and up to two
+   older cards peeking BELOW it, each 12px narrower per side and fainter, drawn as layers INSIDE the row's own box
+   (the row reserves 8px per ledge under the face), so nothing paints above the front card and a contained row
+   (content-visibility while the width moves or the row sleeps) clips none of it. The row itself is transparent: the
+   face carries the material and the rest shadow, the ledges the cards behind. The rows keep their own identity and
+   actions. The owner chose this drawing on 25 Oct 2026 after rejecting edges drawn above the card (24 Oct). */
 /* Specific enough to win over the voices' own bubble rules further down (one more class than they carry). */
 :root[data-theme] .chat-bubble.assistant.chat-relay-note {
+    --relay-reserve: 0px;
+    position: relative;
+    isolation: isolate;
     align-self: flex-start;
-    width: min(100%, 760px);
-    max-width: max(80%, min(100%, 620px));
-    padding: 12px 16px 14px;
-    background: var(--voice-ouroboros-card);
-    /* A hair of the room above the card keeps the edges behind it apart from it. */
-    box-shadow: 0 -1.5px 0 var(--bg-primary), var(--elev-rest);
+    width: min(100%, 680px);
+    max-width: max(72%, min(100%, 620px));
+    margin-right: 0;
+    padding: 12px 16px calc(14px + var(--relay-reserve));
+    border: 0;
+    border-radius: var(--radius-object);
+    background: transparent;
+    box-shadow: none;
 }
+:root[data-theme] .chat-bubble.assistant.chat-relay-note[data-deck-edges="1"] { --relay-reserve: 8px; }
+:root[data-theme] .chat-bubble.assistant.chat-relay-note[data-deck-edges="2"] { --relay-reserve: 16px; }
 .chat-bubble.chat-relay-note > :is(.sender, .msg-time) { display: none; }
 .chat-bubble.chat-relay-note:not([data-raw="1"]) > :is(.chat-relay-raw-label, .message, .chat-message-actions) { display: none; }
 /* A tucked note is a row the deck holds behind its front card: never drawn, whatever else styles the row. */
 .chat-bubble.chat-relay-note[data-deck-tucked="1"] { display: none !important; }
-:root[data-theme] .chat-bubble.assistant.chat-relay-note[data-deck-edges="1"] {
-    margin-top: 8px;
-    box-shadow: 0 -1.5px 0 var(--bg-primary), 0 -16px 0 -8px var(--accent-08), var(--elev-rest);
-}
-:root[data-theme] .chat-bubble.assistant.chat-relay-note[data-deck-edges="2"] {
-    margin-top: 16px;
-    box-shadow: 0 -1.5px 0 var(--bg-primary), 0 -16px 0 -8px var(--accent-08), 0 -32px 0 -16px var(--accent-08), var(--elev-rest);
-}
-/* Open: the caption above the first card; the cards a little closer together than ordinary messages. */
-.chat-relay-note[data-deck-first="1"] { margin-top: 44px; }
+/* A fanned column sits a little closer than ordinary messages, so it still reads as one group. */
 .chat-relay-note[data-deck="open"]:not([data-deck-first="1"]) { margin-top: -6px; }
-.chat-relay-deck-top {
+
+/* The face (the card's material on the rest shadow, inset above the ledge reserve) and the ledges behind it. */
+.chat-relay-note > :is(.chat-relay-face, .chat-relay-ledge) {
     position: absolute;
-    left: 4px;
-    right: 2px;
-    bottom: calc(100% + 6px);
+    border-radius: var(--radius-object);
+    background: var(--voice-ouroboros-note);
+    box-shadow: var(--elev-rest);
+    pointer-events: none;
+}
+.chat-relay-note > .chat-relay-face { inset: 0 0 var(--relay-reserve) 0; z-index: -1; transition: var(--motion-tone); }
+.chat-relay-note > .chat-relay-ledge {
+    display: none;
+    left: 12px;
+    right: 12px;
+    top: 24px;
+    bottom: calc(var(--relay-reserve) - 8px);
+    z-index: -2;
+    background: var(--relay-ledge-1);
+    transform-origin: 50% 0;
+}
+.chat-relay-note > .chat-relay-ledge[data-level="2"] {
+    left: 24px;
+    right: 24px;
+    top: 48px;
+    bottom: 0;
+    z-index: -3;
+    background: var(--relay-ledge-2);
+}
+.chat-relay-note[data-deck-edges="1"] > .chat-relay-ledge[data-level="1"],
+.chat-relay-note[data-deck-edges="2"] > .chat-relay-ledge { display: block; }
+/* The closed stack is pressable anywhere on its face: hover deepens the fill a step, a press deepens it again. */
+@media (hover: hover) {
+    .chat-relay-note[data-deck="closed"] { cursor: pointer; }
+    .chat-relay-note[data-deck="closed"]:hover > .chat-relay-face { background: var(--voice-ouroboros-note-hover); }
+}
+.chat-relay-note[data-deck="closed"]:active > .chat-relay-face:not(:has(button:active)) { filter: var(--press); }
+/* The row's own states go to the face, since the row is transparent: a quote's jump rings the card (reduced motion
+   keeps the ring), a long press sinks and lifts the row (its transform, below) while the face's shadow dims the feed. */
+@keyframes chat-relay-target {
+    from { box-shadow: var(--elev-rest), 0 0 0 3px var(--accent-25); }
+    to { box-shadow: var(--elev-rest), 0 0 0 3px transparent; }
+}
+.chat-relay-note.is-quote-target { animation: none; }
+.chat-relay-note.is-quote-target > .chat-relay-face { animation: chat-relay-target 1.4s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+    .chat-relay-note.is-quote-target > .chat-relay-face { animation: none; box-shadow: var(--elev-rest), 0 0 0 3px var(--accent-25); }
+}
+:root[data-theme] .chat-bubble.assistant.chat-relay-note[data-row-press] { box-shadow: none; }
+.chat-relay-note[data-row-press] > .chat-relay-face { box-shadow: var(--elev-rest), 0 0 0 100vmax transparent; transition: box-shadow 0.24s ease-out; }
+.chat-relay-note[data-row-press="lift"] > .chat-relay-face { box-shadow: var(--elev-float), 0 0 0 100vmax var(--row-lift-dim); }
+
+/* The address line: who → whom, and at the right edge the time (a range on a closed stack) with the stack's control
+   as one unit, so a narrow card wraps that unit whole and never the control alone. */
+.chat-relay-card-head {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    min-height: 32px;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-2);
+    min-height: 28px;
+    color: var(--text-meta);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
 }
-.chat-relay-deck-caption { flex: 1 1 auto; min-width: 0; color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
-.chat-relay-deck-caption b { color: var(--text-primary); font-weight: 600; }
-.chat-relay-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-height: 28px; }
-.chat-relay-card-head > .chat-live-project-card-btn { max-width: 62%; }
-.chat-relay-from { min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta); }
-.chat-relay-sub { color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
-.chat-relay-time { font-variant-numeric: tabular-nums; }
-.chat-relay-act { flex: none; margin-inline-start: auto; }
-.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more) {
+.chat-relay-from { min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); font-weight: 600; }
+.chat-relay-rooms[hidden] { display: none; }
+/* The sender's Project reference at the address line's size (the voice line's 28px, meta); a long name ellipsizes at its cap. */
+.chat-relay-card-head > .chat-quiz-project.chat-live-project-card-btn {
+    min-height: 28px;
+    max-width: min(60%, 360px);
+    padding: 0 var(--space-3);
+    gap: 6px;
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+}
+.chat-relay-card-head > .chat-quiz-project .chat-live-project-name { font-weight: 600; }
+/* The receiver is half of the address: it keeps its whole name, taking its own line below a long Project capsule
+   rather than shrinking; only a name longer than the line stops at its edge. */
+.chat-relay-dest { display: inline-flex; align-items: center; gap: var(--space-2); flex: 1 1 96px; min-width: auto; max-width: 100%; }
+.chat-relay-arrow { display: inline-flex; flex: none; color: var(--text-meta); }
+.chat-relay-arrow > svg { width: 14px; height: 14px; }
+.chat-relay-to { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-relay-side { display: inline-flex; align-items: center; gap: var(--space-2); flex: none; margin-inline-start: auto; white-space: nowrap; }
+.chat-relay-time { flex: none; font-variant-numeric: tabular-nums; }
+/* The stack's one control is the shared small capsule (.btn.btn-default.btn-sm): `N notes` on the closed front card,
+   `Show less` on the column's first card. */
+.chat-relay-act { flex: none; white-space: nowrap; }
+.chat-relay-act[hidden] { display: none; }
+.chat-relay-note .chat-relay-more {
     border: 0; background: none; box-shadow: none; padding: 0; min-height: 0; font: inherit; cursor: pointer;
     color: var(--text-primary); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta);
 }
-.chat-relay-note :is(.chat-relay-act, .chat-relay-hide) { text-decoration: underline; text-underline-offset: 3px; }
-.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more):hover { background: none; box-shadow: none; text-decoration: underline; }
-.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more):focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; }
-.chat-relay-act[hidden] { display: none; }
-.chat-relay-words-inside { margin-top: var(--space-2); color: var(--user-sender); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta); }
-.chat-relay-words-inside::before { content: ''; display: inline-block; width: 3px; height: 0.9em; border-radius: 2px; background: currentColor; margin-right: var(--space-2); vertical-align: -1px; }
-.chat-relay-excerpt { display: flex; align-items: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
-.chat-relay-more { flex: none; }
-.chat-relay-note > .chat-relay-more { margin-top: var(--space-2); }
-.chat-relay-act-label { display: inline-flex; align-items: baseline; }
-.chat-relay-count {
-    display: inline-grid;
-    overflow: hidden;
-    min-width: 0.6em;
-    margin-inline: 0.3em;
-    font-variant-numeric: tabular-nums;
-    text-align: center;
+.chat-relay-note .chat-relay-more:hover { background: none; box-shadow: none; }
+.chat-relay-note .chat-relay-more:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; }
+
+/* His words lie in tucked cards: the blue mark after the excerpt says so, on the closed front card. */
+.chat-relay-words-inside {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    color: var(--user-sender);
+    font-size: var(--type-meta);
+    font-weight: 600;
+    line-height: var(--line-meta);
 }
-.chat-relay-count > .chat-relay-count-value { grid-area: 1 / 1; }
+.chat-relay-words-inside::before { content: ''; flex: none; width: 3px; height: 12px; border-radius: 2px; background: currentColor; }
+.chat-relay-excerpt { display: flex; align-items: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+/* The one control at the end of the teller's line; alone, when a note without that line is open, it keeps the right.
+   A bare word is 16px tall: with a pointer it gains an invisible 24px hit area centred on it (the touch minimum comes
+   from .ui-hit-area under a coarse pointer), so the word itself moves nowhere. */
+.chat-relay-more { flex: none; margin-inline-start: auto; }
+@media (pointer: fine) {
+    .chat-relay-more::after {
+        content: "";
+        position: absolute;
+        inset: min(0px, calc((100% - 24px) / 2));
+    }
+}
 .chat-relay-gist {
     margin: 0;
     flex: 1 1 auto;
@@ -9802,9 +9898,10 @@ body.keyboard-open .project-panel {
 .chat-relay-note[data-raw="1"] .chat-relay-gist[data-raw="1"] { display: none; }
 /* Without the teller's line the note's own first words stand in, in the meta ink: they were written for the work. */
 .chat-relay-gist[data-raw="1"] { color: var(--text-meta); }
-.chat-relay-note .chat-clamp { -webkit-line-clamp: 3; line-clamp: 3; }
+/* Two lines of his words on a card; the whole quotation once the note is opened. */
+.chat-relay-note .chat-clamp { -webkit-line-clamp: 2; line-clamp: 2; }
 .chat-relay-note .chat-clamp[data-expanded="1"] { -webkit-line-clamp: unset; line-clamp: unset; }
-.chat-relay-note > :is(.chat-quote, .chat-relay-quotes) { margin-top: var(--space-3); }
+.chat-relay-note > :is(.chat-quote, .chat-relay-quotes) { margin-top: var(--space-2); }
 .chat-relay-raw-label {
     margin-top: var(--space-3);
     color: var(--text-meta);
@@ -9822,15 +9919,6 @@ body.keyboard-open .project-panel {
     line-height: var(--line-body);
 }
 :root[data-theme="light"] .chat-relay-note[data-raw="1"] > .message { background: rgba(var(--shell-rgb), 0.72); }
-/* A quote's jump to a note keeps its ring with reduced motion too (the card's own shadow is more specific). */
-@media (prefers-reduced-motion: reduce) {
-    :root[data-theme] .chat-bubble.assistant.chat-relay-note.is-quote-target { box-shadow: 0 0 0 3px var(--accent-25); }
-}
-/* The closed deck can be pressed anywhere on its front card. */
-@media (hover: hover) {
-    .chat-relay-note[data-deck="closed"][data-deck-edges] { cursor: pointer; }
-}
-.chat-relay-note[data-deck="closed"][data-deck-edges]:active { filter: var(--press); }
 
 /* The clamp of a long quotation (a relay panel's text); its toggle lives in the panel's head, a row that already
    exists, so no control floats on a row of its own. */
@@ -10227,14 +10315,14 @@ body.keyboard-open .project-panel {
 }
 :root[data-theme] .settings-footer { background: var(--surface-object); }
 
-/* Sheets: what floats over moving content (menus, the composer's field) takes the float surface and shadow; the
-   shared menu and model list take it in ui.css, so setup has it too. */
+/* Sheets: what floats over moving content takes the float shadow. A menu and a dialog have the popups' opaque backing
+   (--popup-float, which .ui-popup wears in ui.css, so setup has it too); the composer's field stays glass. */
 :root[data-theme] :is(.chat-header-menu, .task-control-menu, .marketplace-modal) {
-    border-color: transparent; border-radius: var(--radius-object); background: var(--surface-float); box-shadow: var(--elev-float);
+    border-color: transparent; border-radius: var(--radius-object); background: var(--popup-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-/* More lost the old header's continuous backing: its own sheet must remain readable without blur. */
-:root[data-theme] .chat-header-menu { background: var(--chip-float); }
+/* More lost the old header's continuous backing: its sheet is the capsules' step, opaque like the work list's. */
+:root[data-theme] .chat-header-menu { background: var(--sheet-float); }
 :root[data-theme] .chat-field {
     background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
@@ -10248,7 +10336,7 @@ body.keyboard-open .project-panel {
    every state; hover deepens its fill, a press deepens it again, a chosen or switched-on one takes its tone. The bars'
    controls (the Project bar's close and the phone's menu button among them) are neutral capsules; Panic is danger,
    the budget neutral and amber only while a spending limit's stop waits for the owner. The room's status stays
-   a bare sentence inside the title capsule that opens its Shade (room_work.css). */
+   a bare sentence inside the title capsule that opens its work list (room_work.css). */
 :root[data-theme] :is(.chat-header-btn.ui-chrome-control, .shell-icon-control) {
     border-color: transparent; background: var(--chip-float); color: var(--text-primary); box-shadow: var(--elev-rest);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);

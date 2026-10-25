@@ -17,8 +17,8 @@ set to zero (owner decision Q1 = A; the background pass keeps its days): G1 thro
 proven drive into ``state/custody_trash``; the maintenance child deletes it, asked at once
 through ``maintenance.child.request``), G2 through ``subagent_worktrees.prune_orphans``/
 ``prune_execution_snapshots``, one copy per call with a stop check between calls (each call
-decides under the ops lock, as the custody cadence does: the registry row, pin and own-body
-verdict logic live there, and a move-aside would need a second row state). It runs on its own
+decides under that copy's record lock, as the custody cadence does: the record, pin and own-body
+verdict logic live there, and a move-aside would need a second record state). It runs on its own
 thread and stops between items on the owner's Stop, the server's stop or a closed supervisor
 generation (``_closed``), with no reconcile latch; concurrency is the retirers' own locks. A
 moved folder counts as removed only once its trash entry is gone, "still being deleted"
@@ -492,9 +492,13 @@ class FreeSpace:
                 groups.append(group)
             if self._closed():
                 raise _Stopped()
-        copies = _resolve_root()
-        listing = sorted(copies.iterdir()) if copies.is_dir() and {GROUP_LOST_COPIES, GROUP_SERVICE_FOLDERS} & set(
-            self._offered) else []
+        from ouroboros.unindexed import COPIES
+
+        # Older copies sit at the root, new ones in COPIES, each with its environment and test runs beside it.
+        folders = [_resolve_root(), _resolve_root() / COPIES]
+        listing = [entry for folder in folders if folder.is_dir() and not folder.is_symlink()
+                   and {GROUP_LOST_COPIES, GROUP_SERVICE_FOLDERS} & set(self._offered)
+                   for entry in sorted(folder.iterdir()) if entry.name != COPIES]
         recorded = {str(pathlib.Path(str(row["path"])).resolve(strict=False)) for row in rows if row.get("path")}
         if GROUP_LOST_COPIES in self._offered:
             # A copy's record precedes its folder, so a folder no record names is no copy being made.
@@ -513,11 +517,11 @@ class FreeSpace:
                         and not os.path.lexists(entry.with_name(entry.name[:-len(".env")])):
                     _sorted_into(group, "in_use" if live(_copy_owner(entry.name[:-len(".env")])) is not False else "offer",
                                  _Candidate(GROUP_SERVICE_FOLDERS, f"env:{entry.name}", entry, "env"))
-            runs = copies / ".test-evidence"  # records of test runs made inside copies without a task drive
-            for run in sorted(runs.iterdir()) if runs.is_dir() and not runs.is_symlink() else ():
-                if run.is_dir() and not run.is_symlink():
-                    _sorted_into(group, "offer" if _run_finished(run) else "in_use",
-                                 _Candidate(GROUP_SERVICE_FOLDERS, f"test_run:{run.name}", run, "test_run"))
+            for runs in (folder / ".test-evidence" for folder in folders):  # runs inside copies without a task drive
+                for run in sorted(runs.iterdir()) if runs.is_dir() and not runs.is_symlink() else ():
+                    if run.is_dir() and not run.is_symlink():
+                        _sorted_into(group, "offer" if _run_finished(run) else "in_use",
+                                     _Candidate(GROUP_SERVICE_FOLDERS, f"test_run:{run.name}", run, "test_run"))
             groups.append(group)
         if GROUP_RESULT_PINS in self._offered:
             # Held by custody (no disposition) while its task is over and its checkout is gone: only the pins remain.
@@ -725,7 +729,7 @@ class FreeSpace:
             maintenance.child.request()  # the moved drives' deletion is the maintenance child's job
 
     def _free_copies(self, root: pathlib.Path, candidates: List[_Candidate], run: Dict[str, Any]) -> None:
-        """One retirer call per copy, so Stop lands between copies and each ops-lock hold covers
+        """One retirer call per copy, so Stop lands between copies and each record-lock hold covers
         one checkout; a stop leaves the remaining copies as they were."""
         from ouroboros.subagent_worktrees import prune_execution_snapshots, prune_orphans
 

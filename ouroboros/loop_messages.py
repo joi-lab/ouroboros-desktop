@@ -222,8 +222,9 @@ def _record_owner_directive(
 
     ``origin`` carries the typed ids the caller already holds (a task message's
     ``source_task_id``, and ``relayed_from_task_id`` when a parent relayed a
-    sibling's words): the row keeps them so every reader of this one corpus can
-    tell a directive from a relayed proposal without inferring it from the text.
+    sibling's words; an owner answer's card as ``source_task_id`` + ``quiz_id``): the row
+    keeps them so every reader of this one corpus can tell a directive from a relayed
+    proposal, and find an answer's question, without inferring it from the text.
     """
     if ctx is None:
         return
@@ -277,7 +278,7 @@ def _initialize_owner_directives(ctx: Any, messages: List[Dict[str, Any]]) -> No
         # its human words as authority; the source-work link in the model's
         # surrounding frame and the external request are context, not orders.
         _loop()._record_owner_directive(ctx, source="owner_quiz_answer", content=late_answer_owner_text(answered),
-                                      origin={"source_task_id": late["task_id"]})
+                                      origin={"source_task_id": late["task_id"], "quiz_id": late["quiz_id"]})
         return
     author = metadata.get("objective_author")
     # A task-drafted objective, or the host's Continue work order (its facts are
@@ -290,7 +291,7 @@ def _initialize_owner_directives(ctx: Any, messages: List[Dict[str, Any]]) -> No
                 _loop()._record_owner_directive(
                     ctx, source=str(row["source"]), content=row.get("content"),
                     msg_id=str(row.get("msg_id") or ""),
-                    origin={key: row[key] for key in ("source_task_id", "relayed_from_task_id") if row.get(key)},
+                    origin={key: row[key] for key in ("source_task_id", "relayed_from_task_id", "quiz_id") if row.get(key)},
                 )
         return  # The task-drafted objective is never an owner directive.
     for message in messages:

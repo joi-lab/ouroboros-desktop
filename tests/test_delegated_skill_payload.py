@@ -18,6 +18,7 @@ import subprocess
 import pytest
 
 from ouroboros import delegate_custody as custody
+from ouroboros.unindexed import COPIES
 from tests._governance_docs_shared import architecture_text
 from ouroboros.subagent_worktrees import (
     find_execution_snapshot,
@@ -939,7 +940,7 @@ def test_registry_save_failure_leaves_no_orphan_snapshot_dir(tmp_path, monkeypat
         provision_payload_snapshot(
             target_root=skill, task_id="t1", snapshot_id="snapReg",
             worktree_root=tmp_path / "snaps", data_dir=data)
-    leftovers = list((tmp_path / "snaps").glob("dlgp_*")) if (tmp_path / "snaps").exists() else []
+    leftovers = [*(tmp_path / "snaps").glob("dlgp_*"), *(tmp_path / "snaps").glob(f"{COPIES}/dlgp_*")]
     assert leftovers == [], leftovers
     assert worktrees.find_execution_snapshot("snapReg", data_dir=data) is None
 

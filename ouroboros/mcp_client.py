@@ -46,7 +46,7 @@ from ouroboros.workspace_executor import resolve_process_env, validate_process_e
 from ouroboros import mcp_catalog
 from ouroboros.mcp_schema import (
     _redact_error_text as _redact_error_text,
-    _model_facing_description, _model_facing_result, _normalize_input_schema,
+    _exception_text, _model_facing_description, _model_facing_result, _normalize_input_schema,
     _wrap_schema_text_fields as _wrap_schema_text_fields,
 )
 
@@ -931,8 +931,10 @@ def _serialize_content_part(item: Any) -> Dict[str, Any]:
 def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Optional[int] = None) -> Any:
     """Run async work from sync code; the factory avoids reusing closed coroutines."""
     try:
-        asyncio.get_running_loop()
+        running = asyncio.get_running_loop() is not None
     except RuntimeError:
+        running = False
+    if not running:  # outside the handler, whose RuntimeError would be every failure's context
         return asyncio.run(coro_factory())
 
     # Existing loop: run the coroutine in a sub-thread.
@@ -1315,7 +1317,7 @@ class MCPManager:
         except OwnerPauseRefused as exc:
             return {"ok": False, "not_started": True, "error": f"MCP listing NOT STARTED: {exc}"}
         except BaseException as exc:  # noqa: BLE001 - retain last-known tools on every failure
-            error = f"{type(exc).__name__}: {_redact_error_text(exc, cfg)}"
+            error = _exception_text(exc, cfg)
         at = datetime.now(timezone.utc).isoformat()
         with self._lock:
             target = self._servers.get(server_id)
@@ -1332,7 +1334,7 @@ class MCPManager:
                 envelope = loaded
                 target.publication_error = ""
             except Exception as exc:
-                target.publication_error = f"{type(exc).__name__}: {_redact_error_text(exc, cfg)}"
+                target.publication_error = _exception_text(exc, cfg)
                 log.warning("MCP catalog publication failed for %s: %s", cfg.id, target.publication_error)
             self._adopt_catalog(target, envelope)
             return {"ok": items is not None, "published": not bool(target.publication_error),
@@ -1389,7 +1391,7 @@ class MCPManager:
         try:
             tools_raw = _run_async(lambda: self._async_list_tools(cfg, timeout), join_timeout=timeout + 3)
         except BaseException as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"{type(exc).__name__}: {_redact_error_text(exc, cfg)}"}
+            return {"ok": False, "error": _exception_text(exc, cfg)}
         truncated = any(
             isinstance(t, dict) and t.get("_pagination_truncated") for t in tools_raw
         )
@@ -1493,7 +1495,7 @@ class MCPManager:
                 from ouroboros.tools.tool_result import launch_refusal_result, _replace_tool_result
                 return _replace_tool_result(launch_refusal_result(exc),
                                             meta_updates={"mcp_call_not_sent": True})
-            body = f"⚠️ MCP_TOOL_ERROR: {type(exc).__name__}: {_redact_error_text(exc, cfg)}"
+            body = f"⚠️ MCP_TOOL_ERROR: {_exception_text(exc, cfg)}"
             text = _model_facing_result(cfg, tool.raw_name, body)
             return ToolResult(
                 status="error",

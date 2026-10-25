@@ -1984,10 +1984,15 @@ ARCHITECTURE §13 for the shared runtime gate.
 
 ## Reference skills
 
-Bundled references live under `repo/skills/`: `ui_design` guides visual work;
-`design_demo` presents a visual choice in one self-contained page. Both are
-`type: instruction`, recommended and on by default on fresh and upgraded installs.
-Trusted installation needs no review call; an owner's Off or removal stands.
+Bundled references live under `repo/skills/`: `ui_design` guides visual work and
+putting a visual choice before a person in one self-contained page, whose clean view
+hides the author's names and notes from a critic. It is `type: instruction`,
+recommended and on by default on fresh and upgraded installs. Trusted installation
+needs no review call; an owner's Off or removal stands. A built-in the app stops
+bundling is uninstalled on update when its copy is unchanged (its grants survive)
+and stays as the owner's copy when edited or when another folder uses its name;
+`design_demo` was merged into `ui_design` this way. An owner's edited `ui_design`
+keeps its own text, which may still name `design_demo`.
 `unix_computer_use` and `windows_computer_use` are bundled extensions.
 
 Non-declared delegated sessions receive an index of enabled, accepted or reviewed

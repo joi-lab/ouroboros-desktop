@@ -24,6 +24,7 @@ import pytest
 
 from ouroboros import body_candidate
 from ouroboros import subagent_worktrees as sw
+from ouroboros.unindexed import COPIES
 from ouroboros.task_results import write_task_result
 
 SIX_MIB = 6 * 1024 * 1024
@@ -270,7 +271,7 @@ def test_a_failed_provisioning_carries_git_s_own_words_and_leaves_nothing(tmp_pa
     assert isinstance(failed.value, subprocess.CalledProcessError)
     assert text.startswith("git update-ref refs/ouroboros/delegated/snap1 exited ") and "cannot lock ref" in text
     assert sw.find_execution_snapshot("snap1", tmp_path / "data") is None
-    assert not list((tmp_path / "copies").glob("dlg_*"))
+    assert not [*(tmp_path / "copies").glob("dlg_*"), *(tmp_path / "copies").glob(f"{COPIES}/dlg_*")]
     assert refs(source) == "refs/ouroboros/delegated\n"
     assert not list((tmp_path / "data" / "state" / "private_copies").glob("*.json"))
     git(source, "update-ref", "-d", "refs/ouroboros/delegated")

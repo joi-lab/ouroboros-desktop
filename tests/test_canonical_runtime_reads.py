@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ouroboros.context import _canonical_runtime_reader
+from ouroboros.tool_access_reads import canonical_runtime_reader as _canonical_runtime_reader
 from ouroboros.contracts.task_constraint import TaskConstraint
 from ouroboros.tool_access import build_resolved_resource_binding, filesystem_affordance_map
 from ouroboros.tools.registry import ToolContext, ToolRegistry

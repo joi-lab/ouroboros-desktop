@@ -282,6 +282,7 @@ from supervisor.events_worker_reports import (  # noqa: E402, F401 -- intentiona
     _handle_task_focus_updated,
     _handle_task_heartbeat,
     _handle_task_metrics,
+    _handle_ui_i18n_updated,
 )
 from supervisor.queue_transitions import (  # noqa: E402, F401 -- intentional public re-exports
     _close_campaign_after_owner_stop,
@@ -307,6 +308,7 @@ EVENT_HANDLERS = {
     "task_heartbeat": _handle_task_heartbeat,
     "task_dispatch_resolved": _handle_task_dispatch_resolved,
     "task_focus_updated": _handle_task_focus_updated,
+    "ui_i18n_updated": _handle_ui_i18n_updated,
     "typing_start": _handle_typing_start,
     "send_message": _handle_send_message,
     "task_done": _handle_task_done,

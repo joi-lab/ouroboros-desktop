@@ -385,14 +385,11 @@ def write_task_result(
 
     def _write(needs: set) -> Dict[str, Any]:
         # TZ-1 V10: the mailbox bytes are read BEFORE the row lock (a bounded union happens
-        # under it); a write the projector turns terminal, or a first row, asks once
+        # under it); a write the projector turns terminal asks once
         # (``Reprepare``) and the whole write repeats with that input prepared out here
         # (what an earlier round prepared is kept, not read again).
         if "mail" not in prepared and (status in _TRULY_TERMINAL_STATUSES or "mail" in needs):
             prepared["mail"] = (capture_unread_mail(results_drive_root, task_id), capture_owner_mail(results_drive_root, task_id))
-        if "rollup" not in prepared and (create_only or "rollup" in needs) and "swarm_fanout_rollup" not in fields:
-            from ouroboros.swarm_rollup import initial_swarm_rollup
-            prepared["rollup"] = initial_swarm_rollup(results_drive_root)
         return patch_document(results_drive_root, task_id, lambda existing: _merge(existing, prepared))
 
     def _merge(existing: Dict[str, Any], prepared: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -411,9 +408,8 @@ def write_task_result(
             return None
         prepared_fields = dict(fields)
         if not existing and "swarm_fanout_rollup" not in prepared_fields:
-            if "rollup" not in prepared:
-                raise Reprepare("rollup")
-            prepared_fields["swarm_fanout_rollup"] = prepared["rollup"]
+            from ouroboros.swarm_rollup import initial_swarm_rollup
+            prepared_fields["swarm_fanout_rollup"] = initial_swarm_rollup(results_drive_root)
         if "review_projection" in prepared_fields:
             prepared_fields["review_projection"] = merge_review_projection(
                 existing.get("review_projection"), prepared_fields["review_projection"],
@@ -421,6 +417,8 @@ def write_task_result(
         projected_fields = _field_projector(existing, {**prepared_fields, "status": status}) if _field_projector else prepared_fields
         if projected_fields is None:  # projector saw a terminal/stale row: no mutation
             return None
+        # The store reconciles fan-out base witnesses with addressed event union,
+        # including an independently repaired execution-root base on copy-back.
         projected_status = str(projected_fields.pop("status", status))
         projected_fields.pop("terminal_time", None)  # ordinary fields cannot manufacture clock authority
         # Monotonic lifecycle: no stale mirror may overwrite a terminal outcome.

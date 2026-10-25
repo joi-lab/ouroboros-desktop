@@ -1,4 +1,10 @@
-"""Provider model-catalog endpoint helpers."""
+"""Provider catalog discovery, shared by saved pickers and request-local drafts.
+
+Only saved discovery opts into image evidence for compatible, Anthropic and
+DeepSeek catalogs. Record their already-fetched rows off the event loop through
+the existing evidence owner, before reducing them to the public picker shape.
+Draft onboarding and Provider Test never opt in, even with saved credentials.
+"""
 
 from __future__ import annotations
 
@@ -113,6 +119,8 @@ async def _fetch_openai_compatible_model_catalog(
     provider_label: str,
     api_key: str,
     base_url: str,
+    *,
+    record_image_input: bool = False,
 ) -> list[dict[str, str]]:
     api_root = str(base_url or "").rstrip("/")
     if not api_root:
@@ -126,6 +134,12 @@ async def _fetch_openai_compatible_model_catalog(
     response.raise_for_status()
     data = response.json()
     raw_models = data.get("data", []) or []
+
+    if record_image_input:
+        from ouroboros.vision_routing import record_catalog_image_input
+
+        await asyncio.to_thread(record_catalog_image_input, provider_id, api_root, raw_models,
+                                source=f"the {provider_label} /models catalog")
 
     models: list[dict[str, str]] = []
     for item in raw_models:
@@ -146,6 +160,8 @@ async def _fetch_openai_compatible_model_catalog(
 async def _fetch_anthropic_model_catalog(
     client: httpx.AsyncClient,
     api_key: str,
+    *,
+    record_image_input: bool = False,
 ) -> list[dict[str, str]]:
     response = await client.get(
         "https://api.anthropic.com/v1/models",
@@ -157,6 +173,12 @@ async def _fetch_anthropic_model_catalog(
     response.raise_for_status()
     data = response.json()
     raw_models = data.get("data", []) or []
+
+    if record_image_input:
+        from ouroboros.vision_routing import record_catalog_image_input
+
+        await asyncio.to_thread(record_catalog_image_input, "anthropic", "https://api.anthropic.com/v1",
+                                raw_models, source="the Anthropic /models catalog")
 
     models: list[dict[str, str]] = []
     for item in raw_models:
@@ -220,6 +242,8 @@ async def _fetch_gigachat_model_catalog(
 
 def _provider_specs(
     settings: dict,
+    *,
+    record_image_input: bool = False,
 ) -> list[tuple[str, Callable[[httpx.AsyncClient], Awaitable[list[dict[str, str]]]]]]:
     specs: list[tuple[str, Callable[[httpx.AsyncClient], Awaitable[list[dict[str, str]]]]]] = []
 
@@ -242,7 +266,8 @@ def _provider_specs(
 
     anthropic_api_key = str(settings.get("ANTHROPIC_API_KEY", "") or "").strip()
     if anthropic_api_key:
-        specs.append(("anthropic", lambda client: _fetch_anthropic_model_catalog(client, anthropic_api_key)))
+        specs.append(("anthropic", lambda client: _fetch_anthropic_model_catalog(
+            client, anthropic_api_key, record_image_input=record_image_input)))
 
     minimax_api_key = str(settings.get("MINIMAX_API_KEY", "") or "").strip()
     if minimax_api_key:
@@ -275,6 +300,7 @@ def _provider_specs(
                 "DeepSeek",
                 deepseek_api_key,
                 DEEPSEEK_BASE_URL,
+                record_image_input=record_image_input,
             ),
         ))
     zai_api_key = str(settings.get("ZAI_API_KEY", "") or "").strip()
@@ -304,6 +330,7 @@ def _provider_specs(
                 "OpenAI Compatible",
                 compatible_api_key,
                 compatible_base_url,
+                record_image_input=record_image_input,
             ),
         ))
 
@@ -514,7 +541,7 @@ async def api_model_catalog(_request: Request) -> JSONResponse:
     items = list(subscription["items"])
     errors = list(subscription["errors"])
     seen_values: set[str] = set()
-    specs = _provider_specs(settings)
+    specs = _provider_specs(settings, record_image_input=True)
 
     timeout = httpx.Timeout(_CATALOG_HTTP_TIMEOUT_SEC)
     try:

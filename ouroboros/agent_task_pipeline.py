@@ -1040,6 +1040,9 @@ def emit_task_results(
         if not evolution_restart:
             pending_events.append({
                 "type": "restart_request", "reason": restart_reason,
+                "phase": "ready", **{key: value for key, value in
+                    (getattr(ctx, "pending_restart_request", None) or {}).items()
+                    if key in {"request_id", "task_id", "task_attempt"}},
                 "evolution_restart": False, "ts": utc_now_iso(),
             })
         ctx.pending_restart_reason = None

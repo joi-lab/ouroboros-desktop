@@ -20,6 +20,7 @@ import pytest
 
 from ouroboros import body_candidate
 from ouroboros import subagent_worktrees as trees
+from ouroboros.unindexed import COPIES
 
 _WAIT_SEC = 30.0
 
@@ -60,7 +61,7 @@ def provision(tmp_path, target, *, snapshot_id="fill"):
 def nothing_left(tmp_path, target, snapshot_id):
     assert trees.find_execution_snapshot(snapshot_id, tmp_path / "data") is None
     assert not git(target, "for-each-ref", "refs/ouroboros/delegated/").stdout
-    assert not list((tmp_path / "snapshots").glob("dlg_*"))
+    assert not [*(tmp_path / "snapshots").glob("dlg_*"), *(tmp_path / "snapshots").glob(f"{COPIES}/dlg_*")]
 
 
 def test_the_copy_is_git_s_checkout_of_the_snapshot_and_an_untouched_capture_is_empty(tmp_path):

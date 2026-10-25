@@ -298,9 +298,10 @@ The core writes each stored row and its live frame with an identical `ts` string
 | a Main pointer `chat` with `system_type: "project_question_pointer"` | the pointer row | `task_id` and `quiz_id` are equal |
 | `photo`, `video`, `document` or `links` | `msg_type` equal to the frame's `type` | `task_id` and `ts` are equal |
 | `card` | `msg_type: "card"` | `card.card_id` is equal |
+| a `chat` carrying `row_client_message_id` (an outgoing row saved under its own name, such as a note between works) | the row whose `client_message_id` is that value | the two names are equal |
 | any other `chat` | a row with the same `is_progress`, `role` and `system_type` | `task_id`, `ts` and `content` = `text` are all equal |
 
-Only `role:"user"` rows merge by `client_message_id`: on a System frame it only correlates the answered submission and is not persisted, so stored System replies use the other-chat rule. Never match on `ts` or `task_id` alone: one task writes many rows with close timestamps, and the same words can come from different tasks.
+Only `role:"user"` rows merge by `client_message_id`: on a System frame it only correlates the answered submission and is not persisted, so stored System replies use the other-chat rule. An outgoing row saved under its own name repeats that name on its live frame as `row_client_message_id`, never as `client_message_id`. Never match on `ts` or `task_id` alone: one task writes many rows with close timestamps, and the same words can come from different tasks.
 
 **On every connect and reconnect:**
 1. Open the socket and keep the frames it delivers.

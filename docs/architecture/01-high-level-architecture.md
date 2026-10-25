@@ -12,7 +12,7 @@ web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules n
     speech_providers.js, voice_recorder.js, dictation.js — The page's speech hub and strict selection, bounded Opus/AAC/WAV recording, cancellable transcription and draft-insertion decisions
     voice_controls.js, dictation_chooser.js, read_aloud.js — The composer's dictation mic, "+" → Add dictation…, Read aloud on replies (DESIGN "Voice controls")
     ui_primitives.js — safe-field, escaping and tone/status helpers (§3 Navigation)
-    i18n.js, settings_language.js, ui_i18n_types.js — interface language: a DOM overlay over rendered chrome from the translation memory, translated at the producer; chat prose, logs, code and owner names are never walked (§3 Settings; §7 `OUROBOROS_UI_LANGUAGE`)
+    i18n.js, settings_language.js, ui_i18n_types.js — interface language: a DOM overlay over rendered chrome from the translation memory, translated at the producer; chat prose, logs, code and owner names are never walked (§3 Settings)
     page_header.js, ui_interactions.js, scroll_fade.js — header/tab strip and the segmented-choice generator; dialog, menu and popup binders; scroll-edge fade (§3 Navigation)
     chat_decision.js, question_presentation.js, main_waiting.js, chat_render_batch.js, task_phase_chip.js, task_activity_types.js — chat helpers: decision cards, the Project-question form and its Main mirror, keyed timeline patches, status/motion and census schema (§3 Chat and Projects)
     chat_history.js, chat_history_reveal.js, chat_history_replay.js, chat_reading_position.js, chat_row_sleep.js, chat_row_placement.js — bounded pages, landing, replay, reading intent, row sleep, child words vs notices (§3 Timeline ownership)
@@ -133,9 +133,9 @@ ouroboros/ — agent core and shared runtime (§6)
   vision_routing.py, vision_image_limits.py, image_preparation.py — owner-mode image routing for Main, explicit VLM/caption sends, route limits and byte preparation (§6 Vision and local image evidence)
   fallback_cooldown.py — per-process 429-aware cooldown for the `OUROBOROS_MODEL_FALLBACKS` chain; advisory
   model_concurrency.py — per-(model, use_local) semaphore (`OUROBOROS_MODEL_MAX_CONCURRENCY`), per-process only: one task's loop, children and pings cannot exhaust a model's rate limit
-  project_naming.py — SSOT for LLM-first project naming with deterministic fallback: admission (no model call), card conversion, the lazy turn namer
-  ui_translation.py — the translation generator: one worker thread per process, accounted light-model batches; free text resolves to a tag or `language_needs_model`
-  ui_language.py, i18n_memory.py — the interface-language fact and the per-language translation memory `state/i18n/<tag>.json`, provenance owner > imported > generated (§7 `OUROBOROS_UI_LANGUAGE`)
+  project_naming.py — admission names, bounded Light naming with fallback, card conversion and lazy turn naming (§7)
+  ui_translation.py — one translation worker, accounted Light batches and free-text language resolution (`language_needs_model`; §7)
+  ui_language.py, i18n_memory.py — the interface-language fact and one translation memory per language, `state/i18n/<tag>.json`: owner > imported > generated (§7)
   loop_tool_execution.py, tool_call_log.py — tool dispatch, results, per-invocation counting
   deadline_utils.py — deadline parsing and the transport-vs-logical wait seam
   observability.py, source_retention.py — private CAS: equal histories stored once, gzip-1, hardlinks (§10)
@@ -157,7 +157,7 @@ ouroboros/ — agent core and shared runtime (§6)
   external_runs.py — a task's delegated runs under one stop policy (§6 Owner Pause)
   working_checkpoint.py — one rolling working state per attempt, delayed content ACK, frozen recovery (§6 Saved working state)
   local_custody_repair.py — an addressed action retires a positively ended local owner's claim; passive reads write nothing (§6 Owner Continue)
-  owner_continue.py, schedule_continuation.py — Continue eligibility and owner/schedule sources (§6)
+  owner_continue.py, schedule_continuation.py — Continue eligibility and sources (§6)
   routing_wait.py — receipt waits and the one act projection that the picker, routing tools and observer share
   outcomes.py — typed task-outcome and objective authority with separate lifecycle, execution, objective, review, artifact and verification axes (§6 Task lifecycle; §10.1)
   outcome_receipt_store.py — verification-receipt append/read authority; a zero-run receipt writes `incomplete`/`unknown` only: a zero-run "complete" is unverifiable self-report
@@ -252,12 +252,12 @@ ouroboros/ — agent core and shared runtime (§6)
   delegate_recovery.py, delegate_continuation.py, delegate_pending.py — exact-leaf recovery, `continue_from` after any stop, pending-invocation replay with the original key (§6 Delegated subagents)
   delegate_registration_policy.py, delegate_readonly_inputs.py — `resolve_registration` and STARTED-row field tables; readonly lineage inputs
   delegate_terminal.py, owner_stop_receipt.py — terminal reconciliation, audit-only custody persistence, typed custody card rows, Wrap up's saved-work receipt (§6 Delegated subagents)
-  subagent_dispatch_notes.py — executor-note exports shared with `agent.py`; the note/blocked-outcome pair is implemented in `agent_dispatch.py`
+  subagent_dispatch_notes.py — executor-note exports shared with `agent.py`; `agent_dispatch.py` implements the note/blocked-outcome pair
   subagent_messages.py, subagents.py, subagent_history.py, subagent_metrics.py, subagent_metric_events.py — child messages, dispatch, dated row measurements, no admission policy (§6)
   subagent_worktrees.py, worktree_removal.py — private-copy primitive, `state/private_copies/` records, `refs/ouroboros/delegated*/` pins, custody GC, removal retries (§6 Delegated subagents)
-  force_remove.py — shared permission-granting `force_rmtree`
+  force_remove.py, unindexed.py — shared permission-granting `force_rmtree`; `.noindex` copy names
   body_candidate.py, body_adoption.py, body_switch.py — Own-body worktree authoring and restart-bound adoption of an exact reviewed commit before body imports (§6 Own-body candidates; §2)
-  artifacts.py, artifact_storage.py — attachments (`artifact_store/attachments/`), records, block clones, patch compression, scratch hashes (`.scratch_manifest.json`), undeclared-output guard, tool-evidence slices
+  artifacts.py, artifact_storage.py, artifact_directories.py — artifact_store/attachments/, records/clones, patch compression, ZIPs, .scratch_manifest.json hashes, output audit, tool-evidence slices (§6)
   chat_uploads.py, confined_files.py — the owner-attachment store (`data/uploads`) with byte-proven media kind; held-directory walks and regular-file opens (POSIX dirfd, Windows NT handles) for attachments, task files and sources (DESIGN "Chat attachments")
   retention.py, workspace_preflight.py — GC clamp, cutoff and exact task-drive retention date; workspace facts and delegated scratch/cache preparation/retirement (§6)
   project_sources.py — folder attach validation (realpath, not the home root, no repo/data overlap); opt-in `init_git`; a server-side clone never prompts (typed `auth_required`); attaching is the trust grant (`trusted_at`)
@@ -274,7 +274,7 @@ ouroboros/ — agent core and shared runtime (§6)
   review_custody.py, review_source_closure.py, review_operation.py, review_live_join.py — Reviewer workers: no-resend custody, retained owner-bound inputs, panel waits/checkpoints, existing-producer collection/live joins (§6 Review stack; Paid stamp and owner custody)
   review_owner_custody.py — Paid attempts record `(server session, pid)` (§6 Paid stamp and owner custody)
   review_execution.py, review_session_preparation.py — Review delivery (`delivery_retrieves(route, native_retrieval)`) and session preparation without transport fallback (§6)
-  review_native_episode.py — Read-only native API reviewer episodes for pool seats and deep self-review (§6 Native tool-round episode)
+  review_native_episode.py, review_native_images.py — Read-only native API reviewer episodes for pool seats and deep self-review (§6 Native tool-round episode)
   review_session_reads.py — Harness-journal reading diagnostics (`harness_observed`), never verdict, quorum or retry authority (§6 Review delivery)
   review_verdict_extraction.py — verdict canonicalization by output shape: strict parse, then light-model extraction (`array`, `object`, `report` pass-through)
   review_session_custody.py, review_checking.py, review_checking_prune.py — Delegated-review recovery validation and the pre-POST durable invocation checkpoint; writable seats' private copies and the prune of every review copy (§6 Review delivery)
@@ -363,7 +363,7 @@ ouroboros/ — agent core and shared runtime (§6)
   protected_artifacts.py — Execute-only black-box policy for protected artifacts
   shell_parse.py — Shared command/argv normalization and POSIX wrapper grammar; observed targets, not permission judgments (§6 Safety and runtime mode)
   argv_budget.py — Argv admission counts encoded bytes of argv plus environment (ARG_MAX charges both); asked by skill_exec before exec
-  workspace_executor.py, docker_process_observer.py — `local` and network-none `docker_exec`; Docker liveness needs `sh`, `cat`, readable `/proc` (§9)
+  workspace_executor.py, workspace_executor_paths.py, docker_process_observer.py — backends/output paths (§6); liveness needs `sh`, `cat`, `/proc` (§9)
   deliverables_paths.py — Lexical and case-folded deliverables path views
   tool_capabilities.py — SSOT for the core, parallel-safe, untruncated and stateful-browser tool sets and the cognitive-memory tool class every Presence ceiling carries
   tool_access.py — ToolProfile × ResourceRoot × Operation matrix, affordance map, closed-enum `required_capabilities` check
@@ -460,7 +460,7 @@ ouroboros/ — agent core and shared runtime (§6)
     cards.py — `show_card`: a validated card body, stored before its `send_card` event
     core_file_tools.py, core_secret_paths.py, core_artifacts.py — File reads/lists (opt-in bounded tree); delegated action/runtime helpers; human artifact delivery (§6 Credential mutation and diagnostic redaction)
     shell.py — Process tools `run_command`/`run_script` (§9)
-    shell_guards.py — Shared process-path inspection helpers and target extractors; process admission is owned by registry_guard_process.py (§6)
+    shell_guards.py — Shared process-path inspection helpers and target extractors; registry_guard_process.py owns process admission (§6)
     registry_core.py, registry_guards.py, registry_guard_process.py, tool_context.py — registry load/schema/dispatch, the capability/resource/update/skill guards, process admission, `ToolContext`/`BrowserState` (protocol: contracts/tool_context.py) (§6 Safety and runtime mode)
     git.py, git_plumbing.py, git_repo_edit.py, git_vcs_ops.py, vcs_read.py, git_review_cycle.py, git_managed_postcommit.py, git_evolution.py — Git/write tools with the deterministic, test and one-wave review commit gates and the author's optional preflight; its leaves: plumbing, repo write/edit, VCS inspection and rollback, the reviewed-commit cycle, managed-merge post-commit gates, evolution-campaign authority (§6 Git and commit review)
     search.py — `web_search`, one leg per Source/Model of `ouroboros/search_routes.py` (§6 Web access mechanisms)
@@ -475,7 +475,7 @@ ouroboros/ — agent core and shared runtime (§6)
     compact_context.py — LLM-requested tool-history compaction trigger, applied on the next round
     control.py — control tools: restart, timeout settings, scheduling, review, chat history and model switching; the `schedule_subagent` contract and compact `wait_task` projections (§6 Delegated subagents)
     control_delegation.py — Delegation-budget affordances and `move_to_project` (§6 Project placement)
-    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources
+    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, control_ui_translation.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources, owner wording pins (§3)
     tool_discovery.py — List/enable owner: callable catalog by namespace in every mode; grants nothing
     tool_result.py, tool_catalog.py, tool_resolution.py — the typed internal tool result and its text adapter, intrinsic tool descriptors, argument normalization with physical target binding
     arg_feedback.py — What a tool says about an argument it did not obey: the one-line ignored disclosure and the typed refusal naming field, value and repair (DEVELOPMENT "LLM-first affordances")
@@ -487,7 +487,7 @@ ouroboros/ — agent core and shared runtime (§6)
     deliverables_shell.py — cp/mv/ln into deliverables with symlink checks
     shell_audit.py — Post-exec custody audit for process tools
     process_facts.py — Per-call selected environment, secret egress masking and typed process/runtime facts for loop_tool_execution.py; `run_script` cites its script's redacted dispatch record (`get_task_result` reads it)
-    write_shape.py — write-shape predicates behind shell_parse.py and shell_guards.py; permission is owned by the task/resource and Supervisor contract (§6 Safety and runtime mode)
+    write_shape.py — write-shape predicates behind shell_parse.py and shell_guards.py; the task/resource and Supervisor contract owns permission (§6 Safety and runtime mode)
     extension_dispatch.py — Extension tool dispatch; discovery stays in registry.py
     release_sync.py — `sync_release_metadata` for commit-admission preflight; the carrier-span SSOT `VERSION_CARRIER_SPANS` shared by the managed-update resolver and the commit packet (§10 invariant 2)
     review_synthesis.py — Shared synthesis helpers
@@ -551,7 +551,7 @@ ouroboros/ — agent core and shared runtime (§6)
   obligations.py — Atomic current sets (incl. `owner_questions`); owning transitions publish before work and retire after discharge
   startup_migrations.py, startup_task_files.py — Explicit inherited-state import/repair and addressed file recovery
   delegate_custody_current.py — Custody on the store: run rows, pending invocations, outbox, importer's fold
-  owned_shutdown.py — the ownership set `state/owned_processes.json` (both custody funnels write it) and the one bounded exit stop; unconfirmed stops are retried at the next start (§9)
+  owned_shutdown.py — the ownership set `state/owned_processes.json`, the one bounded exit stop with its next-start retry and entry `state/shutdown_entry.json` (§9)
   platform_layer.py, platform_win32_abi.py — OS process/lock helpers, descendant seam, private Win32 ABI (Platform substrate below)
   verified_download.py — Shared exact-size/digest verification and atomic cached byte delivery
   node_runtime.py — Execution-probed Node runtime health (`node_runtime_health`; a missing binary is never cached), `select_skill_node_runtime`, `skill_node_emergency_path_dir`
@@ -620,7 +620,7 @@ Birth identity is separate from PID presence. Linux mints boot-qualified ticks, 
 
 ### Data layout (`~/Ouroboros/`)
 
-Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSISTENCE.md` registers every durable entity's writer, format, schema, retention and reset.
+Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` registers each durable entity's writer, format, schema, retention and reset.
 
 ```
 ~/Ouroboros/
@@ -716,7 +716,7 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   ├── archive/                   ← rotated logs, rescue snapshots, archived repos; never GC'd
 │   └── uploads/                   ← chat attachments
 ├── projects/                      ← genesis subagent projects (`OUROBOROS_SUBAGENT_PROJECTS_ROOT`), never GC-pruned
-├── subagent_worktrees/            ← self-worktree checkouts (`OUROBOROS_SUBAGENT_WORKTREE_ROOT`), GC-pruned
+├── subagent_worktrees/            ← self-worktree checkouts (`OUROBOROS_SUBAGENT_WORKTREE_ROOT`), GC-pruned; new in `copies.noindex/`
 ├── Deliverables/                  ← bare user_files filenames (`OUROBOROS_DELIVERABLES_ROOT`), never GC-pruned
 └── ouroboros.pid                  ← launcher PID lock; auto-released on crash
 ```

@@ -131,6 +131,7 @@ _PENDING_FIELDS = (
     'subagent_availability', 'child_drive_root', 'budget_drive_root', 'task_constraint',
     'predecessor_authority_source', 'metadata', 'origin_message_ref', 'origin_message_text',
     'image_source_ref', 'image_mime', 'image_caption',
+    'attachment_manifest', 'attachment_images', 'attachments',
     '_attempt', 'review_reason', 'review_source_task_id', '_budget_pause',
     'budget_resumed_at', '_terminalization_retry', '_cancel_intent_authority_hold', '_owner_wait_resume',
     '_budget_pause_resume', '_budget_pause_hold', '_resume_selection', '_continuation_prepared', '_admission_owner_token',
@@ -227,6 +228,9 @@ def persist_queue_snapshot(reason: str = "") -> bool:
             "budget_root_fences": budget_root_fences,
             "pending": pending_rows, "running": running_rows,
         }
+        from ouroboros.server_restart import _AGENT_RESTART_REPLY, agent_restart_snapshot
+
+        payload.update(restart_intent=agent_restart_snapshot(), restart_reply=dict(_AGENT_RESTART_REPLY))
         from ouroboros.budget_pause import BUDGET_HOLD_KEY
 
         fenced = {str(row.get("root_task_id") or "") for row in budget_root_fences}

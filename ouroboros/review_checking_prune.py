@@ -51,6 +51,7 @@ from ouroboros.review_checking import (
     _seat_locked,
     seat_dir,
 )
+from ouroboros.unindexed import unindexed
 
 _PASS_LOCK = threading.Lock()
 
@@ -139,7 +140,7 @@ def _checkout_hold(data_root: Any, entry: pathlib.Path, *, rounds: tuple, source
     if marker is not None and (not isinstance(marker, dict) or marker.get("schema_version") != 1):
         return "marker_unreadable"
     task_id = str(marker.get("task_id") or "") if marker is not None else owners.get(entry.name, "")
-    repo = (entry / "repo").resolve(strict=False)
+    repo = unindexed(entry, "repo").resolve(strict=False)
     if not task_id:
         return "owner_unknown"
     if entry.name in active:
@@ -176,7 +177,7 @@ def _remove_checkout(entry: pathlib.Path) -> str:
     from ouroboros.subagent_worktrees import _force_rmtree
     from ouroboros.tools.review_subject import _git_bytes
 
-    repo, common = entry / "repo", None
+    repo, common = unindexed(entry, "repo"), None
     if (repo / ".git").is_file():
         rc, out, err = _git_bytes(repo, ["rev-parse", "--git-common-dir"])
         text = out.decode("utf-8", "replace").strip()
@@ -248,8 +249,8 @@ def finished_seat_homes(data_root: Any, live: Callable[[str], Any], stopped: Cal
             continue
         if task_id not in proven:
             proven[task_id] = _task_proven_over(task_id, data_root, live)
-        found.append((home, "offer" if proven[task_id] and not _checking_area_present(home / "area") else "in_use",
-                      task_id))
+        bare = proven[task_id] and not _checking_area_present(unindexed(home, "area"))  # its copy is gone
+        found.append((home, "offer" if bare else "in_use", task_id))
     return found
 
 
@@ -265,7 +266,7 @@ def retire_seat_home(data_root: Any, home: pathlib.Path, live: Callable[[str], A
             return "busy"
         if task_id not in proven:
             proven[task_id] = _task_proven_over(task_id, data_root, live)
-        if _checking_area_present(home / "area") or not proven[task_id]:
+        if _checking_area_present(unindexed(home, "area")) or not proven[task_id]:
             return "in_use"
     trash = pathlib.Path(data_root) / "state" / "custody_trash" / f"{home.name}-{uuid.uuid4().hex[:12]}"
     trash.parent.mkdir(parents=True, exist_ok=True)
@@ -397,7 +398,7 @@ def prune_review_checkouts(data_root: Any, live_task_ids: Any, *, views_since: O
 
         def seat(home: pathlib.Path) -> set:
             """One seat home; returns the views it still needs."""
-            area = home / "area"
+            area = unindexed(home, "area")
             if home.is_symlink():  # never followed; it names no copy this pass could own
                 if views:
                     report["errors"].append(f"{home.name}: the seat home is a link")

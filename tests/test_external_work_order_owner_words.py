@@ -179,7 +179,7 @@ def test_the_authority_fingerprint_does_not_move_with_the_words(tmp_path):
 
 
 def test_the_parent_is_told_what_a_child_and_a_session_start_with():
-    """The parameter texts the parent reads say what the host guarantees and what it must write itself."""
+    """The emitted contract says what the host supplies and what the parent writes."""
     from ouroboros.tools import delegate
     from ouroboros.tools.control import get_tools
 
@@ -187,8 +187,9 @@ def test_the_parent_is_told_what_a_child_and_a_session_start_with():
     start = next(tool for tool in delegate.get_tools() if tool.name == "delegate_start")
     prompt = start.schema["parameters"]["properties"]["prompt"]["description"]
     context, selection = schedule["context"]["description"], schedule["input_sources"]["description"]
-    for text in (context, selection, prompt):
+    for text in (context + "\n" + selection, prompt):
         assert "my human's originating words" in text
+    assert "input_sources says what it starts with" in context
     assert "write the orientation it lacks" in context and "none of my memory" in context
     assert "why the work exists" in prompt and "the host supplies the canonical work order" in prompt
     assert selection.startswith("Omit or shared: the child starts with ") and "one read away" in selection

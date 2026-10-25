@@ -23,7 +23,7 @@ from ouroboros.skill_loader import (
     grant_status_for_skill,
     skill_conflict_status,
 )
-from ouroboros.skill_peer_inventory import discover_skill_peers
+from ouroboros.skill_peer_inventory import discover_conflict_peers
 
 log = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ def _extension_runtime_state(
     review_gate = skill.review.gate_for(hash_now)
     if drive_root is None:
         drive_root = pathlib.Path(skill.skill_dir).parent.parent.parent
-    peers = list(skills) if skills is not None else list(discover_skill_peers(
-        pathlib.Path(drive_root), repo_path=repo_path
+    peers = list(skills) if skills is not None else list(discover_conflict_peers(
+        pathlib.Path(drive_root), skill.name, repo_path=repo_path
     ))
     if not any(peer.name == skill.name for peer in peers):
         peers.append(skill)
@@ -201,9 +201,6 @@ def runtime_state_for_skill_name(
         selected = list(skills)
     else:
         selected = discover_skill_identity(drive_root, skill_name, repo_path=resolved_repo_path, locations=locations)
-    peer_projection = list(skills) if skills is not None else list(
-        discover_skill_peers(drive_root, repo_path=resolved_repo_path, locations=locations)
-    )
     safe_name = _sanitize_skill_name(skill_name)
     skill = next((item for item in selected if item.name == safe_name), None)
     if skill is None:
@@ -224,12 +221,15 @@ def runtime_state_for_skill_name(
             "reason": "missing",
         }
     else:
+        peers = list(skills) if skills is not None else list(
+            discover_conflict_peers(drive_root, safe_name, repo_path=resolved_repo_path, locations=locations)
+        )
         state = _apply_durable_extension_health(
             _apply_deps_block(
                 _extension_runtime_state(
                     skill,
                     drive_root=pathlib.Path(drive_root),
-                    skills=peer_projection,
+                    skills=peers,
                     repo_path=resolved_repo_path,
                 ),
                 pathlib.Path(drive_root),

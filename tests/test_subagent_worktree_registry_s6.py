@@ -26,6 +26,7 @@ import pytest
 from ouroboros import body_candidate
 from ouroboros import subagent_worktrees as wt
 from ouroboros.task_results import write_task_result
+from ouroboros.unindexed import COPIES, copy_path
 
 
 MALFORMED = '"not a record"'
@@ -224,7 +225,7 @@ def test_c4_a_record_write_failure_leaves_no_worktree_or_ref(tmp_path, monkeypat
             worktree_root=snaps, data_dir=data)
 
     assert len(calls) == failing_call
-    leftovers = sorted(p.name for p in snaps.glob("dlg_*")) if snaps.exists() else []
+    leftovers = sorted(p.name for p in [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")])
     assert leftovers == [], leftovers
     assert _git(
         target, "rev-parse", "refs/ouroboros/delegated/snapFail", check=False,
@@ -239,7 +240,7 @@ def test_c4_b_the_acting_worktree_cleans_up_on_record_failure(tmp_path, monkeypa
     after them removes both — otherwise every retry strands one more worktree+branch."""
     target = _seed_target(tmp_path)
     snaps, data = tmp_path / "snaps", tmp_path / "data"
-    copy = (snaps / "acting9")
+    copy = copy_path(snaps, "acting9")
 
     # Leg 1: an unreadable record of this copy refuses first; its bytes are kept.
     (data / "state" / "private_copies").mkdir(parents=True)

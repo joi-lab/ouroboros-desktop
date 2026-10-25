@@ -147,7 +147,7 @@ export function clock(at) {
 }
 
 /**
- * A work's line, said beside its word (the card's quieter line, the Shade row's, the sidebar's name after the word):
+ * A work's line, said beside its word (the card's quieter line, the work-list row's, the sidebar's name after the word):
  * the current episode's own sentence (the owner's Pause with the time it was pressed), then what still runs beside
  * it, one sentence per tail, joined " · ". The line never repeats `word`: an answer wait's own words are compared by
  * their code, in any language.
@@ -220,7 +220,7 @@ export function ownStopPress(state, records) {
 }
 
 /**
- * One work's row in the room's Shade: its word (an outcome beside Finalizing…), its line beside it, the row's tone
+ * One work's row in the room's work list: its word (an outcome beside Finalizing…), its line beside it, the row's tone
  * (the word's ink), its `mark` (the work's shape as the server names it; the owner's own Stop press moves it), `owner`
  * whether something in the work waits for the owner (its turn: the amber dot takes the mark's place; a Pause by the
  * owner or by Ouroboros is not the owner's move) and `outcome`, the known outcome said beside Finalizing… (its dot in

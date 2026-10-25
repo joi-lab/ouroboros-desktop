@@ -201,6 +201,11 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
         "open_relays": dict(getattr(ctx, "_open_relays", None) or {}),
         # Own routing acts still unconfirmed: a resumed turn reports their outcomes too.
         "unconfirmed_routing_acts": list(getattr(ctx, "unconfirmed_routing_acts", None) or []),
+        "restart": {
+            "request": dict(getattr(ctx, "pending_restart_request", None) or {}),
+            "reason": getattr(ctx, "pending_restart_reason", None),
+            "evolution": bool(getattr(ctx, "pending_restart_is_evolution", False)),
+        },
         "route": {key: getattr(ctx, key, None) for key in (
             "active_model", "active_effort", "active_use_local", "active_context_mode",
             "active_model_override", "active_effort_override", "active_use_local_override",
@@ -1071,6 +1076,15 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
     ctx._held_owner_messages = dict(state.get("held_owner_messages") or {})
     ctx._open_relays = dict(state.get("open_relays") or {})
     ctx.unconfirmed_routing_acts = [dict(act) for act in state.get("unconfirmed_routing_acts") or [] if isinstance(act, dict)]
+    restart = state.get("restart") or {}
+    request = restart.get("request") or {}
+    # Cold Pause/Resume keeps the requester's obligation without sending again.
+    # A new task or attempt inherits no authority to finish this Restart.
+    if (request.get("task_id"), request.get("task_attempt")) == (
+            ctx.task_id, int(getattr(ctx, "task_attempt", None) or 1)):
+        ctx.pending_restart_request = dict(request)
+        ctx.pending_restart_reason = restart.get("reason")
+        ctx.pending_restart_is_evolution = bool(restart.get("evolution"))
     # Match the agent's native handoff clock; a budget grant overrides it separately.
     ctx._budget_paused_sec = budget_paused_seconds(adopt_handoff_clock(
         state.get("model_wait") or {}, getattr(ctx, "owner_wait_resume", None)))

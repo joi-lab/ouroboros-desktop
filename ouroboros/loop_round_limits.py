@@ -244,15 +244,15 @@ def _drain_incoming_messages(
                 continue
             if kind == KIND_QUIZ_ANSWER:
                 from ouroboros.owner_quiz import late_answer_owner_text
-                answer = (entry.get("quiz_delivery") or {}).get("answer_snapshot")
+                delivery = entry.get("quiz_delivery") or {}
+                answer = delivery.get("answer_snapshot")
                 owner_words = late_answer_owner_text(answer) if isinstance(answer, dict) else dmsg
                 if isinstance(answer, dict):
                     from ouroboros.owner_relay import retain_owner_message
                     retain_owner_message(owner_ctx, (answer.get("delivery") or {}).get("answer_row"))
-                _loop()._record_owner_directive(
-                    owner_ctx, source="owner_quiz_answer", content=owner_words,
-                    msg_id=str(entry.get("msg_id") or ""),
-                )
+                _loop()._record_owner_directive(  # the delivered card's identity: its question stays findable
+                    owner_ctx, source="owner_quiz_answer", content=owner_words, msg_id=str(entry.get("msg_id") or ""),
+                    origin={"source_task_id": delivery.get("task_id"), "quiz_id": delivery.get("quiz_id")})
                 deliver_quiz_answer(
                     entry, task_id, event_queue,
                     lambda text: _loop()._append_or_merge_user_message(messages, text, slot=owner_ctx,

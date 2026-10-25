@@ -695,6 +695,25 @@ def _normalize_workspace_artifact_status(result: Dict[str, Any]) -> Dict[str, An
     return normalized
 
 
+def stored_list_order_is_final(result: Dict[str, Any]) -> bool:
+    """Whether this body's status and ts suffice for filtered-list membership.
+
+    Derived by the store writer, never a declaration that the task cannot change.
+    Retry and replica reads, workspace finalization and every nonterminal/unknown
+    status still need the ordinary effective reader. A later body write rederives
+    the fact; a pre-projection writer leaves NULL. No external state is consulted.
+    """
+    status = result.get("status")
+    ts = result.get("ts")
+    if status not in FINAL_STATUSES or (ts is not None and (not isinstance(ts, str) or ts != ts.strip())):
+        return False
+    if result.get("superseded_by") or result.get("retry_task_id"):
+        return False
+    if not cancellation_blocks_child_result(result) and _child_drive_candidates(result):
+        return False
+    return _normalize_workspace_artifact_status(result).get("status") == status
+
+
 def _parent_workspace_artifact_lifecycle_fields(result: Dict[str, Any]) -> frozenset[str]:
     metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     if not (str(result.get("workspace_root") or "").strip() or str(metadata.get("workspace_root") or "").strip()):
