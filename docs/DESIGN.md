@@ -1784,6 +1784,79 @@ load (`Held back: this page was opened with everything held.`), each released by
 its own control. Ouroboros reads the fact in one System row in the chat that
 owns the item.
 
+### Dashboard › Consciousness
+
+The headline says the server's current state, independently of the recent rows.
+“Due; waiting for current work” preserves a due clock without promising a new
+turn while work is still live. Recent wakes names its coverage: “wakes that
+reached a model call in the last 48 h”. An empty window and an unavailable read
+are different states; neither describes whether consciousness is switched on.
+
+A Recent wakes row shows the mind’s sentence when present, keeps the whole note behind “more”, and borrows its status and money words from the task card.
+Its anatomy is time; Own time with the house mark or an authored place label;
+phase and known duration; the optional authored summary; and cost at the edge.
+Without a summary, known tool-call and round counts occupy the line. No sentence
+is fabricated from the note. The collapsed summary may ellipsize in CSS; the
+stored sentence and note are never clipped, repaired or replaced with a preview.
+
+Native “more” discloses “Its own note” through the chat Markdown renderer, known
+counts, checks in words and the available task door. The whole note wraps on a
+phone; wide Markdown owns its own horizontal scroller. Working, Waiting, Queued,
+Paused and State unknown remain distinct. “Done · no message” requires a silent
+finish with no accepted owner message and no host notice. A held step is not
+chosen silence; a released output is not proof of delivery. Checks name their
+tool; only warned, held and sent-despite facts get amber chips. “not checked”
+does not say whether a read was exempt or the Safety Supervisor was off, and
+the row never claims that every call was checked.
+
+Money keeps the card's scope and uncertainty: confirmed zero is `$0.00`, an
+unavailable amount is “spend unknown”, and a known part retains “Tracked:” and
+any “up to” qualification. Open accounting keeps “so far”; it is no final total.
+The allowance says “Some calls have no price” and “next check at”, never promises
+that the check will permit more work. Visible and accessible words agree.
+
+“Open in Main ↗” opens the existing card by its task and chat identity through
+the around-history reader. This build offers it only for cards in Main; a focus
+in a place room has no door until that room has a reader. Refresh preserves an
+open row's actual nodes, disclosure, focus, selection and reading position;
+changed content and order wait until it closes. Host words use `tr`/`fmt`;
+summaries, notes and place labels stay under `data-i18n-authored`.
+
+#### Places and Connect
+
+A new place starts Silent in the Connect write; it can still wake to read and think, while writes through the connector’s declared tools and delivery queue are held.
+Connect says: “It starts Silent: it hears and thinks there and sends nothing
+until you make it Active.” The place sheet retains the Silent disclosure about
+scripts, browser actions and unintegrated code. Repeat Connect keeps the saved
+state and choices; Paused keeps the connection without admitting a new focus.
+
+The connector carries the service name and monochrome service mark; the technical
+skill id stays in details. The sheet's title is the service and saved instance
+label, with its state beside it. Readiness is separate: “Connector on”, “Off in
+Skills”, “Review required”, “Connector not running” or “Connector unavailable”.
+The connector's own status supplies setup facts; neither Active nor a service
+mark proves readiness. Service, instance and account names, connector status
+and declared signal labels are authored content.
+
+“Where” offers instances from the connector's declared status list. An absent
+list offers no instance chooser; known choices keep their labels and exact
+identities; a known empty list says “None offered yet” with its settings door;
+an unreadable list says “Could not read the connector’s list” with “Try again”.
+“Whole account” remains an explicit separate action in each state; a missing
+account on an instance never becomes that choice. Existing identities say
+“Connected · Open”. Connected services stay listed as “Connected · N places ·
+Connect another”; adding a narrower place does not relabel a broad one.
+
+“What calls it here” lists supported kinds, with the connector's suggestions
+selected at Connect and author chips on saved choices. It says “A checked kind
+calls it here at once, when <Service> reports it.” Core kinds use shared words;
+declared signals use their connector's labels and settings. “also wakes on bot
+messages” is itself a wake reason as well as permission to hear bots. Other
+captured events remain observations for the own wake; the mind decides what to
+read, so the sheet must not promise exhaustive reading. A revision conflict
+says “Changed elsewhere; your text is kept”; it keeps the draft for a deliberate
+save against refreshed facts.
+
 ### Voice controls
 
 Dictation and Read aloud are host controls over engines that skills provide;
@@ -2012,12 +2085,14 @@ action changes model/account only. Closing the chat disposes view resources
 without claiming it stopped the task; continuation requires the Ouroboros
 process to keep running.
 
-A consciousness wake-up needs nothing of its own here: it is an ordinary direct
-turn with its own task id, so its model wait, controls and temporary model
-change behave exactly as an owner turn's and last until that turn ends; the
-persistence checkbox still saves the consciousness role. `Started by: Consciousness`
-names its origin in the block's details; its final bubble and tasks' cards
-keep that origin, never a separate card, reused slot or vocabulary.
+A wake keeps the ordinary task card: its accepted summary fills the existing title slot and leads Details as “In its words”; its answer remains its own note when it finishes silently.
+While running, the server supplies Own time or the focus's cause label in that
+same title slot; no summary leaves that title in place. Old wakes retain their
+stored title, with no invented sentence. Model waits, controls and temporary
+model changes last until the turn ends; the persistence checkbox still saves
+the consciousness role. `Started by: Consciousness` keeps the origin in Details
+and on any delivered answer. The summary is authored text, not another message
+or card.
 
 An already-delivered answer does not close a still-open post-task synthesis.
 Consolidation or chooser waits use the same role controls in that task's
