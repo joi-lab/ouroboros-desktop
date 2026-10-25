@@ -234,7 +234,8 @@ def test_the_view_fact_reaches_the_cap_info_the_task_context_and_one_event(tmp_p
     _messages_out, cap = _messages(env, memory, MAIN, ctx=ctx)
     facts = cap["memory_view"]
     assert facts["role"] == "integrator" and facts["room_id"] == "1"
-    assert facts["store_status"] == {"state": "active"} and facts["legacy_frontier_status"] == "exact"
+    assert facts["store_status"] == {"state": "active", "tail_facts": "filling"}  # open rows read live, no fill yet
+    assert facts["legacy_frontier_status"] == "exact"
     assert facts["spec"]["live_rooms"] == "lines" and facts["blocks"]["live_rooms"] == 4
     assert facts["blocks"]["story_tokens"] > 0 and facts["blocks"]["room_tokens"] > 0
     assert facts["floor"]["mode"] == "max" and facts["floor"]["steps"] == {}

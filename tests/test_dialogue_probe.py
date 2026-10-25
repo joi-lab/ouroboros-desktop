@@ -11,7 +11,8 @@ from tests._dialogue import seed
 
 
 class CountedConnection:
-    """Count returned SQL rows, separately from SQLite VM instructions or JSON decodes."""
+    """Count the rows reaching Python, separately from SQLite VM instructions or JSON decodes: returned SQL rows,
+    and the rows a one-step page (``dialogue_store._page``, a ``json_group_array``) carries in its one row."""
 
     def __init__(self, conn, *, legacy=False):
         self.conn, self.legacy = conn, legacy
@@ -33,6 +34,10 @@ class CountedConnection:
                 self.body_rows += 1
             elif "seq" in row.keys():
                 self.seq_rows += 1
+            elif len(values) == 1 and str(row.keys()[0]).startswith("json_group_array"):
+                for item in json.loads(values[0] or "[]"):
+                    self.body_rows += isinstance(item, dict) and "body" in item
+                    self.seq_rows += type(item) is int
             return row
 
         cursor = self.conn.cursor()

@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, LEGACY_ROOM_LABEL, legacy_frontier, row_lineage
-from ouroboros.chronicle_store import (CHILD_DRAFT_RIGHT, DELEGATED_FOCUS_ROLES, ChronicleStore, draft_signer,
+from ouroboros.chronicle_store import (CHILD_DRAFT_RIGHT, DELEGATED_FOCUS_ROLES, ChronicleStore, capture, draft_signer,
                                        is_late_review_mark, source_time_span)
 from ouroboros.contracts.chat_id_policy import WEB_UI_CHAT_ID
 from ouroboros.dialogue_provenance import (RoomLabelResolver, is_presence_task, render_memory_row, render_row_text,
@@ -269,7 +269,7 @@ def view_spec_for_task(task: Mapping[str, Any], drive_root: Any, *, ctx: Any = N
 class MemoryViewSnapshot:
     """Everything a render needs, read once per request; ``snapshot_json`` is its canonical form."""
     spec: ViewSpec
-    store_status: Dict[str, Any]  # {"state": "active" | an import kind, "reason"?}
+    store_status: Dict[str, Any]  # {"state": "active" | an import kind, "reason"?, "tail_facts": "filling"?}
     frontier: Dict[str, Any]  # {"status", "pos"} of the legacy frontier
     story: Tuple[Dict[str, Any], ...] = ()  # legacy records, pages, parts and selected accounts; told_by keeps source addresses, in story order
     room: Optional[Dict[str, Any]] = None  # the current room's facts and texts
@@ -824,9 +824,12 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status=status, frontier={}, room=bare, owner_words=owner_words)
     try:
         store = ChronicleStore(root)
-        frontier = legacy_frontier(store)
-        story, story_status, refusals = _capture_story(store, root, label) if spec.story else ([], {}, [])
-        room, live, marks = _capture_live(store, root, spec, label, story)
+        with capture(root) as derived:  # one state of the chronicle for every reader (activation may publish: before)
+            frontier = legacy_frontier(store)
+            story, story_status, refusals = _capture_story(store, root, label) if spec.story else ([], {}, [])
+            room, live, marks = _capture_live(store, root, spec, label, story)
+            candidates = tuple({"id": row["id"], "room_id": row["room_id"]} for row in store.pending_candidates()
+                               ) if spec.role == "consciousness" else ()
         if room:
             from ouroboros.owner_words import task_governing_words
 
@@ -844,12 +847,13 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status={"state": "journal_unreadable",
                                                            "reason": f"{type(exc).__name__}: {exc}"},
                                   frontier={}, room=bare, owner_words=owner_words)
+    if (tail := (derived or {}).get("tail")) is not None and not tail.complete:
+        status = {**status, "tail_facts": "filling"}  # its open rows were read live: the stored tail is not complete
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
                               story=tuple(story), room=room, live_rooms=tuple(live), marks=tuple(marks),
                               legacy_blocks=story_status, fallback_refusals=tuple(refusals), owner_words=owner_words,
-                              candidates=tuple({"id": row["id"], "room_id": row["room_id"]} for row in store.pending_candidates())
-                              if spec.role == "consciousness" else ())
+                              candidates=candidates)
 
 
 # --- rendering ------------------------------------------------------------------------------------

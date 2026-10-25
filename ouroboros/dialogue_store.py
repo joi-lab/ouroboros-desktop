@@ -409,7 +409,7 @@ def stream_row(stream: str, columns: Dict[str, Any]) -> bool:
     return stream == "chat" and (columns["chat_id"] is None or columns["chat_id"] >= 0)
 
 
-def _row(record: sqlite3.Row) -> Row:
+def _row(record: Any) -> Row:  # a ``sqlite3.Row``, or a record of ``_page``
     from ouroboros.place_arrivals import project_source
     return Row(record["stream"], record["seq"], project_source(record), record["dispatch"], record["length"])
 
@@ -645,28 +645,39 @@ def row_at(root: Any, stream: str, seq: int) -> Optional[Row]:
     return rows_at(root, stream, [seq]).get(int(seq))
 
 
+_PAGE = ("SELECT json_group_array(json_object('stream',stream,'seq',seq,'body',body,'dispatch',dispatch,"
+         "'dispatch_input',dispatch_input,'length',length)) FROM (SELECT stream, seq, body, dispatch, dispatch_input, "
+         "length FROM dialogue ")
+
+
+def _page(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -> List[Dict[str, Any]]:
+    """The rows ``where`` selects in ONE step, by coordinate (``_row`` takes them as it takes ``sqlite3.Row``):
+    every ``sqlite3_step`` releases the GIL, so beside busy threads a page re-queues once, not once per row."""
+    return sorted(json.loads(conn.execute(_PAGE + where + ")", params).fetchone()[0] or "[]"),
+                  key=lambda record: record["seq"])
+
+
 def rows_at(root: Any, stream: str, seqs: Iterable[int]) -> Dict[int, Row]:
     """The rows at many coordinates in one read (a statement per 500): each row found, by coordinate."""
     wanted, records = sorted({int(seq) for seq in seqs}), []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 500):
             chunk = wanted[start:start + 500]
-            records += conn.execute(f"{_SELECT} WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})",
-                                    (stream, *chunk)).fetchall()
+            records += _page(conn, f"WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})", (stream, *chunk))
     return {record["seq"]: _row(record) for record in records}
 
 
 def rows_between(root: Any, stream: str, lower: int, upper: int) -> List[Row]:
     """Every row with ``lower <= seq < upper`` in order (a frozen page replayed by its coordinates)."""
     with transaction(root, write=False) as conn:
-        records = conn.execute(f"{_SELECT} WHERE stream=? AND seq>=? AND seq<? ORDER BY seq", (stream, lower, upper)).fetchall()
+        records = _page(conn, "WHERE stream=? AND seq>=? AND seq<?", (stream, lower, upper))
     return [_row(record) for record in records]
 
 
 def rows_after(root: Any, stream: str, seq: int, *, limit: int = 1000) -> List[Row]:
     """The rows appended after ``seq`` (a live follower's next batch, a wake's window), in order."""
     with transaction(root, write=False) as conn:
-        records = conn.execute(f"{_SELECT} WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit)).fetchall()
+        records = _page(conn, "WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit))
     return [_row(record) for record in records]
 
 
@@ -677,8 +688,8 @@ def iter_rows(root: Any, stream: str, *, lower: int = 0, upper: Optional[int] = 
     bound = _bound(upper)
     while True:
         with transaction(root, write=False) as conn:
-            records = conn.execute(f"{_SELECT} WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
-                                   (stream, lower, bound, batch)).fetchall()
+            records = _page(conn, "WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
+                            (stream, lower, bound, batch))
         for record in records:
             yield _row(record)
         if len(records) < batch:
@@ -719,7 +730,7 @@ def probe_rows(root: Any, stream: str, keys: Iterable[Tuple[str, Any]], *, befor
 
 
 def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]], *, before: Optional[int],
-           lower: int, limit: int, newest_first: bool) -> List[sqlite3.Row]:
+           lower: int, limit: int, newest_first: bool) -> List[Dict[str, Any]]:
     """Capture the winning stored records; the transaction owner decodes after release.
 
     One statement per column selects, through that column's index, the first ``limit`` coordinates
@@ -734,15 +745,16 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
             values.setdefault(column, []).append(value)
     found = set()
     order, bounds = ("DESC" if newest_first else "ASC"), (_bound(before), lower, limit)
-    for column, listed in values.items() if limit > 0 else ():
-        select = f"SELECT seq FROM dialogue INDEXED BY {_PROBE_INDEX[column]} WHERE stream=? AND {column} "
-        tail = f" AND seq<? AND seq>=? ORDER BY seq {order} LIMIT ?"
+    for column, listed in values.items() if limit > 0 else ():  # each column's coordinates in one step
+        select = (f"SELECT json_group_array(seq) FROM (SELECT seq FROM dialogue INDEXED BY {_PROBE_INDEX[column]} "
+                  f"WHERE stream=? AND {column} ")
+        tail = f" AND seq<? AND seq>=? ORDER BY seq {order} LIMIT ?)"
         if None in listed:  # the chat-less rows, through the full room index
-            found.update(record["seq"] for record in conn.execute(select + "IS NULL" + tail, (stream, *bounds)))
+            found.update(json.loads(conn.execute(select + "IS NULL" + tail, (stream, *bounds)).fetchone()[0]))
         if any(value is not None for value in listed):
-            found.update(record["seq"] for record in conn.execute(
+            found.update(json.loads(conn.execute(
                 select + "IN (SELECT +value FROM json_each(?))" + tail,  # unary + keeps the column's affinity
-                (stream, json.dumps([value for value in listed if value is not None]), *bounds)))
+                (stream, json.dumps([value for value in listed if value is not None]), *bounds)).fetchone()[0]))
     chosen = heapq.nlargest(limit, found) if newest_first else heapq.nsmallest(limit, found)
     if not chosen:
         return []
@@ -752,7 +764,7 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
     for start in range(0, len(chosen), variables - 1):  # one binding is the stream, including for 10,000-row readers
         batch = chosen[start:start + variables - 1]
         marks = ",".join("?" for _ in batch)
-        for record in conn.execute(f"{_SELECT} WHERE stream=? AND seq IN ({marks})", (stream, *batch)):
+        for record in _page(conn, f"WHERE stream=? AND seq IN ({marks})", (stream, *batch)):
             records[record["seq"]] = record
     return [records[seq] for seq in chosen]
 

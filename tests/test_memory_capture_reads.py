@@ -49,6 +49,21 @@ def test_main_view_reads_its_open_rows_a_page_at_a_time_and_reads_as_before(tmp_
     assert mv.capture_memory_view(tmp_path, made["task"], made["spec"]) == batched
 
 
+def test_a_view_enters_the_chronicle_index_for_its_activation_and_its_one_capture_only(tmp_path, monkeypatch):
+    from ouroboros.chronicle_store import ChronicleStore
+
+    made = shape.open_rows(tmp_path, 240, rooms=24)
+    store, mind = ChronicleStore(tmp_path), {"kind": "mind", "task_id": "t1", "focus": {"role": "root", "task_id": "t1"}}
+    for chat in (shape.MAIN, *range(1000, 1011)):  # a page and a note in twelve rooms: every reader has rooms to visit
+        assert store.write_note(room_id=str(chat), task_id="t1", text=f"note {chat}", author=mind).ok
+        assert store.publish_page(room_id=str(chat), text=f"page {chat}", author=mind,
+                                  covers={"rows": [f"sealed-{chat}"], "stream_span": [chat, chat]}).ok
+    entered = _counted(monkeypatch, ChronicleStore, "_index")
+    view = mv.capture_memory_view(tmp_path, made["task"], made["spec"])
+    assert view.active and len(view.live_rooms) == 23 and view.room["facts"]["pages"] == 1
+    assert entered == ["_reading", "capture"]  # the activation receipt, then one read for every reader of the view
+
+
 def test_rows_by_address_answers_as_resolve_row_and_a_wrong_hint_still_finds_its_row(tmp_path):
     shape.open_rows(tmp_path, 60, rooms=3)
     addresses = [address for address, _row, _pos in cc.iter_rows(tmp_path)]
@@ -110,7 +125,7 @@ def _legacy_units_fresh(root):
     from ouroboros import memory_inventory as mi
     from ouroboros.chronicle_store import ChronicleStore
 
-    for name in ("_UNITS", "_SPAN_ROWS", "_ROW_SETS", "_SEALED", "_RETELLING_CHARS"):
+    for name in ("_UNITS", "_SPAN_ROWS", "_ROW_SETS", "_RETELLING_CHARS"):
         getattr(mi, name, {}).pop(str(root.resolve()), None)
     return mi.legacy_units(ChronicleStore(root), root)
 
