@@ -156,9 +156,11 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
         account_id = str(event_payload.get("account_id") or "").strip()
         conversation_id = str(event_payload.get("conversation_id") or "").strip()
         thread_id = str(event_payload.get("thread_id") or "").strip()
-        from ouroboros.places import WAKE_FACTS
+        from ouroboros.places import WAKE_FACTS, declared_wake_signals
         facts = event_payload.get("facts")
-        if "facts" in event_payload and (not isinstance(facts, list) or any(f not in WAKE_FACTS for f in facts)):
+        allowed_facts = set(WAKE_FACTS) | declared_wake_signals(skill_name)
+        if "facts" in event_payload and (not isinstance(facts, list) or any(
+                not isinstance(f, str) or f not in allowed_facts for f in facts)):
             raise ValueError("event.facts must be a list of declared wake facts")
         admission = await host._bounded_host_read(ctx, functools.partial(
             host._admit_presence, ctx, skill_name, str(payload.get("binding_id") or ""),

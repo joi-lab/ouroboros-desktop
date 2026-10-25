@@ -352,11 +352,66 @@ class RecentWake(TypedDict):
 
 
 class PlaceConnectRequest(TypedDict):
-    """Connect an installed connector; omitted account and conversation ids default to empty."""
+    """Connect Silent; ids default to empty. An instance label is prefixed with the service."""
 
     connector: str
     account_id: NotRequired[str]
     conversation_id: NotRequired[str]
+    label: NotRequired[str]
+
+
+class PlaceIcon(TypedDict, total=False):
+    """Sanitized host mark or SVG geometry; an unavailable mark is {}."""
+
+    kind: Literal["host", "svg"]
+    name: str
+    svg: str
+
+
+class PlaceReadiness(TypedDict):
+    text: str
+    tone: str
+
+
+class PlaceSummary(TypedDict):
+    """One projection for list, write/conflict responses and the model's place map."""
+
+    place_id: str
+    connector: str
+    provider: str
+    account_id: str
+    conversation_id: str
+    label: str
+    state: Literal["active", "silent", "paused"]
+    wakes: List[Dict[str, str]]
+    notes: List[Dict[str, str]]
+    owner_accounts: List[Dict[str, str]]
+    working_folder: str
+    model: str
+    context_topics: List[str]
+    legacy_binding_ids: List[str]
+    revision: int
+    thread_id: str
+    destination: str
+    scope: str
+    contribution_id: str
+    reply_destination: Optional[Dict[str, str]]
+    icon: PlaceIcon
+    readiness: PlaceReadiness
+    wake_suggestions: List[str]
+    facts: NotRequired[List[Any]]
+    source: NotRequired[Dict[str, Any]]
+    settings: NotRequired[str]
+    rooms: Optional[List[Dict[str, Any]]]
+    unanswered: Optional[int]  # open focus turns, not owed replies
+    last_activity_at: str
+    activity_coverage: str
+    spent_24h_usd: Optional[float]
+    account_candidates: List[Dict[str, Any]]
+
+
+class PlaceDisconnectRequest(TypedDict, total=False):
+    expected_revision: int
 
 
 class PlaceOwnerAccountRequest(TypedDict):
@@ -638,7 +693,9 @@ __all__ = [
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
     "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
-    "RecentWake", "RecentWakeCheck", "PlaceConnectRequest", "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
+    "RecentWake", "RecentWakeCheck",
+    "PlaceConnectRequest", "PlaceIcon", "PlaceReadiness", "PlaceSummary", "PlaceDisconnectRequest",
+    "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",
     "ProjectListResponse", "ProjectCreateResponse", "ProjectUpdateRequest", "ProjectUpdateResponse",
     "ProjectFromTaskRequest", "ProjectTaskBinding", "ProjectFromTaskResponse",

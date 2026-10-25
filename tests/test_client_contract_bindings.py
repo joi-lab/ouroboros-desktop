@@ -372,7 +372,7 @@ def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):
     monkeypatch.setattr("ouroboros.place_projection.place_declarations", lambda _root: [{
         "skill": "bridge", "id": "chat", "destination": "vendor:chat", "label": "Test chat", "wakes": ["mention"],
     }])
-    connect = {"connector": "bridge", "account_id": "account", "conversation_id": "room"}
+    connect = {"connector": "bridge", "account_id": "account", "conversation_id": "room", "label": "Room"}
     assert BY_TOKEN["POST /api/places"]["request"]["schemas"] == ["PlaceConnectRequest"]
     assert _declared("PlaceConnectRequest") == set(connect)
     connect_type = contract_typed_dict("PlaceConnectRequest")
@@ -382,6 +382,9 @@ def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):
     connected = client.post("/api/places", json=connect)
     assert connected.status_code == 200, connected.text
     place = connected.json()["place"]
+    assert place["label"] == "Test chat · Room" and place["state"] == "silent"
+    assert not validate_ingress(place, contract_typed_dict("PlaceSummary"))
+    assert set(place) <= _declared("PlaceSummary") and "connector_label" not in place
     path = f"/api/places/{place['place_id']}"
     change = {
         "state": "silent", "wakes": ["direct_message"], "add_note": "Owner choice",
@@ -410,3 +413,8 @@ def test_place_request_shapes_cover_the_owner_journey(client, monkeypatch):
     assert removed.json()["place"]["notes"] == removed.json()["place"]["owner_accounts"] == []
     conflict = client.post(path, json=change)
     assert conflict.status_code == 409 and conflict.json()["code"] == "place_revision_conflict"
+    assert conflict.json()["place"] == removed.json()["place"]
+    assert BY_TOKEN["DELETE /api/places/{place_id}"]["request"]["schemas"] == ["PlaceDisconnectRequest"]
+    disconnect = {"expected_revision": removed.json()["place"]["revision"]}
+    assert not validate_ingress(disconnect, contract_typed_dict("PlaceDisconnectRequest"))
+    assert client.request("DELETE", path, json=disconnect).status_code == 200

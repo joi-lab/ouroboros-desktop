@@ -35,10 +35,14 @@ def wake(tmp_path, monkeypatch):
 
 
 def test_places_context_has_every_place_and_room_without_reading_history(monkeypatch, tmp_path):
-    configured = [places.Place("mail", "inbox", "mail", label="Inbox"),
-                  places.Place("quiet", "chat", "chat", label="Quiet room", state="silent"),
-                  places.Place("paused", "chat", "chat", label="Paused room", state="paused")]
-    monkeypatch.setattr(places, "load_places", lambda root: configured)
+    configured = [places.connect_place(tmp_path, place_id=pid, connector="bridge", provider="chat",
+                                       conversation_id=pid, label=label, state=state)
+                  for pid, label, state in [("mail", "Inbox", "active"), ("paused", "Paused room", "paused"),
+                                            ("quiet", "Quiet room", "silent")]]
+    places.edit_place(tmp_path, "mail", "add_note", author="owner", text="Watch releases.\nKeep the exact second line.")
+    monkeypatch.setattr("ouroboros.place_projection.place_declarations", lambda _root: [])
+    monkeypatch.setattr("ouroboros.place_projection.place_activity", lambda _root, place: {
+        "unanswered": {"mail": 3, "quiet": 0, "paused": None}[place.place_id], "last_activity_at": ""})
     calls = []
     def rooms(root, place_id):
         calls.append((root, place_id))
@@ -47,19 +51,24 @@ def test_places_context_has_every_place_and_room_without_reading_history(monkeyp
                 "paused": [{"room_chat_id": -3, "unanswered_count": None}]}[place_id]
     monkeypatch.setattr(places, "place_room_index", rooms, raising=False)
     rows = view.place_views(tmp_path)
-    assert [row["unanswered"] for row in rows] == [3, 0, None]
+    assert [row["unanswered"] for row in rows] == [3, None, 0]
     text = view.places_text(rows)
-    assert "Inbox [mail]: active; unanswered: 3; chat_history(chat_id=-1); chat_history(chat_id=-2)" in text
-    assert "Quiet room [quiet]: silent; unanswered: 0; no captured room" in text
-    assert "Paused room [paused]: paused; unanswered: unknown" in text
+    assert "Inbox [mail]: active; open turns: 3; chat_history(chat_id=-1); chat_history(chat_id=-2)" in text
+    assert "Quiet room [quiet]: silent; open turns: 0; no captured room" in text
+    assert "Paused room [paused]: paused; open turns: unknown" in text
+    assert "note (owner): Watch releases." in text and "note (owner): Keep the exact second line." in text
     assert calls == [(tmp_path, place.place_id) for place in configured]
-    monkeypatch.setattr(places, "load_places", lambda root: [])
+    for place in configured:
+        places.edit_place(tmp_path, place.place_id, "disconnect", author="owner")
     assert view.places_text(view.place_views(tmp_path)) == "none"
 
 
 def test_unavailable_index_does_not_claim_zero(monkeypatch, tmp_path):
-    monkeypatch.setattr(places, "load_places", lambda root: [places.Place("p", "c", "provider")])
-    monkeypatch.delattr(places, "place_room_index", raising=False)
+    places.connect_place(tmp_path, connector="bridge", provider="chat")
+    monkeypatch.setattr("ouroboros.place_projection.place_declarations", lambda _root: [])
+    def unavailable(*_args):
+        raise OSError("room index unavailable")
+    monkeypatch.setattr(places, "place_room_index", unavailable)
     assert view.place_views(tmp_path)[0]["unanswered"] is None
     assert "unknown" in view.places_text(view.place_views(tmp_path))
     assert "unknown" in view.places_text(None)
@@ -76,7 +85,7 @@ def test_prompt_carries_labels_counts_and_one_allowance():
     assert all("{" + placeholder + "}" not in text for placeholder in PLACEHOLDERS)
     assert "Inbox: at least $2.50 (1 unmetered calls)" in text
     assert "root: Study queue (started work)" in text
-    assert "places: Inbox [mail]: active; unanswered: 0" in text
+    assert "places: Inbox [mail]: active; open turns: 0" in text
     assert "allowance known spend (last 24 h): at least 2.50 / 20.00 USD" in text
 
 

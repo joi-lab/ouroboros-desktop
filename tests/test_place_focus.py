@@ -360,15 +360,16 @@ def test_owner_projection_tracks_heard_events_and_preserves_choices(focus, monke
     root, place, admission, event = focus
     declaration = {"id": "room", "skill": "bridge", "skill_label": "Chat bridge", "provides": "place",
                    "label": "Chat", "destination": "vendor:Chat", "scope": "account",
-                   "wakes": ["mention"], "icon": {"name": "message-circle"}}
+                   "wakes": ["mention"], "icon": "message-circle",
+                   "icon_spec": {"kind": "host", "name": "message-circle"}}
     monkeypatch.setattr("ouroboros.place_projection.place_declarations", lambda _root: [declaration])
-    monkeypatch.setattr("ouroboros.presence_admission.focus_allowance", lambda _root: {
+    monkeypatch.setattr("ouroboros.consciousness_allowance.allowance_window", lambda _root, **kw: {
         "spend_by_cause": [{"cause": "place:" + place.place_id, "usd": 0.25}]})
     task = capture_presence_event(admission, event, drive_root=root)
     view = places_view(root)
     card, = view["places"]
     assert card["unanswered"] is None and card["last_activity_at"]
-    assert card["spent_24h_usd"] == 0.25 and card["icon"] == declaration["icon"]
+    assert card["spent_24h_usd"] == 0.25 and card["icon"] == declaration["icon_spec"]
     assert view["connectors"][0]["connected"]
     settle_heard(root, task, event)
     assert places_view(root)["places"][0]["unanswered"] is None  # hearing creates no task store

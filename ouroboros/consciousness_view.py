@@ -73,25 +73,10 @@ def describe_consciousness(clock) -> dict:
 
 
 def place_views(drive_root) -> list[dict]:
-    """One row per configured place; unavailable room counts stay unknown."""
-    from ouroboros import places
+    """The same PlaceSummary used by the owner's Places surface (D15 → D20 is lazy)."""
+    from ouroboros.place_projection import places_view
 
-    views = []
-    room_index = getattr(places, "place_room_index", None)
-    for place in places.load_places(drive_root):
-        view = dict(places.place_summary(place))
-        try:
-            rooms = room_index(drive_root, place.place_id) if room_index else None
-        except Exception:
-            rooms = None
-        view["rooms"] = rooms
-        if rooms is not None:
-            counts = [room.get("unanswered_count") for room in rooms]
-            view["unanswered"] = sum(counts) if all(isinstance(n, int) for n in counts) else None
-        else:
-            view.setdefault("unanswered", None)
-        views.append(view)
-    return views
+    return places_view(drive_root)["places"]
 
 
 def places_text(views) -> str:
@@ -104,7 +89,9 @@ def places_text(views) -> str:
                      for room in view.get("rooms") or []]
         address = "; ".join(addresses) or ("no captured room" if view.get("rooms") == [] else "room address unknown")
         lines.append(f'{view.get("label") or view["place_id"]} [{view["place_id"]}]: {view["state"]}; '
-                     f'unanswered: {count if count is not None else "unknown"}; {address}')
+                     f'open turns: {count if count is not None else "unknown"}; {address}')
+        for note in view.get("notes") or []:
+            lines.extend(f'  note ({note["author"]}): {line}' for line in note["text"].splitlines())
     return "\n  ".join(lines) if lines else "none"
 
 
