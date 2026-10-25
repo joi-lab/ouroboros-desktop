@@ -493,7 +493,6 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         "progress_meta": reply_meta,
         "ts": utc_now_iso(),
     })
-    ctx._owner_message_sent = True
     append_jsonl(ctx.drive_logs() / "events.jsonl", {
         "ts": utc_now_iso(),
         "type": "proactive_message",

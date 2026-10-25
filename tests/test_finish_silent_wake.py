@@ -159,6 +159,21 @@ def test_internal_work_and_earlier_sends_remain(wake):
     assert not quiet_finish(stored)
 
 
+@pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("tool", ["send_links", "send_file"])
+def test_send_family_prevents_a_quiet_finish(wake, live, tool):
+    path = wake.root / "note.txt"
+    path.write_text("A source for you.", encoding="utf-8")
+    arguments = {"file_path": str(path)} if tool == "send_file" else {
+        "title": "A source for you", "links": [{"label": "Source", "url": "https://example.org/"}]}
+    text, usage, trace, bus = wake.run([call(tool, arguments), finish("Private note.", silent=True)], live=live)
+    events = drained(bus) if live else wake.ctx.pending_events
+    assert any(row.get("type") == ("send_document" if tool == "send_file" else "send_links") for row in events)
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert stored["wake_silent"] is True and stored.get("owner_message_sent") is True
+    assert not quiet_finish(stored)
+
+
 @pytest.mark.parametrize("cause", ["own_clock", "focus"])
 @pytest.mark.parametrize("action,silent", [("finish", True), ("finish", False), ("stop", False)])
 def test_wake_summary_titles_the_stored_wake_without_changing_its_words(wake, cause, action, silent):
