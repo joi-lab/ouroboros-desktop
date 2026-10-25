@@ -31,8 +31,10 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from ouroboros import utils
 from ouroboros.utils import JsonlChainUnreadable, iter_jsonl_objects, jsonl_chain_handles
 
 TAIL_WINDOW_START_BYTES = 512 * 1024
@@ -130,6 +132,35 @@ def archive_segments(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optio
             gaps.add("unreadable_source")
         return []
     return sorted(found, key=lambda p: p.name, reverse=True)
+
+
+_LISTINGS: Dict[tuple, tuple] = {}  # (archive dir, prefix) -> (key, newest-first segments): one per log in use
+
+
+def remembered_listing(live: pathlib.Path) -> Callable[..., list]:
+    """``archive_segments`` for LIVE's log (``list_archives``' signature), listed again only when it
+    may have changed: its rotation, the one writer of its archive names, gives LIVE a new inode, and
+    an entry added or removed moves ``archive/``'s mtime. A listing that met a gap, or a directory
+    changed within a clock tick (``utils._RACY_NS``), is never reused."""
+    def listing(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optional[set] = None) -> list:
+        started = time.time_ns()
+        try:
+            live_stat, directory = os.stat(live), os.stat(archive_dir)
+            key = (live_stat.st_dev, live_stat.st_ino, directory.st_mtime_ns)
+        except OSError:
+            key = None
+        name, found = (str(archive_dir), archive_prefix), set()
+        held = _LISTINGS.get(name)
+        if key is not None and held is not None and held[0] == key:
+            return list(held[1])
+        segments = archive_segments(archive_dir, archive_prefix, found)
+        if gaps is not None:
+            gaps.update(found)
+        if key is not None and not found and key[2] < started - utils._RACY_NS:
+            _LISTINGS[name] = (key, tuple(segments))
+        return segments
+
+    return listing
 
 
 def read_jsonl_segment_with_gaps(
@@ -311,5 +342,5 @@ def coverage_line(coverage: dict) -> str:
 
 __all__ = [
     "ARCHIVE_BACKFILL_MAX", "TAIL_WINDOW_START_BYTES", "archive_segments", "coverage_line",
-    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries",
+    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries", "remembered_listing",
 ]
