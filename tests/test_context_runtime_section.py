@@ -833,18 +833,23 @@ class TestVitalsFact:
                                       "chronicle.locked": 7}, "census": {"direct_turns_at_entry": 0}})
         section, data = self._runtime(env)
         vitals = data["vitals"]
-        assert vitals["observed_at"] == data["context_captured_at"] == "2026-10-25T20:00:00+00:00"
+        # The fact's instant is the capture instant printed beside it: not written twice.
+        assert "observed_at" not in vitals and data["context_captured_at"] == "2026-10-25T20:00:00+00:00"
+        from ouroboros.context_runtime_facts import vitals_fact
+
+        stale = vitals_fact(tmp_path, observed_at="2026-10-25T19:00:00+00:00", captured_at="2026-10-25T20:00:00+00:00")
+        assert stale["observed_at"] == "2026-10-25T19:00:00+00:00"  # a snapshot older than the capture names its time
         assert all(isinstance(value, str) for key, value in vitals.items()
-                   if key not in ("owner_turns", "stalls (end not observed in window)"))
+                   if key not in ("owner_turns", "stalls, no end in window"))
         assert vitals["owner_turns"] == [
             "19:55 chat 1 waited 91.2 s, slowest context_building 61.0 s; txns current 2r · chronicle 7; top memory_view.py:_live_rooms"]
         turn = vitals["owner_turns"][0]
         assert "observed_send" not in turn and "not written" not in turn  # a seen send is the default basis
-        assert vitals["stalls (end not observed in window)"] == ["duty custody since 19:30", "turn t9 started since 19:40"]
+        assert vitals["stalls, no end in window"] == ["duty custody since 19:30", "turn t9 started since 19:40"]
         assert vitals["busy_minute"] == "19:59: lag ≤0.4 s; holds dialog w12/0.4 s (message_bus:send:10); queue 5/0.3 s"
         assert vitals["runtime"].startswith("python ") and ", sqlite " in vitals["runtime"]
         assert vitals["boot"] == "18:00 ouroboros@abcdef123456"
-        assert vitals["note"].startswith("No verdict here") and "; rows: query_data(kind='supervisor_log'" in vitals["note"]
+        assert vitals["note"] == "No verdict here, the weighing is mine; rows: query_data(kind='supervisor_log', op='jsonl')"
         assert "last_update" not in vitals
         for word in ("WARNING", "CRITICAL", "% busy", "current\"", "threshold"):
             assert word not in json.dumps(vitals), word
@@ -854,8 +859,8 @@ class TestVitalsFact:
         env = self._env(tmp_path, monkeypatch)
         _section, data = self._runtime(env)
         vitals = data["vitals"]
-        assert set(vitals) <= {"observed_at", "owner_turns_note", "runtime", "wal_gate", "note"}
-        assert {"observed_at", "owner_turns_note", "runtime", "note"} <= set(vitals)
+        assert set(vitals) <= {"owner_turns_note", "runtime", "wal_gate", "note"}
+        assert {"owner_turns_note", "runtime", "note"} <= set(vitals)
         assert vitals["owner_turns_note"] == "none since this process started"
         monkeypatch.setenv("OUROBOROS_IN_WORKER", "1")
         _section, data = self._runtime(env)
@@ -893,9 +898,10 @@ class TestVitalsFact:
 
         assert vitals_line(None) == ""
         line = vitals_line({"observed_at": "T", "owner_turns": ["turn one", "turn two"],
-                            "stalls (end not observed in window)": ["a stall"], "busy_minute": "M: lag",
+                            "stalls, no end in window": ["a stall"], "busy_minute": "M: lag",
                             "runtime": "python 3.10.22, sqlite 3.51.3", "wal_gate": "",
                             "last_update": "applied abc: first request before B → after A", "boot": "B o@s", "note": "n"})
-        assert line == ("body as of T; owner turns turn one | turn two; stalls (end not observed in window) a stall; "
+        assert line == ("body as of T; owner turns turn one | turn two; stalls, no end in window a stall; "
                         "busy minute M: lag; runtime python 3.10.22, sqlite 3.51.3; "
                         "last update applied abc: first request before B → after A; boot B o@s")
+        assert vitals_line({"runtime": "r", "note": "n"}) == "body; runtime r"  # the capture instant stands beside it

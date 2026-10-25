@@ -404,10 +404,10 @@ _OWNER_TURNS_SHOWN = 2  # receipts rendered per context (three do not fit the fa
 _STALL_ENDS = {"direct_turn_stall": "direct_turn_stall_end", "host_duty_stall": "host_duty_stall_end",
                "supervisor_loop_stall": "supervisor_loop_stall_end"}
 _STALL_WORDS = {"direct_turn_stall": "turn", "host_duty_stall": "duty", "supervisor_loop_stall": "loop"}
-_STALLS_KEY = "stalls (end not observed in window)"
+_STALLS_KEY = "stalls, no end in window"
 _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqlite")
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
-VITALS_READER = "query_data(kind='supervisor_log', op='jsonl', filter={'field':'type','op':'contains','value':'direct_turn'})"
+VITALS_READER = "query_data(kind='supervisor_log', op='jsonl')"  # the minimal working call: the kind requires op='jsonl'
 VITALS_NOTE = f"No verdict here, the weighing is mine; rows: {VITALS_READER}"
 WAL_GATE = "WAL needs SQLite ≥3.51.3; an Update keeps this interpreter, a reinstall replaces it"
 
@@ -574,7 +574,7 @@ def _last_update(root: pathlib.Path) -> str:
     return text
 
 
-def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]:
+def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The body's own dated facts beside ``storage``, one line each: the last owner turns from this
     serving process's receipt ring (wait, slowest phase, dispatch basis when unobserved, own
     transactions; the top frame of a stall episode whose end row is still in the tail), stall onsets
@@ -582,12 +582,14 @@ def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]
     (counts and summed seconds per store and side, the longest hold's site, never a percentage), the
     runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a rollback journal),
     the retained update's before/after, the boot row, and a note that names the journal's reader.
-    Every absent source omits its key; a pooled worker says its owner-turn part is unknown. Never
-    raises."""
+    ``observed_at`` is the fact's own instant (the clocks' day); it is written only when it differs
+    from ``captured_at``, the Runtime JSON's ``context_captured_at`` beside it (a stale snapshot), so
+    the same instant is not printed twice. Every absent source omits its key; a pooled worker says its
+    owner-turn part is unknown. Never raises."""
     import os
 
     root = pathlib.Path(data_root)
-    fact: Dict[str, Any] = {"observed_at": observed_at}
+    fact: Dict[str, Any] = {} if observed_at == captured_at else {"observed_at": observed_at}
     try:
         tail = _supervisor_tail(root)
         if os.environ.get("OUROBOROS_IN_WORKER") == "1":
@@ -626,7 +628,8 @@ def body_facts(data_root: Any, *, observed_at: str) -> Dict[str, Any]:
     """The Runtime section's ``storage`` and ``vitals`` keys, each present only with its fact: one call
     site in ``context.build_runtime_section``; wakes and deep self-review only (owner answer B) would
     guard ``vitals`` here with ``is_consciousness_origin``."""
-    facts = {"storage": storage_fact(data_root), "vitals": vitals_fact(data_root, observed_at=observed_at)}
+    facts = {"storage": storage_fact(data_root),
+             "vitals": vitals_fact(data_root, observed_at=observed_at, captured_at=observed_at)}
     return {key: value for key, value in facts.items() if value is not None}
 
 
@@ -634,7 +637,7 @@ def vitals_line(fact: Optional[Dict[str, Any]]) -> str:
     """The same facts in one line (a deep self-review's inline rendering); "" for none."""
     if not isinstance(fact, dict):
         return ""
-    parts = [f"body as of {fact.get('observed_at')}"]
+    parts = [f"body as of {fact['observed_at']}" if fact.get("observed_at") else "body"]
     for key in ("owner_turns", "owner_turns_note", _STALLS_KEY, "busy_minute", "runtime", "wal_gate", "last_update", "boot"):
         value = fact.get(key)
         if isinstance(value, list) and value:
