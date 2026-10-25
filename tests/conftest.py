@@ -15,7 +15,6 @@ import sys
 import tempfile
 import threading
 import time
-import zlib
 
 _PYTEST_DATA_DIR = None
 _PYTEST_ROOT = None
@@ -476,11 +475,13 @@ def _pin_lane_groups(items, shards: int) -> None:
     """
     if shards <= 0:
         return
+    from tests.ci_verdicts import serial_group
+
     for item in items:
         path = item.nodeid.split("::", 1)[0]
         serial = item.get_closest_marker("serial") is not None
         # Serial: by FILE (the isolation unit). Others: the scope `--dist loadscope` uses (class when present).
-        group = f"serial{zlib.crc32(path.encode('utf-8')) % shards}" if serial else item.nodeid.rsplit("::", 1)[0]
+        group = serial_group(path, shards) if serial else item.nodeid.rsplit("::", 1)[0]
         item.add_marker(pytest.mark.xdist_group(group))
     items.sort(key=lambda item: item.get_closest_marker("serial") is None)
 
