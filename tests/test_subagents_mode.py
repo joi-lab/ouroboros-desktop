@@ -8,7 +8,9 @@ from ouroboros import config, projects_registry as projects
 from ouroboros.composer_cognition import read_cognition
 from ouroboros.settings_integrity import effective_subagents_mode, live_subagents_mode
 from ouroboros.subagent_runtime import subagents_availability
-from tests.test_project_cognition import room_settings  # noqa: F401
+from tests.test_project_cognition import room_settings as cognition_room_settings
+
+room_settings = cognition_room_settings
 
 
 @pytest.mark.parametrize("mode", ["off", "auto", "swarm"])

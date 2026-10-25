@@ -667,18 +667,11 @@ def subagents_fact_line() -> str:
 
 def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
                        measured: bool = True, focus_fact: str = "", subagents_fact: Optional[str] = None) -> str:
-    """One line of this round's facts for the actor, no advice (owner decisions 5A, 11 Oct 1A).
-
-    Reads the measurement the round already recorded (``_remember_main_fit`` facts),
-    the window's free room and the owner target's room or excess apart, each known or
-    unknown (free room is never the smaller of window and target), the largest resident
-    units from the existing unit reader, the task's own recorded cost, and a tariff only
-    when the exact route's catalog is cached (no fetch, no price table). ``money`` carries
-    the round's observation (``wallet``, ``tree``, ``cost_ceiling``, ``quota``;
-    ``task_pacing.round_money_observation``), each bound named. Time comes from the Time
-    clock owners (``context_runtime_facts.round_clock_fact``); a nanny's burn names its
-    anchors (``nanny_pacing.nanny_burn_fact``); tool counts are the observed results.
-    ``measured=False`` names the input as unmeasured instead of reusing stale numbers.
+    """Round facts, no advice (owner decisions 5A, 11 Oct 1A).
+    ``_remember_main_fit`` supplies distinct window/target room, largest residents and own cost; tariffs stay cached.
+    ``money`` is the round's wallet/tree/ceiling/quota observation, each bound named.
+    Time and nanny burn keep their owners/anchors; tool counts are observed results.
+    ``measured=False`` reports unmeasured input rather than stale numbers.
     """
     from ouroboros.context_runtime_facts import round_clock_fact
     from ouroboros.nanny_pacing import nanny_burn_fact
