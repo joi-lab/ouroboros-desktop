@@ -91,6 +91,38 @@ def test_one_author_names_task_and_allows_current_or_idle(published_tool, places
     assert guard.dispatch_refusal(ctx, name, {"room": "C2", "thread": "T"}, ext_tool=tool) == ""
 
 
+@pytest.mark.parametrize("broad_account", ["", "*"])
+@pytest.mark.parametrize("account_source", ["focus", "call"])
+def test_broad_place_uses_resolved_account_for_author_lease(published_tool, tmp_path, broad_account, account_source):
+    from ouroboros.conversation_lease import PresenceTurnGate
+    from ouroboros.places import connect_place
+
+    place = connect_place(tmp_path, connector="connector", provider="service", account_id=broad_account)
+    name, tool = published_tool("message", target=["room", "account_id"], conversation="room", thread="thread")
+    ctx = SimpleNamespace(drive_root=tmp_path, task_id="caller", task_metadata={})
+    args = {"room": "C2", "thread": "T"}
+    if account_source == "focus":
+        ctx.task_metadata = {"presence": {"transport_skill": "connector", "place_id": place.place_id,
+                                         "event": {"account_id": "resolved-account"}}}
+    else:
+        args["account_id"] = "resolved-account"
+    lease = PresenceTurnGate(state_root=tmp_path / "state").acquire("service:resolved-account:C2:T")
+    lease.bind_author("author")
+    try:
+        assert "tell_task(task_id='author'" in guard.dispatch_refusal(ctx, name, args, ext_tool=tool)
+        assert guard.call_place_facts(ctx, name, args, ext_tool=tool)["conversation_key"] == "service:resolved-account:C2:T"
+        ctx.task_id = "author"
+        assert guard.dispatch_refusal(ctx, name, args, ext_tool=tool) == ""
+        ctx.task_id = "caller"
+        assert guard.dispatch_refusal(ctx, name, {**args, "account_id": "other-account"}, ext_tool=tool) == ""
+        assert guard.dispatch_refusal(ctx, name, {**args, "thread": "other-thread"}, ext_tool=tool) == ""
+        if account_source == "focus":
+            ctx.task_metadata["presence"]["transport_skill"] = "unrelated"
+            assert guard.dispatch_refusal(ctx, name, args, ext_tool=tool) == ""
+    finally:
+        lease.release()
+
+
 def test_supervisor_facts_keep_every_place_and_note_author(published_tool, places):
     _, ctx = places
     name, tool = published_tool("message", target=["to", "cc"])
