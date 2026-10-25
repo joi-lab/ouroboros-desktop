@@ -18,7 +18,8 @@ import re
 from collections import Counter
 from typing import Any, Dict, List
 
-from ouroboros.utils import iter_jsonl_objects, read_json_dict, read_text
+from ouroboros.jsonl_tail import cached_tail_objects
+from ouroboros.utils import read_json_dict, read_text
 from ouroboros.store import StoreError
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,8 @@ def safe_read(path: pathlib.Path, fallback: str = "") -> str:
 
 
 def _iter_recent_jsonl(path: pathlib.Path, max_bytes: int = 256_000):
-    yield from iter_jsonl_objects(path, tail_bytes=max_bytes)
+    """The log's bounded tail, read once per file identity and shared with the Runtime section's body fact."""
+    yield from cached_tail_objects(path, max_bytes)
 
 
 def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:

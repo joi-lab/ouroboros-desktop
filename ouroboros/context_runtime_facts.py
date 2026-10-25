@@ -436,13 +436,14 @@ def _stall_key(row: Dict[str, Any]) -> tuple:
 def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
     """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, stall
     onsets whose end is not in the window (an onset's ``_end`` row with the same identity closes it;
-    a closed episode's ``top_frames`` is kept by execution for the receipts). An unreadable or absent
-    journal is no fact: empty, never an error."""
-    from ouroboros.utils import iter_jsonl_objects
+    a closed episode's ``top_frames`` is kept by execution for the receipts). The tail is the one the
+    health block reads, memoized on the file's identity (``jsonl_tail.cached_tail_objects``): one read
+    per context build serves both. An unreadable or absent journal is no fact: empty, never an error."""
+    from ouroboros.jsonl_tail import cached_tail_objects
 
     found: Dict[str, Any] = {"open": {}, "ended": {}}
     try:
-        rows = list(iter_jsonl_objects(root / "logs" / "supervisor.jsonl", tail_bytes=_SUPERVISOR_TAIL_BYTES))
+        rows = cached_tail_objects(root / "logs" / "supervisor.jsonl", _SUPERVISOR_TAIL_BYTES)
     except Exception:
         log.debug("supervisor journal tail unreadable for the body fact", exc_info=True)
         return found

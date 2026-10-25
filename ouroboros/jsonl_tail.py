@@ -31,9 +31,38 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ouroboros.utils import JsonlChainUnreadable, iter_jsonl_objects, jsonl_chain_handles
+
+# One bounded tail per path per process, memoized on the file's identity: a context build reads the
+# same 256 KB of ``logs/supervisor.jsonl`` for its health block and its body fact, so one read serves
+# both; an append (a new size and mtime) or a rotation (a new inode) reads again. The memory bound is
+# one entry per path (the two runtime logs the context tails).
+_TAIL_LOCK = threading.Lock()
+_TAILS: Dict[str, Tuple[tuple, Tuple[Dict[str, Any], ...]]] = {}
+
+
+def cached_tail_objects(path: Any, tail_bytes: int) -> Tuple[Dict[str, Any], ...]:
+    """The parseable dict rows of the last ``tail_bytes`` of ``path`` (``iter_jsonl_objects``), read once
+    per file identity ``(st_dev, st_ino, st_size, st_mtime_ns)`` and tail size, kept per path; a missing
+    file is ``()``. Callers read the rows and never mutate them."""
+    path = pathlib.Path(path)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return ()
+    identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, int(tail_bytes))
+    key = str(path)
+    with _TAIL_LOCK:
+        kept = _TAILS.get(key)
+        if kept is not None and kept[0] == identity:
+            return kept[1]
+    rows = tuple(iter_jsonl_objects(path, tail_bytes=tail_bytes))
+    with _TAIL_LOCK:
+        _TAILS[key] = (identity, rows)
+    return rows
 
 TAIL_WINDOW_START_BYTES = 512 * 1024
 ARCHIVE_BACKFILL_MAX = 3
@@ -310,6 +339,6 @@ def coverage_line(coverage: dict) -> str:
 
 
 __all__ = [
-    "ARCHIVE_BACKFILL_MAX", "TAIL_WINDOW_START_BYTES", "archive_segments", "coverage_line",
+    "ARCHIVE_BACKFILL_MAX", "TAIL_WINDOW_START_BYTES", "archive_segments", "cached_tail_objects", "coverage_line",
     "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries",
 ]
