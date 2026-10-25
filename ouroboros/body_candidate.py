@@ -726,8 +726,9 @@ def holds_commit(task_id: str, commit_sha: str, data_dir: Optional[Any] = None) 
         row = next((entry for entry in _rows(data_dir, op="read_body_candidate_commit")
                     if task_id and entry.get("task_id") == task_id), None)
         if row is None and task_id:  # a listing skips an unreadable record; this task's own one raises
-            _wt._record_at(_wt._resolve_root() / f"body_{_wt._safe_name(task_id)}", data_dir,
-                           op="read_body_candidate_commit")
+            name = f"body_{_wt._safe_name(task_id)}"  # under either name the copy may have been born with
+            for path in (_wt._resolve_root() / name, _wt.copy_path(_wt._resolve_root(), name)):
+                _wt._record_at(path, data_dir, op="read_body_candidate_commit")
     except Exception:
         return None
     if row is None or not commit_sha or not row.get("path") or not pathlib.Path(str(row["path"])).is_dir():
