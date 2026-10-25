@@ -355,7 +355,7 @@ test('openRoomChatId opens the captured conversation once the index knows it; an
     NodeStub.prototype.replaceChildren = function (...nodes) { this.children = []; nodes.forEach((node) => this.appendChild(node)); };
     t.after(() => { delete NodeStub.prototype.replaceChildren; });
     const room = { room_chat_id: 1099511627777, address: 'Slack #general', unanswered_count: 0, label: null, last_at: '', conversation_id: 'C1', thread_id: '' };
-    const index = { place_id: slack.id, rooms: [room], coverage: 'captured_place_events' };
+    const index = { place_id: slack.id, rooms: [room], coverage: { discovery: 'captured_place_events', importing: false, gaps: [] } };
     const sheet = openPlaceSheet(slack, { readRooms: async () => index, openRoomChatId: 1099511627777 });
     t.after(() => sheet.close());
     await settled(); await settled();
@@ -389,7 +389,7 @@ test('the reader state keeps the authored place name out of the translation over
     NodeStub.prototype.replaceChildren = function (...nodes) { this.children = []; nodes.forEach((node) => this.appendChild(node)); };
     t.after(() => { delete NodeStub.prototype.replaceChildren; });
     const room = { room_chat_id: 1099511627777, address: 'Slack #general', unanswered_count: 0, label: null, last_at: '', conversation_id: 'C1', thread_id: '' };
-    const sheet = openPlaceSheet(slack, { readRooms: async () => ({ place_id: slack.id, rooms: [room], coverage: 'captured_place_events' }), openRoomChatId: 1099511627777 });
+    const sheet = openPlaceSheet(slack, { readRooms: async () => ({ place_id: slack.id, rooms: [room], coverage: { discovery: 'captured_place_events', importing: false, gaps: [] } }), openRoomChatId: 1099511627777 });
     t.after(() => sheet.close());
     await settled(); await settled();
     const meta = document.body.querySelector('[data-place-meta]');

@@ -125,7 +125,7 @@ export function normalizeWake(raw) {
 
 /**
  * The consciousness snapshot: `/api/state`'s `bg_consciousness_state` (plus the separate `enabled` it
- * carries), or `GET /api/consciousness`, which adds `places` and `recent_wakes`. Missing facts stay null.
+ * carries), or `GET /api/consciousness`, which carries `places_brief` (labels only; full Places come from `/api/places`) and `recent_wakes`. Missing facts stay null.
  */
 export function normalizeConsciousness(raw, { enabled } = {}) {
     const top = object(raw) || {};
