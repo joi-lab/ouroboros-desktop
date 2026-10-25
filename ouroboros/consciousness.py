@@ -55,7 +55,7 @@ from ouroboros.config import (
 )
 from ouroboros.consciousness_allowance import STATUS_EXHAUSTED, STATUS_UNKNOWN, allowance_window
 from ouroboros.consciousness_authority import is_consciousness_origin, is_own_clock_wake
-from ouroboros.consciousness_wake import bind_wake_observation, observe_wake, render_wake_message, wake_task_metadata
+from ouroboros.consciousness_wake import bind_wake_observation, observe_wake, previous_wake_text, render_wake_message, wake_task_metadata
 from ouroboros.deadline_utils import parse_deadline_ts
 from ouroboros.utils import append_jsonl, utc_now_iso
 
@@ -273,6 +273,7 @@ class BackgroundConsciousness:
         observation = observe_wake(self._drive_root, boundary=self._read_state().get(OBSERVATION_STATE_KEY),
                                    since=self._observation_bootstrap_since, now=now, reason=reason)
         context = self._context_facts(window)
+        previous = previous_wake_text(self._drive_root, self._last_wake_task_id, now=now)
 
         def render(events: str) -> str:
             return render_wake_message(
@@ -280,7 +281,7 @@ class BackgroundConsciousness:
                 disabled_tools=list(metadata.get("disabled_tools") or []), spent_usd=window.get("settled_usd"),
                 spent_is_floor=int(window.get("unknown_unmetered") or 0) > 0,
                 daily_usd=window.get("limit_usd") or 0.0, running=len(context["counted_roots"]),
-                max_tasks=get_consciousness_max_tasks(), interval=self._interval(), events=events,
+                max_tasks=get_consciousness_max_tasks(), interval=self._interval(), events=events, previous_wake=previous,
                 **context)
 
         accepted_boundary = None
@@ -347,6 +348,7 @@ class BackgroundConsciousness:
                     or not is_own_clock_wake(self._own_wake)):
                 return
         outcome = "unknown"
+        row = None
         try:
             from ouroboros.task_results import load_task_result
             row = load_task_result(self._drive_root, task_id, strict=True)
@@ -386,6 +388,9 @@ class BackgroundConsciousness:
                     OBSERVATION_BOOTSTRAP_STATE_KEY: self._observation_bootstrap_since}))
             except Exception:
                 log.debug("consciousness: wake completion not persisted", exc_info=True)
+        if (row or {}).get("wake_summary"):
+            from supervisor.worker_chat_lane import _broadcast_task_named
+            _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": row["wake_summary"]})
 
     def start(self) -> str:
         with self._lock:
