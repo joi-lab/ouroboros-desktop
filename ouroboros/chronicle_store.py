@@ -451,6 +451,7 @@ class ChronicleStore:
             with self._publishing() as db:
                 yield db
             return
+        store_timing.count("chronicle.read")
         try:
             yield db
         finally:
@@ -485,7 +486,7 @@ class ChronicleStore:
         fd = acquire_exclusive_file_lock(self.lock_path, timeout_sec=wait_sec, stale_sec=90, owner_aware_stale=True)
         if fd is None:
             raise TimeoutError("chronicle publication lock unavailable")
-        store_timing.count("chronicle.locked")  # a read that takes no lock counts "chronicle.read"
+        store_timing.count("chronicle.locked")  # every locked open; a lock-free read counts "chronicle.read"
         db = None
         try:
             try:
