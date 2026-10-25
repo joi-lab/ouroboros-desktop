@@ -1790,17 +1790,18 @@ The headline says the server's current state, independently of the recent rows.
 “Due; waiting for current work” preserves a due clock without promising a new
 turn while work is still live. Recent wakes names its coverage: “wakes that
 reached a model call in the last 48 h”. An empty window and an unavailable read
-are different states; neither describes whether consciousness is switched on.
+differ: “No wakes in the last 48 h.” versus an authored warning retaining earlier
+rows. Neither describes whether consciousness is switched on.
 
-A Recent wakes row shows the mind’s sentence when present, keeps the whole note behind “more”, and borrows its status and money words from the task card.
-Its anatomy is time; Own time with the house mark or an authored place label;
-phase and known duration; the optional authored summary; and cost at the edge.
-Without a summary, known tool-call and round counts occupy the line. No sentence
-is fabricated from the note. The collapsed summary may ellipsize in CSS; the
-stored sentence and note are never clipped, repaired or replaced with a preview.
+A Recent wakes row shows time, Own time with the house mark or an authored place
+label, phase and known duration, and cost at the edge, using the card's words.
+The authored summary wraps whole. Without it, the note's first words show in meta
+ink on one CSS-ellipsized line; with neither, known counts occupy that line.
+The owner chose this fallback on 25 Oct 2026. The whole note and counts are one
+“more” away; stored words are never clipped, repaired or replaced with a preview.
 
-Native “more” discloses “Its own note” through the chat Markdown renderer, known
-counts, checks in words and the available task door. The whole note wraps on a
+Native “more” discloses “Its own note” through the chat Markdown renderer
+and enhancer, counts, checks and the task door. The whole note wraps on a
 phone; wide Markdown owns its own horizontal scroller. Working, Waiting, Queued,
 Paused and State unknown remain distinct. “Done · no message” requires a silent
 finish with no accepted owner message and no host notice. A held step is not
@@ -1816,8 +1817,8 @@ The allowance says “Some calls have no price” and “next check at”, never
 that the check will permit more work. Visible and accessible words agree.
 
 “Open in Main ↗” opens the existing card by its task and chat identity through
-the around-history reader. This build offers it only for cards in Main; a focus
-in a place room has no door until that room has a reader. Refresh preserves an
+the around-history reader. Focus cards have no Dashboard door; captured place
+conversations open from the place sheet. Refresh preserves an
 open row's actual nodes, disclosure, focus, selection and reading position;
 changed content and order wait until it closes. Host words use `tr`/`fmt`;
 summaries, notes and place labels stay under `data-i18n-authored`.

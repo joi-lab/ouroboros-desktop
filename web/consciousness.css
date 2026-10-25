@@ -186,7 +186,8 @@ textarea.ui-control.consciousness-owner-words {
 .consciousness-wake-head { color: var(--text-meta); font-size: var(--type-body); line-height: var(--line-body); overflow-wrap: anywhere; }
 .consciousness-wake-where, .consciousness-wake-own { color: var(--text-primary); font-weight: 600; }
 .consciousness-wake-own { display: inline-flex; align-items: center; gap: 6px; }
-.consciousness-wake-summary { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); }
+.consciousness-wake-summary { margin: 0; overflow-wrap: anywhere; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); }
+.consciousness-wake-lead { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-meta); font-size: var(--type-body); line-height: var(--line-body); }
 .consciousness-wake-facts { margin: var(--space-1) 0; color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); overflow-wrap: anywhere; }
 .consciousness-wake-facts.is-line { margin: 0; }
 .consciousness-wake-checks { display: flex; flex-wrap: wrap; gap: var(--space-1); }

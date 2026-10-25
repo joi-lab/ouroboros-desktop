@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { setup } from './dashboard_dom_fixture.js';
+import { setup, NodeStub } from './dashboard_dom_fixture.js';
 
 import { normalizeConsciousness, normalizePlacesResponse, normalizeWake } from '../modules/consciousness_api.js';
 import {
     countedRootsText, dashboardPlaceRowHtml, factsLineParts, headlineView, initConsciousnessDashboard, liveWake,
-    placesCardHtml, summaryHtml, wakeRowHtml, wakesCardHtml,
+    paintWakeRows, placesCardHtml, summaryHtml, wakeRowHtml, wakesCardHtml,
 } from '../modules/consciousness_dashboard.js';
-import { wakeCostText } from '../modules/consciousness_words.js';
+import { noteLeadText, wakeCostText } from '../modules/consciousness_words.js';
+import { applyPayload, setMissTransport } from '../modules/i18n.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
 const full = () => normalizeConsciousness(FIXTURE.consciousness);
@@ -57,8 +58,11 @@ test('summary is authored, note is whole and disclosed, only flagged checks get 
     const old = wake('214a31b6'), named = wake('w-summary');
     const oldHtml = wakeRowHtml(old), namedHtml = wakeRowHtml(named);
     assert.doesNotMatch(oldHtml, /class="consciousness-wake-summary"/);
-    assert.match(oldHtml, /9 rounds/);
-    assert.ok(oldHtml.indexOf(old.note) > oldHtml.indexOf('<details'));
+    const collapsed = oldHtml.split('<details')[0];
+    assert.match(collapsed, /class="consciousness-wake-lead" data-i18n-authored>В 07:46 UTC сделал короткую сверку/);
+    assert.doesNotMatch(collapsed, /9 rounds/);
+    assert.ok(oldHtml.slice(oldHtml.indexOf('<details')).includes(old.note));
+    assert.match(wakeRowHtml({ ...old, note: '' }).split('<details')[0], /9 rounds/);
     assert.ok(namedHtml.includes(`class="consciousness-wake-summary" data-i18n-authored>${named.summary}</p>`));
     assert.ok(namedHtml.indexOf(named.summary) < namedHtml.indexOf('<details'));
     assert.ok(namedHtml.includes(named.note));
@@ -150,7 +154,7 @@ function fakeMount() {
         innerHTML: '',
         regions,
         querySelector(selector) {
-            if (!regions.has(selector)) regions.set(selector, { innerHTML: '', textContent: '', dataset: {}, querySelector: () => null });
+            if (!regions.has(selector)) regions.set(selector, { innerHTML: '', textContent: '', dataset: {}, querySelector: () => null, closest: () => null });
             return regions.get(selector);
         },
         addEventListener() {}, removeEventListener() {},
@@ -209,4 +213,97 @@ test('a failed read keeps the earlier values and says so', async () => {
         globalThis.window = priorWindow;
         globalThis.document = priorDocument;
     }
+});
+
+test('the relay note lead keeps every word and only trims its edges', () => {
+    assert.equal(noteLeadText('  First words\n\nThen the whole note.  '), 'First words\n\nThen the whole note.');
+    assert.equal(noteLeadText(null), '');
+    assert.equal(noteLeadText(wake('214a31b6').note), wake('214a31b6').note);
+    const relay = fs.readFileSync(new URL('../modules/chat_relay_deck.js', import.meta.url), 'utf8');
+    assert.match(relay, /words: noteLeadText\(/, 'the relay and Dashboard share the lead implementation');
+});
+
+test('unavailable wakes keep the authored reason and painted rows, unlike an absent key or empty window', (t) => {
+    const { document } = setup(t);
+    document.documentElement = new NodeStub('html');
+    document.createTreeWalker = () => ({ nextNode: () => null });
+    setMissTransport(() => Promise.resolve(null));
+    const reason = 'Recent wakes could not be read: storage is busy.';
+    const snapshot = normalizeConsciousness({ recent_wakes: null, recent_wakes_coverage: reason });
+    assert.equal(snapshot.recentWakes, null);
+    assert.equal(snapshot.coverage, reason);
+    const legacy = normalizeConsciousness({ recent_wakes_coverage: reason });
+    assert.equal(legacy.recentWakes, null);
+    assert.equal(legacy.coverage, '');
+    applyPayload({ language: 'ru', english: false, revision: 1, entries: {
+        ['code:' + reason]: { text: 'Must not translate authored text' },
+        'code:consciousness.no_wakes_48h': { text: 'За последние 48 ч пробуждений нет.' },
+    } });
+    t.after(() => applyPayload({ language: '', english: true, revision: 0, entries: {} }));
+    const unavailable = wakesCardHtml(snapshot.recentWakes, snapshot.coverage);
+    assert.match(unavailable, /role="status" data-tone="warn" data-i18n-authored/);
+    assert.ok(unavailable.includes(reason));
+    assert.doesNotMatch(unavailable, /Must not translate|does not report|No wakes/);
+    assert.match(wakesCardHtml(legacy.recentWakes, legacy.coverage), /does not report its recent wakes yet/);
+    assert.match(wakesCardHtml([]), /За последние 48 ч пробуждений нет/);
+    const region = new NodeStub();
+    region.innerHTML = wakesCardHtml([wake('214a31b6')], full().coverage);
+    const row = region.querySelector('[data-wake]');
+    const put = (node, html) => { node.innerHTML = html; };
+    paintWakeRows(region, null, reason, new Set(), put);
+    assert.equal(region.querySelector('[data-wake]'), row, 'closed rows survive a failed read too');
+    assert.ok(region.querySelector('[role="status"]').textContent.includes(reason));
+    paintWakeRows(region, [], full().coverage, new Set(), put);
+    assert.equal(region.querySelector('[data-wake]'), null);
+    assert.equal(region.querySelector('[role="status"]'), null, 'success clears the warning');
+    applyPayload({ language: '', english: true, revision: 0, entries: {} });
+    assert.match(wakesCardHtml([]), /No wakes in the last 48 h\./);
+    assert.doesNotMatch(wakesCardHtml([]), /No wakes yet/);
+});
+
+for (const rich of [true, false]) test(`opened ${rich ? 'fenced code' : 'plain'} notes mount once and release on close and removal`, async (t) => {
+    const cleanups = [];
+    const { mount } = setup({ after: cleanup => cleanups.push(cleanup) });
+    let controller;
+    t.after(() => { controller?.destroy(); cleanups.forEach(cleanup => cleanup()); });
+    // Only the HTML template API missing from this bookkeeping fixture; no layout is simulated.
+    Object.defineProperty(NodeStub.prototype, 'content', { configurable: true, get() { return this; } });
+    t.after(() => { delete NodeStub.prototype.content; });
+    NodeStub.prototype.getBoundingClientRect = () => ({ top: 0 });
+    t.after(() => { delete NodeStub.prototype.getBoundingClientRect; });
+    let next = { ...full(), recentWakes: [{ ...wake('214a31b6'), note: rich ? '~~~js\nanswer();\n~~~' : 'The whole plain note.' }] };
+    const mounted = [], enhanced = [], destroyed = [];
+    const markdown = {
+        mount: (node, text) => { mounted.push([node, text]); node.innerHTML = rich ? '<div class="md-code-block"><pre>answer();</pre></div>' : `<p>${text}</p>`; },
+        enhance: node => enhanced.push(node), destroy: node => destroyed.push(node),
+    };
+    controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' }, markdown,
+        read: async () => next, readPlacesFn: async () => normalizePlacesResponse(FIXTURE.places) });
+    await controller.refresh();
+    assert.equal(mounted.length, 0, 'closed notes do not acquire Markdown resources');
+    const row = mount.querySelector('[data-wake]'), details = row.querySelector('details'), note = row.querySelector('.consciousness-wake-note');
+    details.open = true;
+    await mount.fire('toggle', { target: details });
+    assert.equal(mounted[0][0], note, 'mount into the actual note element');
+    assert.equal(mounted[0][1], next.recentWakes[0].note);
+    assert.equal(enhanced.length, rich ? 1 : 0);
+    await controller.refresh();
+    assert.equal(mount.querySelector('[data-wake]'), row);
+    assert.equal(row.querySelector('details').open, true);
+    assert.equal(row.querySelector('.consciousness-wake-note'), note);
+    assert.equal(mounted.length, 1);
+    details.open = false;
+    await mount.fire('toggle', { target: details });
+    assert.equal(destroyed[0], note);
+    const reopened = row.querySelector('details');
+    reopened.open = true;
+    await mount.fire('toggle', { target: reopened });
+    assert.equal(mounted.length, 2);
+    // A queued close can race a refresh removing its row; cleanup belongs to removal too.
+    reopened.open = false;
+    next = { ...next, recentWakes: [] };
+    await controller.refresh();
+    await mount.fire('toggle', { target: reopened });
+    assert.equal(destroyed.length, 2);
+    assert.equal(mount.querySelector('[data-wake]'), null);
 });

@@ -136,7 +136,7 @@ export function normalizeConsciousness(raw, { enabled } = {}) {
         enabled: known,
         status: text(bg.status),
         detail: text(bg.detail),
-        coverage: text(bg.recent_wakes_coverage),
+        coverage: bg.recent_wakes === undefined ? '' : text(bg.recent_wakes_coverage),
         level: text(bg.level),
         nextWakeAt: text(bg.next_wake_at),
         lastWakeAt: text(bg.last_wake_at),
