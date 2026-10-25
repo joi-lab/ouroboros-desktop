@@ -52,6 +52,7 @@ import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 from ouroboros.platform_layer import (acquire_exclusive_file_lock, kernel_file_locks_enforced,
@@ -304,8 +305,101 @@ class _IndexLookups:
                                % ",".join("?" * len(HEAD_KINDS)), (str(room), *HEAD_KINDS)).fetchone()[0]
 
 
+# One state of the index: each table in ONE statement, one ``sqlite3_step`` (one GIL release) per table, not per row.
+_SNAPSHOT_SQL = ("SELECT json_group_array(json_array(sequence,id,kind,room,target,body)) FROM records",
+                 "SELECT json_group_array(json_array(member_id,part_id)) FROM folded",
+                 "SELECT json_group_array(json_array(room,row_ref)) FROM page_rows",
+                 "SELECT json_group_array(json_array(sequence,room,scope,body)) FROM active_marks",
+                 "SELECT json_group_array(json_array(key,value)) FROM state")
+
+
+class _Snapshot:
+    """``_IndexLookups`` answered from one state of the index (``_SNAPSHOT_SQL``, parsed after its read
+    transaction closed): the same filters and order and no statement. Each record handed out is parsed
+    anew from its stored text, as the index returns it; ``memo`` holds facts one capture derives once."""
+
+    def __init__(self, texts):
+        records, folded, sealed, marks, state = (json.loads(text or "[]") for text in texts)
+        self.records = sorted(records)  # [sequence, id, kind, room, target, body] by sequence
+        self.by_id = {row[1]: row for row in self.records}
+        self.by_room: Dict[str, List[Any]] = {}
+        self.by_target: Dict[str, List[Any]] = {}
+        for row in self.records:
+            self.by_room.setdefault(row[3], []).append(row)
+            self.by_target.setdefault(row[4], []).append(row)
+        self.folded = dict(folded)
+        self.page_rows: Dict[str, set] = {}
+        for room, ref in sealed:
+            self.page_rows.setdefault(room, set()).add(ref)
+        self.active = sorted(marks)
+        self.values = dict(state)
+        self.memo: Dict[str, Any] = {}
+
+    def get(self, record_id):
+        row = self.by_id.get(str(record_id))
+        return {**json.loads(row[5]), "sequence": row[0]} if row else None
+
+    def targeting(self, record_id, kinds):
+        return [(row[0], json.loads(row[5])) for row in self.by_target.get(str(record_id), ()) if row[2] in kinds]
+
+    def part_of(self, record_id):
+        return self.folded.get(str(record_id))
+
+    def rows(self, room=None, kinds=(), after=0):
+        rows = self.records if room is None else self.by_room.get(str(room), ())
+        return [(row[0], row[5]) for row in rows if row[0] > int(after) and (not kinds or row[2] in kinds)]
+
+    def sealed(self, room):
+        return set(self.page_rows.get(str(room), ()))
+
+    def marks(self, room=None, include_global=True):
+        return [body for _seq, held, scope, body in self.active
+                if room is None or held == str(room) or include_global and scope == "global"]
+
+    def state(self, key, default=None):
+        return json.loads(self.values[key]) if key in self.values else default
+
+    def head(self, room):
+        return max((row[0] for row in self.by_room.get(str(room), ()) if row[2] in HEAD_KINDS), default=0)
+
+
 def _lookups(db):
-    return db if isinstance(db, _IndexLookups) else _IndexLookups(db)
+    return db if isinstance(db, (_IndexLookups, _Snapshot)) else _IndexLookups(db)
+
+
+_CAPTURE: ContextVar[Optional[Tuple[str, _Snapshot]]] = ContextVar("chronicle_capture", default=None)
+
+
+@contextmanager
+def capture(data_root: Any):
+    """One state of this installation's chronicle for every reader inside the block (one capture).
+
+    The index is read once (``_SNAPSHOT_SQL`` in one read transaction, closed before any reader runs, so a
+    publisher never waits on a capture) and pinned for the block; inside a capture of the same chronicle
+    this is that capture. Without a journal nothing is pinned. A publication inside the block is not seen
+    by its readers: publish before the capture, or after it.
+    """
+    store = ChronicleStore(data_root)
+    if store._pinned() is not None or not store.log_path.exists():
+        yield
+        return
+    with store._index() as db:
+        texts = [db.execute(sql).fetchone()[0] for sql in _SNAPSHOT_SQL]
+    token = _CAPTURE.set((str(store.index_path), _Snapshot(texts)))
+    try:
+        yield
+    finally:
+        _CAPTURE.reset(token)
+
+
+def capture_memo(data_root: Any, key: str, compute: Callable[[], Any]) -> Any:
+    """``compute()`` once per capture of this chronicle, so its readers share one answer; each call outside one."""
+    snapshot = ChronicleStore(data_root)._pinned()
+    if snapshot is None:
+        return compute()
+    if key not in snapshot.memo:
+        snapshot.memo[key] = compute()
+    return snapshot.memo[key]
 
 
 class ChronicleStore:
@@ -317,6 +411,15 @@ class ChronicleStore:
         self.log_path = self.data_root / "memory" / "chronicle" / "records.jsonl"
         self.index_path = self.data_root / "memory" / "chronicle" / "index.sqlite3"
         self.lock_path = self.data_root / "memory" / "chronicle" / ".publication.lock"
+
+    def _pinned(self) -> Optional[_Snapshot]:
+        held = _CAPTURE.get()
+        return held[1] if held is not None and held[0] == str(self.index_path) else None
+
+    def journal_size(self) -> int:
+        """The size of ``records.jsonl`` the reads reflect: the file's, or the size a pinned capture indexed."""
+        snapshot = self._pinned()
+        return snapshot.state("offset", 0) if snapshot is not None else self.log_path.stat().st_size
 
     # --- projection --------------------------------------------------------------------------------
 
@@ -1103,7 +1206,11 @@ class ChronicleStore:
 
     @contextmanager
     def _reading(self):
-        """A reader's lookups (``_IndexLookups``) over the index on its read path (``_index``)."""
+        """A reader's lookups: the pinned capture's snapshot, else the index on its read path (``_index``)."""
+        snapshot = self._pinned()
+        if snapshot is not None:
+            yield snapshot
+            return
         with self._index() as db:
             yield _IndexLookups(db)
 

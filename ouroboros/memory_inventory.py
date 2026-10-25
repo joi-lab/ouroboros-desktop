@@ -52,7 +52,7 @@ from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Mapping, Name
 
 from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
-from ouroboros.chronicle_store import ChronicleStore, source_time_span
+from ouroboros.chronicle_store import ChronicleStore, capture, capture_memo, source_time_span
 from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
 from ouroboros.dialogue_provenance import row_class, row_provenance
 
@@ -108,7 +108,12 @@ class MembershipFacts(NamedTuple):
 
 
 def membership_facts(root: Any) -> MembershipFacts:
-    """Reserved Project rooms, task bindings and the bound owner messages, as ``iter_room_rows`` reads them."""
+    """Reserved Project rooms, task bindings and the bound owner messages, as ``iter_room_rows`` reads them;
+    every reader of one capture (``chronicle_store.capture``) takes the same facts."""
+    return capture_memo(root, "membership", lambda: _membership_facts(root))
+
+
+def _membership_facts(root: Any) -> MembershipFacts:
     from ouroboros.project_dialogue import _source_ref_identity  # D15->D17 is lazy-only
     from ouroboros.projects_registry import all_task_bindings, list_reserved_projects, project_task_bindings, RoomResolver
 
@@ -166,25 +171,9 @@ def _projection_rows(root: Any, frontier: Mapping[str, Any]) -> List[Entry]:
     return [(address, row_meta(row), pos) for address, row, pos in chat_chain.iter_rows(root, lower=lower)]
 
 
-_SEALED: Dict[str, Tuple[Tuple[int, int], Dict[str, FrozenSet[str]]]] = {}
-
-
-def _authority(store: ChronicleStore) -> Tuple[int, int]:
-    """Identity of the chronicle's append-only authority: the same bytes project the same index."""
-    stat = store.log_path.stat()
-    return stat.st_size, stat.st_mtime_ns
-
-
-def _sealed(store: ChronicleStore, room: str, authority: Tuple[int, int]) -> FrozenSet[str]:
-    """``store.sealed_row_refs(room)``, read once per room for one state of the authority."""
-    key = str(store.data_root.resolve())
-    cached = _SEALED.get(key)
-    if cached is None or cached[0] != authority:
-        cached = (authority, {})
-        _SEALED[key] = cached
-    if room not in cached[1]:
-        cached[1][room] = frozenset(store.sealed_row_refs(room))
-    return cached[1][room]
+def _authority(store: ChronicleStore) -> int:
+    """The chronicle authority the facts read now reflect: the append-only journal's size projects one index."""
+    return store.journal_size()
 
 
 def _active_frontier(store: ChronicleStore) -> Optional[Dict[str, Any]]:
@@ -207,24 +196,25 @@ def rows_after_frontier(root: Any) -> List[Entry]:
 def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
     """The open rows of every room that has one: after the frontier, outside the room's sealed set."""
     store = ChronicleStore(root)
-    frontier = _active_frontier(store)
-    if frontier is None:
-        return {}
-    facts, authority = membership_facts(root), _authority(store)
-    grouped: Dict[str, List[Entry]] = {}
-    projected = _projection_rows(root, frontier)
-    # The rows' task lineages in one read a generation (``RoomResolver.warm``), not one read per task.
-    facts.rooms.warm({str(entry[1].get(key) or "") for entry in projected
-                      for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
-    for entry in projected:
-        for room in rooms_of_row(entry[1], facts):
-            grouped.setdefault(room, []).append(entry)
-    rooms: Dict[str, List[Entry]] = {}
-    for room, entries in grouped.items():
-        sealed = _sealed(store, room, authority)
-        kept = [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
-        if kept:
-            rooms[room] = kept
+    with capture(root):  # one state of the chronicle: its frontier and every room's sealed set
+        frontier = _active_frontier(store)
+        if frontier is None:
+            return {}
+        facts = membership_facts(root)
+        grouped: Dict[str, List[Entry]] = {}
+        projected = _projection_rows(root, frontier)
+        # The rows' task lineages in one read a generation (``RoomResolver.warm``), not one read per task.
+        facts.rooms.warm({str(entry[1].get(key) or "") for entry in projected
+                          for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+        for entry in projected:
+            for room in rooms_of_row(entry[1], facts):
+                grouped.setdefault(room, []).append(entry)
+        rooms: Dict[str, List[Entry]] = {}
+        for room, entries in grouped.items():
+            sealed = store.sealed_row_refs(room)
+            kept = [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
+            if kept:
+                rooms[room] = kept
     return rooms
 
 
@@ -259,7 +249,7 @@ def open_room_rows(root: Any, room_id: Any) -> List[Entry]:
     entries = _room_entries(root, store, room)
     if not entries:
         return []
-    sealed = _sealed(store, room, _authority(store))
+    sealed = store.sealed_row_refs(room)
     return [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
 
 
@@ -391,29 +381,30 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     if cached is not None and cached[0] == key and cached[2] is not None \
             and _lineage_answers(facts, cached[1]) == cached[2]:
         return list(cached[3])
-    pointers = store.legacy_pointer_rows()
-    refusals = fallback_refusals(store.scan_state())
-    chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
-    ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
-              if (span := _exact_range(pointer)) is not None}
-    bounds = {span for _room, span in ranges.values()}
-    spans = _span_rows(root, bounds)
-    triples = _task_triples(entry for span in bounds for entry in spans[span])
-    answers = _lineage_answers(facts, triples)  # before the rows are counted: a lineage moving meanwhile recounts next call
-    row_sets = _legacy_row_sets(root, ranges, facts)
-    units = []
-    for pointer in pointers:
-        record_id, room = pointer["node_id"], str(pointer["room_id"])
-        rows, span, first = row_sets.get(record_id, (frozenset(), None, -1))
-        uncovered = len(rows - _sealed(store, room, authority)) if rows else 0
-        refusal = refusals.get(record_id)
-        block = pointer.get("legacy_block")
-        units.append(LegacyUnit(
-            record_id=record_id, block=block if type(block) is int else None, room_id=room,
-            raw="exact" if record_id in ranges else "unknown", rows=len(rows), uncovered=uncovered,
-            retelling_chars=chars.get(record_id, 0),
-            folded=bool(pointer.get("folded_into")) or (bool(rows) and uncovered == 0),
-            refusal=dict(refusal) if isinstance(refusal, dict) else None, ts_span=span, first_pos=first))
+    with capture(root):  # every verdict reads one chronicle state: ``authority``'s, or a later one recounted next call
+        pointers = store.legacy_pointer_rows()
+        refusals = fallback_refusals(store.scan_state())
+        chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
+        ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
+                  if (span := _exact_range(pointer)) is not None}
+        bounds = {span for _room, span in ranges.values()}
+        spans = _span_rows(root, bounds)
+        triples = _task_triples(entry for span in bounds for entry in spans[span])
+        answers = _lineage_answers(facts, triples)  # before the rows are counted: a lineage moving meanwhile recounts next call
+        row_sets = _legacy_row_sets(root, ranges, facts)
+        units = []
+        for pointer in pointers:
+            record_id, room = pointer["node_id"], str(pointer["room_id"])
+            rows, span, first = row_sets.get(record_id, (frozenset(), None, -1))
+            uncovered = len(rows - store.sealed_row_refs(room)) if rows else 0
+            refusal = refusals.get(record_id)
+            block = pointer.get("legacy_block")
+            units.append(LegacyUnit(
+                record_id=record_id, block=block if type(block) is int else None, room_id=room,
+                raw="exact" if record_id in ranges else "unknown", rows=len(rows), uncovered=uncovered,
+                retelling_chars=chars.get(record_id, 0),
+                folded=bool(pointer.get("folded_into")) or (bool(rows) and uncovered == 0),
+                refusal=dict(refusal) if isinstance(refusal, dict) else None, ts_span=span, first_pos=first))
     _UNITS[str(root.resolve())] = (key, triples, answers, units)
     return list(units)
 
@@ -622,7 +613,7 @@ def open_segments(root: Any, store: ChronicleStore, room_id: Any, *,
         entries = entries[:hits[-1] + 1] if hits else []
     if not entries:
         return
-    sealed = _sealed(store, room, _authority(store))
+    sealed = store.sealed_row_refs(room)
     head = store.room_head(room)
     run: List[Entry] = []
     seen = set()
