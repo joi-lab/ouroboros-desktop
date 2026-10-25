@@ -89,9 +89,11 @@ export function normalizeConnector(raw) {
 
 export function normalizePlacesResponse(raw) {
     const data = object(raw) || {};
+    const connectors = list(data.connectors).map(normalizeConnector).filter((connector) => connector.connector);
     return {
-        places: list(data.places).map(normalizePlace).filter((place) => place.id),
-        connectors: list(data.connectors).map(normalizeConnector).filter((connector) => connector.connector),
+        places: list(data.places).map(normalizePlace).filter((place) => place.id).map((place) => ({ ...place,
+            serviceLabel: connectors.find((connector) => connector.connector === place.connector)?.label || place.provider })),
+        connectors,
         // Old connections the places migration could not move (absent on a server without the migration).
         migrationProblems: list(data.migration_problems).map((problem) => ({
             bindingId: text(problem?.binding_id), code: text(problem?.code), detail: text(problem?.detail),

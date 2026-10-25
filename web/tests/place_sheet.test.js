@@ -22,6 +22,20 @@ test('the subtitle uses the projected service and instance label with its state,
     assert.doesNotMatch(placeSheetMetaText(community), /telegram-bot|-100123|ouroboros_bot/);
 });
 
+test('the service is the matching connector declaration, independent of the editable place label', () => {
+    const raw = { ...FIXTURE.places.places[0], label: 'My team · urgent', provider: 'slack' };
+    for (const connectors of [
+        [{ connector: 'different', label: 'Wrong service' }, { connector: raw.connector, label: 'Declared service' }], [],
+    ]) {
+        const [place] = normalizePlacesResponse({ places: [raw], connectors }).places;
+        const name = connectors.length ? 'Declared service' : 'slack';
+        assert.equal(place.serviceLabel, name);
+        const html = placeSheetBodyHtml(place);
+        assert.ok(html.includes(`when <span data-i18n-authored>${name}</span> reports it.`));
+        assert.doesNotMatch(html, /when .*My team|when .*Wrong service/);
+    }
+});
+
 test('readiness on and off use the projection; notes and account names stay authored', () => {
     assert.match(placeSheetBodyHtml(slack), /data-tone="ok" role="status">Connector on/);
     assert.match(placeSheetBodyHtml({ ...slack, readiness: { text: 'Off in Skills', tone: 'warn' } }), /data-tone="warn" role="status">Off in Skills/);
