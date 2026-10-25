@@ -274,7 +274,7 @@ def prune_review_checkouts(data_root: Any, live_task_ids: Any, *, views_since: O
                     report["capture_failed"] += 1
                     return True
             if receipt.get("status") in _RECEIPTED:
-                receipt = _release_area(area, receipt)
+                receipt = _release_area(area, receipt, marker.get("git"))
                 if receipt.get("cleanup_error"):
                     report["errors"].append(receipt["cleanup_error"])
                     return True
