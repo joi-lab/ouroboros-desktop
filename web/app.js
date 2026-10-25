@@ -725,7 +725,9 @@ async function revealQuotedSource(address, chatId, isCurrent) {
     const page = await apiClient.chatHistory({ chatId, around: address });
     if (!current()) return null;
     if (page?.anchor?.state !== 'found') return page?.anchor || { state: 'unknown' };
-    if (page.anchor.row_address !== address || page.anchor.chat_id !== chatId) return { state: 'unknown' };
+    const matches = address.startsWith('task:') ? chatId === 1 && page.anchor.task_id === address.slice(5)
+        : page.anchor.row_address === address && page.anchor.chat_id === chatId;
+    if (!matches) return { state: 'unknown' };
     if (project) return openProjectPanel(project, { openOnly: true, sourceReveal: { address, page, current: isCurrent } });
     closeProjectPanel({ reveal: true });
     const showing = projectNavigationGeneration;
