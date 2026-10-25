@@ -187,6 +187,7 @@ def get_tools() -> List[ToolEntry]:
                 "pending_review": {"type": "string", "enum": ["wait", "finish"], "default": "wait"},
                 "swarm_comparison": {"type": "string", "description": "Optional solo-versus-swarm comparison in your own words, attributed to you separately from measured tree facts."},
                 "silent": {"type": "boolean", "default": False, "description": "A consciousness wake or a schedule-born root without a Presence binding may finish without a message when no human reply is owed; any answer stays in the durable result as internal text (wake_silent)."},
+                "summary": {"type": "string", "default": "", "description": "On a consciousness wake's own turn: one plain sentence for your human, in their language: what this wake did or decided. It titles the wake's card and its row on the Consciousness page; your answer or note stays as written."},
             }, "required": ["action"]}}, _finish_task),
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",

@@ -9,6 +9,7 @@ from ouroboros.projects_registry import bind_task_to_project, create_project
 from ouroboros.task_results import write_task_result
 from ouroboros.task_store import delete_document
 from ouroboros.terminal_projection import _project_row
+from tests._wake_summary_shared import seed_wake
 
 
 @pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")],
@@ -57,3 +58,32 @@ def test_non_summary_rows_do_not_acquire_terminal_flags():
     projected = {}
     _copy_task_summary_metadata(projected, {"type": "message", "wake_silent": True, "quiet_effective": True})
     assert projected == {}
+
+
+@pytest.mark.parametrize("retained", [True, False])
+@pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
+@pytest.mark.parametrize("owner_sent", [True, False])
+def test_wake_words_and_quiet_truth_survive_terminal_only_history(tmp_path, retained, summary, owner_sent):
+    fields = {"owner_message_sent": owner_sent}
+    if summary:
+        fields.update(wake_summary=summary, suggested_name=summary)
+    stored = seed_wake(tmp_path, **fields)
+    tid = stored["task_id"]
+    terminal = _project_row(tid, stored, {}, {"chat_id": 1})
+    dialogue_store.append(tmp_path, "chat", terminal)
+    if not retained:
+        assert delete_document(tmp_path, tid)
+    rows = json.loads(_assemble_history_response(tmp_path, 1, 50, 200))["messages"]
+    projected = next(row for row in rows if row.get("system_type") == "task_summary" and "wake_silent" in row)
+    assert projected["quiet_effective"] is (not owner_sent)
+    assert projected.get("wake_summary", "") == summary
+    assert projected["suggested_name"] == stored["suggested_name"]
+    assert stored["result"] not in json.dumps(rows, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("kind", ["task_summary", "message"])
+def test_terminal_copy_carries_both_authored_title_fields_only_on_summaries(kind):
+    words = {"suggested_name": "Title", "wake_summary": "The mind's line."}
+    projected = {}
+    _copy_task_summary_metadata(projected, {"type": kind, **words})
+    assert {key: projected[key] for key in words if key in projected} == (words if kind == "task_summary" else {})

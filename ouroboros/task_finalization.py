@@ -96,6 +96,11 @@ def terminal_custody_notice_text(result: Dict[str, Any]) -> str:
     return terminal_custody_notice(result, owner_row=True)
 
 
+def quiet_finish(row: Dict[str, Any]) -> bool:
+    """A silent finish is quiet only when neither the mind nor the host sent a message."""
+    return row.get("wake_silent") is True and not row.get("owner_message_sent") and not terminal_host_notice_text(row)
+
+
 def terminal_notice_text(result: Dict[str, Any]) -> str:
     """The same terminal notices on transports with one text body or no event stream."""
     return "\n\n".join(part for part in (
@@ -266,6 +271,10 @@ def terminal_result_fields(usage: Dict[str, Any], *, existing: Dict[str, Any] | 
         fields["terminal_salvage_path"] = path
     if usage.get("wake_silent") is True:
         fields["wake_silent"] = True
+    if usage.get("wake_summary"):
+        fields["wake_summary"] = fields["suggested_name"] = str(usage["wake_summary"])
+    if usage.get("owner_message_sent") is True:
+        fields["owner_message_sent"] = True
     if usage.get("terminal_plan_review_open") is True:
         fields["terminal_plan_review_open"] = True
     for key in ("terminal_provider_notice", "terminal_host_notice"):

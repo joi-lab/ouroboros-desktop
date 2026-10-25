@@ -347,6 +347,7 @@ class BackgroundConsciousness:
                     or not is_own_clock_wake(self._own_wake)):
                 return
         outcome = "unknown"
+        row = None
         try:
             from ouroboros.task_results import load_task_result
             row = load_task_result(self._drive_root, task_id, strict=True)
@@ -386,6 +387,9 @@ class BackgroundConsciousness:
                     OBSERVATION_BOOTSTRAP_STATE_KEY: self._observation_bootstrap_since}))
             except Exception:
                 log.debug("consciousness: wake completion not persisted", exc_info=True)
+        if (row or {}).get("wake_summary"):
+            from supervisor.worker_chat_lane import _broadcast_task_named
+            _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": row["wake_summary"]})
 
     def start(self) -> str:
         with self._lock:

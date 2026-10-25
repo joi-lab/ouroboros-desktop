@@ -18,7 +18,9 @@ import ouroboros.loop as loop
 from ouroboros.consciousness_authority import CONSCIOUSNESS_CATEGORY, CONSCIOUSNESS_TASK_CATEGORY
 from ouroboros.owner_mailbox import write_owner_message
 from ouroboros.task_results import load_task_result
+from ouroboros.task_finalization import quiet_finish
 from ouroboros.tools.registry import ToolRegistry
+from tests._wake_summary_shared import seed_wake
 
 TASK_ID = "wake-task"
 WAKE = {"initiator": "consciousness", "usage_category": CONSCIOUSNESS_CATEGORY, "wake_reason": "heartbeat", "wake_cause": "own_clock"}
@@ -132,6 +134,7 @@ def test_clean_silent_wake_publishes_nothing_and_keeps_its_record(wake, answer, 
     assert sends(pending) == [] and sends(drained(bus)) == [], "no final row, live or buffered"
     assert owed_rows(wake.root) == [], "boot replay owes nothing"
     assert stored["status"] == "completed" and stored.get("wake_silent") is True
+    assert quiet_finish(stored) and "owner_message_sent" not in stored
     assert stored["outcome_axes"]["execution"]["status"] == "ok"
     assert stored["result"] == (answer or ""), "internal words are retained, not erased"
     assert "​" not in json.dumps(stored, ensure_ascii=False)
@@ -152,6 +155,58 @@ def test_internal_work_and_earlier_sends_remain(wake):
     pending, stored = emit(wake, text, usage, trace, bus=bus)
     assert sends(pending) == [] and sends(drained(bus)) == []
     assert stored.get("wake_silent") is True
+    assert usage["owner_message_sent"] is True and stored["owner_message_sent"] is True
+    assert not quiet_finish(stored)
+
+
+@pytest.mark.parametrize("cause", ["own_clock", "focus"])
+@pytest.mark.parametrize("action,silent", [("finish", True), ("finish", False), ("stop", False)])
+def test_wake_summary_titles_the_stored_wake_without_changing_its_words(wake, cause, action, silent):
+    metadata = {**WAKE, "wake_cause": cause}
+    summary = "Проверил состояние системы; вмешательство не требуется."
+    text, usage, trace, bus = wake.run([finish(
+        "Whole note.\n\nSecond paragraph stays as written.", action=action,
+        silent=silent, rationale="The remaining probe can wait.", summary="  Проверил\n состояние\tсистемы; вмешательство не требуется.  ")], metadata=metadata)
+    assert usage["wake_summary"] == summary
+    seed_wake(wake.root, task_id=TASK_ID)
+    _, stored = emit(wake, text, usage, trace, bus=bus, metadata=metadata)
+    assert stored["wake_summary"] == stored["suggested_name"] == summary
+    assert stored["result"] == "Whole note.\n\nSecond paragraph stays as written."
+
+
+@pytest.mark.parametrize("summary", [None, "", " \n\t"])
+def test_absent_summary_keeps_the_existing_title(wake, summary):
+    text, usage, trace, bus = wake.run([finish(silent=True, **({"summary": summary} if summary is not None else {}))])
+    before = seed_wake(wake.root, task_id=TASK_ID)
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert "wake_summary" not in usage and "wake_summary" not in stored
+    assert stored["suggested_name"] == before["suggested_name"]
+
+
+@pytest.mark.parametrize("metadata,direct", [({}, True), (SCHEDULE, False),
+    ({"initiator": "consciousness", "usage_category": CONSCIOUSNESS_TASK_CATEGORY}, False), (WAKE, False)])
+@pytest.mark.parametrize("action", ["finish", "stop"])
+def test_summary_refuses_non_wakes_but_empty_summary_keeps_ordinary_completion(wake, metadata, direct, action):
+    from ouroboros.tools.control_runtime import _finish_task
+
+    wake.ctx.task_metadata, wake.ctx.is_direct_chat = metadata, direct
+    wake.ctx._active_builtin_tool_result = None
+    rejected = _finish_task(wake.ctx, action=action, answer="Answer", rationale="Unfinished", summary="A line")
+    assert "COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn" in rejected
+    assert wake.ctx._active_builtin_tool_result.code == "TOOL_ARG_ERROR"
+    assert getattr(wake.ctx, "_completion_request", None) is None
+    assert "completion_requested" in _finish_task(wake.ctx, action=action, answer="Answer", rationale="Unfinished", summary=" \n")
+    assert "wake_summary" not in wake.ctx._completion_request
+
+
+def test_finish_schema_offers_optional_summary():
+    from ouroboros.tools.control import get_tools
+
+    entry = next(entry for entry in get_tools() if entry.name == "finish_task")
+    parameters = entry.schema["parameters"]
+    assert parameters["properties"]["summary"]["type"] == "string"
+    assert parameters["properties"]["summary"]["default"] == ""
+    assert "summary" not in parameters["required"]
 
 
 def test_silent_terminal_ships_no_deferred_mid_turn_send_early(wake):
@@ -663,7 +718,7 @@ def test_forced_rail_retaining_quiet_bytes_publishes_only_the_host_notice(wake, 
     from ouroboros.task_finalization import build_sealed_final_package
 
     injected = _control_at_admission_close(wake, monkeypatch, control, expire=expire)
-    text, usage, trace, bus = wake.run([finish(internal or None, silent=True)])
+    text, usage, trace, bus = wake.run([finish(internal or None, silent=True, summary="Checked the probe.")])
     assert injected and len(wake.calls) == 1, "no paid wrap-up call"
     assert trace["forced_finalization"]["source"] == source
     assert text == internal and usage.get("wake_silent") is True
@@ -675,13 +730,14 @@ def test_forced_rail_retaining_quiet_bytes_publishes_only_the_host_notice(wake, 
     spoken = _spoken(wake, pending, bus)
     assert owed_rows(wake.root) and (not internal or internal not in spoken), "the notice is owed, never the words"
     assert stored["result"] == internal and stored.get("wake_silent") is True
+    assert "wake_summary" not in usage and "wake_summary" not in stored
     assert build_sealed_final_package(stored, shown[0]["text"])["final_result_text"] == ""
 
 
 def test_forced_wrap_up_with_new_ordinary_words_speaks_them(wake, monkeypatch):
     """A wrap-up the model authors afresh replaces the quiet candidate and is ordinary speech."""
     _control_at_admission_close(wake, monkeypatch, "deadline")
-    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True),
+    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True, summary="Checked the probe."),
                                         {"role": "assistant", "content": "Wrap-up: the probe is still red."}])
     assert len(wake.calls) == 2 and trace["forced_finalization"]["source"] == "model"
     assert "wake_silent" not in usage and text == "Wrap-up: the probe is still red."
@@ -689,6 +745,7 @@ def test_forced_wrap_up_with_new_ordinary_words_speaks_them(wake, monkeypatch):
     spoken = _spoken(wake, pending, bus)
     assert "Wrap-up: the probe is still red." in spoken and INTERNAL not in spoken
     assert "wake_silent" not in stored
+    assert "wake_summary" not in usage and "wake_summary" not in stored
 
 
 def test_forced_retention_of_stale_quiet_bytes_stays_internal(wake, monkeypatch):

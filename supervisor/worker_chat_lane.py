@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 from supervisor.state import append_jsonl
+from ouroboros.consciousness_authority import wake_cause
 from ouroboros.observability import stamp_finalization_enqueue
 from ouroboros.utils import utc_now_iso
 
@@ -494,7 +495,7 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
         # returned events can be consumed after this registry entry is gone:
         # stamp the authoritative chat identity before handing them off.
         on_first_work = None
-        if not task.get("project_id"):
+        if not task.get("project_id") and not wake_cause(task.get("metadata")):
             from ouroboros.project_naming import spawn_turn_namer
 
             on_first_work = lambda: spawn_turn_namer(  # noqa: E731

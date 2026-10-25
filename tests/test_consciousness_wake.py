@@ -12,9 +12,29 @@ import pytest
 from ouroboros import consciousness_wake as wake, dialogue_store as ds
 from tests._dialogue import import_all
 from tests._store_shared import read_result, result_exists, seed_result
+from tests._wake_summary_shared import seed_wake
+from tests import test_consciousness as clock_tests
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 T0 = 1_800_000_000.0
+clock = clock_tests.clock
+
+
+@pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
+@pytest.mark.parametrize("callback", ["own_clock", "focus", "other-task"])
+def test_finished_wake_publishes_its_own_title_once(clock, monkeypatch, summary, callback):
+    from supervisor import worker_chat_lane
+
+    row = seed_wake(clock.root, **({"wake_summary": summary, "suggested_name": summary} if summary else {}))
+    task_id = row["task_id"]
+    clock.clock._own_wake = {"task_id": task_id, "wake_cause": "own_clock", "initiator": "consciousness"}
+    frames = []
+    monkeypatch.setattr(worker_chat_lane, "_broadcast_task_named", frames.append)
+    for _ in range(2):
+        clock.clock._wake_finished("other" if callback == "other-task" else task_id, True,
+            metadata={"wake_cause": callback, "initiator": "consciousness"})
+    assert frames == ([{"type": "task_named", "task_id": task_id, "suggested_name": summary}]
+                      if summary and callback == "own_clock" else [])
 
 
 def _iso(ts):
