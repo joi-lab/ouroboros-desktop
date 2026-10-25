@@ -255,7 +255,7 @@ test('the attention vocabulary comes from the host when absent and honors a decl
     assert.match(limited, /added by Ouroboros/);
     assert.doesNotMatch(limited, /data-fact="any_message"/);
     assert.doesNotMatch(placeSheetBodyHtml({ ...slack, facts: [] }), /type="checkbox"/);
-    assert.match(html, /Everything else here it reads at its next own wake\./);
+    assert.match(html, /Everything else here it sees at its next own wake and decides what to read\./);
 });
 
 test('Silent still wakes for its list and holds what it would say or change; Paused is not woken', () => {

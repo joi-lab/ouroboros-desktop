@@ -60,26 +60,26 @@ function wakesHtml(place) {
         ${vocabulary.includes('from_bot') ? `<p class="place-sheet-note">${tr('places.wake.bots', 'Bot messages need this check; once checked, they can wake it without another checked kind.')}</p>` : ''}
         ${place.state === 'silent' ? `<p class="place-sheet-note">${tr('places.wake.silent', 'Silent: these still wake it to read and think; what it would say or change here is held.')}</p>` : ''}
         ${place.state === 'paused' ? `<p class="place-sheet-note">${tr('places.wake.paused', 'While this place is Paused, nothing here wakes it.')}</p>` : ''}
-        <p class="place-sheet-note">${tr('places.wake.honesty', 'Everything else here it reads at its next own wake.')}</p>`;
+        <p class="place-sheet-note">${tr('places.wake.honesty', 'Everything else here it sees at its next own wake and decides what to read.')}</p>`;
 }
 
 function accountsHtml(place, ui) {
     const rows = place.ownerAccounts.map((account) => `<div class="harness-account-row place-account">
             <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
-            <div class="harness-account-meta">${escapeHtml(['you', account.confirmedAt ? `confirmed on ${shortDate(account.confirmedAt)}` : 'confirmed'].join(' · '))}${account.label && account.label !== account.actorId ? ` · <span data-i18n-authored>${escapeHtml(account.actorId)}</span>` : ''}</div>
+            <div class="harness-account-meta">${escapeHtml([tr('places.account.you', 'you'), account.confirmedAt ? fmt('confirmed on {date}', { date: shortDate(account.confirmedAt) }) : tr('places.account.confirmed', 'confirmed')].join(' · '))}${account.label && account.label !== account.actorId ? ` · <span data-i18n-authored>${escapeHtml(account.actorId)}</span>` : ''}</div>
             <div class="harness-account-actions"><button type="button" class="btn btn-ghost btn-sm" data-place-act="revoke" data-actor="${escapeHtml(account.actorId)}" aria-label="Not my account: remove ${escapeHtml(account.label || account.actorId)}">Remove</button></div>
         </div>`).join('');
     const mine = new Set(place.ownerAccounts.map((account) => account.actorId));
     const candidates = place.accountCandidates.filter((account) => !mine.has(account.actorId)).map((account) => `<div class="harness-account-row place-account">
             <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
-            <div class="harness-account-meta"${account.label ? ' data-i18n-authored' : ''}>${escapeHtml(account.label ? account.actorId : 'seen here')}</div>
+            <div class="harness-account-meta"${account.label ? ' data-i18n-authored' : ''}>${escapeHtml(account.label ? account.actorId : tr('places.account.seen', 'seen here'))}</div>
             <div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(account.actorId)}" data-actor-label="${escapeHtml(account.label)}">This is me</button></div>
         </div>`).join('');
     const form = ui.adding ? `<div class="place-account-form">
             <div class="ui-field"><label for="place-account-id">Your account here</label>
                 <input class="ui-control" id="place-account-id" data-place-draft="actorId" value="${escapeHtml(ui.drafts.actorId || '')}" spellcheck="false" autocomplete="off" aria-describedby="place-account-help">
                 <div class="ui-field-help" id="place-account-help">${escapeHtml(`${capitalized(accountIdText(place.provider))}.`)}</div></div>
-            <label class="ui-field">Name (optional)<input class="ui-control" data-place-draft="actorLabel" data-i18n-authored value="${escapeHtml(ui.drafts.actorLabel || '')}" spellcheck="false" autocomplete="off"></label>
+            <label class="ui-field">${tr('places.account.name', 'Name (optional)')}<input class="ui-control" data-place-draft="actorLabel" data-i18n-authored value="${escapeHtml(ui.drafts.actorLabel || '')}" spellcheck="false" autocomplete="off"></label>
             <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm-typed">This is me</button><button type="button" class="btn btn-ghost btn-sm" data-place-act="cancel-add">Cancel</button></div>
         </div>` : '<div class="place-sheet-actions"><button type="button" class="btn btn-ghost btn-sm" data-place-act="add-mine">Add mine</button></div>';
     return `${rows || candidates ? `<div class="place-accounts">${rows}${candidates}</div>` : ''}${form}
@@ -94,7 +94,7 @@ function notesHtml(place, ui) {
         </li>`).join('');
     return `<p class="place-sheet-note">It reads them at every wake here; the Safety Supervisor treats yours as your instructions.</p>
         ${items ? `<ul class="place-note-list">${items}</ul>` : ''}
-        <label class="ui-field">New note<textarea class="ui-control consciousness-owner-words" rows="2" data-place-draft="note" data-i18n-authored spellcheck="false">${escapeHtml(ui.drafts.note || '')}</textarea></label>
+        <label class="ui-field">${tr('places.note.new', 'New note')}<textarea class="ui-control consciousness-owner-words" rows="2" data-place-draft="note" data-i18n-authored spellcheck="false">${escapeHtml(ui.drafts.note || '')}</textarea></label>
         <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="add-note">Add note</button></div>`;
 }
 

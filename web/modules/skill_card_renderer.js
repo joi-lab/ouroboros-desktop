@@ -653,7 +653,7 @@ export function renderInstalledSkillCard(skill, reviewingSkills = new Set(), rep
             <div class="skills-details-facts" data-skill-detail-facts>
                 ${detailRow('Can use', escapeHtml(permissionWords(skill.permissions).join(' · ') || 'Nothing beyond its own folder'))}
                 ${accessRows(skill)}
-                ${detailRow(tr('skills.id', 'ID'), escapeHtml(skill.name))}
+                ${detailRow(tr('skills.id', 'ID'), `<code data-i18n-authored>${escapeHtml(skill.name)}</code>`)}
                 ${installRecordRows(skill)}
                 ${liveRow(skill, live)}
                 ${publicationRow(skill)}

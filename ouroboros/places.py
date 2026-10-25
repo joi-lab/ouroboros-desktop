@@ -320,7 +320,7 @@ def place_summary(place: Place) -> Mapping[str, Any]:
 
 def _write(drive_root: Any, place_id: str, change: Any, expected_revision: int | None = None) -> Place | None:
     if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
-        raise PlaceError("place_revision_invalid", "expected_revision")
+        raise PlaceError("place_revision_invalid", "expected_revision", "place_revision_invalid: expected_revision must be a whole number.")
     load_places(drive_root)  # migration precedes the first user edit, under the same file lock
     result = None
 
@@ -393,14 +393,14 @@ def _change_place(old: Place | None, action: str, author: str, values: dict) -> 
             raise PlaceError("place_wake_invalid", "wakes")
         added_signals = {f for f in facts if is_wake_signal(f)} - {w.fact for w in old.wakes}
         if added_signals and not added_signals <= declared_wake_signals(old.connector):
-            raise PlaceError("place_wake_undeclared", "wakes")
+            raise PlaceError("place_wake_undeclared", "wakes", "place_wake_undeclared: this connector has not declared that signal; turn it on or choose a listed kind.")
         return replace(old, wakes=tuple(next((w for w in old.wakes if w.fact == fact), WakeItem(fact, author)) for fact in dict.fromkeys(facts)))
     if action in {"add_wake", "remove_wake"}:
         fact = values.get("fact", "")
         if not valid_wake_fact(fact):
             raise PlaceError("place_wake_invalid", "fact")
         if action == "add_wake" and is_wake_signal(fact) and fact not in declared_wake_signals(old.connector):
-            raise PlaceError("place_wake_undeclared", "fact")
+            raise PlaceError("place_wake_undeclared", "fact", "place_wake_undeclared: this connector has not declared that signal; turn it on or choose a listed kind.")
         items = tuple(w for w in old.wakes if w.fact != fact)
         if action == "add_wake":
             items += (WakeItem(fact, author),)

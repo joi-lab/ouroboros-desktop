@@ -331,6 +331,6 @@ test('skill titles prefer the optional title, then connector label, then canonic
         const html = renderInstalledSkillCard(skill(fields));
         assert.ok(html.includes(`<span data-i18n-authored>${expected}</span>`));
         assert.match(html, /data-skill="demo"/);
-        assert.match(html, /skills-detail-label">ID<\/span><span class="skills-detail-value">demo<\/span>/);
+        assert.match(html, /skills-detail-label">ID<\/span><span class="skills-detail-value"><code data-i18n-authored>demo<\/code><\/span>/);
     }
 });

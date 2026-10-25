@@ -53,25 +53,31 @@ export function factsLineParts(snapshot, placeCount = null) {
 }
 
 /** The own tasks MAX_TASKS counts, each with its cause; work the owner asked for never counts. */
-export function countedRootsText(snapshot) {
-    if (snapshot.maxTasks === null && !snapshot.countedRoots.length) return '';
+export function countedRootsParts(snapshot) {
+    if (snapshot.maxTasks === null && !snapshot.countedRoots.length) return null;
     const running = snapshot.countedRoots.length || snapshot.tasksRunning || 0;
-    const head = `Its own tasks: ${running}${snapshot.maxTasks !== null ? ` of ${snapshot.maxTasks}` : ''}`;
+    const head = snapshot.maxTasks !== null ? fmt('Its own tasks: {running} of {max}', { running, max: snapshot.maxTasks })
+        : fmt('Its own tasks: {running}', { running });
     const names = snapshot.countedRoots.map((root) => `${root.title || root.taskId}${root.causeLabel ? ` (${root.causeLabel})` : ''}`);
-    return [head, ...names].join(' · ');
+    return { head, names };
+}
+
+export function countedRootsText(snapshot) {
+    const parts = countedRootsParts(snapshot);
+    return parts ? [parts.head, ...parts.names].join(' · ') : '';
 }
 
 export function summaryHtml(snapshot, { placeCount = null, hasSocket = true } = {}) {
     const headline = headlineView(snapshot);
     const kicker = snapshot.enabled === null ? 'Consciousness · state unknown' : `Consciousness · ${snapshot.enabled ? 'on' : 'off'}`;
     const money = allowanceLabel(snapshot.spentUsd, snapshot.dailyUsd, snapshot.unknownUnmetered, snapshot.integrityDegraded);
-    const roots = countedRootsText(snapshot);
+    const roots = countedRootsParts(snapshot);
     const toggle = snapshot.enabled === null ? '' : `<button type="button" class="btn btn-ghost btn-sm consciousness-stop" data-cx-act="toggle" data-enabled="${snapshot.enabled ? '1' : '0'}"${hasSocket ? '' : ' disabled'}>${snapshot.enabled ? 'Stop' : 'Start'}</button>`;
     return `<div class="storage-summary-head">
             <div class="storage-summary-text consciousness-summary-text">
                 <div class="storage-kicker">${escapeHtml(kicker)}</div>
                 <div class="consciousness-headline"><div class="storage-total">${escapeHtml(headline.text)}${headline.moving ? dots() : ''}</div>${toggle}</div>
-                ${roots ? `<p class="consciousness-next" data-i18n-authored>${escapeHtml(roots)}</p>` : ''}
+                ${roots ? `<p class="consciousness-next">${escapeHtml(roots.head)}${roots.names.map((name) => ` · <span data-i18n-authored>${escapeHtml(name)}</span>`).join('')}</p>` : ''}
             </div>
         </div>
         <div class="consciousness-summary-foot">
