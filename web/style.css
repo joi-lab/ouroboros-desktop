@@ -612,7 +612,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 }
 /* A limitation and its disclosure own the space before Project; never paint over their words. */
 .chat-bubble.project-answer:has(> .project-answer-limitation, > .project-ending-details) { --project-answer-tail: 0px; }
-.chat-bubble.project-answer.is-folded:has(> .project-answer-limitation, > .project-ending-details) > .message {
+.chat-bubble.project-answer.is-folded > .message:has(~ .project-answer-limitation, ~ .project-ending-details) {
     -webkit-mask-image: linear-gradient(180deg, black 60%, transparent 100%);
     mask-image: linear-gradient(180deg, black 60%, transparent 100%);
 }
@@ -1161,7 +1161,7 @@ html[data-layout="docked"] .app-page-header[data-empty] {
 }
 /* While a card is dragged the band lets the pointer through to the board, whose top edge is where the engine scrolls
    a drag upward; at rest the band is the window's handle. */
-:root[data-window-chrome="integrated"][data-layout="docked"] #page-widgets:has(.widgets-card.dragging) .app-page-header[data-empty] {
+:root[data-window-chrome="integrated"][data-layout="docked"] #page-widgets .app-page-header[data-empty]:has(~ .widgets-scroll .widgets-card.dragging) {
     pointer-events: none;
 }
 
@@ -3049,7 +3049,7 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     display: none;
 }
 
-.chat-live-card.subagent:not(:has(> .chat-live-foot > .chat-live-meta:not(:empty), > .chat-live-foot > .chat-live-foot-end > .chat-live-review-summary:not([hidden]), > .chat-live-foot > .chat-live-foot-end > .chat-live-actions:not(:empty))) > .chat-live-summary-button {
+.chat-live-card.subagent > .chat-live-summary-button:not(:has(~ .chat-live-foot > .chat-live-meta:not(:empty), ~ .chat-live-foot > .chat-live-foot-end > .chat-live-review-summary:not([hidden]), ~ .chat-live-foot > .chat-live-foot-end > .chat-live-actions:not(:empty))) {
     padding-bottom: var(--space-2);
 }
 
@@ -7527,8 +7527,8 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
 
 @media (hover: hover) {
     .nav-projects-facts:hover,
-    .nav-projects-header:has(> .nav-projects-facts:hover) > .nav-section-toggle,
-    .nav-projects-header:has(> .nav-section-toggle:hover) > .nav-projects-facts {
+    .nav-projects-header > .nav-section-toggle:has(~ .nav-projects-facts:hover),
+    .nav-projects-header > .nav-section-toggle:hover ~ .nav-projects-facts {
         background: var(--tone-quiet-hover);
         color: var(--text-primary);
     }
@@ -7916,11 +7916,12 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
     padding-bottom: 0;
 }
 .project-panel .chat-instance-panel .chat-messages {
-    padding-top: var(--chat-header-reserve, 56px);
+    padding-top: var(--chat-feed-reserve, var(--chat-header-reserve, 56px));
 }
-/* The note already reserves the floating bar. With a keyboard both are in flow. */
-.project-panel .chat-panel-statusbar:has(> :not([hidden])) + .chat-messages {
-    padding-top: 8px;
+/* The note already reserves the floating bar. With a keyboard both are in flow. The room asks and its feed inherits
+   the answer: :has() stays in its subject compound (DEVELOPMENT "Design System"). */
+.project-panel .chat-instance-panel:has(> .chat-panel-statusbar > :not([hidden])) {
+    --chat-feed-reserve: 8px;
 }
 body.keyboard-open .project-panel .chat-panel-statusbar { padding-top: 8px; }
 body.keyboard-open .project-panel .chat-instance-panel .chat-messages {
@@ -9925,7 +9926,7 @@ body.keyboard-open .project-panel {
    the time under the doubt's actions then keeps clear of the Reply / Copy targets that sit on its line. */
 @media (pointer: coarse) {
     .chat-clamp-toggle, .msg-pending .btn { min-height: var(--touch-target-min); }
-    .chat-bubble:is(.has-reply, .has-copy) > .msg-pending:has(.btn) + .msg-time { margin-top: var(--space-3); }
+    .chat-bubble:is(.has-reply, .has-copy) > .msg-pending:has(.btn):has(+ .msg-time) { margin-bottom: var(--space-3); }
 }
 
 .chat-copy-fallback {
