@@ -237,7 +237,7 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
                      **({"tool_calls": row["tool_calls"]} if "tool_calls" in row else {}),
                      **({"rounds": usage["total_rounds"]} if "total_rounds" in usage else {}),
                      "checks": row.get("safety_checks", []), "note": notes.get(task_id),
-                     **({"summary": row["wake_summary"]} if "wake_summary" in row else {}),
+                     **({"summary": row["wake_summary"]} if isinstance(row.get("wake_summary"), str) and row["wake_summary"] else {}),
                      **({"said_owner": bool(row["owner_message_sent"])} if "owner_message_sent" in row else {}),
                      **{k: row[k] for k in TASK_COST_META_FIELDS if k in row}})
     return rows
