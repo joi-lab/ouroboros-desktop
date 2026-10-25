@@ -49,7 +49,7 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
         assert places == snapshot["places_brief"]
         assert ids == ["wake"]
         return [{"task_id": "wake"}]
-    monkeypatch.setattr(view, "_wake_ids", lambda *args: ["wake"])
+    monkeypatch.setattr(view, "wake_ids", lambda *args: ["wake"])
     monkeypatch.setattr(view, "recent_wakes", wakes)
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
     panel = json.loads(response.body)
@@ -127,7 +127,7 @@ def test_recent_wake_coverage_names_the_selection_cap_even_with_pruned_documents
     document = seed_wake(tmp_path)
     ids = [document["task_id"], *[f"pruned-{i}" for i in range(selected_count - 1)]] if selected_count else []
     reads = []
-    monkeypatch.setattr(view, "_wake_ids", lambda *args: reads.append(args) or ids)
+    monkeypatch.setattr(view, "wake_ids", lambda *args: reads.append(args) or ids)
     clock = object.__new__(BackgroundConsciousness)
     clock._drive_root = tmp_path
     monkeypatch.setattr(clock, "status_snapshot", lambda: {"places_brief": []})

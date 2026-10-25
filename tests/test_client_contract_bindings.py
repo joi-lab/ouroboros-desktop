@@ -395,7 +395,7 @@ def test_recent_wake_read_unavailability_keeps_the_panel(client, monkeypatch, so
     if source == "usage":
         monkeypatch.setattr(usage_store, "read", unavailable)
     else:
-        monkeypatch.setattr(consciousness_view, "_wake_ids", lambda *args: [document["task_id"]])
+        monkeypatch.setattr(consciousness_view, "wake_ids", lambda *args: [document["task_id"]])
         monkeypatch.setattr(store, "open_store", unavailable)
     if not typed:
         with pytest.raises(ValueError, match="unexpected failure"):

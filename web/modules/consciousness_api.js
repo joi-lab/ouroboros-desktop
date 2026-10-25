@@ -158,7 +158,6 @@ export function normalizeConsciousness(raw, { enabled } = {}) {
         placesBrief: list(bg.places_brief).map((row) => ({
             id: text(row?.place_id), label: text(row?.label), state: text(row?.state), unanswered: count(row?.unanswered),
         })).filter((row) => row.id),
-        places: Array.isArray(bg.places) ? bg.places.map(normalizePlace).filter((place) => place.id) : null,
         recentWakes: Array.isArray(bg.recent_wakes) ? bg.recent_wakes.map(normalizeWake).slice(0, 50) : null,
     };
 }

@@ -147,7 +147,7 @@ def first_reply_at(drive_root, task_id: str) -> str | None:
     return first[1] if first else None
 
 
-def _wake_ids(drive_root, now: float) -> list[str]:
+def wake_ids(drive_root, now: float) -> list[str]:
     """The allowance's category/time index, newest distinct wake roots first."""
     from ouroboros import usage_store
     from ouroboros.consciousness_allowance import ROOT_HORIZON_SEC, _MONEY_KIND
@@ -214,7 +214,7 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
     from ouroboros.task_finalization import quiet_finish
 
     if ids is None:
-        ids = _wake_ids(drive_root, time.time() if now is None else now)
+        ids = wake_ids(drive_root, time.time() if now is None else now)
     if not ids:
         return []
     documents = display_documents(drive_root, ids)

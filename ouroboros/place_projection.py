@@ -71,12 +71,13 @@ def place_view(root, place, *, declarations: list[dict] | None = None, allowance
     cause = "place:" + place.place_id
     spend = next((item.get("usd") for item in (allowance or {}).get("spend_by_cause") or []
                   if item.get("cause") == cause), None)
-    activity = place_activity(root, place)
     try:
+        activity = place_activity(root, place)
         rooms = place_room_index(root, place.place_id)
     except Exception:
+        # A busy store leaves the place's label and notes readable; only its counts are unknown.
         log.warning("Place room index unavailable for %s", place.place_id, exc_info=True)
-        rooms = None
+        activity, rooms = {"unanswered": None, "last_activity_at": None}, None
     result.update(label=place.label or place.provider,
                   rooms=rooms, unanswered=activity["unanswered"] if rooms is not None else None,
                   last_activity_at=activity["last_activity_at"],

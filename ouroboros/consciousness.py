@@ -457,14 +457,14 @@ class BackgroundConsciousness:
 
     def details_snapshot(self, requested_enabled: bool | None) -> Dict[str, Any]:
         """The full read-only panel; the state endpoint keeps its small snapshot."""
-        from ouroboros.consciousness_view import RECENT_WAKE_LIMIT, _wake_ids, describe_consciousness_state, recent_wakes
+        from ouroboros.consciousness_view import RECENT_WAKE_LIMIT, wake_ids, describe_consciousness_state, recent_wakes
         from ouroboros.store import StoreBusy
         from ouroboros.usage_store import UsageLockUnavailable
 
         snapshot = describe_consciousness_state(self.status_snapshot(), requested_enabled)
         coverage = "wakes that reached a model call in the last 48 h"
         try:
-            ids = _wake_ids(self._drive_root, time.time())
+            ids = wake_ids(self._drive_root, time.time())
             wakes = recent_wakes(self._drive_root, snapshot.get("places_brief"),
                                  live_wake_task_id=snapshot.get("live_wake_task_id", ""), ids=ids)
             if len(ids) == RECENT_WAKE_LIMIT:

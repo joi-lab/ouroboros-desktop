@@ -355,7 +355,7 @@ class RecentWakesView(TypedDict):
     """Recent-wakes fields of /api/consciousness; status fields remain an open JSON shape."""
 
     recent_wakes: Optional[List[RecentWake]]
-    recent_wakes_coverage: str
+    recent_wakes_coverage: NotRequired[str]  # names the cap or the typed read failure; absent without a clock
 
 
 class PlaceConnectRequest(TypedDict):
