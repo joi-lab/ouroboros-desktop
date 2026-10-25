@@ -199,6 +199,17 @@ def test_absent_summary_keeps_the_existing_title(wake, summary):
     assert stored["suggested_name"] == before["suggested_name"]
 
 
+@pytest.mark.parametrize("arguments", [{}, {"summary": ""}, {"summary": None}])
+def test_ordinary_finish_accepts_an_omitted_empty_or_null_summary(wake, arguments):
+    from ouroboros.tools.control_runtime import _finish_task
+
+    wake.ctx.task_metadata = {}
+    result = _finish_task(wake.ctx, action="finish", answer="x", **arguments)
+    assert "completion_requested" in result and "TOOL_ERROR" not in result
+    assert wake.ctx._completion_request["answer"] == "x"
+    assert "wake_summary" not in wake.ctx._completion_request
+
+
 @pytest.mark.parametrize("cause,title", [("own_clock", "Own time"), ("focus", "Research room")])
 @pytest.mark.parametrize("summary", ["", "S2"])
 @pytest.mark.parametrize("reset_at_start", [False, True])

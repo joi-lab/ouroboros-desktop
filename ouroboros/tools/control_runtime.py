@@ -908,7 +908,7 @@ def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
 
     metadata = getattr(ctx, "task_metadata", None) or {}
     wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
-    summary = " ".join(summary.split())
+    summary = " ".join(str(summary or "").split())
     if summary and not wake:
         return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
             text="ERROR: COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn"))
