@@ -6,8 +6,9 @@ transaction ``{"kind": "transaction", "schema": 1, "records": [...],
 ``.publication.lock``. ``index.sqlite3`` is only a projection: deleting it
 replays the journal into the same rows, sequences, page coverage and folds; a
 torn or invalid transaction becomes an addressed ``gap`` record and its
-neighbours stay intact. ``scan_state`` merges by top-level key, so one writer's
-frontier never erases another's.
+neighbours stay intact. A reader takes the lock only to bring a stale index up
+to date. ``scan_state`` merges by top-level key, so one writer's frontier never
+erases another's.
 
 A record is never rewritten. A ``page`` seals a SET of row refs of its room
 (``page_rows``: chat ``row_sha256`` values and ``note:<id>``), once per level:
@@ -53,7 +54,8 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
-from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
+from ouroboros.platform_layer import (acquire_exclusive_file_lock, kernel_file_locks_enforced,
+                                      release_exclusive_file_lock)
 from ouroboros.utils import append_jsonl, assert_test_data_path, utc_now_iso
 
 SCHEMA_VERSION = 1
@@ -71,6 +73,7 @@ _SOURCE_FIELDS = ("id", "kind", "room_id", "revision", "sha256")  # what an acco
 _NO_BLOCK = float("inf")
 _CHUNK = 500
 
+# A schema change bumps SCHEMA_VERSION: a reader on the lock-free path (``_current``) checks only the version.
 _SCHEMA = """
     CREATE TABLE IF NOT EXISTS records (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +99,7 @@ _RESET = ("DELETE FROM records; DELETE FROM state; DELETE FROM active_marks; DEL
           f"PRAGMA user_version={SCHEMA_VERSION};")
 
 QuoteResolver = Callable[[Any], Optional[Tuple[str, str]]]
+_KERNEL_LOCKS: Dict[str, bool] = {}  # per chronicle directory: SQLite's own locks order a reader against a commit
 
 
 class PublishResult(NamedTuple):
@@ -262,6 +266,44 @@ class ChronicleStore:
 
     @contextmanager
     def _index(self):
+        """A reader's projection. While the index holds every authority byte (its ``offset`` equals the size
+        of ``records.jsonl`` within one read snapshot) it is read on a read-only connection with no lock file,
+        no schema script and no catch-up: SQLite's own locks order the read against a publisher's commit.
+        Otherwise, and where kernel locks are not enforced (the name tier), the publisher's locked catch-up."""
+        db = self._current()
+        if db is None:
+            with self._publishing() as db:
+                yield db
+            return
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def _current(self) -> Optional[sqlite3.Connection]:
+        key = str(self.directory)
+        if key not in _KERNEL_LOCKS:
+            if not self.index_path.exists():
+                return None
+            _KERNEL_LOCKS[key] = kernel_file_locks_enforced(self.lock_path)
+        if not _KERNEL_LOCKS[key]:
+            return None
+        try:
+            db = sqlite3.connect(f"{self.index_path.absolute().as_uri()}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return None
+        try:
+            db.execute("BEGIN")  # the version, the offset and every read after them: one snapshot
+            if (db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION and self._state(db, "offset", 0)
+                    == (self.log_path.stat().st_size if self.log_path.exists() else 0)):
+                return db
+        except (sqlite3.Error, OSError, ValueError):
+            pass
+        db.close()
+        return None
+
+    @contextmanager
+    def _publishing(self):
         assert_test_data_path(self.directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         fd = acquire_exclusive_file_lock(self.lock_path, timeout_sec=10, stale_sec=90, owner_aware_stale=True)
@@ -400,7 +442,7 @@ class ChronicleStore:
         repeated activation returns the existing receipt. ``record`` is the
         batch's last record with its ``sequence``.
         """
-        with self._index() as db:
+        with self._publishing() as db:
             return self._commit(db, records, scan_state)
 
     def room_head(self, room_id: Any) -> int:
@@ -426,7 +468,7 @@ class ChronicleStore:
         refusal = verify_quotes(quotes, quote_resolver)
         if refusal is not None:
             return refusal
-        with self._index() as db:
+        with self._publishing() as db:
             return self._commit(db, [record], quotes_verified=True,
                                 pre=lambda: self._head_refusal(db, room, expected_sequence))
 
@@ -445,7 +487,7 @@ class ChronicleStore:
         refusal = verify_quotes(quotes, quote_resolver)
         if refusal is not None:
             return refusal
-        with self._index() as db:
+        with self._publishing() as db:
             if expected_sequence is None:
                 return _refuse("revision_required", "a part folds revisable records: pass expected_sequence, "
                                "the room head its text is based on", current_head=self._head(db, room))
@@ -471,7 +513,7 @@ class ChronicleStore:
         unnamed, the current one is frozen. A source that is not in this chronicle is
         ``target_missing``; a revision that is not that record's is ``revision_conflict``.
         """
-        with self._index() as db:
+        with self._publishing() as db:
             refs = []
             for given in sources if isinstance(sources, (list, tuple)) else ():
                 frozen, refusal = self._source_version(db, given)
@@ -487,7 +529,7 @@ class ChronicleStore:
     def select_account(self, account_id: str, *, replaces: Iterable[Any], author: Dict[str, Any], reason: str,
                        shown: bool = True) -> PublishResult:
         """The mind's choice of the common view: show the account (or withdraw it) in place of the named records."""
-        with self._index() as db:
+        with self._publishing() as db:
             target = self._get(db, account_id)
             if target is None:
                 return _refuse("target_missing", conflict_ids=(str(account_id),))
@@ -500,7 +542,7 @@ class ChronicleStore:
         """The mind's correction beside the original; it acts at once and moves the target room's head."""
         if not isinstance(author, dict) or author.get("kind") != "mind":
             return _refuse("invalid", "only the mind corrects a record")
-        with self._index() as db:
+        with self._publishing() as db:
             target = self._get(db, target_id)
             if target is None:
                 return _refuse("target_missing", conflict_ids=(str(target_id),))
@@ -523,7 +565,7 @@ class ChronicleStore:
 
     def decide(self, draft_id: str, accepted: bool, author: Dict[str, Any], reason: str) -> PublishResult:
         """The mind accepts or rejects a helper's draft page or part, once, with a reason."""
-        with self._index() as db:
+        with self._publishing() as db:
             target = self._get(db, draft_id)
             if target is None:
                 return _refuse("target_missing", conflict_ids=(str(draft_id),))
@@ -548,7 +590,7 @@ class ChronicleStore:
         return self._mark_decision("mark_release", mark_id, author, reason)
 
     def _mark_decision(self, kind, mark_id, author, reason, **fields):
-        with self._index() as db:
+        with self._publishing() as db:
             active = db.execute("SELECT room FROM active_marks WHERE id=?", (str(mark_id),)).fetchone()
             room = active[0] if active else ""
             return self._commit(db, [{"kind": kind, "room_id": room, "target_id": str(mark_id),
