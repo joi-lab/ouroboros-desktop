@@ -306,4 +306,18 @@ for (const rich of [true, false]) test(`opened ${rich ? 'fenced code' : 'plain'}
     await mount.fire('toggle', { target: reopened });
     assert.equal(destroyed.length, 2);
     assert.equal(mount.querySelector('[data-wake]'), null);
+    next = { ...next, recentWakes: [wake('214a31b6')] };
+    await controller.refresh();
+    const last = mount.querySelector('details');
+    last.open = true;
+    await mount.fire('toggle', { target: last });
+    controller.destroy(); controller = null;
+    assert.equal(destroyed.length, 3, 'teardown releases an open note too');
+});
+
+
+test('the committed wake document uses only the neutral home path', () => {
+    const document = fs.readFileSync(new URL('../../tests/fixtures/wake_document_214a31b6.json', import.meta.url), 'utf8');
+    assert.match(document, /\/Users\/owner\//);
+    assert.deepEqual([...new Set([...document.matchAll(/\/Users\/([A-Za-z0-9_-]+)/g)].map(match => match[1]))], ['owner']);
 });
