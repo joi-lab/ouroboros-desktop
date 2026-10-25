@@ -250,9 +250,17 @@ def _addressed(root: Any, entries: Iterable[ds.Row], keep: Optional[Callable[[ds
     position, looked up a page at a time: the ordinals and the legacy hints of a page's rows in one read
     each, never one per row (every room's open rows come through here, and Main's view reads them each
     turn). A page is ``_ADDRESS_PAGE`` source rows examined, kept or not, so a filtered reader that stops
-    early reads at most a page beyond what it used."""
-    page, examined = [], 0
-    for entry in entries:
+    early reads at most a page beyond what it used. A source that fails mid-page (a busy store between
+    its own pages) still answers the rows it read first, then fails, as the one-row lookups did."""
+    page, examined, source = [], 0, iter(entries)
+    while True:
+        try:
+            entry = next(source)
+        except StopIteration:
+            break
+        except Exception:
+            yield from _addressed_page(root, page)
+            raise
         examined += 1
         if not is_a2a_chat_id(entry.row.get("chat_id", 1)) and (keep is None or keep(entry)):
             page.append(entry)

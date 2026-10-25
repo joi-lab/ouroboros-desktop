@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import itertools
 import json
 import pathlib
 import shutil
@@ -561,3 +562,29 @@ def test_an_unsettled_unit_still_answers_the_rows_before_it_and_a_busy_store_sto
     with pytest.raises(StoreBusy):
         list(cc.iter_rows(tmp_path))
     assert asked == []  # contention never turns a page into one wait per row
+
+
+def test_a_source_that_fails_mid_page_still_answers_the_rows_it_read_first(tmp_path, monkeypatch):
+    """A busy store between the source's own pages ends the reader where the one-row lookups ended it:
+    after every row read before the failure, with the same failure. A room's candidate union pages
+    unaligned with the reader's pages, so the failure can land inside one."""
+    from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
+    from ouroboros.store import StoreBusy
+
+    _paged_chain(tmp_path)
+    expected, real = _one_by_one(tmp_path), ds.iter_rows
+    read_first = sum(1 for entry in itertools.islice(real(tmp_path, "chat"), 620)
+                     if not is_a2a_chat_id(entry.row.get("chat_id", 1)))
+
+    def failing(*args, **kwargs):
+        for count, entry in enumerate(real(*args, **kwargs)):
+            if count == 620:  # inside the reader's second page
+                raise StoreBusy("held")
+            yield entry
+
+    monkeypatch.setattr(ds, "iter_rows", failing)
+    answered = []
+    with pytest.raises(StoreBusy):
+        for item in cc.iter_rows(tmp_path):
+            answered.append(item)
+    assert answered == expected[:read_first] and read_first > cc._ADDRESS_PAGE
