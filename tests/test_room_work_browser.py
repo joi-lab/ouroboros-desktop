@@ -1182,7 +1182,7 @@ def settle_unfold(page, room):
     """Wait until the room's Shade has finished unfolding (its 170 ms entrance slides it 6px), so geometry reads its
     resting place rather than a frame of the animation."""
     root = "#page-chat" if room == "main" else "#project-panel"
-    page.wait_for_function("""(root) => { const s = document.querySelector(`${root} .rw-shade`);
+    page.wait_for_function("""(root) => { const s = document.querySelector(`${root} .rw-shade:not(.cx-shade)`);
         return Boolean(s) && !s.hidden && !(s.getAnimations?.() || []).some((a) => a.playState === 'running'); }""",
                            arg=root, timeout=10_000)
     settle_frames(page)

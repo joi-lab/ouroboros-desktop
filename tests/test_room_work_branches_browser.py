@@ -125,7 +125,7 @@ ROWS_RECORDER = """([scope, ms]) => {
     const root = scope === 'main' ? '#page-chat' : '#project-panel';
     let last = '';
     const tick = () => {
-        const surface = document.querySelector(`${root} .rw-surface`);
+        const surface = document.querySelector(`${root} .rw-surface:not(.cx-shade)`);  // the work Shade, not the chip's
         const note = surface?.querySelector('.rw-note');
         const menu = document.querySelector('body > .task-control-menu');
         const state = { hidden: surface ? surface.hidden : null, note: note && !note.hidden ? note.textContent : '',
@@ -471,7 +471,7 @@ def test_open_sheet_repaints_translated_chrome_without_replacing_focus(branch_ui
         page.wait_for_function('(label) => document.querySelector("#page-chat .rw-pill-question").textContent === label', arg=question)
         assert page.evaluate('() => document.activeElement === window.__languageFocusNode'), 'language repaint replaced focus'
         expected = '‹Work in this chat›' if language == 'ru' else 'Work in this chat'
-        assert page.locator('#page-chat .rw-surface').get_attribute('aria-label') == expected
+        assert page.locator('#page-chat .rw-surface:not(.cx-shade)').get_attribute('aria-label') == expected
         assert page.locator('#page-chat .rw-pill-resume').inner_text() == ('‹Resume›' if language == 'ru' else 'Resume')
     record('language-switch', {'focus': page.evaluate(ACTIVE), 'posts': transport.posts})
     assert transport.posts == [] and transport.decision_posts() == []
