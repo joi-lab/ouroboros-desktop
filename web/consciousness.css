@@ -61,6 +61,9 @@ textarea.ui-control.consciousness-owner-words {
 .cx-chip[hidden], .cx-chip-word[hidden] { display: none; }
 .cx-chip-glyph { display: inline-flex; flex: none; }
 .cx-chip-glyph svg { display: block; width: 18px; height: 18px; }
+/* It leads the bar's end group, so a status word that grows or shrinks never moves it (DESIGN bible 6). */
+:is(.chat-page-header, .project-panel-bar) > .cx-chip { margin-inline-start: auto; }
+:is(.chat-page-header, .project-panel-bar) > .cx-chip:not([hidden]) + :is(.app-page-actions, .app-page-trailing) { margin-inline-start: 0; }
 :root[data-theme] .cx-chip.ui-chrome-control[data-off="true"] .cx-chip-glyph,
 :root[data-theme] .cx-chip.ui-chrome-control[data-off="true"]:not([data-evolving="true"]) .cx-chip-word { color: var(--text-meta); }
 :root[data-theme] .cx-chip.ui-chrome-control[data-open="1"] { background: var(--chip-float-hover); }

@@ -225,7 +225,9 @@ class Transport:
                 raw[task_id] = {"running": pausing, **raw.get(task_id, {})}
                 fences.setdefault(item.get("root_task_id") or task_id, {
                     "state": "requested" if pausing else "paused", "parked_members": [] if pausing else [task_id]})
+        # Consciousness facts show each bar's chip: one more neighbour no word may move (DESIGN bible 6).
         return {"sha": "room-work-fixture", "supervisor_ready": ready, "active_chat_activities": rows,
+                "bg_consciousness_enabled": True, "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00"},
                 "active_chat_activities_complete": self.complete, "projects": self.projects,
                 "project_chat_ids": [p["chat_id"] for p in self.projects],
                 **work_fields(rows, raw, results=self.results, fences=fences, complete=self.complete)}
