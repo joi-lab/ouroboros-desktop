@@ -138,11 +138,11 @@ def record_response_ack(drive_root, *, provider, model, base_url="", options=Non
 
 def resolve_response_limit(drive_root, *, provider, model, base_url="", options=None,
                            allow_fetch=False, api_key=None) -> ResponseLimit:
-    from ouroboros.capability_evidence import (_load, _age_seconds,
+    from ouroboros.capability_evidence import (_read, _age_seconds,
         _CONFIRMED_TTL_SEC, _FAILED_TTL_SEC, _openai_compatible_metadata_window, _claudexor_metadata_evidence)
 
     fp = _response_fingerprint(provider=provider, model=model, base_url=base_url, options=options)
-    data = _load(drive_root)
+    data = _read(drive_root)
     ack = data.get("response_acks", {}).get(fp)
     if ack:
         return ResponseLimit(**ack)
@@ -173,7 +173,7 @@ def resolve_response_limit(drive_root, *, provider, model, base_url="", options=
                 read = ""  # No metadata source for this provider: nothing was read.
         except Exception:
             read = "metadata read failed"  # No inferred maximum after a failed metadata read.
-        cached = _load(drive_root).get("response_limits", {}).get(fp)
+        cached = _read(drive_root).get("response_limits", {}).get(fp)
         absent = not cached or (not cached.get("max_output_tokens")
                                 and _age_seconds(cached.get("observed_at", "")) > _FAILED_TTL_SEC)
         if read and absent:
@@ -252,7 +252,7 @@ def response_limit_preview(drive_root, route: dict, *, account="", settings=None
     model = route["model"]
     provider, base_url, _key = _dispatch_route(route)
     options = ce.model_account_options(model, credential_profile_id=account, settings=settings) if provider == "claudexor" else {}
-    data = ce._load(drive_root)
+    data = ce._read(drive_root)
     observed = None
     if provider == "claudexor":
         try:
