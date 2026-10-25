@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import functools
 import json
 import logging
 import pathlib
@@ -293,6 +294,13 @@ def snapshot_json(snapshot: MemoryViewSnapshot) -> str:
 
 
 def snapshot_from_json(text: str) -> MemoryViewSnapshot:
+    """A captured view's snapshot, parsed once per text: the fit plan, the floor and the wake
+    facts of one build share it, so no consumer mutates it."""
+    return _parsed_view(text)
+
+
+@functools.lru_cache(maxsize=4)  # a memory bound, not a policy: a miss parses again
+def _parsed_view(text: str) -> MemoryViewSnapshot:
     data = json.loads(text)
     data["spec"] = ViewSpec(**data["spec"])
     for name in _TUPLES:

@@ -32,8 +32,10 @@ import json
 import os
 import pathlib
 import threading
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from ouroboros import utils
 from ouroboros.utils import JsonlChainUnreadable, iter_jsonl_objects, jsonl_chain_handles
 
 # One bounded tail per path per process, memoized on the file's identity: a context build reads the
@@ -159,6 +161,74 @@ def archive_segments(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optio
             gaps.add("unreadable_source")
         return []
     return sorted(found, key=lambda p: p.name, reverse=True)
+
+
+_LISTINGS: Dict[tuple, tuple] = {}  # (archive dir, prefix) -> (key, newest-first segments): one per log in use
+
+
+def remembered_listing(live: pathlib.Path) -> Callable[..., list]:
+    """``archive_segments`` for LIVE's log (``list_archives``' signature), listed again only when it
+    may have changed: its rotation, the one writer of its archive names, gives LIVE a new inode, and
+    an entry added or removed moves ``archive/``'s mtime. A listing that met a gap, or a directory
+    changed within a clock tick (``utils._RACY_NS``), is never reused."""
+    def listing(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optional[set] = None) -> list:
+        started = time.time_ns()
+        try:
+            live_stat, directory = os.stat(live), os.stat(archive_dir)
+            key = (live_stat.st_dev, live_stat.st_ino, directory.st_mtime_ns)
+        except OSError:
+            key = None
+        name, found = (str(archive_dir), archive_prefix), set()
+        held = _LISTINGS.get(name)
+        if key is not None and held is not None and held[0] == key:
+            return list(held[1])
+        segments = archive_segments(archive_dir, archive_prefix, found)
+        if gaps is not None:
+            gaps.update(found)
+        if key is not None and not found and key[2] < started - utils._RACY_NS:
+            _LISTINGS[name] = (key, tuple(segments))
+        return segments
+
+    return listing
+
+
+# live log -> {archive: (file identity, task ids it holds, its gaps)}: the newest ARCHIVE_BACKFILL_MAX
+_ARCHIVE_TASKS: Dict[str, Dict[str, tuple]] = {}
+
+
+def task_archive_parser(live: pathlib.Path, task_id: str) -> Callable[..., list]:
+    """``iter_jsonl_objects`` (``iter_objects``' signature) for ONE task's window of LIVE's log.
+
+    A rotated archive is written once, so the task ids it holds are kept per file identity: an
+    archive without TASK_ID's rows is not parsed again for that task, and the gaps it met are
+    replayed. The live file, and an archive that holds the task, parse as ever. Only archives a
+    read can consult (the newest ``ARCHIVE_BACKFILL_MAX`` of this log) are kept.
+    """
+    held = _ARCHIVE_TASKS.setdefault(str(live), {})
+
+    def parse(path: pathlib.Path, *, tail_bytes: Optional[int] = None, gap_reasons: Optional[set] = None) -> list:
+        path = pathlib.Path(path)
+        if path == live or tail_bytes is not None:
+            return list(iter_jsonl_objects(path, tail_bytes=tail_bytes, gap_reasons=gap_reasons))
+        found: set = set()
+        try:
+            with path.open("rb") as handle:
+                identity, known = utils.file_identity(os.fstat(handle.fileno())), held.get(str(path))
+                if known is not None and known[0] == identity and task_id not in known[1]:
+                    rows, found = [], set(known[2])
+                else:
+                    rows = list(iter_jsonl_objects(path, gap_reasons=found, _handle=handle))
+                    held[str(path)] = (identity, frozenset(str(row.get("task_id", "")).strip() for row in rows),
+                                       frozenset(found))
+                    for stale in sorted(held)[:-ARCHIVE_BACKFILL_MAX]:
+                        del held[stale]
+        except FileNotFoundError:
+            rows = []
+        if gap_reasons is not None:
+            gap_reasons.update(found)
+        return rows
+
+    return parse
 
 
 def read_jsonl_segment_with_gaps(
@@ -340,5 +410,5 @@ def coverage_line(coverage: dict) -> str:
 
 __all__ = [
     "ARCHIVE_BACKFILL_MAX", "TAIL_WINDOW_START_BYTES", "archive_segments", "cached_tail_objects", "coverage_line",
-    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries",
+    "read_jsonl_segment_with_gaps", "read_rotated_jsonl_entries", "remembered_listing", "task_archive_parser",
 ]

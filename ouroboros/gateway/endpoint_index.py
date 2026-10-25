@@ -223,7 +223,7 @@ _ENGINE = "relays the bundled Claudexor engine"
 HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/health": Shape("200:HealthResponse"),
     "GET /api/contract": Shape("200:GatewayContractResponse"),
-    "GET /api/state": Shape("200:StateResponse 500:ErrorResponse"),
+    "GET /api/state": Shape("200:StateResponse 500:ErrorResponse", query="bindings_since"),
     "GET /api/consciousness": Shape("200:json 503:json", note="consciousness panel: status, spend by cause, places, recent wakes"),
     "GET /onboarding": Shape("200:html", query="builtin", note="selected setup or builtin wizard; builtin=1 forces builtin"),
     "GET /api/onboarding": Shape("200:html 204:empty", note="204: a ready provider exists, no setup needed"),

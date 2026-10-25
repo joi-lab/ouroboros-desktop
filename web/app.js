@@ -483,7 +483,7 @@ const stateSnapshots = createStateSnapshotSequencer((data, requestedAt, generati
         ?? (data.projects || lastProjectRows).map((project) => project?.chat_id));
     renderProjectsNav(data.projects || lastProjectRows,
         data.project_chat_ids ?? (data.projects ? undefined : Array.from(state.projectChatIds)), projectActivityIndex);
-    applyTaskBindings(data.task_bindings || {});
+    if (data.task_bindings) applyTaskBindings(data.task_bindings);  // null: unchanged, never filled here
     hydrateOpenChatsFromState(data, requestedAt, generation);
     evolution?.hydrateStateSnapshot(data);
     observeMainRevision(data.main_visible_revision);
@@ -1207,7 +1207,7 @@ async function refreshProjectsNav(force = true) {
     const request = await stateSnapshots.gate(force);
     if (!request) return;
     try {
-        const resp = await apiFetch('/api/state', { cache: 'no-store' });
+        const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
         if (!resp.ok) {
             stateSnapshots.fail(request);
             return;
