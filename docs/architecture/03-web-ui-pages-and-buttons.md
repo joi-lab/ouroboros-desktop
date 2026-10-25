@@ -198,7 +198,7 @@ Costs projects the physical-attempt ledger: known spend (confirmed plus estimate
 
 Storage (`storage.js`) opens passively. **Measure** counts every owned place in a low-I/O-priority child (progress, Stop, phase-only live region). Only finished counts give the five-share bar, date, growth; free space stays fresh; failed reads keep the gauge; unknown is never zero. **Temporary space** (`storage_free.js`) previews finished tasks' folders/copies without writes, then sizes them; the shared confirmation frees selected plan items via existing retirers at retention zero, one copy per call, Stop between. Visible polling covers count, preview and deletion (not stuck ones); results: removed/kept/deleting/stuck.
 
-Evolution's campaign object (state; consciousness and its allowance; Start via the shared dialog, empty = default objective, off in Light mode or without a current state; Pause when on) never waits for history: `evolution_history.py` serves the saved copy and re-measures only on new tags or Try again. Milestones are dots on one measure; the chosen version's README row reads beneath.
+Evolution's campaign object (state; consciousness and its allowance; Start via the shared dialog, empty = default objective, off in Light mode or without a current state; Pause when on; Run review… through `/review`'s picker) never waits for history: `evolution_history.py` serves the saved copy and re-measures only on new tags or Try again. Milestones are dots on one measure; the chosen version's README row reads beneath.
 
 #### Updates
 
