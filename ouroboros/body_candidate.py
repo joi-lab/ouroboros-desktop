@@ -103,8 +103,8 @@ def _git(cwd: Any, *args: str, check: bool = True) -> subprocess.CompletedProces
     return _wt._git(pathlib.Path(cwd), *args, check=check)
 
 
-def _rows(data_dir: Optional[Any] = None, *, op: str = "") -> List[Dict[str, Any]]:
-    return [row for row in _wt._records(data_dir, op=op) if row.get("kind") == KIND]
+def _rows(data_dir: Optional[Any] = None, *, op: str = "", strict: bool = False) -> List[Dict[str, Any]]:
+    return [row for row in _wt._records(data_dir, op=op, strict=strict) if row.get("kind") == KIND]
 
 
 def list_candidates(data_dir: Optional[Any] = None) -> List[Dict[str, Any]]:
@@ -112,12 +112,10 @@ def list_candidates(data_dir: Optional[Any] = None) -> List[Dict[str, Any]]:
     return _rows(data_dir)
 
 
-def find(owner: str, data_dir: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-    owner = str(owner or "").strip()
-    for row in _rows(data_dir) if owner else []:
-        if row.get("task_id") == owner and not row.get("retiring"):
-            return row
-    return None
+def find(owner: str, data_dir: Optional[Any] = None, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    owner = str(owner or "").strip()  # ``strict``: an unreadable copy record raises
+    return next((row for row in (_rows(data_dir, strict=strict) if owner else [])
+                 if row.get("task_id") == owner and not row.get("retiring")), None)
 
 
 def context_fact(owner: str = "", data_dir: Optional[Any] = None, *, limit: int = 8) -> List[Dict[str, Any]]:
@@ -136,7 +134,7 @@ def context_fact(owner: str = "", data_dir: Optional[Any] = None, *, limit: int 
         "yours": bool(owner) and row.get("task_id") == owner,
     } for row in rows[:limit]]
     if len(rows) > limit:
-        shown.append({"omitted": len(rows) - limit, "source": "state/subagent_worktrees.json (kind=body_candidate rows)"})
+        shown.append({"omitted": len(rows) - limit, "source": "state/private_copies/*.json (kind=body_candidate records)"})
     return shown
 
 
@@ -721,12 +719,15 @@ def holds_commit(task_id: str, commit_sha: str, data_dir: Optional[Any] = None) 
     """Whether ``task_id``'s own candidate still holds ``commit_sha`` on its branch (what adoption needs).
 
     ``False`` only on evidence: no candidate of that task, no checkout, or Git
-    answering that the commit is gone or off the branch. An unreadable registry or
+    answering that the commit is gone or off the branch. An unreadable record or
     an unanswered Git is ``None``: unknown never proves the reviewed commit lost.
     """
     try:
         row = next((entry for entry in _rows(data_dir, op="read_body_candidate_commit")
                     if task_id and entry.get("task_id") == task_id), None)
+        if row is None and task_id:  # a listing skips an unreadable record; this task's own one raises
+            _wt._record_at(_wt._resolve_root() / f"body_{_wt._safe_name(task_id)}", data_dir,
+                           op="read_body_candidate_commit")
     except Exception:
         return None
     if row is None or not commit_sha or not row.get("path") or not pathlib.Path(str(row["path"])).is_dir():

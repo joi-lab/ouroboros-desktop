@@ -172,17 +172,19 @@ def _read_record(file: Path, *, op: str = "", data_dir: Optional[Any] = None) ->
         raise SubagentWorktreeRegistryCorrupt(f"{file.name}: {exc}") from exc
 
 
-def _records(data_dir: Optional[Any] = None, *, op: str = "") -> List[Dict[str, Any]]:
-    """Every readable copy record. An unreadable record is reported and skipped,
-    never rewritten or removed: the copy it names stays where it is."""
+def _records(data_dir: Optional[Any] = None, *, op: str = "", strict: bool = False) -> List[Dict[str, Any]]:
+    """Every readable copy record. An unreadable record is reported and skipped (``strict``:
+    raised), never rewritten or removed: the copy it names stays where it is."""
     _import_legacy_registry(data_dir)
     rows: List[Dict[str, Any]] = []
     try:
         files = sorted(f for f in _records_dir(data_dir).glob("*.json") if not f.name.startswith("."))
     except OSError:
+        if strict:
+            raise
         return rows
     for file in files:
-        with contextlib.suppress(SubagentWorktreeRegistryCorrupt):
+        with contextlib.suppress(*(() if strict else (SubagentWorktreeRegistryCorrupt,))):
             row = _read_record(file, op=op, data_dir=data_dir)
             if row is not None:
                 rows.append(row)
