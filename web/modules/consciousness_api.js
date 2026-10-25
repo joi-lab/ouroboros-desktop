@@ -180,7 +180,9 @@ export async function readConsciousnessFromState(init = {}) {
 }
 
 export async function readPlaces(init = {}) {
-    return normalizePlacesResponse(await fetchJson('/api/places', { cache: 'no-store', ...init }));
+    const data = await fetchJson('/api/places', { cache: 'no-store', ...init }, { rejectOkFalse: true });
+    if (!Array.isArray(data?.places) || !Array.isArray(data?.connectors)) throw new Error(tr('places.unavailable', 'Places could not be read.'));
+    return normalizePlacesResponse(data);
 }
 
 /** Only the declared status route, within this connector's extension namespace; never a probe. */
@@ -191,7 +193,7 @@ export async function readPlaceConnector(connector, init = {}) {
     const path = route && extensionRoutePath(connector.connector, route);
     if (!path || path !== url) throw new Error(tr('places.status.route_unavailable', 'The connector status route could not be read.'));
     const data = await fetchJson(path, { ...init, cache: 'no-store' }, { rejectOkFalse: true });
-    if (!object(data)) throw new Error(tr('places.status.unavailable', 'The connector status could not be read.'));
+    if (!object(data) || data.error) throw new Error(tr('places.status.unavailable', 'The connector status could not be read.'));
     return data;
 }
 

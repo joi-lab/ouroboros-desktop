@@ -18,9 +18,10 @@ import {
 } from '../modules/settings_safety.js';
 import { chooseRecheckRow, recheckDraft, recheckMarkHtml, syncRecheckState } from '../modules/safety_recheck.js';
 import {
-    consciousnessModelText, consciousnessSectionHtml, migrationProblemLines, settingsPlacesHtml,
+    bindConsciousnessSettings, consciousnessModelText, consciousnessSectionHtml, migrationProblemLines, settingsPlacesHtml,
 } from '../modules/settings_consciousness.js';
 import { parseAvailableSubagentsSetting, buildAvailableSubagentsSetting } from '../modules/subagents_settings.js';
+import { setup, NodeStub } from './dashboard_dom_fixture.js';
 import { apiClient } from '../modules/api_client.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
@@ -51,7 +52,7 @@ test('the owner names stand with their notes; stored values never change', () =>
 
 test('a place row says its state, what wakes it and what waits; absent money is the dash', () => {
     const { places } = normalizePlacesResponse(FIXTURE.places);
-    assert.equal(placeStatusText(places[0]), 'active · wakes for direct messages, mentions and replies · 2 unanswered');
+    assert.equal(placeStatusText(places[0]), 'active · wakes for direct messages, mentions and replies · 2 open turns');
     assert.equal(placeStatusText(places[1]), 'silent · wakes for mentions', 'a Silent place still wakes for its list');
     assert.equal(placeStatusText(places[2]), 'paused', 'a Paused place says only its state');
     assert.equal(placeStatusText({ state: 'gone' }), 'state unknown');
@@ -442,11 +443,11 @@ test('Consciousness: Advises · Acts · Evolves with notes, the allowance and ta
     assert.equal(consciousnessModelText({ OUROBOROS_MODEL_CONSCIOUSNESS: 'openai::gpt-5.6' }), 'gpt-5.6');
 });
 
-test('the Settings places list: icon, label, state word, unanswered count; each row opens its sheet', () => {
+test('the Settings places list: icon, label, state word, open-turn count; each row opens its sheet', () => {
     const { places } = normalizePlacesResponse(FIXTURE.places);
     const html = settingsPlacesHtml({ places });
     assert.equal((html.match(/data-place-open=/g) || []).length, 3);
-    assert.match(html, /<span class="consciousness-place-name">Slack · Acme<\/span>\s*<span class="consciousness-place-facts">active · 2 unanswered<\/span>/);
+    assert.match(html, /<span class="consciousness-place-name" data-i18n-authored>Slack · Acme<\/span>\s*<span class="consciousness-place-facts">active · 2 open turns · Connector on<\/span>/);
     assert.match(html, /aria-label="Open Mail · inbox: paused"/);
     assert.match(settingsPlacesHtml({ places: [] }), /No place yet\. Connect one from an installed connector\./);
     assert.match(settingsPlacesHtml({ error: 'Places could not be read: HTTP 404' }), /data-tone="warn"/);
@@ -468,4 +469,29 @@ test('an old connection the places migration could not move is said once, in Set
     assert.equal((html.match(/Could not move an old connection/g) || []).length, 2);
     assert.match(html, /<p class="settings-inline-note" data-tone="warn">Could not move/);
     assert.match(settingsPlacesHtml({ places: [], problems: migrationProblems }), /Connect it again\.<\/p><p class="settings-inline-note">No place yet/);
+});
+
+test('Settings reads Places on mount and after a change, including recovery from a failed first read', async (t) => {
+    const { window } = setup(t);
+    const root = new NodeStub();
+    root.innerHTML = '<section data-consciousness-places><div data-place-list></div></section>';
+    let reads = 0;
+    const dispose = bindConsciousnessSettings(root, { read: async () => {
+        if (++reads === 1) throw new Error('offline');
+        return normalizePlacesResponse(FIXTURE.places);
+    } });
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    await settled();
+    assert.equal(reads, 1, 'even while the tab is hidden');
+    assert.match(root.textContent, /Places could not be read: offline/);
+    window.dispatchEvent(new CustomEvent('ouro:places-changed'));
+    await settled();
+    assert.equal(reads, 2);
+    assert.match(root.textContent, /Slack · Acme/);
+    assert.match(root.textContent, /Connector on/);
+    assert.doesNotMatch(root.textContent, /offline/);
+    dispose();
+    window.dispatchEvent(new CustomEvent('ouro:places-changed'));
+    await settled();
+    assert.equal(reads, 2);
 });

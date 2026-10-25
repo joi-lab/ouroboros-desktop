@@ -39,7 +39,8 @@ function whereHtml(view) {
     else if (!choices) note = tr('places.choices.loading', 'Reading where you can connect…');
     else if (choices.state === 'empty') note = tr('places.choices.empty', 'None offered yet.');
     else if (choices.state === 'unavailable') note = tr('places.choices.unavailable', 'Could not read the connector’s list.');
-    const settings = choices?.state === 'empty' ? button('settings', tr('places.connector.settings', 'Open connector settings')) : '';
+    const settings = choices?.state === 'empty' ? button('settings', connector.settings
+        ? tr('places.connector.settings', 'Open connector settings') : tr('places.connector.page', 'Open connector page')) : '';
     const retry = choices?.state === 'unavailable' ? button('retry-choices', tr('places.retry', 'Try again')) : '';
     const readiness = view.connectorStatus?.text ? { ...view.connectorStatus, authored: true } : connector.readiness;
     return `<section class="place-sheet-section">
@@ -67,7 +68,7 @@ export function connectListHtml({ connectors = null, places = [], error = '', se
             return `<div class="harness-account-row place-connector-row">
                 <div class="harness-account-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(connector.icon, 18)}</span><strong data-i18n-authored>${escapeHtml(connector.label)}</strong></div>
                 ${connector.readiness ? `<div class="harness-account-meta" data-tone="${escapeHtml(connector.readiness.tone)}">${escapeHtml(tr(`places.readiness.${connector.readiness.text}`, connector.readiness.text))}</div>` : ''}
-                <div class="harness-account-actions">${n ? `<span>${escapeHtml(fmt('Connected · {n} places ·', { n }))}</span>` : ''}
+                <div class="harness-account-actions">${n ? `<span>${escapeHtml(fmt(n === 1 ? 'Connected · {n} place ·' : 'Connected · {n} places ·', { n }))}</span>` : ''}
                     ${button('choose', n ? tr('places.connect.another', 'Connect another') : tr('places.connect.action', 'Connect'), `data-connector="${escapeHtml(connector.connector)}"`)}</div>
             </div>`;
         }).join('')}</div></section>`;
@@ -79,7 +80,7 @@ export async function openConnectorSettings(connector, openSettingsTab) {
     if (await openSettingsTab('advanced') === false) return;
     const section = document.getElementById('extension-settings-sections');
     const form = [...(section?.querySelectorAll('[data-extension-settings-form]') || [])]
-        .find((node) => node.dataset.skill === connector.connector);
+        .find((node) => node.dataset.skill === connector.connector && node.dataset.extensionSettingsKey?.startsWith(`${connector.connector}:${connector.settings}:`));
     (form || section)?.scrollIntoView({ block: 'start' });
 }
 

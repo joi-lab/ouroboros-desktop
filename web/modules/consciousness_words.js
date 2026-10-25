@@ -1,6 +1,7 @@
 // The owner's words for consciousness, places and safety (owner's final names, 21.10), in one place.
 // Stored values never change: only these words do, so a relabel is one line here. Pure data and pure
 // helpers over host facts; nothing here reads the network or the page.
+import { fmt, tr } from './i18n.js';
 
 /** Consciousness autonomy: stored observe / act / full. */
 export const AUTONOMY_LEVELS = Object.freeze([
@@ -40,7 +41,7 @@ export const WAKE_FACT_WORDS = Object.freeze({
     review_requested: 'review requests addressed to me',
     assigned: 'assignments addressed to me',
     any_message: 'every message',
-    from_bot: 'messages from bots',
+    from_bot: 'also wakes on bot messages',
     legacy_addressed: 'messages addressed to it',
 });
 
@@ -78,12 +79,15 @@ export const capitalized = (text) => {
 };
 
 /** One wake fact in words; an unknown kind keeps its own spelling rather than a guess. */
-export const wakeFactWord = (fact) => WAKE_FACT_WORDS[fact] || String(fact || '').replace(/_/g, ' ');
+export const wakeFactWord = (fact) => WAKE_FACT_WORDS[fact]
+    ? tr(`places.wake.${fact}`, WAKE_FACT_WORDS[fact]) : String(fact || '').replace(/_/g, ' ');
 
 /** «wakes for direct messages, mentions and replies», or '' when nothing wakes it here. */
 export function wakesForText(wakes = []) {
     const facts = [...new Set(wakes.map((item) => item?.fact).filter(Boolean))];
-    return facts.length ? `wakes for ${listWords(facts.map(wakeFactWord))}` : '';
+    const kinds = facts.filter((fact) => fact !== 'from_bot');
+    return [kinds.length ? `wakes for ${listWords(kinds.map(wakeFactWord))}` : '',
+        facts.includes('from_bot') ? wakeFactWord('from_bot') : ''].filter(Boolean).join(' · ');
 }
 
 export const authorWord = (author) => AUTHOR_WORDS[author] || (author ? `added by ${author}` : '');
@@ -94,12 +98,12 @@ export const placeStateWord = (state) => placeStateOf(state)?.word || 'state unk
 /**
  * A place row's one status sentence: «active · wakes for direct messages, mentions and replies». A Silent place
  * keeps its list (it still wakes there to read and think; what it would say or change is held); a Paused place
- * says only its state. Unanswered messages are a count.
+ * says only its state. The count is open focus turns, not owed replies.
  */
 export function placeStatusText(place) {
     const parts = [placeStateWord(place?.state)];
     if (place?.state === 'active' || place?.state === 'silent') parts.push(wakesForText(place.wakes));
-    if (Number.isInteger(place?.unanswered) && place.unanswered > 0) parts.push(`${place.unanswered} unanswered`);
+    if (Number.isInteger(place?.unanswered) && place.unanswered > 0) parts.push(fmt('{n} open turns', { n: place.unanswered }));
     return parts.filter(Boolean).join(' · ');
 }
 

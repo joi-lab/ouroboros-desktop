@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { connectChoices, connectListHtml, openConnectPlace } from '../modules/place_connect.js';
-import { connectPlace, normalizePlace, normalizeConnector, readPlaceConnector } from '../modules/consciousness_api.js';
+import { connectChoices, connectListHtml, openConnectPlace, openConnectorSettings } from '../modules/place_connect.js';
+import { connectPlace, normalizePlace, normalizeConnector, readPlaceConnector, readPlaces } from '../modules/consciousness_api.js';
 import { setup } from './dashboard_dom_fixture.js';
 
 const raw = { connector: 'github', label: 'GitHub', icon: { kind: 'svg', svg: '<svg viewBox="0 0 24 24"><circle r="7"/></svg>' },
@@ -93,6 +93,41 @@ test('the declared route uses the extension helper and no-store; unrelated route
         await assert.rejects(readPlaceConnector({ ...github, source: { url } }), /route could not be read/);
     }
     assert.equal(calls.length, 1);
+});
+
+test('an unreadable Places response is an error; a known empty projection is empty', async (t) => {
+    const { routes } = setup(t);
+    routes.set('/api/places', { ok: true, json: async () => ({ error: 'not JSON' }) });
+    await assert.rejects(readPlaces(), /Places could not be read/);
+    routes.set('/api/places', { ok: true, json: async () => ({ places: [], connectors: [] }) });
+    assert.deepEqual((await readPlaces()).places, []);
+});
+
+test('a failed status body never looks like an absent chooser, while an empty status object may omit it', async (t) => {
+    const { routes } = setup(t);
+    for (const data of [null, [], { error: 'not JSON' }, { ok: false, error: 'offline' }]) {
+        routes.set('/api/extensions/github/status', { ok: true, json: async () => data });
+        await assert.rejects(readPlaceConnector(github));
+    }
+    routes.set('/api/extensions/github/status', { ok: true, json: async () => ({}) });
+    assert.equal(connectChoices(await readPlaceConnector(github)).state, 'absent');
+});
+
+test('the empty-list settings door opens the declared section; without a declaration it opens Skills', async (t) => {
+    const { document, window } = setup(t);
+    const host = document.createElement('div'); host.id = 'extension-settings-sections';
+    host.innerHTML = '<form data-extension-settings-form data-skill="github" data-extension-settings-key="github:other:0"></form><form data-extension-settings-form data-skill="github" data-extension-settings-key="github:connection:0"></form>';
+    document.body.appendChild(host);
+    const forms = host.querySelectorAll('[data-extension-settings-form]');
+    const scrolled = [], tabs = [], skills = [];
+    forms.forEach((form, index) => { form.scrollIntoView = () => scrolled.push(index); });
+    window.addEventListener('ouro:open-skills', (event) => skills.push(event.detail.skill));
+    await openConnectorSettings(github, async (tab) => tabs.push(tab));
+    assert.deepEqual(tabs, ['advanced']);
+    assert.deepEqual(scrolled, [1]);
+    await openConnectorSettings({ ...github, settings: '' }, async (tab) => tabs.push(tab));
+    assert.deepEqual(tabs, ['advanced']);
+    assert.deepEqual(skills, ['github']);
 });
 
 test('connecting an instance carries only its identity and connector-authored label', async (t) => {

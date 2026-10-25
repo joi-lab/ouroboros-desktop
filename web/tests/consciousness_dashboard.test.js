@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { setup } from './dashboard_dom_fixture.js';
 
 import { normalizeConsciousness, normalizePlacesResponse } from '../modules/consciousness_api.js';
 import {
@@ -26,7 +27,7 @@ test('the headline says what it does now; work in a place outranks its own clock
     assert.deepEqual(headlineView({ ...fromState(), enabled: false }), { text: 'Off', moving: false });
     assert.deepEqual(headlineView(normalizeConsciousness({})), { text: 'State unknown', moving: false });
     const spent = { ...fromState(), status: 'allowance_exhausted', allowanceResetsAt: '2026-10-20T15:40:00Z' };
-    assert.match(headlineView(spent).text, /^Waiting for the allowance · frees at \d\d:\d\d$/);
+    assert.match(headlineView(spent).text, /^Waiting for the allowance · next check at \d\d:\d\d$/);
     assert.equal(headlineView({ ...spent, allowanceResetsAt: '' }).text, 'Waiting for the allowance');
 });
 
@@ -58,18 +59,59 @@ test('the summary: status, Stop, the 24-hour money, the host\'s sentence only wh
 test('a place row: icon, label, state and wakes in words, the day\'s spend; unknown spend is the dash', () => {
     const { places } = normalizePlacesResponse(FIXTURE.places);
     const slack = dashboardPlaceRowHtml(places[0], { awake: true });
-    assert.match(strip(slack), /Slack · Acme active · wakes for direct messages, mentions and replies · 2 unanswered · connected \$0\.88/);
+    assert.match(strip(slack), /Slack · Acme active · wakes for direct messages, mentions and replies · 2 open turns · Connector on \$0\.88/);
     assert.match(slack, /class="status-mark consciousness-mark"/);
     assert.match(slack, /aria-label="Open Slack · Acme, awake here now: /);
-    assert.match(dashboardPlaceRowHtml(places[1]), /class="consciousness-spend is-none">—</);
-    assert.match(strip(dashboardPlaceRowHtml(places[1])), /^Telegram · Ouroboros community silent · wakes for mentions —$/, 'Silent still wakes for its list');
+    assert.match(dashboardPlaceRowHtml(places[1]), /class="consciousness-spend is-none">unknown</);
+    assert.match(dashboardPlaceRowHtml(places[1]), /spend unknown/);
+    assert.doesNotMatch(dashboardPlaceRowHtml(places[1]), /nothing spent|\$0\.00 spent/);
+    assert.match(strip(dashboardPlaceRowHtml(places[1])), /^Telegram · Ouroboros community silent · wakes for mentions unknown$/, 'Silent still wakes for its list');
     assert.match(strip(dashboardPlaceRowHtml(places[2])), /^Mail · inbox paused \$0\.00$/);
     assert.match(dashboardPlaceRowHtml(places[2]), />\$0\.00</);
+    assert.match(dashboardPlaceRowHtml(places[2]), /\$0\.00 spent/);
+    assert.doesNotMatch(dashboardPlaceRowHtml(places[2]), /spend unknown/);
     assert.match(placesCardHtml(places), /data-place-connect>Connect a place</, "the one Connect control");
     assert.match(placesCardHtml([]), /No place yet\. Connect one from an installed connector\./);
     assert.match(placesCardHtml([]), /A connector you install can connect a place here: Connect a place\./);
     assert.doesNotMatch(placesCardHtml(places), /Each connector you install adds/);
     assert.match(placesCardHtml(null, { error: 'Places could not be read: HTTP 404' }), /data-tone="warn"/);
+});
+
+test('the Dashboard always reads the Places projection, even with an empty snapshot list or a failed snapshot', async (t) => {
+    const { window } = setup(t);
+    const mount = fakeMount();
+    let reads = 0, offline = false, placesOffline = false;
+    const controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
+        read: async () => { if (offline) throw new Error('snapshot offline'); return { ...full(), places: [] }; },
+        readFallback: async () => { throw new Error('state offline'); },
+        readPlacesFn: async () => {
+            ++reads;
+            if (placesOffline) throw new Error('places offline');
+            return normalizePlacesResponse(FIXTURE.places);
+        },
+    });
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    const placesHtml = () => mount.regions.get('[data-cx-places]').innerHTML;
+    await settled();
+    assert.equal(reads, 1, 'mount reads Places even when the Dashboard is hidden');
+    await controller.refresh();
+    assert.match(placesHtml(), /Slack · Acme/);
+    assert.match(placesHtml(), /Connector on/);
+    offline = true;
+    await controller.refresh();
+    assert.match(placesHtml(), /Slack · Acme/);
+    placesOffline = true;
+    window.dispatchEvent(new CustomEvent('ouro:places-changed')); await settled();
+    assert.match(placesHtml(), /Places could not be read: places offline/);
+    assert.doesNotMatch(placesHtml(), /No place yet/);
+    placesOffline = false;
+    window.dispatchEvent(new CustomEvent('ouro:places-changed')); await settled();
+    assert.match(placesHtml(), /Slack · Acme/);
+    assert.doesNotMatch(placesHtml(), /places offline/);
+    const before = reads;
+    controller.destroy();
+    window.dispatchEvent(new CustomEvent('ouro:places-changed')); await settled();
+    assert.equal(reads, before);
 });
 
 test('a recent wake: when, cause and where, how fast it answered, the check chips, the cost', () => {

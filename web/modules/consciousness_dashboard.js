@@ -2,13 +2,14 @@
 // (the same /bg command the Activity row and the chat header send), where its money went by cause, the own
 // tasks MAX_TASKS counts, its places (each opens its sheet; Connect a place) and the recent wakes with their
 // cause, where, how fast it answered, what the Safety Supervisor did and what each cost. Facts come from
-// `GET /api/consciousness`; while a server does not answer that, `/api/state` and `/api/places` still give
-// the status and the places, and the wakes say they are not reported. Unknown is said, never zero.
+// `GET /api/consciousness`, with `/api/state` as the status fallback. Places always read `/api/places`.
+// Wakes say when they are not reported; unknown money is never zero.
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { statusMarkHtml } from './status_mark.js';
 import { strokeIcon } from './page_icons.js';
 import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
+import { tr, fmt } from './i18n.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
 import { CHECK_CHIPS, clockText, durationText, placeStatusText, usdText } from './consciousness_words.js';
 import { openPlaceSheet } from './place_sheet.js';
@@ -41,7 +42,8 @@ export function headlineView(snapshot) {
     if (!snapshot.enabled) return { text: 'Off', moving: false };
     if (snapshot.status === 'allowance_exhausted') {
         const frees = clockText(snapshot.allowanceResetsAt);
-        return { text: `Waiting for the allowance${frees ? ` · frees at ${frees}` : ''}`, moving: false };
+        return { text: frees ? fmt('Waiting for the allowance · next check at {time}', { time: frees })
+            : tr('consciousness.allowance.waiting', 'Waiting for the allowance'), moving: false };
     }
     const next = clockText(snapshot.nextWakeAt);
     return { text: next ? `Sleeping until ${next}` : 'Sleeping', moving: false };
@@ -92,12 +94,15 @@ export function summaryHtml(snapshot, { placeCount = null, hasSocket = true } = 
 }
 
 export function dashboardPlaceRowHtml(place, { awake = false } = {}) {
-    const spend = usdText(place.spent24hUsd);
+    const unknown = place.spent24hUsd == null;
+    const spend = unknown ? tr('places.money.unknown', 'unknown') : usdText(place.spent24hUsd);
+    const spendWords = unknown ? tr('places.money.aria', 'spend unknown') : fmt('{spend} spent', { spend });
     return `<li><button type="button" class="consciousness-dash-place" data-place-open="${escapeHtml(place.id)}"
-            aria-label="${escapeHtml(`Open ${place.label}${awake ? ', awake here now' : ''}: ${placeStatusText(place)}; ${spend === '—' ? 'nothing spent' : `${spend} spent`} in 24 hours`)}">
-        <span class="consciousness-dash-place-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 18)}</span><span class="consciousness-place-name">${escapeHtml(place.label)}</span>${awake ? dots() : ''}</span>
-        <span class="consciousness-dash-place-meta">${escapeHtml(placeStatusText(place))}${place.status?.text ? `${SEP}${escapeHtml(place.status.text)}` : ''}</span>
-        <span class="consciousness-spend${spend === '—' ? ' is-none' : ''}">${escapeHtml(spend)}</span>
+            aria-label="${escapeHtml(fmt('Open {place}{awake}: {status}; {spend} in 24 hours', { place: place.label,
+                awake: awake ? tr('places.awake', ', awake here now') : '', status: placeStatusText(place), spend: spendWords }))}">
+        <span class="consciousness-dash-place-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(place.icon, 18)}</span><span class="consciousness-place-name" data-i18n-authored>${escapeHtml(place.label)}</span>${awake ? dots() : ''}</span>
+        <span class="consciousness-dash-place-meta">${escapeHtml(placeStatusText(place))}${place.readiness?.text ? `${SEP}<span data-tone="${escapeHtml(place.readiness.tone)}">${escapeHtml(tr(`places.readiness.${place.readiness.text}`, place.readiness.text))}</span>` : ''}</span>
+        <span class="consciousness-spend${unknown ? ' is-none' : ''}">${escapeHtml(spend)}</span>
     </button></li>`;
 }
 
@@ -180,6 +185,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
     // The page binds every `.scroll-fade-y` scroller once, after the panels mount (app.js).
     let snapshot = null;
     let places = null;
+    let placesError = '', placesGeneration = 0;
     let generation = 0;
     let timer = 0;
     let destroyed = false;
@@ -192,33 +198,43 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         painted.set(region, html);
         region.innerHTML = html;
     };
-    function paint({ placesError = '' } = {}) {
+    function paint() {
         if (snapshot) put(regions.summary, summaryHtml(snapshot, { placeCount: places ? places.length : null, hasSocket: Boolean(ws?.send) }));
         const awake = snapshot ? liveWake(snapshot) : null;
         put(regions.places, placesCardHtml(places, { error: placesError, awakeIn: awake?.cause === 'focus' ? awake.placeId : '' }));
         put(regions.wakes, wakesCardHtml(snapshot ? snapshot.recentWakes : null));
     }
 
+    async function refreshPlaces() {
+        const current = ++placesGeneration;
+        try {
+            const data = await readPlacesFn();
+            if (destroyed || current !== placesGeneration) return;
+            places = data.places; placesError = '';
+        } catch (error) {
+            if (destroyed || current !== placesGeneration) return;
+            placesError = fmt('Places could not be read: {reason}', { reason: error?.message || error });
+        }
+        paint();
+    }
+
     async function refresh() {
         if (destroyed) return;
         const current = ++generation;
+        const placesRead = refreshPlaces();
         regions.status.textContent = snapshot ? '' : 'Reading…';
         let next = null;
         let readError = '';
         try { next = await read(); } catch {
             try { next = await readFallback(); } catch (error) { readError = error?.message || String(error); }
         }
-        let placesError = '';
-        let nextPlaces = next?.places || null;
-        if (next && !nextPlaces) {
-            try { nextPlaces = (await readPlacesFn()).places; } catch (error) { placesError = `Places could not be read: ${error?.message || error}`; }
-        }
         if (destroyed || current !== generation) return;
-        if (next) { snapshot = next; places = nextPlaces ?? places; }
+        if (next) snapshot = next;
         regions.status.textContent = readError ? `Could not read consciousness: ${readError}. ${snapshot ? 'Earlier values are shown.' : ''}` : '';
         regions.status.dataset.tone = readError ? 'error' : '';
-        if (snapshot) paint({ placesError });
+        paint();
         schedule();
+        await placesRead;
     }
 
     function schedule() {
@@ -234,7 +250,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
             return;
         }
         const connect = event.target.closest('[data-place-connect]');
-        if (connect) { openConnectPlace({ returnFocus: connect }); return; }
+        if (connect) { openConnectPlace({ returnFocus: connect, openSettingsTab }); return; }
         const button = event.target.closest('[data-cx-act]');
         if (!button || button.disabled) return;
         const act = button.dataset.cxAct;
@@ -252,11 +268,11 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         }
     };
     const onShown = (event) => { if (event?.detail?.tab === 'consciousness') void refresh(); else clearTimeout(timer); };
-    const onChanged = () => { if (shown()) void refresh(); };
+    const onChanged = () => { void refreshPlaces(); };
     mount.addEventListener('click', onClick);
     window.addEventListener('ouro:dashboard-subtab-shown', onShown);
     window.addEventListener(PLACES_CHANGED_EVENT, onChanged);
-    if (shown()) void refresh();
+    if (shown()) void refresh(); else void refreshPlaces();
     return {
         refresh,
         destroy() {
