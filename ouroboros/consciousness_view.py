@@ -170,13 +170,6 @@ def _wake_notes(drive_root, ids: list[str]) -> dict:
             "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)))
 
 
-def _quiet(row: dict) -> bool:
-    # TODO(L2): quiet_finish — replace with the shared task_finalization predicate.
-    from ouroboros.task_finalization import terminal_host_notice_text
-
-    return row.get("wake_silent") is True and not row.get("owner_message_sent") and not terminal_host_notice_text(row)
-
-
 def _wake_phase(row: dict, clock_live: bool) -> str:
     """Terminal card outcome, or the existing work classifier over stored activity facts."""
     from ouroboros.gateway.work_status import classify_member
@@ -215,6 +208,7 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
     from ouroboros.task_status import FINAL_STATUSES
     from ouroboros.task_store import display_documents
     from ouroboros.terminal_time import terminal_time_fact
+    from ouroboros.task_finalization import quiet_finish
 
     ids = _wake_ids(drive_root, time.time() if now is None else now)
     if not ids:
@@ -239,7 +233,7 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
                      **({"first_reply_at": first_reply_at(drive_root, task_id)} if cause == "focus" else {}),
                      "ended_at": terminal_time_fact(row)["occurred_at"],
                      "live": live_wake_task_id == task_id or row.get("status") not in FINAL_STATUSES,
-                     "phase": _wake_phase(row, live_wake_task_id == task_id), "quiet": _quiet(row),
+                     "phase": _wake_phase(row, live_wake_task_id == task_id), "quiet": quiet_finish(row),
                      **({"tool_calls": row["tool_calls"]} if "tool_calls" in row else {}),
                      **({"rounds": usage["total_rounds"]} if "total_rounds" in usage else {}),
                      "checks": row.get("safety_checks", []), "note": notes.get(task_id),
