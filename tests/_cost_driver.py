@@ -6,7 +6,8 @@ before production code is imported, so a measurement is cold by construction: no
 previous request, boot or test cached in memory is present.
 
 Only what would leave the machine or start real work is replaced: the provider check says a
-provider is ready (no model is called; a call would be recorded and refused), workers are not
+provider is ready (no model is called; a call would be recorded and refused), a name lookup of
+any host but this one is refused and counted (``network_refused``), workers are not
 spawned, the supervisor's git bootstrap (checkout reset + import-test child process) and the
 boot-time update check do not run, the owned Claudexor daemon is not warmed, the starter-skill
 installer does not run (the boot of this fresh root with a ready provider schedules it; it would
@@ -128,7 +129,9 @@ class _Tagger:
             BOUNDARY.reset(token)
 
 
-def _stub_external_effects(srv: Any, result: Dict[str, Any]) -> None:
+def _stub_external_effects(srv: Any, result: Dict[str, Any], meter: CostMeter) -> None:
+    import socket
+
     from ouroboros import claudexor_daemon, llm, skill_starter
     from supervisor import workers
 
@@ -146,6 +149,18 @@ def _stub_external_effects(srv: Any, result: Dict[str, Any]) -> None:
 
     llm.LLMClient.chat = refuse_model
     llm.LLMClient.chat_async = refuse_model
+    socket.getaddrinfo = loopback_only(meter, socket.getaddrinfo)
+
+
+def loopback_only(meter: CostMeter, resolve: Callable[..., Any]) -> Callable[..., Any]:
+    """``socket.getaddrinfo`` for the driver: this machine's names resolve; any other host is refused and
+    counted under the boundary that asked (``network_refused``), so nothing measured here leaves the machine."""
+    def lookup(host, *args, **kwargs):
+        if host not in (None, "", "localhost", "::1") and not str(host).startswith("127."):
+            meter.note_name("network_refused", str(host))
+            raise OSError(f"cost contract: no network ({host})")
+        return resolve(host, *args, **kwargs)
+    return lookup
 
 
 class _Park:
@@ -728,7 +743,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
         import server as srv
 
         _mark(result, "imported")
-        _stub_external_effects(srv, result)
+        _stub_external_effects(srv, result, meter)
         stubs = _stub_duty_effects(result)
         # The install root is resolved once per process, in whichever boundary's thread asks first:
         # a race the history size tips, not history work. Resolve it before any boundary starts.

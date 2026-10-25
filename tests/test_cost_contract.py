@@ -63,8 +63,11 @@ K_SMALL = 1
 CHILD_TIMEOUT_SEC = 900  # a transport bound for one child, not a judgment about the boot
 LOCATIONS = ("root", *HISTORY, EXECUTION)
 # Counted per location; lock files (``lock``) are left out: how often a lock is probed and retried
-# follows the contention between this process's threads at that instant, not the history.
+# follows the contention between this process's threads at that instant, not the history. Its
+# acquisitions (``lock_acquired``) do not, so they count, as do the dialogue rows decoded and every
+# refused lookup of a host beyond this machine.
 WORK = ("connect", "statements", "begins", "commits", "writes", "json_loads", "json_chars", "popen", "thread_start",
+        "lock_acquired", "rows_decoded", "network_refused",
         *(f"{kind}:{where}" for kind in ("connect", "stat", "scandir", "listdir", "dir_entries", "open", "os_open",
                                           "read_bytes")
           for where in (*LOCATIONS, "outside")))
