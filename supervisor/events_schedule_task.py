@@ -452,8 +452,12 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any, preparation: Any = None
         if canonical_root and str(canonical_root) != str(count_roots[0]):
             count_roots.append(canonical_root)
         direct_child_count = _direct_child_count(count_roots, parent_id, tid)
+        from ouroboros.settings_integrity import live_subagents_mode
+
         rights = check_delegation_admission(
-            parent_budget,
+            parent_budget, room_mode=live_subagents_mode(task={
+                "id": parent_id, "root_task_id": root_task_id, "project_id": project_id, "chat_id": chat_id,
+                "metadata": evt.get("origin_metadata")}, drive_root=ctx.DRIVE_ROOT),
             direct_child_count=direct_child_count,
         )
         # An unknown count is the interlocked re-check's to decide (it defers contention).
@@ -704,10 +708,15 @@ def _admit_scheduled_payload(ctx: Any, preparation: Any, r: SimpleNamespace) -> 
         from ouroboros.tools.control_delegation import effective_delegation_budget
         from supervisor import workspace_preparation
 
+        room_mode = "auto"
+
         def durable_child_count() -> Any:
             # Read on the lane, outside Q: the declared rights stay the same, current
             # counts cannot be borrowed from the pre-preparation queue snapshot.
-            nonlocal direct_child_count
+            from ouroboros.settings_integrity import live_subagents_mode
+
+            nonlocal direct_child_count, room_mode
+            room_mode = live_subagents_mode(task=task, drive_root=ctx.DRIVE_ROOT)
             direct_child_count = _direct_child_count(
                 r.count_roots, parent_id, tid,
                 propagate_contention=preparation is not None or not workspace_preparation._requests_preparation(evt))
@@ -716,7 +725,7 @@ def _admit_scheduled_payload(ctx: Any, preparation: Any, r: SimpleNamespace) -> 
         def recheck_child_admission(count: Any) -> tuple[str, str]:
             # Under Q, memory only, with the count the lane read.
             nonlocal queued_behind_active_cap
-            rights = check_delegation_admission(r.parent_budget, direct_child_count=count)
+            rights = check_delegation_admission(r.parent_budget, direct_child_count=count, room_mode=room_mode)
             if not rights.ok:
                 return rights.reason_code, f"Subagent rejected: {rights.reason_code}: {rights.detail}"
             running = getattr(ctx, "RUNNING", QUEUE_RUNNING)

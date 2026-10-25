@@ -182,7 +182,10 @@ def current_model_visible_subagent_catalog() -> dict[str, Any]:
     """Read the current normalized settings and return the stable catalog."""
 
     from ouroboros.config import runtime_settings
+    from ouroboros.settings_integrity import effective_subagents_mode
 
+    if effective_subagents_mode() == "off":
+        return {}
     return model_visible_subagent_catalog(
         effective_runtime_subagent_settings(runtime_settings())
     )
@@ -567,9 +570,25 @@ def apply_task_start_settings_or_disclose(task_id: str, emit_live_log: Any) -> T
     return previous
 
 
+SUBAGENTS_OFF_DETAIL = "Subagents are off in this chat; my human can switch the Subagents capsule."
+
+
+def _require_room_subagents() -> None:
+    from ouroboros.settings_integrity import actor_subagents_availability, live_subagents_mode
+
+    if live_subagents_mode() == "off":
+        raise SubagentSelectionError("subagents_off_in_room", SUBAGENTS_OFF_DETAIL)
+    availability = actor_subagents_availability()
+    if availability in {"disabled", "unsaved"}:
+        raise SubagentSelectionError(
+            "subagents_disabled" if availability == "disabled" else "subagent_configuration_unsaved",
+            "Subagents are off in Settings.")
+
+
 def _resolution(
     settings: Mapping[str, Any], *, allow_undecided_legacy: bool,
 ) -> ConfiguredSubagentsResolution:
+    _require_room_subagents()
     resolution = offered_subagents(settings)
     if resolution.source == SOURCE_INVALID:
         raise SubagentSelectionError(
@@ -1130,6 +1149,10 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
     work_order_source_request = options.pop("work_order_source_request", None)
     access = options.pop("access", None)
     try:
+        # An admitted actor's bound physical leaf and custody retries finish its
+        # existing work. An explicit selector is a new admission, even in a child.
+        if not retry_token and not (isinstance(bootstrap, dict) and compiled_work_order and not selected_id):
+            _require_room_subagents()
         if str(options.get("retry_of") or "").strip() and (
             selected_id or selected_snapshot is not None or access is not None
             or options.get("mode") is not None or options.get("override_plan_readiness") is not None

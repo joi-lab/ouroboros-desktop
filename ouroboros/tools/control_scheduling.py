@@ -1011,7 +1011,9 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "write_surface": requested_surface,
         "resource_intent": ({"kind": "explicit_none"} if folderless_scratch_dir(ctx) is not None
                             else dict(metadata.get("resource_intent") or {})),
-        "origin_metadata": {**consciousness_origin_metadata({**metadata, "task_id": str(getattr(ctx, "task_id", "") or "")}), **owner_origin},  # tree origin: consciousness label/level + owner words
+        "origin_metadata": {**consciousness_origin_metadata({**metadata, "task_id": str(getattr(ctx, "task_id", "") or "")}), **owner_origin,
+                            **({"evolution_root_task_id": metadata.get("evolution_root_task_id") or root_task_id}
+                               if metadata.get("evolution_root_task_id") or metadata.get("evolution_transaction") else {})},  # tree origin: consciousness label/level + owner words
         **presence_binding_authority_metadata(metadata, task_contract=getattr(ctx, "task_contract", None)),  # never speaker
     }
     _populate_subagent_event_extras(

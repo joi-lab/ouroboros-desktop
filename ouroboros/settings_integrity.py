@@ -225,17 +225,26 @@ def _with_cognition(snapshot: TaskSettingsSnapshot, cognition: Mapping) -> TaskS
                    environ=MappingProxyType({**snapshot.environ, **values}))
 
 
-def actor_settings_snapshot(snapshot: TaskSettingsSnapshot, task: Mapping, drive_root: Path) -> TaskSettingsSnapshot:
-    """Capture this room privately; a new subordinate resolves its room again."""
-    from ouroboros.composer_cognition import read_cognition
+def _actor_scope(task: Mapping, drive_root: Path) -> tuple[Path, Mapping]:
+    from ouroboros.consciousness_authority import is_consciousness_origin
     from ouroboros.dialogue_provenance import presence_metadata_binding
 
     metadata = task.get("metadata") if isinstance(task.get("metadata"), Mapping) else {}
     actor = {key: task.get(key) or metadata.get(key) for key in (
         "id", "parent_task_id", "root_task_id", "project_id", "chat_id")}
     actor["presence"] = bool(task.get("_presence_turn") or presence_metadata_binding(metadata) is not None)
-    scope = (Path(task.get("budget_drive_root") or metadata.get("budget_drive_root") or drive_root),
-             MappingProxyType(actor))
+    actor["autonomous"] = bool(task.get("type") == "evolution" or metadata.get("evolution_root_task_id")
+                               or metadata.get("evolution_transaction") or is_consciousness_origin(metadata)
+                               or metadata.get("work_kind") == "consciousness" or actor["presence"])
+    return (Path(task.get("budget_drive_root") or metadata.get("budget_drive_root") or drive_root),
+            MappingProxyType(actor))
+
+
+def actor_settings_snapshot(snapshot: TaskSettingsSnapshot, task: Mapping, drive_root: Path) -> TaskSettingsSnapshot:
+    """Capture this room privately; a new subordinate resolves its room again."""
+    from ouroboros.composer_cognition import read_cognition
+
+    scope = _actor_scope(task, drive_root)
     snapshot = replace(snapshot, actor_scope=scope)
     project_id = _actor_project(scope)
     if not project_id:
@@ -284,16 +293,31 @@ def live_effort_range() -> dict[str, str]:
     return read_cognition(root, _actor_project(snapshot.actor_scope), settings=settings)["effort_range"]
 
 
-def live_subagents_mode() -> str:
-    """Current stored own-room choice, independent of task/checkpoint settings."""
+def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None = None) -> str:
+    """Current room choice; autonomous work keeps its independent delegation controls.
+
+    Explicit actor facts serve host admission before a worker binds its private scope.
+    """
     from ouroboros import config
     from ouroboros.composer_cognition import read_cognition
 
     settings = config.load_settings()
     snapshot = _TASK_SETTINGS.get()
-    if snapshot is None or snapshot.actor_scope is None:
+    scope = _actor_scope(task, drive_root or config.DATA_DIR) if task is not None else (snapshot.actor_scope if snapshot else None)
+    if scope is None:
         return config.normalize_subagents_mode(settings.get("OUROBOROS_SUBAGENTS_MODE"))
-    return read_cognition(snapshot.actor_scope[0], _actor_project(snapshot.actor_scope), settings=settings)["subagents_mode"]
+    if scope[1].get("autonomous"):
+        return "auto"
+    return read_cognition(scope[0], _actor_project(scope), settings=settings)["subagents_mode"]
+
+
+def actor_subagents_availability() -> str | None:
+    """Live Settings gate for a bound actor; pure catalog resolvers keep their supplied settings."""
+    from ouroboros import config
+    from ouroboros.subagent_runtime import subagents_availability
+
+    snapshot = _TASK_SETTINGS.get()
+    return subagents_availability(config.load_settings()) if snapshot and snapshot.actor_scope else None
 
 
 def effective_subagents_mode() -> str:
