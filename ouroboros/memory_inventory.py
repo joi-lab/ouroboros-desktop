@@ -283,7 +283,8 @@ class LegacyUnit:
 
 _RowSet = Tuple[FrozenSet[str], Optional[Dict[str, Any]], int]  # row_sha256 set, time span, first position
 _RETELLING_CHARS: Dict[str, Dict[str, int]] = {}
-_UNITS: Dict[str, Tuple[Tuple[Any, ...], List[LegacyUnit]]] = {}
+_Triple = Tuple[str, str, str]  # a row's (task, parent, root) ids, as the room rule takes them
+_UNITS: Dict[str, Tuple[Tuple[Any, ...], Tuple[_Triple, ...], Optional[Tuple[int, ...]], List[LegacyUnit]]] = {}
 _SPAN_ROWS: Dict[str, Dict[Tuple[int, int], List[Entry]]] = {}
 
 
@@ -347,6 +348,21 @@ def _legacy_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int,
     return sets
 
 
+def _task_triples(entries: Iterable[Entry]) -> Tuple[_Triple, ...]:
+    """The distinct (task, parent, root) ids of the rows that name a task: what the room rule asks the lineage."""
+    return tuple(sorted({(str(meta.get("task_id") or ""), str(meta.get("parent_task_id") or ""),
+                          str(meta.get("root_task_id") or "")) for _address, meta, _pos in entries if meta.get("task_id")}))
+
+
+def _lineage_answers(facts: MembershipFacts, triples: Tuple[_Triple, ...]) -> Optional[Tuple[int, ...]]:
+    """The room rule's answer for each triple, the one membership input ``facts.fingerprint`` leaves out: a
+    task result admitted later, or a lineage the store could not read under contention, changes it with
+    no row written. ``None`` while the store cannot answer every task: a count made then is not reused."""
+    if not facts.rooms.warm({task_id for triple in triples for task_id in triple} - {""}):
+        return None
+    return tuple(int(facts.rooms(*triple) or 0) for triple in triples)
+
+
 def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
     key = str(store.data_root.resolve())
     known = _RETELLING_CHARS.get(key, {})
@@ -360,8 +376,9 @@ def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
 def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     """Every legacy record and journal gap, in the store's pointer order, with its folded verdict.
 
-    The verdicts depend only on the chronicle's authority, the registry facts and the chat
-    generations, so the last answer is reused while all three are unchanged.
+    The verdicts depend only on the chronicle's authority, the registry facts and the room rule's
+    answers for the tasks of the units' rows (the rows themselves never change, ``_span_rows``), so the
+    last answer is reused while all three are unchanged: a row written since changes none of them.
     """
     if not store.log_path.exists():
         return []
@@ -369,15 +386,20 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     authority, facts = _authority(store), membership_facts(root)
     from ouroboros import dialogue_store as ds
     ds.require_imported(root, "chat")
-    key = (authority, facts.fingerprint(), ds.stream_end(root, "chat"))
+    key = (authority, facts.fingerprint())
     cached = _UNITS.get(str(root.resolve()))
-    if cached is not None and cached[0] == key:
-        return list(cached[1])
+    if cached is not None and cached[0] == key and cached[2] is not None \
+            and _lineage_answers(facts, cached[1]) == cached[2]:
+        return list(cached[3])
     pointers = store.legacy_pointer_rows()
     refusals = fallback_refusals(store.scan_state())
     chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
     ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
               if (span := _exact_range(pointer)) is not None}
+    bounds = {span for _room, span in ranges.values()}
+    spans = _span_rows(root, bounds)
+    triples = _task_triples(entry for span in bounds for entry in spans[span])
+    answers = _lineage_answers(facts, triples)  # before the rows are counted: a lineage moving meanwhile recounts next call
     row_sets = _legacy_row_sets(root, ranges, facts)
     units = []
     for pointer in pointers:
@@ -392,7 +414,7 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
             retelling_chars=chars.get(record_id, 0),
             folded=bool(pointer.get("folded_into")) or (bool(rows) and uncovered == 0),
             refusal=dict(refusal) if isinstance(refusal, dict) else None, ts_span=span, first_pos=first))
-    _UNITS[str(root.resolve())] = (key, units)
+    _UNITS[str(root.resolve())] = (key, triples, answers, units)
     return list(units)
 
 

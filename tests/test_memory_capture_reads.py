@@ -121,16 +121,42 @@ def test_legacy_units_read_their_spans_once_and_count_rooms_with_current_lineage
 
     shared.world(tmp_path)
     store = ChronicleStore(tmp_path)
-    before = {unit.record_id: unit.rows for unit in mi.legacy_units(store, tmp_path)}
-    assert any(before.values())
+    before = mi.legacy_units(store, tmp_path)
+    assert any(unit.rows for unit in before)
     read = _counted(monkeypatch, cc, "iter_rows")
     read_rooms = _counted(monkeypatch, cc, "iter_room_rows")
-    # A task the old memory saw without a result is admitted under the bound root: its row leaves Main for Alpha.
-    seed_result(tmp_path, "t1", {"status": "completed", "chat_id": 1, "root_task_id": "bound", "parent_task_id": "bound"})
+    counted = _counted(monkeypatch, mi, "_legacy_row_sets")
     ds.append(tmp_path, "chat", {"chat_id": 1, "direction": "in", "text": "a row of this turn"})
+    assert mi.legacy_units(store, tmp_path) == before and counted == []  # a new row changes no unit: the answer stands
+    # A task the old memory saw without a result is admitted under the bound root, and no row is written: its
+    # row leaves Main for Alpha.
+    seed_result(tmp_path, "t1", {"status": "completed", "chat_id": 1, "root_task_id": "bound", "parent_task_id": "bound"})
     after = mi.legacy_units(store, tmp_path)
-    assert read == [] and read_rooms == []  # the spans' rows are not read again
-    assert after == _legacy_units_fresh(tmp_path) and {unit.record_id: unit.rows for unit in after} != before
+    assert read == [] and read_rooms == [] and len(counted) == 1  # the spans' rows are not read again, only recounted
+    assert after == _legacy_units_fresh(tmp_path) and [unit.rows for unit in after] != [unit.rows for unit in before]
+
+
+def test_legacy_units_counted_while_the_lineage_store_was_busy_are_recounted_once_it_answers(tmp_path, monkeypatch):
+    from ouroboros import memory_inventory as mi, projects_registry as pr
+    from ouroboros.chronicle_store import ChronicleStore
+    from tests import _memory_inventory_shared as shared
+    from tests._store_shared import seed_result
+
+    shared.world(tmp_path)
+    seed_result(tmp_path, "t1", {"status": "completed", "chat_id": 1, "root_task_id": "bound", "parent_task_id": "bound"})
+    store, fresh = ChronicleStore(tmp_path), _legacy_units_fresh(tmp_path)
+    for key in [key for key in pr._TASK_LINEAGE if key[0] == str(tmp_path)]:
+        del pr._TASK_LINEAGE[key]  # t1's lineage is not remembered yet, so the busy store decides its room
+    pr._ROOM_ANSWERS.pop(str(pr._bindings_path(tmp_path)), None)
+    with monkeypatch.context() as busy:
+        attempts = []
+        busy.setattr(pr, "_read_lineage", lambda *_args, **_kwargs: attempts.append(1))  # None: the store cannot answer now
+        during, reused = mi.legacy_units(store, tmp_path), len(attempts)
+        attempts.clear()
+        mi._UNITS.pop(str(tmp_path.resolve()))
+        assert mi.legacy_units(store, tmp_path) == during and len(attempts) == reused - 1  # the reuse check spent one attempt
+    assert during != fresh  # t1's row counted in Main while its lineage could not be read
+    assert mi.legacy_units(store, tmp_path) == fresh  # the store answers again, no row written: counted with it
 
 
 def test_legacy_rows_are_the_rooms_rows_the_room_reader_returns(tmp_path):
