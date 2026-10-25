@@ -7,16 +7,16 @@ import test from 'node:test';
 
 import { normalizePlacesResponse } from '../modules/consciousness_api.js';
 import { SILENT_CARD } from '../modules/consciousness_words.js';
-import { connectListHtml, placeChangeFor, placeSheetBodyHtml, placeSheetMetaText } from '../modules/place_sheet.js';
+import { placeChangeFor, placeSheetBodyHtml, placeSheetMetaText } from '../modules/place_sheet.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
-const { places, connectors } = normalizePlacesResponse(FIXTURE.places);
+const { places } = normalizePlacesResponse(FIXTURE.places);
 const [slack, community, mail] = places;
 const strip = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 test('the head names the connector and how much of it the place covers', () => {
-    assert.equal(placeSheetMetaText(slack), 'Slack · whole account · T024BE7LD');
-    assert.equal(placeSheetMetaText(community), 'Telegram · one conversation · -100123');
+    assert.equal(placeSheetMetaText(slack), 'Slack · Acme · active');
+    assert.equal(placeSheetMetaText(community), 'Telegram · Ouroboros community · silent');
 });
 
 test('Active · Silent · Paused in one control; the note says what the chosen state does', () => {
@@ -122,18 +122,4 @@ test('each press asks for exactly one contract change, never a guess', () => {
     assert.deepEqual(placeChangeFor('save-folder', slack, {}), { working_folder: '~/work/acme' });
     assert.deepEqual(placeChangeFor('save-model', mail, { drafts: { model: '' } }), { model: '' }, 'empty uses the consciousness model');
     assert.equal(placeChangeFor('unknown', slack, {}), null);
-});
-
-test('Connect lists the installed connectors not yet connected; none sends the owner to Browse › Connectors', () => {
-    assert.match(connectListHtml({}), /Reading the installed connectors…/);
-    const html = connectListHtml({ connectors });
-    assert.equal((html.match(/data-connect-act="connect"/g) || []).length, 1);
-    assert.match(strip(html), /AgentRQ Connects AgentRQ · suggests waking for direct messages Connect/);
-    assert.doesNotMatch(html, /data-connector="slack-bridge"/, 'a connected one is not offered again');
-    const none = connectListHtml({ connectors: connectors.map((entry) => ({ ...entry, connected: true })) });
-    assert.match(none, /Every installed connector is connected\./);
-    assert.match(none, /data-connect-act="browse">Find connectors in Skills</);
-    assert.match(connectListHtml({ connectors: [] }), /No installed connector can connect a place yet\./);
-    assert.match(connectListHtml({ error: 'Couldn’t read the connectors: HTTP 404' }), /data-connect-act="retry"/);
-    assert.match(connectListHtml({ connectors, status: { 'agentrq-bridge': { text: 'Refused', tone: 'error' } } }), /data-tone="error" role="status">Refused</);
 });

@@ -3,18 +3,16 @@
 // Paused), what wakes it there and who added each item, the owner's accounts there, the notes with their
 // authors, the working folder (an address, not a fence) and the model. Every change is one owner write through
 // consciousness_api.js and repaints from the record the server answers; nothing is saved by a guess. The
-// Connect flow lives here too: an installed connector's place is created from its declaration, no id typed.
+// Connect is a separate flow in place_connect.js.
 import { bindDialogFocus } from './ui_interactions.js';
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { renderSegmentedField } from './page_header.js';
 import { chipHtml, skillIconHtml } from './skill_presentation.js';
-import { connectPlace, disconnectPlace, PLACES_CHANGED_EVENT, readPlaces, updatePlace } from './consciousness_api.js';
+import { tr } from './i18n.js';
+import { disconnectPlace, PLACES_CHANGED_EVENT, updatePlace } from './consciousness_api.js';
 import {
-    PLACE_STATES, SILENT_CARD, accountIdText, authorWord, capitalized, listWords, placeScopeText, placeStateOf, wakeFactWord,
+    PLACE_STATES, SILENT_CARD, accountIdText, authorWord, capitalized, placeStateOf, placeStateWord, wakeFactWord,
 } from './consciousness_words.js';
-
-/** The one «Connect a place» control (Dashboard and Settings draw this, never their own); a press opens the flow. */
-export const connectPlaceButtonHtml = () => '<button type="button" class="btn btn-default btn-sm" data-place-connect>Connect a place</button>';
 
 /** Ask the Skills page for one installed skill's card, or Browse filtered to connectors. */
 export function openSkillsFor(detail) {
@@ -26,8 +24,8 @@ const shortDate = (value) => {
     const time = Date.parse(String(value || ''));
     return Number.isFinite(time) ? new Date(time).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
 };
-const statusLine = (status) => (status?.text
-    ? `<p class="place-sheet-status ui-status" data-tone="${escapeHtml(status.tone || 'muted')}" role="status">${escapeHtml(status.text)}</p>` : '');
+export const statusLine = (status) => (status?.text
+    ? `<p class="place-sheet-status ui-status" data-tone="${escapeHtml(status.tone || 'muted')}" role="status"${status.authored ? ' data-i18n-authored' : ''}>${escapeHtml(status.text)}</p>` : '');
 const section = (key, title, inner, ui) => `<section class="place-sheet-section" data-place-section="${key}">
     ${title ? `<h3>${escapeHtml(title)}</h3>` : ''}${inner}${statusLine(ui.status?.[key])}</section>`;
 
@@ -159,9 +157,9 @@ export function placeSheetBodyHtml(place, ui = {}) {
     ].join('');
 }
 
-export const placeSheetMetaText = (place) => [place.connectorLabel, placeScopeText(place)].filter(Boolean).join(' · ');
+export const placeSheetMetaText = (place) => [place.label, placeStateWord(place.state)].filter(Boolean).join(' · ');
 
-function sheetShell(titleHtml, metaText, modifier = '') {
+export function sheetShell(titleHtml, metaText, modifier = '') {
     const dialog = document.createElement('dialog');
     dialog.className = `document-reader place-sheet${modifier ? ` ${modifier}` : ''}`;
     dialog.setAttribute('aria-labelledby', 'place-sheet-title');
@@ -172,14 +170,14 @@ function sheetShell(titleHtml, metaText, modifier = '') {
                 <div class="document-reader-meta" data-place-meta>${escapeHtml(metaText)}</div>
             </div>
             <div class="document-reader-actions"></div>
-            <button type="button" class="btn btn-default document-reader-close" data-place-close>Close</button>
+            <button type="button" class="btn btn-default document-reader-close" data-place-close>${tr('places.close', 'Close')}</button>
         </div>
         <div class="document-reader-body place-sheet-body is-quiet-focus" tabindex="-1" data-place-body></div>
     </div>`;
     return dialog;
 }
 
-function showSheet(dialog, { returnFocus, onClose }) {
+export function showSheet(dialog, { returnFocus, onClose }) {
     const body = dialog.querySelector('[data-place-body]');
     let closed = false;
     let disposeFocus = null;
@@ -348,65 +346,4 @@ function focusKeyOf(node) {
     if (draft) return `[data-place-draft="${draft.dataset.placeDraft}"]`;
     const segment = node.closest?.('[data-effort-value]');
     return segment ? `[data-place-state] [data-effort-value="${segment.dataset.effortValue}"]` : '';
-}
-
-/** The Connect list: installed connectors whose place is not connected yet; none → the way to Browse. */
-export function connectListHtml({ connectors = null, error = '', status = {} } = {}) {
-    if (error) return `<div class="place-sheet-section"><p class="place-sheet-status ui-status" data-tone="error" role="alert">${escapeHtml(error)}</p>
-        <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-connect-act="retry">Try again</button></div></div>`;
-    if (!connectors) return '<p class="place-sheet-section place-sheet-note" role="status">Reading the installed connectors…</p>';
-    const open = connectors.filter((connector) => !connector.connected);
-    if (!open.length) {
-        return `<section class="place-sheet-section">
-            <p>${connectors.length ? 'Every installed connector is connected.' : 'No installed connector can connect a place yet.'} A connector is a skill that connects a service such as Slack, Telegram or email.</p>
-            <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-connect-act="browse">Find connectors in Skills</button></div>
-        </section>`;
-    }
-    return `<section class="place-sheet-section">
-        <p class="place-sheet-note">Connecting a place lets it hear there and, while the place is Active, speak and act there. You choose its state after connecting.</p>
-        <div class="place-accounts">${open.map((connector) => `<div class="harness-account-row place-connector-row">
-            <div class="harness-account-main"><span class="place-glyph" aria-hidden="true">${skillIconHtml(connector.icon, 18)}</span><strong>${escapeHtml(connector.label)}</strong></div>
-            <div class="harness-account-meta">${escapeHtml([connector.destination.replace(/^vendor:/, 'Connects '),
-                connector.wakes.length ? `suggests waking for ${listWords(connector.wakes.map(wakeFactWord))}` : ''].filter(Boolean).join(' · '))}</div>
-            <div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-connect-act="connect" data-connector="${escapeHtml(connector.connector)}">Connect</button></div>
-            ${statusLine(status[connector.connector])}
-        </div>`).join('')}</div>
-    </section>`;
-}
-
-/** Open the Connect flow; a connected place opens its own sheet at once. */
-export function openConnectPlace({ returnFocus = document.activeElement, read = readPlaces, connect = connectPlace } = {}) {
-    const dialog = sheetShell('Connect a place', 'From the connectors installed here', 'place-connect');
-    const sheet = showSheet(dialog, { returnFocus });
-    const view = { connectors: null, error: '', status: {} };
-    const paint = () => { sheet.body.innerHTML = connectListHtml(view); };
-    const load = async () => {
-        view.error = '';
-        view.connectors = null;
-        paint();
-        try { view.connectors = (await read()).connectors; } catch (error) { view.error = `Couldn’t read the connectors: ${error?.message || error}`; }
-        if (!sheet.closed) paint();
-    };
-    sheet.body.addEventListener('click', async (event) => {
-        const button = event.target.closest('[data-connect-act]');
-        if (!button || button.disabled) return;
-        const act = button.dataset.connectAct;
-        if (act === 'retry') { await load(); return; }
-        if (act === 'browse') { sheet.close(); openSkillsFor({ category: 'connectors' }); return; }
-        if (act !== 'connect') return;
-        const name = button.dataset.connector;
-        button.disabled = true;
-        view.status = { [name]: { text: 'Connecting…', tone: 'muted' } };
-        paint();
-        try {
-            const place = await connect({ connector: name });
-            sheet.close();
-            openPlaceSheet(place, { returnFocus });
-        } catch (error) {
-            view.status = { [name]: { text: error?.message || String(error), tone: 'error' } };
-            if (!sheet.closed) paint();
-        }
-    });
-    void load();
-    return sheet;
 }

@@ -94,8 +94,8 @@ test('every write sends exactly the contract keys and announces the confirmed pl
     const stub = stubFetch((url) => (url.startsWith('/api/places') ? { ok: true, place } : { ok: true }));
     try {
         assert.equal((await connectPlace({ connector: 'agentrq-bridge' })).id, 'slack-acme');
-        await updatePlace('slack acme', { state: 'silent' });
-        await disconnectPlace('slack-acme');
+        await updatePlace('slack acme', { state: 'silent', expected_revision: 4 });
+        await disconnectPlace('slack-acme', 4);
         await saveSafetyLevel('light');
         await saveSafetyLevel('full', 'consciousness');
         await saveSafetyRules('No posts from my folders.');
@@ -104,8 +104,8 @@ test('every write sends exactly the contract keys and announces the confirmed pl
     } finally { stub.restore(); }
     assert.deepEqual(stub.calls.map(({ url, method, body }) => [method, url, body]), [
         ['POST', '/api/places', { connector: 'agentrq-bridge' }],
-        ['POST', '/api/places/slack%20acme', { state: 'silent' }],
-        ['DELETE', '/api/places/slack-acme', null],
+        ['POST', '/api/places/slack%20acme', { state: 'silent', expected_revision: 4 }],
+        ['DELETE', '/api/places/slack-acme', { expected_revision: 4 }],
         ['POST', '/api/owner/safety-mode', { mode: 'light' }],
         ['POST', '/api/owner/safety-mode', { mode: 'full', kind: 'consciousness' }],
         ['POST', '/api/owner/safety-rules', { rules: 'No posts from my folders.' }],

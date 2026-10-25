@@ -11,7 +11,8 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
 import { CHECK_CHIPS, clockText, durationText, placeStatusText, usdText } from './consciousness_words.js';
-import { connectPlaceButtonHtml, openConnectPlace, openPlaceSheet } from './place_sheet.js';
+import { openPlaceSheet } from './place_sheet.js';
+import { connectPlaceButtonHtml, openConnectPlace } from './place_connect.js';
 
 const SEP = ' · ';
 const REFRESH_MS = 20000;

@@ -3,7 +3,8 @@
 // JSON shape is read in one place: a field the server renames is one fix in this file. Readers are
 // tolerant (unknown extra keys are fine; a missing field stays absent, never a guessed zero); writers
 // send exactly the contract's request keys.
-import { fetchJson, jsonPost } from './api_client.js';
+import { extensionRoutePath, extensionRoutePrefix, fetchJson, jsonPost } from './api_client.js';
+import { tr } from './i18n.js';
 
 /** Raised on window after a place write the server confirmed: `{place}` or `{placeId, removed: true}`. */
 export const PLACES_CHANGED_EVENT = 'ouro:places-changed';
@@ -17,32 +18,32 @@ const amount = (value) => {
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
 };
+const placeReadiness = (value) => object(value) && text(value.text)
+    ? { text: text(value.text), tone: text(value.tone) || 'muted' } : null;
 
-/** `{name?, svg?}` or null: the connector's icon as the host projected it (Lane D sanitizes the geometry). */
+/** Preserve the host's sanitized icon spec, including the SVG discriminant. */
 export function normalizeIcon(raw) {
     if (typeof raw === 'string') return raw ? { name: raw, svg: '' } : null;
     const icon = object(raw);
     if (!icon) return null;
     const name = text(icon.name);
     const svg = text(icon.svg);
-    return name || svg ? { name, svg } : null;
+    return { kind: text(icon.kind), name, svg };
 }
 
 /** One PlaceSummary (contract §2) in the browser's names. */
 export function normalizePlace(raw) {
     const place = object(raw) || {};
     const connector = text(place.connector);
-    const connectorLabel = text(place.connector_label) || connector;
-    const status = object(place.status);
     return {
         id: text(place.place_id),
         connector,
-        connectorLabel,
         provider: text(place.provider),
         accountId: text(place.account_id),
         conversationId: text(place.conversation_id),
         scope: text(place.scope),
-        label: text(place.label) || connectorLabel || text(place.place_id),
+        label: text(place.label),
+        revision: count(place.revision),
         state: text(place.state),
         destination: text(place.destination),
         icon: normalizeIcon(place.icon),
@@ -61,7 +62,10 @@ export function normalizePlace(raw) {
         })).filter((account) => account.actorId),
         workingFolder: text(place.working_folder),
         model: text(place.model),
-        status: status && text(status.text) ? { text: text(status.text), tone: text(status.tone) || 'muted' } : null,
+        readiness: placeReadiness(place.readiness),
+        facts: Array.isArray(place.facts) ? place.facts : null,
+        source: object(place.source),
+        settings: text(place.settings),
         unanswered: count(place.unanswered),
         lastActivityAt: text(place.last_activity_at),
         spent24hUsd: amount(place.spent_24h_usd),
@@ -74,11 +78,15 @@ export function normalizeConnector(raw) {
     const name = text(connector.connector);
     return {
         connector: name,
-        label: text(connector.connector_label) || name,
+        label: text(connector.label),
         icon: normalizeIcon(connector.icon),
         destination: text(connector.destination),
         wakes: [...new Set(list(connector.wakes).map((item) => text(object(item) ? item.fact : item)).filter(Boolean))],
         connected: connector.connected === true,
+        readiness: placeReadiness(connector.readiness),
+        facts: Array.isArray(connector.facts) ? connector.facts : null,
+        source: object(connector.source),
+        settings: text(connector.settings),
     };
 }
 
@@ -175,6 +183,18 @@ export async function readPlaces(init = {}) {
     return normalizePlacesResponse(await fetchJson('/api/places', { cache: 'no-store', ...init }));
 }
 
+/** Only the declared status route, within this connector's extension namespace; never a probe. */
+export async function readPlaceConnector(connector, init = {}) {
+    const prefix = extensionRoutePrefix(connector.connector);
+    const url = text(connector.source?.url);
+    const route = url.startsWith(prefix) ? url.slice(prefix.length) : '';
+    const path = route && extensionRoutePath(connector.connector, route);
+    if (!path || path !== url) throw new Error(tr('places.status.route_unavailable', 'The connector status route could not be read.'));
+    const data = await fetchJson(path, { ...init, cache: 'no-store' }, { rejectOkFalse: true });
+    if (!object(data)) throw new Error(tr('places.status.unavailable', 'The connector status could not be read.'));
+    return data;
+}
+
 // ---- place writes (owner-authored on the server) ----------------------------------------------------
 function placeAnswer(data) {
     if (!data || data.ok !== true || !object(data.place)) {
@@ -186,10 +206,11 @@ function placeAnswer(data) {
 }
 
 /** Connect a place from an installed connector's declaration; no id is typed. */
-export async function connectPlace({ connector, accountId = '', conversationId = '' }) {
+export async function connectPlace({ connector, accountId = '', conversationId = '', label = '' }) {
     const body = { connector };
     if (accountId) body.account_id = accountId;
     if (conversationId) body.conversation_id = conversationId;
+    if (label) body.label = label;
     return placeAnswer(await jsonPost('/api/places', body));
 }
 
@@ -201,8 +222,11 @@ export async function updatePlace(placeId, change) {
     return placeAnswer(await jsonPost(`/api/places/${encodeURIComponent(placeId)}`, change));
 }
 
-export async function disconnectPlace(placeId) {
-    const data = await fetchJson(`/api/places/${encodeURIComponent(placeId)}`, { method: 'DELETE' });
+export async function disconnectPlace(placeId, expectedRevision) {
+    const data = await fetchJson(`/api/places/${encodeURIComponent(placeId)}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expected_revision: expectedRevision }),
+    });
     if (data?.ok !== true) throw Object.assign(new Error(text(data?.error) || 'The place was not disconnected.'), { body: data });
     announce({ placeId, removed: true });
     return true;

@@ -10,7 +10,8 @@ import { parseModelSource } from './route_editor_primitives.js';
 import { PLACES_CHANGED_EVENT, readPlaces } from './consciousness_api.js';
 import { AUTONOMY_LEVELS, placeStateWord } from './consciousness_words.js';
 import { skillIconHtml } from './skill_presentation.js';
-import { connectPlaceButtonHtml, openConnectPlace, openPlaceSheet } from './place_sheet.js';
+import { openPlaceSheet } from './place_sheet.js';
+import { connectPlaceButtonHtml, openConnectPlace } from './place_connect.js';
 import { settingsLinkHtml } from './settings_safety.js';
 
 /** The section body under its title (settings_ui.js keeps the `<h3>`). */

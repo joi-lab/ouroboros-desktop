@@ -65,9 +65,9 @@
   "places": {
     "places": [
       {
-        "place_id": "slack-acme", "connector": "slack-bridge", "connector_label": "Slack", "provider": "slack",
+        "place_id": "slack-acme", "connector": "slack-bridge", "provider": "slack",
         "account_id": "T024BE7LD", "conversation_id": "", "label": "Slack · Acme", "state": "active",
-        "destination": "vendor:Slack", "icon": {"name": "", "svg": "<svg viewBox=\"0 0 24 24\"><path d=\"M4 4h16\"/></svg>"},
+        "destination": "vendor:Slack", "icon": {"kind": "svg", "svg": "<svg viewBox=\"0 0 24 24\"><path d=\"M4 4h16\"/></svg>"},
         "wakes": [{"fact": "direct_message", "author": "connector"}, {"fact": "mention", "author": "connector"}, {"fact": "reply_to_me", "author": "owner"}],
         "wake_suggestions": ["direct_message", "group_dm", "mention", "my_thread", "reply_to_me"],
         "notes": [
@@ -76,10 +76,10 @@
         ],
         "owner_accounts": [{"platform_actor_id": "U01ANTON", "label": "@anton.r", "confirmed_at": "2026-10-12T09:00:00+00:00"}],
         "working_folder": "~/work/acme", "model": "",
-        "status": {"text": "connected", "tone": "ok"}, "unanswered": 2, "last_activity_at": "2026-10-20T13:04:00+00:00", "spent_24h_usd": 0.88
+        "readiness": {"text": "Connector on", "tone": "ok"}, "revision": 4, "unanswered": 2, "last_activity_at": "2026-10-20T13:04:00+00:00", "spent_24h_usd": 0.88
       },
       {
-        "place_id": "tg-community", "connector": "telegram-bot", "connector_label": "Telegram", "provider": "telegram",
+        "place_id": "tg-community", "revision": 5, "connector": "telegram-bot", "provider": "telegram",
         "account_id": "ouroboros_bot", "conversation_id": "-100123", "label": "Telegram · Ouroboros community", "state": "silent",
         "destination": "vendor:Telegram", "icon": {"name": "chat"},
         "wakes": [{"fact": "mention", "author": "connector"}], "wake_suggestions": ["mention", "reply_to_me"],
@@ -87,7 +87,7 @@
         "unanswered": 0, "last_activity_at": "", "spent_24h_usd": null
       },
       {
-        "place_id": "mail-inbox", "connector": "email-presence", "connector_label": "Mail", "provider": "imap",
+        "place_id": "mail-inbox", "revision": 6, "connector": "email-presence", "provider": "imap",
         "account_id": "me@example.org", "conversation_id": "", "label": "Mail · inbox", "state": "paused",
         "destination": "vendor:Email", "icon": null,
         "wakes": [{"fact": "any_message", "author": "migration"}], "wake_suggestions": ["any_message"],
@@ -96,8 +96,8 @@
       }
     ],
     "connectors": [
-      {"connector": "slack-bridge", "connector_label": "Slack", "icon": {"name": "chat"}, "destination": "vendor:Slack", "wakes": ["direct_message", "mention"], "connected": true},
-      {"connector": "agentrq-bridge", "connector_label": "AgentRQ", "icon": null, "destination": "vendor:AgentRQ", "wakes": ["direct_message"], "connected": false}
+      {"connector": "slack-bridge", "label": "Slack", "icon": {"name": "chat"}, "destination": "vendor:Slack", "wakes": ["direct_message", "mention"], "connected": true},
+      {"connector": "agentrq-bridge", "label": "AgentRQ", "icon": null, "destination": "vendor:AgentRQ", "wakes": ["direct_message"], "connected": false}
     ]
   },
   "settings": {
