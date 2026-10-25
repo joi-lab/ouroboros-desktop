@@ -65,3 +65,30 @@ def test_the_driver_refuses_and_counts_every_lookup_beyond_this_machine(tmp_path
             tagged("turn", lambda: lookup("openrouter.ai", 443))
     snap = meter.snapshot("turn")
     assert snap["counts"].get("network_refused") == 1 and snap["names"] == {"network_refused openrouter.ai": 1}
+
+
+def test_the_turn_law_s_batched_rows_are_the_rows_append_stores(tmp_path):
+    """The turn law lays its rows in one transaction (tests/_turn_shapes.append_rows); each must be stored as
+    ``dialogue_store.append`` stores it, positions and room facts included, or the law measures rows no
+    install holds."""
+    import sqlite3
+
+    from ouroboros import dialogue_store
+    from tests._turn_shapes import append_rows
+
+    rows = [{"chat_id": chat_id, "direction": direction, "text": f"row {index}",
+             "ts": f"2025-03-0{index}T00:00:00+00:00", **({"task_id": "w1"} if direction == "out" else {})}
+            for index, (chat_id, direction) in enumerate([(1, "in"), (1, "out"), (3000, "out"), (1, "in")], start=1)]
+    for row in rows:
+        dialogue_store.append(tmp_path / "public", "chat", row)
+    append_rows(tmp_path / "batched", rows)
+    stored = []
+    for root in (tmp_path / "public", tmp_path / "batched"):
+        conn = sqlite3.connect(dialogue_store.path(root))
+        try:
+            stored.append([conn.execute(query).fetchall() for query in (
+                "SELECT * FROM dialogue ORDER BY seq", "SELECT * FROM streams ORDER BY stream",
+                "SELECT * FROM rooms ORDER BY chat_id")])
+        finally:
+            conn.close()
+    assert stored[0] == stored[1] and len(stored[0][0]) == len(rows)
