@@ -10,14 +10,22 @@ of the window's longest hold, the first frame outside the store modules. ``drain
 window as ``{kind: {"read": {...}, "write": {...}}}`` (only buckets with a count) and resets it: the
 per-minute diagnostics row publishes it. Nothing here writes to disk, takes a store lock or raises
 into the caller: a failure inside the hook is swallowed and the transaction's outcome stands.
+
+``metered()`` scopes a second, private count to one unit of work on the calling context (an owner
+turn on its thread; a ``ContextVar``, the ``store._WAIT_BUDGET`` idiom): the same transactions as
+``{kind}.{read|write}`` with their summed and longest holds (``….sec``, ``….max_sec``), plus the
+events ``count`` names (the chronicle index's opens, ``chronicle.locked``; a lock-free read counts
+``chronicle.read``). ``snapshot`` copies the meter by value for a receipt read from another thread.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import sys
 import threading
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 
 KINDS = {"current.sqlite": "current", "dialog.sqlite": "dialog", "usage.sqlite": "usage"}
 # The frames the site skips: the store transport, not the owner that opened the transaction.
@@ -25,6 +33,7 @@ _STORE_FRAMES = frozenset({"store.py", "store_timing.py", "store_hot_facts.py", 
                            "dialogue_store.py", "usage_store.py", "contextlib.py"})
 _LOCK = threading.Lock()
 _WINDOW: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_METER: contextvars.ContextVar = contextvars.ContextVar("store_timing_meter", default=None)
 # The hold clock: high resolution on every OS (``time.monotonic`` ticks at ~15.6 ms on Windows, where a short hold
 # would measure 0.0).
 clock = time.perf_counter
@@ -48,8 +57,44 @@ def record(conn: Any, write: bool, started: float) -> None:
             bucket["total_sec"] += held
             if held >= bucket["max_sec"]:
                 bucket["max_sec"], bucket["max_site"] = held, _site()
+            meter = _METER.get()
+            if meter is not None:
+                side = f"{kind}.{'write' if write else 'read'}"
+                meter[side] = meter.get(side, 0) + 1
+                meter[side + ".sec"] = meter.get(side + ".sec", 0.0) + held
+                meter[side + ".max_sec"] = max(meter.get(side + ".max_sec", 0.0), held)
     except Exception:  # a diagnostic never changes the transaction's outcome
         pass
+
+
+def count(event: str) -> None:
+    """One ``event`` inside the current ``metered()`` scope, if any; never raises."""
+    try:
+        meter = _METER.get()
+        if meter is not None:
+            with _LOCK:
+                meter[event] = meter.get(event, 0) + 1
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def metered() -> Iterator[Dict[str, Any]]:
+    """This context's own counts (module docstring); read them through ``snapshot`` from another thread."""
+    meter: Dict[str, Any] = {}
+    token = _METER.set(meter)
+    try:
+        yield meter
+    finally:
+        _METER.reset(token)
+
+
+def snapshot(meter: Any) -> Dict[str, Any]:
+    """A by-value copy of a meter (seconds rounded to microseconds); ``{}`` for no meter."""
+    if not isinstance(meter, dict):
+        return {}
+    with _LOCK:
+        return {key: round(value, 6) if isinstance(value, float) else value for key, value in meter.items()}
 
 
 def _site() -> str:
