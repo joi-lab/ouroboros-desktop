@@ -664,8 +664,11 @@ INTERNAL = "INTERNAL: journal read, nothing new."
 
 
 @pytest.mark.parametrize("summary", ["", "Checked the journal."])
-def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch, summary):
-    wait = _park_after_selection(wake, monkeypatch, [finish(INTERNAL, silent=True, summary=summary)])
+@pytest.mark.parametrize("sent", [False, True])
+def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch, summary, sent):
+    responses = [call("send_user_message", {"text": "A visible progress update."})] if sent else []
+    wait = _park_after_selection(wake, monkeypatch, [*responses, finish(INTERNAL, silent=True, summary=summary)])
+    assert bool(getattr(wake.ctx, "_owner_message_sent", False)) is sent
     _resume_in_new_process(wake, monkeypatch, wait)
     text, usage, trace, bus = wake.run([{"content": ""}])
     assert usage.get("wake_silent") is True and text == INTERNAL
@@ -674,6 +677,8 @@ def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monke
     assert stored["result"] == INTERNAL and stored.get("wake_silent") is True
     assert stored.get("wake_summary", "") == summary and usage.get("wake_summary", "") == summary
     assert "summary" not in stored
+    assert bool(stored.get("owner_message_sent")) is sent
+    assert quiet_finish(stored) is (not sent)
 
 
 @pytest.mark.parametrize("summary", ["", "Checked the tests."])
