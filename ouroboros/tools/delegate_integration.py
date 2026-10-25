@@ -29,9 +29,6 @@ from ouroboros.configured_subagents import SESSION_ACCESS_PROFILES
 from ouroboros.tools.tool_result import ToolResult
 from ouroboros.tools.registry import ToolContext, active_repo_dir_for
 from ouroboros.utils import resolve_path_allow_missing
-from ouroboros.delegate_target_drift import (
-    _persist_target_drift, _target_drift_evidence, _target_drift_paths,  # noqa: F401
-)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ouroboros.subagents import DelegatedRunShape
@@ -162,6 +159,9 @@ def _retry_binding_refusal(record: Dict[str, Any], retry_token: str) -> Optional
     request = record.get("request") or {}
     if reference.get("workspace_kind") == "directory" and (request.get("execution") or {}).get("workspaceKind") == "directory" and record.get("target_root"):
         return None
+    from ouroboros.delegate_directory import is_in_place_run
+    if is_in_place_run(record) and record.get("target_root") and str(record.get("execution_root") or "") == str(record["target_root"]):
+        return None  # recorded in place by its starter's choice: the replay works there again
     snapshot_id = str(record.get("snapshot_id") or "")
     baseline_sha = str(record.get("baseline_sha") or "")
     target_root = str(record.get("target_root") or "")
@@ -496,8 +496,7 @@ def _record_baseline_manifest(drive: pathlib.Path, task_id: str, invocation_id: 
                     exc_info=True)
 
 
-def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path,
-                   manifest: Dict[str, Any], target_drift: Optional[Any] = None) -> Dict[str, Any]:
+def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     """The terminal-payload projection of one captured run patch (C1)."""
     from ouroboros.headless import (
         ARTIFACT_STATUS_READY_NO_CHANGES,
@@ -528,54 +527,30 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path,
         "file_outputs": list(manifest.get("file_outputs") or []),
         "file_output_count": len(manifest.get("file_output_changes") or []),
         "note": (
-            "NOT APPLIED: the run edited its private execution snapshot only. Nothing "
-            "reaches the shared tree until you explicitly call "
-            "integrate_delegated_patch(run_id=...) with decision='apply' or 'reject'. "
-            "The snapshot and complete file results persist until that disposition. "
-            "Read manifest_read, its file artifacts, and patch_read when present; "
-            "the text patch alone need not contain the complete result."
+            "NOT APPLIED: the run edited its private copy only. Nothing reaches the shared "
+            "tree until you explicitly call integrate_delegated_patch(run_id=...) with "
+            "decision='apply' or 'reject'. The result is kept until then as the patch and "
+            "its pinned commits (vcs_read diff base=baseline_id head=result_commit); the "
+            "copy's checkout itself is released once the capture is saved. Read "
+            "manifest_read, its file artifacts, and patch_read when present."
         ),
     }
-    drift = target_drift if isinstance(target_drift, dict) else {
-        "checked": target_drift is not None,
-        "paths": list(target_drift or []),
-        "error": "",
-    }
-    drift_paths = [str(path) for path in (drift.get("paths") or []) if str(path)]
-    drift_error = str(drift.get("error") or "")
-    if drift.get("checked") is True:
-        block["target_drift_checked"] = True
-    if drift_paths:
-        block["target_mutated_during_run"] = drift_paths
-        block["note"] = (
-            "The private execution snapshot has no captured file changes, but the "
-            "authority tree changed while the run was open. The author is unknown: "
-            "the child, a neighbor, or another process may have written there. "
-            "The drift is diagnostic evidence; it is not attributed to this child."
-            if status == ARTIFACT_STATUS_READY_NO_CHANGES else
-            "NOT APPLIED: the private execution snapshot contains captured changes, "
-            "and authority-tree drift was also observed; "
-            "the author of that drift is unknown. "
-            "the existing locked baseline check will decide whether integration "
-            "is safe. Nothing reaches the shared tree until explicit disposition."
-        )
-    if drift_error:
-        block["target_drift_unknown"] = drift_error
-        if status == ARTIFACT_STATUS_READY_NO_CHANGES:
-            block["note"] = (
-                "The private execution snapshot has no captured file changes, but "
-                f"authority-tree drift could not be verified ({drift_error}). "
-                "The author is unknown; preserve this diagnostic fact and use the "
-                "normal no-change disposition."
-            )
+    if manifest.get("result_commit"):
+        block["result_commit"] = str(manifest["result_commit"])
     if status not in {ARTIFACT_STATUS_READY_WITH_CHANGES, ARTIFACT_STATUS_READY_NO_CHANGES}:
         # A failed manifest's own typed note (unreviewable_metadata_change,
-        # non-UTF-8, …) is the actionable fact — never hide it in boilerplate.
-        block["note"] = str(manifest.get("note") or "") or block["note"]
+        # non-UTF-8, …) or git's own words are the actionable fact — never boilerplate.
+        first = next((row for row in manifest.get("errors") or [] if isinstance(row, dict)), {})
+        detail = str(first.get("stderr") or first.get("message") or "").strip()
+        block["note"] = str(manifest.get("note") or "") or (f"capture failed: {detail[:600]}" if detail else block["note"])
     elif evidence_only(entry):  # evidence owes no apply/reject, on every read (#1969)
         block["note"] = INVESTIGATION_NOTE
         if getattr(entry, "patch_disposed", "") == custody.EVIDENCE_RETAINED:
             block["disposition"] = custody.EVIDENCE_RETAINED
+    elif getattr(entry, "patch_disposed", "") == custody.NO_CHANGES:
+        block["disposition"] = custody.NO_CHANGES
+        block["note"] = ("No changes: the run's private copy ended exactly as it started, so the result "
+                         "closed itself; there is nothing to apply or reject.")
     current_head = str(manifest.get("current_head") or "")
     if current_head and entry.baseline_sha and current_head != entry.baseline_sha:
         # Single-writer snapshot: a moved HEAD can only mean the run itself committed.
@@ -588,6 +563,66 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path,
         }
     return block
 
+
+def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_dir: pathlib.Path,
+                                   evidence: str) -> Dict[str, Any]:
+    """Capture a Git snapshot as its result commit C (parent B) with the ordinary manifest.
+
+    The patch is B..C from git's plumbing; large and binary files ride in it as
+    binary diffs, so there are no separate file outputs. New named evidence stays
+    out of C (it is retained beside the capture). A git failure is a failed
+    manifest that carries git's own words."""
+    import os
+
+    from ouroboros.artifact_storage import compress_in_place
+    from ouroboros.artifacts import stream_artifact_file
+    from ouroboros.headless import ARTIFACT_STATUS_READY_NO_CHANGES, ARTIFACT_STATUS_READY_WITH_CHANGES
+    from ouroboros.subagent_worktrees import GitFailed, _git_env, capture_result_commit
+    from ouroboros.utils import atomic_write_json, utc_now_iso
+
+    patch_path = cap_dir / "workspace.patch"
+    base = entry.baseline_sha
+    manifest: Dict[str, Any] = {
+        "schema_version": 1, "created_at": utc_now_iso(), "workspace_root": str(clone),
+        "patch_name": "workspace.patch", "manifest_name": "workspace_patch.json",
+        "base_provenance": "admission_head", "base_ref": base, "base_head": base, "base_is_empty_tree": False,
+        "base_explanation": "Application patch from the run's snapshot commit B to its result commit C. "
+                            "It does not attribute authorship.",
+        "file_outputs": [], "file_output_changes": [], "tracked_excluded": [], "sensitive_blocked": [],
+        "diagnostics": [], "errors": []}
+    try:
+        result = capture_result_commit(entry.snapshot_id, patch_path, held_out=evidence)
+        env = dict(os.environ)
+        status_rows = _git_env(clone, "diff-tree", "-r", "-z", "--no-renames", "--name-status", base,
+                               result["result_sha"], env=env).stdout.decode("utf-8", "surrogateescape").split("\0")
+        pairs = list(zip(status_rows[0::2], status_rows[1::2]))
+        added = [path for code, path in pairs if code == "A"]
+        changed = [path for code, path in pairs if code and code != "A"]
+        diffstat = _git_env(clone, "diff-tree", "-r", "--stat", "--no-renames", base, result["result_sha"],
+                            env=env).stdout.decode("utf-8", "replace").strip()
+    except (GitFailed, OSError) as exc:
+        manifest.update(status="failed", patch_size=0, sha256="", diffstat="", current_head="",
+                        errors=[{"type": "result_commit_failed", "message": str(exc),
+                                 "stderr": str(getattr(exc, "stderr", b"") or "")}])
+        atomic_write_json(cap_dir / "workspace_patch.json", manifest, trailing_newline=True)
+        return manifest
+    size, digest = 0, ""
+    if result["patch_size"]:
+        compress_in_place(patch_path)
+        measured = stream_artifact_file(patch_path)
+        size, digest = measured["size"], measured["sha256"]
+    else:
+        patch_path.unlink(missing_ok=True)
+    manifest.update(
+        status=ARTIFACT_STATUS_READY_WITH_CHANGES if size else ARTIFACT_STATUS_READY_NO_CHANGES,
+        current_head=result["head"], patch_size=size, sha256=digest, diffstat=diffstat,
+        tracked_changed=changed, untracked_included=added, untracked_excluded=list(result["excluded"]),
+        counts={"tracked_changed": len(changed), "tracked_excluded": 0, "untracked_included": len(added),
+                "untracked_excluded": len(result["excluded"]), "sensitive_blocked": 0},
+        result_commit=result["result_sha"], result_tree=result["result_tree"],
+        result_ref=result["result_ref"], baseline_ref=result["baseline_ref"])
+    atomic_write_json(cap_dir / "workspace_patch.json", manifest, trailing_newline=True)
+    return manifest
 
 
 def _capture_terminal_patch(ctx: ToolContext, entry: Optional[_RunCustody], *, gateway=None) -> Optional[Dict[str, Any]]:
@@ -630,6 +665,9 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
 
     if entry is None or entry.review_owned:
         return None  # the review owner compares against its frozen subject, never a product baseline
+    from ouroboros.delegate_directory import in_place_block, is_in_place_run
+    if is_in_place_run(entry):
+        return in_place_block(entry)  # its edits are already in its starter's folder: nothing to capture
 
     def finish(block, transport=None):
         return retain_run_evidence(drive, entry, block, transport) if retain_investigation and publish else block
@@ -668,16 +706,26 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             manifest = {}
         manifest = manifest if isinstance(manifest, dict) else {}
         if isinstance(manifest.get("authority_drift"), dict) and str(manifest.get("status") or "") == "failed":
-            # A failed no-change capture is durable forensic custody even though
-            # it intentionally never minted PATCH_CAPTURED. Do not recapture it
-            # after a neighbor happens to revert and erase the observation.
-            return _capture_block(entry, cap_dir, manifest, manifest["authority_drift"])
+            # A legacy failed no-change capture (drift evidence of releases 7.4.1 to
+            # this one) is durable forensic custody that never minted PATCH_CAPTURED;
+            # it stays rejectable and is never recaptured.
+            return _capture_block(entry, cap_dir, manifest)
         if entry.patch_captured and str(manifest.get("status") or "") in ready:
-            stored_drift = manifest.get("authority_drift")
-            evidence = stored_drift if isinstance(stored_drift, dict) else _target_drift_evidence(entry)
-            return finish(_capture_block(entry, cap_dir, manifest, evidence))
+            return finish(_capture_block(entry, cap_dir, manifest))
+    from ouroboros.subagent_worktrees import find_execution_snapshot
+    snapshot = find_execution_snapshot(entry.snapshot_id) or {}
     exec_root = pathlib.Path(entry.execution_root)
     if not exec_root.exists():
+        saved = manifest if manifest_path.exists() else {}
+        if (str(saved.get("status") or "") in ready and saved.get("result_commit")
+                and saved.get("result_commit") == snapshot.get("result_sha")):
+            # The copy was released after this capture was saved but its row did not
+            # land: the saved result itself is the capture.
+            if publish:
+                custody.record_patch_captured(drive, entry, status=str(saved.get("status") or ""),
+                                              sha256=str(saved.get("sha256") or ""),
+                                              patch_size=saved.get("patch_size"), capture_dir=str(cap_dir))
+            return finish(_capture_block(entry, cap_dir, saved))
         return {
             "status": "missing",
             "baseline_id": entry.baseline_sha,
@@ -685,12 +733,10 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             "authority_target_root": entry.target_root,
             "patch_artifact": None,
             "manifest_artifact": None,
-            "note": "the private execution snapshot no longer exists on disk, so the "
+            "note": "the private copy no longer exists on disk and no saved result names it, so the "
                     "run's changes cannot be captured. Nothing was applied anywhere.",
         }
     try:
-        from ouroboros.headless import write_workspace_patch_artifacts
-
         cap_dir.mkdir(parents=True, exist_ok=True)
         if entry.authority_source == "skill_payload":
             # The payload-specific adapter over the skill-loader inventory (R1
@@ -698,26 +744,27 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             # would silently omit legitimate loader-visible files.
             manifest = _write_payload_patch_artifacts(exec_root, cap_dir, entry)
         else:
-            # The preflight-head shape pins the capture BASE to the snapshot's baseline
-            # commit (never a moved HEAD), reusing the one existing capture primitive —
-            # sensitive veto, binary handling, sha256 manifest and all.
             from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME
-            from ouroboros.subagent_worktrees import find_execution_snapshot
-            snapshot = find_execution_snapshot(entry.snapshot_id) or {}
-            # A Git-subdirectory investigation runs in a folder of its clone; the
-            # capture always diffs the whole registered clone. The run's untracked
+            # A Git-subdirectory investigation runs in a folder of its copy; the
+            # capture always diffs the whole recorded copy. The run's untracked
             # named evidence is retained beside the capture, never carried in it (#2070).
             clone = pathlib.Path(str(snapshot.get("path") or exec_root))
             try:
                 evidence = (exec_root.resolve().relative_to(clone.resolve()) / EVIDENCE_DIRNAME).as_posix()
             except ValueError:
                 evidence = ""
-            _, manifest = write_workspace_patch_artifacts(
-                clone, cap_dir,
-                task={"metadata": {"workspace_preflight": {"git": {"head": entry.baseline_sha}},
-                                   "file_baseline": snapshot.get("file_baseline") or {},
-                                   "host_evidence": evidence}},
-            )
+            if "file_baseline" in snapshot or "untracked_baseline" in snapshot:
+                # A copy provisioned before the one-primitive update keeps its own capture:
+                # its file inputs live outside Git and would read as new files in C.
+                from ouroboros.headless import write_workspace_patch_artifacts
+                _, manifest = write_workspace_patch_artifacts(
+                    clone, cap_dir,
+                    task={"metadata": {"workspace_preflight": {"git": {"head": entry.baseline_sha}},
+                                       "file_baseline": snapshot.get("file_baseline") or {},
+                                       "host_evidence": evidence}},
+                )
+            else:
+                manifest = _write_result_commit_artifacts(entry, clone, cap_dir, evidence)
     except Exception as exc:
         log.warning("Delegated run patch capture failed for %s", entry.run_id, exc_info=True)
         return {
@@ -728,23 +775,9 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             "authority_target_root": entry.target_root,
             "patch_artifact": None,
             "manifest_artifact": None,
-            "note": f"patch capture failed ({type(exc).__name__}: {exc}); the execution "
-                    "snapshot is preserved — inspect it directly.",
+            "note": f"patch capture failed ({type(exc).__name__}: {exc}); the private copy "
+                    "is kept — inspect it directly.",
         }
-    drift_evidence = _target_drift_evidence(entry)
-    if str(manifest.get("status") or "") in ready:
-        try:
-            manifest = _persist_target_drift(manifest_path, manifest, drift_evidence)
-        except Exception as exc:
-            drift_evidence = {
-                "checked": False, "paths": [],
-                "error": f"authority drift record failed: {type(exc).__name__}: {exc}",
-            }
-            manifest = dict(manifest)
-            manifest["status"] = "failed"
-            manifest["authority_drift"] = drift_evidence
-            manifest["note"] = "Authority drift could not be durably recorded; snapshot preserved."
-            return _capture_block(entry, cap_dir, manifest, drift_evidence)
     if publish and str(manifest.get("status") or "") in ready:
         custody.record_patch_captured(
             drive, entry,
@@ -753,7 +786,7 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             patch_size=manifest.get("patch_size"),
             capture_dir=str(cap_dir),
         )
-    return finish(_capture_block(entry, cap_dir, manifest, drift_evidence))
+    return finish(_capture_block(entry, cap_dir, manifest))
 
 
 def capture_stranded_patch(drive_root: Any, run: _RunCustody) -> Dict[str, Any]:

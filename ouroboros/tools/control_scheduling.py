@@ -830,10 +830,10 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         return _publish_scheduling_refusal(ctx, "error", "TOOL_ARG_ERROR",
             "⚠️ delegated_mode_unsupported: mode requires an agent_session row; API children keep their ordinary task execution.",
             reason="delegated_mode_unsupported")
-    if fields.get("directory_strategy") == "copy" and route.get("kind") != "agent_session":
+    if (fields.get("directory_strategy") == "copy" or fields.get("workspace") == "in_place") and route.get("kind") != "agent_session":
         return _publish_scheduling_refusal(
             ctx, "error", "TOOL_ARG_ERROR",
-            "⚠️ TOOL_ARG_ERROR (schedule_subagent): directory_strategy=copy is unsupported for native/API children, which use shared files directly; select an agent_session actor for copy.")
+            "⚠️ TOOL_ARG_ERROR (schedule_subagent): directory_strategy=copy is unsupported for native/API children, which use shared files directly; select an agent_session actor for copy or workspace=in_place.")
     requested_model_lane = "auto"  # bounded historical projection only
     requested_executor = "harness" if route.get("kind") == "agent_session" else "native"
     current_depth, depth_error = _context_task_depth(ctx)
@@ -975,7 +975,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "requested_effort": fields["requested_effort"],
         "configured_subagent": configured_subagent,
         "parent_cognitive_route": parent_cognitive_route,
-        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode") if key in fields},
+        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode", "workspace") if key in fields},
     }
     owner_origin = governing_words_for_schedule(ctx)  # the owner's words that caused this tree, by value
     child_facts = {

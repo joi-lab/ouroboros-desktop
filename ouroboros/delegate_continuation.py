@@ -335,8 +335,9 @@ def _adopted_snapshot(entry: Any, authority: Any) -> Tuple[Optional[AdoptedSnaps
         record = find_execution_snapshot(entry.snapshot_id) or {}
     except Exception as exc:
         record = {"error": f"{type(exc).__name__}: {exc}"}
+    # A checkout released after its saved capture comes back at the hand-over from commit C.
     if (not record.get("path") or not entry.execution_root or not entry.baseline_sha
-            or not Path(entry.execution_root).exists()):
+            or not (Path(entry.execution_root).exists() or record.get("result_sha"))):
         return None, REFUSAL_SNAPSHOT_MISSING, (
             f"Run {entry.run_id}'s private snapshot {entry.snapshot_id} is gone or unreadable "
             f"({record.get('error') or 'no registry entry or directory'}), so its work cannot be continued in "
@@ -357,7 +358,10 @@ def continuation_prompt(facts: Dict[str, Any], caller_text: str) -> str:
     if workspace == "same_snapshot":
         tree = ("You continue in the SAME private snapshot the previous run worked in (same path, same "
                 "baseline): everything it changed there is still there, and one cumulative patch of the whole "
-                "work is captured when you finish.")
+                "work is captured when you finish."
+                + (" Its checkout was restored from the saved result, so files .gitignore hides (environments, "
+                   "build outputs) and its .review-evidence/ files are not here; that evidence stays retained "
+                   "beside its capture." if facts.get("checkout") == "recreated" else ""))
     elif disposition == "applied":
         tree = ("Its captured changes were APPLIED to the target, so the tree you start from contains them: "
                 "do not redo or re-apply that work.")
@@ -447,7 +451,8 @@ def start_binding(ctx: Any, drive: Any, token: str, *, gateway: Any, actor: Dict
         return NO_CONTINUATION, _fail("delegate_start", code, detail, continue_from=token, definitely_unrun=True)
     entry = current_runs(drive, "run_id=?", (token,))[token]
     preference = str(carrier or "")
-    facts.update(workspace="same_snapshot" if adopted else "fresh", carrier_preference=preference or "auto")
+    facts.update(workspace="same_snapshot" if adopted else "fresh", carrier_preference=preference or "auto",
+                 **({"checkout": "recreated"} if adopted and not Path(adopted.path).exists() else {}))
     record = {"continuation_of": token}
     if adopted:
         from ouroboros.delegate_source_coverage import inherit_source_obligations
@@ -538,7 +543,16 @@ def snapshot_handover(drive: Any, row: Dict[str, Any]) -> Iterator[Dict[str, Any
                "detail": f"The continued run's snapshot lock is held or unavailable{busy}; retry after it completes."}
         return
     try:
-        yield _handover_refusal(drive, row)
+        refusal = _handover_refusal(drive, row)
+        if not refusal and not Path(str(row.get("execution_root") or "")).exists():
+            from ouroboros.subagent_worktrees import recreate_snapshot_checkout
+            try:
+                recreate_snapshot_checkout(str(row.get("snapshot_id") or ""))
+            except Exception as exc:
+                refusal = {"reason": REFUSAL_SNAPSHOT_MISSING,
+                           "detail": f"The continued run's checkout could not be restored from its saved result "
+                                     f"({type(exc).__name__}: {exc}); nothing was started."}
+        yield refusal
     finally:
         release_exclusive_file_lock(lock_path, fd)
 

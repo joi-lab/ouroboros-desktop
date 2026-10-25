@@ -83,6 +83,7 @@ PATCH_DISPOSED = "delegate_run_patch_disposed"
 # row took over (``_supersede``); its work rides the successor's cumulative capture.
 SUPERSEDED = "superseded"
 EVIDENCE_RETAINED = "evidence_retained"  # investigation capture; never applied
+NO_CHANGES = "no_changes"  # an empty writer result, closed on capture; nothing to apply
 # CR1-3 (owed-before-sent, one row earlier than the disposition): APPLY-INTENT lands
 # BEFORE the target tree is mutated; RESOLVED lands only when the attempt is KNOWN to
 # have left the tree unmutated. An intent with neither resolution nor disposition
@@ -798,12 +799,15 @@ def disposition_lock_path(drive_root: Any, custody: RunCustody) -> pathlib.Path:
 
 
 def record_patch_captured(drive_root: Any, custody: RunCustody, **payload: Any) -> bool:
-    """Durably mark a terminal mutating run's patch as captured (idempotent flag)."""
-    custody.patch_captured = True
-    return emit(drive_root, PATCH_CAPTURED, {
+    """Durably mark a terminal mutating run's patch as captured (idempotent flag).
+    The in-memory flag follows the durable row: a copy is released only after it."""
+    recorded = emit(drive_root, PATCH_CAPTURED, {
         "run_id": custody.run_id, "task_id": custody.task_id,
         "snapshot_id": custody.snapshot_id, **payload,
     })
+    if recorded:
+        custody.patch_captured = True
+    return recorded
 
 
 def record_patch_disposed(drive_root: Any, custody: RunCustody, *, disposition: str,

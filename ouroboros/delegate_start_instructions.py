@@ -244,6 +244,17 @@ def directory_copy_binding_instruction(authority_root: str, binding_sha256: str 
     )
 
 
+def in_place_binding_instruction(root: str) -> str:
+    """Tell an in-place Git writer that its host's own folder is its working tree."""
+    return (
+        "\n\nDELEGATED IN-PLACE BINDING (typed host fact): you work directly in "
+        f"{str(root or '').strip() or '(unknown)'}, your host task's own folder, as it chose. Every change lands "
+        "there as you make it and nothing is captured for a separate apply. Your host may be working there too: "
+        "change only what the assignment needs; never reset, clean, stash, check out or commit. Keep test "
+        "scratch, environments and caches outside every Git working tree, " + scratch_fact() + "."
+    )
+
+
 def apply_execution_binding(instructions: str, execution_root: str,
                             authority_root: str, binding_sha256: str = "", *,
                             evidence_root: str | None = None, granted_scratch: str = "") -> str:

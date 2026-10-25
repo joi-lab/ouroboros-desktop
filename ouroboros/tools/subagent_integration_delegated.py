@@ -72,8 +72,8 @@ def _capture_failed_refusal(rid: str, cap_status: str, note: str) -> str:
         f"usably captured, and the capture-at-disposition attempt did not "
         f"produce a patch (status {cap_status or 'missing'!r}: {note[:300]}). "
         "No disposition was recorded — the obligation stays open and the "
-        "execution snapshot (if present) is preserved. Inspect the snapshot "
-        "directly, then retry this call."
+        "private copy (if present) is kept. Inspect it directly, then retry "
+        "this call."
     )
 
 
@@ -89,7 +89,7 @@ def prepared_capture_inspection(rid: str, decision: str, applies_changes: bool,
     return (f"⚠️ INTEGRATE_DELEGATED_INSPECT_CAPTURE: run {rid}'s captured result was NOT applied: it was "
             "prepared during this call, so it was not available for inspection. Read it (manifest_read, its "
             "file artifacts, and patch_read when present); a later apply decides this same retained capture. "
-            "No target files changed; the snapshot and the capture stay retained.\n"
+            "No target files changed; the capture stays retained.\n"
             + json.dumps(describe(), ensure_ascii=False, indent=2))
 
 
@@ -163,7 +163,13 @@ def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
             "or fresh payload binding (payload lane) is the run's recorded target — or contains it as "
             "a host-minted project tree — may dispose the orphan."
         )
-    from ouroboros.delegate_directory import is_directory_run
+    from ouroboros.delegate_directory import is_directory_run, is_in_place_run
+    if is_in_place_run(entry):
+        return (
+            f"⚠️ INTEGRATE_DELEGATED_NOT_ISOLATED: run {rid} worked directly in {entry.target_root} by its "
+            "starter's choice (workspace='in_place'); its edits are already there. There is nothing to apply "
+            "or reject: inspect them with vcs_read diff and undo through git."
+        )
     if not entry.execution_root and not is_directory_run(entry):
         return (
             f"⚠️ INTEGRATE_DELEGATED_NOT_ISOLATED: run {rid} recorded no execution "
@@ -178,6 +184,9 @@ def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
             "no disposition; nothing was changed. To act on a finding, change the candidate yourself or "
             "start a child that holds write authority."
         )
+    if entry.patch_disposed == custody.NO_CHANGES:
+        return (f"OK: delegated run {rid} changed nothing: its private copy ended exactly as it started, "
+                "so its result closed itself (no_changes). There is nothing to apply or reject.")
     if entry.patch_disposed:
         return (
             f"⚠️ INTEGRATE_DELEGATED_ALREADY_DISPOSED: run {rid}'s patch was already "
@@ -232,13 +241,13 @@ def _unwritten_disposition_text(rid: str, target_root: str, disposition: str,
             "written, so nothing on disk records that this patch was handled. Do "
             "NOT call integrate_delegated_patch again for this run — a second "
             "apply would land the same changes twice. Fix the drive/event log, "
-            f"then {verify} and record the outcome; the execution "
-            "snapshot is deliberately preserved."
+            f"then {verify} and record the outcome; the run's saved result and "
+            "pins are deliberately preserved."
         )
     return (
         f"⚠️ INTEGRATE_DISPOSITION_UNWRITTEN: run {rid}'s patch was NOT applied "
         f"(disposition {disposition!r}), and the durable disposition row could not "
-        "be written. Nothing in your tree changed and the execution snapshot is "
+        "be written. Nothing in your tree changed and the run's saved result is "
         "preserved. Fix the drive/event log; this process already holds the "
         "disposition in memory (a repeat here answers ALREADY_DISPOSED), so the "
         "run reads as undisposed again only after a restart — repeat it then."
@@ -274,14 +283,52 @@ def _dispose_delegated(drive: Any, entry: Any, snapshot_key: str, reason: str,
 
 
 def retain_run_evidence(drive: Any, entry: Any, block: Dict[str, Any], gateway: Any = None, *, recapture=False, named=None) -> Dict[str, Any]:
-    """Retention disposes investigations; candidates await owner apply/reject after named evidence."""
+    """Retention disposes investigations; a candidate's saved result releases its checkout and
+    awaits the owner's apply/reject, and an empty one closes itself."""
     from ouroboros.delegate_registration_policy import candidate_apply_possible
 
     if not candidate_apply_possible(entry):
         return retain_investigation_evidence(drive, entry, block, gateway, recapture=recapture, named=named)
     if named is None:
         named = run_named_evidence(drive, entry, recapture=recapture) if block.get("status") in _READY_CAPTURE_STATUSES else {}
-    return {**block, "named_evidence": named} if named else block
+    return _settle_writer_capture(drive, entry, {**block, "named_evidence": named} if named else block, named)
+
+
+def _settle_writer_capture(drive: Any, entry: Any, block: Dict[str, Any], named: Dict[str, Any]) -> Dict[str, Any]:
+    """Once a writer's capture row and its named evidence are durably saved, the result
+    lives as the patch plus pinned commits B and C, so the checkout goes; an empty result
+    (C equals B, HEAD unmoved, nothing retained beside it) closes as no_changes. A pending
+    continuation, a copy made before this update or anything still owed keeps the checkout."""
+    from ouroboros import delegate_custody as custody
+    from ouroboros.delegate_directory import is_directory_run
+    from ouroboros.subagent_worktrees import find_execution_snapshot, release_snapshot_checkout
+
+    if (not entry.snapshot_id or entry.authority_source == "skill_payload" or is_directory_run(entry)
+            or block.get("status") not in _READY_CAPTURE_STATUSES or not entry.patch_captured
+            or entry.patch_disposed or entry.superseded_by or entry.mode == "plan"
+            or not (entry.settled or entry.terminal_state in custody.TERMINAL_STATES)
+            or (named and named.get("status") != "retained")
+            or any(str(item.get("snapshot_id") or "") == entry.snapshot_id
+                   for item in custody.pending_invocations(drive))):
+        return block
+    record = find_execution_snapshot(entry.snapshot_id) or {}
+    if not record or "file_baseline" in record or "untracked_baseline" in record:
+        return block  # a copy made before this update keeps its checkout until disposition, as before
+    if (block.get("status") == ARTIFACT_STATUS_READY_NO_CHANGES and not block.get("head_moved")
+            and not block.get("file_outputs") and not (named or {}).get("files")):
+        recorded, note = _dispose_delegated(drive, entry, entry.snapshot_id, "the run changed nothing",
+                                            custody.NO_CHANGES, True, disposed_by=entry.task_id)
+        if recorded:
+            return {**block, "disposition": custody.NO_CHANGES,
+                    "note": "No changes: the run's private copy ended exactly as it started, so the result "
+                            f"closed itself; there is nothing to apply or reject.{note}"}
+        return block
+    try:
+        released = release_snapshot_checkout(entry.snapshot_id)
+    except Exception:
+        log.warning("Releasing the checkout of captured run %s failed", entry.run_id, exc_info=True)
+        released = False
+    return {**block, "checkout_released": True} if released else block
 
 
 def retain_investigation_evidence(drive: Any, entry: Any, block: Dict[str, Any], gateway: Any = None, *, recapture=False, named=None) -> Dict[str, Any]:
@@ -355,18 +402,18 @@ def _drift_refusal(
         return (
             f"⚠️ INTEGRATE_DELEGATED_BASELINE_UNVERIFIABLE: run {rid}'s patch was NOT "
             f"applied — its target state could not be compared against the run's "
-            f"baseline ({drift_error}). Nothing was changed; the execution snapshot "
-            f"and the patch are preserved. Verdict: {verdict_path or '(unwritten)'}."
+            f"baseline ({drift_error}). Nothing was changed; the patch and its pinned "
+            f"commits are kept. Verdict: {verdict_path or '(unwritten)'}."
         )
     return (
         f"⚠️ INTEGRATE_CONFLICT: {len(drifted)} path(s) in {target} CHANGED since run "
         f"{rid}'s snapshot was taken, so its patch was NOT applied (a plain apply "
         f"would relocate hunks and silently land them on moved content). Drifted: "
         f"{', '.join(drifted[:10])}{' …' if len(drifted) > 10 else ''}\n"
-        "YOU own this conflict: the execution snapshot and the captured patch are "
-        "preserved until you resolve it. Reconcile your tree with the snapshot's "
-        "changes (read the patch artifact, or diff against the execution root "
-        "directly), then retry the apply, or "
+        "YOU own this conflict: the captured patch and its pinned commits are kept "
+        "until you resolve it. Reconcile your tree with the run's changes (read the "
+        "patch artifact, or vcs_read diff from the capture's baseline_id to its "
+        "result_commit), then retry the apply, or "
         "integrate_delegated_patch(decision='reject') to discard. "
         f"Verdict: {verdict_path or '(unwritten)'}."
     )
@@ -712,7 +759,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
             return _unwritten_disposition("rejected", applied=False)
         return (
             f"{orphan_note}🚫 Rejected delegated run {rid}'s captured patch ({len(touched)} file(s) not "
-            f"applied); its execution snapshot is released. Verdict: {verdict_path or '(unwritten)'}. "
+            f"applied); its private copy and pins are released. Verdict: {verdict_path or '(unwritten)'}. "
             f"Reason: {reason or '(none)'}.{format_patch_exclusions(manifest)}{note}"
         )
 
@@ -723,7 +770,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
                 return _unwritten_disposition("applied", applied=False)
             return (
                 f"OK: delegated run {rid} has no captured file changes to apply; "
-                f"its answer and external effects remain separate evidence; the snapshot is released."
+                f"its answer and external effects remain separate evidence; its private copy is released."
                 f"{format_patch_exclusions(manifest)}{note}"
             )
         return (
@@ -875,7 +922,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
             "and the apply could not be cleanly reversed. Do NOT retry this call — the "
             "changes are already in your working tree and a second apply would double "
             "them. Inspect with vcs_read diff, stage what you accept yourself, and note that "
-            "the run is recorded as applied. Its execution snapshot is preserved for "
+            "the run is recorded as applied. Its captured patch is kept for "
             f"comparison. Verdict: {verdict_path or '(unwritten)'}.{format_patch_exclusions(manifest)}{tail}"
         )
 
@@ -894,10 +941,10 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
         return (
             f"⚠️ INTEGRATE_CONFLICT: applying run {rid}'s patch into {target} did not "
             f"apply cleanly. git said: {stderr[:600]}\n"
-            "YOU own this conflict: the execution snapshot and the captured patch are "
-            "preserved until you resolve it. Reconcile your tree with the snapshot's "
-            "changes (read the patch artifact, or diff against the execution root "
-            "directly), retry the apply, or "
+            "YOU own this conflict: the captured patch and its pinned commits are kept "
+            "until you resolve it. Reconcile your tree with the run's changes (read the "
+            "patch artifact, or vcs_read diff from the capture's baseline_id to its "
+            "result_commit), retry the apply, or "
             "integrate_delegated_patch(decision='reject') to discard. "
             f"Verdict: {verdict_path or '(unwritten)'}."
         )
@@ -927,7 +974,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
     return (
         f"{orphan_note}✅ Integrated delegated run {rid}'s patch into {target} ({len(touched)} file(s), staged).{prot_note}\n"
         f"{diffstat}{format_patch_exclusions(manifest)}\n"
-        f"Verdict: {verdict_path or '(unwritten)'}. Its execution snapshot is released.\n"
+        f"Verdict: {verdict_path or '(unwritten)'}. Its private copy and pins are released.\n"
         "Changes are staged but NOT committed — review them yourself; you are the sole committer."
         f"{note}"
     )

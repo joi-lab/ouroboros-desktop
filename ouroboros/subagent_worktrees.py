@@ -887,7 +887,8 @@ def capture_result_commit(snapshot_id: str, patch_path: Path, *, held_out: str =
     if proc.returncode != 0:
         raise GitFailed(proc.returncode, proc.args, b"", proc.stderr)
     return {"result_sha": commit, "result_tree": tree, "head": head, "result_ref": result_ref,
-            "patch_size": patch_path.stat().st_size, "excluded": excluded}
+            "baseline_ref": str(row.get("baseline_ref") or ""), "patch_size": patch_path.stat().st_size,
+            "excluded": excluded}
 
 
 def release_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] = None,

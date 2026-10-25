@@ -115,7 +115,7 @@ def retain_named(root, entry, *, whole=False, recapture=False, reread=False, pub
     No BodyRuntime tick calls the witness walker. A new terminal observation, explicit
     recapture, or this foreground retention boundary is what observes changed sources.
     """
-    from ouroboros.review_checking import EVIDENCE_RETAIN_BYTES, named_evidence_witness, retain_named_evidence
+    from ouroboros.review_checking import named_evidence_witness, retain_named_evidence
 
     root = pathlib.Path(root).resolve()
     home = custody.delegated_capture_dir(root, entry.task_id, custody.capture_key(entry))
@@ -123,7 +123,7 @@ def retain_named(root, entry, *, whole=False, recapture=False, reread=False, pub
     area = pathlib.Path(str(entry.execution_root or ""))
     if reread or not entry.execution_root or not area.is_dir():
         return known or {"status": "copy_missing", "files": [], "gaps": []}
-    source = {"policy": POLICY, "limit_bytes": None if whole else EVIDENCE_RETAIN_BYTES,
+    source = {"policy": POLICY, "limit_bytes": None,
               "whole": whole, "baseline_sha": entry.baseline_sha,
               "terminal_sha": entry.terminal_source.get("sha256"), "invocation_id": entry.invocation_id,
               "snapshot_id": entry.snapshot_id, "capture_id": entry.capture_id,
@@ -150,9 +150,12 @@ def retain_named(root, entry, *, whole=False, recapture=False, reread=False, pub
     try:
         if error is not None:
             raise error
-        files = retain_named_evidence(area, staging / "files",
-            [float("inf") if whole else EVIDENCE_RETAIN_BYTES], gaps, product_paths=products, preserve_mode=False)
-        summary = {"status": "partial" if gaps else "retained", "files": files, "gaps": gaps}
+        files = retain_named_evidence(area, staging / "files", [float("inf")], gaps,
+                                      product_paths=products, preserve_mode=False)
+        # Links and special entries are recorded, never followed: nothing more can be
+        # retained, so they do not hold the copy. Only bytes left behind do (a legacy budget).
+        summary = {"status": "partial" if any(gap.get("reason") == "evidence_budget_exceeded" for gap in gaps)
+                   else "retained", "files": files, "gaps": gaps}
     except Exception as exc:
         # A raised copier has no complete inventory. Keep the source, not unlisted
         # partial copies in every immutable retry generation.
