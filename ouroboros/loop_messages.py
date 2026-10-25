@@ -652,8 +652,21 @@ CONTEXT_FACTS_HEADER = "[CONTEXT_FACTS]"
 CONTEXT_FACTS_NAME = "ouroboros_context_facts"
 
 
+def subagents_fact_line() -> str:
+    """The room's current delegation choice belongs only to the round's dynamic tail."""
+    from ouroboros import config
+    from ouroboros.settings_integrity import live_subagents_mode, room_subagents_mode_applies
+    from ouroboros.subagent_runtime import subagents_availability
+
+    if not room_subagents_mode_applies():
+        return ""
+    if subagents_availability(config.load_settings()) != "available":
+        return "Subagents: Off — off in Settings"
+    return f"Subagents: {live_subagents_mode().title()} — set by my human for this chat"
+
+
 def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
-                       measured: bool = True, focus_fact: str = "") -> str:
+                       measured: bool = True, focus_fact: str = "", subagents_fact: Optional[str] = None) -> str:
     """One line of this round's facts for the actor, no advice (owner decisions 5A, 11 Oct 1A).
 
     Reads the measurement the round already recorded (``_remember_main_fit`` facts),
@@ -740,7 +753,8 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     if focus_fact:
         parts.append(focus_fact)
     parts.extend(filter(None, [reasoning_retirement_fact(usage, ctx.round_idx)]))
-    return f"{CONTEXT_FACTS_HEADER} " + " | ".join(parts)
+    mode_fact = subagents_fact_line() if subagents_fact is None else subagents_fact
+    return f"{CONTEXT_FACTS_HEADER} " + " | ".join(parts) + ("\n" + mode_fact if mode_fact else "")
 
 
 def _round_fact(ctx: Any, tool_ctx: Any) -> str:
@@ -953,12 +967,13 @@ def append_context_facts(ctx: Any, *, money: Optional[Dict[str, Any]] = None) ->
     usage = ctx.accumulated_usage
     plan = ctx.context_fit_plan
     focus_identity, focus_fact = _own_focus_fact(ctx)
+    subagents_fact = subagents_fact_line()
     source = [{k: v for k, v in m.items() if k != "cache_control"} for m in ctx.messages if m.get(HOST_CONTEXT_KIND_KEY) != CONTEXT_FACTS_NAME]
     source.append({"role": "system", "content": json.dumps(ctx.tool_schemas, ensure_ascii=False, sort_keys=True)})
     key = (ctx.round_idx, ctx.active_model, ctx.active_context_mode, ctx.active_effort,
            str(getattr(plan, "route_fp", "")), str(getattr(plan, "status", "")),
            bool(getattr(plan, "stale", False)), int(getattr(plan, "window_tokens", 0) or 0),
-           context_reclaim_transcript_sha256(source), focus_identity, reasoning_retirement_fact(usage, ctx.round_idx))
+           context_reclaim_transcript_sha256(source), focus_identity, subagents_fact, reasoning_retirement_fact(usage, ctx.round_idx))
     visible = any(m.get(HOST_CONTEXT_KIND_KEY) == CONTEXT_FACTS_NAME and m.get("content") == usage.get("_context_facts_line")
                   for m in ctx.messages)
     if tuple(usage.get("_context_facts_key") or ()) == key and visible:
@@ -982,7 +997,7 @@ def append_context_facts(ctx: Any, *, money: Optional[Dict[str, Any]] = None) ->
                 refresh=True, max_age_sec=_loop()._TREE_ACCOUNTING_MAX_STALE_SEC))
         money = {"wallet": observed["wallet"], "tree": observed["tree"],
                  "cost_ceiling": getattr(tool_ctx, "_cost_ceiling", None)}
-    line = context_facts_line(ctx, money=money, measured=measured, focus_fact=focus_fact)
+    line = context_facts_line(ctx, money=money, measured=measured, focus_fact=focus_fact, subagents_fact=subagents_fact)
     ctx.messages.append(bound_host_row(CONTEXT_FACTS_NAME, line))
     usage["_context_facts_round"] = ctx.round_idx
     usage["_context_facts_key"] = key

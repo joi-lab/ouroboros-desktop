@@ -311,6 +311,12 @@ def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None 
     return read_cognition(scope[0], _actor_project(scope), settings=settings)["subagents_mode"]
 
 
+def room_subagents_mode_applies() -> bool:
+    """Consciousness and Evolve keep their own controls, including their descendants."""
+    snapshot = _TASK_SETTINGS.get()
+    return not (snapshot and snapshot.actor_scope and snapshot.actor_scope[1].get("autonomous"))
+
+
 def actor_subagents_availability() -> str | None:
     """Live Settings gate for a bound actor; pure catalog resolvers keep their supplied settings."""
     from ouroboros import config

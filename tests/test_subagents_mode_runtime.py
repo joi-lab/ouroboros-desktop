@@ -160,3 +160,46 @@ def test_global_settings_off_withholds_new_admission_from_running_actor():
         with pytest.raises(runtime.SubagentSelectionError) as refused:
             runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")
         assert refused.value.code == "subagents_disabled"
+
+
+def test_room_switch_reaches_next_round_and_next_admission_without_rewriting_prefix(monkeypatch, tmp_path):
+    from ouroboros import loop
+    from ouroboros.loop_messages import append_context_facts
+    from tests.test_round_facts_line import _facts_ctx
+    from tests.test_loop_compaction import _fit
+
+    configured()
+    ctx = _facts_ctx(tmp_path, monkeypatch)
+    monkeypatch.setattr(loop, "_measure_round_main_fit", lambda *a, **k: _fit())
+    prefix = list(ctx.messages)
+    with task_settings_scope(snapshot({"id": "parent", "project_id": "alpha"})):
+        for mode in ("auto", "swarm", "off", "auto"):
+            update_project_cognition(config.DATA_DIR, "alpha", subagents_mode=mode)
+            ctx.round_idx += 1
+            assert append_context_facts(ctx, money={})
+            assert ctx.messages[-1]["content"].splitlines()[-1] == f"Subagents: {mode.title()} — set by my human for this chat"
+            assert "cache_control" not in ctx.messages[-1]
+            if mode == "off":
+                with pytest.raises(runtime.SubagentSelectionError, match="Subagents are off"):
+                    runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")
+            else:
+                assert runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")[0]
+        assert ctx.messages[:len(prefix)] == prefix
+        # A late owner switch also refreshes an unsent prepare in the SAME round.
+        update_project_cognition(config.DATA_DIR, "alpha", subagents_mode="swarm")
+        assert append_context_facts(ctx, money={})
+        assert "Subagents: Swarm" in ctx.messages[-1]["content"]
+        assert not append_context_facts(ctx, money={})
+
+
+def test_round_fact_names_settings_lock_and_omits_autonomous_scope():
+    from ouroboros.loop_messages import subagents_fact_line
+
+    values = configured()
+    values.update(OUROBOROS_SUBAGENTS_MODE="swarm", OUROBOROS_SUBAGENTS='{"enabled":false,"items":[]}')
+    save_owner(values)
+    with task_settings_scope(snapshot({"id": "owner"})):
+        assert subagents_fact_line() == "Subagents: Off — off in Settings"
+        assert live_subagents_mode() == "swarm"
+    with task_settings_scope(snapshot({"id": "evolve", "type": "evolution"})):
+        assert subagents_fact_line() == ""
