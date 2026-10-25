@@ -56,7 +56,7 @@ class ChatInbound(TypedDict):
     content: str
     sender_session_id: NotRequired[str]
     client_message_id: NotRequired[str]
-    force_plan: NotRequired[bool]
+    force_plan: NotRequired[bool]  # Deprecated for one release; accepted and ignored.
     attachments: NotRequired[list]  # list[ChatAttachmentInbound] (additive, v6.26.0)
     # Multi-project chat routing: the owner stays user_id 1; chat_id selects the thread, project_id scopes memory.
     chat_id: NotRequired[int]

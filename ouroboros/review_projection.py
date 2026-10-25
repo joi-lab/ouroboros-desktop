@@ -27,7 +27,7 @@ from ouroboros.review_records import review_slot_awaiting, review_slot_unresolve
 # its projection is a gap, never a transport failure or a malformed answer.
 AWAITING_PROJECTION = "awaiting"
 _AWAITING_REASON = "No answer recorded: the host returned at the dispatch barrier before this reviewer answered."
-# The plan review's outcome CLASS at delivery, stamped by owner_hurry.force_plan_decision and
+# The plan review's outcome CLASS at delivery, stamped by owner_hurry.plan_gate_decision and
 # carried on outcome_axes.execution.plan_review; the earlier engine's classes (unanswered,
 # none_answered, answered_open) survive only as the cause sentences of finished tasks.
 PLAN_REVIEW_OBJECTIONS_OPEN = "objections_open"  # objections stood open at delivery

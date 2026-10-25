@@ -50,7 +50,7 @@ PLAN_RECORD_VERSION = 3
 _PLAN_RECORD_MAX_BYTES = 1_000_000
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 PARTICIPANT_STATUSES = frozenset({"pending", "answered", "unparseable", "failed", "not_dispatched"})
-GATE_STATUSES = frozenset({"not_required", "force_plan_unmet", "held", "objections_open", "awaiting", "clear",
+GATE_STATUSES = frozenset({"not_required", "held", "objections_open", "awaiting", "clear",
                            "rail_degraded", "unreadable"})
 LEGACY_ASK_ID = "legacy"
 _DONE_WHEN_KEYS = ("id", "claim", "support", "surface")
@@ -343,7 +343,7 @@ def pending_asks(record: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
 
 def asks_dispatched(record: Mapping[str, Any]) -> int:
-    """Asks that reached a participant counted by that ask (the force_plan fact)."""
+    """Asks that reached a participant counted by that ask."""
     return sum(1 for ask in record.get("asks") or []
                if any(p.get("dispatched") and p.get("owner_marked") for p in ask.get("participants") or []))
 
@@ -372,23 +372,18 @@ def unknown_outcome_asks(record: Mapping[str, Any]) -> List[str]:
 # ------------------------------------------------------------------ gate
 
 def gate_projection(record: Mapping[str, Any], *, enforcement: str, cyber_pro: bool, hurry: bool,
-                    force_plan: bool, hard_rail: str = "", legacy: Optional[Mapping[str, Any]] = None,
+                    hard_rail: str = "", legacy: Optional[Mapping[str, Any]] = None,
                     unreadable: bool = False) -> Dict[str, Any]:
     """The ONE finalization decision over the plan record (pure).
 
     ``held`` ⟺ Blocking, not Cyber Pro, no owner hurry, and some open objection was
     raised by an owner-marked reviewer of the ask it answered — for any task. Silence,
-    pending asks, refusals and mind-added critics never hold. A Swarm ``force_plan``
-    stays unmet until one ask reached at least one counted reviewer: under Blocking that holds
-    the final answer while the mind never asked; an ask that no route could take (a
-    recorded attempt) counts as attempted — disclosed, not held, outages never hold.
-    Advisory, the owner's hurry and Cyber Pro disclose an unmet obligation once a plan
-    exists (a task that wrote no plan at all is still held to write one). An unreadable
-    record is engaged, never absent.
+    pending asks, refusals and mind-added critics never hold. An unreadable record
+    is engaged, never absent.
     """
     policy = "blocking" if str(enforcement or "").lower() == "blocking" else "advisory"
     legacy_engaged = bool((legacy or {}).get("engaged"))
-    if not force_plan and not unreadable and not engaged(record) and not legacy_engaged:
+    if not unreadable and not engaged(record) and not legacy_engaged:
         return {"required": False, "allow": True, "status": "not_required", "enforcement": policy,
                 "open_objections": [], "holding": [], "pending_asks": [], "revision": 0}
     objections = open_objections(record, legacy)
@@ -397,13 +392,12 @@ def gate_projection(record: Mapping[str, Any], *, enforcement: str, cyber_pro: b
     dispatched = asks_dispatched(record) + int((legacy or {}).get("asks_dispatched") or 0)
     latest = latest_revision(record)
     decision: Dict[str, Any] = {
-        "required": True, "self_opened": not force_plan, "enforcement": policy,
+        "required": True, "enforcement": policy,
         "open_objections": [{k: o.get(k) for k in ("seat_id", "id", "text", "holds", "not_adjudicated", "ask_id",
                                                      "revision", "owner_marked", "legacy")} for o in objections],
         "holding": [f"{o['seat_id']}:{o['id']}" for o in holding],
         "pending_asks": pending, "asks_dispatched": dispatched, "asks_unroutable": unroutable_asks(record),
         "unknown_outcome": unknown_outcome_asks(record),
-        "force_plan_met": not force_plan or dispatched > 0,
         "revision": int(latest.get("n") or 0) if latest else 0,
         "unreadable": bool(unreadable), "reason": str(hard_rail or ""),
         "source": "legacy_v2" if (legacy_engaged and not engaged(record)) else "plan_record",
@@ -419,13 +413,6 @@ def gate_projection(record: Mapping[str, Any], *, enforcement: str, cyber_pro: b
         status, allow = ("objections_open" if objections else "awaiting" if pending else "clear"), True
     elif unreadable:
         status, allow = "unreadable", False  # a gate that cannot read its authority is engaged, not absent
-    elif force_plan and dispatched == 0:
-        # Blocking holds while the mind never asked; an ask that positively reached nobody (a recorded
-        # attempt, or every seat refused before dispatch) is disclosed, not held — outages never hold. Advisory and the owner's hurry
-        # never hold a plan that exists; a task that wrote no plan at all is still held to write
-        # one (the Swarm admitted it on that condition).
-        tried = engaged(record) or legacy_engaged
-        status, allow = "force_plan_unmet", tried and (unroutable_asks(record) > 0 or policy != "blocking" or hurry)
     elif holding and policy == "blocking" and not hurry:
         status, allow = "held", False
     elif objections:

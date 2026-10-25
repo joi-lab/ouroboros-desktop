@@ -92,30 +92,6 @@ def build_user_content(task: Dict[str, Any]) -> Any:
         text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
                 "not spoken by the owner. The owner's words retain their own source. "
                 "[/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
-    if metadata.get("force_plan"):
-        source = str(metadata.get("force_plan_source") or "operator").strip() or "operator"
-        from ouroboros.config import get_review_enforcement
-
-        review_enforcement = get_review_enforcement()
-        plan_notice = (
-            "[SWARM_INITIATIVE]\n"
-            f"Source: {source}.\n"
-            f"Resolved review enforcement: {review_enforcement}.\n"
-            "Plan review applies to this work (BIBLE P3); whether to ask, explore or plan first is "
-            "your judgment. Under blocking, continue analysis, evidence gathering, and "
-            "non-mutating preparation while review is open, but begin implementation only after review closes "
-            "or a real task-wide rail fires. Under advisory, you may proceed by judgment with explicit "
-            "disclosure. When the work decomposes into independent parts, fan out subagents within the "
-            "configured caps and reconcile them. State the chosen execution shape explicitly in the plan's "
-            "decisions or acceptance claims — delegation required, optional, or intentionally not used — so "
-            "reviewers can judge it. Parallel children each work from your base snapshot and cannot see each "
-            "other's edits; their patches integrate independently, so two children writing the same region of "
-            "the same file conflict at integration — expected mechanics, not a failure. Give children disjoint "
-            "write regions, or explicitly plan the parent-synthesis step that resolves the expected overlap. "
-            "Planning or reviewer unavailability must not replace useful work with a terminal planning error.\n"
-            "[/SWARM_INITIATIVE]\n\n"
-        )
-        text = plan_notice + str(text or "")
     image_b64 = task.get("image_base64")
     if not image_b64 and task.get("image_source_ref"):
         # A prestart Pause has original input, but no checkpointed transcript.

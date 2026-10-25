@@ -1,7 +1,7 @@
 """The runtime section and the user content the context builder emits.
 
 Split verbatim out of ``tests/test_context.py`` by theme. This module owns the
-force-plan notice that must not rewrite the user's text, the light-mode rule and filesystem affordances the runtime section states,
+legacy metadata that must not rewrite the user's text, the light-mode rule and filesystem affordances the runtime section states,
 the workspace rules that preserve system review/commit authority, the host routing
 manifest and manual contract, the improvement backlog digest, and the runtime_env
 block.
@@ -38,52 +38,17 @@ def test_schedule_digest_distinguishes_unreadable_from_empty(tmp_path, root_only
 
 
 @pytest.mark.parametrize("enforcement", ["blocking", "advisory"])
-def test_force_plan_metadata_adds_structured_notice_without_rewriting_user_text(
-    monkeypatch, enforcement,
-):
+def test_legacy_force_plan_metadata_leaves_owner_content_unchanged(monkeypatch, enforcement):
     monkeypatch.setenv("OUROBOROS_REVIEW_ENFORCEMENT", enforcement)
-    content = build_user_content(
-        {
-            "text": "Fix the marketplace retry flow.",
-            "metadata": {"force_plan": True, "force_plan_source": "swarm"},
-        }
-    )
-
-    assert content.startswith("[SWARM_INITIATIVE]")
-    assert "Source: swarm." in content
-    assert f"Resolved review enforcement: {enforcement}." in content
-    # The obligation is constitutional (BIBLE P3) and the gate is structural
-    # (owner_hurry.force_plan_decision); the ORDER of asking, exploring and
-    # planning belongs to the mind (BIBLE P5/P13), never to a prompt choreography.
-    assert "First call plan_task" not in content
-    assert "whether to ask, explore or plan first is your judgment" in content
-    assert "Under blocking" in content
-    assert "non-mutating preparation" in content
-    assert "begin implementation only after review closes" in content
-    # Fan-out integration mechanics (owner-approved, 2026-08-05): parallel
-    # children cannot see each other's edits, so a plan gives them disjoint
-    # write regions or plans the parent synthesis for the expected overlap.
-    assert "cannot see each other's edits" in content
-    assert "disjoint write regions" in content
-    # Owner intent as prose, not schema (rc-phaseC, P5): the plan must name its
-    # execution shape so reviewers can judge a silent zero-fan-out.
-    assert "State the chosen execution shape explicitly" in content
-    assert "delegation required, optional, or intentionally not used" in content
-    assert content.rstrip().endswith("Fix the marketplace retry flow.")
+    text = "Fix the marketplace retry flow."
+    assert build_user_content({"text": text, "metadata": {"force_plan": True, "force_plan_source": "swarm"}}) == text
 
 
 @pytest.mark.parametrize("obsolete_marker", [False, True])
-def test_managed_force_plan_has_only_the_initiative_context(obsolete_marker):
+def test_managed_legacy_force_plan_leaves_exact_owner_text(obsolete_marker):
     text = "  Investigate the alternatives.\nAsk about the actual constraints.\n"
-    content = build_user_content({
-        "text": text, "id": "managed-root", "root_task_id": "managed-root",
-        "_ephemeral_turn": obsolete_marker,
-        "metadata": {"force_plan": True, "force_plan_source": "swarm"},
-    })
-    assert content.startswith("[SWARM_INITIATIVE]")
-    assert content.count("[SWARM_INITIATIVE]") == 1
-    assert "SWARM_ROUTING_INTENT" not in content
-    assert content.endswith(text)
+    assert build_user_content({"text": text, "managed_task": obsolete_marker,
+                              "metadata": {"force_plan": True, "force_plan_source": "swarm"}}) == text
 
 
 

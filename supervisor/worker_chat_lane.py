@@ -368,7 +368,7 @@ def _admit_chat_task(
         # attachment — images natively via attachment_images + non-images via the
         # read_file(root='artifact_store', path='attachments/...') manifest — exactly
         # like the CLI/API/GAIA path. The uploads are resolved from data/uploads/ in
-        # ws._chat_attachment_uploads and carried as task['metadata'] (like force_plan).
+        # ws._chat_attachment_uploads and carried as task['metadata'].
         # On a non-empty manifest we DROP the legacy inline image_base64 so the same
         # image is not double-injected; on absent/empty uploads (older clients, the
         # single-image base64 seam) the legacy inline path above stays untouched.

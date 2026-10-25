@@ -169,7 +169,7 @@ def test_post_round_finalize_control_binds_its_grace_deadline(tmp_path, monkeypa
     )
     grace_deadline = time.time() + 42.0
     monkeypatch.setattr(loop, "_resolve_delivery_control", lambda content, *_args: ("fresh", content))
-    monkeypatch.setattr(loop, "_enforce_swarm_actions", lambda *_args: False)
+    monkeypatch.setattr(loop, "_enforce_plan_gate", lambda *_args: False)
     monkeypatch.setattr(loop, "_compute_subagent_handoff", lambda *_args: None)
     monkeypatch.setattr(loop, "_maybe_enforce_child_absorption_gate", lambda *_args: None)
     monkeypatch.setattr(loop, "_maybe_inject_finalization_nudges", lambda *_args: False)
@@ -604,7 +604,7 @@ def test_provider_unavailable_keeps_current_model_candidate_byte_exact(
     answer = "Complete current model answer."
     loop._replace_delivery_candidate(registry, limit_ctx, trace, answer, control="replace")
     monkeypatch.setattr(loop, "call_llm_with_retry", lambda *_a, **_k: (None, 0.0))
-    monkeypatch.setattr(loop, "_force_plan_disclosure", lambda *_a, **_k: "\nHOST FACT")
+    monkeypatch.setattr(loop, "_plan_gate_disclosure", lambda *_a, **_k: "\nHOST FACT")
 
     text, usage, returned_trace = loop._handle_provider_unavailable(limit_ctx)
 
@@ -644,7 +644,7 @@ def test_provider_unavailable_forced_model_answer_excludes_host_suffix(
         "call_llm_with_retry",
         lambda *_a, **_k: ({"content": "Fresh forced model answer."}, 0.0),
     )
-    monkeypatch.setattr(loop, "_force_plan_disclosure", lambda *_a, **_k: "\nHOST FACT")
+    monkeypatch.setattr(loop, "_plan_gate_disclosure", lambda *_a, **_k: "\nHOST FACT")
 
     text, usage, returned_trace = loop._handle_provider_unavailable(limit_ctx)
 
