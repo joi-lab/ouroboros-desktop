@@ -28,7 +28,7 @@ NOW = dt.datetime(2027, 1, 15, 12, tzinfo=dt.timezone.utc).timestamp()
     ({"last_wake_outcome": "unknown"}, "wake_outcome_unknown"),
     ({"last_wake_outcome": "failed"}, "wake_failed"),
     ({"next_wake_at": "2027-01-15T11:59:59+00:00", "owner_turn_live": True}, "due"),
-    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "due"),
+    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "thinking"),
 ])
 def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path, facts, status):
     import server
@@ -67,7 +67,7 @@ def test_due_headline_needs_a_due_clock_and_current_work(monkeypatch, wake, owne
     facts = {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
     result = view.describe_consciousness_state(facts, True)
     due = deadline in {"2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z"}
-    if due and (wake or owner):
+    if due and owner and not wake:
         assert result["status"] == "due"
         assert result["detail"] == "Due; waiting for current work."
     else:

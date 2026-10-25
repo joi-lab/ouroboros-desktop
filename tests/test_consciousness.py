@@ -95,6 +95,25 @@ def _register(task_id, *, initiator=""):
 # --- boot -----------------------------------------------------------------------
 
 
+def test_headline_while_the_launched_own_wake_runs(clock, monkeypatch):
+    from ouroboros import consciousness_view as view
+    from supervisor import workers
+
+    due = clock.clock.next_wake_at
+    assert clock.clock.tick(now=due + 1) == "launched"
+    _register("wake0001", initiator="consciousness")
+    monkeypatch.setattr(workers, "direct_chat_turn", lambda task_id: {
+        "metadata": {"initiator": "consciousness", "wake_cause": "own_clock"},
+    } if task_id == "wake0001" else None)
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: due + 120))
+    snapshot = clock.clock.status_snapshot()
+    assert snapshot["live_wake_task_id"] == "wake0001"
+    assert snapshot["next_wake_at"] == _iso(due)
+    described = view.describe_consciousness_state(snapshot, True)
+    assert described["status"] == "thinking"
+    assert described["detail"] == "Wake-up wake0001 is running as a Main turn."
+
+
 def test_boot_floor_never_wakes_in_the_first_second(clock):
     """An overdue persisted next_wake_at is pushed past now + floor; a later one is kept."""
     assert clock.clock.next_wake_at == T0 + FLOOR

@@ -29,11 +29,10 @@ def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None)
         status, detail = "disabled", "Background consciousness is off."
     elif not snapshot:
         status, detail = "stopped", "Enabled in state, but the alarm clock was not constructed (supervisor init failed)."
-    elif (snapshot.get("live_wake_task_id") or snapshot.get("owner_turn_live")) \
-            and deadline is not None and deadline.timestamp() <= time.time():
-        status, detail = "due", "Due; waiting for current work."
     elif snapshot.get("live_wake_task_id"):
         status, detail = "thinking", f"Wake-up {snapshot['live_wake_task_id']} is running as a Main turn."
+    elif snapshot.get("owner_turn_live") and deadline is not None and deadline.timestamp() <= time.time():
+        status, detail = "due", "Due; waiting for current work."
     elif outcome == "skipped:waiting_for_first_conversation":
         status, detail = "waiting_for_first_conversation", "No owner chat is bound yet; the first conversation binds it."
     elif outcome == "skipped:allowance_exhausted":
