@@ -177,7 +177,7 @@ CHIPS = """(count) => {
     for (let i = 0; i < count; i += 1) {
         const chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = 'chat-swarm';
+        chip.className = 'chat-composer-chip';
         chip.textContent = `Contributed chip ${i + 1}`;
         slot.append(chip);
     }
@@ -185,7 +185,7 @@ CHIPS = """(count) => {
     const voice = document.querySelector('#page-chat [data-composer-voice]');
     const mic = document.createElement('button');
     mic.type = 'button';
-    mic.className = 'chat-swarm';
+    mic.className = 'voice-btn voice-mic';
     mic.textContent = 'Mic';
     voice.append(mic);
     voice.hidden = false;

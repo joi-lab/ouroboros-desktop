@@ -1,6 +1,7 @@
-// Each composer's saved room settings: Context and Effort, two inline capsules.
-// Main and Projects read their own authoritative values and save through the owner
-// endpoints. Swarm stays a per-message flag. (DESIGN: Composer owner controls.)
+// Each composer's saved room settings: Subagents, Context and Effort, three inline capsules of one
+// family. Main and Projects read their own authoritative values and save through the owner
+// endpoints (DESIGN: Composer owner controls); Subagents (composer_subagents.js) runs on this
+// file's capsule machine.
 import { fmt } from './i18n.js';
 import {
     EFFORT_OPTIONS, EFFORT_RANGE_DEFAULT, OWNER_TIERS, effortText, normalizeEffortRange, ownerLevelIndex,
@@ -8,6 +9,7 @@ import {
 import { beginMorph, stopMorph } from './capsule_morph.js';
 import { haptic } from './haptics.js';
 import { createComposerFold } from './composer_fold.js';
+import { createSubagentsControl } from './composer_subagents.js';
 
 const N = OWNER_TIERS.length - 1;
 const HANDLES = ['min', 'rec', 'max'];
@@ -126,11 +128,11 @@ function contextModeMarkup() {
  * other controls when it fits there, alone (they step aside, its own name too if need be) when
  * it does not, scrolling inside itself only when nothing else fits. The fit is measured, no
  * breakpoint (a translation or another font needs none). One capsule is open at a time: opening
- * one closes the other at once (`peer`), so the fit measures it as it stands closed.
+ * one closes the others at once (`peers`), so the fit measures them as they stand closed.
  *
  * Hover is an accelerator only (`(hover: hover) and (pointer: fine)`): a press pins the strip
- * open and unpins it; touch and keyboard use the press. Hover never opens a capsule while the
- * other one is open, since closing it would move this one under a still pointer.
+ * open and unpins it; touch and keyboard use the press. Hover never opens a capsule while
+ * another one is open, since closing it would move this one under a still pointer.
  */
 function createCapsule({
     el, row, kind, strip, segs, render, focusTarget, padMax = SEG_PAD.max,
@@ -147,7 +149,7 @@ function createCapsule({
     const hoverCapable = typeof win?.matchMedia === 'function' && win.matchMedia(HOVER_MEDIA)?.matches === true;
     const state = { open: false, pinned: false, collapsing: false, destroyed: false };
     const api = {
-        el, kind, hoverCapable, peer: null, isOpen: () => state.open, isPinned: () => state.pinned,
+        el, kind, hoverCapable, peers: [], isOpen: () => state.open, isPinned: () => state.pinned,
         isSettled: () => !state.open && !state.collapsing,
     };
     el.dataset.open = 'false';
@@ -205,22 +207,21 @@ function createCapsule({
     // Right to left (the rendered direction) the strip starts at its right end: its levels run
     // leftwards to negative offsets and its scrollLeft runs from 0 down.
     const isRtl = () => styleOf(strip)?.direction === 'rtl';
-    // What stays on the line beside the open strip: the pills' own children (their wrapper
-    // stretches on a phone) and the other capsule, closed, each with its row gap. Alone, they
-    // are hidden and measure 0: the width seen before they stepped aside stays.
-    let peers = { width: 0, count: 0 };
+    // What stays on the line beside the open strip: the other capsules, closed, and the row's
+    // other controls, each with its row gap; a capsule's note is the line under it, never beside it.
+    // Alone, they are hidden and measure 0: the width seen before they stepped aside stays.
+    let beside = { width: 0, count: 0 };
     function measurePeers(gap) {
-        if (row.dataset?.ownerSolo) return peers;
+        if (row.dataset?.ownerSolo) return beside;
         let width = 0;
         let count = 0;
         for (const node of Array.from(row.children || [])) {
-            if (node === el || node.hidden) continue;
-            const kids = node.classList?.contains('chat-composer-pills') ? Array.from(node.children || []).filter((kid) => !kid.hidden) : [node];
-            const own = kids.reduce((sum, kid) => sum + widthOf(kid), 0) + px(styleOf(node)?.columnGap) * Math.max(0, kids.length - 1);
+            if (node === el || node.hidden || node.hasAttribute?.('data-capsule-note')) continue;
+            const own = widthOf(node);
             if (own > 0) { width += own + gap; count += 1; }
         }
-        peers = { width, count };
-        return peers;
+        beside = { width, count };
+        return beside;
     }
     // The head as it stands open: the ring, then the name and the divider before the levels
     // unless the strip needs their room (the name is cached: a name that gave way measures 0).
@@ -367,7 +368,7 @@ function createCapsule({
     };
     function setOpen(open, { focus = false } = {}) {
         if (state.open === open && !focus) return;
-        if (open && !state.open) api.peer?.snapClosed();
+        if (open && !state.open) api.peers.forEach((peer) => peer.snapClosed());
         const flips = state.open !== open;
         const morph = flips && el.dataset.snap !== 'true' ? beginMorph({ el, row, win }) : null;  // alone, it grows in place
         const collapses = !open && state.open && el.dataset.fit === 'inline' && el.dataset.snap !== 'true';
@@ -419,11 +420,14 @@ function createCapsule({
             setOpen(!state.open, { focus: viaKeyboard && !state.open });
         }
     };
-    // A press on the other capsule is its own to answer: opening it closes this one at once,
+    // A press on another capsule is its own to answer: opening it closes this one at once,
     // before anything moves under the pointer.
     const onDocPointerDown = (event) => {
         keyboardFocus = false;
-        if (state.open && !el.contains(event.target) && !api.peer?.el.contains(event.target)) { state.pinned = false; setOpen(false); }
+        if (state.open && !el.contains(event.target) && !api.peers.some((peer) => peer.el.contains(event.target))) {
+            state.pinned = false;
+            setOpen(false);
+        }
     };
     const onDocKeyDown = (event) => {
         keyboardFocus = true;
@@ -441,7 +445,7 @@ function createCapsule({
         if (!state.open) {
             clearTimeout(hoverTimer);
             hoverTimer = setTimeout(() => {
-                if (state.destroyed || api.peer?.isOpen()) return;
+                if (state.destroyed || api.peers.some((peer) => peer.isOpen())) return;
                 // Hover opens only where the head stays under the mouse. Alone or scrolling, the
                 // other controls step aside and the strip moves under a still pointer, so a click
                 // meant to pin would land on a level: there the press opens it, as on touch.
@@ -528,8 +532,8 @@ export function createEffortRangeControl({
     const ring = { band: q('[data-ring-band]'), rec: q('[data-ring-rec]') };
     const segs = Array.from(el.querySelectorAll('.chat-effort-seg'));
     const handles = { min: q('.chat-effort-min'), rec: q('.chat-effort-rec'), max: q('.chat-effort-max') };
-    // After the pills and the context capsule.
-    const before = row.querySelector('.chat-context-mode') || row.querySelector('.chat-composer-pills');
+    // After the context capsule.
+    const before = row.querySelector('.chat-context-mode');
     if (before && typeof before.insertAdjacentElement === 'function') before.insertAdjacentElement('afterend', el);
     else row.appendChild(el);
 
@@ -908,13 +912,15 @@ function createContextModeControl({ el, row, saveContextMode, showToast, refresh
  * @param {(suffix: string) => Element|null} deps.byId  the instance-namespaced lookup
  * @param {typeof fetch} deps.apiFetch
  * @param {(body: object) => Promise<object>} deps.saveEffortRange  `apiClient.ownerEffortRange`
+ * @param {(body: object) => Promise<object>} [deps.saveSubagentsMode]  the room's subagents mode writer
+ * @param {() => void} [deps.openSettings]  Settings › Agents, where subagents are turned on
  * @param {(message: string, tone?: string) => void} deps.showToast
  * @param {(force?: boolean) => Promise<void>|void} deps.refreshState  a forced `/api/state` re-read
  * @param {() => void} [deps.onLayout]  a strip opened or closed on its own line
  * @param {HTMLElement} [deps.box]  independently sized page the composer docks inside
  * @param {() => boolean} [deps.readingBack]  the owner's own gesture took the room off its newest row (composer_fold.js)
  */
-export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRange, showToast, refreshState, onLayout, projectId = '', box = null, win = globalThis.window, doc = globalThis.document, readingBack }) {
+export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRange, saveSubagentsMode, openSettings = () => {}, showToast, refreshState, onLayout, projectId = '', box = null, win = globalThis.window, doc = globalThis.document, readingBack }) {
     let destroyed = false;
     const scoped = body => projectId ? { ...body, project_id: projectId } : body;
     const readback = reply => {
@@ -971,9 +977,17 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
     const contextEl = byId('context-mode');
     const context = contextEl ? createContextModeControl({ el: contextEl, row: row || contextEl.parentElement, saveContextMode, ...shared }) : null;
     const effort = row ? createEffortRangeControl({ row, saveEffortRange: saveRoomEffort, ...shared }) : null;
-    for (const control of [context, effort]) if (control) capsules.push(control.capsule);
+    const subagentsEl = row && saveSubagentsMode ? byId('subagents-mode') : null;
+    const saveRoomSubagents = async ({ mode }) => {
+        const reply = await saveSubagentsMode(scoped({ mode }));
+        return { subagents_mode: readback(reply)?.subagents_mode ?? reply?.subagents_mode };
+    };
+    const subagents = subagentsEl ? createSubagentsControl({ el: subagentsEl, row, capsule: createCapsule,
+        save: saveRoomSubagents, openSettings, ...shared }) : null;
+    const controls = [subagents, context, effort].filter(Boolean);
+    for (const control of controls) capsules.push(control.capsule);
     // One capsule is open at a time.
-    if (context && effort) { context.capsule.peer = effort.capsule; effort.capsule.peer = context.capsule; }
+    for (const capsule of capsules) capsule.peers = capsules.filter((other) => other !== capsule);
     win?.addEventListener?.('resize', fitNames);
     const stopObserving = observeLayout(win, [row], fitNames);
     const relayout = () => { if (!destroyed) { fitNames(); capsules.forEach((capsule) => capsule.relayout()); } };
@@ -996,22 +1010,26 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
     return {
         context,
         effort,
+        subagents,
+        // A room's values (Main's state, or the named Project's cognition) and, for every room, whether the catalog
+        // offers subagents at all (`subagents_availability`).
         syncState(data) {
+            if (destroyed) return;
             const values = projectId ? data?.projects?.find(project => project.id === projectId)?.cognition : data;
-            if (destroyed || !values) return;
+            subagents?.syncState(values, data?.subagents_availability);
+            if (!values) return;
             context?.syncState(values); effort?.syncState(values); fitNames();
         },
-        hasPendingSave: () => Boolean(context?.hasPendingSave() || effort?.hasPendingSave()),
-        pendingSave: async () => (await Promise.all([context, effort]
-            .filter(control => control?.hasPendingSave()).map(control => control.pendingSave()))).every(ok => ok !== false),
+        hasPendingSave: () => controls.some((control) => control.hasPendingSave()),
+        pendingSave: async () => (await Promise.all(controls
+            .filter(control => control.hasPendingSave()).map(control => control.pendingSave()))).every(ok => ok !== false),
         destroy() {
             destroyed = true;
             stopObserving();
             win?.removeEventListener?.('resize', fitNames);
             boxObserver?.disconnect();
             textObserver?.disconnect();
-            context?.destroy();
-            effort?.destroy();
+            for (const control of controls) control.destroy();
             fold?.destroy();
             if (row?.dataset) delete row.dataset.ownerCompact;
             row?.style?.setProperty?.('--capsule-value-cap', '');
