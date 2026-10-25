@@ -266,13 +266,14 @@ def test_configured_child_bootstrap_keeps_the_refusal_facts(tmp_path, monkeypatc
     the availability row and the acceptance evidence carry the detail."""
     from ouroboros import subagent_bootstrap, subagent_runtime
     from ouroboros.agent_dispatch import executor_blocked_outcome
-    from ouroboros.delegate_shared import _fail, lock_busy_facts
+    from ouroboros.delegate_shared import _fail
     from ouroboros.subagents import SubagentExecutorResolution
 
     busy = wt.WorktreeOpsLockBusy(tmp_path / "lock", 120.0, {"pid": "4242", "task": "t-other", "op": "provision"})
     refusal = _fail("delegate_start", "execution_snapshot_failed",
-                    f"A private execution snapshot could not be provisioned ({busy}).",
-                    definitely_unrun=True, **lock_busy_facts(busy))
+                    f"A private execution snapshot could not be provisioned ({busy}).", definitely_unrun=True,
+                    cause="lock_busy", holder=dict(busy.holder), retryable=True, waited_sec=120.0,
+                    retry_hint="wait for the holder and retry delegate_start")
     monkeypatch.setattr(subagent_runtime, "exact_start", lambda *_a, **_kw: refusal)
     monkeypatch.setattr(subagent_runtime, "current_subagent_alternatives", lambda selected: [])
 

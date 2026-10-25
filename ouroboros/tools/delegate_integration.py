@@ -24,7 +24,7 @@ from ouroboros.delegate_custody import RunCustody as _RunCustody
 from ouroboros.delegate_registration_policy import (
     INVESTIGATION_AUTHORITY, INVESTIGATION_NOTE, evidence_only, no_write_authority,
     record_persistent as _record_persistent)
-from ouroboros.delegate_shared import _fail, lock_busy_facts
+from ouroboros.delegate_shared import _fail
 from ouroboros.configured_subagents import SESSION_ACCESS_PROFILES
 from ouroboros.tools.tool_result import ToolResult
 from ouroboros.tools.registry import ToolContext, active_repo_dir_for
@@ -420,7 +420,7 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
             "A private execution snapshot of the write root could not be provisioned "
             f"({type(exc).__name__}: {exc}). The run was NOT started: a mutating "
             "delegated run executes only in its own snapshot, never in the shared tree.",
-            target_root=target_root, definitely_unrun=True, **lock_busy_facts(exc))
+            target_root=target_root, definitely_unrun=True)
     if folder.parts and not (pathlib.Path(handle.path) / folder).is_dir():
         # Unclaimed; custody GC retries a failed release once the owning task is proven over.
         try:
@@ -1016,7 +1016,7 @@ def _provision_payload_snapshot(
             f"provisioned ({type(exc).__name__}: {exc}). The run was NOT started: "
             "a mutating delegated run executes only in its own snapshot, never "
             "in the live payload.",
-            target_root=record["target_root"], definitely_unrun=True, **lock_busy_facts(exc))
+            target_root=record["target_root"], definitely_unrun=True)
     record["resource_ref"]["payload_hash"] = handle.payload_hash
     _record_baseline_manifest(drive, task_id, invocation_id, handle,
                               payload_hash=handle.payload_hash,
