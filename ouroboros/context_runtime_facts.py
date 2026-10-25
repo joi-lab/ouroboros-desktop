@@ -117,6 +117,8 @@ def round_clock_fact(ctx: Any, now: Optional[float] = None) -> str:
     missing start is unknown, never zero; every value is as of the one sample
     instant, with the live wait owner's clock when it owns this task and otherwise
     the same carriers ``model_wait.execution_window_remaining_for_context`` reads.
+    An owner turn in this process ends the segment with its own wait so far
+    (``_owner_wait_fact``); a wake, a pooled task or a resume has none.
     """
     import datetime
     import time
@@ -165,7 +167,31 @@ def round_clock_fact(ctx: Any, now: Optional[float] = None) -> str:
         grace = effective_finalization_reserve_sec(ctx)
         parts.append(f"host requests one tool-less final answer at ~{stamp(now + max(0.0, min(bounds) - grace))} "
                      f"({grace / 60:.1f} min before the nearer explicit bound)")
+    parts.extend(filter(None, [_owner_wait_fact(ctx)]))
     return "; ".join(parts)
+
+
+def _owner_wait_fact(ctx: Any) -> str:
+    """This turn's own wait, from the process-local registry (``TurnExecution.receipt``): when my human's
+    message was accepted and how much later this request comes, so far, with the slowest phase; once
+    the first dispatch was observed, when it went out and on which basis. Elapsed only, never a
+    dispatch that has not happened; "" for a turn nobody awaits or a process that serves none."""
+    from supervisor.active_activity import get_direct_activity_registry
+
+    entry = get_direct_activity_registry().get(str(getattr(ctx, "task_id", "") or ""))
+    execution = getattr(entry, "execution", None)
+    if execution is None or not execution.owner_turn:
+        return ""
+    receipt = execution.receipt()
+    slowest = (f"; slowest phase so far {receipt['slowest_phase']} {receipt['slowest_phase_sec']:.1f} s"
+               if receipt.get("slowest_phase") else "")
+    if receipt.get("accepted_at"):
+        origin, wait = f"my human's message accepted at {receipt['accepted_at']}", receipt["owner_wait_sec"]
+    else:
+        origin, wait = f"my turn began at {receipt['entered_at']} (acceptance stamp unknown)", receipt["handler_wait_sec"]
+    if receipt["dispatch"] == "not_observed":
+        return f"{origin}; this request {wait:.1f} s later{slowest}"
+    return f"{origin}; my first request went out {wait:.1f} s later ({receipt['dispatch']}){slowest}"
 
 
 def _context_clock_note(task: Dict[str, Any]) -> str:
