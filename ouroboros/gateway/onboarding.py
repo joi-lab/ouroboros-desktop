@@ -580,10 +580,9 @@ def _write_precondition(expect_preset: bool, expect_safety_light: bool, read_fin
     """Re-prove eligibility INSIDE the settings lock, against the state this
     write is about to overwrite.
 
-    The re-read is ``load_settings_lock_held``: the settings lock is not
-    re-entrant, so the ordinary ``load_settings()`` would wait out its full 2s
-    timeout and then read anyway — two seconds added to every onboarding save
-    for a lock it already holds."""
+    The re-read is ``load_settings_lock_held``, the read for a holder of the
+    settings lock, which is not re-entrant: the lock-free ``load_settings()``
+    re-reads an undecodable document behind that lock, which this caller holds."""
     def _check() -> str:
         from ouroboros.config import SETTINGS_PATH, load_settings_lock_held
 
