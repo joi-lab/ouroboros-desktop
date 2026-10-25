@@ -857,7 +857,10 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # (the retired automatic reflection's routed store); its row stays, exempted below with its reason.
 # 420 -> 419: ``memory/knowledge/patterns.md`` lost its fixed-path readers (the resident context section,
 # the deep-review whitelist and the project-fork seed): it is an ordinary note read through knowledge tools.
-EXPECTED_SCAN_PATHS = 419
+# 419 -> 424: one record file per private copy ``state/private_copies/*.json`` with its legacy-import
+# receipt and lock (the records row), and the seat homes the owner's Storage -> Free lists
+# (``review_checking_prune.finished_seat_homes``, the seats row).
+EXPECTED_SCAN_PATHS = 424
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

@@ -684,8 +684,8 @@ def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = 
         dropped: List[str] = []
         prefix = held_out.strip("/") + "/" if held_out.strip("/") else ""
 
-        def held(rel: str) -> bool:
-            return bool(prefix) and rel.startswith(prefix) and rel not in held_keep
+        def held(rel: str) -> bool:  # the folder's files, or an entry standing where the folder belongs
+            return bool(prefix) and (rel == prefix.rstrip("/") or rel.startswith(prefix)) and rel not in held_keep
 
         for rel in _nul_paths(_git_env(source, "ls-files", "-z", env=env).stdout):
             if rel in absent:
