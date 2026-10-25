@@ -37,15 +37,16 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
     snapshot = {"enabled": True, "next_wake_at": "2027-01-15T12:30:00+00:00",
                 "allowance_resets_at": "2027-01-15T18:00:00+00:00", "spent_24h_usd": 21.5,
-                "daily_usd": 20, "unknown_unmetered": 2, "integrity_degraded": True, **facts}
+                "daily_usd": 20, "unknown_unmetered": 2, "integrity_degraded": True,
+                "places_brief": [{"place_id": "mail", "label": "Inbox"}], **facts}
     clock = object.__new__(BackgroundConsciousness)
     clock._drive_root = tmp_path
     monkeypatch.setattr(clock, "status_snapshot", lambda: dict(snapshot))
     monkeypatch.setattr(server, "_consciousness", clock)
     monkeypatch.setattr(state, "load_state", lambda: {"bg_consciousness_enabled": True})
-    monkeypatch.setattr(view, "place_views", lambda root: [{"place_id": "mail"}])
     def wakes(root, places, *, live_wake_task_id):
         assert live_wake_task_id == snapshot.get("live_wake_task_id", "")
+        assert places == snapshot["places_brief"]
         return [{"task_id": "wake"}]
     monkeypatch.setattr(view, "recent_wakes", wakes)
     response = asyncio.run(api_consciousness(Request({"type": "http", "app": server.app.app})))
@@ -54,7 +55,7 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert panel["status"] == status and panel["detail"]
     assert {key: panel[key] for key in fallback} == fallback
     assert clock.details_snapshot(True) == panel
-    assert panel["places"] == [{"place_id": "mail"}] and panel["recent_wakes"] == [{"task_id": "wake"}]
+    assert "places" not in panel and panel["recent_wakes"] == [{"task_id": "wake"}]
     assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 

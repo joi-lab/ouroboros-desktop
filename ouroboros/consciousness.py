@@ -457,18 +457,17 @@ class BackgroundConsciousness:
 
     def details_snapshot(self, requested_enabled: bool | None) -> Dict[str, Any]:
         """The full read-only panel; the state endpoint keeps its small snapshot."""
-        from ouroboros.consciousness_view import describe_consciousness_state, place_views, recent_wakes
+        from ouroboros.consciousness_view import describe_consciousness_state, recent_wakes
         snapshot = describe_consciousness_state(self.status_snapshot(), requested_enabled)
-        places = place_views(self._drive_root)
-        return {**snapshot, "places": places, "recent_wakes": recent_wakes(
-                    self._drive_root, places, live_wake_task_id=snapshot.get("live_wake_task_id", "")),
+        return {**snapshot, "recent_wakes": recent_wakes(
+                    self._drive_root, snapshot.get("places_brief"), live_wake_task_id=snapshot.get("live_wake_task_id", "")),
                 "recent_wakes_coverage": "wakes that reached a model call in the last 48 h"}
 
     def _context_facts(self, window) -> dict:
         from ouroboros.consciousness_view import cause_views, place_views, root_views
         from supervisor.queue import live_consciousness_roots
         try:
-            places = place_views(self._drive_root)
+            places = place_views(self._drive_root, window)
         except Exception:
             places = None
         return {"spend_by_cause": cause_views(window.get("spend_by_cause"), places),

@@ -56,15 +56,14 @@ def connect_declared_place(root, connector: str, *, account_id: str = "", conver
                          contribution_id=row["id"], wakes=row.get("wakes", []))
 
 
-def place_view(root, place, *, declarations: list[dict] | None = None, allowance: dict | None = None) -> dict[str, Any]:
+def place_view(root, place, *, declarations: list[dict] | None = None, allowance: dict | None = None,
+               brief: bool = False) -> dict[str, Any]:
+    """Stored facts for status/launch; the owner surface also resolves connector capabilities."""
     from ouroboros.consciousness_allowance import allowance_window
     from ouroboros.place_arrivals import account_candidates
     from ouroboros.places import place_room_index
-    if allowance is None:
+    if allowance is None and not brief:
         allowance = allowance_window(root, allow_stale=True)
-    rows = place_declarations(root) if declarations is None else declarations
-    row = next((r for r in rows if r["skill"] == place.connector and (
-        not place.contribution_id or r["id"] == place.contribution_id)), {})
     result = dict(place_summary(place))
     # Legacy notes predate ids; use stable content+ordinal ids without rewriting history.
     result["notes"] = [{**n, "note_id": note_identity(place.place_id, i, place.notes[i])}
@@ -78,14 +77,20 @@ def place_view(root, place, *, declarations: list[dict] | None = None, allowance
     except Exception:
         log.warning("Place room index unavailable for %s", place.place_id, exc_info=True)
         rooms = None
+    result.update(label=place.label or place.provider,
+                  rooms=rooms, unanswered=activity["unanswered"] if rooms is not None else None,
+                  last_activity_at=activity["last_activity_at"],
+                  activity_coverage="captured_place_events", spent_24h_usd=spend)
+    if brief:
+        return result
+    rows = place_declarations(root) if declarations is None else declarations
+    row = next((r for r in rows if r["skill"] == place.connector and (
+        not place.contribution_id or r["id"] == place.contribution_id)), {})
     result.update(label=place.label or row.get("label") or place.provider,
                   reply_destination=place.destination,
                   destination=row.get("destination") or "vendor:" + place.provider,
                   icon=row.get("icon_spec") or {}, wake_suggestions=list(row.get("wakes") or []),
-                  readiness=row.get("readiness") or {"text": "Connector unavailable", "tone": "warn"},
-                  rooms=rooms, unanswered=activity["unanswered"] if rooms is not None else None,
-                  last_activity_at=activity["last_activity_at"],
-                  activity_coverage="captured_place_events", spent_24h_usd=spend)
+                  readiness=row.get("readiness") or {"text": "Connector unavailable", "tone": "warn"})
     result.update({key: row[key] for key in ("facts", "source", "settings") if key in row})
     result["account_candidates"] = account_candidates(root, place.place_id)
     return result

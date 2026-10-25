@@ -346,6 +346,7 @@ def test_recent_wake_rows_match_the_typed_contract(client, monkeypatch, with_sum
     assert assert_bound("GET /api/consciousness", response) == "application/json"
     panel = response.json()
     row, = panel["recent_wakes"]
+    assert "places" not in panel
     shape = contract_typed_dict("RecentWake")
     assert not validate_ingress(row, shape)
     assert set(row) <= _declared("RecentWake")

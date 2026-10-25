@@ -114,6 +114,50 @@ def test_headline_while_the_launched_own_wake_runs(clock, monkeypatch):
     assert described["detail"] == "Wake-up wake0001 is running as a Main turn."
 
 
+def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
+    from ouroboros import consciousness_view as view, places, place_projection
+
+    place = places.connect_place(clock.root, connector="bridge", provider="chat", label="Research room")
+    places.edit_place(clock.root, place.place_id, "add_note", author="owner", text="Watch releases.")
+    reads = []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("status and launch must not discover connectors or reread the allowance")
+
+    for target in ("ouroboros.skill_loader.discover_skills", "ouroboros.place_projection.place_declarations",
+                   "ouroboros.place_arrivals.account_candidates", "ouroboros.place_projection.migration_problems",
+                   "ouroboros.consciousness_allowance.allowance_window"):
+        monkeypatch.setattr(target, forbidden)
+    monkeypatch.setattr(place_projection, "place_activity", lambda root, place: {
+        "unanswered": 3, "last_activity_at": "2027-01-15T12:00:00Z"})
+    monkeypatch.setattr(places, "place_room_index", lambda root, place_id: [{"room_chat_id": 123}])
+    original = view.place_views
+
+    def project(*args, **kwargs):
+        result = original(*args, **kwargs)
+        reads.append(result)
+        return result
+
+    monkeypatch.setattr(view, "place_views", project)
+    window = {**AVAILABLE, "spend_by_cause": [{"cause": "place:" + place.place_id, "usd": 1.25, "unmetered_calls": 0}]}
+    monkeypatch.setattr(clock_module, "allowance_window", lambda *a, **kw: window)
+    snapshot = clock.clock.status_snapshot()
+    assert snapshot["places_brief"] == [{"place_id": place.place_id, "label": "Research room", "state": "active", "unanswered": 3}]
+    assert len(reads) == 1 and reads[0][0]["spent_24h_usd"] == 1.25
+    assert reads[0][0]["notes"][0]["note_id"]
+    assert reads[0][0]["last_activity_at"] == "2027-01-15T12:00:00Z"
+    assert not {"icon", "readiness", "account_candidates"} & reads[0][0].keys()
+    reads.clear()
+    panel = clock.clock.details_snapshot(True)
+    assert len(reads) == 1 and "places" not in panel
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(
+        "Places: {places}", encoding="utf-8")
+    assert clock.clock.tick(clock.clock.next_wake_at) == "launched"
+    text = clock.launches[-1]["text"]
+    assert f"Research room [{place.place_id}]: active; open turns: 3; chat_history(chat_id=123)" in text
+    assert "note (owner): Watch releases." in text
+
+
 def test_boot_floor_never_wakes_in_the_first_second(clock):
     """An overdue persisted next_wake_at is pushed past now + floor; a later one is kept."""
     assert clock.clock.next_wake_at == T0 + FLOOR

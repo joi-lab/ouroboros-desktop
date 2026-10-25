@@ -68,14 +68,15 @@ def describe_consciousness(clock) -> dict:
     requested = bool(enabled) if known else None
     if clock is not None:
         return clock.details_snapshot(requested)
-    return {**describe_consciousness_state({}, requested), "places": [], "recent_wakes": []}
+    return {**describe_consciousness_state({}, requested), "recent_wakes": []}
 
 
-def place_views(drive_root) -> list[dict]:
-    """The same PlaceSummary used by the owner's Places surface (D15 → D20 is lazy)."""
-    from ouroboros.place_projection import places_view
+def place_views(drive_root, allowance=None) -> list[dict]:
+    """Stored PlaceSummary facts, using the caller's allowance without connector discovery."""
+    from ouroboros.place_projection import place_view
+    from ouroboros.places import load_places
 
-    return places_view(drive_root)["places"]
+    return [place_view(drive_root, place, allowance=allowance, brief=True) for place in load_places(drive_root)]
 
 
 def places_text(views) -> str:
