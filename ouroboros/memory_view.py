@@ -268,7 +268,7 @@ def view_spec_for_task(task: Mapping[str, Any], drive_root: Any, *, ctx: Any = N
 class MemoryViewSnapshot:
     """Everything a render needs, read once per request; ``snapshot_json`` is its canonical form."""
     spec: ViewSpec
-    store_status: Dict[str, Any]  # {"state": "active" | an import kind, "reason"?}
+    store_status: Dict[str, Any]  # {"state": "active" | an import kind, "reason"?, "tail_facts": "filling"?}
     frontier: Dict[str, Any]  # {"status", "pos"} of the legacy frontier
     story: Tuple[Dict[str, Any], ...] = ()  # legacy records, pages, parts and selected accounts; told_by keeps source addresses, in story order
     room: Optional[Dict[str, Any]] = None  # the current room's facts and texts
@@ -816,7 +816,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status=status, frontier={}, room=bare, owner_words=owner_words)
     try:
         store = ChronicleStore(root)
-        with capture(root):  # one state of the chronicle for every reader of this view (activation may publish: before)
+        with capture(root) as derived:  # one state of the chronicle for every reader (activation may publish: before)
             frontier = legacy_frontier(store)
             story, story_status, refusals = _capture_story(store, root, label) if spec.story else ([], {}, [])
             room, live, marks = _capture_live(store, root, spec, label, story)
@@ -839,6 +839,8 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status={"state": "journal_unreadable",
                                                            "reason": f"{type(exc).__name__}: {exc}"},
                                   frontier={}, room=bare, owner_words=owner_words)
+    if (tail := (derived or {}).get("tail")) is not None and not tail.complete:
+        status = {**status, "tail_facts": "filling"}  # its open rows were read live: the stored tail is not complete
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
                               story=tuple(story), room=room, live_rooms=tuple(live), marks=tuple(marks),

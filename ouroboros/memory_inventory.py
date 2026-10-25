@@ -37,8 +37,9 @@ them a second time:
 Rows are addressed in ``state/dialog.sqlite`` by the legacy frontier's durable
 stream position. A room query selects only that room's indexed candidates and
 then applies current membership, so a later binding still moves earlier rows.
-Whole-mind inventory explicitly requests every room. No reader walks JSONL or
-rebuilds a process-local copy of the chat chain.
+Whole-mind inventory reads the facts of every row after the frontier stored
+beside the chronicle (``_tail``) plus the rows appended since; membership and
+seals are applied at read. No reader walks JSONL or keeps a process-local copy.
 
 Nothing here publishes a record or calls a model.
 """
@@ -48,7 +49,7 @@ import hashlib
 import json
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
@@ -166,9 +167,153 @@ def rooms_of_row(meta: Mapping[str, Any], facts: MembershipFacts) -> FrozenSet[s
 
 # --- the open-row projection --------------------------------------------------------------------
 
+class Tail(NamedTuple):
+    """Every chat row after the legacy frontier, ``(pos, address, row_meta, terminal_status)`` in append order;
+    ``complete`` is False while the stored facts are not complete for this dialogue store (rows read live)."""
+    rows: List[Tuple[int, Dict[str, Any], Dict[str, Any], Optional[str]]]
+    complete: bool
+
+
+def terminal_status(row: Mapping[str, Any]) -> Optional[str]:
+    """A task's typed terminal row (a host summary or its final report): its status, ``""`` unrecorded; else None."""
+    host = row.get("type") in ("task_summary", "project_completion_summary")
+    final = row.get("direction") == "out" and not row.get("is_progress") and (
+        row.get("terminal_origin") or row.get("task_terminal_status") or row.get("task_phase") == "finalizing")
+    return str(row.get("status") or row.get("task_terminal_status") or "") if host or final else None
+
+
+def _tail_source(root: Any, frontier: Mapping[str, Any]) -> Dict[str, Any]:
+    """What the stored tail projects: the dialogue store (its file identity) after the legacy frontier."""
+    from ouroboros import dialogue_store as ds
+    from ouroboros.store import file_identity
+
+    return {"store": list(file_identity(ds.path(root)) or ()), "frontier": int(frontier["pos"])}
+
+
+def _projected(entries: Iterable[Any]) -> List[List[Any]]:
+    """Rows read now (``chat_chain.iter_stream``), stored form: ``[pos, seq, row_sha256, legacy, meta, terminal]``."""
+    return [[pos, entry.seq, chat_chain.source_row_id(entry.row), None if legacy is None else list(legacy),
+             row_meta(entry.row), terminal_status(entry.row)] for entry, legacy, pos in entries]
+
+
+def _entry(fact: List[Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any], Optional[str]]:
+    """``(pos, address, meta, terminal)`` of a stored or just projected row: the address its live read gives."""
+    pos, seq, sha, legacy, meta, terminal = fact
+    meta = dict(meta)
+    if "source_keys" in meta:  # stored as JSON lists; ``row_meta`` gives tuples
+        meta["source_keys"] = tuple(tuple(key) for key in meta["source_keys"])
+    return pos, chat_chain.address_at(meta, seq, legacy, sha=sha), meta, terminal
+
+
+def _anchored(root: Any, state: Mapping[str, Any]) -> bool:
+    """Whether the stored prefix's last row is still the dialogue store's row at its coordinate."""
+    from ouroboros import dialogue_store as ds
+
+    anchor = state.get("anchor")
+    row = ds.row_at(root, "chat", anchor[0]) if anchor else None
+    return anchor is None or (row is not None and chat_chain.source_row_id(row.row) == anchor[1])
+
+
+def _tail(root: Any, frontier: Mapping[str, Any]) -> Tail:
+    """Every chat row after the frontier, read once per capture: the facts stored beside the chronicle
+    (``ChronicleStore.tail_facts``), then the rows appended since, read live from the stored prefix's last
+    row, which must still answer (its anchor), projected, and stored by this reader. Until a complete prefix
+    stands for this dialogue store and frontier (an update, a rebuilt index, a replaced store) the rows are
+    read live, today's cost, and the maintenance job fills it (``fill_tail``)."""
+    return capture_memo(root, "tail", lambda: _read_tail(root, frontier))
+
+
+def _read_tail(root: Any, frontier: Mapping[str, Any], *, terminal_only: bool = False) -> Tail:
+    """``_tail``'s read; ``terminal_only`` keeps the rows with a terminal status (the stored ones read alone)."""
+    from ouroboros import dialogue_store as ds
+
+    store, source = ChronicleStore(root), _tail_source(root, frontier)
+    end = ds.stream_end(root, "chat")
+    held = store.tail_facts(source, terminal_only=terminal_only)
+    if held is not None:
+        state, stored = held
+        anchor = state.get("anchor")
+        live = list(chat_chain.iter_stream(root, lower=anchor[0] if anchor else state["upper"], upper=end))
+        first = live[0][0] if live else None
+        if anchor is None or (first is not None and [first.seq, chat_chain.source_row_id(first.row)] == anchor):
+            gap = _projected(live[1:] if anchor else live)
+            if state.get("complete") and end > state["upper"]:  # one zero-wait attempt; a busy lock leaves it
+                store.extend_tail(state, gap, {**state, "upper": end, "anchor": gap[-1][1:3] if gap else anchor})
+            return Tail([_entry(fact) for fact in stored + gap if not terminal_only or fact[5] is not None],
+                        bool(state.get("complete")))
+    lower = chat_chain.position_boundary(root, source["frontier"])
+    return Tail([_entry(fact) for fact in _projected(chat_chain.iter_stream(root, lower=lower, upper=end))
+                 if not terminal_only or fact[5] is not None], False)
+
+
+_FILL_ROWS = 2_000  # rows per index transaction: bounds one publication-lock hold, so publishers interleave
+
+
+def tail_owed(root: Any) -> bool:
+    """Whether the stored tail facts wait for the fill: the chronicle is active and no complete prefix stands
+    for this dialogue store and frontier (none, unfinished, another source, or an anchor that no longer answers)."""
+    store = ChronicleStore(root)
+    frontier = _active_frontier(store)
+    if frontier is None:
+        return False
+    state = store.tail_state()
+    return not (isinstance(state, dict) and state.get("complete")
+                and state.get("source") == _tail_source(root, frontier) and _anchored(root, state))
+
+
+def fill_tail(root: Any, should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """The maintenance job ``memory_tail``: store the facts of every chat row after the legacy frontier,
+    ``_FILL_ROWS`` an index transaction, resuming an unfinished prefix of this source; a turn never pays it."""
+    from ouroboros import dialogue_store as ds
+    from ouroboros.store import StoreMigrating
+
+    store = ChronicleStore(root)
+    frontier = _active_frontier(store)
+    if frontier is None:
+        return {"state": "done", "items": 0}
+    try:
+        source, end, state = _tail_source(root, frontier), ds.stream_end(root, "chat"), store.tail_state()
+        resume = isinstance(state, dict) and state.get("source") == source and _anchored(root, state)
+        if resume and state.get("complete"):
+            return {"state": "done", "items": 0}
+        anchor = state.get("anchor") if resume else None
+        start = ((anchor[0] if anchor else state["upper"]) if resume
+                 else chat_chain.position_boundary(root, source["frontier"]))
+        skip = start if anchor else None  # the stored prefix's last row, read again, stored once
+        expected, replace, chunk, items = state, not resume, [], 0
+        for read in chat_chain.iter_stream(root, lower=start, upper=end):
+            if read[0].seq == skip:
+                continue
+            chunk.append(read)
+            if len(chunk) == _FILL_ROWS:
+                rows = _projected(chunk)
+                anchor, new = rows[-1][1:3], {"source": source, "upper": chunk[-1][0].end, "complete": False}
+                if not store.extend_tail(expected, rows, {**new, "anchor": anchor}, replace=replace, wait_sec=10):
+                    return {"state": "pending", "items": items}
+                expected, replace, chunk, items = {**new, "anchor": anchor}, False, [], items + len(rows)
+                if should_stop():
+                    return {"state": "pending", "items": items}
+        rows = _projected(chunk)
+        done = {"source": source, "upper": end, "anchor": rows[-1][1:3] if rows else anchor, "complete": True}
+        if not store.extend_tail(expected, rows, done, replace=replace, wait_sec=10):
+            return {"state": "pending", "items": items}
+        return {"state": "done", "items": items + len(rows)}
+    except StoreMigrating:  # positions settle with the archive import: the job before this one
+        return {"state": "pending", "items": 0}
+
+
 def _projection_rows(root: Any, frontier: Mapping[str, Any]) -> List[Entry]:
-    lower = chat_chain.position_boundary(root, int(frontier["pos"]))
-    return [(address, row_meta(row), pos) for address, row, pos in chat_chain.iter_rows(root, lower=lower)]
+    return [(address, meta, pos) for pos, address, meta, _terminal in _tail(root, frontier).rows]
+
+
+def terminal_rows(root: Any) -> List[Tuple[Dict[str, Any], Dict[str, Any], int, str]]:
+    """``(address, row_meta, pos, status)`` of every typed terminal row after the legacy frontier, in append order."""
+    frontier = _active_frontier(ChronicleStore(root))
+    if frontier is None:
+        return []
+    tail = capture_memo(root, "tail", lambda: _read_tail(root, frontier),  # a capture's whole tail, else these alone
+                        outside=lambda: _read_tail(root, frontier, terminal_only=True))
+    return [(address, meta, pos, terminal) for pos, address, meta, terminal in tail.rows if terminal is not None]
 
 
 def _authority(store: ChronicleStore) -> int:

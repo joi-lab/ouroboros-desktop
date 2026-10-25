@@ -7,8 +7,10 @@ transaction ``{"kind": "transaction", "schema": 1, "records": [...],
 replays the journal into the same rows, sequences, page coverage and folds; a
 torn or invalid transaction becomes an addressed ``gap`` record and its
 neighbours stay intact. A reader takes the lock only to bring a stale index up
-to date. ``scan_state`` merges by top-level key, so one writer's frontier never
-erases another's.
+to date. The index also keeps the facts of the chat rows after the legacy
+frontier (``tail_rows``), a projection of ``state/dialog.sqlite`` that
+``memory_inventory`` fills and extends. ``scan_state`` merges by top-level key,
+so one writer's frontier never erases another's.
 
 A record is never rewritten. A ``page`` seals a SET of row refs of its room
 (``page_rows``: chat ``row_sha256`` values and ``note:<id>``), once per level:
@@ -59,7 +61,7 @@ from ouroboros.platform_layer import (acquire_exclusive_file_lock, kernel_file_l
                                       release_exclusive_file_lock)
 from ouroboros.utils import append_jsonl, assert_test_data_path, utc_now_iso
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KINDS = frozenset({"page", "part", "note", "correction", "decision", "mark", "mark_view", "mark_release",
                    "legacy", "gap", "activation", "account", "selection"})
 AUTHOR_KINDS = frozenset({"mind", "helper", "host", "legacy_helper"})
@@ -94,9 +96,11 @@ _SCHEMA = """
     CREATE INDEX IF NOT EXISTS page_rows_page ON page_rows(page_id);
     CREATE TABLE IF NOT EXISTS folded (member_id TEXT PRIMARY KEY, part_id TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS folded_part ON folded(part_id);
+    CREATE TABLE IF NOT EXISTS tail_rows (pos INTEGER PRIMARY KEY, seq INTEGER NOT NULL, row_sha256 TEXT NOT NULL,
+                                          legacy TEXT, meta TEXT NOT NULL, terminal TEXT);
 """
 _RESET = ("DELETE FROM records; DELETE FROM state; DELETE FROM active_marks; DELETE FROM page_rows; "
-          "DELETE FROM folded; DELETE FROM sqlite_sequence WHERE name='records'; "
+          "DELETE FROM folded; DELETE FROM tail_rows; DELETE FROM sqlite_sequence WHERE name='records'; "
           f"PRAGMA user_version={SCHEMA_VERSION};")
 
 QuoteResolver = Callable[[Any], Optional[Tuple[str, str]]]
@@ -304,13 +308,18 @@ class _IndexLookups:
         return self.db.execute("SELECT COALESCE(MAX(sequence),0) FROM records WHERE room=? AND kind IN (%s)"
                                % ",".join("?" * len(HEAD_KINDS)), (str(room), *HEAD_KINDS)).fetchone()[0]
 
+    def tail(self, terminal_only=False):
+        sql = _TAIL_SQL + (" WHERE terminal IS NOT NULL" if terminal_only else "")
+        return sorted(json.loads(self.db.execute(sql).fetchone()[0] or "[]"))
 
+
+_TAIL_SQL = "SELECT json_group_array(json_array(pos,seq,row_sha256,json(legacy),json(meta),terminal)) FROM tail_rows"
 # One state of the index: each table in ONE statement, one ``sqlite3_step`` (one GIL release) per table, not per row.
 _SNAPSHOT_SQL = ("SELECT json_group_array(json_array(sequence,id,kind,room,target,body)) FROM records",
                  "SELECT json_group_array(json_array(member_id,part_id)) FROM folded",
                  "SELECT json_group_array(json_array(room,row_ref)) FROM page_rows",
                  "SELECT json_group_array(json_array(sequence,room,scope,body)) FROM active_marks",
-                 "SELECT json_group_array(json_array(key,value)) FROM state")
+                 "SELECT json_group_array(json_array(key,value)) FROM state", _TAIL_SQL)
 
 
 class _Snapshot:
@@ -319,7 +328,7 @@ class _Snapshot:
     anew from its stored text, as the index returns it; ``memo`` holds facts one capture derives once."""
 
     def __init__(self, texts):
-        records, folded, sealed, marks, state = (json.loads(text or "[]") for text in texts)
+        records, folded, sealed, marks, state, tail = (json.loads(text or "[]") for text in texts)
         self.records = sorted(records)  # [sequence, id, kind, room, target, body] by sequence
         self.by_id = {row[1]: row for row in self.records}
         self.by_room: Dict[str, List[Any]] = {}
@@ -333,6 +342,7 @@ class _Snapshot:
             self.page_rows.setdefault(room, set()).add(ref)
         self.active = sorted(marks)
         self.values = dict(state)
+        self.tail_rows = sorted(tail)  # [pos, seq, row_sha256, legacy, meta, terminal] by position
         self.memo: Dict[str, Any] = {}
 
     def get(self, record_id):
@@ -362,6 +372,9 @@ class _Snapshot:
     def head(self, room):
         return max((row[0] for row in self.by_room.get(str(room), ()) if row[2] in HEAD_KINDS), default=0)
 
+    def tail(self, terminal_only=False):
+        return [list(row) for row in self.tail_rows if not terminal_only or row[5] is not None]
+
 
 def _lookups(db):
     return db if isinstance(db, (_IndexLookups, _Snapshot)) else _IndexLookups(db)
@@ -376,27 +389,30 @@ def capture(data_root: Any):
 
     The index is read once (``_SNAPSHOT_SQL`` in one read transaction, closed before any reader runs, so a
     publisher never waits on a capture) and pinned for the block; inside a capture of the same chronicle
-    this is that capture. Without a journal nothing is pinned. A publication inside the block is not seen
-    by its readers: publish before the capture, or after it.
+    this is that capture. It yields the facts its readers derive once (``capture_memo``); without a journal
+    nothing is pinned and it yields None. A publication inside the block is not seen by its readers.
     """
     store = ChronicleStore(data_root)
-    if store._pinned() is not None or not store.log_path.exists():
-        yield
+    if (pinned := store._pinned()) is not None or not store.log_path.exists():
+        yield None if pinned is None else pinned.memo
         return
     with store._index() as db:
         texts = [db.execute(sql).fetchone()[0] for sql in _SNAPSHOT_SQL]
-    token = _CAPTURE.set((str(store.index_path), _Snapshot(texts)))
+    snapshot = _Snapshot(texts)
+    token = _CAPTURE.set((str(store.index_path), snapshot))
     try:
-        yield
+        yield snapshot.memo
     finally:
         _CAPTURE.reset(token)
 
 
-def capture_memo(data_root: Any, key: str, compute: Callable[[], Any]) -> Any:
-    """``compute()`` once per capture of this chronicle, so its readers share one answer; each call outside one."""
+def capture_memo(data_root: Any, key: str, compute: Callable[[], Any], *,
+                 outside: Optional[Callable[[], Any]] = None) -> Any:
+    """``compute()`` once per capture of this chronicle, so its readers share one answer; outside a capture,
+    each call computes (``outside``, when given: a narrower answer for one reader)."""
     snapshot = ChronicleStore(data_root)._pinned()
     if snapshot is None:
-        return compute()
+        return (outside or compute)()
     if key not in snapshot.memo:
         snapshot.memo[key] = compute()
     return snapshot.memo[key]
@@ -462,10 +478,10 @@ class ChronicleStore:
         return None
 
     @contextmanager
-    def _publishing(self):
+    def _publishing(self, wait_sec: float = 10):
         assert_test_data_path(self.directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        fd = acquire_exclusive_file_lock(self.lock_path, timeout_sec=10, stale_sec=90, owner_aware_stale=True)
+        fd = acquire_exclusive_file_lock(self.lock_path, timeout_sec=wait_sec, stale_sec=90, owner_aware_stale=True)
         if fd is None:
             raise TimeoutError("chronicle publication lock unavailable")
         db = None
@@ -1201,6 +1217,44 @@ class ChronicleStore:
         sequence, chosen = selections[-1]
         return {"id": chosen["id"], "shown": bool(chosen.get("shown")), "replaces": [str(r) for r in chosen.get("replaces") or ()],
                 "reason": str(chosen.get("reason") or ""), "ts": chosen.get("ts"), "sequence": sequence}
+
+    # --- the dialogue tail's facts: a projection of state/dialog.sqlite kept beside the journal's ------
+
+    def tail_facts(self, source: Mapping[str, Any], *,
+                   terminal_only: bool = False) -> Optional[Tuple[Dict[str, Any], List[List[Any]]]]:
+        """``(state, rows)`` of the stored facts of the chat rows after the legacy frontier (only those with a
+        terminal status: ``terminal_only``), when they were projected from ``source`` (``memory_inventory`` names
+        the dialogue store and frontier, projects the rows and checks the state's ``anchor``); rows
+        ``[pos, seq, row_sha256, legacy, meta, terminal]`` by position."""
+        with self._reading() as look:
+            state = look.state("tail")
+            return ((state, look.tail(terminal_only)) if isinstance(state, dict) and state.get("source") == source
+                    else None)
+
+    def tail_state(self) -> Any:
+        with self._reading() as look:
+            return look.state("tail")
+
+    def extend_tail(self, expected: Any, rows: Iterable[List[Any]], state: Dict[str, Any], *, replace: bool = False,
+                    wait_sec: float = 0) -> bool:
+        """Store projected tail rows and the ``state`` naming them in ONE index transaction, only while the stored
+        state is still the ``expected`` one its writer read (compare-and-set: concurrent writers in several
+        processes store each row once and never leave a hole). ``replace`` drops the stored rows first. A lock
+        held past ``wait_sec`` or a refused write stores nothing: the rows wait for the next writer."""
+        try:
+            with self._publishing(wait_sec) as db:
+                if self._state(db, "tail") != expected:
+                    return False
+                if replace:
+                    db.execute("DELETE FROM tail_rows")
+                db.executemany("INSERT OR IGNORE INTO tail_rows VALUES (?,?,?,?,?,?)",
+                               [(pos, seq, sha, None if legacy is None else _json(legacy), _json(meta), terminal)
+                                for pos, seq, sha, legacy, meta, terminal in rows])
+                self._set_state(db, "tail", state)
+                db.commit()
+                return True
+        except (TimeoutError, sqlite3.Error):
+            return False
 
     # --- reads -------------------------------------------------------------------------------------
 
