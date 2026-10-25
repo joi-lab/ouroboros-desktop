@@ -765,3 +765,145 @@ class TestStorageFact:
         assert "## Runtime context" in section
         assert data["storage"]["bytes"] == latest["bytes"] and data["storage"]["previous_at"] is None
         assert data["storage"]["growth_bytes"] is None
+
+
+class TestVitalsFact:
+    """The body's own dated facts reach the Runtime block beside ``storage``: the last owner turns from
+    the serving process's receipt ring, stall onsets without an observed end, the last busy minute as
+    sums/counts/maxima, the runtime, the retained update, the boot row, one reader and a note. Every
+    absent source omits its key; nothing here is a verdict or a percentage."""
+
+    def _env(self, tmp_path, monkeypatch):
+        from collections import deque
+
+        from supervisor import active_activity
+
+        class FakeEnv:
+            repo_dir = tmp_path / "repo"
+            drive_root = tmp_path
+
+            def drive_path(self, p):
+                return tmp_path / p
+
+        (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "state" / "state.json").write_text('{"spent_usd": 0}', encoding="utf-8")
+        monkeypatch.setattr(active_activity, "_DIRECT_TURNS", deque(maxlen=active_activity.DIRECT_TURNS_KEPT))
+        monkeypatch.setattr("ouroboros.context_runtime_facts._JOURNAL_MODES", {})
+        monkeypatch.delenv("OUROBOROS_IN_WORKER", raising=False)
+        return FakeEnv()
+
+    def _runtime(self, env, task=None):
+        section = build_runtime_section(env, task or {"id": "t1", "type": "task", "_is_direct_chat": True},
+                                        captured_at="2026-10-25T20:00:00+00:00")
+        return section, json.loads(section.split("## Runtime context\n\n", 1)[1])
+
+    @staticmethod
+    def _journal(tmp_path, rows):
+        path = tmp_path / "logs" / "supervisor.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    def test_a_main_direct_turn_reads_its_bodys_dated_facts(self, tmp_path, monkeypatch):
+        from supervisor.active_activity import record_direct_turn
+
+        env = self._env(tmp_path, monkeypatch)
+        self._journal(tmp_path, [
+            {"ts": "2026-10-25T18:00:00+00:00", "type": "boot", "branch": "ouroboros", "sha": "abcdef1234567890"},
+            {"ts": "2026-10-25T19:00:00+00:00", "type": "direct_turn_stall", "execution_id": "turn_a", "task_id": "t0",
+             "phase": "context_building", "stood_sec": 30.0},
+            {"ts": "2026-10-25T19:01:00+00:00", "type": "direct_turn_stall_end", "execution_id": "turn_a", "task_id": "t0",
+             "phase": "context_building", "then": "context_built", "stood_sec": 61.0, "samples": 4,
+             "top_frames": [{"frame": "ouroboros/memory_view.py:_live_rooms", "samples": 4}]},
+            {"ts": "2026-10-25T19:30:00+00:00", "type": "host_duty_stall", "duty": "custody", "running_sec": 120.0},
+            {"ts": "2026-10-25T19:40:00+00:00", "type": "direct_turn_stall", "execution_id": "turn_b", "task_id": "t9",
+             "phase": "started", "stood_sec": 15.0},
+            {"ts": "2026-10-25T19:59:00+00:00", "type": "supervisor_load", "window_sec": 60.0, "max_event_lag_sec": 0.4,
+             "handlers": {"llm_usage": {"count": 3, "total_sec": 0.1, "max_sec": 0.05}},
+             "store_locks": {"dialog": {"write": {"count": 12, "total_sec": 0.42, "max_sec": 0.2,
+                                                   "max_site": "supervisor.message_bus:send:10"}}},
+             "queue_lock": {"holds": 5, "max_hold_sec": 0.3}},
+        ])
+        monkeypatch.setattr("supervisor.state.append_jsonl", lambda path, row, *a, **k: True)
+        record_direct_turn({"type": "direct_turn", "execution_id": "turn_a", "chat_id": 1, "task_id": "t0",
+                            "accepted_at": "2026-10-25T18:59:00+00:00", "owner_wait_sec": 91.2, "wait_before_entry_sec": 0.8,
+                            "handler_wait_sec": 90.4, "phases": {"accepted": 0.1, "context_building": 61.0},
+                            "slowest_phase": "context_building", "slowest_phase_sec": 61.0, "dispatch": "observed_send",
+                            "meter": {"current.read": 2, "current.read.sec": 0.01, "current.read.max_sec": 0.008,
+                                      "chronicle.locked": 7}, "census": {"direct_turns_at_entry": 0}})
+        section, data = self._runtime(env)
+        vitals = data["vitals"]
+        assert vitals["observed_at"] == data["context_captured_at"] == "2026-10-25T20:00:00+00:00"
+        assert list(data).index("vitals") == list(data).index("storage" if "storage" in data else "vitals")
+        turn = vitals["owner_turns"][0]
+        assert (turn["owner_wait_sec"], turn["slowest_phase"], turn["slowest_phase_sec"], turn["dispatch"]) == (
+            91.2, "context_building", 61.0, "observed_send")
+        assert turn["transactions"] == {"current.read": 2, "chronicle.locked": 7} and turn["hold_sec"] == 0.01
+        assert turn["top_frame"] == "ouroboros/memory_view.py:_live_rooms" and turn["journal"] == "written"
+        assert [(row["kind"], row["end"]) for row in vitals["stalls"]] == [
+            ("host_duty_stall", "not observed in window"), ("direct_turn_stall", "not observed in window")]
+        assert vitals["stalls"][1]["execution_id"] == "turn_b" and vitals["stalls"][0]["duty"] == "custody"
+        minute = vitals["last_busy_minute"]
+        assert minute["ts"] == "2026-10-25T19:59:00+00:00" and minute["max_event_lag_sec"] == 0.4
+        assert minute["store_holds"] == {"dialog.write": {"count": 12, "sum_sec": 0.42, "max_sec": 0.2,
+                                                           "site": "supervisor.message_bus:send:10"}}
+        assert minute["queue_lock"] == {"holds": 5, "max_hold_sec": 0.3}
+        assert vitals["runtime"]["python"] and vitals["runtime"]["sqlite"]
+        assert set(vitals["runtime"].get("journal") or {}) <= {"current", "dialog", "usage"}  # the stores this build opened
+        assert vitals["boot"] == {"at": "2026-10-25T18:00:00+00:00", "branch": "ouroboros", "sha": "abcdef123456"}
+        assert vitals["readers"][0]["arguments"]["kind"] == "supervisor_log"
+        assert "mine to decide" in vitals["note"] and "last_update" not in vitals
+        for word in ("WARNING", "CRITICAL", "%", "current\"", "threshold"):
+            assert word not in json.dumps(vitals), word
+        assert "## Supervisor" not in section
+
+    def test_absent_sources_omit_their_keys_and_a_pooled_worker_says_its_part_is_unknown(self, tmp_path, monkeypatch):
+        env = self._env(tmp_path, monkeypatch)
+        _section, data = self._runtime(env)
+        vitals = data["vitals"]
+        assert set(vitals) == {"observed_at", "owner_turns_note", "runtime", "readers", "note"}
+        assert "since this process started" in vitals["owner_turns_note"]
+        monkeypatch.setenv("OUROBOROS_IN_WORKER", "1")
+        _section, data = self._runtime(env)
+        assert "pooled worker" in data["vitals"]["owner_turns_note"] and "owner_turns" not in data["vitals"]
+
+    def test_the_journal_per_store_and_the_wal_gate_only_for_a_rollback_store(self, tmp_path, monkeypatch):
+        from ouroboros.task_results import write_task_result
+
+        env = self._env(tmp_path, monkeypatch)
+        write_task_result(tmp_path, "seed", "running")  # a present store, in this test runtime's journal mode
+        _section, data = self._runtime(env)
+        runtime = data["vitals"]["runtime"]
+        assert "current" in runtime["journal"] and runtime["journal"]["current"] in {"wal", "rollback"}
+        assert ("wal_gate" in runtime) == ("rollback" in runtime["journal"].values())
+        if "wal_gate" in runtime:
+            assert "3.51.3" in runtime["wal_gate"] and runtime["sqlite"] in runtime["wal_gate"]
+
+    def test_an_unreadable_journal_or_a_failing_source_never_breaks_the_section(self, tmp_path, monkeypatch):
+        env = self._env(tmp_path, monkeypatch)
+        (tmp_path / "logs").mkdir()
+        (tmp_path / "logs" / "supervisor.jsonl").write_bytes(b"\xff{not json\n")
+        _section, data = self._runtime(env)
+        assert "boot" not in data["vitals"] and "stalls" not in data["vitals"]
+
+        def broken(*_a, **_k):
+            raise RuntimeError("ring unavailable")
+
+        monkeypatch.setattr("supervisor.active_activity.direct_turns", broken)
+        section, data = self._runtime(env)
+        assert "vitals" not in data and '"context_captured_at"' in section
+
+    def test_vitals_line_renders_the_same_facts_in_one_line(self):
+        from ouroboros.context_runtime_facts import vitals_line
+
+        assert vitals_line(None) == ""
+        line = vitals_line({"observed_at": "T", "owner_turns": [{"owner_wait_sec": 91.2, "slowest_phase": "context_building",
+                                                               "slowest_phase_sec": 61.0, "dispatch": "observed_send"}],
+                            "stalls": [{"kind": "host_duty_stall", "duty": "custody", "since": "S"}],
+                            "last_busy_minute": {"ts": "M", "max_event_lag_sec": 0.4, "store_holds": {
+                                "dialog.write": {"max_sec": 0.2, "site": "x:y:1"}}},
+                            "runtime": {"python": "3.10.22", "sqlite": "3.51.3", "journal": {"current": "wal"}},
+                            "last_update": {"outcome": "applied", "target_sha": "abc"}, "boot": {"at": "B", "branch": "o", "sha": "s"}})
+        assert line == ("body as of T; owner turns 91.2 s (context_building 61.0 s, observed_send); "
+                        "stall onsets without an observed end host_duty_stall custody since S; "
+                        "last busy minute M event lag max 0.4 s, longest store hold dialog.write 0.2 s at x:y:1; "
+                        "python 3.10.22 sqlite 3.51.3 journal current=wal; last update applied to abc; boot B o@s")

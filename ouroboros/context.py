@@ -283,6 +283,7 @@ from ouroboros.context_runtime_facts import (  # noqa: E402,F401 — re-exported
     task_schedule_fact,
     schedule_store_fact,
     storage_fact,
+    vitals_fact,
 )
 
 
@@ -407,9 +408,16 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
 
     runtime_data["effort_range"] = {**effort_range(), "binds": effort_range_binds(task.get("metadata"))}
     # What Ouroboros owns on disk, from the last finished count (Dashboard -> Storage): a fact, no threshold.
-    storage = storage_fact(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root))
+    canonical = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
+    storage = storage_fact(canonical)
     if storage is not None:
         runtime_data["storage"] = storage
+    # The body's own dated facts (owner turns, stalls, the last busy minute, runtime, boot), in every
+    # turn (owner answer A, 25.10.2026); wakes and deep self-review only would guard this one call
+    # with ``is_consciousness_origin(task.get("metadata"))``.
+    vitals = vitals_fact(canonical, observed_at=runtime_data["context_captured_at"])
+    if vitals is not None:
+        runtime_data["vitals"] = vitals
     runtime_data.update(_task_authority_projection(env, task))
     if supplementary_messages_out is not None:
         from ouroboros.main_context_authority import predecessor_notes_message
@@ -852,29 +860,19 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
 
 
 def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[str]:
-    """My own recent process: this task's windows and the supervisor.
+    """My own recent process: this task's windows.
 
     Conversations are not here: the current room's open conversation, its task facts
     and the other live rooms are the memory view's (``memory_view.render_room``).
     Earlier versions' post-task reflection logs stay at their sources for their
     readers (``journal_read(source='reflections')``, ``read_file``); no context
-    renders them.
+    renders them. The supervisor's journal reaches the mind as the Runtime
+    section's ``vitals`` (boot, stalls, the busy minute), not as a section.
     """
-    sections = []
-
     # Each task reads ITS OWN newest rows through a bounded window (#131): a
     # global tail filtered afterwards handed every task whatever share of the
     # shared suffix it happened to occupy (Memory.recent_activity_sections).
-    from ouroboros.jsonl_tail import coverage_line
-
-    sections.extend(memory.recent_activity_sections(task_id))
-
-    supervisor_rows, supervisor_coverage = memory.read_task_recent("supervisor.jsonl", "", 200)
-    supervisor_summary = memory.summarize_supervisor(supervisor_rows)
-    if supervisor_summary:
-        sections.append(f"## Supervisor ({coverage_line(supervisor_coverage)})\n\n" + supervisor_summary)
-
-    return sections
+    return list(memory.recent_activity_sections(task_id))
 
 
 def _build_registry_digest(env: Any) -> str:

@@ -909,6 +909,8 @@ def official_update_projection(
 ) -> Dict[str, Any]:
     """The typed fact for the Runtime context: O(1), no git, never raises.
 
+    The retained update's before/after samples are the Runtime section's ``vitals.last_update``
+    (``context_runtime_facts``); the panel reads them through ``runtime_status``.
     ``status`` is honest about freshness. It follows the CHECK, not the letter:
     ``update_available``/``up_to_date`` while the last check still describes this HEAD (the
     availability is the cache's, so an available update may carry a failed letter or none at
@@ -922,7 +924,6 @@ def official_update_projection(
     try:
         from ouroboros import get_version
         from ouroboros.config import DATA_DIR
-        from ouroboros.update_generation_facts import projection as generation_facts
 
         head = str(head_sha or "")
         if not head or head == "unknown":
@@ -947,7 +948,6 @@ def official_update_projection(
                 "running": {"version": get_version(), "sha": head},
                 "update_channel": active_channel, "target": None, "behind": None, "ahead": None,
                 "local_changes": "unknown", "letter": project_letter(record, head_sha=head, latest_sha=""),
-                "after_update": generation_facts(drive_root=drive_root, state=state),
             }
         latest = str(cache.get("latest_sha") or "")
         checked_head = str((record or {}).get("checked_head_sha") or "")
@@ -983,7 +983,6 @@ def official_update_projection(
             "local_changes": str(cache.get("local_changes") or "unknown")
             if head == str(cache.get("checked_head_sha") or "") else "unknown",
             "letter": letter,
-            "after_update": generation_facts(drive_root=drive_root, state=state),
         }
     except Exception as exc:  # noqa: BLE001 — a fact that raises would take the whole context with it
         log.debug("official_update projection failed", exc_info=True)
