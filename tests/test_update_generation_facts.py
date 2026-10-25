@@ -158,8 +158,8 @@ def test_record_reaches_panel_api_and_real_context_builder_without_chat(isolated
     # The mind reads the samples once, as the body fact's last update; the Runtime copy of the
     # update projection no longer repeats them (the panel keeps its own reader above).
     assert "after_update" not in runtime["official_update"]
-    assert runtime["vitals"]["last_update"]["after"]["direct_message_first_dispatch"]["task_id"] == "visible-task"
-    assert runtime["vitals"]["last_update"]["outcome"] == "applied" and "before" in runtime["vitals"]["last_update"]
+    assert runtime["vitals"]["last_update"].startswith("applied to " + "b" * 12 + ": before ")
+    assert "; after " in runtime["vitals"]["last_update"] and "first dispatch visible-task 3.0 s" in runtime["vitals"]["last_update"]
     assert state_file.read_bytes() == before  # passive readers never resample/write
 
 

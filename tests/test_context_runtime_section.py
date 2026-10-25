@@ -833,26 +833,23 @@ class TestVitalsFact:
         section, data = self._runtime(env)
         vitals = data["vitals"]
         assert vitals["observed_at"] == data["context_captured_at"] == "2026-10-25T20:00:00+00:00"
-        assert list(data).index("vitals") == list(data).index("storage" if "storage" in data else "vitals")
+        assert all(isinstance(value, str) for key, value in vitals.items() if key not in ("owner_turns", "stalls"))
         turn = vitals["owner_turns"][0]
-        assert (turn["owner_wait_sec"], turn["slowest_phase"], turn["slowest_phase_sec"], turn["dispatch"]) == (
-            91.2, "context_building", 61.0, "observed_send")
-        assert turn["transactions"] == {"current.read": 2, "chronicle.locked": 7} and turn["hold_sec"] == 0.01
-        assert turn["top_frame"] == "ouroboros/memory_view.py:_live_rooms" and turn["journal"] == "written"
-        assert [(row["kind"], row["end"]) for row in vitals["stalls"]] == [
-            ("host_duty_stall", "not observed in window"), ("direct_turn_stall", "not observed in window")]
-        assert vitals["stalls"][1]["execution_id"] == "turn_b" and vitals["stalls"][0]["duty"] == "custody"
-        minute = vitals["last_busy_minute"]
-        assert minute["ts"] == "2026-10-25T19:59:00+00:00" and minute["max_event_lag_sec"] == 0.4
-        assert minute["store_holds"] == {"dialog.write": {"count": 12, "sum_sec": 0.42, "max_sec": 0.2,
-                                                           "site": "supervisor.message_bus:send:10"}}
-        assert minute["queue_lock"] == {"holds": 5, "max_hold_sec": 0.3}
-        assert vitals["runtime"]["python"] and vitals["runtime"]["sqlite"]
-        assert set(vitals["runtime"].get("journal") or {}) <= {"current", "dialog", "usage"}  # the stores this build opened
-        assert vitals["boot"] == {"at": "2026-10-25T18:00:00+00:00", "branch": "ouroboros", "sha": "abcdef123456"}
-        assert vitals["readers"][0]["arguments"]["kind"] == "supervisor_log"
-        assert "mine to decide" in vitals["note"] and "last_update" not in vitals
-        for word in ("WARNING", "CRITICAL", "%", "current\"", "threshold"):
+        assert turn.split(" chat 1: ", 1)[1].startswith(
+            "human waited 91.2 s to first request, slowest context_building 61.0 s, observed_send; "), turn
+        assert "current.read 2, chronicle.locked 7, holds 0.01 s; top frame ouroboros/memory_view.py:_live_rooms" in turn
+        assert "not written" not in turn
+        assert vitals["stalls"] == [
+            "host_duty_stall custody since 2026-10-25T19:30:00, 120.0 s at onset (end not observed in window)",
+            "direct_turn_stall started since 2026-10-25T19:40:00, 15.0 s at onset (task_id t9, execution_id turn_b; end not observed in window)"]
+        assert vitals["last_busy_minute"] == (
+            "2026-10-25T19:59:00: event lag max 0.4 s in 60.0 s; store holds dialog.write n=12 sum=0.4 s max=0.2 s, "
+            "longest at supervisor.message_bus:send:10; queue lock holds 5, max_hold_sec 0.3")
+        assert vitals["runtime"].startswith("python ") and ", sqlite " in vitals["runtime"]
+        assert vitals["boot"] == "2026-10-25T18:00:00 ouroboros@abcdef123456"
+        assert "mine to decide; more rows: query_data(kind='supervisor_log'" in vitals["note"]
+        assert "last_update" not in vitals
+        for word in ("WARNING", "CRITICAL", "% busy", "current\"", "threshold"):
             assert word not in json.dumps(vitals), word
         assert "## Supervisor" not in section
 
@@ -860,7 +857,8 @@ class TestVitalsFact:
         env = self._env(tmp_path, monkeypatch)
         _section, data = self._runtime(env)
         vitals = data["vitals"]
-        assert set(vitals) == {"observed_at", "owner_turns_note", "runtime", "readers", "note"}
+        assert set(vitals) <= {"observed_at", "owner_turns_note", "runtime", "wal_gate", "note"}
+        assert {"observed_at", "owner_turns_note", "runtime", "note"} <= set(vitals)
         assert "since this process started" in vitals["owner_turns_note"]
         monkeypatch.setenv("OUROBOROS_IN_WORKER", "1")
         _section, data = self._runtime(env)
@@ -872,11 +870,12 @@ class TestVitalsFact:
         env = self._env(tmp_path, monkeypatch)
         write_task_result(tmp_path, "seed", "running")  # a present store, in this test runtime's journal mode
         _section, data = self._runtime(env)
-        runtime = data["vitals"]["runtime"]
-        assert "current" in runtime["journal"] and runtime["journal"]["current"] in {"wal", "rollback"}
-        assert ("wal_gate" in runtime) == ("rollback" in runtime["journal"].values())
-        if "wal_gate" in runtime:
-            assert "3.51.3" in runtime["wal_gate"] and runtime["sqlite"] in runtime["wal_gate"]
+        vitals = data["vitals"]
+        journal = vitals["runtime"].split("; journal ", 1)[1]
+        assert "current=wal" in journal or "current=rollback" in journal
+        assert ("wal_gate" in vitals) == ("=rollback" in journal)
+        if "wal_gate" in vitals:
+            assert "3.51.3" in vitals["wal_gate"] and vitals["runtime"].split(", sqlite ")[1].split(";")[0] in vitals["wal_gate"]
 
     def test_an_unreadable_journal_or_a_failing_source_never_breaks_the_section(self, tmp_path, monkeypatch):
         env = self._env(tmp_path, monkeypatch)
@@ -896,14 +895,8 @@ class TestVitalsFact:
         from ouroboros.context_runtime_facts import vitals_line
 
         assert vitals_line(None) == ""
-        line = vitals_line({"observed_at": "T", "owner_turns": [{"owner_wait_sec": 91.2, "slowest_phase": "context_building",
-                                                               "slowest_phase_sec": 61.0, "dispatch": "observed_send"}],
-                            "stalls": [{"kind": "host_duty_stall", "duty": "custody", "since": "S"}],
-                            "last_busy_minute": {"ts": "M", "max_event_lag_sec": 0.4, "store_holds": {
-                                "dialog.write": {"max_sec": 0.2, "site": "x:y:1"}}},
-                            "runtime": {"python": "3.10.22", "sqlite": "3.51.3", "journal": {"current": "wal"}},
-                            "last_update": {"outcome": "applied", "target_sha": "abc"}, "boot": {"at": "B", "branch": "o", "sha": "s"}})
-        assert line == ("body as of T; owner turns 91.2 s (context_building 61.0 s, observed_send); "
-                        "stall onsets without an observed end host_duty_stall custody since S; "
-                        "last busy minute M event lag max 0.4 s, longest store hold dialog.write 0.2 s at x:y:1; "
-                        "python 3.10.22 sqlite 3.51.3 journal current=wal; last update applied to abc; boot B o@s")
+        line = vitals_line({"observed_at": "T", "owner_turns": ["turn one", "turn two"], "stalls": ["a stall"],
+                            "last_busy_minute": "M: lag", "runtime": "python 3.10.22, sqlite 3.51.3", "wal_gate": "",
+                            "last_update": "applied to abc: before B; after A", "boot": "B o@s", "note": "n"})
+        assert line == ("body as of T; owner turns turn one | turn two; stalls a stall; last busy minute M: lag; "
+                        "runtime python 3.10.22, sqlite 3.51.3; last update applied to abc: before B; after A; boot B o@s")

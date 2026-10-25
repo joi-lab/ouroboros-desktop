@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from ouroboros.task_pacing import in_task_cost_ceiling_disclosure as _in_task_cost_ceiling
 from ouroboros.config import runtime_setting
@@ -395,15 +395,22 @@ def storage_fact(data_root: Any) -> Optional[Dict[str, Any]]:
     return fact
 
 
-# The body's own facts: bounds here are transport and memory limits, never judgments.
+# The body's own facts: bounds here are transport and memory limits, never judgments. Each item is one
+# line of text, not a nested object: the Runtime section is indented JSON, and the fact must cost the
+# context no more than the health lines it replaced (the owner's Nano window).
 _SUPERVISOR_TAIL_BYTES = 256_000  # the same bounded tail the health block reads
 _OWNER_TURNS_SHOWN = 3  # receipts rendered per context; the ring keeps DIRECT_TURNS_KEPT
 _STALL_ENDS = {"direct_turn_stall": "direct_turn_stall_end", "host_duty_stall": "host_duty_stall_end",
                "supervisor_loop_stall": "supervisor_loop_stall_end"}
 _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqlite")
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
-VITALS_NOTE = ("Facts about my own body as of observed_at; no verdict or bound stands in for judgment here. Whether a "
-               "wait matters, what to change in my own work and whether to tell my human are mine to decide.")
+VITALS_READER = "query_data(kind='supervisor_log', op='jsonl', filter={'field': 'type', 'op': 'contains', 'value': 'direct_turn'})"
+VITALS_NOTE = ("My body's facts as of observed_at, no verdict: whether a wait matters, what to change and whether "
+               f"to tell my human are mine to decide; more rows: {VITALS_READER}")
+
+
+def _when(stamp: Any) -> str:
+    return str(stamp or "")[:19]  # the journal's microseconds buy the mind nothing
 
 
 def _stall_key(row: Dict[str, Any]) -> tuple:
@@ -439,44 +446,63 @@ def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
     return found
 
 
-def _owner_turn(row: Dict[str, Any], ended: Dict[str, Any]) -> Dict[str, Any]:
-    """One receipt as the mind reads it; the stall episode's top frame when its end row is still in the tail."""
-    fact: Dict[str, Any] = {"at": row.get("ts"), "chat_id": row.get("chat_id"), "task_id": row.get("task_id")}
-    for key in ("owner_wait_sec", "wait_before_entry_sec", "handler_wait_sec", "slowest_phase", "slowest_phase_sec",
-                "dispatch", "journal"):
-        if row.get(key) is not None:
-            fact[key] = row[key]
+def _sec(value: Any) -> str:
+    return f"{float(value):.1f} s" if isinstance(value, (int, float)) else "unknown"
+
+
+def _owner_turn(row: Dict[str, Any], ended: Dict[str, Any]) -> str:
+    """One receipt as one line: when, how long my human waited to the first request (the handler's
+    wait when the acceptance stamp was unknown), the slowest phase, the dispatch basis, the turn's
+    own transactions, and the stall episode's top frame when its end row is still in the tail."""
+    wait = row.get("owner_wait_sec")
+    waited = (f"human waited {_sec(wait)} to first request" if wait is not None
+              else f"thread waited {_sec(row.get('handler_wait_sec'))} (acceptance stamp unknown)")
+    parts = [f"{_when(row.get('ts'))} chat {row.get('chat_id')}: {waited}"
+             + (f", slowest {row['slowest_phase']} {_sec(row.get('slowest_phase_sec'))}" if row.get("slowest_phase") else "")
+             + f", {row.get('dispatch')}"]
     meter = row.get("meter") if isinstance(row.get("meter"), dict) else {}
-    transactions = {key: value for key, value in meter.items() if "." in key and not key.endswith("_sec")
-                    and not key.endswith(".sec")}
-    if transactions:
-        fact["transactions"] = transactions  # per store and side, plus chronicle opens
-        fact["hold_sec"] = round(sum(value for key, value in meter.items() if key.endswith(".sec")), 3)
+    counts = [f"{key} {value}" for key, value in meter.items() if "." in key and not key.endswith("_sec") and not key.endswith(".sec")]
+    if counts:
+        parts.append(", ".join(counts) + f", holds {sum(value for key, value in meter.items() if key.endswith('.sec')):.2f} s")
     frames = (ended.get(str(row.get("execution_id") or "")) or {}).get("top_frames")
     if isinstance(frames, list) and frames and isinstance(frames[0], dict) and frames[0].get("frame"):
-        fact["top_frame"] = frames[0]["frame"]
-    return fact
+        parts.append(f"top frame {frames[0]['frame']}")
+    if row.get("journal") == "not_written":
+        parts.append("journal row not written")
+    return "; ".join(parts)
 
 
-def _busy_minute(row: Dict[str, Any]) -> Dict[str, Any]:
+def _stall(kind: str, row: Dict[str, Any]) -> str:
+    where = " ".join(str(row[key]) for key in ("phase", "duty") if row.get(key))
+    ids = ", ".join(f"{key} {row[key]}" for key in ("task_id", "execution_id") if row.get(key))
+    stood = next((row[key] for key in ("stood_sec", "running_sec", "stalled_sec") if isinstance(row.get(key), (int, float))), None)
+    return (f"{kind} {where} since {_when(row.get('ts'))}".replace("  ", " ") + (f", {_sec(stood)} at onset" if stood is not None else "")
+            + (f" ({ids}; end not observed in window)" if ids else " (end not observed in window)"))
+
+
+def _busy_minute(row: Dict[str, Any]) -> str:
     """The newest ``supervisor_load`` row: sums, counts and maxima with their sites, never a share of time."""
-    fact: Dict[str, Any] = {"ts": row.get("ts"), "window_sec": row.get("window_sec"),
-                            "max_event_lag_sec": row.get("max_event_lag_sec")}
+    text = f"{_when(row.get('ts'))}: event lag max {_sec(row.get('max_event_lag_sec'))} in {_sec(row.get('window_sec'))}"
     locks = row.get("store_locks")
     if isinstance(locks, dict) and locks and "error" not in locks:
-        fact["store_holds"] = {f"{kind}.{side}": {"count": bucket.get("count"), "sum_sec": bucket.get("total_sec"),
-                                                 "max_sec": bucket.get("max_sec"), "site": bucket.get("max_site")}
-                               for kind, sides in locks.items() if isinstance(sides, dict)
-                               for side, bucket in sides.items() if isinstance(bucket, dict)}
+        buckets = [(f"{kind}.{side}", bucket) for kind, sides in locks.items() if isinstance(sides, dict)
+                   for side, bucket in sides.items() if isinstance(bucket, dict)]
+        if buckets:
+            longest = max(buckets, key=lambda item: float(item[1].get("max_sec") or 0.0))
+            text += "; store holds " + ", ".join(
+                f"{name} n={bucket.get('count')} sum={_sec(bucket.get('total_sec'))} max={_sec(bucket.get('max_sec'))}"
+                for name, bucket in buckets)
+            if longest[1].get("max_site"):
+                text += f", longest at {longest[1]['max_site']}"
     if isinstance(row.get("queue_lock"), dict) and row["queue_lock"]:
-        fact["queue_lock"] = row["queue_lock"]
-    return fact
+        text += "; queue lock " + ", ".join(f"{key} {value}" for key, value in row["queue_lock"].items())
+    return text
 
 
-def _runtime_facts(root: pathlib.Path) -> Dict[str, Any]:
-    """CPython and SQLite as this process runs them; each present store's journal as its header says
-    (read once per process: a boot or a handoff is the only writer of that choice); the WAL gate only
-    while a store runs a rollback journal."""
+def _runtime_facts(root: pathlib.Path) -> Tuple[str, str]:
+    """CPython and SQLite as this process runs them with each present store's journal as its header
+    says (read once per process: a boot or a handoff is the only writer of that choice), and the WAL
+    gate while a store runs a rollback journal ("" otherwise)."""
     import platform
     import sqlite3
 
@@ -485,7 +511,6 @@ def _runtime_facts(root: pathlib.Path) -> Dict[str, Any]:
     version = sqlite3.sqlite_version_info
     fixed = (version >= (3, 51, 3) or (version[:2] == (3, 50) and version[2] >= 7)
              or (version[:2] == (3, 44) and version[2] >= 6))  # store._journal_mode's gate
-    fact: Dict[str, Any] = {"python": platform.python_version(), "sqlite": sqlite3.sqlite_version}
     journal: Dict[str, str] = {}
     for rel in _STORE_FILES:
         path = root / rel
@@ -498,40 +523,51 @@ def _runtime_facts(root: pathlib.Path) -> Dict[str, Any]:
             journal[path.stem] = _JOURNAL_MODES[key]
         except Exception:
             log.debug("journal mode unreadable: %s", path, exc_info=True)
+    runtime = f"python {platform.python_version()}, sqlite {sqlite3.sqlite_version}"
     if journal:
-        fact["journal"] = journal
+        runtime += "; journal " + ", ".join(f"{name}={mode}" for name, mode in journal.items())
+    gate = ""
     if "rollback" in journal.values():
-        fact["wal_gate"] = (f"WAL needs SQLite 3.51.3 or the 3.50.7/3.44.6 backports (this interpreter's "
-                            f"{sqlite3.sqlite_version} {'passes' if fixed else 'does not pass'}), enforced file "
-                            "locks and a local filesystem; an in-place update keeps the interpreter")
-    return fact
+        gate = (f"WAL needs SQLite 3.51.3+ (or 3.50.7/3.44.6; this {sqlite3.sqlite_version} {'passes' if fixed else 'does not pass'}), "
+                "enforced file locks, a local filesystem; an update keeps the interpreter")
+    return runtime, gate
 
 
-def _last_update(root: pathlib.Path) -> Optional[Dict[str, Any]]:
-    """The retained managed update's before/after samples, compact; None without a retained attempt."""
+def _last_update(root: pathlib.Path) -> str:
+    """The retained managed update's before/after samples in one line; "" without a retained attempt."""
     from ouroboros.update_generation_facts import projection
 
     facts = projection(drive_root=root)
     if not isinstance(facts, dict):
-        return None
-    fact: Dict[str, Any] = {"outcome": facts.get("outcome"), "target_sha": str(facts.get("target_sha") or "")[:12]}
+        return ""
+    sides = []
     for side in ("before", "after"):
         sample = facts.get(side)
-        if isinstance(sample, dict):
-            fact[side] = {key: sample[key] for key in ("observed_at", "rss_bytes", "rss_measure", "cpu_percent",
-                                                       "duty_overruns", "direct_message_first_dispatch")
-                          if sample.get(key) is not None}
-    return fact
+        if not isinstance(sample, dict):
+            continue
+        text = f"{side} {_when(sample.get('observed_at'))}"
+        if sample.get("rss_bytes") is not None:
+            text += f" rss {int(sample['rss_bytes']) // 1048576} MiB ({sample.get('rss_measure')})"
+        if sample.get("cpu_percent") is not None:
+            text += f" cpu {float(sample['cpu_percent']):.1f}% of {_sec(sample.get('cpu_interval_seconds'))}"
+        if sample.get("duty_overruns"):
+            text += " duty overruns " + ", ".join(f"{name} {count}" for name, count in sample["duty_overruns"].items())
+        dispatch = sample.get("direct_message_first_dispatch")
+        if isinstance(dispatch, dict):
+            text += f" first dispatch {dispatch.get('task_id')} {_sec(dispatch.get('seconds'))}"
+        sides.append(text)
+    return f"{facts.get('outcome')} to {str(facts.get('target_sha') or '')[:12]}: " + "; ".join(sides)
 
 
 def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]:
-    """The body's own dated facts beside ``storage``: the last owner turns from this serving process's
-    receipt ring (wait, slowest phase, dispatch basis, own transactions; the top frame of a stall
-    episode whose end row is still in the tail), stall onsets whose end was not observed in the
-    journal's bounded tail (never «current»), the last busy minute (sums, counts, maxima and sites,
-    never a percentage), the runtime (CPython, SQLite, journal per store, the WAL gate), the retained
-    update's before/after, the boot row, one reader for the journal rows, and a note. Every absent
-    source omits its key; a pooled worker says its owner-turn part is unknown. Never raises."""
+    """The body's own dated facts beside ``storage``, one line each: the last owner turns from this
+    serving process's receipt ring (wait, slowest phase, dispatch basis, own transactions; the top
+    frame of a stall episode whose end row is still in the tail), stall onsets whose end was not
+    observed in the journal's bounded tail (never «current»), the last busy minute (sums, counts,
+    maxima and sites, never a percentage), the runtime (CPython, SQLite, journal per store, the WAL
+    gate), the retained update's before/after, the boot row, and a note that names the journal's
+    reader. Every absent source omits its key; a pooled worker says its owner-turn part is unknown.
+    Never raises."""
     import os
 
     root = pathlib.Path(data_root)
@@ -549,24 +585,21 @@ def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]
                 fact["owner_turns"] = [_owner_turn(row, tail["ended"]) for row in turns]
             else:
                 fact["owner_turns_note"] = "no owner turn's receipt recorded since this process started"
-        stalls = [{"kind": kind, "since": row.get("ts"), **{key: row[key] for key in ("phase", "duty", "task_id", "execution_id",
-                                                                                        "stood_sec", "running_sec", "stalled_sec")
-                                                             if row.get(key) not in (None, "")},
-                   "end": "not observed in window"} for (kind, _key), row in tail["open"].items()]
+        stalls = [_stall(kind, row) for (kind, _key), row in tail["open"].items()]
         if stalls:
             fact["stalls"] = stalls
         if isinstance(tail.get("load"), dict):
             fact["last_busy_minute"] = _busy_minute(tail["load"])
-        fact["runtime"] = _runtime_facts(root)
+        fact["runtime"], gate = _runtime_facts(root)
+        if gate:
+            fact["wal_gate"] = gate
         update = _last_update(root)
-        if update is not None:
+        if update:
             fact["last_update"] = update
         boot = tail.get("boot")
         if isinstance(boot, dict):
-            fact["boot"] = {"at": boot.get("ts"), "branch": boot.get("branch") or boot.get("git_branch"),
-                            "sha": str(boot.get("sha") or boot.get("git_sha") or "")[:12]}
-        fact["readers"] = [{"tool": "query_data", "arguments": {"kind": "supervisor_log", "op": "jsonl", "tail": 20,
-                            "filter": {"field": "type", "op": "contains", "value": "direct_turn"}}}]
+            fact["boot"] = (f"{_when(boot.get('ts'))} {boot.get('branch') or boot.get('git_branch')}@"
+                            f"{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
         fact["note"] = VITALS_NOTE
     except Exception:  # a fact about the body never breaks the Runtime section
         log.debug("vitals fact unavailable", exc_info=True)
@@ -574,37 +607,25 @@ def vitals_fact(data_root: Any, *, observed_at: str) -> Optional[Dict[str, Any]]
     return fact
 
 
+def body_facts(data_root: Any, *, observed_at: str) -> Dict[str, Any]:
+    """The Runtime section's ``storage`` and ``vitals`` keys, each present only with its fact: one call
+    site in ``context.build_runtime_section``; wakes and deep self-review only (owner answer B) would
+    guard ``vitals`` here with ``is_consciousness_origin``."""
+    facts = {"storage": storage_fact(data_root), "vitals": vitals_fact(data_root, observed_at=observed_at)}
+    return {key: value for key, value in facts.items() if value is not None}
+
+
 def vitals_line(fact: Optional[Dict[str, Any]]) -> str:
-    """The same facts in one line (a wake's or a deep self-review's inline rendering); "" for none."""
+    """The same facts in one line (a deep self-review's inline rendering); "" for none."""
     if not isinstance(fact, dict):
         return ""
     parts = [f"body as of {fact.get('observed_at')}"]
-    turns = fact.get("owner_turns")
-    if isinstance(turns, list) and turns:
-        parts.append("owner turns " + ", ".join(
-            f"{turn.get('owner_wait_sec', turn.get('handler_wait_sec'))} s ({turn.get('slowest_phase')} "
-            f"{turn.get('slowest_phase_sec')} s, {turn.get('dispatch')})" for turn in turns))
-    elif fact.get("owner_turns_note"):
-        parts.append(f"owner turns {fact['owner_turns_note']}")
-    stalls = fact.get("stalls")
-    if isinstance(stalls, list) and stalls:
-        parts.append("stall onsets without an observed end " + ", ".join(
-            f"{row.get('kind')} {row.get('phase') or row.get('duty') or ''} since {row.get('since')}".rstrip() for row in stalls))
-    minute = fact.get("last_busy_minute")
-    if isinstance(minute, dict):
-        holds = minute.get("store_holds") or {}
-        longest = max(holds.items(), key=lambda item: float(item[1].get("max_sec") or 0.0)) if holds else None
-        parts.append(f"last busy minute {minute.get('ts')} event lag max {minute.get('max_event_lag_sec')} s" + (
-            f", longest store hold {longest[0]} {longest[1].get('max_sec')} s at {longest[1].get('site')}" if longest else ""))
-    runtime = fact.get("runtime") or {}
-    parts.append(f"python {runtime.get('python')} sqlite {runtime.get('sqlite')}" + (
-        " journal " + " ".join(f"{name}={mode}" for name, mode in runtime["journal"].items()) if runtime.get("journal") else ""))
-    update = fact.get("last_update")
-    if isinstance(update, dict):
-        parts.append(f"last update {update.get('outcome')} to {update.get('target_sha')}")
-    boot = fact.get("boot")
-    if isinstance(boot, dict):
-        parts.append(f"boot {boot.get('at')} {boot.get('branch')}@{boot.get('sha')}")
+    for key in ("owner_turns", "owner_turns_note", "stalls", "last_busy_minute", "runtime", "wal_gate", "last_update", "boot"):
+        value = fact.get(key)
+        if isinstance(value, list) and value:
+            parts.append(f"{key.replace('_', ' ')} " + " | ".join(str(item) for item in value))
+        elif isinstance(value, str) and value:
+            parts.append(f"{key.replace('_', ' ')} {value}")
     return "; ".join(parts)
 
 

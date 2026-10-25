@@ -185,7 +185,7 @@ def test_the_boot_row_is_the_runtime_vitals_not_a_supervisor_section(tmp_path):
 
     _write(tmp_path / "logs" / "supervisor.jsonl", [{"ts": "2026-09-22T00:00:00Z", "type": "boot", "branch": "ouroboros", "sha": "abcdef123456"}])
     assert not [s for s in build_recent_sections(Memory(drive_root=tmp_path), env=None) if s.startswith("## Supervisor")]
-    assert vitals_fact(tmp_path, observed_at="now")["boot"] == {"at": "2026-09-22T00:00:00Z", "branch": "ouroboros", "sha": "abcdef123456"}
+    assert vitals_fact(tmp_path, observed_at="now")["boot"] == "2026-09-22T00:00:00 ouroboros@abcdef123456"
 
 
 def test_bounded_window_with_no_matching_rows_is_still_disclosed(tmp_path):

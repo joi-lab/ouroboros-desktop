@@ -173,10 +173,10 @@ def test_two_concurrent_owner_turns_keep_their_own_meters(monkeypatch, tmp_path)
     write_task_result(tmp_path, "seed", "running")
     both_inside = threading.Barrier(2, timeout=10)
 
-    def reading(reads: int):
+    def reading():
         def behave(actor, task):
             both_inside.wait()  # both turns are inside their own metered scope now
-            for _ in range(reads):
+            for _ in range(3 * int(task["chat_id"]) - 2):  # chat 1 reads once, chat 2 four times
                 load_task_result(tmp_path, "seed")
             both_inside.wait()
             identity = {"task_attempt": 1, "llm_call_id": f"call-{task['id']}", "execution_id": f"x-{task['id']}",
@@ -187,7 +187,7 @@ def test_two_concurrent_owner_turns_keep_their_own_meters(monkeypatch, tmp_path)
             return [{"type": "send_message", "chat_id": task["chat_id"], "text": "the answer", "task_id": task["id"]}]
         return behave
 
-    actors = [_Actor(reading(1)), _Actor(reading(4))]
+    actors = [_Actor(reading()), _Actor(reading())]
     monkeypatch.setattr(agent_module, "make_agent", lambda **kwargs: actors.pop(0))
     stamp = _iso(time.time())
 

@@ -886,5 +886,5 @@ def test_the_retrieving_task_inlines_the_bodys_dated_facts(review_repo, tmp_path
         encoding="utf-8")
     task, _facts = deep_self_review._retrieving_task(review_repo, drive)
     line = next(l for l in task.splitlines() if l.startswith("Body (the Runtime section's vitals"))
-    assert "body as of " in line and "boot 2026-10-25T18:00:00+00:00 ouroboros@abcdef123456" in line
-    assert "python " in line and "sqlite " in line
+    assert "body as of " in line and "boot 2026-10-25T18:00:00 ouroboros@abcdef123456" in line
+    assert "runtime python " in line and ", sqlite " in line
