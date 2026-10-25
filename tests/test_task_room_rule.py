@@ -244,6 +244,28 @@ def test_an_absent_id_is_read_once_per_resolver(tmp_path, monkeypatch):
     assert pr.RoomResolver(tmp_path)("ghost-1") == 0 and counts["open_store"] == 3, "a fresh resolver (a new frame) asks again"
 
 
+def test_a_warm_follows_the_ancestors_of_remembered_tasks_and_says_when_it_could_not(tmp_path, monkeypatch):
+    """Children whose lineage is remembered still send the rule to their ancestors: the warm reads those
+    too, so the rule then walks them with no read per id, and it answers False while the store cannot
+    answer them (a memory count is then not reused) instead of leaving one failing read per task."""
+    rooms = _world(tmp_path)
+    leaves = [f"leaf-{i}" for i in range(6)]
+    for leaf in leaves:
+        write_task_result(tmp_path, leaf, "running", delegation_role="subagent", parent_task_id="grand-1",
+                          root_task_id="root-1", chat_id=1)
+    for key in [key for key in pr._TASK_LINEAGE if key[0] == str(tmp_path)]:
+        del pr._TASK_LINEAGE[key]
+    assert set(pr._read_lineage(tmp_path, leaves)) == set(leaves)  # the leaves are remembered, their ancestors not
+    attempts, real = [], pr._read_lineage
+    monkeypatch.setattr(pr, "_read_lineage", lambda *args, **_kwargs: attempts.append(sorted(args[1])))  # None: busy
+    assert pr.RoomResolver(tmp_path).warm(leaves) is False and attempts == [["grand-1", "root-1"]]
+    monkeypatch.setattr(pr, "_read_lineage", real)
+    counts = _count_store_work(monkeypatch)
+    resolver = pr.RoomResolver(tmp_path)
+    assert resolver.warm(leaves) is True and counts["open_store"] == 2  # two generations: grand-1 and root-1, then mid-1
+    assert [resolver(leaf) for leaf in leaves] == [rooms["b"]] * 6 and counts["open_store"] == 2
+
+
 def _request(root, body):
     async def _json():
         return body
