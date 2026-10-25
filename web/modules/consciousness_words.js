@@ -2,6 +2,9 @@ import { tr, fmt } from './i18n.js';
 import { taskPresentation } from './log_events.js';
 import { taskCostMeta } from './chat_activity.js';
 
+/** The relay and wake note lead: the author's whole text; the surface alone fits its first words. */
+export const noteLeadText = (text) => String(text ?? '').trim();
+
 // The owner's words for consciousness, places and safety (owner's final names, 21.10), in one place.
 // Stored values never change: only these words do, so a relabel is one line here. Pure data and pure
 // helpers over host facts; nothing here reads the network or the page.

@@ -11,14 +11,11 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { tr, fmt } from './i18n.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
-import { CHECK_CHIPS, clockText, durationText, placeStatusText, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
-import { mountChatMarkdown } from './chat_markdown.js';
+import { CHECK_CHIPS, clockText, durationText, noteLeadText, placeStatusText, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
+import { mountChatMarkdown, enhanceChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
 import { costPresentationDetail } from './chat_activity.js';
 import { openPlaceSheet } from './place_sheet.js';
 import { connectPlaceButtonHtml, openConnectPlace } from './place_connect.js';
-
-/** The note through the one Markdown seam; the row string carries the mounted HTML and its content contract. */
-const noteHtml = (text) => { const host = { classList: { add() {} }, innerHTML: '' }; mountChatMarkdown(host, text); return host.innerHTML; };
 
 const SEP = ' · ';
 const REFRESH_MS = 20000;
@@ -128,12 +125,13 @@ export function wakeRowHtml(wake, { open = false } = {}) {
     const flags = wake.checks.filter((check) => CHECK_CHIPS[check.chip]?.tone === 'warn')
         .map((check) => chipHtml(wakeCheckText(check), 'warn')).join(' ');
     const note = wake.note ? `<p class="consciousness-wake-note-label">${escapeHtml(tr('consciousness.own_note', 'Its own note'))}</p>
-        <div class="consciousness-wake-note ui-rich-content" data-i18n-authored>${noteHtml(wake.note)}</div>` : '';
+        <div class="consciousness-wake-note ui-rich-content" data-i18n-authored>${escapeHtml(wake.note)}</div>` : '';
     const costDetail = costPresentationDetail(wake.cost.cost_presentation);
-    // This base has no place-room reader. Never draw a door that cannot land on its card.
+    // This door lands Main cards; captured place conversations have their own sheet reader.
     const door = wake.chatId === 1 && wake.taskId ? `<button type="button" class="consciousness-inline-link ui-hit-area" data-cx-open-task="${escapeHtml(wake.taskId)}" data-chat-id="${wake.chatId}">${escapeHtml(tr('consciousness.open_main', 'Open in Main'))} ↗</button>` : '';
     const line = wake.summary ? `<p class="consciousness-wake-summary" data-i18n-authored>${escapeHtml(wake.summary)}</p>`
-        : counts ? `<p class="consciousness-wake-facts is-line">${counts}</p>` : '';
+        : wake.note ? `<p class="consciousness-wake-lead" data-i18n-authored>${escapeHtml(noteLeadText(wake.note))}</p>`
+            : counts ? `<p class="consciousness-wake-facts is-line">${counts}</p>` : '';
     return `<li class="consciousness-wake${wake.live ? ' is-live' : ''}" data-wake="${escapeHtml(wake.taskId)}">
         <time class="consciousness-wake-time"${wake.startedAt ? ` datetime="${escapeHtml(wake.startedAt)}"` : ''}>${escapeHtml(clockText(wake.startedAt) || '—')}</time>
         <div class="consciousness-wake-main">
@@ -149,27 +147,32 @@ export function wakeRowHtml(wake, { open = false } = {}) {
     </li>`;
 }
 
+const coverageHtml = (wakes, coverage) => coverage ? `<p class="storage-meta${wakes === null ? ' ui-status' : ''}"${wakes === null ? ' role="status" data-tone="warn"' : ''} data-i18n-authored>${escapeHtml(coverage)}</p>` : '';
+
 export function wakesCardHtml(wakes, coverage = '') {
     const body = !Array.isArray(wakes)
-        ? `<p class="consciousness-copy">${escapeHtml(tr('consciousness.wakes_unavailable', 'This server does not report its recent wakes yet.'))}</p>`
-        : !wakes.length ? `<p class="consciousness-copy">${escapeHtml(tr('consciousness.no_wakes', 'No wakes yet.'))}</p>`
+        ? coverage ? '' : `<p class="consciousness-copy">${escapeHtml(tr('consciousness.wakes_unavailable', 'This server does not report its recent wakes yet.'))}</p>`
+        : !wakes.length ? `<p class="consciousness-copy">${escapeHtml(tr('consciousness.no_wakes_48h', 'No wakes in the last 48 h.'))}</p>`
             : `<ol class="consciousness-wakes">${wakes.map((wake) => wakeRowHtml(wake)).join('')}</ol>`;
     return `<div class="consciousness-card-head"><div class="consciousness-card-head-text">
             <h4 class="storage-card-title">${escapeHtml(tr('consciousness.recent', 'Recent wakes'))}</h4>
-            ${coverage ? `<p class="storage-meta">${escapeHtml(tr(coverage, coverage))}</p>` : ''}
+            ${coverageHtml(wakes, coverage)}
         </div></div>${body}`;
 }
 
 /** Keyed rows: an open disclosure is a reading surface, retained until its reader closes it. */
-export function paintWakeRows(region, wakes, coverage, opened, put) {
+export function paintWakeRows(region, wakes, coverage, opened, put, release = destroyChatMarkdown) {
     const list = region.querySelector('.consciousness-wakes');
     // Native toggle is queued: read the open property too when a refresh wins that race.
     for (const row of list?.children || []) if (row.querySelector('details')?.open) opened.add(row.dataset.wake);
-    if (list && opened.size && (!Array.isArray(wakes) || !wakes.length)) return;
-    if (!list || !Array.isArray(wakes) || !wakes.length) { put(region, wakesCardHtml(wakes, coverage)); return; }
     const scroller = region.closest('.costs-scroll');
-    const reading = [...list.children].find((row) => opened.has(row.dataset.wake));
+    const reading = [...(list?.children || [])].find((row) => opened.has(row.dataset.wake));
     const top = reading?.getBoundingClientRect().top;
+    const keepPosition = () => { if (scroller && reading?.isConnected) scroller.scrollTop += reading.getBoundingClientRect().top - top; };
+    const header = region.querySelector('.consciousness-card-head-text');
+    if (header) put(header, `<h4 class="storage-card-title">${escapeHtml(tr('consciousness.recent', 'Recent wakes'))}</h4>${coverageHtml(wakes, coverage)}`);
+    if (list && (wakes === null && coverage || opened.size && (!Array.isArray(wakes) || !wakes.length))) { keepPosition(); return; }
+    if (!list || !Array.isArray(wakes) || !wakes.length) { put(region, wakesCardHtml(wakes, coverage)); return; }
     const rows = new Map([...list.children].map((row) => [row.dataset.wake, row]));
     let before = list.firstElementChild;
     for (const wake of wakes) {
@@ -189,13 +192,14 @@ export function paintWakeRows(region, wakes, coverage, opened, put) {
         before = row.nextElementSibling;
         rows.delete(wake.taskId);
     }
-    for (const [id, row] of rows) if (!opened.has(id)) row.remove();
-    if (scroller && reading?.isConnected) scroller.scrollTop += reading.getBoundingClientRect().top - top;
+    for (const [id, row] of rows) if (!opened.has(id)) { release(row); row.remove(); }
+    keepPosition();
 }
 
 /** Mount the tab into its Dashboard panel. */
 export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, read = readConsciousness,
-    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces } = {}) {
+    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces,
+    markdown = { mount: mountChatMarkdown, enhance: enhanceChatMarkdown, destroy: destroyChatMarkdown } } = {}) {
     if (!mount) return { refresh: () => {}, destroy() {} };
     mount.innerHTML = `<div class="settings-embedded-content"><div class="costs-scroll scroll-fade-y">
         <div class="storage-root consciousness-root">
@@ -219,17 +223,26 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
 
     // A refresh that found nothing new leaves a region's nodes alone, so focus and reading position stay.
     const opened = new Set();
+    const notes = new Map();
+    function releaseNotes(region) {
+        for (const [note, text] of notes) if (region.contains(note)) {
+            markdown.destroy(note);
+            note.textContent = text;
+            notes.delete(note);
+        }
+    }
     const painted = new WeakMap();
     const put = (region, html) => {
         if (painted.get(region) === html || region.innerHTML === html) return;
         painted.set(region, html);
+        releaseNotes(region);
         region.innerHTML = html;
     };
     function paint() {
         if (snapshot) put(regions.summary, summaryHtml(snapshot, { placeCount: places ? places.length : null, hasSocket: Boolean(ws?.send) }));
         const awake = snapshot ? liveWake(snapshot) : null;
         put(regions.places, placesCardHtml(places, { error: placesError, awakeIn: awake?.cause === 'focus' ? places?.find((place) => place.rooms.some((room) => room.chatId === awake.chatId))?.id : '' }));
-        paintWakeRows(regions.wakes, snapshot?.recentWakes ?? null, snapshot?.coverage || '', opened, put);
+        paintWakeRows(regions.wakes, snapshot?.recentWakes ?? null, snapshot?.coverage || '', opened, put, releaseNotes);
     }
 
     // One read in flight at a time; only the change event starts a fresh one over a pending read.
@@ -279,7 +292,15 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
     const onToggle = (event) => {
         if (!event.target.matches?.('.consciousness-wake-more')) return;
         const id = event.target.closest('[data-wake]').dataset.wake;
-        if (event.target.open) opened.add(id); else { opened.delete(id); paint(); }
+        if (event.target.open) {
+            opened.add(id);
+            const note = event.target.querySelector('.consciousness-wake-note');
+            if (note && !notes.has(note)) {
+                notes.set(note, note.textContent);
+                markdown.mount(note, note.textContent);
+                if (note.querySelector('.md-code-block, .md-mermaid, .md-chart, .md-table-wrap')) markdown.enhance(note);
+            }
+        } else { releaseNotes(event.target); opened.delete(id); paint(); }
     };
     const onClick = async (event) => {
         const door = event.target.closest('[data-cx-open-task]');
@@ -322,6 +343,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         refresh,
         destroy() {
             destroyed = true;
+            releaseNotes(mount);
             clearTimeout(timer);
             mount.removeEventListener('click', onClick);
             mount.removeEventListener('toggle', onToggle, true);

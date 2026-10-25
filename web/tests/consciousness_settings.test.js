@@ -477,18 +477,24 @@ test('an old connection the places migration could not move is said once, in Set
     assert.match(settingsPlacesHtml({ places: [], problems: migrationProblems }), /Connect it again\.<\/p><p class="settings-inline-note">No place yet/);
 });
 
-test('Settings reads Places on mount and after a change, including recovery from a failed first read', async (t) => {
+test('Settings reads Places when visible and after a change, including recovery from a failed read', async (t) => {
     const { window } = setup(t);
     const root = new NodeStub();
     root.innerHTML = '<section data-consciousness-places><div data-place-list></div></section>';
+    root.dataset.activeSettingsTab = 'behavior';
+    const state = { activePage: 'chat' };
     let reads = 0;
-    const dispose = bindConsciousnessSettings(root, { read: async () => {
+    const dispose = bindConsciousnessSettings(root, { state, read: async () => {
         if (++reads === 1) throw new Error('offline');
         return normalizePlacesResponse(FIXTURE.places);
     } });
     const settled = () => new Promise((resolve) => setImmediate(resolve));
     await settled();
-    assert.equal(reads, 1, 'even while the tab is hidden');
+    assert.equal(reads, 0, 'no boot read while Settings is hidden');
+    state.activePage = 'settings';
+    window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: 'settings' } }));
+    await settled();
+    assert.equal(reads, 1);
     assert.match(root.textContent, /Places could not be read: offline/);
     window.dispatchEvent(new CustomEvent('ouro:places-changed'));
     await settled();
@@ -500,4 +506,20 @@ test('Settings reads Places on mount and after a change, including recovery from
     window.dispatchEvent(new CustomEvent('ouro:places-changed'));
     await settled();
     assert.equal(reads, 2);
+});
+
+test('Settings reads Places on mount only in the visible Behavior tab', async (t) => {
+    setup(t);
+    for (const tab of ['behavior', 'models']) {
+        const root = new NodeStub();
+        root.innerHTML = '<section data-consciousness-places><div data-place-list></div></section>';
+        root.dataset.activeSettingsTab = tab;
+        let reads = 0;
+        const dispose = bindConsciousnessSettings(root, { state: { activePage: 'settings' }, read: async () => {
+            reads++; return normalizePlacesResponse(FIXTURE.places);
+        } });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(reads, tab === 'behavior' ? 1 : 0);
+        dispose();
+    }
 });

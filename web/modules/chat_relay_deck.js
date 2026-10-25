@@ -8,6 +8,7 @@ import { fitText, fullText } from './text_fit.js';
 import { motionMs, reducedMotion } from './motion.js';
 import { projectReference } from './project_reference.js';
 import { fetchJson } from './api_client.js';
+import { noteLeadText } from './consciousness_words.js';
 
 let nextNoteId = 0;
 const EDGES = 2;   // at most two edges behind the front card
@@ -66,7 +67,7 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         const time = formatTime(row?.ts) || null;
         return {
             quoted, chatId: Number(sender?.chat_id),
-            words: String(row?.text ?? bubble.querySelector(':scope > .message')?.textContent ?? '').trim(),
+            words: noteLeadText(row?.text ?? bubble.querySelector(':scope > .message')?.textContent),
             summary: String(relay.summary || '').trim(),
             name: String(sender?.name || '').trim() || (fromMain ? 'Main' : tr('chat.relay.another_work', 'Another work')),
             kind: fromMain ? 'main' : 'project', time: time?.short || '', when: time?.full || '',

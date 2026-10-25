@@ -43,7 +43,7 @@ function stateHtml(place, ui) {
         ${silent ? `<p class="place-silent-card" role="note">${escapeHtml(`${state.note} ${SILENT_CARD}`)}</p>` : ''}`;
 }
 
-function wakesHtml(place) {
+function wakesHtml(place, ui) {
     const vocabulary = place.facts ?? Object.keys(WAKE_FACT_WORDS).filter((fact) => fact !== 'legacy_addressed'
         || place.wakes.some((item) => item.fact === fact));
     const items = vocabulary.map((item) => {
@@ -55,7 +55,7 @@ function wakesHtml(place) {
         return `<li class="place-wake-item"><label class="place-wake-toggle ui-hit-area"><input class="ui-checkbox" type="checkbox" data-place-act="${chosen ? 'remove-wake' : 'add-wake'}" data-fact="${escapeHtml(fact)}"${chosen ? ' checked' : ''}>
             <span${authored ? ' data-i18n-authored' : ''}>${escapeHtml(label)}</span></label>${chosen ? chipHtml(tr(`places.author.${chosen.author}`, authorWord(chosen.author)), 'neutral') : ''}</li>`;
     }).join('');
-    const service = `<span data-i18n-authored>${escapeHtml(place.label.split(' · ')[0])}</span>`;
+    const service = `<span data-i18n-authored>${escapeHtml(ui.serviceLabel || place.serviceLabel || place.provider)}</span>`;
     return `<p class="place-sheet-note">${fmt('A checked kind calls it here at once, when {service} reports it.', { service })}</p>
         <ul class="place-wake-list">${items}</ul>
         ${vocabulary.includes('from_bot') ? `<p class="place-sheet-note">${tr('places.wake.bots', 'Bot messages need this check; once checked, they can wake it without another checked kind.')}</p>` : ''}
@@ -148,7 +148,7 @@ export function placeSheetBodyHtml(place, ui = {}) {
                 : statusLine(view.readiness || (place.readiness && { ...place.readiness, text: tr(`places.readiness.${place.readiness.text}`, place.readiness.text) }))), view) : '',
         view.removed ? '' : section('state', '', stateHtml(place, view), view),
         view.removed ? '' : section('conversations', tr('places.conversations', 'Conversations'), placeRoomsHtml(view.roomIndex || { rooms: null }), view),
-        view.removed ? '' : section('wakes', tr('places.calls', 'What calls it here'), wakesHtml(place), view),
+        view.removed ? '' : section('wakes', tr('places.calls', 'What calls it here'), wakesHtml(place, view), view),
         section('accounts', 'Your accounts here', accountsHtml(place, view), view),
         section('notes', 'Notes', notesHtml(place, view), view),
         section('folder', 'Working folder', folderHtml(place, view), view),
@@ -238,7 +238,8 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
     disconnect = disconnectPlace, readStatus = readPlaceConnector, readModels = (init) => fetchJson('/api/model-catalog', init),
     readRooms = readPlaceRooms } = {}) {
     let current = place;
-    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false, roomIndex: { rooms: null } };
+    const ui = { drafts: {}, status: {}, busy: false, adding: false, confirmDisconnect: false, moreOpen: false,
+        serviceLabel: place.serviceLabel || place.provider, roomIndex: { rooms: null } };
     let disposeModels = () => {}, modelsRead = false;
     let history = null, selected = null, editorScroll = 0, roomController = null, roomGeneration = 0;
     const abort = new AbortController();

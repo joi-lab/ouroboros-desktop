@@ -157,7 +157,7 @@ export function bindConsciousnessSettings(root, { read = readPlaces, state = nul
     window.addEventListener('ouro:settings-subtab-shown', onShown);
     window.addEventListener('ouro:page-shown', onShown);
     window.addEventListener(PLACES_CHANGED_EVENT, onChanged);
-    void refresh();
+    if (visible()) void refresh();
     return () => {
         generation += 1;
         section.removeEventListener('click', onClick);

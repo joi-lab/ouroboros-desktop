@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".json": "application/json; charset=utf-8"}
     def log_message(self, *_):
         pass
 
@@ -45,8 +46,8 @@ def probe(output):
                             if (telegram) { document.documentElement.dataset.host = 'telegram'; window.Telegram = { WebApp: { platform: 'ios' } }; }
                             document.head.innerHTML = ['ui', 'style', 'settings', 'cards', 'consciousness'].map(file =>
                                 `<link rel="stylesheet" href="/web/${file}.css">`).join('') +
-                                '<style>body{margin:0;display:block}#mount{height:100dvh;padding:16px;box-sizing:border-box}.costs-scroll{height:calc(100dvh - 32px);overflow:auto}</style>';
-                            document.body.innerHTML = '<main id="mount" class="dashboard-shell"></main>';
+                                '<style>body{margin:0;display:block}#main-mount{height:100dvh}#main-mount[hidden],#mount[hidden]{display:none}#mount{height:100dvh;padding:16px;box-sizing:border-box}.costs-scroll{height:calc(100dvh - 32px);overflow:auto}</style>';
+                            document.body.innerHTML = '<main id="mount" class="dashboard-shell"></main><main id="main-mount" hidden></main>';
                         }""", {"telegram": telegram, "width": width})
                         page.add_script_tag(url=origin + "/web/marked.min.js")
                         page.add_script_tag(url=origin + "/web/purify.min.js")
@@ -63,7 +64,46 @@ def probe(output):
                             window.doorEvents = [];
                             window.addEventListener('ouro:open-task', event => doorEvents.push(event.detail));
                             await controller.refresh();
+                            const { apiClient } = await import('/web/modules/api_client.js');
+                            const { createChatInstance } = await import('/web/modules/chat.js');
+                            const { tr } = await import('/web/modules/i18n.js');
+                            window.historyReads = []; window.doorNotices = [];
+                            apiClient.chatHistory = async ({chatId, around}) => {
+                                historyReads.push({chatId, around});
+                                const task = around?.startsWith('task:') ? around.slice(5) : '';
+                                const history = structuredClone(fixture.history);
+                                if (!task) return { ...history, messages: [] };
+                                const row = history.messages.find(row => row.task_id === task);
+                                return { ...history, anchor: row ? { state: 'found', task_id: task, history_id: row.history_id } : { state: 'absent' } };
+                            };
+                            const ws = { on() { return () => {}; }, isConnected: () => true, send() {} };
+                            const chatState = { activePage: 'dashboard', projectChatIds: new Set(), unreadCount: 0 };
+                            const stateSnapshots = { begin: () => ({}), gate: async () => ({}), isCurrent: () => true, apply() {} };
+                            window.mainChat = createChatInstance({ ws, state: chatState, stateSnapshots,
+                                mountEl: document.querySelector('#main-mount'), chatId: 1, asPanel: true });
+                            const app = await (await fetch('/web/app.js')).text();
+                            const door = app.slice(app.indexOf('async function revealQuotedSource('), app.indexOf('\\nfunction freshProjectRow'));
+                            const showPage = async () => {
+                                dashboardState.activePage = 'chat'; chatState.activePage = 'chat';
+                                document.querySelector('#mount').hidden = true;
+                                document.querySelector('#main-mount').hidden = false;
+                                return true;
+                            };
+                            new Function('apiClient', 'mainChat', 'state', 'showPage', 'closeProjectPanel', 'showToast', 'tr',
+                                'let projectNavigationGeneration = 0;\\n' + door)(
+                                apiClient, mainChat, chatState, showPage, () => {}, text => doorNotices.push(text), tr);
                         }""")
+                        assert page.evaluate("document.characterSet") == "UTF-8"
+                        summary = page.locator('[data-wake="w-summary"] .consciousness-wake-summary').evaluate("""el => ({
+                            whole: el.textContent === snapshot.recentWakes.find(row => row.taskId === 'w-summary').summary,
+                            closed: !el.closest('[data-wake]').querySelector('details').open,
+                            width: el.clientWidth, height: el.clientHeight, scrollWidth: el.scrollWidth, scrollHeight: el.scrollHeight,
+                            whiteSpace: getComputedStyle(el).whiteSpace, lines: el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)
+                        })""")
+                        assert summary['whole'] and summary['closed'] and summary['whiteSpace'] != 'nowrap', summary
+                        assert summary['scrollWidth'] <= summary['width'] + 1 and summary['scrollHeight'] <= summary['height'] + 1, summary
+                        if width == 390:
+                            assert summary['lines'] >= 2, summary
                         if engine.name == 'chromium' and width == 1280:
                             rows = page.locator('[data-cx-wakes] [data-wake]').evaluate_all(
                                 '(rows) => Object.fromEntries(rows.map(row => [row.dataset.wake, row.outerHTML]))')
@@ -71,6 +111,8 @@ def probe(output):
                             (output / 'fixture-rows.html').write_text(page.locator('[data-cx-wakes]').inner_html(), encoding='utf-8')
                         page.locator('[data-cx-wakes]').scroll_into_view_if_needed()
                         page.screenshot(path=str(output / f"collapsed-{engine.name}-{width}-{'telegram' if telegram else 'browser'}.png"))
+                        page.locator('[data-wake="w-summary"]').scroll_into_view_if_needed()
+                        page.screenshot(path=str(output / f"summary-{engine.name}-{width}-{'telegram' if telegram else 'browser'}.png"))
                         page.clock.install()
                         page.locator('[data-wake="w-summary"] summary').click()
                         page.wait_for_function("document.querySelector('[data-wake=\"w-summary\"] details').open")
@@ -106,18 +148,50 @@ def probe(output):
                             page.evaluate("async wakes => { snapshot.recentWakes = wakes; await controller.refresh(); }", unavailable)
                             assert page.evaluate("kept.row.isConnected && kept.row.querySelector('details').open && document.activeElement === kept.focus && getSelection().toString() === kept.selection && Math.abs(kept.note.getBoundingClientRect().top - kept.top) < 2")
                         page.evaluate("async () => { snapshot.recentWakes = latestWakes; await controller.refresh(); }")
-                        page.locator('[data-wake="w-summary"] [data-cx-open-task]').click()
-                        assert page.evaluate("doorEvents") == [{"task_id": "w-summary", "chat_id": 1}]
                         page.locator('[data-wake="w-summary"] summary').scroll_into_view_if_needed()
                         page.screenshot(path=str(output / f"wakes-{engine.name}-{width}-{'telegram' if telegram else 'browser'}.png"))
                         page.locator('[data-wake="w-summary"] summary').click()
                         page.wait_for_function("document.querySelector('[data-wake=\"w-summary\"] .consciousness-wake-note').textContent.includes('New detail on refresh.')")
-                        for unavailable, words in [(None, 'This server does not report its recent wakes yet.'), ([], 'No wakes yet.')]:
-                            page.evaluate("async wakes => { snapshot.recentWakes = wakes; await controller.refresh(); }", unavailable)
+                        page.locator('[data-wake="214a31b6"] summary').click()
+                        page.locator('[data-wake="214a31b6"] [data-cx-open-task]').click()
+                        landed_card = page.locator('#main-mount .chat-live-card[data-task-id="214a31b6"].is-quote-target')
+                        landed_card.wait_for(state='visible')
+                        landing = landed_card.evaluate("""el => {
+                            const card = el.getBoundingClientRect(), feed = document.querySelector('#chat-messages').getBoundingClientRect();
+                            return { focused: document.activeElement === el, top: card.top, bottom: card.bottom, feedTop: feed.top,
+                                feedBottom: feed.bottom, height: innerHeight, reads: historyReads.filter(row => row.around === 'task:214a31b6').length };
+                        }""")
+                        assert landing['focused'] and landing['reads'] == 1, landing
+                        assert landing['top'] >= landing['feedTop'] - 2 and landing['top'] < min(landing['height'], landing['feedBottom']), landing
+                        assert page.evaluate("doorNotices") == []
+                        assert page.evaluate("doorEvents") == [{"task_id": "214a31b6", "chat_id": 1}]
+                        page.screenshot(path=str(output / f"main-{engine.name}-{width}-{'telegram' if telegram else 'browser'}.png"))
+                        page.evaluate("""() => {
+                            document.querySelector('#main-mount').hidden = true;
+                            document.querySelector('#mount').hidden = false;
+                        }""")
+                        page.locator('[data-wake="214a31b6"] summary').click()
+                        page.evaluate("""async () => {
+                            snapshot.recentWakes = null;
+                            snapshot.coverage = 'Recent wakes could not be read: storage is busy.';
+                            await controller.refresh();
+                        }""")
+                        assert page.locator('[data-cx-wakes] [data-wake]').count() > 0
+                        assert page.locator('[data-cx-wakes] [role="status"][data-tone="warn"][data-i18n-authored]').inner_text() == 'Recent wakes could not be read: storage is busy.'
+                        for unavailable, words in [(None, 'This server does not report its recent wakes yet.'), ([], 'No wakes in the last 48 h.')]:
+                            page.evaluate("async wakes => { snapshot.recentWakes = wakes; snapshot.coverage = ''; await controller.refresh(); }", unavailable)
                             assert words in page.locator('[data-cx-wakes]').inner_text()
+                        page.evaluate("""async () => {
+                            snapshot.recentWakes = [{ ...latestWakes.find(row => row.taskId === '214a31b6'), note: '~~~js\\nanswer();\\n~~~' }];
+                            await controller.refresh();
+                        }""")
+                        page.locator('[data-wake="214a31b6"] summary').click()
+                        page.locator('[data-chat-markdown-enhanced] [data-code-copy]').wait_for(state='visible')
+                        page.locator('[data-wake="214a31b6"] summary').click()
+                        page.wait_for_function("!document.querySelector('[data-chat-markdown-enhanced]')")
                         assert not errors, errors
-                        results.append({"engine": engine.name, "width": width, "height": height, "telegram": telegram, **retained})
-                        page.evaluate("controller.destroy()")
+                        results.append({"engine": engine.name, "width": width, "height": height, "telegram": telegram, **retained, "summary": summary, "landing": landing})
+                        page.evaluate("controller.destroy(); mainChat.destroy()")
                         context.close()
                 finally:
                     browser.close()
