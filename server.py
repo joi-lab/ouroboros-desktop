@@ -66,7 +66,6 @@ from ouroboros.server_routing_context import (  # noqa: F401
     _project_id_for_registered_chat,
     _reserved_project_for_chat,
     _scoped_task_metadata,
-    _task_belongs_to_chat,
     _task_result_ground_truth,
     main_lane_routing_metadata,
 )
