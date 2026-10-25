@@ -450,6 +450,8 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
             task["actor_id"] = "consciousness"
         task.setdefault("metadata", {}).update(origin)
         apply_consciousness_authority(task)
+    from ouroboros.settings_integrity import record_subagents_admission
+    record_subagents_admission(task, _pool().DRIVE_ROOT)
     inherited_attachment_manifest = _pool()._apply_presence_promotion_authority(
         evt, task, objective=objective, expected_output=expected_output,
     )

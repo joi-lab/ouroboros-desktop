@@ -311,6 +311,11 @@ def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None 
     return read_cognition(scope[0], _actor_project(scope), settings=settings)["subagents_mode"]
 
 
+def record_subagents_admission(task: dict, drive_root: Path) -> None:
+    """A root's admission fact for telemetry, never a future-round authority."""
+    task.setdefault("metadata", {})["subagents_mode"] = live_subagents_mode(task=task, drive_root=drive_root)
+
+
 def room_subagents_mode_applies() -> bool:
     """Consciousness and Evolve keep their own controls, including their descendants."""
     snapshot = _TASK_SETTINGS.get()

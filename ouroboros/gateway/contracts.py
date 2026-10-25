@@ -262,6 +262,7 @@ class ChatOutbound(ChatReferenceFields):
     sender_label: NotRequired[str]
     sender_session_id: NotRequired[str]
     client_message_id: NotRequired[str]
+    subagents_mode: NotRequired[Literal["swarm"]]  # Accepted owner message, never a client claim.
     transport: NotRequired[TransportMetadata]
     # Typed message kind; role alone selects authorship (DESIGN: Chat authorship and System rows).
     system_type: NotRequired[str]
@@ -313,6 +314,7 @@ class PhotoOutbound(ChatReferenceFields):
     sender_label: NotRequired[str]
     sender_session_id: NotRequired[str]
     client_message_id: NotRequired[str]
+    subagents_mode: NotRequired[Literal["swarm"]]  # Accepted owner message, never a client claim.
     transport: NotRequired[TransportMetadata]
     chat_id: NotRequired[int]
     task_id: NotRequired[str]

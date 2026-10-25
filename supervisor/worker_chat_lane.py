@@ -449,6 +449,8 @@ def _admit_chat_task(
         # A consciousness wake-up derives its level's disabled_tools and mode cap
         # here, before the contract reads them (consciousness_authority).
         apply_consciousness_authority(task)
+        from ouroboros.settings_integrity import record_subagents_admission
+        record_subagents_admission(task, _pool().DRIVE_ROOT)
         attach_task_contract(task)
         from ouroboros.tool_access_roots import freeze_tool_profile
         freeze_tool_profile(task)

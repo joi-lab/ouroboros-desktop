@@ -446,6 +446,7 @@
  * @property {string=} sender_label
  * @property {string=} sender_session_id
  * @property {string=} client_message_id
+ * @property {"swarm"=} subagents_mode  // host annotation at owner-message acceptance
  * @property {Object=} transport
  * @property {string=} system_type
  * @property {"timeline"|"reviews"=} card_row
@@ -503,6 +504,7 @@
  * @property {string=} sender_label
  * @property {string=} sender_session_id
  * @property {string=} client_message_id
+ * @property {"swarm"=} subagents_mode  // host annotation at owner-message acceptance
  * @property {Object=} transport
  * @property {number=} chat_id
  * @property {string=} task_id

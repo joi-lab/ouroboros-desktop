@@ -1112,8 +1112,8 @@ def maybe_emit_delegated_run_fanout(ctx: ToolContext, *, run_id: str, route_id: 
                                     objective: str, durable: bool) -> None:
     """swarm_fanout for a delegated harness run, only under host-attested Swarm intent.
 
-    A task admitted through the Swarm button carries the typed metadata fact
-    ``force_plan_source == "swarm"`` — the gate reads exactly that admission fact,
+    A root records its room choice at admission as the typed metadata fact
+    ``subagents_mode == "swarm"`` — the gate reads exactly that admission fact,
     never keywords or prompt text (P5). Only such a hosting task folds its
     delegate_start into swarm telemetry; an ordinary delegated run on a task that
     never asked for a swarm emits nothing. The event reuses the exact existing
@@ -1125,7 +1125,7 @@ def maybe_emit_delegated_run_fanout(ctx: ToolContext, *, run_id: str, route_id: 
     """
     metadata = getattr(ctx, "task_metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
-    if not durable or metadata.get("force_plan_source") != "swarm":
+    if not durable or metadata.get("subagents_mode") != "swarm":
         return
     task_id = str(getattr(ctx, "task_id", "") or "")
     try:
