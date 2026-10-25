@@ -857,7 +857,8 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # (the retired automatic reflection's routed store); its row stays, exempted below with its reason.
 # 420 -> 419: ``memory/knowledge/patterns.md`` lost its fixed-path readers (the resident context section,
 # the deep-review whitelist and the project-fork seed): it is an ordinary note read through knowledge tools.
-EXPECTED_SCAN_PATHS = 419
+# 419 -> 420: ``state/openrouter_models.json``, the OpenRouter catalogue every process adopts.
+EXPECTED_SCAN_PATHS = 420
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

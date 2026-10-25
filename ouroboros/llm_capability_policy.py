@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextvars
 import copy
 import logging
+import pathlib
 import time
 from typing import Any, Dict, Optional, Set
 
@@ -47,6 +48,11 @@ _OPTIONAL_DROPPABLE_PARAMS = _OPTIONAL_SAMPLING_PARAMS + (
 
 # Shared by the classifier and floor predicate; bare "required" is too broad.
 _MANDATORY_VALUE_MARKERS = ("mandatory", "cannot be disabled", "must be enabled")
+
+
+def _catalog_path(drive_root: Any) -> pathlib.Path:
+    """The catalogue one clean OpenRouter /models answer recorded for every process of the install."""
+    return pathlib.Path(drive_root) / "state" / "openrouter_models.json"
 
 
 def model_catalog(source: str, credential_profile_id: str | None = None, *,
@@ -121,7 +127,8 @@ class _CapabilityPolicyMixin:
 
     @classmethod
     def _fetch_openrouter_capabilities(cls) -> None:
-        """Populate _SUPPORTED_PARAMS_CACHE once from OpenRouter /models."""
+        """Populate the catalogue caches from OpenRouter /models; a clean answer is recorded for
+        every process (``state/openrouter_models.json``)."""
         cls._SUPPORTED_PARAMS_FETCHED = True
         cls._CAPABILITIES_FETCH_OK = False  # set True only on a clean 200 + parse
         try:
@@ -148,16 +155,17 @@ class _CapabilityPolicyMixin:
                 [(m.get("id"), (m.get("top_provider") or {}).get("max_completion_tokens")) for m in rows],
                 provider="openrouter", base_url="https://openrouter.ai/api/v1",
                 field="top_provider.max_completion_tokens", source="OpenRouter")
-            context_lengths = {}
+            context_lengths, recorded = {}, {}
             for m in rows:
                 mid = m.get("id") or ""
                 sp = m.get("supported_parameters")
                 if mid and isinstance(sp, list) and sp:
                     cls._SUPPORTED_PARAMS_CACHE[mid] = set(sp)
+                    recorded.setdefault(mid, {})["supported_parameters"] = sorted(str(name) for name in sp)
                 # Context window (provider_metadata Capability Evidence source).
                 cl = m.get("context_length")
                 if mid and isinstance(cl, (int, float)) and cl > 0:
-                    context_lengths[mid] = int(cl)
+                    context_lengths[mid] = recorded.setdefault(mid, {})["context_length"] = int(cl)
             from ouroboros.utils import utc_now_iso
             cls._CONTEXT_LENGTH_CACHE, cls._CONTEXT_LENGTH_OBSERVED_AT = context_lengths, utc_now_iso()
             # Image input is a fact about this exact route: one parser, stored
@@ -170,6 +178,46 @@ class _CapabilityPolicyMixin:
             cls._CAPABILITIES_FETCH_OK = True  # reached the provider and parsed it
         except Exception:
             log.debug("Failed to fetch OpenRouter model capabilities", exc_info=True)
+            return
+        try:  # the record is a cache of this answer: its loss costs another process one GET
+            from ouroboros.capability_evidence import canonical_evidence_root
+            from ouroboros.utils import atomic_write_json
+
+            atomic_write_json(_catalog_path(canonical_evidence_root()),
+                              {"observed_at": cls._CONTEXT_LENGTH_OBSERVED_AT, "models": recorded})
+        except OSError:
+            log.debug("Failed to record the OpenRouter catalogue", exc_info=True)
+
+    @classmethod
+    def _adopt_recorded_catalog(cls) -> bool:
+        """Adopt the catalogue a process recorded while it is within the confirmed-evidence TTL:
+        the caches, date and success its fetch left, without a GET. A model it lacks stays unknown."""
+        from ouroboros.capability_evidence import _CONFIRMED_TTL_SEC, _age_seconds, canonical_evidence_root
+        from ouroboros.utils import json_snapshot
+
+        try:
+            record = json_snapshot(_catalog_path(canonical_evidence_root())) or {}
+            models, observed = record.get("models"), str(record.get("observed_at") or "")
+            if not isinstance(models, dict) or not observed or _age_seconds(observed) > _CONFIRMED_TTL_SEC:
+                return False
+            rows = [(str(mid), row) for mid, row in models.items() if isinstance(row, dict)]
+            params = {mid: {str(name) for name in row["supported_parameters"]} for mid, row in rows
+                      if isinstance(row.get("supported_parameters"), list) and row["supported_parameters"]}
+            lengths = {mid: row["context_length"] for mid, row in rows
+                       if type(row.get("context_length")) is int and row["context_length"] > 0}
+        except Exception:
+            log.debug("The recorded OpenRouter catalogue is unreadable", exc_info=True)
+            return False
+        cls._SUPPORTED_PARAMS_CACHE.update(params)
+        cls._CONTEXT_LENGTH_CACHE, cls._CONTEXT_LENGTH_OBSERVED_AT = lengths, observed
+        cls._SUPPORTED_PARAMS_FETCHED = cls._CAPABILITIES_FETCH_OK = True
+        return True
+
+    @classmethod
+    def prefetch_openrouter_catalog(cls) -> None:
+        """At boot, off every turn: observe the catalogue unless a process recorded a current one."""
+        if not cls._adopt_recorded_catalog():
+            cls._fetch_openrouter_capabilities()
 
     @classmethod
     def metadata_fetch_attempted_and_failed(cls) -> bool:
@@ -181,17 +229,21 @@ class _CapabilityPolicyMixin:
 
     @classmethod
     def _get_supported_parameters(cls, model_id: str) -> Optional[set]:
-        """Return supported parameter names, or None when unknown/no stripping."""
+        """Supported parameter names, or None when unknown (no stripping): what this process or
+        the recorded catalogue holds. A request never waits for the network (unknown, not denied)."""
         if not cls._SUPPORTED_PARAMS_FETCHED:
-            cls._fetch_openrouter_capabilities()
+            cls._adopt_recorded_catalog()
         return cls._SUPPORTED_PARAMS_CACHE.get(model_id)
 
     @classmethod
     def openrouter_context_length(cls, model_id: str, *, allow_fetch: bool = True) -> int:
-        """Read the catalog, refreshing expired evidence only when fetching is allowed."""
+        """Read the catalog (a recorded one first); with fetching allowed, observe an absent model or
+        refresh expired evidence."""
         from ouroboros.capability_evidence import _age_seconds, _CONFIRMED_TTL_SEC
 
         mid = str(model_id or "")
+        if not cls._SUPPORTED_PARAMS_FETCHED or _age_seconds(cls._CONTEXT_LENGTH_OBSERVED_AT) > _CONFIRMED_TTL_SEC:
+            cls._adopt_recorded_catalog()
         needs_fetch = (not cls._SUPPORTED_PARAMS_FETCHED) or (
             allow_fetch and (not cls._CAPABILITIES_FETCH_OK or mid not in cls._CONTEXT_LENGTH_CACHE
                             or _age_seconds(cls._CONTEXT_LENGTH_OBSERVED_AT) > _CONFIRMED_TTL_SEC)

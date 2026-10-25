@@ -114,14 +114,22 @@ def _provider_catalog_state_returns():
     """Hand `LLMClient`'s provider-catalog class state back as the test found it.
 
     A class not yet imported when the test started is found pristine; a test
-    that imports it and fetches gives the empty caches back.
+    that imports it and fetches gives the empty caches back, and the catalogue
+    a clean fetch recorded at the worker-shared data root, which any later test
+    would adopt, returns to what the test found.
     """
     cls = _provider_catalog_class()
     saved = _provider_catalog_snapshot(cls) if cls is not None else None
+    record = _PYTEST_DATA_DIR / "state" / "openrouter_models.json" if _PYTEST_DATA_DIR is not None else None
+    recorded = record.read_bytes() if record is not None and record.is_file() else None
     yield
     cls = _provider_catalog_class()
     if cls is not None:
         _restore_provider_catalog(cls, saved if saved is not None else _PROVIDER_CATALOG_PRISTINE)
+    if record is not None and recorded is None:
+        record.unlink(missing_ok=True)
+    elif record is not None and (not record.is_file() or record.read_bytes() != recorded):
+        record.write_bytes(recorded)
 
 
 @pytest.fixture
