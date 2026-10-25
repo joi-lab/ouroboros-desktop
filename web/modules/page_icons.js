@@ -53,18 +53,9 @@ export function renderSkillIcon(spec, { size = 16, className = '' } = {}) {
     const pixels = Number.isFinite(size) && size > 0 ? size : 16;
     const name = typeof spec === 'string' ? spec : spec?.name;
     let svg = strokeIcon(CONTROL_BODIES[name] || CONTROL_BODIES.plug, pixels);
-    if (spec?.kind === 'svg' && typeof spec.svg === 'string' && spec.svg.length <= 8192 && globalThis.DOMPurify) {
-        // The server has already rebuilt these bytes. Keep the DOM sink limited to geometry too.
-        const clean = globalThis.DOMPurify.sanitize(spec.svg, {
-            ALLOWED_TAGS: ['svg', 'g', 'path', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'rect'],
-            ALLOWED_ATTR: ['xmlns', 'viewBox', 'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'width', 'height',
-                'points', 'x1', 'y1', 'x2', 'y2', 'transform', 'fill', 'stroke', 'stroke-width',
-                'stroke-linecap', 'stroke-linejoin', 'fill-rule', 'clip-rule'],
-            ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false, KEEP_CONTENT: false,
-        });
-        if (clean.startsWith('<svg ') && clean.endsWith('</svg>')) {
-            svg = clean.replace('<svg ', `<svg width="${pixels}" height="${pixels}" `);
-        }
+    // icon_spec rebuilt this geometry on the server; do not fetch or sanitize it again.
+    if (spec?.kind === 'svg' && typeof spec.svg === 'string' && spec.svg.startsWith('<svg ') && spec.svg.endsWith('</svg>')) {
+        svg = spec.svg.replace('<svg ', `<svg width="${pixels}" height="${pixels}" `);
     }
     const css = String(className).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
     return svg.replace('<svg ', `<svg aria-hidden="true"${css ? ` class="${css}"` : ''} `);
