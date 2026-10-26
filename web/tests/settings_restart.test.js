@@ -37,6 +37,9 @@ test('Restart now confirm-and-send sends exactly one non-queueable /restart', as
     assert.match(seenOptions[0].body, /already paused stay paused/);
     assert.match(seenOptions[0].body, /Runnable queued tasks return to the queue/);
     assert.match(seenOptions[0].body, /Existing holds and limits still apply/);
+    // Live routing: resumed work that follows a role takes its current model; an explicit choice stays.
+    assert.match(seenOptions[0].body,
+        /work that follows a model setting resumes on the current setting; task-specific choices stay\./);
     assert.doesNotMatch(seenOptions[0].body, /queued tasks stop/);
     assert.doesNotMatch(seenOptions[0].body, /still pausing/);
 });

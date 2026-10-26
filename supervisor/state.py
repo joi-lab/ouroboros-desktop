@@ -790,23 +790,31 @@ def check_openrouter_ground_truth(api_key: Optional[str] = None) -> Optional[Dic
             return None
         from ouroboros.net_transport import trust_ssl_context
 
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/auth/key",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        req = urllib.request.Request("https://openrouter.ai/api/v1/auth/key",
+                                     headers={"Authorization": f"Bearer {api_key}"})
         # A provider call: it verifies against the owner's trust bundle like every other one.
         with urllib.request.urlopen(req, timeout=10, context=trust_ssl_context()) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        # OpenRouter usage is dollars, not cents.
-        usage_total = data.get("data", {}).get("usage", 0)
-        usage_daily = data.get("data", {}).get("usage_daily", 0)
-        return {
-            "total_usd": float(usage_total),
-            "daily_usd": float(usage_daily),
-        }
+            key = json.loads(resp.read().decode("utf-8")).get("data", {})
+        # Dollars, not cents. Like the ledger, the key's consumption includes its BYOK share.
+        return {"total_usd": float(key.get("usage", 0)) + float(key.get("byok_usage") or 0),
+                "daily_usd": float(key.get("usage_daily", 0)) + float(key.get("byok_usage_daily") or 0)}
     except Exception:
         log.warning("Failed to fetch OpenRouter ground truth", exc_info=True)
         return None
+
+
+def _other_openrouter_connection_enabled() -> bool:
+    """Whether an enabled OpenRouter connection besides the queried built-in key shares the
+    ledger's ``openrouter`` bucket: the key's usage is then no like-for-like comparison."""
+    try:
+        from ouroboros.config import runtime_settings
+
+        rows = runtime_settings().get("OUROBOROS_CONNECTIONS") or []
+        return any(isinstance(row, dict) and row.get("kind") == "openrouter" and row.get("name") != "default"
+                   and row.get("enabled", True) is not False
+                   for row in (json.loads(rows) if isinstance(rows, str) else rows))
+    except Exception:
+        return False
 
 
 # Only diagnostic baseline/publication identity: ordinary spend may advance
@@ -857,6 +865,7 @@ class _OpenRouterDiagnostic:
             ground_truth = check_openrouter_ground_truth(api_key)
             if ground_truth is None or not self.current():
                 return
+            shared = _other_openrouter_connection_enabled()  # a settings read, never under STATE_LOCK
             with _state_lock("OpenRouter diagnostic"):
                 if not self.current():
                     return
@@ -864,7 +873,7 @@ class _OpenRouterDiagnostic:
                 if (not self.current() or key_fp != _openrouter_key_fingerprint()
                         or any(st.get(key) != snapshot.get(key) for key in _OPENROUTER_DIAGNOSTIC_BASIS)):
                     return
-                _apply_openrouter_ground_truth(st, snapshot, key_fp, ground_truth)
+                _apply_openrouter_ground_truth(st, snapshot, key_fp, ground_truth, shared=shared)
                 if self.current():
                     _save_state_unlocked(st)
         except Exception:
@@ -877,7 +886,7 @@ _OPENROUTER_DIAGNOSTIC = _OpenRouterDiagnostic()
 
 
 def _apply_openrouter_ground_truth(st: Dict[str, Any], snapshot: Dict[str, Any],
-                                  key_fp: str, ground_truth: Dict[str, float]) -> None:
+                                  key_fp: str, ground_truth: Dict[str, float], *, shared: bool = False) -> None:
     """Publish one applicable observation under STATE_LOCK; money stays ledger-owned."""
     st["openrouter_total_usd"] = ground_truth["total_usd"]
     st["openrouter_checked_ledger_settled_usd"] = snapshot.get("openrouter_ledger_settled_usd")
@@ -903,13 +912,14 @@ def _apply_openrouter_ground_truth(st: Dict[str, Any], snapshot: Dict[str, Any],
         st["budget_drift_alert"] = False
     elif (
         key_changed
+        or shared
         or session_total_snap is None
         or session_or_settled_snap is None
         or or_ledger_settled is None
     ):
-        # Rebaseline (key swapped mid-session, or pre-upgrade state
-        # lacks the OpenRouter-only snapshot) and skip this cycle:
-        # the old baseline describes a different key/metric.
+        # Rebaseline (key swapped mid-session, another enabled OpenRouter connection
+        # spends into the same bucket, or pre-upgrade state lacks the OpenRouter-only
+        # snapshot) and skip the percentage: the old baseline describes another key/metric.
         st["session_total_snapshot"] = ground_truth["total_usd"]
         st["session_openrouter_settled_snapshot"] = or_ledger_settled
         st["session_openrouter_key_fp"] = key_fp
@@ -928,26 +938,16 @@ def _apply_openrouter_ground_truth(st: Dict[str, Any], snapshot: Dict[str, Any],
                 all_provider_delta = float(snapshot.get("spent_usd") or 0.0) - float(
                     st.get("session_spent_snapshot") or 0.0
                 )
-                append_jsonl(
-                    DRIVE_ROOT / "logs" / "events.jsonl",
-                    {
-                        "ts": utc_now_iso(),
-                        # "type" is the events.jsonl schema key every
-                        # other event uses; type-keyed aggregations
-                        # lost this row when it was written as "event".
-                        "type": "budget_drift_warning",
-                        "drift_pct": round(drift_pct, 2),
-                        "our_delta": round(our_delta, 4),
-                        "or_delta": round(or_delta, 4),
-                        "abs_diff": round(abs_diff, 4),
-                        "all_provider_delta": round(all_provider_delta, 4),
-                        "spent_calls": snapshot["spent_calls"],
-                        "note": (
-                            "OpenRouter-only ledger delta vs /auth/key usage delta. "
-                            "High drift usually means a shared OR key or missing ledger rows."
-                        ),
-                    }
-                )
+                append_jsonl(DRIVE_ROOT / "logs" / "events.jsonl", {
+                    # "type" is the events.jsonl schema key every other event uses;
+                    # type-keyed aggregations lost this row when it was written as "event".
+                    "ts": utc_now_iso(), "type": "budget_drift_warning",
+                    "drift_pct": round(drift_pct, 2), "our_delta": round(our_delta, 4),
+                    "or_delta": round(or_delta, 4), "abs_diff": round(abs_diff, 4),
+                    "all_provider_delta": round(all_provider_delta, 4), "spent_calls": snapshot["spent_calls"],
+                    "note": ("OpenRouter-only ledger delta vs /auth/key usage delta. "
+                             "High drift usually means a shared OR key or missing ledger rows."),
+                })
             else:
                 st["budget_drift_alert"] = False
         else:
