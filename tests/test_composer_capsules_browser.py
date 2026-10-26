@@ -547,7 +547,10 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
             facts = page.evaluate(PANEL, SUBAGENTS)
             _assert_panel(facts, phone=phone, theme="dark")
             _shot(page, tmp_path, f"capsules-subagents-settings-off-{engine}-{width}-dark")
-            press(f'{_panel(page, SUBAGENTS)} .chat-seg[data-mode="swarm"]')
+            # A press on a value Settings rules out (aria-disabled: the browser's own actionability waits for it, so the
+            # press is forced) chooses nothing.
+            locked_swarm = page.locator(f'{_panel(page, SUBAGENTS)} .chat-seg[data-mode="swarm"]')
+            (locked_swarm.tap if phone else locked_swarm.click)(force=True)
             page.wait_for_timeout(300)
             assert page.locator(f"{SUBAGENTS}").get_attribute("data-mode") == "off", "a value Settings rules out is not chosen"
             # Open Settings closes the panel first, then goes to Settings › Agents.

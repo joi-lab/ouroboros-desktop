@@ -75,6 +75,7 @@ FACTS = """sel => {
         band: box(strip?.querySelector('.chat-effort-band')), minCap: box(strip?.querySelector('.chat-effort-min')),
         maxCap: box(strip?.querySelector('.chat-effort-max')), strip: box(strip),
         segs: strip ? [...strip.querySelectorAll('.chat-effort-seg')].map(box) : [],
+        words: strip ? [...strip.querySelectorAll('.chat-effort-seg-text')].map(box) : [],
         stripScrolls: Boolean(strip) && strip.scrollWidth > strip.clientWidth + 1,
     };
 }"""
@@ -134,6 +135,10 @@ def _assert_strip_geometry(facts: dict) -> None:
     for cap in (facts["minCap"], facts["maxCap"], pill):
         assert abs(cap["top"] - band["top"]) <= 0.6 and abs(cap["bottom"] - band["bottom"]) <= 0.6, facts
     assert abs(facts["minCap"]["left"] - band["left"]) <= 0.6 and abs(facts["maxCap"]["right"] - band["right"]) <= 0.6, facts
+    # A bracket's bar (its outer 2 px; its arms run along the band's top and bottom) keeps its air from every word.
+    bars = ((facts["minCap"]["left"], facts["minCap"]["left"] + 2), (facts["maxCap"]["right"] - 2, facts["maxCap"]["right"]))
+    for low, high in bars:
+        assert all(word["right"] <= low - 1 or word["left"] >= high + 1 for word in facts["words"]), ((low, high), facts["words"])
 
 
 def _assert_in_its_panel(facts: dict, *, phone: bool, finger: bool = True) -> None:
