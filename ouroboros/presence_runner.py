@@ -77,6 +77,7 @@ class PresenceTurnEvent:
     # (``presence_continuation``): 1 lets the transport take the initial envelope early.
     continuation_version: int = 0
     facts: tuple[str, ...] | None = None
+    identity: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -928,7 +929,7 @@ def _build_task(
         from ouroboros.presence_context import focus_metadata
         from ouroboros.consciousness_authority import apply_consciousness_authority
         metadata.pop("inline_max_rounds", None)
-        metadata.update(focus_metadata(admission, event, task_id, chat_id))
+        metadata.update(focus_metadata(admission, event, task_id, chat_id, drive_root=drive_root))
         from ouroboros.presence_context import _own_work_section
         metadata["focus_work_here"] = _own_work_section(drive_root, metadata["presence"], task_id)
         apply_consciousness_authority(task)

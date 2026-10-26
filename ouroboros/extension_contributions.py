@@ -91,7 +91,8 @@ def stage_contributions(api, skill, revision: str) -> None:
 
 
 def project_contributions(skill: str, entries: list[dict], revision: str, label: str = "", *,
-                          sources: dict[str, bytes] | None = None, tools: list | None = None) -> list[dict]:
+                          sources: dict[str, bytes] | None = None, tools: list | None = None,
+                          status: dict | None = None) -> list[dict]:
     """Host-owned absolute paths; authors never choose a different skill's namespace."""
     prefix = f"/api/extensions/{quote(skill, safe='')}/"
     rows = []
@@ -124,5 +125,35 @@ def project_contributions(skill: str, entries: list[dict], revision: str, label:
         render = row["render"]
         render["url"] = (prefix + f"ui/{quote(revision, safe='')}/" + quote(render.pop("entry"), safe="/")
                          if render["kind"] == "host" else "")
-        rows.append(row)
+        rows.append(project_place_status(row, status or {}) if row.get("provides") == "place" else row)
     return rows
+
+
+def project_place_status(row: dict, payload: dict) -> dict:
+    """Keep validated credential facts; a broken connector must not break its sheet."""
+    from ouroboros.places import validate_presence_identity
+
+    result = {**row, "labels": {fact["id"]: fact["label"] for fact in row.get("facts", []) if isinstance(fact, dict)}}
+    if "identity" in payload:
+        try:
+            result["identity"] = validate_presence_identity(payload["identity"])
+        except ValueError as exc:
+            result.pop("identity", None)
+            log.warning("Place identity dropped for %s: %s", row.get("skill"), exc)
+    return result
+
+
+def live_place_declarations(root=None, *, connector: str = "") -> list[dict]:
+    """Read each live declaration's existing status route, without a poller or cache."""
+    from ouroboros.config import DATA_DIR
+    from ouroboros.extension_registry_state import live_contribution_projection
+    from ouroboros.gateway.places_api import read_place_status
+
+    return [project_place_status(row, read_place_status(root or DATA_DIR, row))
+            for row in live_contribution_projection() if row.get("provides") == "place"
+            and (not connector or row.get("skill") == connector)]
+
+
+def current_place_identity(place, root=None) -> dict | None:
+    return next((row.get("identity") for row in live_place_declarations(root, connector=place.connector)
+                 if not place.contribution_id or row["id"] == place.contribution_id), None)

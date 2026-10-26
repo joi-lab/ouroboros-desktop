@@ -950,6 +950,7 @@ contributes:
     scope: account             # account | conversation
     wakes: [direct_message, group_dm, mention, my_thread, reply_to_me]   # suggestions; the owner edits the list
     source: {route: status, refresh_s: 15}                               # optional status and Connect choices
+    settings: connection       # optional id passed to api.register_settings_section
 ```
 
 - `effect` is one fact with three consumers: Advises (autonomy) refuses everything but a declared read; a Silent or
@@ -968,6 +969,11 @@ contributes:
   Skills cards prefer the optional top-level, one-line `title`, then the place contribution's `label`, then `name`.
   Catalog entries may carry `title`; it is display text, never a new skill identity. Place, instance, account and
   signal labels render verbatim as authored content, outside the host's translation overlay.
+
+The optional `settings` member names the connector's registered Settings section (for example
+`api.register_settings_section("connection", ...)`); it is a section id, not an embedded form or a new
+Place field. That section's form/action components and routes own configuration, including signal
+parameters or connector send switches. Their hydration/write contract is documented under PluginAPI below.
 
 The declared `source` route may return `connect: [{account_id, conversation_id, label}]` beside its status
 `text`/`tone`. The host publishes the route as `source.url`; Connect reads it lazily with `cache: no-store`,
@@ -989,13 +995,15 @@ instance list and posts only `connector`. Selecting an instance posts its string
 repeat Connect preserves state, label, wakes and notes. Several identities can coexist without splitting or
 relabeling an existing broad place. Connectors remain listed with a place count and “Connect another”.
 
-A `provides: place` contribution may include `facts`, a list of the core fact names advertised in
-`/identity.presence_wake_facts` and connector-defined objects `{id: "signal.<slug>", label: "Human-readable signal"}`.
+A `provides: place` contribution may include `facts`: core names from `/identity.presence_wake_facts`,
+labelled core kinds `{id: "direct_message", label: "Mail addressed to you"}`, or connector-defined
+objects `{id: "signal.<slug>", label: "Human-readable signal"}`.
 A signal id must match `^signal\.[a-z0-9_-]{1,40}$`; its object has exactly `id` and `label`, and the label is
 non-empty text up to 120 characters. Fact ids must be unique. `wakes` remains the default wake suggestions
 and must be a subset of `facts` when that list is present; when `facts` is absent, only core wake facts may
-be suggested. An empty `facts` list permits only empty `wakes`. Core facts are plain strings; signals require
-labelled objects in `facts` and their id strings in `wakes` and event `facts`.
+be suggested. An empty `facts` list permits only empty `wakes`. Core labels are optional; signals require
+labels. Both use id strings in `wakes` and event `facts`; a label changes display words, never the fact
+semantics. Labels on core kinds require `/identity.presence_identity: 1`; plain core strings work on older hosts.
 
 Negotiate support through `/identity`: `presence_wake_signals: 1` advertises this seam. Older hosts may reject
 the `facts` manifest key, so do not publish signal declarations to a host without support. Intake accepts a
@@ -1027,6 +1035,37 @@ outside the provider API or the connector's declared support.
 The host validates and captures an event before applying authored wakes and execution
 conditions. Manifest wakes are suggestions, not a second attention policy. Provider
 access, supported event kinds and outgoing tools remain the connector's responsibility.
+
+### Who the connector writes as
+
+When `/identity` advertises `presence_identity: 1`, the status route may return top-level `identity`,
+and every `POST /presence/turn` may carry the same object as `event.identity`, beside `event.facts`:
+
+```json
+{"sends_as": {"id": "writer@example.test", "label": "Writer mailbox", "kind": "user"},
+ "reads_as": [{"id": "reader@example.test", "label": "Reader mailbox", "kind": "user"}]}
+```
+
+Both members are optional; unknown members are refused. `sends_as` is one entry; `reads_as` is a list.
+Each entry has exactly nonblank `id` and `label` strings (at most 200 characters each) and `kind: user|bot`.
+`kind` describes the credential's provider account, not a chosen persona. Do not add host-derived owner flags.
+Invalid event identity returns 400 `presence_identity_invalid`; invalid status identity is logged and dropped.
+The event copy wins for its focus; without it the current status declaration is used. Neither carrier adds
+fields to `places.json`. The host passes the facts to focus/own-clock context, Safety and wake/delivery views.
+
+The owner's “This is my account” confirms `sends_as.id` using the existing `owner_accounts` writer.
+A matching `platform_actor_id` in the same `account_id` scope derives `owner: true`; revocation removes it.
+This says whose credential writes or reads, independently of who sent an incoming message. Bot identities
+never offer this confirmation. Only the human activates a place, through its sheet or an owner-door Main turn;
+consciousness may still set Silent or Paused.
+
+Optional `event.actor.authenticated` must be a boolean: true means the provider attests this sender's
+identity, not merely that the connector authenticated to its API. Never derive it from a header the sender
+controls. An unverified mail `From:` therefore requires false; receiving-server authentication evidence must
+be verified by the connector before true is warranted. False keeps `owner_confirmed` false even for a
+confirmed owner account, so neither the owner Safety occasion nor promotion to owner work follows.
+Absent retains the existing authenticated-platform behavior. A bad shape returns 400 `presence_actor_invalid`.
+Send identity and this actor fact only after the host advertises `presence_identity: 1`.
 
 ### Places and focus transport ingress
 

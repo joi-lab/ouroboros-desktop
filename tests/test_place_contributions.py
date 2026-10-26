@@ -72,16 +72,20 @@ def test_hub_pointer_optional_fields_do_not_change_schema(tmp_path):
                               "connector", tmp_path)["icon"] == {}
 
 
-@pytest.mark.parametrize("facts,wakes", [
-    (["mention", {"id": "signal.words", "label": "Words you chose appear"}], ["mention", "signal.words"]),
-    ([], []), (["any_message", "from_bot"], ["from_bot"]),
+@pytest.mark.parametrize("facts,wakes,labels", [
+    (["mention", {"id": "signal.words", "label": "Words you chose appear"}], ["mention", "signal.words"],
+     {"signal.words": "Words you chose appear"}),
+    ([{"id": "direct_message", "label": "Mail addressed to you"}], ["direct_message"],
+     {"direct_message": "Mail addressed to you"}),
+    ([], [], {}), (["any_message", "from_bot"], ["from_bot"], {}),
 ])
-def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes):
+def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes, labels):
     clean, errors = validate_contributions(manifest(
         [{**PLACE, "facts": facts, "wakes": wakes}], kind="extension", permissions=["presence"]))
     assert not errors
     row, = project_contributions("connector", clean, "reviewed")
     assert row["facts"] == facts and row["wakes"] == wakes
+    assert row["labels"] == labels
 
 
 @pytest.mark.parametrize("patch", [
@@ -90,8 +94,9 @@ def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes):
     {"facts": ["signal.words"]}, {"facts": ["unknown"]}, {"facts": "mention"},
     {"facts": ["mention", "mention"]},
     *[{"facts": [{"id": value, "label": "Words"}]} for value in
-      ("mention", "signal.", "signal.Upper", "signal.a.b", "signal." + "a" * 41)],
+      ("unknown", "signal.", "signal.Upper", "signal.a.b", "signal." + "a" * 41)],
     {"facts": [{"id": "signal.words", "label": ""}]},
+    {"facts": [{"id": "mention", "label": "x" * 121}]},
     {"facts": [{"id": "signal.words", "label": "Words", "pattern": "text"}]},
 ])
 def test_invalid_facts_drop_only_invalid_contribution(patch):
@@ -99,3 +104,22 @@ def test_invalid_facts_drop_only_invalid_contribution(patch):
     clean, errors = validate_contributions(manifest(
         [good, {**PLACE, "id": "invalid", **patch}], kind="extension", permissions=["presence"]))
     assert len(errors) == 1 and [row["id"] for row in clean] == ["place"]
+
+
+@pytest.mark.parametrize("identity", [{}, {"sends_as": {"id": "writer", "label": "Mail", "kind": "user"}},
+                                      {"reads_as": [{"id": "reader", "label": "Reader", "kind": "bot"}]}])
+def test_status_identity_is_detached_and_projected(identity):
+    clean, errors = validate_contributions(manifest([PLACE], kind="extension", permissions=["presence"]))
+    assert not errors
+    row, = project_contributions("connector", clean, "reviewed", status={"identity": identity})
+    assert row["identity"] == identity and row["identity"] is not identity
+    legacy, = project_contributions("connector", clean, "reviewed")
+    assert "identity" not in legacy
+
+
+@pytest.mark.parametrize("identity", [None, [], {"extra": True}, {"sends_as": {"id": "writer"}}])
+def test_invalid_status_identity_is_logged_and_dropped(identity, caplog):
+    clean, _ = validate_contributions(manifest([PLACE], kind="extension", permissions=["presence"]))
+    row, = project_contributions("connector", clean, "reviewed", status={"identity": identity})
+    assert "identity" not in row and row["label"] == PLACE["label"]
+    assert "Place identity dropped for connector" in caplog.text

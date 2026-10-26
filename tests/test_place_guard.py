@@ -170,3 +170,34 @@ def test_unreadable_place_store_holds_only_connector_writes(published_tool, plac
     assert guard.dispatch_refusal(ctx, name, {"channel": "C1"}, ext_tool=tool) == ""
     assert guard.call_place_facts(ctx, name, {"channel": "C1"}, ext_tool=tool).get("places_unreadable", "") == (
         "Place records need repair" if declares_place else "")
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_call_facts_include_sending_identity_only_when_declared(published_tool, places, monkeypatch, declared):
+    from ouroboros.places import OwnerAccount
+    rows, ctx = places
+    rows[1] = replace(rows[1], owner_accounts=(OwnerAccount("writer", account_id="account"),))
+    identity = {"sends_as": {"id": "writer", "label": "My mailbox", "kind": "user"}}
+    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: identity if declared else None)
+    name, tool = published_tool("message", target="room", conversation="room")
+    facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
+    if declared:
+        assert facts["sends_as"] == identity["sends_as"] and facts["sends_as_owner"] is True
+        assert facts["places"][0]["sends_as"] == facts["sends_as"]
+    else:
+        assert "sends_as" not in facts and "sends_as_owner" not in facts
+        assert "sends_as" not in facts["places"][0]
+    assert guard.call_place_facts(ctx, "read_file", {}) == {}
+
+
+def test_safety_call_uses_focus_identity_only_for_its_target(published_tool, places, monkeypatch):
+    rows, ctx = places
+    event = {"sends_as": {"id": "event", "label": "At the event", "kind": "user"}}
+    current = {"sends_as": {"id": "current", "label": "Now", "kind": "bot"}}
+    ctx.task_metadata = {"focus": {"place_id": "active", "identity": event, "identity_owner": True}}
+    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: current)
+    name, tool = published_tool("message", target="room", conversation="room")
+    facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
+    assert facts["sends_as"] == event["sends_as"] and facts["sends_as_owner"] is True
+    facts = guard.call_place_facts(ctx, name, {"room": "C1"}, ext_tool=tool)
+    assert facts["sends_as"] == current["sends_as"] and facts["sends_as_owner"] is False
