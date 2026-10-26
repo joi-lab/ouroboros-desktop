@@ -1,12 +1,7 @@
-"""Strict settings-snapshot integrity pin (benchmark isolation trust root).
+"""Pinned settings snapshots, private actor reads and live room choices.
 
-An isolated benchmark server seeds its child with an exact settings snapshot
-and pins its sha256 in ``OUROBOROS_SETTINGS_SHA256``: while the pin is
-present the snapshot is an owner-authored trust root — every read verifies
-the complete byte stream and every writer refuses. Extracted from
-``config.py`` (which re-exports the public names, so every existing
-``config.X`` import keeps working) to keep the SSOT module inside its size
-ratchet.
+Benchmark OUROBOROS_SETTINGS_SHA256 pins verify complete bytes and refuse
+every writer. Public integrity names are re-exported by config.py.
 """
 from __future__ import annotations
 
@@ -306,7 +301,12 @@ def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None 
 
 def record_subagents_admission(task: dict, drive_root: Path) -> None:
     """A root's admission fact for telemetry, never a future-round authority."""
-    task.setdefault("metadata", {})["subagents_mode"] = effective_subagents_mode(task=task, drive_root=drive_root)
+    # A new root's accepted room is authoritative; its not-yet-running identity
+    # must not read the task store ahead of the ordinary pre-start storage wait.
+    lineage = {"id", "parent_task_id", "root_task_id"}
+    room = {key: value for key, value in task.items() if key not in lineage}
+    room["metadata"] = {key: value for key, value in (task.get("metadata") or {}).items() if key not in lineage}
+    task.setdefault("metadata", {})["subagents_mode"] = effective_subagents_mode(task=room, drive_root=drive_root)
 
 
 def room_subagents_mode_applies() -> bool:
