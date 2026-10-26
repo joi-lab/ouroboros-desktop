@@ -99,6 +99,7 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | POST | `/api/owner/auto-grant` | |
 | POST | `/api/owner/context-mode` | |
 | POST | `/api/owner/effort-range` | |
+| POST | `/api/owner/subagents-mode` | `{mode, project_id?}` → `{ok, project_id, subagents_mode, cognition}` (§7) |
 | POST | `/api/owner/safety-mode` | |
 | POST | `/api/owner/safety-model` | |
 | POST | `/api/owner/safety-rules` | |
@@ -217,7 +218,7 @@ The browser opens one socket for the whole SPA. Feature modules subscribe, and t
 
 #### WebSocket chat
 
-A browser `chat` frame carries owner text and/or uploaded attachment references, optionally with `sender_session_id`, `client_message_id`, `force_plan`, `chat_id`, `project_id` and `client_surface`: raw sending-surface facts measured at send (the pywebview bridge appears asynchronously after load). The gateway normalizes them (`client_surface.normalize_client_surface`), stamps host `received_at` at receipt, and every transport passes one common enqueue (`LocalChatBridge.enqueue_local_message`). The surface fact is per-message provenance, distinct from the chat-scoped `transport` reply route, assembled at its producer, never inferred at render, carried from the originating owner turn by promotion or steering (`client_surface.py`).
+A browser `chat` frame carries owner text and/or uploaded attachment references, optionally with `sender_session_id`, `client_message_id`, `chat_id`, `project_id` and `client_surface`: raw sending-surface facts measured at send (the pywebview bridge appears asynchronously after load). `ChatInbound.force_plan` remains accepted and ignored for one release (deprecated); current clients omit it. The gateway normalizes surface facts (`client_surface.normalize_client_surface`), stamps host `received_at` at receipt, and every transport passes one common enqueue (`LocalChatBridge.enqueue_local_message`). The surface fact is per-message provenance, distinct from the chat-scoped `transport` reply route, assembled at its producer, never inferred at render, carried from the originating owner turn by promotion or steering (`client_surface.py`).
 
 Acceptance is idempotent on `client_message_id`: a successful browser `send()` means only that the current socket took the frame, not task admission. A same-id frame rejoins the accepted row if words and ordered attachment content match, else is refused; the `ingress_accepted` echo and history carry the row's durable dispatch fact (`ingress_pending`: owed, performed once by a retry or the next bus init; `ingress_dispatched`: entered here); row and uploads are kept (`supervisor/message_ingress.py`). Unreadable chat history is unknown: the frame is refused with the `initialization_notice` before anything is claimed or written.
 

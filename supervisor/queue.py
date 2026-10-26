@@ -300,6 +300,10 @@ def enqueue_task(
         t.pop("_consciousness_continuation", None)  # never a caller-supplied marker
         if continuation:
             t["_consciousness_continuation"] = True
+    if (not restoring_snapshot and not (t.get("parent_task_id") or metadata.get("parent_task_id"))
+            and "subagents_mode" not in metadata):
+        from ouroboros.settings_integrity import record_subagents_admission
+        record_subagents_admission(t, DRIVE_ROOT)
     attach_task_contract(apply_consciousness_authority(t))
     from ouroboros.tool_access_roots import freeze_tool_profile
     freeze_tool_profile(t)

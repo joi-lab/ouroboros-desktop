@@ -64,6 +64,19 @@ def _events():
 VALID_SUBAGENT_MEMORY_MODES = frozenset({"forked", "empty"})
 
 
+def _subagent_room_mode(ctx: Any, task: dict) -> tuple[str, Optional[tuple[str, str]]]:
+    """A room removed during preparation retains the Project admission refusal."""
+    from ouroboros.settings_integrity import live_subagents_mode
+
+    try:
+        return live_subagents_mode(task=task, drive_root=ctx.DRIVE_ROOT), None
+    except ValueError as exc:
+        if not task.get("project_id"):
+            raise
+        return "", ("project_routing_fence_lookup_failed",
+                    f"Task not scheduled: Project state could not be checked: {exc}")
+
+
 def _cleanup_rejected_worktree(tid: str, result_fields: Dict[str, Any]) -> None:
     """Tear down a write surface provisioned for an acting subagent that is then
     rejected by a later gate, so rejected schedules never leak a worktree or an
@@ -452,8 +465,17 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any, preparation: Any = None
         if canonical_root and str(canonical_root) != str(count_roots[0]):
             count_roots.append(canonical_root)
         direct_child_count = _direct_child_count(count_roots, parent_id, tid)
+        room_mode, room_refusal = _subagent_room_mode(ctx, {
+            "id": parent_id, "root_task_id": root_task_id, "project_id": project_id, "chat_id": chat_id,
+            "metadata": evt.get("origin_metadata")})
+        if room_refusal:
+            reject(ctx, tid=tid, chat_id=chat_id, delegation_role=delegation_role,
+                   parent_id=parent_id, root_task_id=root_task_id, role=role, result_fields=result_fields,
+                   reason_code=room_refusal[0], detail=room_refusal[1],
+                   extra_fields={"admission_outcome": "never_admitted"})
+            return
         rights = check_delegation_admission(
-            parent_budget,
+            parent_budget, room_mode=room_mode,
             direct_child_count=direct_child_count,
         )
         # An unknown count is the interlocked re-check's to decide (it defers contention).
@@ -704,10 +726,16 @@ def _admit_scheduled_payload(ctx: Any, preparation: Any, r: SimpleNamespace) -> 
         from ouroboros.tools.control_delegation import effective_delegation_budget
         from supervisor import workspace_preparation
 
+        room_mode = "auto"
+        room_refusal = None
+
         def durable_child_count() -> Any:
             # Read on the lane, outside Q: the declared rights stay the same, current
             # counts cannot be borrowed from the pre-preparation queue snapshot.
-            nonlocal direct_child_count
+            nonlocal direct_child_count, room_mode, room_refusal
+            room_mode, room_refusal = _subagent_room_mode(ctx, task)
+            if room_refusal:
+                return direct_child_count
             direct_child_count = _direct_child_count(
                 r.count_roots, parent_id, tid,
                 propagate_contention=preparation is not None or not workspace_preparation._requests_preparation(evt))
@@ -716,7 +744,9 @@ def _admit_scheduled_payload(ctx: Any, preparation: Any, r: SimpleNamespace) -> 
         def recheck_child_admission(count: Any) -> tuple[str, str]:
             # Under Q, memory only, with the count the lane read.
             nonlocal queued_behind_active_cap
-            rights = check_delegation_admission(r.parent_budget, direct_child_count=count)
+            if room_refusal:
+                return room_refusal
+            rights = check_delegation_admission(r.parent_budget, direct_child_count=count, room_mode=room_mode)
             if not rights.ok:
                 return rights.reason_code, f"Subagent rejected: {rights.reason_code}: {rights.detail}"
             running = getattr(ctx, "RUNNING", QUEUE_RUNNING)

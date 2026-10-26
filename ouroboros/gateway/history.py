@@ -806,6 +806,8 @@ def _collect_chat_rows(
                 # (the key is simply ignored), and ``transport`` is the
                 # provenance surface.
             }
+            if role == "user" and entry.get("subagents_mode") == "swarm":
+                rec["subagents_mode"] = "swarm"
             if role == "user" and entry.get("ingress_accepted") is True:
                 rec["ingress_accepted"] = True
                 # Proven undispatched, entered, or this live process's and pending; an ended process's: nothing.

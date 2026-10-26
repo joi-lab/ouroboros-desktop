@@ -152,7 +152,7 @@ def test_project_fast_route_stages_attachment_in_actor_child_drive(tmp_path):
     assert notices == [] and "status=staged" in metadata["_attachment_report"]
 
 
-def test_project_swarm_bypasses_single_root_mailbox_for_new_managed_root(tmp_path, monkeypatch):
+def test_project_legacy_swarm_flag_uses_ordinary_new_head_for_pending_root(tmp_path, monkeypatch):
     import server
     from ouroboros.owner_mailbox import drain_owner_messages
     from ouroboros.projects_registry import create_project
@@ -195,15 +195,10 @@ def test_project_swarm_bypasses_single_root_mailbox_for_new_managed_root(tmp_pat
     server._process_bridge_updates(Bridge(), 0, ctx)
 
     assert drain_owner_messages(tmp_path, "pending-root") == []
-    assert len(calls) == 1 and calls[0][0] == "promote"
-    event = calls[0][1]
-    assert event["force_plan"] is True
-    assert event["project_id"] == "racer" and event["chat_id"] == chat_id
-    assert event["objective"] == "deeply fix the new issue"
-    assert "routing_contract" not in event
+    assert calls == ["direct"]
 
 
-def test_main_swarm_admits_root_in_main_without_model_routing(tmp_path, monkeypatch):
+def test_main_legacy_swarm_flag_uses_ordinary_owner_decision(tmp_path, monkeypatch):
     import server
     from ouroboros.projects_registry import create_project
 
@@ -233,13 +228,10 @@ def test_main_swarm_admits_root_in_main_without_model_routing(tmp_path, monkeypa
         lambda event, _ctx: calls.append(("promote", event)) or {"status": "scheduled"},
     )
     monkeypatch.setattr("supervisor.message_bus.log_chat", lambda *_a, **_k: None)
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
     server._process_bridge_updates(Bridge(), 0, ctx)
 
-    assert [kind for kind, _kwargs in calls] == ["promote"]
-    event = calls[0][1]
-    assert event["project_id"] == "" and event["chat_id"] == 1
-    assert event["objective"] == "audit and fix it"
-    assert "routing_contract" not in event
+    assert [kind for kind, _kwargs in calls] == ["direct"]
 
 
 def test_project_zero_call_followup_advances_active_fence_then_falls_through_when_sealed(

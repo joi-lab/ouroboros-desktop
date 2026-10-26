@@ -18,7 +18,7 @@ Every refusal — a schema error, an old-form call (``spec``, ``review_dispositi
 ``affected_paths``, an unknown participant, nothing sendable, the budget or deadline
 rail — writes nothing and engages no gate. There is no cycle counter, no verdict, no
 quorum and no fingerprint routing; the only hold is the finalization gate's
-(``owner_hurry.force_plan_decision`` over ``plan_record.gate_projection``).
+(``owner_hurry.plan_gate_decision`` over ``plan_record.gate_projection``).
 """
 
 from __future__ import annotations
@@ -357,11 +357,9 @@ def _decision(ctx: ToolContext, record: Mapping[str, Any], legacy: Optional[Mapp
     from ouroboros.owner_hurry import latched
     from ouroboros.tools.review_helpers import review_enforcement_blocks
 
-    metadata = getattr(ctx, "task_metadata", {})
-    metadata = metadata if isinstance(metadata, Mapping) else {}
     return plan_record.gate_projection(
         record, enforcement=str(get_review_enforcement() or ""), cyber_pro=not review_enforcement_blocks("blocking"),
-        hurry=latched(ctx) is not None, force_plan=metadata.get("force_plan") is True, legacy=legacy, unreadable=unreadable)
+        hurry=latched(ctx) is not None, legacy=legacy, unreadable=unreadable)
 
 
 def _render_done_when(rows: List[Mapping[str, Any]]) -> str:
@@ -478,12 +476,6 @@ def render_record(record: Mapping[str, Any], decision: Mapping[str, Any], legacy
                      + (f" The dispatch outcome of ask(s) {', '.join(decision['unknown_outcome'])} is unknown: the substrate held the "
                         "seats when the host lost track, so a reply may still arrive and a new ask to them may pay twice."
                         if decision.get("unknown_outcome") else ""))
-    elif status == "force_plan_unmet" and decision.get("allow") and decision.get("asks_unroutable"):
-        lines.append("This task was admitted with a planning obligation; your ask reached nobody (no route could take it, "
-                     f"{decision['asks_unroutable']} attempt{'' if decision['asks_unroutable'] == 1 else 's'} recorded) — disclosed in "
-                     "your final answer, not held. Ask again when a route is available.")
-    elif status == "force_plan_unmet":
-        lines.append("This task was admitted with a planning obligation: ask the council before you finish.")
     else:
         lines.append("Nothing holds your final answer.")
     return "\n".join(lines)

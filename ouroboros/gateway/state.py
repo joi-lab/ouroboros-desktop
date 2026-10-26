@@ -170,6 +170,11 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
     concurrent request.
     """
     from ouroboros.tools.github import github_token_from_env_or_settings
+    from ouroboros.config import load_settings
+    from ouroboros.composer_cognition import main_cognition
+    from ouroboros.subagent_runtime import subagents_availability
+
+    settings = load_settings()
     from ouroboros.usage_accounting import usage_projection, usage_writer_snapshot
     from supervisor.queue import get_evolution_status_snapshot
     from supervisor.state import TOTAL_BUDGET_LIMIT, control_value, load_state
@@ -301,6 +306,8 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
         # on the worker thread with the rest of the snapshot, never on the event loop.
         "bg_state": (_describe_bg(request)(bg_enabled) if _describe_bg(request) else {}),
         "github_token_configured": bool(github_token_from_env_or_settings()),
+        "subagents_mode": main_cognition(settings)["subagents_mode"],
+        "subagents_availability": subagents_availability(settings),
         "projects": projects,
         "project_chat_ids": project_chat_ids,
         "main_visible_revision": main_visible_revision,
@@ -1011,6 +1018,8 @@ async def api_state(request: Request) -> JSONResponse:
             "boot": snap["boot"],  # the boot phases the header paints (Starting… → chat ready → Online)
             "runtime_mode": get_runtime_mode(),
             "context_mode": get_context_mode(),
+            "subagents_mode": snap["subagents_mode"],
+            "subagents_availability": snap["subagents_availability"],
             # Frozen one-window compatibility field. Persistent auto-Low is retired.
             "context_mode_auto_low": False,
             "effort_range": effort_range(),  # the owner's range, the tolerant read
