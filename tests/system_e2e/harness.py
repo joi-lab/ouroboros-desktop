@@ -60,7 +60,9 @@ from devtools.benchmarks.common.server_runner import (  # noqa: E402
 from ouroboros.provider_models import (  # noqa: E402
     ACTIVE_MODEL_SETTING_KEYS,
     ALL_PROVIDER_CREDENTIAL_KEYS,
+    CONNECTIONS_KEY,
     LEGACY_MODEL_SETTING_KEYS,
+    PROVIDER_KINDS,
 )
 from ouroboros.tools.scope_review_contract import SCOPE_REQUIRED_ITEMS  # noqa: E402
 from tests.candidate_checkout import (  # noqa: E402
@@ -879,7 +881,10 @@ def runtime_credential_env_key_reads() -> set:
             for name in _ENV_READ_RE.findall(source):
                 if _CREDENTIAL_SHAPE_RE.search(name):
                     keys.add(name)
-    return keys
+    # The resolver reads every kind's secret settings and the added-key rows by name through the
+    # kind table, which no literal shows (``provider_connections.connection_values``).
+    keys.update(flat for spec in PROVIDER_KINDS.values() for _field, flat, secret in spec.fields if secret)
+    return keys | {CONNECTIONS_KEY}
 
 
 def proc_environ(pid: int) -> dict:
@@ -1037,7 +1042,7 @@ def retired_cost_alias_paths(payload) -> list:
 # Everything the child environment must NOT carry in the keyless lane. The env union
 # closes the documented hole: IsolatedServer._is_secret_env_key EXEMPTS provider keys,
 # so an inherited ANTHROPIC_API_KEY survives the base sanitization by design.
-STRIPPED_PROVIDER_ENV_KEYS = frozenset(_PROVIDER_ENV_KEYS) | frozenset(ALL_PROVIDER_CREDENTIAL_KEYS)
+STRIPPED_PROVIDER_ENV_KEYS = frozenset(_PROVIDER_ENV_KEYS) | frozenset(ALL_PROVIDER_CREDENTIAL_KEYS) | {CONNECTIONS_KEY}
 PROXY_ENV_KEYS = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",

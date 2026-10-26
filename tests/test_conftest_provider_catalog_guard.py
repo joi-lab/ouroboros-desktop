@@ -54,6 +54,7 @@ def test_a_class_imported_during_the_test_is_found_pristine():
     assert conftest._provider_catalog_snapshot(LLMClient) == {
         "_SUPPORTED_PARAMS_CACHE": {}, "_SUPPORTED_PARAMS_FETCHED": False,
         "_CONTEXT_LENGTH_CACHE": {}, "_CONTEXT_LENGTH_OBSERVED_AT": "", "_CAPABILITIES_FETCH_OK": False,
+        "_CAPABILITIES_FAILED_AT": "",
     }
     assert conftest._PROVIDER_CATALOG_PRISTINE["_SUPPORTED_PARAMS_CACHE"] == {}  # the template stayed empty
     conftest._restore_provider_catalog(LLMClient, saved)

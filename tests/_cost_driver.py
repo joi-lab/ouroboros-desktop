@@ -6,7 +6,8 @@ before production code is imported, so a measurement is cold by construction: no
 previous request, boot or test cached in memory is present.
 
 Only what would leave the machine or start real work is replaced: the provider check says a
-provider is ready (no model is called; a call would be recorded and refused), workers are not
+provider is ready (no model is called; a call would be recorded and refused), a name lookup of
+any host but this one is refused and counted (``network_refused``), workers are not
 spawned, the supervisor's git bootstrap (checkout reset + import-test child process) and the
 boot-time update check do not run, the owned Claudexor daemon is not warmed, the starter-skill
 installer does not run (the boot of this fresh root with a ready provider schedules it; it would
@@ -39,10 +40,8 @@ Boundaries (tags in the output):
 - ``P:*`` (B8, the producer and loop boundaries, each on its FIRST pass in this process):
   ``P:metrics_run`` a delegated run's measurement publication with the metrics cursor ABSENT,
   ``P:metrics_review`` a review publication with the cursor STALE (behind the first segment),
-  ``P:intake`` the owner-message intake on the loop thread up to the direct turn's hand-off (the
-  turn itself is recorded, never run: its cost is the ordinary-dialogue measurement's, not this
-  contract's, and it reaches the network), ``P:send`` the loop's ``send_message`` of a terminal
-  answer, ``P:allowance`` one consciousness tick's allowance read;
+  ``P:send`` the loop's ``send_message`` of a terminal answer, ``P:allowance`` one consciousness
+  tick's allowance read;
 - ``D:<duty>:first|rest|work`` (B7, the rest law): every pass of the reconciled duty inventory
   (``server_maintenance.HOST_DUTIES``) and the delegated body's tick (``delegated-body``), each run
   on this thread under its own latch: ``first`` over the root as the boot left it, ``rest`` a second
@@ -54,7 +53,18 @@ Boundaries (tags in the output):
   pool work it submitted and the wakes it caused (a child look it requested, the early delivery
   replay), all joined or run here under its tag before the snapshot. The daemon is absent (every
   gateway read refuses typed), the maintenance child's spawn is recorded instead of started, and
-  the body's driver thread stays parked while its tick is driven here.
+  the body's driver thread stays parked while its tick is driven here;
+- ``T:*`` (B10, last): one owner message as the supervisor loop handles it (the state read, the
+  canonical inbound row, the routing pre-pass) and the production direct turn it starts, counted
+  up to the turn's first model request (``T:<tag>@request``), where the refused model call ends
+  it: ``T:main`` the process's first owner turn, ``T:mainw`` the next, ``T:main:foreign`` Main
+  after a busy install's activity elsewhere, ``T:room`` a project room's turn; at k=1 also
+  ``T:main:broad`` after 40 more live rooms and 10 running roots, ``T:main:rows`` after 650
+  more open rows over those rooms and ``T:main:archive`` after 40 archived knowledge notes and
+  40 old rescue snapshots (the turn after ``T:main:archive:first``, which meets them first). The
+  history they must not reread is laid after the import, untagged, and the install brought to the
+  steady state its maintenance child and its boot keep (the stored tail facts, the recorded OpenRouter
+  catalogue, the archive listing; tests/_turn_shapes.py).
 """
 
 from __future__ import annotations
@@ -80,6 +90,12 @@ READY_TIMEOUT_SEC = 240.0  # the transport bound of this measurement, not a judg
 # the parent's child timeout (tests/test_cost_contract.py) is the bound that ends a runaway driver.
 HOLD_TIMEOUT_SEC = 1800.0
 STATEMENT_SAMPLE = 80
+# B10: what a turn's request must carry (a row the step before it wrote), by tag.
+NEEDLES: Dict[str, List[str]] = {}
+
+
+class _FirstRequest(BaseException):
+    """The turn reached its first model request: its count is taken there and the turn ends (test-only)."""
 
 
 def _summary(meter: CostMeter, tag: str) -> Dict[str, Any]:
@@ -128,7 +144,9 @@ class _Tagger:
             BOUNDARY.reset(token)
 
 
-def _stub_external_effects(srv: Any, result: Dict[str, Any]) -> None:
+def _stub_external_effects(srv: Any, result: Dict[str, Any], meter: CostMeter) -> None:
+    import socket
+
     from ouroboros import claudexor_daemon, llm, skill_starter
     from supervisor import workers
 
@@ -140,12 +158,33 @@ def _stub_external_effects(srv: Any, result: Dict[str, Any]) -> None:
     skill_starter.schedule_starter = lambda _root, _ids, *, origin, repo_dir=None: (
         result.setdefault("starter_requests", []).append(origin))
 
-    def refuse_model(*_args, **_kwargs):
-        result.setdefault("model_calls", []).append(BOUNDARY.get() or threading.current_thread().name)
+    def refuse_model(*args, **kwargs):
+        tag = tag_of()
+        result.setdefault("model_calls", []).append(tag)
+        if tag.startswith("T:") and f"{tag}@request" not in result:
+            # The owner's wait ends at the turn's first model request: the count is taken there; the turn
+            # then unwinds through its finally blocks (a BaseException passes its failure handlers).
+            request = json.dumps([args[1:], kwargs], default=str, ensure_ascii=False)
+            result[f"{tag}@request"] = {**_summary(meter, tag),
+                                        "carries": [needle for needle in NEEDLES.get(tag, ()) if needle in request]}
+            _mark(result, f"{tag}@request")
+            raise _FirstRequest(tag)
         raise RuntimeError("cost contract: no model call is expected on these boundaries")
 
     llm.LLMClient.chat = refuse_model
     llm.LLMClient.chat_async = refuse_model
+    socket.getaddrinfo = loopback_only(meter, socket.getaddrinfo)
+
+
+def loopback_only(meter: CostMeter, resolve: Callable[..., Any]) -> Callable[..., Any]:
+    """``socket.getaddrinfo`` for the driver: this machine's names resolve; any other host is refused and
+    counted under the boundary that asked (``network_refused``), so nothing measured here leaves the machine."""
+    def lookup(host, *args, **kwargs):
+        if host not in (None, "", "localhost", "::1") and not str(host).startswith("127."):
+            meter.note_name("network_refused", str(host))
+            raise OSError(f"cost contract: no network ({host})")
+        return resolve(host, *args, **kwargs)
+    return lookup
 
 
 class _Park:
@@ -297,16 +336,14 @@ def _chat_frame(meter: CostMeter, client: Any, result: Dict[str, Any], tag: str,
 
 # ---- B8: producer and loop boundaries, B7: the duties ----------------------------------------------
 
-def _event_ctx(srv: Any, result: Dict[str, Any]) -> Any:
-    """The supervisor's event context as ``server._run_supervisor`` builds it, from the same owners; the
-    direct turn the intake hands off is recorded (``direct_turns``), never run here."""
+def _event_ctx(srv: Any) -> Any:
+    """The supervisor's event context as ``server._run_supervisor`` builds it, from the same owners, the
+    production direct turn included."""
     from ouroboros.utils import append_jsonl
     from supervisor import queue, workers
     from supervisor.message_bus import send_with_budget, try_get_bridge
     from supervisor.state import load_state, save_state, update_state
-
-    def handle_chat_direct(chat_id, text, *_args, **_kwargs):
-        result.setdefault("direct_turns", []).append({"chat_id": chat_id, "text": text})
+    from supervisor.worker_chat_lane import handle_chat_direct
 
     return SimpleNamespace(
         DRIVE_ROOT=srv.DATA_DIR, REPO_DIR=srv.REPO_DIR, bridge=try_get_bridge(), WORKERS=workers.WORKERS,
@@ -319,12 +356,12 @@ def _event_ctx(srv: Any, result: Dict[str, Any]) -> Any:
 
 
 def _boundary(meter: CostMeter, result: Dict[str, Any], tag: str, call: Callable[[], Any], *,
-              join: str = "", timeout: float = 180.0) -> None:
+              timeout: float = 180.0) -> None:
     try:
         response = tagged(tag, call)
     except Exception as exc:  # the boundary's own refusal is a fact of the measurement, not a driver error
         response = f"{type(exc).__name__}: {exc}"
-    alive = meter.join_spawned(join or tag, timeout=timeout)
+    alive = meter.join_spawned(tag, timeout=timeout)
     if alive:
         result["errors"].append(f"{tag}: threads still alive after {timeout}s: {alive}")
     _mark(result, tag)
@@ -367,12 +404,6 @@ def _publish_review(root: pathlib.Path, task_id: str) -> None:
     review_execution(request, slot, actor, SimpleNamespace(), fallback_root=root)
 
 
-def _route_message(srv: Any, ctx: Any, text: str, message_id: str) -> None:
-    srv._route_owner_message(ctx.bridge, ctx, {
-        "chat_id": 1, "text": text, "client_message_id": message_id, "image_caption": "", "image_data": None,
-        "task_constraint": None, "task_metadata": None, "origin_message_ref": None, "log_text": text})
-
-
 def _send_answer(ctx: Any, task_id: str, text: str) -> Any:
     from supervisor.events_chat_delivery import _handle_send_message
     from supervisor.terminal_delivery import delivery_id_for
@@ -386,13 +417,11 @@ def _measure_boundaries(meter: CostMeter, srv: Any, result: Dict[str, Any], root
                         facts: Dict[str, Any]) -> None:
     from ouroboros.consciousness_allowance import allowance_window
 
-    ctx = _event_ctx(srv, result)
+    ctx = _event_ctx(srv)
     held = facts["held_runs"]
     _boundary(meter, result, "P:metrics_run", lambda: _publish_run(root, held[0]["run_id"]))
     _stale_cursor(root)
     _boundary(meter, result, "P:metrics_review", lambda: _publish_review(root, held[1]["task_id"]))
-    _boundary(meter, result, "P:intake", lambda: _route_message(srv, ctx, "owner message for the intake boundary",
-                                                                 "cost-intake-1"), join="P:intake:turn")
     _boundary(meter, result, "P:send", lambda: _send_answer(ctx, CURRENT["running"][0], "the final answer of the cost contract"))
     _boundary(meter, result, "P:allowance", lambda: allowance_window(root))
 
@@ -416,6 +445,78 @@ def _addressed_stream(root: pathlib.Path, result: Dict[str, Any]) -> None:
     from ouroboros import chat_chain
 
     result["B9_rows"] = sum(1 for _entry in chat_chain.iter_rows(root))
+
+
+# ---- B10: the owner's turn, from the loop's handling of the message to the turn's first model request ----
+
+_UPDATE_IDS = iter(range(9_000_000, 10_000_000))
+
+
+def _owner_turn(srv: Any, ctx: Any, chat_id: int, message_id: str) -> int:
+    """One owner message as the supervisor loop handles it (``server._handle_bridge_update_batch``): the state
+    read, the canonical inbound row, the routing pre-pass and the direct turn it starts on its own thread, which
+    inherits this boundary up to its first model request."""
+    update = {"update_id": next(_UPDATE_IDS), "message": {
+        "chat": {"id": chat_id}, "from": {"id": 7}, "text": f"owner turn {message_id}", "source": "web",
+        "client_message_id": message_id, "sender_session_id": "cost-contract"}}
+    return srv._handle_bridge_update_batch(ctx.bridge, [update], 0, ctx, [0])
+
+
+def _boot_census(srv: Any, root: pathlib.Path) -> None:
+    """What precedes the owner's first turn on a live install and is not that turn's: the boot's first worker
+    verifies the server generation and stamps it (no worker is spawned here), and the health block's stray-server
+    probe holds its answer for 15 minutes. Both count the machine's processes, one ``ps`` per process named like
+    an install (#2025's census), which follow the host, not the history (tests/test_cost_host.py holds that axis)."""
+    from ouroboros import agent, context_health
+
+    env = agent.Env(repo_dir=pathlib.Path(srv.REPO_DIR), drive_root=root)
+    agent.OuroborosAgent._log_worker_boot_once(SimpleNamespace(env=env))
+    agent._worker_boot_logged = False  # this process's own first turn still logs its boot and reads the stamp
+    context_health._stray_server_note(env)
+
+
+def _measure_turns(meter: CostMeter, srv: Any, result: Dict[str, Any], root: pathlib.Path,
+                   facts: Dict[str, Any]) -> None:
+    """B10: the history (untagged) and the steady state a long-lived install keeps over it, then each turn up to
+    its first model request; at k=1 also breadth, rows and archived history."""
+    from ouroboros import skill_identity, utils
+    from tests import _turn_shapes as shapes
+
+    # A file read within a clock tick of its write is read again (``utils._RACY_NS``): bounded by time, not by the
+    # history, it would make two turns' counts depend on the milliseconds between them. B10 runs without that
+    # window; a file's identity (inode, size, nanosecond times) still names every write the turns meet here.
+    utils._RACY_NS = skill_identity._RACY_NS = 0
+    ctx, k = _event_ctx(srv), int(facts.get("k") or 1)
+
+    def activity() -> Dict[str, Any]:
+        _completion(root, "turn", k)
+        return shapes.foreign_activity(root)
+
+    def rows() -> Dict[str, Any]:
+        grown = shapes.grow_rows(root, shapes.MORE_ROWS)
+        NEEDLES["T:main:rows"] = [grown["main_newest"]]
+        return grown
+
+    shape_steps = {"history": lambda: shapes.turn_history(root, k), "steady": lambda: shapes.steady_state(root),
+                   "activity": activity, "breadth": lambda: shapes.grow_breadth(root, shapes.BREADTH), "rows": rows,
+                   "archive": lambda: shapes.archive_history(root, shapes.ARCHIVED)}
+    plan = ["history", "steady", "census", ("T:main", 1), ("T:mainw", 1), "activity", ("T:main:foreign", 1),
+            ("T:room", int(facts["late_chat_id"]))]
+    if k == 1:  # the breadth, rows and archive axes need one size only
+        plan += ["breadth", ("T:main:broad", 1), "rows", ("T:main:rows", 1),
+                 "archive", ("T:main:archive:first", 1), ("T:main:archive", 1)]
+    for index, step in enumerate(plan):
+        if step == "census":
+            _boot_census(srv, root)
+        elif isinstance(step, str):
+            started, cpu = time.monotonic(), time.process_time()
+            laid = shape_steps[step]()
+            result.setdefault("turn_shapes", {})[step] = {**laid, "cpu": round(time.process_time() - cpu, 2),
+                                                          "seconds": round(time.monotonic() - started, 2)}
+        else:
+            tag, chat_id = step
+            _boundary(meter, result, tag, lambda chat_id=chat_id, index=index: _owner_turn(
+                srv, ctx, chat_id, f"cost-turn-{index}"), timeout=600.0)
 
 
 def _duty_rows(sm: Any) -> List[Any]:
@@ -719,7 +820,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     meter = CostMeter(root, execution_root=spec.get("facts", {}).get("execution_root"),
                       thread_rules=[("current-store-import", "B2"), ("supervisor-main", "B2"),
                                     ("boot-coordinator", "B1c")],
-                      lineage={"B1": "B1:spawned", "B2": "B2:spawned", "B1c": "B1c:spawned", "P:intake": "P:intake:turn"})
+                      lineage={"B1": "B1:spawned", "B2": "B2:spawned", "B1c": "B1c:spawned"})
     meter.__enter__()
     stubs: Dict[str, Any] = {}
     try:
@@ -728,7 +829,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
         import server as srv
 
         _mark(result, "imported")
-        _stub_external_effects(srv, result)
+        _stub_external_effects(srv, result, meter)
         stubs = _stub_duty_effects(result)
         # The install root is resolved once per process, in whichever boundary's thread asks first:
         # a race the history size tips, not history work. Resolve it before any boundary starts.
@@ -781,6 +882,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
                     _heartbeats(root)
                     _measure_boundaries(meter, srv, result, root, facts)
                     _measure_duties(meter, srv, result, root, facts, stubs)
+                _measure_turns(meter, srv, result, root, facts)  # B10 last: no earlier law's inputs change
             finally:
                 result["process_at_end"] = _all_counts(meter)
                 if stubs:

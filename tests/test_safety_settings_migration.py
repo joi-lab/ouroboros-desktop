@@ -19,7 +19,10 @@ def test_existing_install_copies_once_persisted_and_audited(install, old):
     cfg = install
     cfg.SETTINGS_PATH.write_text(json.dumps({} if old is None else {"OUROBOROS_SAFETY_MODE": old}))
     old = old or "full"
-    first = cfg.load_settings()
+    before = cfg.SETTINGS_PATH.read_bytes()
+    assert cfg.load_settings()["OUROBOROS_CONSCIOUSNESS_SAFETY_MODE"] == old  # an ordinary read: in memory alone
+    assert cfg.SETTINGS_PATH.read_bytes() == before
+    first = cfg.load_settings(migrate=True)  # the boot's read persists the upgrade
     assert first["OUROBOROS_CONSCIOUSNESS_SAFETY_MODE"] == old
     saved = json.loads(cfg.SETTINGS_PATH.read_text())
     assert saved["OUROBOROS_CONSCIOUSNESS_SAFETY_MODE"] == old

@@ -8,17 +8,19 @@ import pytest
 
 
 def test_inspector_resolves_the_main_actor_offered_by_empty_enabled_catalog(tmp_path, monkeypatch):
-    from ouroboros import config
     from ouroboros.settings_integrity import task_settings_scope, task_settings_snapshot
     from ouroboros.subagent_runtime import model_visible_subagent_catalog, select_subagent_snapshot
     from ouroboros.tools.registry import ToolRegistry
+
+    from tests._shared import saved_settings
 
     settings = {
         "OUROBOROS_SUBAGENTS": json.dumps({"enabled": True, "items": []}),
         "OUROBOROS_MODEL": "openai/synthetic-main-model",
         "OPENROUTER_API_KEY": "synthetic-unused-credential",
     }
-    monkeypatch.setattr(config, "load_settings", lambda: {})
+    saved_settings(monkeypatch, tmp_path, OUROBOROS_MODEL=settings["OUROBOROS_MODEL"],
+                   OPENROUTER_API_KEY=settings["OPENROUTER_API_KEY"])  # route keys read the saved document
     catalog = model_visible_subagent_catalog(settings)
     handle = catalog["rows"][0]["subagent_id"]
     selected, _ = select_subagent_snapshot(settings, subagent_id=handle)

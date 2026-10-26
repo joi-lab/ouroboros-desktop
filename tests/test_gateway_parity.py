@@ -130,9 +130,10 @@ def test_provider_test_gateway_contract_shape_is_exact():
     request_hints = get_type_hints(ProviderTestRequest, include_extras=True)
     response_hints = get_type_hints(ProviderTestResponse, include_extras=True)
 
-    assert set(request_hints) == {"provider_id", "overrides"}
-    assert _notrequired_fields(ProviderTestRequest) == {"overrides"}
+    assert set(request_hints) == {"provider_id", "overrides", "connection"}
+    assert _notrequired_fields(ProviderTestRequest) == {"overrides", "connection"}
     assert request_hints["provider_id"] is str
+    assert get_args(request_hints["connection"]) == (str,)
     overrides_type = get_args(request_hints["overrides"])[0]
     assert get_origin(overrides_type) is dict
     assert get_args(overrides_type) == (str, str)
@@ -148,6 +149,7 @@ def test_provider_test_gateway_contract_shape_is_exact():
     assert _js_typedef_properties(text, "ProviderTestRequest") == {
         ("string", "provider_id"),
         ("Object<string, string>=", "overrides"),
+        ("string=", "connection"),
     }
     assert _js_typedef_properties(text, "ProviderTestResponse") == {
         ("boolean", "ok"),
@@ -237,10 +239,16 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for name in ("EvolutionRefresh", "EvolutionDataResponse"):
         assert f"import('./evolution_types.js').{name}" in text
     text += "\n" + (modules / "evolution_types.js").read_text(encoding="utf-8")
+    for name in ("UpdateMergePlan", "UpdatePreflightRequest", "UpdatePreflightResponse", "UpdateApplyRequest",
+                 "UpdateApplySuccessResponse", "UpdateApplyErrorResponse", "UpdateProgressChangedOutbound",
+                 "UpdateStatusReadyOutbound"):
+        assert f"import('./update_types.js').{name}" in text
+    text += "\n" + (modules / "update_types.js").read_text(encoding="utf-8")
     version = (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
     assert f"GATEWAY_CONTRACT_VERSION = '{version}'" in text
     settings_meta_fields = {
         "custom_secret_keys", "setup_contract", "available_subagents", "policy_state", "restart_state",
+        "connections",
     }
     assert settings_meta_fields <= set(SettingsMeta.__annotations__)
     assert _js_typedef_fields(text, "SettingsMeta") == settings_meta_fields

@@ -20,6 +20,7 @@ from tests.test_project_authority_outages import _uncertain_child
 from tests.test_project_hold_recovery import worker
 from tests._store_shared import result_signature
 from tests.ui_chat_viewport_smoke import _CAPTURE_TEST_SOCKET, _emit_ws_frame
+from tests.ui_console_errors import PageErrors
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 WAIT = "Waiting for Project verification"
@@ -126,7 +127,7 @@ def test_nested_child_wait_and_same_id_recovery(direct_server_with_data, tmp_pat
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
             page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
-            page.on("pageerror", lambda error: errors.append(str(error)))
+            errors = PageErrors(page, engine)
             page.route("**/api/tasks*", task_transport)
             page.route("**/api/tasks/**", task_transport)
             page.route("**/api/state", state_transport)
@@ -210,7 +211,7 @@ def test_nested_child_wait_and_same_id_recovery(direct_server_with_data, tmp_pat
             assert child_card.locator('[data-live-phase]').inner_text() == "Stopped"
             assert _chip_mark(child_card.locator('[data-live-phase]')) == ["dot", "neutral", "neutral"]
             shot(page, "cancelled-narrow")
-            assert not errors, errors
+            assert not errors.unexpected(), errors
         except Exception:
             page.screenshot(path=str(evidence / "zz-failure.png"))
             raise

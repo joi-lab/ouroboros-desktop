@@ -136,7 +136,7 @@ def _event(value: Any, field: str) -> Any:
     from ouroboros.presence_runner import PresenceTurnEvent
 
     if not isinstance(value, dict) or set(value) != _EVENT_FIELDS:
-        raise PresenceHistoryInvalid(field, f"{field} must carry exactly the live event fields, without facts")
+        raise PresenceHistoryInvalid(field, f"{field} must carry exactly the live event fields, without facts or identity")
     _unicode(value, field)
     for key in ("source_event_id", "provider", "account_id", "conversation_id", "thread_id", "conversation_key", "text"):
         if not isinstance(value[key], str):
@@ -147,6 +147,8 @@ def _event(value: Any, field: str) -> Any:
     actor = value["actor"].get("platform_actor_id")
     if not isinstance(actor, str) or not actor.strip():
         raise PresenceHistoryInvalid(f"{field}.actor.platform_actor_id", "history names its sender by platform_actor_id")
+    if "authenticated" in value["actor"] and type(value["actor"]["authenticated"]) is not bool:
+        raise PresenceHistoryInvalid(f"{field}.actor.authenticated", "actor.authenticated must be a boolean, as live")
     if "transport_queue" in value["conversation"]:
         raise PresenceHistoryInvalid(f"{field}.conversation.transport_queue", "history carries no inbox observation")
     provider, account, conversation, thread = (value[key].strip() for key in (

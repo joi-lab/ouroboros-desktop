@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.ui_chat_viewport_smoke import _CAPTURE_TEST_SOCKET, _emit_ws_frame
+from tests.ui_console_errors import PageErrors
 
 pytest_plugins = ("tests.test_ui_smoke_playwright",)
 
@@ -220,20 +221,19 @@ def test_update_indicator_failure_closes_on_its_notice_and_success_stays_in_the_
     evidence = Path(os.environ.get("OUROBOROS_UI_EVIDENCE_DIR", str(tmp_path)))
     evidence.mkdir(parents=True, exist_ok=True)
     actions = []
-    errors = []
     theme = "dark" if width == 1100 else "light"
 
     def open_page(browser):
         page = browser.new_page(viewport={"width": width, "height": 750}, color_scheme=theme, has_touch=width < 980)
         page.add_init_script(f"({_CAPTURE_TEST_SOCKET})();")
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        errors = PageErrors(page, engine)
         page.on("request", lambda request: actions.append(request.url) if request.method == "POST" and any(
             path in request.url for path in ("/api/update/", "/api/command", "/api/git/")) else None)
         page.route("**/api/update/status**", lambda route: route.fulfill(json=status))
         page.goto(direct_server, wait_until="domcontentloaded")
         page.wait_for_selector("#page-chat")
         page.wait_for_function("window.__testSockets?.some(s => s.readyState === 1)")
-        return page
+        return page, errors
 
     def conclude(page, **fields):
         status["update_progress"] = {**refusal, **fields}
@@ -242,7 +242,7 @@ def test_update_indicator_failure_closes_on_its_notice_and_success_stays_in_the_
     with sync_playwright() as pw:
         browser = getattr(pw, engine).launch(headless=True)
         try:
-            page = open_page(browser)
+            page, errors = open_page(browser)
             _sidebar(page, width)
             pill, close = page.locator("#update-pill"), page.locator(".update-notice-close")
             # A stage names itself and has no close: it ends by itself, with the attempt.
@@ -368,7 +368,7 @@ def test_update_indicator_failure_closes_on_its_notice_and_success_stays_in_the_
             assert page.locator('#dashboard-panel-updates').evaluate('el => el.scrollWidth <= el.clientWidth')
             assert actions == [], actions
             assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-            assert errors == [], errors
+            assert errors.unexpected() == [], errors
         finally:
             browser.close()
 

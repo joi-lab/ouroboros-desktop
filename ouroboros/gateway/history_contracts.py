@@ -99,6 +99,13 @@ class PlaceHistoryFacts(TypedDict, total=False):
     delivery_state: Literal['authored', 'accepted', 'delivered', 'failed', 'uncertain']
     attention: PlaceHistoryAttention
     owner_confirmed: bool  # current stored account confirmation, never inferred from role=user
+    facts: List[str]  # a heard row's declared event facts ([] when none were declared)
+    identity: Dict[str, Any]  # captured incoming rows: the connector's declared identity at that moment
+    sends_as: Dict[str, Any]  # receipt rows: {id, label, kind} frozen from the delivering focus
+    sends_as_owner: bool
+    held_text: str  # hold notices: the whole reply the hold kept back
+    held: bool
+    checked: bool  # False on holds: the hold precedes the Safety check
     historical_import: PlaceHistoryImport  # never owner confirmation or attention
     sent_at: str  # the provider send time its arrival recorded (``source_order``); absent: unknown, never inferred
 

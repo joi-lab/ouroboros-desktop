@@ -2347,12 +2347,11 @@ def test_decision_turn_metadata_injects_running_tasks_and_client_id(tmp_path):
     assert md["client_message_id"] == "cm-9"
     assert md["current_chat"]["chat_id"] == 1
     assert [t["task_id"] for t in md["current_chat"]["running_tasks"]] == ["a"]
-    # No running tasks + no client id -> no routing facts, only the live-works
-    # present every new head receives (an honest, incomplete empty roster here).
+    # No running tasks + no client id -> no routing facts at all (the head's
+    # context capture builds its own live-works present).
     empty_ctx = types.SimpleNamespace(DRIVE_ROOT=tmp_path, RUNNING={})
     md = server._decision_turn_metadata(empty_ctx, 1, "", {"k": "v"})
-    assert {key: value for key, value in md.items() if key != "live_works_present"} == {"k": "v"}
-    assert md["live_works_present"]["works"] == [] and md["live_works_present"]["incomplete"] is True
+    assert md == {"k": "v"}
 
 
 # --- Q10=A (owner, 2026-08-08): file-less project promotes auto-provision -----

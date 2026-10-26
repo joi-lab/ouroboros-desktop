@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -18,6 +19,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import yaml
 
+from ouroboros import utils
 from ouroboros.markdown_source import MarkdownSource, parse_markdown_navigation, parse_markdown_source
 from ouroboros.platform_layer import file_lock_exclusive, file_unlock
 from ouroboros.utils import append_jsonl, utc_now_iso, write_bytes_atomic
@@ -277,8 +279,8 @@ def _archive_error(topic: str, metadata: Mapping[str, Any]) -> str:
     return ""
 
 
-def _navigation_descriptor(address: KnowledgeAddress) -> dict[str, Any]:
-    raw = address.path.read_bytes()
+def _navigation_descriptor(address: KnowledgeAddress, raw: bytes | None = None) -> dict[str, Any]:
+    raw = address.path.read_bytes() if raw is None else raw
     raw.decode("utf-8")  # unreadable bytes remain a read_error, as in full inventory
     try:
         metadata, title = parse_markdown_navigation(raw, str(address.path))
@@ -290,16 +292,42 @@ def _navigation_descriptor(address: KnowledgeAddress) -> dict[str, Any]:
             "archive": metadata.get("archive"), "archive_error": error}
 
 
+# a note's address -> (what proves its bytes unchanged, its navigation row); a listing drops deleted notes
+_NAVIGATION: Dict[KnowledgeAddress, tuple] = {}
+
+
+def _navigation_row(address: KnowledgeAddress) -> dict[str, Any]:
+    """``_navigation_descriptor``, parsed again only when the note's bytes may have changed: on POSIX
+    while its file identity holds (``utils.file_identity``: a change time no caller sets back), settled
+    beyond a clock tick; on Windows, whose ``st_ctime`` is the creation time, while its bytes' digest
+    holds (the read stays, the parse goes). A row with a parse error is never kept."""
+    started, raw = time.time_ns(), None
+    if os.name == "nt":
+        raw = address.path.read_bytes()
+        key, settled = hashlib.sha256(raw).digest(), True
+    else:
+        info = os.stat(address.path)  # before the read: a write after it moves the identity
+        key, settled = utils.file_identity(info), max(info.st_mtime_ns, info.st_ctime_ns) < started - utils._RACY_NS
+    held = _NAVIGATION.get(address)
+    if held is not None and held[0] == key:
+        return dict(held[1])
+    row = _navigation_descriptor(address, raw)
+    if settled and not row.get("parse_error"):
+        _NAVIGATION[address] = (key, row)
+    return dict(row)
+
+
 def inventory_knowledge(address: KnowledgeAddress, *, navigation: bool = False,
                         known_note: KnowledgeNote | None = None) -> tuple[dict[str, Any], ...]:
     """Enumerate the current shelf without writes; navigation omits source proofs.
 
-    A note already read by this operation can be reused. Nothing survives the
-    operation: external edits and missing/failed index publications stay visible.
+    A note already read by this operation can be reused. A note's navigation is
+    reused only while its identity proves the bytes unchanged: external edits and
+    missing/failed index publications stay visible.
     """
     if not address.shelf.exists():
         return ()
-    rows = []
+    rows, listed = [], set()
     for path in sorted(address.shelf.rglob("*.md")):
         if path == address.shelf / INDEX_FILE:
             continue
@@ -309,12 +337,16 @@ def inventory_knowledge(address: KnowledgeAddress, *, navigation: bool = False,
             item.path.resolve().relative_to(address.shelf.resolve())
         except ValueError:
             continue
+        listed.add(item)
         try:
             rows.append(note_descriptor(known_note) if known_note is not None and item.path == known_note.address.path
-                        else _navigation_descriptor(item) if navigation else note_descriptor(read_knowledge_note(item)))
+                        else _navigation_row(item) if navigation else note_descriptor(read_knowledge_note(item)))
         except (OSError, UnicodeDecodeError) as exc:
             rows.append({**item.as_dict(), "title": topic, "summary": "", "revision": None,
                          "read_error": type(exc).__name__})
+    if navigation:
+        for gone in [held for held in _NAVIGATION if held.shelf == address.shelf and held not in listed]:
+            del _NAVIGATION[gone]
     return tuple(rows)
 
 

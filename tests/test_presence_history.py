@@ -115,6 +115,9 @@ def test_capability_and_presence_grant_use_the_real_token_boundary(tmp_path):
 
 @pytest.mark.parametrize("change,field", [
     (lambda b: b["records"][0]["event"].update(facts=["mention"]), "records[0].event"),
+    (lambda b: b["records"][0]["event"].update(identity={"sends_as": {"id": "w", "label": "W", "kind": "user"}}),
+     "records[0].event"),
+    (lambda b: b["records"][0]["event"]["actor"].update(authenticated="yes"), "records[0].event.actor.authenticated"),
     (lambda b: b["records"][0].update(staged_files=["x.jpg"]), "records[0].staged_files"),
     (lambda b: b["records"][0].update(authorship="owner"), "records[0].authorship"),
     (lambda b: b["records"][0].update(source_timestamp="2025-03-01T10:00:00"), "records[0].source_timestamp"),
@@ -146,6 +149,14 @@ def test_malformed_requests_record_nothing(room, change, field):
     assert response.json()["code"] == "presence_history_invalid" and response.json()["disposition"] == "rejected"
     assert response.json()["field"] == field and "results" not in response.json()
     assert not rows(room.root)
+
+
+def test_history_takes_the_actor_fact_a_live_event_takes(room):
+    """``actor.authenticated`` is a boolean on both doors (CREATING_SKILLS); an imported row keeps it as sent."""
+    imported = record(1)
+    imported["event"]["actor"]["authenticated"] = False
+    assert room.http.post("/presence/history", json=body(imported)).status_code == 200
+    assert [row["transport"]["actor"].get("authenticated") for row in rows(room.root)] == [False]
 
 
 @pytest.mark.parametrize("raw", [b'{"import_id": "\xff\xfe", "records": []}', b"\xff\xfe{",
@@ -1376,6 +1387,42 @@ def test_open_memory_rows_read_as_their_room_after_its_imports_are_sealed(room):
     stored = ["chat:a:s:0:1", "chat:a:s:0:2"]
     assert [meta["client_message_id"] for _address, meta, _pos in open_room_rows(room.root, other)] == stored
     assert [meta["client_message_id"] for _address, meta, _pos in by_room[str(other)]] == stored
+
+
+def test_memory_reads_a_rooms_imports_without_building_or_missing_their_index(room):
+    """A memory reader writes nothing (``test_memory_fallback``). With the derived indexes gone, as a store cutover
+    brings imported rows back without them, open rows, every room's open rows and recall still read the room by time
+    from its place arrivals, never "no imports", and build nothing; the room's endpoint read builds them."""
+    from ouroboros.chronicle_store import ChronicleStore
+    from ouroboros.memory import Memory
+    from ouroboros.memory_inventory import open_room_rows, open_rows_by_room
+    from ouroboros.place_arrivals import history_import_rooms
+    ChronicleStore(room.root).ensure_activated()
+    _one_second_with_an_import(room)
+    other = _a_room_without_imports(room)
+    derived = {"dialogue_place_rooms", "dialogue_place_recent", "dialogue_place_imported", "dialogue_room_reading"}
+    with ds.transaction(room.root, write=True) as conn:
+        for name in derived:
+            conn.execute(f"DROP INDEX {name}")
+
+    def built():
+        with ds.transaction(room.root, write=False) as conn:
+            return derived & {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    def database_bytes():
+        # SQLite may use PERSIST or WAL. Compare both bytes and file presence without assuming either mode.
+        names = ("dialog.sqlite", "dialog.sqlite-wal", "dialog.sqlite-journal")
+        return {name: path.read_bytes() for name in names if (path := room.root / "state" / name).exists()}
+    before = database_bytes()
+    assert history_import_rooms(room.root, (CHAT, other, 1)) == {CHAT}
+    expected = ["chat:a:r:0:100", "chat:a:r:0:100:edit:r2", "chat:a:r:0:101", "chat:a:r:0:102"]
+    assert [meta["client_message_id"] for _address, meta, _pos in open_room_rows(room.root, CHAT)] == expected
+    assert [meta["client_message_id"] for _address, meta, _pos in open_rows_by_room(room.root)[str(CHAT)]] == expected
+    recall = Memory(room.root).chat_history(count=20, search="LIVE-")
+    assert sorted(["LIVE-100", "LIVE-EDIT-100", "LIVE-102"], key=recall.index) == ["LIVE-100", "LIVE-EDIT-100", "LIVE-102"]
+    assert built() == set()
+    assert database_bytes() == before
+    assert _room_texts(room.root, CHAT) == ["LIVE-100", "LIVE-EDIT-100", "ARCHIVE-101", "LIVE-102"]
+    assert built() == derived
 
 
 def test_a_room_read_by_time_is_bounded_by_its_rows_stored_times(room):

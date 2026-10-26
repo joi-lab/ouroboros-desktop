@@ -498,6 +498,8 @@ def test_no_packs_depends_on_sidecars_not_an_empty_cache(ctx):
     ({"tail": -1}, "tail=-1: use an integer from 0 to 10000"),
     ({"max_rows": 2}, "max_rows=2 applies only to op=sql; omit it; tail bounds rows for op=jsonl"),
     ({"snapshot": False}, "snapshot=false applies only to op=sql; omit it"),
+    ({"snapshot": True}, "snapshot=true applies only to op=sql; omit it"),
+    ({"timeout_sec": 2}, "timeout_sec=2 applies only to op=sql; omit it"),
     ({"db": "money", "query": "SELECT 1"}, 'db="money", query="SELECT 1" apply only to op=sql; omit them'),
     ({"sha256": "a" * 64}, f'sha256="{"a" * 59}... applies only to op=blob; omit it'),
     ({"state_file": "health"}, 'state_file="health" applies only to kind=skill_state; omit it'),

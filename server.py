@@ -66,7 +66,6 @@ from ouroboros.server_routing_context import (  # noqa: F401
     _project_id_for_registered_chat,
     _reserved_project_for_chat,
     _scoped_task_metadata,
-    _task_belongs_to_chat,
     _task_result_ground_truth,
     main_lane_routing_metadata,
 )
@@ -1121,15 +1120,15 @@ async def lifespan(app):
         name="ws-heartbeat",
     )
 
-    # Boot APPLIES the provider normalization in-process and persists nothing
-    # (mirror of launcher_onboarding.prepare_first_run_settings). Two
+    # Boot APPLIES the provider normalization in-process and persists none of it
+    # (mirror of launcher_onboarding.prepare_first_run_settings); its read does
+    # persist the two compatibility upgrades (``migrate=True``). Two
     # normalizations, two re-derivations: the VOCABULARY one is the read seam
     # every reader applies (config.normalize_settings_raw); the PROVIDER one is
     # re-derived by every consumer that needs the route — the task-start
     # projection, the settings GET and onboarding reads, the context-fit route
-    # resolver — so a start-time write would only make boot a second author of
-    # settings.json with no reader that needs it.
-    settings, _provider_defaults_changed, _provider_default_keys = apply_runtime_provider_defaults(load_settings())
+    # resolver — so writing it at start would only make boot a second author.
+    settings, _provider_defaults_changed, _provider_default_keys = apply_runtime_provider_defaults(load_settings(migrate=True))
     _apply_settings_to_env(settings)
     served_ui.apply(app, settings)  # this generation's main interface, before any request is served
     # Pin boot-time runtime-mode after env apply; save_settings compares to this owner baseline.
@@ -1231,6 +1230,7 @@ async def lifespan(app):
         ("usage_store", _usage_store),
         ("skills", lambda: live and server_boot.seed_skills(lifespan_drive_root, settings, provider_ready=startup_provider_ready)),
         ("projects", lambda: live and server_boot.reconcile_projects(lifespan_drive_root)),
+        ("log_listings", lambda: live and server_boot.remember_log_listings(lifespan_drive_root)),
         ("services", lambda: server_boot.start_background_services(
             settings, local_model=has_local, boot_managed_update=_boot_managed_update_tasks, warm_daemon=live)),
         ("host_service", lambda: server_boot.on_loop(_event_loop, server_boot.serve_host_service(lifespan_drive_root, boot))),

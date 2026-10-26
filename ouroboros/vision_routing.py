@@ -225,7 +225,7 @@ def route_image_input(model: str) -> ImageInputEvidence:
 
         target = LLMClient()._resolve_remote_target(name)
         key = image_route_scope(target)
-        records = evidence._load(evidence.canonical_evidence_root()).get(EVIDENCE_NAMESPACE) or {}
+        records = evidence._read(evidence.canonical_evidence_root()).get(EVIDENCE_NAMESPACE) or {}
         record = records.get(key) if key else None
         if not isinstance(record, dict):
             return ImageInputEvidence()

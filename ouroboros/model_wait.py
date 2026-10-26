@@ -90,6 +90,8 @@ def model_wait_reason(error: Exception) -> str:
     code = getattr(error, "code", "")
     if code in {"auth_required", "subscription_window_exhausted"}:
         return "auth" if code == "auth_required" else "quota"
+    if code == "connection_unavailable":  # the route's connection is gone or disabled: typed, $0, owner's call
+        return "connection_unavailable"
     problem = getattr(error, "problem", None)
     context = problem.get("context") if isinstance(problem, dict) else None
     if code == "credential_pool_exhausted" and isinstance(context, dict) and context.get("poolCause") == "mixed":
@@ -1119,6 +1121,22 @@ def current_model_wait() -> TaskModelWait | None:
     return _CURRENT.get()
 
 
+_AFTER_THE_REPLY = frozenset({"post_task", "consolidation"})  # the post-task worker's usage categories
+
+
+def owner_awaits_current_call() -> bool:
+    """Whether this call prepares the reply of a direct turn the owner awaits (Main, a project room, a call): the
+    model queue lets it ahead of background calls that have not started (``model_concurrency``). The same turn's
+    work after its answer (synthesis, memory drafts, scratchpad consolidation) queues as background."""
+    task = getattr(_CURRENT.get(), "task", None)
+    if not isinstance(task, dict) or not task.get("_is_direct_chat"):
+        return False
+    from ouroboros.usage_accounting import current_usage_scope
+    from supervisor.active_activity import reply_expected
+
+    return getattr(current_usage_scope(), "category", "") not in _AFTER_THE_REPLY and reply_expected(task)
+
+
 def announce_capability_refusal(error: Exception, *, drive_root: Any) -> None:
     """One owner notice per account/model episode when no account can serve a model.
 
@@ -1234,7 +1252,7 @@ def model_waitable(function: Callable | None = None, *, client_parameter: str = 
             error.task_resource_wait_reason = classified
         reason = model_wait_reason(error)
         if not (context and not context.closed and values.get("model_role") and reason
-                and (classified or (isinstance(error, ClaudexorModelError)
+                and (classified or reason == "connection_unavailable" or (isinstance(error, ClaudexorModelError)
                                     and getattr(capture, "state", None) in {"released", "settled"}))):
             return False
         deferral = _deferral(values["model_role"])

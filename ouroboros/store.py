@@ -159,8 +159,7 @@ def physical_acquisition():
     """At accepted handoff, copy only the caller's physical budget into its body.
 
     Other ContextVars and explicit acquisition_budget scopes remain unchanged;
-    a nested physical start must acquire its own fresh admission guard.
-    """
+    a nested physical start must acquire its own fresh admission guard."""
     token = _ADMISSION_NO_WAIT.set(False)
     try:
         yield
@@ -197,6 +196,7 @@ class _Inode:
 
 
 _INODES: Dict[Tuple[int, int], _Inode] = {}
+_TIERS: Dict[tuple, Optional[str]] = {}  # (path, identity) -> its header's tier; a retier in place sets None: read each time
 # Reentrant: a reader generator finalized by the cyclic GC returns its borrow on whatever thread
 # triggered the collection, possibly inside this thread's own guarded section.
 _INODE_GUARD = threading.RLock()
@@ -274,6 +274,21 @@ class _StoreConnection(sqlite3.Connection):
                 if entry is not None:
                     entry.conns -= 1
                     _settle(key, entry)
+
+
+def counted_connect(target: str, path: Any, **kwargs: Any) -> sqlite3.Connection:
+    """``sqlite3.connect`` counted on PATH's inode before any statement can take a lock (``_borrow``)."""
+    conn = sqlite3.connect(target, factory=_StoreConnection, **kwargs)
+    if os.name != "nt":
+        try:
+            key = _identity_key(os.stat(path))
+        except OSError:
+            conn.close()
+            raise
+        with _INODE_GUARD:
+            _INODES.setdefault(key, _Inode()).conns += 1
+            conn._store_key = key
+    return conn
 
 
 def _read_header(path: pathlib.Path, dir_fd: Optional[int] = None) -> bytes:
@@ -460,8 +475,10 @@ def copy_file_bytes(source: Any, destination: Any) -> Any:
     return str(target)
 
 
-def header_tier(path: pathlib.Path, application_ids: Dict[str, int]) -> Optional[str]:
-    """The lock tier the file's SQLite header names; ``None`` for a missing or foreign file."""
+def header_tier(path: pathlib.Path, application_ids: Dict[str, int], identity: Optional[tuple] = None) -> Optional[str]:
+    """The lock tier the file's SQLite header names; ``None`` for a missing or foreign file; read once per ``identity``."""
+    if tier := _TIERS.get((str(path), identity)):
+        return tier
     try:
         header = _read_header(path)
     except FileNotFoundError:
@@ -469,7 +486,8 @@ def header_tier(path: pathlib.Path, application_ids: Dict[str, int]) -> Optional
     if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
         return None
     application_id = int.from_bytes(header[68:72], "big")
-    return next((tier for tier, value in application_ids.items() if value == application_id), None)
+    tier = next((tier for tier, value in application_ids.items() if value == application_id), None)
+    return (_TIERS.setdefault((str(path), identity), tier) or tier) if tier and identity is not None else tier
 
 
 _LOCAL_FILESYSTEMS = frozenset({"apfs", "hfs", "ufs", "ext2", "ext3", "ext4", "xfs", "btrfs",
@@ -523,8 +541,7 @@ def _bsd_filesystem(path: pathlib.Path) -> Optional[str]:
     if sys.platform == "darwin":
         fields = [("bsize", u32), ("iosize", ctypes.c_int32)] + [
             (name, u64) for name in ("blocks", "bfree", "bavail", "files", "ffree")]
-        fields += [("fsid", ctypes.c_int32 * 2), ("owner", u32), ("type", u32),
-                   ("flags", u32), ("subtype", u32)]
+        fields += [("fsid", ctypes.c_int32 * 2), ("owner", u32), ("type", u32), ("flags", u32), ("subtype", u32)]
         symbol = "statfs64"
     elif sys.platform.startswith("freebsd"):
         fields = [("version", u32), ("type", u32)] + [(name, u64) for name in (
@@ -634,20 +651,10 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
     query = "mode=rwc" if create else "mode=rw"
     if tier == TIER_NAME:
         query += "&vfs=" + ("win32-none" if os.name == "nt" else "unix-none")
-    conn = sqlite3.connect(f"{path.absolute().as_uri()}?{query}", uri=True, isolation_level=None,
-                           timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0,
-                           check_same_thread=not shared, factory=_StoreConnection)
+    conn = counted_connect(f"{path.absolute().as_uri()}?{query}", path, uri=True, isolation_level=None,
+                           timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0, check_same_thread=not shared)
     conn.row_factory = sqlite3.Row
     conn._store_kind = store_timing.kind_of(path)
-    if os.name != "nt":  # counted before any statement can take a lock (see ``_borrow``)
-        try:
-            key = _identity_key(os.stat(path))
-        except OSError:
-            conn.close()
-            raise
-        with _INODE_GUARD:
-            _INODES.setdefault(key, _Inode()).conns += 1
-            conn._store_key = key
     try:
         conn.execute("PRAGMA synchronous = FULL")
         if journal_mode is None:
@@ -666,10 +673,8 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
 
 
 class _CachedConnection:
-    def __init__(self, path: pathlib.Path, tier: str) -> None:
-        self.path, self.tier, self.conn = path, tier, None
-        self.identity = file_identity(path)
-        self.active = True
+    def __init__(self, path: pathlib.Path, tier: str, identity: Optional[tuple]) -> None:
+        self.path, self.tier, self.conn, self.identity, self.active = path, tier, None, identity, True
 
 
 # Cached connections one thread keeps open (an LRU of idle handles): the root's few hot stores stay
@@ -698,30 +703,29 @@ _CONNECTION_GUARD = threading.Condition(threading.RLock())
 
 
 @contextlib.contextmanager
-def connection(path: pathlib.Path, tier: str, *, wait_sec: float = 0.0,
+def connection(path: pathlib.Path, tier: str, *, wait_sec: float = 0.0, identity: Optional[tuple] = None,
                opener: Optional[Callable[..., sqlite3.Connection]] = None) -> Iterator[sqlite3.Connection]:
     """Lease this thread's connection; no transaction survives a returned lease.
 
     A nested access keeps its historical independent transaction (a temporary connection),
-    never commits or rolls back the caller's transaction. File replacement or retiering
-    invalidates the cached connection. Name-tier callers hold their name lock throughout.
-    """
+    never commits or rolls back the caller's transaction. A new file ``identity`` (the caller's stat, never one
+    across a wait) or tier invalidates the cached connection. Name-tier callers hold their name lock throughout."""
     path = pathlib.Path(os.path.abspath(path))
     key, opener = str(path), opener or connect
+    identity = file_identity(path) if identity is None else identity  # a stat waits for the GIL: never under the guard
     with _CONNECTION_GUARD:
         pool = getattr(_LOCAL_CONNECTIONS, "pool", None)
         if pool is None:
             pool = _LOCAL_CONNECTIONS.pool = _ThreadConnections()
             _CONNECTION_POOLS.add(pool)
         entry = pool.entries.get(key)
-        if entry is not None and not entry.active and (entry.identity != file_identity(path) or entry.tier != tier):
+        if entry is not None and not entry.active and (entry.identity != identity or entry.tier != tier):
             entry.conn.close()
             del pool.entries[key]
             entry = None
         nested = entry is not None and entry.active
         if not nested:
-            if entry is None:
-                entry = _CachedConnection(path, tier)
+            entry = entry or _CachedConnection(path, tier, identity)
             pool.entries.pop(key, None)
             pool.entries[key] = entry  # now the most recently leased
             entry.active = True
@@ -762,8 +766,7 @@ def _close_cached(selected: Callable[[str], bool], *, idle_only: bool = False) -
 
     The lifecycle owner must quiesce users first. An active lease refuses the handoff
     with StoreBusy; it is never interrupted or silently rolled back by another thread.
-    ``idle_only`` closes the idle ones and leaves a leased handle to its thread instead.
-    """
+    ``idle_only`` closes the idle ones and leaves a leased handle to its thread instead."""
     with _CONNECTION_GUARD:
         entries = [(pool, name, entry) for pool in list(_CONNECTION_POOLS)
                    for name, entry in pool.entries.items() if selected(name)]
@@ -789,8 +792,7 @@ def close_connections_under(root: pathlib.Path, *, idle_only: bool = False) -> N
     handle kept past the move holds the moved files' space. Another process (a pool worker
     that ran the task) releases its own, ``idle_only``: a late thread's lease stays with
     that thread, which closes it on exit. Contract as ``_close_cached``; paths resolve
-    outside the pool guard, so a slow volume never stalls other stores' leases.
-    """
+    outside the pool guard, so a slow volume never stalls other stores' leases."""
     def canonical(name: Any) -> str:
         return os.path.normcase(os.path.realpath(name))  # a short or linked spelling names the same file
 
@@ -973,10 +975,9 @@ def fsync_directory(directory: pathlib.Path) -> None:
 @contextlib.contextmanager
 def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optional[float] = None,
                 finish: Optional[Callable[[], None]] = None) -> Iterator[sqlite3.Connection]:
-    """One transaction: a write takes the lock at ``BEGIN IMMEDIATE``, a read's only wait is
-    here; any exception rolls back and propagates; ``finish`` (default ``commit``) runs at the
-    end; ``commit_wait_sec`` is the busy wait a COMMIT spends on readers draining. The lock's
-    hold is reported to ``store_timing`` either way."""
+    """One transaction: a write locks at ``BEGIN IMMEDIATE``, a read at ``SELECT 1`` (its snapshot, its only wait);
+    an error rolls back and propagates; ``finish`` (``commit``) ends it, a write's COMMIT waiting ``commit_wait_sec``
+    for readers to drain (a read's never waits). The lock's hold is reported to ``store_timing`` either way."""
     began, held = False, 0.0
     try:
         conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
@@ -984,7 +985,7 @@ def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optio
         if not write:  # take the read lock now
             conn.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
         held = store_timing.clock()
-        if commit_wait_sec is not None:
+        if write and commit_wait_sec is not None:
             conn.execute(f"PRAGMA busy_timeout = {int(commit_wait_sec * 1000)}")
         yield conn
     except BaseException as exc:
@@ -1023,14 +1024,14 @@ def probe(root: Any) -> Tuple[str, Optional[str]]:
     the file cannot be inspected (an exhausted descriptor table is not absence), ``StoreLost`` for a foreign file."""
     path = store_path(root)
     try:
-        os.stat(path)
-        tier = header_tier(path, _APPLICATION_ID)
-    except FileNotFoundError:
-        close_connections(path)
-        return "absent", None
+        identity = file_identity(path)  # one stat: the presence, and the file its header's tier is kept for
+        tier = header_tier(path, _APPLICATION_ID, identity) if identity is not None else None
     except OSError as exc:
         name = errno.errorcode.get(exc.errno, str(exc.errno))
         raise StoreBusy(f"current store not inspectable ({name}): {path}", reason="uninspectable") from exc
+    if identity is None:
+        close_connections(path)
+        return "absent", None
     if tier is None:
         raise StoreLost(f"current store unreadable or foreign, never replaced: {path}")
     return "present", tier
@@ -1241,8 +1242,7 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
         handoff = seam = False
         try:
             changes = conn.total_changes
-            with transaction(conn, write=write, commit_wait_sec=wait_sec if tier == TIER_ENFORCED else None,
-                             finish=(lambda: conn.execute("ROLLBACK")) if barrier else None):
+            with transaction(conn, write=write, finish=(lambda: conn.execute("ROLLBACK")) if barrier else None):
                 txn = Txn(conn, root)
                 phase = txn.phase()
                 handoff = seam = phase != PUBLISHED

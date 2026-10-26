@@ -81,17 +81,27 @@ def place_views(drive_root, allowance=None) -> list[dict]:
     return [place_view(drive_root, place, allowance=allowance, brief=True) for place in load_places(drive_root)]
 
 
-def places_text(views) -> str:
+def places_text(drive_root, views) -> str:
+    from ouroboros.place_arrivals import recent_identity
+    from ouroboros.places import OwnerAccount, owner_account_matches
     if views is None:
         return "unknown (place index unavailable)"
     lines = []
     for view in views:
+        identity = recent_identity(drive_root, view["place_id"])
+        sending = (identity or {}).get("sends_as") or {}
+        owner = sending.get("kind") == "user" and owner_account_matches(
+            (OwnerAccount(**a) for a in view.get("owner_accounts", [])), sending["id"], view.get("account_id", ""))
+        voice = ""
+        if sending:
+            voice = (f'; as Ouroboros (bot {sending["label"]})' if sending["kind"] == "bot"
+                     else f'; writes as {sending["label"]}' + (" (your human's own account)" if owner else ""))
         count = view.get("unanswered")
         addresses = [str(room.get("address") or f'chat_history(chat_id={int(room["room_chat_id"])})')
                      for room in view.get("rooms") or []]
         address = "; ".join(addresses) or ("no captured room" if view.get("rooms") == [] else "room address unknown")
         lines.append(f'{view.get("label") or view["place_id"]} [{view["place_id"]}]: {view["state"]}; '
-                     f'open turns: {count if count is not None else "unknown"}; {address}')
+                     f'open turns: {count if count is not None else "unknown"}; {address}{voice}')
         for note in view.get("notes") or []:
             lines.extend(f'  note ({note["author"]}): {line}' for line in note["text"].splitlines())
     return "\n  ".join(lines) if lines else "none"
@@ -228,9 +238,11 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
         # Category-only legacy roots use the allowance's own-clock fallback.
         cause = "focus" if wake_cause(metadata) == "focus" else "own"
         focus = metadata.get("focus") or {}
+        sending = (focus.get("identity") or {}).get("sends_as") if cause == "focus" else None
         place_id = str(focus.get("place_id") or "")
         usage = (row.get("loop_outcome") or {}).get("usage") or {}
         rows.append({"task_id": task_id, "cause": cause,
+                     **({"as": {"label": sending["label"], "owner": bool(focus.get("identity_owner"))}} if sending else {}),
                      "chat_id": row.get("chat_id"), "conversation": str(focus.get("conversation_key") or ""),
                      "place_label": cause_label(f"place:{place_id}", places or ()) if place_id else "",
                      "started_at": row.get("started_at"),

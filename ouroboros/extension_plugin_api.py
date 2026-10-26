@@ -101,7 +101,7 @@ class ExtensionStaleRecoveryError(ExtensionRegistrationError):
     bundle is created, nothing is staged, ``auth_token.json`` is neither
     created nor rotated, no companion env is materialized, and nothing may be
     disposed by the caller. Infrastructure reads on the way to the fence (the
-    settings lock inside ``load_settings``, a state-dir mkdir via the
+    ``load_settings`` read, a state-dir mkdir via the
     liveness/grant projection) may occur — the same settings/grant read idiom
     used everywhere in the runtime (fix-round-7 scope)."""
 

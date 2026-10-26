@@ -442,6 +442,47 @@ def test_the_store_state_sees_a_vacuum_that_keeps_every_row(tmp_path, monkeypatc
     assert committed_content(path) == before.content and store_state(path) != before
 
 
+@pytest.mark.parametrize("mode", ["PERSIST", "WAL"])
+def test_committed_content_sees_rows_rewritten_in_another_order(tmp_path, monkeypatch, mode):
+    """An obligation set and a task's handoffs read back in rowid order (``set_rows``, ``handoffs``),
+    so the same rows rewritten in another order are other content: ``committed_content`` shows it as
+    it shows a changed row, and sorts only the schema statements a VACUUM reorders. The rewrites go
+    through a bare connection, as a store write would also move ``commit_seq``."""
+    from collections import Counter
+
+    from tests._store_journal_shared import committed_content, use_journal
+    from tests.test_store import document
+
+    use_journal(monkeypatch, mode)
+    path = publish(tmp_path, document("t1"))
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.replace_set("probe", {"a": {"n": 1}, "b": {"n": 2}})
+        for op_id in ("op1", "op2"):
+            txn.put_handoff("t1", "launch_handoffs", op_id, {"state": "claimed"})
+
+    def rewrite(*statements):
+        with contextlib.closing(store.connect(path, store.TIER_ENFORCED)) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for sql in statements:
+                conn.execute(sql)
+            store.commit(conn)
+        return committed_content(path)
+
+    seen = [committed_content(path)]
+    for table, first in (("obligations", "set_name='probe' AND id='a'"), ("task_handoffs", "op_id='op1'")):
+        seen.append(rewrite(f"CREATE TEMP TABLE moved AS SELECT * FROM {table} WHERE {first}",  # it goes last
+                            f"DELETE FROM {table} WHERE {first}", f"INSERT INTO {table} SELECT * FROM moved"))
+        assert Counter(seen[-1]) == Counter(seen[-2]) and seen[-1] != seen[-2]  # the same statements, reordered
+    with store.open_store(tmp_path, write=False) as txn:
+        assert list(txn.set_rows("probe")) == ["b", "a"]
+        assert list(txn.handoffs("t1")["launch_handoffs"]) == ["op2", "op1"]
+    changed = rewrite("UPDATE obligations SET facts='{}' WHERE set_name='probe' AND id='a'")
+    assert changed != seen[-1]
+    with contextlib.closing(store.connect(path, store.TIER_ENFORCED)) as conn:
+        conn.execute("VACUUM")
+    assert committed_content(path) == changed  # a VACUUM keeps each table's row order
+
+
 # ---- who chooses the journal (ouroboros/store_journal.py) --------------------------------
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

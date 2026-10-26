@@ -144,6 +144,15 @@ def _handle_main_llm_call_state(evt: Dict[str, Any], ctx: Any) -> None:
     from ouroboros.update_generation_facts import publish_pending_dispatch
 
     publish_pending_dispatch()
+    receipt = evt.get("direct_turn")
+    if isinstance(receipt, dict):  # the owner turn's receipt rides its first dispatch frame by value
+        from supervisor.active_activity import record_direct_turn
+
+        census = dict(receipt.get("census") or {})
+        for name, rows in (("running", getattr(ctx, "RUNNING", None)), ("pending", getattr(ctx, "PENDING", None))):
+            if hasattr(rows, "__len__"):
+                census[f"{name}_when_handled"] = len(rows)
+        record_direct_turn({**receipt, "census": census}, drive_root=getattr(ctx, "DRIVE_ROOT", None))
     running = getattr(ctx, "RUNNING", None)
     meta = running.get(task_id) if isinstance(running, dict) else None
     direct = None
