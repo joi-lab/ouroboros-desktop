@@ -204,6 +204,46 @@ def test_candidate_evidence_is_retained_out_of_the_patch_before_either_dispositi
         custody._CUSTODY.clear()
 
 
+@pytest.mark.parametrize("ending", ["retained_later", "copy_gone"])
+@pytest.mark.parametrize("decision", ["apply", "reject"])
+def test_unretained_evidence_of_a_kept_copy_withholds_the_disposition(tmp_path, monkeypatch, decision, ending):
+    """A copy that stays (a Git repository inside it cannot be saved in the result) whose named evidence
+    failed to retain is the last copy of that evidence: apply and reject refuse, record nothing and apply
+    nothing. Once retention works the same call disposes; a copy that is already gone holds nothing."""
+    import errno
+
+    from ouroboros import delegate_named_evidence as named
+    from ouroboros.tools.delegate import _capture_terminal_patch
+    from ouroboros.tools.subagent_integration import _integrate_delegated_patch
+
+    target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch)
+    expected = _write_evidence(copy)
+    (copy / "feature.py").write_text("VALUE = 3\n", encoding="utf-8")
+    (copy / "vendor" / "kept").mkdir(parents=True)
+    _git(copy / "vendor" / "kept", "init", "-q")
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        with monkeypatch.context() as busy:
+            busy.setattr(named, "retain_files", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.EBUSY, "in use")))
+            capture = _capture_terminal_patch(ctx, entry)
+            assert capture["named_evidence"]["status"] == "capture_failed" and copy.is_dir(), capture
+            out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
+        assert out.startswith("⚠️ INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED"), out
+        assert entry.patch_disposed == "" and not (target / "feature.py").exists() and copy.is_dir()
+        if ending == "copy_gone":
+            shutil.rmtree(copy)  # lost outside the host: the saved failure is the last copy of nothing
+        else:  # the refusal's remedy: the evidence changes (here: rewritten), so it is retained afresh
+            notes = copy / ".review-evidence" / "notes.txt"
+            os.utime(notes, ns=(notes.stat().st_atime_ns, notes.stat().st_mtime_ns + 1_000_000_000))
+        out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
+        assert ("✅ Integrated" if decision == "apply" else "🚫 Rejected") in out, out
+        assert (target / "feature.py").exists() is (decision == "apply") and not copy.exists()
+        if ending == "retained_later":
+            assert _retained(_latest(ctx, entry)) == expected
+    finally:
+        custody._CUSTODY.clear()
+
+
 def _saved(capture):
     return json.loads((pathlib.Path(capture["named_evidence"]["evidence_dir"]) / "summary.json").read_text(
         encoding="utf-8"))

@@ -430,7 +430,7 @@ def _unpin_snapshot(repo: Path, row: Dict[str, Any]) -> None:
 
 def _discard_snapshot_checkout(row: Dict[str, Any], *, root: Path, data_dir: Optional[Any]) -> None:
     """Undo a provisioning that failed after its record and pin may exist: files,
-    admin dir, pins, record (the postcondition ``tests/test_snapshot_file_inputs.py``
+    admin dir, pins, record (the postcondition ``tests/test_private_copy_primitive.py``
     asserts: no record, no ref, no ``dlg_*`` directory). Best-effort: custody GC
     reconciles crash leftovers once the owning task is proven over."""
     wt_path = Path(str(row.get("path") or ""))

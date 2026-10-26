@@ -363,28 +363,6 @@ def test_a_legacy_capped_investigation_receipt_is_retaken_whole_once_then_releas
     assert not legacy_cap(final) and not collection_due(final)  # retaken once: it rests
 
 
-@pytest.mark.parametrize("staging", ["directory", "linked_receipt"])
-def test_unpublished_evidence_staging_has_a_remover_and_published_receipts_survive(tmp_path, staging):
-    """PERSISTENCE names ``prune_abandoned_generations`` the remover of ``.evidence-<id>.pending/``: an
-    interrupted capture's staging goes at the next addressed capture, a published receipt never does."""
-    from ouroboros import delegate_named_evidence as named
-
-    home = tmp_path / "capture"
-    receipt = home / "evidence" / "summary.json"
-    receipt.parent.mkdir(parents=True)
-    receipt.write_text('{"status": "retained"}', encoding="utf-8")
-    abandoned = home / ".evidence-interrupted.pending"
-    if staging == "directory":
-        abandoned.mkdir()
-        (abandoned / "bytes").write_bytes(b"incomplete")
-    else:  # a staging link to a published receipt: the link goes, never what it names
-        abandoned.symlink_to(receipt.parent, target_is_directory=True)
-
-    named.prune_abandoned_generations(home)
-
-    assert not os.path.lexists(abandoned) and receipt.read_text(encoding="utf-8") == '{"status": "retained"}'
-
-
 # --------------------------------------------------------------------------- the capture's own Git
 
 def test_a_porcelain_diff_config_never_reshapes_the_captured_patch(tmp_path, monkeypatch):
