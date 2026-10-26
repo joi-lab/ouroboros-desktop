@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from ouroboros import config, subagent_runtime
 from tests.test_task_settings_snapshot import isolated_runtime, save_owner  # noqa: F401 -- the shared isolated, sealed root
 
@@ -53,6 +55,28 @@ def test_reused_worker_cannot_resurrect_a_cleared_or_disabled_key(monkeypatch):
         assert "OPENROUTER_API_KEY" not in config.runtime_environ()  # a child (vision) gets no stale credential either
         assert config.runtime_settings()["OPENROUTER_API_KEY"] == ""
     assert os.environ["OPENROUTER_API_KEY"] == "router-old"  # the mirror itself is untouched: it is simply never read
+
+
+def test_an_added_key_replaced_disabled_or_removed_mid_task_is_read_at_the_next_call(monkeypatch):
+    """The named half of r2_opus §(3): within one task a replaced row key serves the next call, and a row
+    the owner turns off or removes refuses there; the built-in key never stands in for it."""
+    from ouroboros.llm_attempt import ConnectionUnavailable
+
+    row = {"kind": "openrouter", "name": "credits", "api_key": "row-old", "enabled": True}
+    route = "openrouter@credits::anthropic/claude-opus-5.5"
+    save_owner({**_document("old"), "OUROBOROS_CONNECTIONS": [row]})
+    task = subagent_runtime.apply_task_start_settings()
+    with config.task_settings_scope(task):
+        from ouroboros.llm import LLMClient
+
+        assert LLMClient()._resolve_remote_target(route)["api_key"] == "row-old"
+        save_owner({**_document("old"), "OUROBOROS_CONNECTIONS": [{**row, "api_key": "row-new"}]})
+        assert LLMClient()._resolve_remote_target(route)["api_key"] == "row-new"
+        for saved, reason in (([{**row, "enabled": False}], "disabled"), ([], "missing")):
+            save_owner({**_document("old"), "OUROBOROS_CONNECTIONS": saved})
+            with pytest.raises(ConnectionUnavailable) as refused:
+                LLMClient()._resolve_remote_target(route)
+            assert refused.value.reason == reason and "router-old" not in str(refused.value)
 
 
 def test_without_a_saved_document_route_keys_read_as_every_other_key(monkeypatch):
