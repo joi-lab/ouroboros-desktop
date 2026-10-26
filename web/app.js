@@ -108,9 +108,7 @@ const navProjectsFacts = navProjectsHeader?.querySelector('.nav-projects-facts')
 const navDrawerBackdrop = document.getElementById('nav-drawer-backdrop');
 const projectPanelBackdrop = document.getElementById('project-panel-backdrop');
 const projectPanel = document.getElementById('project-panel');
-// The Project panel's header is the one page header (page_header.js): name · status, the consciousness chip … Panic ×
-// (owner 25.10, 3A); its ☰ is the room's composer row's first control (owner 19.10, 1A). A Project is named by its
-// owner, not by the sidebar, so its name stays visible in every layout and ellipsizes first.
+// The Project panel's bar is the page header (DESIGN "Page header"): name · status, consciousness chip … Panic ×.
 projectPanel?.insertAdjacentHTML('afterbegin', renderPageHeader({
     title: '',
     titleId: 'project-panel-title',
