@@ -299,7 +299,7 @@ def _settle_writer_capture(drive: Any, entry: Any, block: Dict[str, Any], named:
     lives as the patch plus pinned commits B and C, so the checkout goes; an empty result
     (C equals B, HEAD unmoved, nothing retained beside it) closes as no_changes. A pending
     continuation, a copy made before this update, a path the result could not hold (a Git
-    repository inside the copy, a folder Git could not open) or anything still owed keeps it."""
+    repository or filled submodule inside the copy, a folder Git could not open) or anything still owed keeps it."""
     from ouroboros import delegate_custody as custody
     from ouroboros.delegate_directory import is_directory_run
     from ouroboros.delegate_registration_policy import NO_CHANGES_NOTE

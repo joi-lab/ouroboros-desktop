@@ -522,8 +522,8 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
     checkout = ("the copy's checkout itself is released once the capture is saved" if not unsaved else
                 f"the copy's checkout is KEPT until then: {len(unsaved)} path(s) in it could not be saved in the "
                 f"result (Git repositories or checked-out submodules inside it, or folders Git could not open): "
-                f"{', '.join(unsaved[:8])}. "
-                "Copy what you need out of execution_root before you decide")
+                f"{', '.join(unsaved[:8])}. A submodule's own commits live in its Git directory inside the copy, "
+                "and apply never moves a submodule pointer: copy what you need out of execution_root before you decide")
     block: Dict[str, Any] = {
         "status": status or "missing",
         "baseline_id": entry.baseline_sha,

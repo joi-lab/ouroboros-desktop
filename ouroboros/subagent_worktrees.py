@@ -667,8 +667,9 @@ def snapshot_commit(source: Path, *, message: str, parent: str = "",
     untracked file Git does not ignore. ``assume-unchanged`` is cleared,
     and ``skip-worktree`` too for a path that is on disk, so neither hides an
     edit; an absent ``skip-worktree`` entry keeps its indexed blob (sparse
-    checkouts stay correct). An untracked nested repository, a SQLite WAL index
-    (shared memory) and a special file are left out and named. The commit's
+    checkouts stay correct). An untracked nested repository, a folder Git cannot
+    open, a SQLite WAL index (shared memory) and a special file are left out and
+    named, and so, at a result capture, is a gitlink folder the run filled. The commit's
     parent is ``parent`` or the source's HEAD (none on an unborn branch).
     ``held_out`` names a folder (a run's ``.review-evidence/``) whose files stay out
     of the commit unless listed in ``held_keep`` (what the baseline already holds):

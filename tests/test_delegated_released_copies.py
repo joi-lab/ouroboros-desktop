@@ -243,7 +243,8 @@ def _with_submodule(tmp_path, monkeypatch):
     return target, ctx, handle, copy
 
 
-@pytest.mark.parametrize("work", ["uncommitted_edit", "committed_inside", "staged_clone", "unreadable", "left_empty"])
+@pytest.mark.parametrize("work", ["uncommitted_edit", "committed_inside", "staged_clone", "unreadable", "stray_file",
+                                  "left_empty", "left_empty_beside_an_edit"])
 def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path, monkeypatch, work):
     """A gitlink in the result is only a pointer: a submodule the run checked out, or a repository it
     cloned and staged, keeps the checkout until apply or reject, and so does a gitlink folder it left
@@ -259,6 +260,10 @@ def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path
             _git(lib, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix")
         if work == "unreadable":
             lib.chmod(0o300)  # writable and searchable, but not listable
+    elif work == "stray_file":  # written into the folder of a submodule the run never checked out
+        (lib / "notes.txt").write_text("the run's only output\n", encoding="utf-8")
+    elif work == "left_empty_beside_an_edit":
+        (copy / "tracked.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
     elif work == "staged_clone":
         _git(copy, "clone", "-q", str(tmp_path / "lib"), "vendor/dep")
         (copy / "vendor" / "dep" / "lib.txt").write_text("the run's vendored fix\n", encoding="utf-8")
@@ -269,6 +274,9 @@ def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path
         if work == "left_empty":
             assert capture["disposition"] == entry.patch_disposed == custody.NO_CHANGES, capture
             assert "unsaved_paths" not in capture and not copy.exists()
+            return
+        if work == "left_empty_beside_an_edit":  # an untouched gitlink holds nothing back: the checkout goes
+            assert capture["checkout_released"] is True and "unsaved_paths" not in capture and not copy.exists()
             return
         held = "vendor/dep" if work == "staged_clone" else "deps/lib"
         assert capture["unsaved_paths"] == [held] and "KEPT" in capture["note"], capture
