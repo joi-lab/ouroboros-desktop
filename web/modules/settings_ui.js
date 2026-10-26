@@ -784,7 +784,7 @@ export function renderSettingsPage() {
                              Agents → Delegation (D-10): they bound the agents,
                              not the process pool. Max Workers stays: it is
                              runtime worker processes, not an agent setting. -->
-                        <div class="settings-section-copy">Workers control parallel task capacity. Task liveness is governed automatically by progress, deadlines, the idle rail and the reaper; the per-task round and lifetime limits are optional — a positive number, or <code>unlimited</code> for none (the fresh-install default). A settings file from an earlier release that never set them keeps the finite limits it ran under until you change them here; startup names the values once. Budget limits control runtime cost thresholds. How many subagents a task may run, and how deep they may nest, live in <code>Agents</code>.</div>
+                        <div class="settings-section-copy">Workers control parallel task capacity. A quiet task is checked on, never stopped for being quiet; the per-task round and lifetime limits are optional — a positive number, or <code>unlimited</code> for none (the fresh-install default). A settings file from an earlier release that never set them keeps the finite limits it ran under until you change them here; startup names the values once. Budget limits control runtime cost thresholds. How many subagents a task may run, and how deep they may nest, live in <code>Agents</code>.</div>
                         <div class="form-grid two">
                             <div class="form-field ui-field">
                                 <label for="s-total-budget">Total Budget (USD)</label>

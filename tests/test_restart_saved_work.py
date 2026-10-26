@@ -495,9 +495,9 @@ def test_a_managed_update_window_never_times_out_the_saved_work_it_returns(tmp_p
             reaped.append(job["task_id"])
             queue._reap_timed_out_task(job)
 
-    assert asked == {"resolver": ("idle_timeout", ["finalize_now"]),
-                     "deadline-run": ("deadline", ["finalize_now"])}
-    assert sorted(reaped) == ["deadline-run", "resolver"]
+    assert asked == {"deadline-run": ("deadline", ["finalize_now"])}
+    assert reaped == ["deadline-run"]
+    assert workers.RUNNING["resolver"]["silence_attention"]["state"] == "pending_attention"
     assert load_task_result(tmp_path, "deadline-run")["reason_code"] == "deadline"
     for task_id in ("saved-a", "saved-b"):
         assert workers.RUNNING[task_id].get("finalization_requested_at") is None

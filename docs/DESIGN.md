@@ -171,6 +171,19 @@ under System. In full screen the bar hides until the pointer reveals it; the set
 and error windows and a UI that does not declare it keep the ordinary title bar. A
 browser, another OS or an older desktop app reserves nothing.
 
+A screen that cannot read the choice follows its host (owner 26.10, #1111 A). The Mac's
+main window opens at once in the room colour of the Mac's appearance; when its page
+has read a choice that differs, the window changes once to that palette, never waiting
+to be shown; the first-run setup window opens in the Mac's colour too, then its page
+paints the saved choice. The windows shown before the server (already running, Git
+required, startup failed) follow macOS. The network login page follows this browser's
+saved choice, else the device; the Telegram connecting page the Mini App's saved
+choice, else Telegram's light or dark. The login page and the windows before the
+server inline the interface's own `theme.js` and `ui.css`; the Telegram page restates
+only the palette's room and ink and reads the same saved choice. The Mac's windows
+need a new desktop app on older frozen launchers; source-handoff shells can take
+this through source updates. Login and Telegram change with an ordinary update.
+
 **Interface size** (Settings → Appearance, under Theme) is one slider that makes
 everything larger or smaller, per device like the theme (owner 23.10). Whoever
 owns the viewport applies it, never the page by scaling itself: the desktop app
@@ -671,7 +684,7 @@ without a sentence reads "The recorded reason has no description yet", with
 its exact code in accessible details. Authored warning prose and raw host text
 stay intact; never infer meaning from spelling. The loop's forced-finalization rails
 (round limit, deadline, grace window, context, unabsorbed children) and the
-supervisor's timeout reaper (maximum running time, deadline, idle silence)
+supervisor's timeout reaper (maximum running time, deadline)
 keep typed codes on the record and incident key, and the
 card, the reaper's grace toast, kill notice and salvage line, and the loop's own
 fallback text all say the one sentence from the shared table
@@ -1868,7 +1881,15 @@ eyes: a failed or timed-out step, a wait, a review, a child. Host notes on how
 the turn runs (a checkpoint, a model fallback, a review verdict, a nudge) are
 visible timeline rows that never claim the title or the collapsed line, so a
 turn with only host notes keeps its coined or task name and an empty activity
-line. A task that ends with a cause states it on the collapsed line in the
+line. An unnamed root takes its newest authored headline by that narration's
+own event time (owner 26.10, #1992 A; physical history order breaks equal-time
+ties), even when newer execution or a terminal outcome arrived first, and a
+root's collapsed narration follows the same clock. Once a closed card has
+narration, a late live row is dropped and renames nothing; a saved narration
+still competes, because history adds its row to the timeline. This never
+changes the earliest transcript anchor, explicit name, child identity or final
+lifecycle.
+A task that ends with a cause states it on the collapsed line in the
 owner's words (the sentence of the durable row and the expanded body), so a
 `Done with warnings` chip never stands beside an unrelated last action; a clean
 ending keeps the last narration. Successful tool calls are not rows: they fold

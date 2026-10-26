@@ -167,9 +167,10 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # next round boundary after the owner's stop control was written; the
     # same custody pass runs on the supervisor sweep, so this stays short.
     "OUROBOROS_DIRECT_TURN_STOP_WAIT_SEC": 2,
-    # Activity-based liveness (the flat wall-clock pair it replaced is RETIRED below):
-    # idle window = no real progress AND no progressing subtree; abs ceiling = the optional
-    # per-task lifetime, "unlimited" or seconds (budget/cost stays a separate hard axis).
+    # Activity observation (the flat wall-clock pair it replaced is RETIRED below): the
+    # idle window dates silence (no real progress AND no progressing subtree) for attention,
+    # never a stop (#1376); abs ceiling = the optional per-task lifetime, "unlimited" or
+    # seconds (budget/cost stays a separate hard axis).
     "OUROBOROS_TASK_IDLE_TIMEOUT_SEC": 900,
     "OUROBOROS_TASK_ABS_CEILING_SEC": "unlimited",
     "OUROBOROS_PER_CALL_TIMEOUT_CEILING_SEC": 1800,
@@ -375,9 +376,10 @@ RETIRED_SETTING_KEYS: tuple[str, ...] = (
     # misleading operator surface. Manifests/blobs stay preserved
     # indefinitely BY CONTRACT; the knob is gone, not honored.
     "OUROBOROS_OBSERVABILITY_RETENTION_DAYS",
-    # ABI 7.0 (D04, owner 1B): the flat wall-clock pair. Their kill was replaced by
-    # the activity model (OUROBOROS_TASK_IDLE_TIMEOUT_SEC + OUROBOROS_TASK_ABS_CEILING_SEC)
-    # long ago, after which they were kept as typed no-ops that a settings save reported
+    # ABI 7.0 (D04, owner 1B): the flat wall-clock pair. The activity model replaced
+    # them long ago: OUROBOROS_TASK_ABS_CEILING_SEC is the optional lifetime stop, and
+    # OUROBOROS_TASK_IDLE_TIMEOUT_SEC now only dates silence for attention (#1376). They
+    # were then kept as typed no-ops that a settings save reported
     # as "retired" and a non-default value merely logged. A knob the UI accepts, the
     # status line renders and nothing obeys is the misleading-surface class; the 7.0 ABI
     # window deletes it rather than carrying the ghost another minor.

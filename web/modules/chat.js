@@ -807,6 +807,20 @@ export function createChatInstance({
             || record.toolErrors > 0;
     }
 
+    // Child, else project, identity names the card; authored activity stays in its timeline. An unnamed
+    // root with work takes its newest narration, `Task activity` once ended (#1369).
+    function cardTitle(record, work = blockHasWork(record)) {
+        return record.isSubagent ? childTitle(record) : record.suggestedName
+            || (work ? record.lastHumanHeadline || (record.finished ? 'Task activity' : '') : '');
+    }
+
+    // Write only on change: a rewrite would destroy a selection being copied.
+    function syncCardHeadline(record) {
+        const title = cardTitle(record), line = record.collapsedActivity;
+        if (record.titleEl.textContent !== title) record.titleEl.textContent = title;
+        renderCollapsedActivity(record, projectCollapsedActivity({ isSubagent: record.isSubagent, suggestedName: title, headline: line, body: line }));
+    }
+
     // Fold host facts; absent counters stay absent.
     function noteToolMetrics(taskId, metrics, rawTs, { suppressDomInsert = false } = {}) {
         const rounds = Number.isInteger(metrics?.rounds) && metrics.rounds >= 0 ? metrics.rounds : null;
@@ -874,10 +888,7 @@ export function createChatInstance({
         const work = !record.isSubagent && blockHasWork(record);
         // The first row of work lands after the title writers ran for its frame: an empty title
         // takes a name here (Working is the chip's word, #1369); the writers own it from then on.
-        if ((work || isPortal(record)) && !record.titleEl.textContent) {
-            record.titleEl.textContent = record.suggestedName || record.lastHumanHeadline
-                || (record.finished ? 'Task activity' : '');
-        }
+        if ((work || isPortal(record)) && !record.titleEl.textContent) record.titleEl.textContent = cardTitle(record, true);
         portals.syncConvert(record, isMain && work && !isPortal(record) && !(window.__ouroTaskBindings || {})[record.groupId]);
     }
 
@@ -1362,7 +1373,6 @@ export function createChatInstance({
         if (_pendingName && !record.isSubagent) {
             pendingSuggestedNames.delete(normalizedGroupId);
             record.suggestedName = _pendingName;
-            if (record.titleEl) record.titleEl.textContent = _pendingName;
         }
         resetLiveCardRecord(record);
         // A card the last complete body does not name asks for a read.
@@ -1494,6 +1504,7 @@ export function createChatInstance({
         record.finished = false;
         record.items = [];
         record.lastHumanHeadline = '';
+        record.lastHumanHeadlineSource = null;
         record.expandedLineKeys.clear();
         record._anchorOrderDirty = false;
         // collapsed timelines defer DOM building; the flag says
@@ -1636,6 +1647,23 @@ export function createChatInstance({
         ));
     }
 
+    // Authored naming has its own clock: newer execution or a terminal outcome
+    // may already own the card when its saved narration reaches this instance.
+    // A root's collapsed line keeps it while showing narration (a cause holds).
+    function reconcileAuthoredHeadline(record, summary, rawTs) {
+        if (!summary.human || !summary.headline) return;
+        const previous = record.lastHumanHeadlineSource, shown = previous?.preview || '';
+        const incoming = { time: Date.parse(rawTs), position: _historyRow?.history_position,
+            preview: boundActivityPreview(summary.activityPreview ?? summary.headline) || shown };
+        if (Number.isFinite(previous?.time) && (!Number.isFinite(incoming.time) || incoming.time < previous.time)) return;
+        if (incoming.time === previous?.time && (compareHistoryPosition(incoming.position, previous.position) < 0
+                || previous.position && !incoming.position)) return;
+        if (!record.isSubagent && !record.causeHeld && record.collapsedActivity === shown) record.collapsedActivity = incoming.preview;
+        record.lastHumanHeadline = summary.headline;
+        record.lastHumanHeadlineSource = incoming;
+        return true;
+    }
+
     function applyLiveCardStateMutation(summary, groupId, ts, dedupeKey = '', { suppressDomInsert = false, rawTs = '' } = {}) {
         const nextGroupId = groupId || activeLiveGroupId || 'active';
         const record = getLiveCardRecord(nextGroupId);
@@ -1645,13 +1673,16 @@ export function createChatInstance({
         const nextPhase = summary.phase || '';
         const closedPhase = record.finished && !isTerminalTaskPhase(nextPhase, summary.terminal) ? replayTerminalPhase(record) : '';
         const initialContent = record.finished && (!record.updates || (summary.human && !record.lastHumanHeadline));
+        // A closed card drops a late live row (below); saved narration joins its timeline and may name it.
+        const newest = (!closedPhase || initialContent || _historyRow?.history_id) && reconcileAuthoredHeadline(record, summary, rawTs);
         if (_historyRow?.history_id && record.updates > 0 && !initialContent && !summary.terminal
                 && (record.finished || _historyAppending
                     || Date.parse(rawTs) < Date.parse(record.latestSourceTs || ''))) {
             const changed = mergeHistoricalTimelineItem(record, summary, _historyRow, ts);
             reanchorTaskCard(record, rawTs, { suppressDomInsert });
             if (changed) { renderLiveCardTimeline(record); updateLiveCardCount(record); }
-            return changed;
+            if (newest) syncCardHeadline(record);
+            return changed || liveCardProjectionChanged(before, record);
         }
         // One tool evidence row per block.
         const foldView = summary.toolCall ? applyToolObservation(record, summary.toolCall) : null;
@@ -1699,48 +1730,26 @@ export function createChatInstance({
         if (!isLegacyParentSubagentKey) {
             record.finished = Boolean(closedPhase) || isTerminalTaskPhase(nextPhase, summary.terminal);
         }
-        if (summary.human && headline) {
-            record.lastHumanHeadline = headline;
-        }
         if (summary.model) record.agentModel = summary.model;
         // Origin (including consciousness) stays sticky once observed.
         if (summary.initiator) record.initiator = summary.initiator;
 
-        const shouldPromote = Boolean(summary.promote) || record.finished;
-        const activeHeadline = shouldPromote
-            ? headline
-            : (record.lastHumanHeadline
-                || (record.updates > 1 ? record.titleEl.textContent : ''));
         // Only task facts own the outcome chip under a hold; failed tools are diagnostics.
         if (summary.observedOutcome && !record.finished) record.observedOutcome = summary.observedOutcome;
         const desiredPhase = desiredLiveCardPhase(record, closedPhase || (record.finished ? summary.phase || 'done' : ''));
         setLiveCardPhase(record, desiredPhase.phase, desiredPhase.text, desiredPhase.className,
             desiredPhase.secondary);
-        // Project/child identity names the card; authored activity stays in its timeline.
-        const title = record.suggestedName || (record.isSubagent ? childTitle(record)
-            : !blockHasWork(record) ? ''
-                : (record.finished ? record.lastHumanHeadline || 'Task activity'
-                    : record.lastHumanHeadline || activeHeadline));
-        if (record.titleEl.textContent !== title) record.titleEl.textContent = title;
         // Collapsed activity comes only from the turn's voice, including child cards;
         // host notes and terminal Done cannot overwrite it. Expand keeps full activity.
-        const previewSource = record.isSubagent && summary.human !== false
+        const activityCandidate = (record.isSubagent && summary.human !== false
             ? String(summary.activityPreview ?? summary.body ?? '')
-            : (summary.human ? String(summary.activityPreview ?? activeHeadline ?? '')
-                : (summary.terminal && summary.activityPreview ? String(summary.activityPreview) : ''));
-        const activityCandidate = previewSource.trim();
+            : String(!summary.human && summary.terminal && summary.activityPreview || '')).trim();
         if (activityCandidate) {
             record.collapsedActivity = boundActivityPreview(activityCandidate);
             record.collapsedActivityLead = summary.activityLead || '';  // a child's "Report to parent"
+            record.causeHeld = !record.isSubagent;  // a root's line is its outcome's cause
         }
-        const activityText = projectCollapsedActivity({
-            isSubagent: record.isSubagent,
-            suggestedName: title,
-            headline: record.isSubagent ? '' : record.collapsedActivity,
-            body: record.isSubagent ? record.collapsedActivity : '',
-            previous: record.collapsedActivity,
-        });
-        renderCollapsedActivity(record, activityText);
+        syncCardHeadline(record);
 
         const shouldRenderLine = summary.visible !== false && Boolean(headline || summary.body);
         let timelineUpdate = 'none';
@@ -1759,8 +1768,7 @@ export function createChatInstance({
         }
         updateLiveCardCount(record);
         // Cost does not move the activity clock.
-        if (ts && (summary.human || activityCandidate)) record.latestActivityTs = ts;
-        if (ts && (summary.human || activityCandidate)) record.latestActivityRaw = rawTs || '';
+        if (ts && (summary.human || activityCandidate)) record.latestActivityTs = ts, record.latestActivityRaw = rawTs || '';
         if (summary.executorChip
                 && !keepStickyExecutorChip(record.executorChip, summary.executorChip)) {
             record.executorChip = summary.executorChip;
@@ -1823,13 +1831,8 @@ export function createChatInstance({
         record.finished = true;
         record.finalizingHold = false;
         const presentation = taskPresentation(phase || 'done', record.quietEffective ?? record.historicalTerminal?.quiet_effective);
-        const activePhase = presentation.phase;
-        setLiveCardPhase(record, activePhase, presentation.headline);
-        if (record.isSubagent) record.titleEl.textContent = childTitle(record);
-        else if (!record.suggestedName && !record.lastHumanHeadline
-                && record.titleEl.textContent !== presentation.headline) {
-            record.titleEl.textContent = blockHasWork(record) ? 'Task activity' : '';
-        }
+        setLiveCardPhase(record, presentation.phase, presentation.headline);
+        syncCardHeadline(record);
         settleLiveCard(record, wasFinished);
         ensureLiveCardVisible(record);
         if (activeLiveGroupId === record.groupId) activeLiveGroupId = '';
@@ -1895,10 +1898,7 @@ export function createChatInstance({
         }
         for (const sid of subagentChildParents.keys()) {
             const rec = liveCardRecords.get(sid);
-            // Write only on change: a rewrite would destroy a selection being copied.
-            const next = rec?.isSubagent ? childTitle(rec) : '';
-            if (next && rec.titleEl.textContent !== next) rec.titleEl.textContent = next;
-            if (rec?.isSubagent) renderLiveCardMeta(rec);
+            if (rec?.isSubagent) { syncCardHeadline(rec); renderLiveCardMeta(rec); }
         }
     }
 

@@ -150,11 +150,11 @@ def running_owner_stop_tasks(drive_root: Any, *, grace_sec: float) -> set:
     Read once per enforcement pass (one small locked projection read), then
     checked per RUNNING row — the typed predicate ``supervisor/queue.py``
     consults before generic spare-withdraw, spare-reset, second-grace,
-    idle-kill, reaping, and retry branches (§12.2 item 8). The task's explicit
+    silence-attention and reaping branches (§12.2 item 8). The task's explicit
     deadline and absolute safety ceiling are checked separately by the queue
     and never inherit this hold.  Within those hard bounds the hold covers the
     whole open-intent window, including the short expiry window before custody
-    consumes the intent, so the generic idle rail cannot clone a retry.
+    consumes the intent, so no generic rail acts on the stopping task.
     ``grace_sec<=0`` means the graceful-stop feature is off (the sweep feeds
     custody immediately), so no hold is needed.
     """
