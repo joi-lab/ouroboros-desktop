@@ -566,6 +566,7 @@ def _retrieving_task(repo_dir: pathlib.Path, drive_root: pathlib.Path, *,
         # fact the reviewer (and the header) can rely on, never a gap.
         f"Memory dispositions ({memory['total']} whitelisted): "
         + "; ".join(f"{rel} {d}" for rel, d in memory["dispositions"].items()),
+        _body_line(drive_root),
     ]
     if required_sources_ref:
         parts.append("Read the complete required source manifest through its exact source handle and inspect its sources across your working views. Documents already delivered in full above need no second tool read: "
@@ -576,6 +577,16 @@ def _retrieving_task(repo_dir: pathlib.Path, drive_root: pathlib.Path, *,
     return "\n\n".join(part for part in parts if str(part or "").strip()), {
         "memory": memory, "bible_chars": len(bible), "required_sources": sources,
         "governance_manifest": governance.manifest}
+
+
+def _body_line(drive_root: pathlib.Path) -> str:
+    """The body's dated facts in one line, the same ``vitals`` every turn's Runtime section carries
+    (``context_runtime_facts``): the reviewer judges the trend with the numbers, without a tool call."""
+    from ouroboros.context_runtime_facts import vitals_fact, vitals_line
+    from ouroboros.utils import utc_now_iso
+
+    line = vitals_line(vitals_fact(drive_root, observed_at=utc_now_iso()))
+    return f"Body (the Runtime section's vitals, as every turn reads them): {line}" if line else ""
 
 
 def _review_usage_scope(current: Any, request: Any) -> Any:

@@ -236,6 +236,9 @@ def _ensure(root: pathlib.Path, path: pathlib.Path, *, rederive: bool = False,
                 with store.name_lock(root, IMPORT_LOCK_NAME, timeout_sec=600.0, stale_sec=600.0):
                     if retiered and header == TIER_ENFORCED:  # out of WAL under the tier in use, before the header names another
                         store.prepare_handoff(path, header, seam=False)
+                    if retiered:  # the header changes in place: read it every time until the new tier commits
+                        known = (str(path), store.file_identity(path))
+                        store._TIERS[known] = None
                     with store.open_store(root, write=True, service=True) as txn:
                         if txn.phase() != PUBLISHED:
                             raise store.StoreRetired("store entered export during boot preparation")
@@ -256,6 +259,8 @@ def _ensure(root: pathlib.Path, path: pathlib.Path, *, rederive: bool = False,
                             txn.set_meta("legacy_results", report["results"])
                         if changed_body:
                             txn.set_meta("last_store_body", {"sha": body_sha, "at": utc_now_iso()})
+                    if retiered:
+                        store._TIERS[known] = tier
             if initialize_journal:  # explicit boot ownership, independent of legacy reconciliation
                 report["journal_selected"] = _select_journal(root, path, tier)
             if not store.generation_stamped(root):
@@ -271,6 +276,9 @@ def _ensure(root: pathlib.Path, path: pathlib.Path, *, rederive: bool = False,
                 with store.name_lock(root, IMPORT_LOCK_NAME, timeout_sec=600.0, stale_sec=600.0):
                     if retiered and header == TIER_ENFORCED:  # as above: the old tier converts first
                         store.prepare_handoff(path, header, seam=False)
+                    if retiered:  # as above: read every time until the new tier commits
+                        known = (str(path), store.file_identity(path))
+                        store._TIERS[known] = None
                     with store.open_store(root, write=True, service=True) as txn:
                         if derive:
                             _derive_flag_columns(txn, rederive=rederive)
@@ -278,6 +286,8 @@ def _ensure(root: pathlib.Path, path: pathlib.Path, *, rederive: bool = False,
                             txn.conn.execute(f"PRAGMA application_id = {store._APPLICATION_ID[tier]}")
                         if tier_record != facts["lock_tier"]:
                             txn.set_meta("lock_tier", tier_record)
+                    if retiered:
+                        store._TIERS[known] = tier
             return {"status": "switch_pending", "phase": phase, "lock_tier": tier, **retiered,
                     "legacy_reconcile": "not_needed"}, []
     elif store.generation_stamped(root):

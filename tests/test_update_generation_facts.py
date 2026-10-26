@@ -28,7 +28,7 @@ def samples(monkeypatch):
     monkeypatch.setattr(server_process, "server_source_baseline", lambda: "a" * 40)
 
 
-def test_direct_dispatch_does_no_io_until_supervisor_handles_its_frame(isolated_progress, monkeypatch):  # noqa: F811
+def test_direct_dispatch_does_no_io_until_supervisor_handles_its_frame(isolated_progress, monkeypatch, tmp_path):  # noqa: F811
     from supervisor import events
     from supervisor.active_activity import TurnExecution
     from supervisor.log_addressing import TurnEventQueue
@@ -68,13 +68,18 @@ def test_direct_dispatch_does_no_io_until_supervisor_handles_its_frame(isolated_
     assert isolated_progress.saved[progress.STATE_KEY]["generation_facts"]["after"]["direct_message_first_dispatch"] is None
 
     # The send frame publishes the fact its observer stamped. The turn can have ended before the
-    # supervisor drains it: no live registry entry is needed.
-    events._handle_main_llm_call_state(frames.get_nowait(), SimpleNamespace(RUNNING={}))
+    # supervisor drains it: no live registry entry is needed. The same frame carries the turn's
+    # receipt, which the consumer writes to the journal after the update facts (its own opens).
+    sent_frame = frames.get_nowait()
+    assert sent_frame["direct_turn"]["execution_id"] == execution.execution_id
+    monkeypatch.setattr("supervisor.active_activity._DIRECT_TURNS", __import__("collections").deque(maxlen=100))
+    events._handle_main_llm_call_state(sent_frame, SimpleNamespace(RUNNING={}, DRIVE_ROOT=tmp_path))
     after = isolated_progress.saved[progress.STATE_KEY]["generation_facts"]["after"]["direct_message_first_dispatch"]
     assert after == {"task_id": "owner", "attempt_id": execution.execution_id,
                      "accepted_at": execution.marks[0][1], "dispatched_at": execution.marks[-1][1],
                      "seconds": execution.marks[-1][1] - execution.marks[0][1]}
-    assert calls == [(name, threading.get_ident()) for name in ("_read_saved", "sample", "_store")]
+    assert [call for call in calls if call[0] != "open"] == [(name, threading.get_ident()) for name in ("_read_saved", "sample", "_store")]
+    assert calls.index(("_store", threading.get_ident())) < len(calls) - 1  # the receipt's journal open comes after
     calls.clear()
     # A repeat and another round carry no new first-dispatch fact and do no persistence work.
     events._handle_main_llm_call_state(frame, SimpleNamespace(RUNNING={}))
@@ -149,7 +154,14 @@ def test_record_reaches_panel_api_and_real_context_builder_without_chat(isolated
                           drive_path=lambda path: tmp_path / path)
     before = state_file.read_bytes()
     text = context.build_runtime_section(env, {"id": "reader", "type": "task"})
-    assert '"after_update"' in text and '"task_id": "visible-task"' in text
+    runtime = json.loads(text.split("## Runtime context\n\n", 1)[1])
+    # The mind reads the samples once, as the body fact's last update; the Runtime copy of the
+    # update projection no longer repeats them (the panel keeps its own reader above).
+    assert "after_update" not in runtime["official_update"]
+    assert runtime["vitals"]["last_update"].startswith("applied " + "b" * 12 + ": first request from handler entry before ")
+    assert runtime["vitals"]["last_update"].endswith("; record state/state.json managed_update_attempt")
+    assert " → after 3.0 s; rss 512 → 512 MiB" in runtime["vitals"]["last_update"]
+    assert "cpu" not in runtime["vitals"]["last_update"]  # a share over a sub-second interval is noise, not a fact
     assert state_file.read_bytes() == before  # passive readers never resample/write
 
 

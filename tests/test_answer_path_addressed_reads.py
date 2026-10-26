@@ -642,7 +642,8 @@ def test_the_failed_work_scan_asks_the_chronicle_only_about_named_failures(tmp_p
                               covers={"rows": [first], "stream_span": [0, 0]}).ok
     assert failed_work_units(tmp_path, store) == []
     with sqlite3.connect(store.index_path) as db:
-        db.execute("DROP INDEX page_authors")  # an index an older body built
+        db.execute("DROP INDEX page_authors")  # an index an older body built: another schema version
+        db.execute("PRAGMA user_version=0")
     assert store.mind_page_authors(["failed01", "done0001"]) == {"failed01"}
     with sqlite3.connect(store.index_path) as db:
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name='page_authors'").fetchone()

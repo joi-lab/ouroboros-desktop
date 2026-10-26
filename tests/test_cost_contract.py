@@ -37,6 +37,19 @@ positive companion per duty (an addressed input change) shows the work still hap
 the producer and loop boundaries (``P:*``) flat on their FIRST pass. ``B9`` holds the memory's chat
 reader, a whole-stream reader, to a few read transactions per page of rows, never one per row. The scale root carries the
 shapes of the 22.10 class in counted numbers (tests/_scale_root.py).
+
+``B10`` is the owner's turn: one message as the supervisor loop handles it and the production direct turn it
+starts, counted up to the turn's first model request, where the driver refuses the call and the turn ends. The
+history it must not reread (tests/_turn_shapes.py) is the old memory folded by parts, the archived dialogue sealed
+by pages and rooms sealed after the frontier, met in the steady state a long-lived install keeps (the tail facts
+stored, the OpenRouter catalogue recorded). L1: a project room's turn does the same work at k=1 and k=30; L2:
+Main's turns make the same round trips and decode the same rows (their payload is free: Main shows its story);
+L3/L4 (k=1): after 40 live rooms and 10 running roots, 650 open rows, or 40 archived knowledge notes and old
+rescue snapshots, only the dialogue's page reads may grow, by B9's allowance per page (their statements by the
+lease's per transaction); L5: each turn reaches its request and nothing it does reaches the network; L6: the
+request carries the newest open row. A breach in today's code is a ``TURN_GAPS`` row (tests/_turn_law.py): a
+strict xfail with its numbers, its remover or why it has none, and a ceiling its growth may not pass.
+The first turn's census of the host's processes is the host's, not the history's: tests/test_cost_host.py.
 """
 
 from __future__ import annotations
@@ -56,6 +69,7 @@ import pytest
 from tests._cost_driver import ACTIVITIES
 from tests._cost_meter import EXECUTION, HISTORY, VM_STEP, CostMeter, tagged
 from tests._scale_root import worktree_root
+from tests._turn_law import hold_turn_law, readers_of, turn_gap
 
 pytestmark = pytest.mark.scale
 
@@ -64,8 +78,11 @@ K_SMALL = 1
 CHILD_TIMEOUT_SEC = 900  # a transport bound for one child, not a judgment about the boot
 LOCATIONS = ("root", *HISTORY, EXECUTION)
 # Counted per location; lock files (``lock``) are left out: how often a lock is probed and retried
-# follows the contention between this process's threads at that instant, not the history.
+# follows the contention between this process's threads at that instant, not the history. Its
+# acquisitions (``lock_acquired``) do not, so they count, as do the dialogue rows decoded and every
+# refused lookup of a host beyond this machine.
 WORK = ("connect", "statements", "begins", "commits", "writes", "json_loads", "json_chars", "popen", "thread_start",
+        "lock_acquired", "rows_decoded", "network_refused",
         *(f"{kind}:{where}" for kind in ("connect", "stat", "scandir", "listdir", "dir_entries", "open", "os_open",
                                           "read_bytes")
           for where in (*LOCATIONS, "outside")))
@@ -298,25 +315,83 @@ def test_b9_the_memory_reader_looks_rows_up_a_page_at_a_time(measured):
         assert rows > 150 * k and begins <= 3 * pages + 3, (k, rows, begins)
 
 
-def _main_view_begins(root: pathlib.Path, rows: int) -> int:
-    """Read transactions of one cold Main view over ``rows`` open rows spread across 241 rooms."""
-    from ouroboros import memory_view as mv
-    from tests import _memory_capture_shape as shape
+# ---- B10: the owner's turn up to its first model request --------------------------------------------
 
-    root.mkdir(parents=True)
-    with CostMeter(root) as meter:  # the stores' per-thread connections open under the meter, so it sees their reads
-        made = shape.open_rows(root, rows)
-        tagged("view", lambda: mv.capture_memory_view(root, made["task"], made["spec"]))
-    return meter.snapshot("view")["counts"].get("begins", 0)
+# Round trips: to a store, a lock, a file, a directory, a child process, a thread. A turn may not repeat one per
+# unit of history; bytes and decodes are payload, which Main's view shows by design (BIBLE P1: its own story).
+ROUND = ("connect", "begins", "statements", "lock_acquired", "open", "os_open", "popen", "thread_start", "scandir",
+         "listdir", "dir_entries")
+# After live rooms or open rows are added only the dialogue's own page reads may grow: read transactions by B9's
+# allowance per page of rows the step added (no divisor), their statements by the statements per transaction the
+# turn before made (the lease's, not a constant). A lock, a connection, a file or a child per room, root or row is
+# a breach.
+ROWS_PER_PAGE = 500  # the memory's chat reader reads rows a page at a time (``chat_chain``)
+MAIN_TURNS = ("T:main", "T:mainw", "T:main:foreign")
+BREADTH_TURNS = ("T:main:broad", "T:main:rows", "T:main:archive:first", "T:main:archive")  # the k=1 root only
 
 
-def test_b9_main_view_reads_grow_with_pages_of_open_rows_not_with_rows(tmp_path):
-    """The whole view behind each Main turn, not only its row reader: its rows' positions, texts, rooms
-    and authors are read a page at a time. Twice the open rows over the same 241 rooms cost the extra
-    page's reads only; the view that looked each row up alone spent 2,615 read transactions on 1,300."""
-    small, large = _main_view_begins(tmp_path / "small", 650), _main_view_begins(tmp_path / "large", 1_300)
-    extra_pages = -(-1_300 // 500) - -(-650 // 500)
-    assert large - small <= 3 * extra_pages, (small, large)
+def at_request(measured: Dict[Any, Any], tag: str, k: int) -> Dict[str, Any]:
+    entry = measured[k].get(f"{tag}@request")
+    assert entry is not None, (f"{tag} never reached its first model request at k={k}: "
+                               f"{measured[k].get('responses', {}).get(tag)}; "
+                               f"model calls {measured[k].get('model_calls')}")
+    return entry
+
+
+def _growth(before: Dict[str, Any], after: Dict[str, Any], keys: Iterable[str]) -> Dict[str, int]:
+    return {key: after["counts"].get(key, 0) - before["counts"].get(key, 0) for key in keys}
+
+
+@pytest.mark.parametrize("tag", [pytest.param(tag, marks=turn_gap("L2", tag))
+                                 for tag in (*MAIN_TURNS, "T:room")])
+def test_b10_an_integrating_turn_makes_the_same_round_trips_at_every_size(measured, tag):
+    """L2. An integrating turn makes the same round trips and decodes the same dialogue rows at k=1 and k=30:
+    Main's (the process's first, the next one, one after activity elsewhere) and a project room's direct turn,
+    which integrates as a root task does (BIBLE P1: the whole horizon stays resident there, so its view holds
+    every room's story and a line per live room). Its payload is free: an integrating view shows its story."""
+    large = measured["large"]
+    little, big = at_request(measured, tag, K_SMALL), at_request(measured, tag, large)
+    keys = (*ROUND, "rows_decoded")
+    hold_turn_law("L2", tag, _growth(little, big, keys), dict.fromkeys(keys, COUNT_JITTER), readers_of(little, big),
+                  scale=(large - K_SMALL) / 29)
+
+
+@pytest.mark.parametrize("law, tag, before, step", [
+    pytest.param("L3", "T:main:broad", "T:mainw", "breadth", marks=turn_gap("L3", "T:main:broad")),
+    pytest.param("L4", "T:main:rows", "T:main:broad", "rows", marks=turn_gap("L4", "T:main:rows")),
+    pytest.param("L3", "T:main:archive", "T:main:rows", "archive", marks=turn_gap("L3", "T:main:archive"))])
+def test_b10_main_s_turn_reads_pages_not_rooms_roots_or_rows(measured, law, tag, before, step):
+    """L3/L4 (k=1). After 40 live rooms with story and 10 running roots (L3), 650 open rows over those rooms (L4),
+    or 40 archived knowledge notes and 40 old rescue snapshots (L3, the turn after the one that met them), only
+    the dialogue's own page reads may grow: read transactions by B9's allowance per page of rows the step added
+    (one page more when they cross a page edge), statements by as many transactions of the turn before's
+    statements per transaction; every other round trip stays within ``COUNT_JITTER``. Payload is free."""
+    earlier, later = at_request(measured, before, K_SMALL), at_request(measured, tag, K_SMALL)
+    rows = measured[K_SMALL]["turn_shapes"][step]["rows"]
+    pages = -(-rows // ROWS_PER_PAGE) + bool(rows)
+    begins = COUNT_JITTER + 3 * pages
+    per_begin = earlier["counts"].get("statements", 0) / max(1, earlier["counts"].get("begins", 0))
+    allowed = {**dict.fromkeys(ROUND, COUNT_JITTER), "begins": begins, "statements": math.ceil(per_begin * begins)}
+    hold_turn_law(law, tag, _growth(earlier, later, ROUND), allowed, readers_of(earlier, later))
+
+
+@pytest.mark.parametrize("tag", [pytest.param(tag, marks=turn_gap("L5", tag))
+                                 for tag in (*MAIN_TURNS, "T:room", *BREADTH_TURNS)])
+def test_b10_each_turn_reaches_its_request_without_the_network(measured, tag):
+    """L5. Every turn reaches its first model request at every size it is driven, and nothing it does before
+    that request reaches beyond this machine (the driver refuses and counts every other host's lookup)."""
+    sizes = (K_SMALL,) if tag in BREADTH_TURNS else (K_SMALL, measured["large"])
+    refused = {k: at_request(measured, tag, k)["counts"].get("network_refused", 0) for k in sizes}
+    hosts = {k: [name for name in at_request(measured, tag, k)["names"] if name.startswith("network_refused")]
+             for k in sizes}
+    hold_turn_law("L5", tag, {"network_refused": max(refused.values())}, {"network_refused": 0}, hosts)
+
+
+def test_b10_main_s_turn_carries_the_newest_open_row(measured):
+    """L6. Counts alone pass a cache that drops data: the request of Main's turn after the rows step carries
+    the newest row that step wrote to Main."""
+    needle = measured[K_SMALL]["turn_shapes"]["rows"]["main_newest"]
+    assert at_request(measured, "T:main:rows", K_SMALL)["carries"] == [needle], needle
 
 
 # ---- B6: the rest law of the named maintenance jobs ---------------------------------------------
@@ -455,7 +530,7 @@ DUTY_NAMES = (*_host_duty_names(), "delegated-body")  # the dispatcher's invento
 # the change that removes it. A duty or boundary named here is driven and measured all the same; the
 # marker turns the known breach into a strict xfail that flips the moment the cause is gone.
 REST_LAW_GAPS: Dict[str, str] = {}
-BOUNDARIES = ("P:metrics_run", "P:metrics_review", "P:intake", "P:send", "P:allowance")
+BOUNDARIES = ("P:metrics_run", "P:metrics_review", "P:send", "P:allowance")
 BOUNDARY_GAPS: Dict[str, str] = {}
 # The counter a duty's companion makes appear (work > rest at every size); the body's walk and copy are
 # the two execution-root counters the 22.10 control fails on at rest. A copy opens its source through

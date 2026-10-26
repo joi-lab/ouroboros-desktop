@@ -293,6 +293,12 @@ def _setup_job(name, data, monkeypatch):
         seed(data, archives={"chat_20261001T000000.jsonl": [{"ts": "2026-10-01T00:00:00Z", "direction": "in",
                                                              "chat_id": 1, "text": "archived"}]})
         dialogue_import.cutover(data)  # plans the archive segment; the job imports it
+    elif name == "memory_tail":
+        from ouroboros import dialogue_store
+        from ouroboros.chronicle_store import ChronicleStore
+
+        assert ChronicleStore(data).ensure_activated()["kind"] == "activation"  # its frontier at the stream's start
+        dialogue_store.append(data, "chat", {"chat_id": 1, "direction": "in", "text": "after the frontier"})
     elif name == "hot_facts":
         from ouroboros import store
 

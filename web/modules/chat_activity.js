@@ -934,17 +934,34 @@ export function isTerminalTaskPhase(phase = '', terminal = false) {
  * first forced caller receives that request, the others resolve to null once
  * the follow-up has applied or failed. Gated requests settle via `apply`/`fail` even if a callback throws.
  * Only `fail` fans out `onUnavailable`; socket changes and confirmed mutations `retire()` older bodies.
+ *
+ * Each request names its `path`: once a full `task_bindings` map arrived with its revision, the
+ * next read asks `bindings_since=<revision>`, and a body answering `task_bindings_unchanged` is
+ * filled with that held map for that exact revision only; any other answer drops the held map,
+ * so the read after it asks for the whole map again.
  */
 export function createStateSnapshotSequencer(onApply, now = () => Date.now(), onUnavailable = () => {}) {
     let requestedGeneration = 0;
     let appliedGeneration = 0;
     // Newest applied body until a failed read or retire() clears it (late-mount seed).
     let latest = null;
+    let held = null;  // {revision, bindings}: the last full task_bindings map this page applied
     let inflight = null;
     let settled = null;
     let followUp = null;
     const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
-    const begin = () => ({ generation: ++requestedGeneration, requestedAt: now() });
+    const begin = () => ({ generation: ++requestedGeneration, requestedAt: now(),
+        path: held ? `/api/state?bindings_since=${encodeURIComponent(held.revision)}` : '/api/state' });
+    const withBindings = (data) => {
+        if (!data || typeof data !== 'object') return data;
+        const revision = typeof data.task_bindings_revision === 'string' ? data.task_bindings_revision : '';
+        if (data.task_bindings_unchanged === true && held && revision === held.revision) {
+            return { ...data, task_bindings: held.bindings };
+        }
+        held = revision && data.task_bindings && typeof data.task_bindings === 'object'
+            ? { revision, bindings: data.task_bindings } : null;
+        return data;
+    };
     const open = () => { settled = deferred(); inflight = begin(); return inflight; };
     const settle = (request) => {
         if (!inflight || request !== inflight) return;
@@ -956,7 +973,7 @@ export function createStateSnapshotSequencer(onApply, now = () => Date.now(), on
     };
     return {
         begin,
-        retire() { appliedGeneration = begin().generation; latest = null; },
+        retire() { appliedGeneration = begin().generation; latest = null; held = null; },
         gate(force = false) {
             if (!inflight) return Promise.resolve(open());
             if (!force) return settled.promise.then(() => null);
@@ -968,7 +985,7 @@ export function createStateSnapshotSequencer(onApply, now = () => Date.now(), on
                 const generation = Number(request?.generation) || 0;
                 if (!generation || generation <= appliedGeneration) return false;
                 appliedGeneration = generation;
-                latest = data;
+                latest = data = withBindings(data);
                 onApply(data, request.requestedAt, generation);
                 return true;
             } finally { settle(request); }

@@ -464,6 +464,35 @@ def test_room_rows_are_the_room_evidence_rows_by_room_task_and_period(tmp_path):
     assert list(cc.iter_room_rows(tmp_path, "1", task_ids=[])) == []
 
 
+def test_a_projects_task_reach_reaches_python_in_one_step_whatever_its_size():
+    """The tasks under a project's bound tasks, by parent or by root, as the recursive query names them row by row,
+    handed to Python in one step (each ``sqlite3_step`` releases the GIL)."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE tasks (task_id TEXT PRIMARY KEY, parent_task_id TEXT, root_task_id TEXT)")
+    tree = [(f"c{i}", f"c{i - 1}" if i else "bound", "bound" if i % 3 else None) for i in range(300)]
+    conn.executemany("INSERT INTO tasks VALUES (?,?,?)", tree + [("x1", "elsewhere", "elsewhere"), ("x2", None, None)])
+    rows_by_row = {str(row[0]) for row in conn.execute(cc._REACH.replace("json_group_array(id)", "id"), ('["bound"]',))}
+    stepped = []
+
+    class Rows(list):
+        def fetchone(self):
+            return self[0] if self else None
+
+        def fetchall(self):
+            return list(self)
+
+    class Stepped:  # counts the result rows each statement hands to Python: one ``sqlite3_step`` each
+        def execute(self, *args):
+            rows = Rows(conn.execute(*args).fetchall())
+            stepped.append(len(rows))
+            return rows
+
+    assert cc._reached(Stepped(), {"bound"}) == rows_by_row == {"bound", *(f"c{i}" for i in range(300))}
+    assert stepped == [1]
+
+
 def test_room_rows_between_two_addresses_keep_stream_positions(tmp_path):
     _room_fixture(tmp_path)
     room = list(cc.iter_room_rows(tmp_path, "1"))

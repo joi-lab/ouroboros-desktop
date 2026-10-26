@@ -515,3 +515,59 @@ def test_the_keep_set_covers_live_sharers_whose_rows_did_not_move(root, monkeypa
             txn.conn.set_trace_callback(None)
     assert packer_rows == {"queued", "reviewed"}
     assert not any(detail.startswith("SCAN") for detail in plan), plan
+
+
+def _sidecar_listings(monkeypatch):
+    """Every ``list_sidecars`` call of a pass: the whole listings and the name lists of addressed ones."""
+    whole, named, real = [], [], packs.list_sidecars
+
+    def spy(root_, *, errors=None, names=None):
+        (whole if names is None else named).append(sorted(names or ()))
+        return real(root_, errors=errors, names=names)
+
+    monkeypatch.setattr(packs, "list_sidecars", spy)
+    return whole, named
+
+
+def test_a_pass_from_a_position_reads_its_candidates_own_sidecars_and_an_empty_one_reads_none(root, monkeypatch):
+    """Both directions beside many published packs of other tasks. A pass from a position with nothing to pack
+    reads no sidecar; one with a candidate finds that task's generations by their names, and its one whole
+    listing is the newest-pack mark that orders the candidates (``ordered_candidates``)."""
+    for number in range(6):
+        _task(root, f"foreign-{number}", blobs=1)
+    assert packer.run_pass(root)["faults"] == 0  # no position: a whole census, one shared listing
+    assert len(packs._sidecar_names(root)) == 6
+    since = packer.terminal_revision(root)
+    whole, named = _sidecar_listings(monkeypatch)
+    report = packer.run_pass(root, since=since)
+    assert report["candidates"] == 0 and (whole, named) == ([], [])
+
+    _task(root, "late", blobs=1)
+    report = packer.run_pass(root, since=since)
+    assert (report["candidates"], report["packed"], report["faults"]) == (1, 1, 0)
+    assert len(whole) == 1 and all(set(names) <= {"late.members.json"} for names in named), (whole, named)
+    assert [sidecar["generation"] for sidecar in packs.published_generations(root, "late")] == [1]
+
+
+def test_a_candidate_beside_its_homonym_takes_the_next_free_generation_and_keeps_to_its_own(root):
+    """``a.2`` names ``a``'s generation 2 and ``a.2``'s generation 1: found by spelling, ``a``'s names include
+    it, and only the sidecar's own ``task_id`` tells them apart. ``a``'s later evidence takes the next free
+    generation and leaves its loose file only once its own pack holds it; ``a.2``'s pack stays its own."""
+    from ouroboros.artifacts import store_actor_source_bytes
+
+    handles = {task: _task(root, task, blobs=1, handle=f"# focus {task}\n".encode())[1] for task in ("a", "a.2")}
+    assert packer.run_pass(root)["faults"] == 0
+    assert packs._task_sidecar_names(root, "a") == {"a.members.json", "a.2.members.json"}
+    since = packer.terminal_revision(root)
+    later = store_actor_source_bytes(root, "a", category="context_checkpoints", source_id="focus_source_later",
+                                     data=b"# later focus\n", extension="md")
+    _result(root, "a", "completed")  # written terminal again: a candidate of the next pass
+    report = packer.run_pass(root, since=since)
+    assert (report["candidates"], report["packed"], report["faults"]) == (1, 1, 0)
+    assert [sidecar["generation"] for sidecar in packs.published_generations(root, "a")] == [1, 3]
+    assert [sidecar["generation"] for sidecar in packs.published_generations(root, "a.2")] == [1]
+    assert not _handle_path(root, "a", later).exists()  # its own pack holds it now
+    packs._VALIDATED.clear()  # the sidecars answer, not a cache this process validated
+    assert packs.handle_bytes(root, "a", later["path"]) == b"# later focus\n"
+    for task, handle in handles.items():
+        assert packs.handle_bytes(root, task, handle["path"]) == f"# focus {task}\n".encode()

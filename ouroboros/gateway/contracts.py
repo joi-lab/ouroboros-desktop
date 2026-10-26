@@ -783,11 +783,12 @@ class StateResponse(WorkStateFields):
     project_chat_ids: list
     # Main's room revision (its standalone messages, the kind a Project's visible_revision counts); null while unreadable.
     main_visible_revision: NotRequired[Optional[int]]
-    # Task->project bindings ({task_id: {project_id, chat_id}}) so the frontend
-    # can recognise a project-scoped task card: suppress the stray "turn into
-    # project" button (v6.33.0 P2) and render a pointer that opens the bound
-    # project's panel (v6.33.0 F4).
-    task_bindings: dict
+    # Task->project bindings ({task_id: {project_id, chat_id, project_name}}): a bound card hides the stray
+    # "turn into project" button (v6.33.0 P2) and opens its project (v6.33.0 F4). Null only when
+    # ``?bindings_since`` named the current opaque ``task_bindings_revision`` ("" after a failed read).
+    task_bindings: Optional[dict]
+    task_bindings_revision: str
+    task_bindings_unchanged: bool
     active_direct_turns: NotRequired[List[ActiveDirectTurn]]
     # Combined activity snapshot (direct/ephemeral turns + root managed queue
     # tasks). Additive beside active_direct_turns, which stays unchanged for
