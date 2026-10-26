@@ -51,15 +51,29 @@ def _result(ctx: Any, code: str, text: str, *, details: dict | None = None) -> s
 
 
 def _route(model: str) -> tuple[str, str]:
-    source, sep, name = str(model or "").strip().partition("::")
-    if not sep or source not in {*image_api.IMAGE_API_SOURCES, "claudexor"} or not name.strip():
+    """``(source, model)`` of an image route; ``source@name::`` picks that API connection's key."""
+    from ouroboros.provider_models import parse_model_route
+
+    text = str(model or "").strip()
+    route = parse_model_route(text)
+    if ("::" not in text or not text.startswith(route.kind) or not route.valid
+            or route.kind not in {*image_api.IMAGE_API_SOURCES, "claudexor"} or not route.model.strip()):
         raise ValueError("model must select an image route: openai::<model>, openrouter::<model>, zai::<model>, or claudexor::<source>=<model>. Use list_image_models; no default is chosen.")
-    return source, name.strip()
+    return route.kind, route.model.strip()
 
 
 def _targets() -> dict[str, dict]:
-    """Shared-layer route facts per source; a missing credential is an empty api_key."""
-    return {source: image_api.resolve_image_target(f"{source}::probe") for source in image_api.IMAGE_API_SOURCES}
+    """Shared-layer route facts per source's built-in connection; a missing or switched-off
+    credential is an empty api_key."""
+    from ouroboros.llm_attempt import ConnectionUnavailable
+
+    def target(source: str) -> dict:
+        try:
+            return image_api.resolve_image_target(f"{source}::probe")
+        except ConnectionUnavailable:
+            return {"provider": source, "api_key": "", "base_url": ""}
+
+    return {source: target(source) for source in image_api.IMAGE_API_SOURCES}
 
 
 def _catalog_entry(source: str, model: str, *, editing: bool | None, evidence: str,

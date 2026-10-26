@@ -776,7 +776,8 @@ def resolve_main_token_density(
     except Exception:
         pass
     # Empirical tokenizer classes (audit D8), never a per-model window table.
-    native = str(model_id).lower().removeprefix("claudexor::")
+    from ouroboros.provider_models import parse_model_route
+    native = parse_model_route(str(model_id).lower()).model
     return (4 / 2.7 if "claude" in native else 1.0), "cold_estimate"
 
 
@@ -967,15 +968,14 @@ def _openai_compatible_metadata_window(
 
     ``api_key`` may be passed by callers that already hold the key in scope (e.g.
     the settings-save gate, which has the not-yet-persisted value in ``current``).
-    When omitted the function falls back to the already-saved settings on disk."""
+    When omitted it is the key of the connection ``model`` names (``_route_api_key``)."""
     if not allow_fetch or not str(base_url or "").strip() or not str(model or "").strip():
         return 0
     try:
         import httpx
 
         if api_key is None:
-            from ouroboros.config import runtime_settings
-            api_key = str((runtime_settings() or {}).get("OPENAI_COMPATIBLE_API_KEY") or "")
+            api_key = _route_api_key(model)
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         from ouroboros.net_transport import verify_kwargs
         resp = httpx.get(str(base_url).rstrip("/") + "/models", headers=headers, timeout=5.0, **verify_kwargs())
@@ -985,9 +985,10 @@ def _openai_compatible_metadata_window(
         if provider == "openai-compatible":  # MiniMax /models carries no modality field
             from ouroboros.vision_routing import record_catalog_image_input
             record_catalog_image_input(provider, base_url, items, source="the OpenAI-compatible gateway's /models")
-        # The saved model is normally provider-prefixed (e.g. ``openai-compatible::llama-3``)
+        # The saved model is normally route-prefixed (e.g. ``openai-compatible::llama-3``)
         # while /models lists the BARE id — match either spelling.
-        wanted = {str(model), str(model).split("::", 1)[-1]}
+        from ouroboros.provider_models import parse_model_route
+        wanted = {str(model), parse_model_route(model).model}
         matched = [item for item in (items or []) if isinstance(item, dict)
                    and str(item.get("id") or item.get("name") or "") in wanted]
         from ouroboros.response_limits import positive_limit, record_metadata_limit
@@ -1007,6 +1008,16 @@ def _openai_compatible_metadata_window(
         return 0
 
 
+def _route_api_key(model: str) -> str:
+    """The key of the connection ``model`` names, from the one resolver: never another
+    connection's (a default key sent to a named endpoint), '' when the route cannot serve."""
+    try:
+        from ouroboros.llm_routing import resolve_target
+        return str(resolve_target(model).get("api_key") or "")
+    except Exception:
+        return ""
+
+
 def _provider_metadata_window(
     provider: str, model: str, base_url: str, allow_fetch: bool, api_key: Optional[str] = None
 ) -> Tuple[int, str]:
@@ -1022,12 +1033,6 @@ def _provider_metadata_window(
             return 0, ""
     # CW6: OpenAI-compatible /models probe (vLLM/Ollama/...) before falling to unprobeable.
     if p in {"openai-compatible", "minimax"}:
-        if p == "minimax" and api_key is None:
-            try:
-                from ouroboros.config import runtime_settings
-                api_key = str((runtime_settings() or {}).get("MINIMAX_API_KEY") or "")
-            except Exception:
-                api_key = ""
         window = _openai_compatible_metadata_window(model, base_url, allow_fetch, api_key=api_key, provider=p)
         return window, utc_now_iso() if window else ""
     # GigaChat's /models (aget_models) lists model ids but does NOT publish a per-model
