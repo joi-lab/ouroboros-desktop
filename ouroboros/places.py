@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -39,6 +40,25 @@ AUTHOR_CONNECTOR, AUTHOR_OWNER, AUTHOR_OUROBOROS, AUTHOR_MIGRATION = (
 AUTHORS = (AUTHOR_CONNECTOR, AUTHOR_OWNER, AUTHOR_OUROBOROS, AUTHOR_MIGRATION)
 SILENT_DISCLOSURE = ("Writes through this connector's declared tools and delivery queue are blocked. "
                      "Scripts, browser actions and unintegrated code may still write.")
+
+
+def is_wake_signal(fact: Any) -> bool:
+    return isinstance(fact, str) and re.fullmatch(r"signal\.[a-z0-9_-]{1,40}", fact) is not None
+
+
+def valid_wake_fact(fact: Any) -> bool:
+    """Stored signals remain readable when their connector is off or removed."""
+    return isinstance(fact, str) and (fact in (*WAKE_FACTS, FACT_LEGACY_ADDRESSED) or is_wake_signal(fact))
+
+
+def declared_wake_signals(connector: str) -> set[str]:
+    """Only the authenticated connector's live publication can vouch for a signal."""
+    from ouroboros.extension_registry_state import live_contribution_projection
+
+    return {fact["id"] for row in live_contribution_projection()
+            if row.get("provides") == "place" and row.get("skill") == connector
+            for fact in row.get("facts", [])
+            if isinstance(fact, dict) and is_wake_signal(fact.get("id"))}
 
 
 class PlaceError(ValueError):
@@ -112,7 +132,7 @@ def _validate(place: Place) -> Place:
         raise PlaceError("place_invalid")
     if type(place.revision) is not int or place.revision < 0:
         raise PlaceError("place_revision_invalid")
-    if any(w.fact not in (*WAKE_FACTS, FACT_LEGACY_ADDRESSED) or w.author not in AUTHORS for w in place.wakes):
+    if any(not valid_wake_fact(w.fact) or w.author not in AUTHORS for w in place.wakes):
         raise PlaceError("place_wake_invalid", "wakes")
     if any(not n.text.strip() or n.author not in AUTHORS for n in place.notes):
         raise PlaceError("place_note_invalid", "notes")
@@ -299,6 +319,8 @@ def place_summary(place: Place) -> Mapping[str, Any]:
 
 
 def _write(drive_root: Any, place_id: str, change: Any, expected_revision: int | None = None) -> Place | None:
+    if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
+        raise PlaceError("place_revision_invalid", "expected_revision", "place_revision_invalid: expected_revision must be a whole number.")
     load_places(drive_root)  # migration precedes the first user edit, under the same file lock
     result = None
 
@@ -315,7 +337,7 @@ def _write(drive_root: Any, place_id: str, change: Any, expected_revision: int |
         if result is None:
             rows.pop(place_id, None)
         else:
-            result = _validate(replace(result, revision=(old.revision if old else 0) + 1))
+            result = _validate(replace(result, revision=current["revision"] + 1))
             rows[place_id] = asdict(result)
         return {**current, "revision": current["revision"] + 1, "places": rows}
 
@@ -325,13 +347,13 @@ def _write(drive_root: Any, place_id: str, change: Any, expected_revision: int |
 
 def connect_place(drive_root: Any, *, connector: str, provider: str, label: str = "", account_id: str = "",
                   conversation_id: str = "", scope: str = "account", wakes: Iterable[str] = (),
-                  contribution_id: str = "", place_id: str = "") -> Place:
+                  contribution_id: str = "", place_id: str = "", state: str = STATE_ACTIVE) -> Place:
     # A repeated Connect is idempotent; a refreshed connector cannot replace choices.
     identity = (connector, provider, account_id, conversation_id, contribution_id)
     place_id = place_id or uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity)).hex
     candidate = _validate(Place(place_id=place_id, connector=connector, provider=provider, label=label or provider,
                                account_id=account_id, conversation_id=conversation_id, scope=scope,
-                               contribution_id=contribution_id,
+                               contribution_id=contribution_id, state=state,
                                wakes=tuple(WakeItem(fact, AUTHOR_CONNECTOR) for fact in dict.fromkeys(wakes))))
     return _write(drive_root, place_id, lambda old: old or candidate)
 
@@ -367,13 +389,18 @@ def _change_place(old: Place | None, action: str, author: str, values: dict) -> 
         return replace(old, **{field: value.strip()})
     if action == "set_wakes":
         facts = values.get("wakes")
-        if not isinstance(facts, list) or any(f not in (*WAKE_FACTS, FACT_LEGACY_ADDRESSED) for f in facts):
+        if not isinstance(facts, list) or any(not valid_wake_fact(f) for f in facts):
             raise PlaceError("place_wake_invalid", "wakes")
+        added_signals = {f for f in facts if is_wake_signal(f)} - {w.fact for w in old.wakes}
+        if added_signals and not added_signals <= declared_wake_signals(old.connector):
+            raise PlaceError("place_wake_undeclared", "wakes", "place_wake_undeclared: this connector has not declared that signal; turn it on or choose a listed kind.")
         return replace(old, wakes=tuple(next((w for w in old.wakes if w.fact == fact), WakeItem(fact, author)) for fact in dict.fromkeys(facts)))
     if action in {"add_wake", "remove_wake"}:
         fact = values.get("fact", "")
-        if fact not in (*WAKE_FACTS, FACT_LEGACY_ADDRESSED):
+        if not valid_wake_fact(fact):
             raise PlaceError("place_wake_invalid", "fact")
+        if action == "add_wake" and is_wake_signal(fact) and fact not in declared_wake_signals(old.connector):
+            raise PlaceError("place_wake_undeclared", "fact", "place_wake_undeclared: this connector has not declared that signal; turn it on or choose a listed kind.")
         items = tuple(w for w in old.wakes if w.fact != fact)
         if action == "add_wake":
             items += (WakeItem(fact, author),)

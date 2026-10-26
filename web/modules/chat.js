@@ -1127,10 +1127,12 @@ export function createChatInstance({
     // Refresh files/history; retain lifecycle.
     function noteTaskDetails(record, detail) {
         const files = syncSettledItems(record, detail, { write: withStableViewport });
+        const words = record && detail && 'wake_summary' in detail && record.wakeSummary !== detail.wake_summary;
+        if (words) record.wakeSummary = detail.wake_summary;
         const history = syncHistoryRetentionItem(record, detail);
         const candidate = syncCandidateRemainderItem(record, detail);
         const chain = episodes.note(record, detail);
-        return Boolean((files || history || candidate) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
+        return Boolean((words || files || history || candidate) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
             || chain;
     }
 
@@ -1981,7 +1983,7 @@ export function createChatInstance({
         changed = queueTaskLiveUpdate(
             presented, taskId, normalizeLogTs(rawTs), presented.dedupeKey || '', rawTs,
         ) || changed;
-        // History may carry the coined name that live frames deliver separately.
+        // History carries task_named's title.
         if (msg.suggested_name) changed = applySuggestedName(taskId, msg.suggested_name) || changed;
         // Outcome survives a lost summary even while post-work keeps controls live.
         if (
@@ -2129,8 +2131,7 @@ export function createChatInstance({
         const taskId = getLogTaskGroupId(evt) || '';
         if (!taskId) return false;
         const rawTs = evt.ts || evt.timestamp || new Date().toISOString();
-        // Task-bound Skill lifecycle is presentation on its explicit owner,
-        // never a synthetic lifecycle task card.
+        // Skill lifecycle belongs to its explicit owner.
         const review = attachReviewFromRow(evt, rawTs);
         if (review !== undefined) return review;
         const childInfo = subagentChildParents.get(taskId);
@@ -2426,7 +2427,7 @@ export function createChatInstance({
 
                 const historicalTerminalProjections = new Set();
                 for (const msg of messages) if (msg.historical_terminal && msg.task_id) {
-                    historicalTerminals.set(msg.task_id, msg.historical_terminal);
+                    historicalTerminals.set(msg.task_id, { ...msg.historical_terminal, wake_summary: msg.wake_summary });
                     if (msg.summary_kind === 'terminal_root_projection' || msg.outcome_final === true) {
                         historicalTerminalProjections.add(msg.task_id);
                     }
@@ -2451,6 +2452,7 @@ export function createChatInstance({
                     const taskId = msg.task_id || '';
                     if (!taskId) continue;
                     if (msg.is_progress) {
+                        if (msg.suggested_name) applySuggestedName(taskId, msg.suggested_name);
                         updateLiveCardFromProgressMessage(msg, { grantCancelAuthority: msg.project_mirror !== true });
                         const historyCard = liveCardRecords.get(taskId);
                         if (historyCard && !historyCard.isSubagent && !activeDirectActivities.has(taskId)
@@ -2462,7 +2464,7 @@ export function createChatInstance({
                         if (historyCard && historicalTerminals.has(taskId)) historyCard.historicalTerminal = historicalTerminals.get(taskId);
                         continue;
                     }
-                    // Pass 2 mounts the block in its transcript position.
+                    if (msg.historical_terminal) getLiveCardRecord(taskId).quietEffective = msg.historical_terminal.quiet_effective;
                     if (msg.system_type === 'task_summary') appendTaskSummaryToLiveCard(msg, { suppressDomInsert: true });
                 } } finally { _syncPass1Active = false; _historyRow = null; }
 
@@ -2505,7 +2507,7 @@ export function createChatInstance({
                         addStoredRow(msg, taskId, { evidenceRef: cardRowEvidenceRef(msg) });
                         continue;
                     }
-                    // Durable history clears Sending; census re-links a still-live turn.
+                    // History clears Sending; census re-links live turns.
                     if (fromReconnect && msg.role === 'user' && msg.client_message_id) {
                         pendingSubmissions.delete(String(msg.client_message_id));
                     }
@@ -2554,14 +2556,14 @@ export function createChatInstance({
                     if (msg.role === 'user') { markIngressSaved(messagesDiv, msg); replies.adopt(msg); unconfirmed.settle(msg); }
                 }
                 _historyRow = null;
-                // Persisted terminals without task_summary (crash/timeout/cancel) also settle
-                // progress-only cards, or reload revives them as Working. A child's terminal
-                // resolves the child card, never its parent; a root's uses the shared terminal
-                // mapping (P5: a cancelled root replays as "Stopped", never a generic "Done").
+                // Durable terminal facts settle the named card, including progress-only replays.
                 const settleReplayedTerminal = (tid, terminalRecord, phase, summary = false) => {
                     if (!taskDoneIsTerminal(terminalRecord)) return;
                     if (subagentChildParents.has(tid)) return routeSubagentTerminalToCard(tid, terminalRecord);
-                    if (!liveCardRecords.has(tid)) return;
+                    const record = liveCardRecords.get(tid);
+                    if (!record) return;
+                    record.quietEffective = terminalRecord.quiet_effective ?? record.quietEffective;
+                    noteTaskDetails(record, terminalRecord);
                     insertCardIfNeeded(tid);
                     if (summary) appendTaskSummaryToLiveCard(terminalRecord); else finishLiveCard(tid, phase);
                 };
@@ -2574,16 +2576,13 @@ export function createChatInstance({
                 }
                 _historyRow = null;
 
-                // The hidden terminal-root projection is the durable outcome
-                // authority. Apply its projected phase after narrative rows,
-                // which may still say finalizing; status alone loses failures.
+                // Durable phase outranks narrative rows that may still say finalizing.
                 for (const [tid, historicalTerminal] of historicalTerminals) {
                     if (!historicalTerminalProjections.has(tid)) continue;
                     settleReplayedTerminal(tid, { ...historicalTerminal, task_id: tid }, historicalTerminal.phase);
                 }
 
-                // Every block the predicate admits is in the transcript after a rebuild; a card
-                // this replay minted with neither a terminal nor a census entry is unconfirmed.
+                // Cards without terminal or census evidence remain unconfirmed.
                 for (const [id, record] of liveCardRecords) {
                     mountReplayedCard(record);
                     if (!knownCards.has(id) && !record.finished && !currentActivity(record)) {

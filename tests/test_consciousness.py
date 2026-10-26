@@ -95,6 +95,70 @@ def _register(task_id, *, initiator=""):
 # --- boot -----------------------------------------------------------------------
 
 
+def test_headline_while_the_launched_own_wake_runs(clock, monkeypatch):
+    from ouroboros import consciousness_view as view
+    from supervisor import workers
+
+    due = clock.clock.next_wake_at
+    assert clock.clock.tick(now=due + 1) == "launched"
+    _register("wake0001", initiator="consciousness")
+    monkeypatch.setattr(workers, "direct_chat_turn", lambda task_id: {
+        "metadata": {"initiator": "consciousness", "wake_cause": "own_clock"},
+    } if task_id == "wake0001" else None)
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: due + 120))
+    snapshot = clock.clock.status_snapshot()
+    assert snapshot["live_wake_task_id"] == "wake0001"
+    assert snapshot["next_wake_at"] == _iso(due)
+    described = view.describe_consciousness_state(snapshot, True)
+    assert described["status"] == "thinking"
+    assert described["detail"] == "Wake-up wake0001 is running as a Main turn."
+
+
+def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
+    from ouroboros import consciousness_view as view, places
+
+    place = places.connect_place(clock.root, connector="bridge", provider="chat", label="Research room")
+    places.edit_place(clock.root, place.place_id, "add_note", author="owner", text="Watch releases.")
+    reads = []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("status and launch must not discover connectors or reread the allowance")
+
+    for target in ("ouroboros.skill_loader.discover_skills", "ouroboros.place_projection.place_declarations",
+                   "ouroboros.place_arrivals.account_candidates", "ouroboros.place_projection.migration_problems",
+                   "ouroboros.consciousness_allowance.allowance_window", "ouroboros.place_projection.place_activity"):
+        monkeypatch.setattr(target, forbidden)
+    # One index pass per place: open turns and the newest arrival come from the room index.
+    monkeypatch.setattr(places, "place_room_index", lambda root, place_id: [
+        {"room_chat_id": 123, "unanswered_count": 1, "last_at": "2027-01-15T11:00:00Z"},
+        {"room_chat_id": 124, "unanswered_count": 2, "last_at": "2027-01-15T12:00:00Z"}])
+    original = view.place_views
+
+    def project(*args, **kwargs):
+        result = original(*args, **kwargs)
+        reads.append(result)
+        return result
+
+    monkeypatch.setattr(view, "place_views", project)
+    window = {**AVAILABLE, "spend_by_cause": [{"cause": "place:" + place.place_id, "usd": 1.25, "unmetered_calls": 0}]}
+    monkeypatch.setattr(clock_module, "allowance_window", lambda *a, **kw: window)
+    snapshot = clock.clock.status_snapshot()
+    assert snapshot["places_brief"] == [{"place_id": place.place_id, "label": "Research room", "state": "active", "unanswered": 3}]
+    assert len(reads) == 1 and reads[0][0]["spent_24h_usd"] == 1.25
+    assert reads[0][0]["notes"][0]["note_id"]
+    assert reads[0][0]["last_activity_at"] == "2027-01-15T12:00:00Z"
+    assert not {"icon", "readiness", "account_candidates"} & reads[0][0].keys()
+    reads.clear()
+    panel = clock.clock.details_snapshot(True)
+    assert len(reads) == 1 and "places" not in panel
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text(
+        "Places: {places}", encoding="utf-8")
+    assert clock.clock.tick(clock.clock.next_wake_at) == "launched"
+    text = clock.launches[-1]["text"]
+    assert f"Research room [{place.place_id}]: active; open turns: 3; chat_history(chat_id=123)" in text
+    assert "note (owner): Watch releases." in text
+
+
 def test_boot_floor_never_wakes_in_the_first_second(clock):
     """An overdue persisted next_wake_at is pushed past now + floor; a later one is kept."""
     assert clock.clock.next_wake_at == T0 + FLOOR
@@ -689,7 +753,7 @@ def test_status_snapshot_carries_the_alarm_facts(clock):
         "enabled", "level", "next_wake_at", "last_wake_at", "last_wake_task_id",
         "last_wake_outcome", "last_error", "spent_24h_usd", "daily_usd", "allowance_resets_at",
         "tasks_running", "max_tasks", "live_wake_task_id", "unknown_unmetered", "integrity_degraded",
-        "spend_by_cause", "counted_roots", "places_brief",
+        "spend_by_cause", "counted_roots", "places_brief", "owner_turn_live",
     }
     assert snapshot["enabled"] is True and snapshot["level"] == "act"
     assert snapshot["unknown_unmetered"] == 0 and snapshot["integrity_degraded"] is False

@@ -32,13 +32,14 @@ const NEEDS_OWNER = ['waiting_for_first_conversation', 'waiting_for_owner_chat']
  * limit that stopped it); error for a failure; neutral for everything that goes on by itself or is off.
  */
 export function runtimeTone(status) {
-    if (['running', 'queued', 'idle_ready', 'thinking', 'sleeping'].includes(status)) return 'ok';
+    if (['running', 'queued', 'idle_ready', 'thinking', 'sleeping', 'due'].includes(status)) return 'ok';
     if ([...NEEDS_OWNER, 'budget_blocked', 'budget_stopped'].includes(status)) return 'warn';
     if (['paused_failures', 'error_backoff', 'allowance_exhausted', 'allowance_unknown', 'wake_failed', 'wake_rejected'].includes(status)) return 'error';
     return 'neutral';
 }
 
 function shortStatusLabel(status, fallback = 'off') {
+    if (status === 'due') return tr('consciousness.due', 'due');
     if (status === 'wake_paused') return tr('consciousness.wake_paused', 'paused');
     if (status === 'wake_outcome_unknown') return tr('consciousness.wake_outcome_unknown', 'unknown');
     if (status === 'state_unknown' || status === 'unknown') return 'unknown';  // a null control is never "off"

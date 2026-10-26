@@ -91,6 +91,7 @@ fits your editing workflow.
 ```yaml
 ---
 name: weather                       # required, alnum/underscore/dash, ≤64 chars
+title: Weather                      # optional human title on Skills; name remains the technical id
 description: Live weather widget    # required, short summary
 version: 0.2.1                      # required, free-form (semver recommended)
 type: extension                     # instruction | script | extension
@@ -249,7 +250,7 @@ There is no additional PluginAPI registration call.
 | `placement` | `composer.plus`, `composer.chips` or `message.action`. |
 | `action` | Required on placements: `draft.insert` with text ≤4000, `notice` with text ≤300, `open.tab`, or `skill.request`. No verb sends as the owner. |
 | `action.route`, `with`, `then` | `skill.request` POSTs to its own relative route; `with: none` (default), `draft` or `message`; `then: keep_draft` (default) or `clear_draft`. The host supplies the absolute URL. |
-| `source` | Required only for chips: `{route, refresh_s}`; relative GET route, refresh integer 15..3600 seconds; reply `{text, tone?: ok|warn|bad|muted, title?}`. |
+| `source` | Required for chips, optional for `provides: place`: `{route, refresh_s}`; relative GET route, refresh integer 15..3600 seconds; reply `{text, tone?: ok|warn|bad|muted, title?}`. A place source may also return `connect: [{account_id, conversation_id, label}]`; the four list states and identity rules are defined under “Declaring a place, tool effects and an icon”. |
 | `provides`, `runtime` | Engine kind `stt` or `tts`; required runtime `server` or `client`. Server engines declare a relative POST `route`; clients register from their host module. |
 | `destination` | Required for engines: `device`, `host` or `vendor:<Name>`. Describe the real processing destination. |
 | `languages`, `formats` | Optional lists of up to 64 nonblank strings ≤120 characters. Formats: `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav`. |
@@ -931,7 +932,7 @@ A connector skill (it connects a place: a Slack workspace, a Telegram group, an 
 manifest; core reads them from the reviewed, published release:
 
 ```yaml
-icon: ui/icon.svg              # or a host icon name; geometry only, drawn by the host in currentColor
+icon: ui/icon.svg              # required author asset for provides: place; geometry in currentColor
 tools:
   - name: slack_send
     effect: message            # read | message | write; absent or unknown = write
@@ -948,7 +949,7 @@ contributes:
     destination: vendor:Slack
     scope: account             # account | conversation
     wakes: [direct_message, group_dm, mention, my_thread, reply_to_me]   # suggestions; the owner edits the list
-    source: {route: status, refresh_s: 15}                               # optional status chip
+    source: {route: status, refresh_s: 15}                               # optional status and Connect choices
 ```
 
 - `effect` is one fact with three consumers: Advises (autonomy) refuses everything but a declared read; a Silent or
@@ -959,8 +960,61 @@ contributes:
   while any place of that connector is Silent or Paused, and the refusal says so.
 - `icon` is reduced at staging to viewBox and geometry (path, circle, ellipse, line, polyline, polygon, rect, g),
   bounded, with fills and strokes set to `currentColor`; anything else falls back to the house glyph.
+  Authors of `provides: place` skills must include `ui/icon.svg` and declare `icon: ui/icon.svg`.
+  The fallback keeps an older or unavailable mark from hiding the place capability; it is not the authoring target.
 - `provides: place` requires `type: extension` and the `presence` permission. The Browse "Connectors" filter and
   "Connects <Service>" are derived from it; no tag or suffix is needed.
+- The connector carries the service name in its place `label`; the technical skill id stays in details.
+  Skills cards prefer the optional top-level, one-line `title`, then the place contribution's `label`, then `name`.
+  Catalog entries may carry `title`; it is display text, never a new skill identity. Place, instance, account and
+  signal labels render verbatim as authored content, outside the host's translation overlay.
+
+The declared `source` route may return `connect: [{account_id, conversation_id, label}]` beside its status
+`text`/`tone`. The host publishes the route as `source.url`; Connect reads it lazily with `cache: no-store`,
+without a new endpoint or credential probe. Every row needs a nonblank string `account_id`, a string
+`conversation_id` (empty may represent an explicit account-wide instance), and a nonblank string `label`.
+The ids identify the choice; a label never supplies identity. A `null` account is not a wildcard. Bad rows are
+dropped; a nonempty list with no valid rows is unavailable, not known empty.
+
+| Source response | Meaning in Connect |
+| --- | --- |
+| `connect` absent | No instance chooser is offered; the connector's declared default scope remains available. |
+| Known nonempty list | Show valid instances and mark exact connected identities as “Connected · Open”. |
+| `connect: []` | Known empty: “None offered yet”, with the declared connector settings door (Skills if none). |
+| Failed read, malformed response/list, or all rows invalid | Unavailable: keep the gap visible and offer “Try again”; do not invent an instance. A connector with no live source asks to be turned on. |
+
+The host's explicit “Whole account” action remains available in all four states; it is independent of the
+instance list and posts only `connector`. Selecting an instance posts its string ids and label through
+`POST /api/places`; the saved title is `<Service> · <label>`. A new identity starts Silent in one atomic write;
+repeat Connect preserves state, label, wakes and notes. Several identities can coexist without splitting or
+relabeling an existing broad place. Connectors remain listed with a place count and “Connect another”.
+
+A `provides: place` contribution may include `facts`, a list of the core fact names advertised in
+`/identity.presence_wake_facts` and connector-defined objects `{id: "signal.<slug>", label: "Human-readable signal"}`.
+A signal id must match `^signal\.[a-z0-9_-]{1,40}$`; its object has exactly `id` and `label`, and the label is
+non-empty text up to 120 characters. Fact ids must be unique. `wakes` remains the default wake suggestions
+and must be a subset of `facts` when that list is present; when `facts` is absent, only core wake facts may
+be suggested. An empty `facts` list permits only empty `wakes`. Core facts are plain strings; signals require
+labelled objects in `facts` and their id strings in `wakes` and event `facts`.
+
+Negotiate support through `/identity`: `presence_wake_signals: 1` advertises this seam. Older hosts may reject
+the `facts` manifest key, so do not publish signal declarations to a host without support. Intake accepts a
+signal only if the authenticated connector's current live place declaration lists it; another connector's
+declaration, a discovered-but-unloaded declaration, or arbitrary text cannot authorize it. Ordinary core fact
+intake remains compatible. New owner/tool signal choices likewise require that live declaration; existing
+choices remain readable and removable when the connector is off.
+
+Signal logic and its parameters belong to the connector's own settings. The host performs the existing fact
+membership matching, stores no new Place field, and does not match message text. A signal does not manufacture
+`mention`, addressed status or owner identity. The existing bot rule is unchanged: bot events require
+`from_bot` selected, and `from_bot` itself is an OR wake reason, not merely a gate requiring another selected match.
+
+```yaml
+facts: [mention, {id: signal.words, label: "Words you chose appear"}]
+wakes: [mention, signal.words]
+```
+
+This illustrates the supported declaration shape; it does not claim that a connector ships this signal.
 
 A place connector reports observations; the host decides attention. While running and
 authenticated, report every supported event within the connected place's granted

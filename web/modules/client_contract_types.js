@@ -542,61 +542,65 @@
  */
 
 /**
- * Connect an installed connector; omitted account and conversation ids default to empty.
- * @typedef {Object} PlaceConnectRequest
- * @property {string} connector
- * @property {string=} account_id
- * @property {string=} conversation_id
+ * One stored safety check, retaining both its chip and the tool it checked.
+ * @typedef {Object} RecentWakeCheck
+ * @property {string} chip
+ * @property {string} tool
  */
 
 /**
- * A captured local conversation, not a complete remote-provider history.
- * @typedef {Object} PlaceRoomSummary
- * @property {number} room_chat_id
- * @property {number|null} unanswered_count
- * @property {string} address
- * @property {string|null} label
- * @property {string} last_at  // latest captured arrival
- * @property {string} conversation_id
- * @property {string} thread_id
+ * `GET /api/consciousness` recent_wakes: ledger-selected facts, never authored by the view.
+ * CostPresentation is the task card's existing carrier (api_types.js).
+ * @typedef {Object} RecentWake
+ * @property {string} task_id
+ * @property {?number} chat_id
+ * @property {'own'|'focus'} cause
+ * @property {string} place_label
+ * @property {string} conversation
+ * @property {?string} started_at
+ * @property {?string=} first_reply_at
+ * @property {?string} ended_at
+ * @property {boolean} live
+ * @property {'running'|'waiting'|'queued'|'paused'|'unknown'|'working'|'done'|'warn'|'error'|'cancelled'} phase
+ * @property {boolean} quiet
+ * @property {string=} summary
+ * @property {?string} note
+ * @property {?number=} tool_calls
+ * @property {?number=} rounds
+ * @property {Array<RecentWakeCheck>} checks
+ * @property {boolean=} said_owner
+ * @property {?number=} accounted_upper_bound_usd
+ * @property {?number=} accounted_upper_bound_usd_with_children
+ * @property {?CostPresentation=} cost_presentation
+ * @property {'available'|'unavailable'=} cost_accounting_status
+ * @property {string=} cost_accounting_error
+ * @property {boolean=} cost_final
+ * @property {boolean=} cost_with_children_partial
+ * @property {?CostCustody=} cost_custody
+ * @property {?number=} unknown_unmetered
+ * @property {?number=} non_final_rows
+ * @property {?number=} reserved_usd
+ * @property {?number=} unresolved_upper_bound_usd
+ * @property {?boolean=} ledger_integrity_degraded
  */
 
-/**
- * Store-wide chat import/gaps, not provider completeness.
- * @typedef {Object} PlaceRoomsCoverage
- * @property {'arrivals'} discovery
- * @property {boolean} importing
- * @property {boolean} gaps
+/** Recent-wakes fields of the open consciousness panel.
+ * @typedef {Object} RecentWakesView
+ * @property {Array<RecentWake>|null} recent_wakes
+ * @property {string=} recent_wakes_coverage
  */
 
-/**
- * @typedef {Object} PlaceRoomsResponse
- * @property {string} place_id
- * @property {Array<PlaceRoomSummary>} rooms
- * @property {PlaceRoomsCoverage} coverage
- */
-
-/**
- * Confirm a person; omitted account_id uses the place's account.
- * @typedef {Object} PlaceOwnerAccountRequest
- * @property {string} platform_actor_id
- * @property {string=} label
- * @property {string=} account_id
- */
-
-/**
- * Atomic owner choices. Send a nonempty body; expected_revision compares before writing.
- * @typedef {Object} PlaceUpdateRequest
- * @property {'active'|'silent'|'paused'=} state
- * @property {Array<string>=} wakes
- * @property {string=} add_note
- * @property {string=} remove_note
- * @property {string=} working_folder
- * @property {string=} model
- * @property {PlaceOwnerAccountRequest=} confirm_owner_account
- * @property {string=} revoke_owner_account
- * @property {number=} expected_revision
- */
+/** Places declarations live in a sibling to keep the client envelope module within its size band. */
+/** @typedef {import('./place_contract_types.js').PlaceConnectRequest} PlaceConnectRequest */
+/** @typedef {import('./place_contract_types.js').PlaceIcon} PlaceIcon */
+/** @typedef {import('./place_contract_types.js').PlaceReadiness} PlaceReadiness */
+/** @typedef {import('./place_contract_types.js').PlaceSummary} PlaceSummary */
+/** @typedef {import('./place_contract_types.js').PlaceDisconnectRequest} PlaceDisconnectRequest */
+/** @typedef {import('./place_contract_types.js').PlaceOwnerAccountRequest} PlaceOwnerAccountRequest */
+/** @typedef {import('./place_contract_types.js').PlaceRoomSummary} PlaceRoomSummary */
+/** @typedef {import('./place_contract_types.js').PlaceRoomsCoverage} PlaceRoomsCoverage */
+/** @typedef {import('./place_contract_types.js').PlaceRoomsResponse} PlaceRoomsResponse */
+/** @typedef {import('./place_contract_types.js').PlaceUpdateRequest} PlaceUpdateRequest */
 
 /**
  * `POST /api/settings/secret`: exactly one selector, `{key}`, `{mcp_server_id}` or `{mcp_server_id,

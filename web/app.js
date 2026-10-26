@@ -666,8 +666,7 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
                 mountEl: projectPanelBody,
                 asPanel: true,
                 title: project.name || project.id,
-                // The panel's Retry reruns the open transaction (fetch, paint, ACK)
-                // against the newest known revision, so a recovered read is also seen.
+                // Retry reads, paints and acknowledges the newest revision.
                 onHistoryRetry: () => acknowledgeProjectAfterPaint(freshProjectRow(project), null, { forcePaint: true }),
                 // Arriving at the newest messages retries a withheld acknowledgement.
                 onReadingLatest: () => acknowledgeProjectAfterPaint(freshProjectRow(project)),
@@ -696,19 +695,14 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
                 if (projectReveals.get(project.id) === reveal) projectReveals.delete(project.id);
             }
         }
-        // Reopened at the newest message; after the panel is shown, so the column
-        // has real geometry. An unread room lands on the message that arrived last
-        // (DESIGN "Unread"). A question opened from Main is revealed below instead.
+        // Once visible, an unread room lands on its newest message (DESIGN "Unread").
         const unread = Math.max(0, Number(freshProjectRow(project).visible_revision) || 0)
             > Math.max(0, Number(state.projectSeenRevision?.[project.id]) || 0);
         if (!(taskId && quizId)) void inst.showLatest?.({ arrive: unread });
-        // ACK only the exact revision whose history was fetched and painted. chat.js
-        // owns the paint receipt; an already-painted instance skips the forced
-        // refetch — the server clamps the ACK, so no repaint is needed.
+        // ACK the exact painted revision; chat.js owns the receipt and skips redundant reads.
         if (taskId && quizId) await revealProjectQuestion(project, inst, taskId, quizId);
         else {
-            // Every showing is a navigation: a plain reopen addresses no question
-            // and so voids a reveal that a hidden pending-work survivor still awaits.
+            // A plain reopen cancels any pending question reveal.
             void inst.revealQuestion?.(taskId, quizId);
             await acknowledgeProjectAfterPaint(project, inst, { forcePaint: !inst.hasPaintedHistory?.() });
         }
@@ -717,9 +711,7 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
     }
 }
 
-// The host names the destination. Resolve it in the full registry and read its exact page BEFORE
-// switching: errors and cancelled lookups keep the current room and all composer state. The page
-// then enters the destination's own pager; ordinary close/reopen still goes to the newest message.
+// Resolve and read the exact destination before switching; failed lookups retain room/composer state.
 async function revealQuotedSource(address, chatId, isCurrent) {
     const navigation = projectNavigationGeneration;
     const current = () => navigation === projectNavigationGeneration && isCurrent();
@@ -733,12 +725,22 @@ async function revealQuotedSource(address, chatId, isCurrent) {
     const page = await apiClient.chatHistory({ chatId, around: address });
     if (!current()) return null;
     if (page?.anchor?.state !== 'found') return page?.anchor || { state: 'unknown' };
-    if (page.anchor.row_address !== address || page.anchor.chat_id !== chatId) return { state: 'unknown' };
+    const matches = address.startsWith('task:') ? chatId === 1 && page.anchor.task_id === address.slice(5)
+        : page.anchor.row_address === address && page.anchor.chat_id === chatId;
+    if (!matches) return { state: 'unknown' };
     if (project) return openProjectPanel(project, { openOnly: true, sourceReveal: { address, page, current: isCurrent } });
     closeProjectPanel({ reveal: true });
     const showing = projectNavigationGeneration;
     return mainChat.revealSource(address, () => showing === projectNavigationGeneration, page);
 }
+
+window.addEventListener('ouro:open-task', async ({ detail }) => {
+    if (!detail?.task_id || detail.chat_id !== 1 || !await showPage('chat')) return;
+    try {
+        const result = await revealQuotedSource(`task:${detail.task_id}`, detail.chat_id, () => state.activePage === 'chat');
+        if (result && result.state !== 'found') showToast(tr('consciousness.task_unavailable', 'This task is unavailable.'), 'warn');
+    } catch { showToast(tr('consciousness.task_unavailable', 'This task is unavailable.'), 'warn'); }
+});
 
 function freshProjectRow(project) {
     return lastProjectRows.find((row) => row.id === project.id) || project;
