@@ -136,19 +136,24 @@ def test_diagnostic_rechecks_room_after_preparation_without_reading_under_queue_
     assert not queue.PENDING and observation(attention)["attention_wait"] == "subagents_off_in_room"
 
 
-@pytest.mark.parametrize("origin", ["evolution", "consciousness"])
+@pytest.mark.parametrize("origin", ["evolution", "evolution-descendant", "evolution-transaction", "consciousness"])
 def test_autonomous_diagnostics_keep_their_own_controls(attention, monkeypatch, origin):
     from ouroboros.settings_integrity import live_subagents_mode
 
     monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "off")
     if origin == "evolution":
         attention.meta["task"]["type"] = "evolution"
+    elif origin == "evolution-descendant":
+        attention.meta["task"]["metadata"]["evolution_root_task_id"] = "evolution-root"
+    elif origin == "evolution-transaction":
+        attention.meta["task"]["metadata"]["evolution_transaction"] = {"id": "transaction"}
     else:
         attention.meta["task"]["metadata"]["work_kind"] = "consciousness"
     attention.tick()
     attention.flush()
     assert len(queue.PENDING) == 1
     assert live_subagents_mode(task=queue.PENDING[0], drive_root=attention.root) == "auto"
+    assert "evolution_transaction" not in queue.PENDING[0]["metadata"]
 
 
 def test_waiting_parent_receives_one_attention_through_actual_wait_consumer(attention, monkeypatch):

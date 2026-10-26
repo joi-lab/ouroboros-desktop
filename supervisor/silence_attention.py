@@ -323,10 +323,10 @@ def _admit(queue, task_id, task, meta, fact) -> None:
     metadata = {"work_diagnostic": reference, "billing_group": {k: v for k, v in billing.items() if k.startswith("billing_group_")},
                 **presence_binding_authority_metadata(task.get("metadata"), task_contract=contract),
                 **{k: v for k, v in (task.get("metadata") or {}).items()
-                   if k in {"work_kind", "initiator", "consciousness_autonomy", "runtime_mode_cap",
-                            "evolution_root_task_id", "evolution_transaction"}}}
-    if task.get("type") == "evolution":
-        metadata["evolution_root_task_id"] = root_id
+                   if k in {"work_kind", "initiator", "consciousness_autonomy", "runtime_mode_cap"}}}
+    origin = task.get("metadata") or {}
+    if task.get("type") == "evolution" or origin.get("evolution_root_task_id") or origin.get("evolution_transaction"):
+        metadata["evolution_root_task_id"] = origin.get("evolution_root_task_id") or root_id
     label = _source_label(task)
     diagnostic = {"id": diagnostic_id, "type": "task", "parent_task_id": task_id,
         "root_task_id": root_id, "delegation_role": "subagent", "depth": int(task.get("depth") or 0) + 1,
