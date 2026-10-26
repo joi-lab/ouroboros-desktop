@@ -43,12 +43,11 @@ from ouroboros.outcomes import (
     EXECUTION_FAILED,
     EXECUTION_INFRA_FAILED,
     EXECUTION_OK,
-    BEST_EFFORT_REASON_CODES,
     REASON_OWNER_REQUESTED_FINALIZATION,
+    WARN_DELEGATED_CUSTODY_UNRECONCILED,
     apply_receipt_absent_flag,
     artifact_bundle_from_result,
     build_verification_ledger,
-    custody_debt_axes,
     derive_loop_outcome,
     maybe_write_verification_artifact,
     normalize_outcome_axes,
@@ -560,40 +559,13 @@ def _derive_host_bound_loop_outcome(
     usage: Dict[str, Any],
     llm_trace: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Derive once from the current durable mutation-evidence binding."""
+    """Derive once from the current durable mutation-evidence binding.
+
+    Delegated custody is not part of the outcome: an unreconciled run is a debt
+    BESIDE the cause, kept on the row's own ``delegated_runs_unreconciled`` list and
+    reconciliation envelope, which heal from the write side (#1583)."""
     _attach_host_mutation_projection(env, task, llm_trace)
-    loop_outcome = apply_skill_publish_receipt_veto(derive_loop_outcome(text or "", usage, llm_trace), task, llm_trace)
-    return _apply_terminal_custody_outcome(env, task, loop_outcome, usage=usage)
-
-
-def _apply_terminal_custody_outcome(
-    env: Any, task: Dict[str, Any], loop_outcome: Dict[str, Any],
-    *, usage: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Use the delivery snapshot, or a legacy caller's stored audit, for custody axes."""
-
-    drive_root = task.get("budget_drive_root") or getattr(env, "drive_root", None)
-    if drive_root is None:
-        return loop_outcome
-    audit = (usage or {}).get("delegate_terminal_reconciliation")
-    if isinstance(audit, dict):
-        unreconciled = audit.get("unreconciled")
-    else:
-        existing = load_task_result(drive_root, str(task.get("id") or "")) or {}
-        unreconciled = existing.get("delegated_runs_unreconciled")
-    if not isinstance(unreconciled, list) or not unreconciled:
-        return loop_outcome
-    overlaid = {
-        **loop_outcome,
-        "reason_code": "delegated_custody_unreconciled",
-        "outcome_axes": custody_debt_axes(loop_outcome.get("outcome_axes")),
-    }
-    # A task truncated by the rails keeps ITS reason on the one Reason line; the
-    # custody debt rides objective.warning(s) and the row's debt list instead.
-    rail = str(loop_outcome.get("reason_code") or "")
-    if rail in BEST_EFFORT_REASON_CODES:
-        overlaid["reason_code"] = rail
-    return overlaid
+    return apply_skill_publish_receipt_veto(derive_loop_outcome(text or "", usage, llm_trace), task, llm_trace)
 
 
 def _stamp_project_room_pointer(task: Dict[str, Any], env: Any) -> None:
@@ -617,13 +589,12 @@ def _stamp_project_room_pointer(task: Dict[str, Any], env: Any) -> None:
 def _custody_debt_event_fields(stored_result: Dict[str, Any]) -> Dict[str, Any]:
     """Carry the row's own custody debt list onto the live terminal event.
 
-    The stamped code outlives the fact, so the owner-facing Reason line names
-    the custody warning only while the record's own ``delegated_runs_unreconciled``
-    list is non-empty (docs/ARCHITECTURE.md, terminal composition). Both
-    renderers read that list off the record in front of them, and the card reads
-    this event rather than the durable row, so the event carries a copy of the
-    stored list. A row holding no list states nothing about the debt: absence
-    stays absence instead of becoming a second, guessed rule on one surface.
+    The debt is that list, never the reason (#1583): the headline and the Reason
+    line name it only while the record's own ``delegated_runs_unreconciled`` list is
+    non-empty (docs/ARCHITECTURE.md, terminal composition), and the card reads this
+    event rather than the durable row, so the event carries a copy of the stored
+    list. A row holding no list states nothing about the debt: absence stays absence
+    instead of becoming a second, guessed rule on one surface.
     """
     debt = stored_result.get("delegated_runs_unreconciled")
     return {"delegated_runs_unreconciled": list(debt)} if isinstance(debt, list) else {}
@@ -647,19 +618,25 @@ def _stamp_presence_terminal_facts(
         task["metadata"] = {**metadata, "presence_unknown_outcome": unknown}
 
 
-def _wake_outcome_notice(text: str, loop_outcome: Dict[str, Any]) -> str:
+def _wake_outcome_notice(text: str, loop_outcome: Dict[str, Any], custody_audit: Any = None) -> str:
     """The host notice a silent run's non-clean outcome publishes; ``""`` when it ran clean.
 
-    Errors, forced or degraded outcomes and open delegated custody are not hidden behind
-    silence, yet the words the run selected as internal are never published for it: they
-    stay the row's ``result`` beside this notice (``terminal_host_notice``).
+    Errors, forced or degraded outcomes and delegated custody still open in the current
+    audit (``custody_audit.unreconciled``) are not hidden behind silence, yet the words the
+    run selected as internal are never published for it: they stay the row's ``result``
+    beside this notice (``terminal_host_notice``).
     """
+    from ouroboros.project_dialogue import TASK_CAUSE_PHRASES
+
     execution = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")}).get("execution") or {}
     status, reason = str(execution.get("status") or ""), str(loop_outcome.get("reason_code") or "")
-    if status == EXECUTION_OK and reason != "delegated_custody_unreconciled":
+    debt = custody_audit.get("unreconciled") if isinstance(custody_audit, dict) else None
+    if status == EXECUTION_OK and not debt:
         return ""
+    owed = f" {TASK_CAUSE_PHRASES[WARN_DELEGATED_CUSTODY_UNRECONCILED]}" if debt else ""
     kept = " Its internal result stays in the task details." if str(text or "").strip() else ""
-    return f"⚠️ This run chose to finish without a message, but it ended {status or 'unknown'} ({reason or 'unspecified'}).{kept}"
+    return (f"⚠️ This run chose to finish without a message, but it ended {status or 'unknown'} "
+            f"({reason or 'unspecified'}).{owed}{kept}")
 
 
 def _task_cost_fields(env: Any, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -868,7 +845,7 @@ def emit_task_results(
     loop_outcome = _derive_host_bound_loop_outcome(env, task, text, usage, llm_trace)
     # A silent run's words stay internal. Clean, it publishes nothing (no chat row, owed outbox
     # row, live send or delivery subject); otherwise only a host notice of its outcome.
-    notice = _wake_outcome_notice(text, loop_outcome) if usage.get("wake_silent") is True else ""
+    notice = _wake_outcome_notice(text, loop_outcome, custody_audit) if usage.get("wake_silent") is True else ""
     if notice:
         set_terminal_host_notice(usage, str(usage.get("terminal_host_notice") or ""), notice)
     quiet, published = usage.get("wake_silent") is True and not notice, notice or text
@@ -940,8 +917,12 @@ def emit_task_results(
     # task_results; reversing these writes could strand a terminal result with
     # no delivery. Registration and deduplication share ouroboros/task_finalization.py.
     if _root_outbox and not _presence and not quiet:
+        # The answer-time debt rides beside the cause it never replaces (#1583); replay
+        # overlays the row's current list (gateway.history terminal truth).
+        debt = list(custody_audit.get("unreconciled") or []) if isinstance(custody_audit, dict) else []
         send_event.setdefault("progress_meta", {}).update(
             outcome_axes=outcome_axes, reason_code=reason_code,
+            **({"delegated_runs_unreconciled": debt} if debt else {}),
             **({"cancel_origin": usage["cancel_origin"]} if usage.get("cancel_origin") else {}))
         stamp_root_final_phase(  # shares the pre-store observation, not a later racing write
             send_event, task, terminal_status=terminal_status,
@@ -1212,7 +1193,6 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
                 expected_output=str(task.get("expected_output") or ""),
                 receipts=task_verification_receipts(None, env.drive_root, task),
             )
-        loop_outcome = _apply_terminal_custody_outcome(env, task, loop_outcome, usage=usage)
         outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
         execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
         reason_code = str(loop_outcome.get("reason_code") or "")

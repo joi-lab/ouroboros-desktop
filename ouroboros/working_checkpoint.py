@@ -545,7 +545,7 @@ def complete_pause_from_working(root: Any, task_id: str, row: Dict[str, Any], at
     from ouroboros.artifacts import store_actor_source_bytes
     from ouroboros.budget_pause import (
         RESUME_POLICY, STATE_PAUSING, STOP_POLICY_ALL, STOP_POLICY_OBSERVE, STOP_POLICY_TASK_OWNED,
-        observe_task_runs, set_budget_pause, task_owned_runs_open,
+        episode_fields, observe_task_runs, set_budget_pause, task_owned_runs_open,
     )
     from ouroboros.model_wait import budget_paused_seconds
 
@@ -582,8 +582,9 @@ def complete_pause_from_working(root: Any, task_id: str, row: Dict[str, Any], at
                  "replay_safe": False, "auto_resume": False, "resume_policy": RESUME_POLICY,
                  "started_at": started, "paused_duration_sec": budget_paused_seconds(model_state),
                  "model_wait_quota_clock": model_state.get("quota_clock", {}),
-                 **({"settlement": "external_writers_running" if task_owned_runs_open(external) else "settled"}
-                    if reason == "owner" else {})}
+                 # The seed keeps no list: stops its dead worker issued may have settled unseen (partial).
+                 **({"settlement": "external_writers_running" if task_owned_runs_open(external) else "settled",
+                     **episode_fields(row, external)} if reason == "owner" else {})}
     set_budget_pause(pathlib.Path(root), str(task_id), completed, expected_pause_id=str(row.get("pause_id") or ""),
                      expected_state=STATE_PAUSING)
     return completed
