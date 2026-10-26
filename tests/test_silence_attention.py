@@ -92,6 +92,65 @@ def test_root_background_off_gets_one_readonly_related_diagnostic(attention, mon
     assert queue._reap_queue.empty() and attention.running["root"] is attention.meta
 
 
+@pytest.mark.parametrize("mode", ["off", "auto", "swarm"])
+def test_diagnostic_admission_obeys_live_room_mode(attention, monkeypatch, mode):
+    monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", mode)
+    attention.tick()
+    attention.flush()
+    if mode == "off":
+        assert not queue.PENDING
+        fact = observation(attention)
+        assert fact["attention_wait"] == "subagents_off_in_room"
+        assert load_task_result(attention.root, fact["diagnostic_id"])["reason_code"] == "subagents_off_in_room"
+    else:
+        assert len(queue.PENDING) == 1
+        assert observation(attention)["attention_wait"] == "diagnostic_queued"
+    assert attention.running["root"] is attention.meta and queue._reap_queue.empty()
+
+
+def test_diagnostic_rechecks_room_after_preparation_without_reading_under_queue_lock(attention, monkeypatch):
+    from ouroboros import settings_integrity
+    from supervisor import workspace_preparation
+
+    monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "swarm")
+    original_read, original_accept = settings_integrity.live_subagents_mode, workspace_preparation.accept
+    reads = []
+
+    def read(**kwargs):
+        assert not queue._queue_lock._is_owned()
+        value = original_read(**kwargs)
+        reads.append(value)
+        return value
+
+    def accept(*args, admission, **kwargs):
+        def switched(preparation):
+            monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "off")
+            return admission(preparation)
+        return original_accept(*args, admission=switched, **kwargs)
+
+    monkeypatch.setattr(settings_integrity, "live_subagents_mode", read)
+    monkeypatch.setattr(workspace_preparation, "accept", accept)
+    attention.tick()
+    attention.flush()
+    assert reads[0] == "swarm" and reads[-1] == "off"
+    assert not queue.PENDING and observation(attention)["attention_wait"] == "subagents_off_in_room"
+
+
+@pytest.mark.parametrize("origin", ["evolution", "consciousness"])
+def test_autonomous_diagnostics_keep_their_own_controls(attention, monkeypatch, origin):
+    from ouroboros.settings_integrity import live_subagents_mode
+
+    monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "off")
+    if origin == "evolution":
+        attention.meta["task"]["type"] = "evolution"
+    else:
+        attention.meta["task"]["metadata"]["work_kind"] = "consciousness"
+    attention.tick()
+    attention.flush()
+    assert len(queue.PENDING) == 1
+    assert live_subagents_mode(task=queue.PENDING[0], drive_root=attention.root) == "auto"
+
+
 def test_waiting_parent_receives_one_attention_through_actual_wait_consumer(attention, monkeypatch):
     from ouroboros.tools import control_task_results
     from ouroboros.tools.registry import ToolContext
