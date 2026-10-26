@@ -190,6 +190,25 @@ def test_a_genuine_402_stays_quota_without_reask(isolated, asynchronous, metadat
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+def test_a_final_verdict_without_an_http_status_is_not_compared(isolated, asynchronous):
+    statusless = {**MASKED, "error": {"message": CREDITS, "type": "overloaded_error"}}
+    outcome, sends = drive([Wire(statusless)], asynchronous=asynchronous)
+
+    assert len(sends) == 1 and outcome.stream_rejected is True
+
+
+def test_typed_refusals_are_never_reasked():
+    from ouroboros.llm_attempt import ProcessingNotStarted, ProviderPolicyRefusal
+
+    masked = http_error(402, {key: MASKED[key] for key in ("error", "openrouter_metadata")})
+    refusal = ProviderPolicyRefusal("refused before dispatch")
+    refusal.status_code, refusal.response = masked.status_code, masked.response
+    assert LLMClient._router_reask_kwargs(target(), request_kwargs(), failure=masked) is not None
+    for typed in (ProcessingNotStarted(masked, reason="capacity"), refusal):
+        assert LLMClient._router_reask_kwargs(target(), request_kwargs(), failure=typed) is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
 def test_no_reask_when_fallbacks_are_already_forbidden(isolated, asynchronous):
     kwargs = request_kwargs(routing={"require_parameters": True, "allow_fallbacks": False})
     outcome, sends = drive([Wire(MASKED)], asynchronous=asynchronous, kwargs=kwargs)
