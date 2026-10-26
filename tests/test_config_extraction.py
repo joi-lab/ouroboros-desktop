@@ -24,6 +24,8 @@ _LEAVES = (settings_defaults, settings_scales, model_slots, review_model_routes,
 # New subscription capabilities belong to the same leaves, but did not exist on
 # the historical extraction's facade and need not add compatibility re-exports.
 _ADDED_OWNERS = {
+    "VALID_SUBAGENTS_MODES": settings_scales,
+    "normalize_subagents_mode": settings_scales,
     "_safety_values": safety_config,
     "_resolved_safety_configuration": safety_config,
     "safety_configuration_requires_owner": safety_config,

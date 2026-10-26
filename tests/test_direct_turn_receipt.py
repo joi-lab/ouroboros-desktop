@@ -207,7 +207,8 @@ def test_two_concurrent_owner_turns_keep_their_own_meters(monkeypatch, tmp_path)
         frames.append(out.bus.get_nowait())
     receipts = {frame["chat_id"]: frame["direct_turn"] for frame in frames if "direct_turn" in frame}
     assert set(receipts) == {1, 2}
-    assert receipts[1]["meter"]["current.read"] == 1 and receipts[2]["meter"]["current.read"] == 4
+    # Each admission also resolves its live room mode once, within that turn's meter.
+    assert receipts[1]["meter"]["current.read"] == 2 and receipts[2]["meter"]["current.read"] == 5
     assert all(receipt["accepted_at"] == stamp and receipt["dispatch"] == "observed_send" for receipt in receipts.values())
     ctx = SimpleNamespace(RUNNING={}, PENDING=[], DRIVE_ROOT=tmp_path)
     for frame in frames:
