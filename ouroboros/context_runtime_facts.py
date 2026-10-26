@@ -435,11 +435,11 @@ def _stall_key(row: Dict[str, Any]) -> tuple:
 
 def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
     """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, the newest
-    ``direct_turn`` receipts (a pooled worker has no ring), stall onsets whose end is not in the window (an
-    onset's ``_end`` row with the same identity closes it; a closed episode's ``top_frames`` is kept by
-    execution for the receipts). The tail is the one the
-    health block reads, memoized on the file's identity (``jsonl_tail.cached_tail_objects``): one read
-    per context build serves both. An unreadable or absent journal is no fact: empty, never an error."""
+    ``direct_turn`` receipts (a pooled worker has no ring), stall onsets whose end is not in the window
+    (an onset's ``_end`` row with the same identity closes it; a closed episode's ``top_frames`` is kept
+    by execution for the receipts). The tail is the one the health block reads, memoized on the file's
+    identity (``jsonl_tail.cached_tail_objects``): one read per context build serves both. An unreadable
+    or absent journal is no fact: empty, never an error."""
     from ouroboros.jsonl_tail import cached_tail_objects
 
     found: Dict[str, Any] = {"open": {}, "ended": {}, "turns": []}
