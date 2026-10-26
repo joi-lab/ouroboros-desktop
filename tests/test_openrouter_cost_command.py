@@ -88,6 +88,15 @@ def test_a_row_is_fetched_with_the_saved_key_that_bought_it(tmp_path, monkeypatc
     assert command._target_for(bought_with("synthetic-builtin-key"))["api_key"] == "synthetic-builtin-key"
     for unsent in ("synthetic-off-key", "synthetic-other-key"):  # the built-in answers and its GET refuses
         assert command._target_for(bought_with(unsent))["api_key"] == "synthetic-builtin-key"
+    # The built-in key turned off: an added key's row still reconciles; a built-in row has no key to send.
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    saved["OUROBOROS_CONNECTIONS"].append({"kind": "openrouter", "name": "default", "enabled": False})
+    settings_path.write_text(json.dumps(saved), encoding="utf-8")
+    assert command._target_for(bought_with("synthetic-added-key"))["api_key"] == "synthetic-added-key"
+    builtin_row = bought_with("synthetic-builtin-key")
+    assert command._target_for(builtin_row)["api_key"] == ""
+    assert cost.fetch_generation_receipt(tmp_path, builtin_row, command._target_for(builtin_row)) == {
+        "status": "credential_unavailable"}
 
 
 def test_configured_target_reads_existing_key_without_settings_migration(tmp_path, monkeypatch):

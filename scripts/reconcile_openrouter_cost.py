@@ -46,7 +46,11 @@ def _target_for(row: dict) -> dict:
     from ouroboros.provider_connections import connection_rows
     from ouroboros.provider_models import CONNECTIONS_KEY
 
-    builtin, binding = _target(), cost.generation_binding(row) or {}
+    try:
+        builtin = _target()
+    except ConnectionUnavailable:  # the owner turned the built-in key off: keyless, so its GET is never sent
+        builtin = {"provider": "openrouter", "base_url": "", "api_key": ""}
+    binding = cost.generation_binding(row) or {}
     wanted = {key: binding.get(key) for key in ("endpoint", "credential_sha256")}
     if cost.binding_for_target(builtin) == wanted:
         return builtin
