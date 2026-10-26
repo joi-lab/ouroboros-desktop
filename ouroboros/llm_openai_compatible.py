@@ -38,7 +38,7 @@ from ouroboros.request_wire_recovery import (
 )
 from ouroboros.utils import sanitize_tool_result_for_log
 from ouroboros.config import runtime_setting
-from ouroboros._usage_response import observed_processing_mode, provider_cost_value
+from ouroboros._usage_response import observed_processing_mode, reported_price
 from ouroboros.event_usage import REPORTED_TOKENS_KEY
 
 
@@ -408,14 +408,13 @@ class _OpenAICompatibleLaneMixin:
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Normalize a reply without generation lookup; skip_cost_fetch also skips tariffs."""
         usage = dict(resp_dict.get("usage") or {})
-        price_candidates = (
-            usage.get("cost"), usage.get("total_cost"), resp_dict.get("total_cost_usd"),
-        )
-        usage["cost"] = next((cost for value in price_candidates
-                              if (cost := provider_cost_value(value)) is not None), None)
+        # What the reply consumed (a BYOK reply: gateway charge + provider-billed share).
+        usage["cost"], cost_invalid, cost_basis = reported_price(usage, resp_dict.get("total_cost_usd"))
         usage.pop("cost_invalid", None)  # Host fact, never a provider usage extension.
-        if usage["cost"] is None and any(value is not None for value in price_candidates):
+        if cost_invalid:
             usage["cost_invalid"] = True
+        if cost_basis:
+            usage["cost_basis"] = cost_basis
         if "service_tier" in resp_dict:
             usage["service_tier"] = resp_dict["service_tier"]
         attach_processing_receipt(target, usage)
