@@ -16,6 +16,7 @@ to right and right to left, while the panel shows the whole word; right to left 
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 
 import pytest
@@ -480,12 +481,16 @@ SUBAGENTS_PANEL = """() => {
 }"""
 
 
+# The page's state read: the first `/api/state` and every `?bindings_since=` read after it (chat_activity.js).
+STATE_READS = re.compile(r"/api/state(\?|$)")
+
+
 def _state_with(page, facts: dict) -> None:
-    """The server's /api/state with the room's subagents facts held by the test (the core lane serves them); a saved
-    mode lands in `facts`, so the state read after a save answers it."""
-    page.unroute("**/api/state")
+    """The server's state reads with the room's subagents facts held by the test, so Settings-off needs no Settings
+    write; a saved mode lands in `facts`, so every state read after a save answers it."""
+    page.unroute(STATE_READS)
     page.unroute("**/api/owner/subagents-mode")
-    page.route("**/api/state", lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
+    page.route(STATE_READS, lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
 
     def save(route):
         facts["subagents_mode"] = route.request.post_data_json["mode"]
