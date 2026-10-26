@@ -84,21 +84,22 @@ export const capitalized = (text) => {
     return value ? value[0].toUpperCase() + value.slice(1) : value;
 };
 
-/** One wake fact in words; a connector-declared signal uses its declared label; an unknown kind keeps its spelling. */
+/** One wake fact in words; a declared label wins; an unknown kind keeps its spelling. */
 export const wakeFactWord = (fact, labels = null) => labels?.[fact] || (WAKE_FACT_WORDS[fact]
     ? tr(`places.wake.${fact}`, WAKE_FACT_WORDS[fact]) : String(fact || '').replace(/_/g, ' '));
 
-/** `{id: label}` for the declared signals of a place or connector (`facts` entries that are objects). */
+/** `{id: label}` for declared facts, including signals (`facts` entries that are objects). */
 export const signalLabels = (facts) => Object.fromEntries((Array.isArray(facts) ? facts : [])
     .filter((item) => item && typeof item === 'object' && item.id && item.label).map((item) => [item.id, item.label]));
 
 /** «wakes for direct messages, mentions and replies», or '' when nothing wakes it here. */
-export function wakesForText(wakes = [], declared = null) {
+export function wakesForText(wakes = [], declared = null, labels = null) {
     const facts = [...new Set(wakes.map((item) => item?.fact).filter(Boolean))];
     const kinds = facts.filter((fact) => fact !== 'from_bot');
-    const labels = signalLabels(declared);
-    return [kinds.length ? fmt('wakes for {kinds}', { kinds: listWords(kinds.map((fact) => wakeFactWord(fact, labels))) }) : '',
-        facts.includes('from_bot') ? wakeFactWord('from_bot') : ''].filter(Boolean).join(' · ');
+    const named = { ...signalLabels(declared), ...labels };
+    const word = (fact) => named[fact] ? named[fact].toLowerCase() : wakeFactWord(fact);
+    return [kinds.length ? fmt('wakes for {kinds}', { kinds: listWords(kinds.map(word)) }) : '',
+        facts.includes('from_bot') ? word('from_bot') : ''].filter(Boolean).join(' · ');
 }
 
 export const authorWord = (author) => AUTHOR_WORDS[author] || (author ? `added by ${author}` : '');
@@ -113,7 +114,7 @@ export const placeStateWord = (state) => placeStateOf(state)?.word || tr('places
  */
 export function placeStatusText(place) {
     const parts = [placeStateWord(place?.state)];
-    if (place?.state === 'active' || place?.state === 'silent') parts.push(wakesForText(place.wakes, place.facts));
+    if (place?.state === 'active' || place?.state === 'silent') parts.push(wakesForText(place.wakes, place.facts, place.labels));
     if (Number.isInteger(place?.unanswered) && place.unanswered > 0) parts.push(fmt('{n} open turns', { n: place.unanswered }));
     return parts.filter(Boolean).join(' · ');
 }

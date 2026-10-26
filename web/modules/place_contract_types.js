@@ -25,6 +25,22 @@
  */
 
 /**
+ * The connector's declared account; owner is derived on the owner-facing Place view.
+ * @typedef {Object} PlaceIdentityAccount
+ * @property {string} id
+ * @property {string} label
+ * @property {'user'|'bot'} kind
+ * @property {boolean=} owner
+ */
+
+/**
+ * Optional accounts used to write and read; absent means undeclared.
+ * @typedef {Object} PlaceIdentity
+ * @property {PlaceIdentityAccount=} sends_as
+ * @property {Array<PlaceIdentityAccount>=} reads_as
+ */
+
+/**
  * One projection for list, write/conflict responses and the model's place map.
  * @typedef {Object} PlaceSummary
  * @property {string} place_id
@@ -49,6 +65,10 @@
  * @property {Object<string,string>|null} reply_destination
  * @property {PlaceIcon} icon
  * @property {PlaceReadiness} readiness
+ * @property {PlaceIdentity=} identity
+ * @property {boolean=} can_confirm
+ * @property {'off'|'light'|'full'=} safety_mode
+ * @property {Object<string,string>=} labels
  * @property {Array<string>} wake_suggestions
  * @property {Array<*>=} facts
  * @property {Object<string,*>=} source
