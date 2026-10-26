@@ -20,6 +20,7 @@ from tests.test_context_fit_integration import _plan
 from tests.test_llm_claudexor import MODEL, ROUTE, result, ledger, setup as gateway_fixture
 from tests.test_model_wait import live_wait as wait_fixture
 from tests._usage_store_testing import dispatched_attempts
+from tests._shared import saved_settings
 
 setup = gateway_fixture
 live_wait = wait_fixture
@@ -123,8 +124,9 @@ def test_native_account_repair_rebinds_real_physical_candidate_before_send(main_
     assert ctx.context_fit_plan.core_sha256 == "a" * 64
 
 
-def test_quota_auto_wait_rejoins_same_round_then_repairs_changed_account(main_call):
+def test_quota_auto_wait_rejoins_same_round_then_repairs_changed_account(main_call, monkeypatch):
     ctx, gateway, _controller, events, _decide, observations = main_call
+    saved_settings(monkeypatch, ctx.drive_root, OUROBOROS_MODEL_FALLBACKS="")  # no configured route: the wait is in place
     gateway.results = [_failed("subscription_window_exhausted"),
                        _failed("invalid_continuation", ROUTE_B), result(route=ROUTE_B)]
     gateway.dispatch = ["not_started", "not_started", "response_received"]
@@ -144,6 +146,8 @@ def test_quota_auto_wait_rejoins_same_round_then_repairs_changed_account(main_ca
 @pytest.mark.parametrize("image_mode", ["off", "caption"])
 def test_wait_reprepares_vision_from_canonical_images(main_call, monkeypatch, image_mode):
     from ouroboros import vision_routing
+
+    saved_settings(monkeypatch, main_call[0].drive_root, OUROBOROS_MODEL_FALLBACKS="")  # the wait is in place
 
     ctx, gateway, _controller, _events, _decide, _observations = main_call
     image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}
@@ -300,6 +304,7 @@ def test_manual_switch_updates_only_waiting_role_and_continues_current_main_call
     main_call, monkeypatch, destination, use_local, pin,
 ):
     ctx, gateway, controller, events, decide, _observations = main_call
+    saved_settings(monkeypatch, ctx.drive_root, OUROBOROS_MODEL_FALLBACKS="")  # the wait is in place
     monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a", "light": "light-account"}))
     gateway.results = [_failed("subscription_window_exhausted"), result(route=ROUTE_B), result(route=ROUTE_B)]
     gateway.dispatch = ["not_started", "response_received", "response_received"]
@@ -470,13 +475,14 @@ def _slot(envelope=None):
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_a_same_route_wait_and_reprepare_update_the_original_slot(main_call, turn_engine, asynchronous):
+def test_a_same_route_wait_and_reprepare_update_the_original_slot(main_call, turn_engine, asynchronous, monkeypatch):
     """Both real reprepare routes deep-copy their kwargs and must keep ONE owner.
 
     The synchronous case goes through the live quota wait, the asynchronous one
     through the proven-un-sent account repair and its thread offload.
     """
     ctx, gateway, controller, _events, _decide, _observations = main_call
+    saved_settings(monkeypatch, ctx.drive_root, OUROBOROS_MODEL_FALLBACKS="")  # the wait is in place
     landed = {**result(route=ROUTE_B if asynchronous else ROUTE), "nativeContinuation": deepcopy(TURN)}
     gateway.results = [_failed("invalid_continuation", ROUTE_B) if asynchronous
                        else _failed("subscription_window_exhausted"), landed]
@@ -626,6 +632,7 @@ CACHE_REPREPARE_EXECUTION = "execution-reprepare-proof"
 )
 def test_live_owner_wait_reprojects_affinity(main_call, monkeypatch, destination, use_local):
     ctx, gateway, controller, events, decide, _ = main_call
+    saved_settings(monkeypatch, ctx.drive_root, OUROBOROS_MODEL_FALLBACKS="")  # the wait is in place
     ctx.accumulated_usage["execution_id"] = CACHE_REPREPARE_EXECUTION
     gateway.results = [_failed("subscription_window_exhausted"), result(route=ROUTE_B)]
     gateway.dispatch = ["not_started", "response_received"]

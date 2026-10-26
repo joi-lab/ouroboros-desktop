@@ -1343,16 +1343,15 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
                 _owner_write_settings(settings_to_save)
                 os.environ["GITHUB_REPO"] = resolved_slug
         immediate_changed, next_task_changed = _effect_buckets(all_changed)
-        agent_task_running = bool(next_task_changed) and started_before_save
+        from ouroboros.route_choice import ROUTE_SETTING_KEYS
+        # Owner decision (2026-08-05): the task-start snapshot boundary STAYS for reviewers, subagents, context and
+        # effort, said loudly so "Saved" never reads as "applied to the task you are watching". Models, accounts and
+        # keys read live (route_choice): work following a role moves on its next call, so they draw no warning.
+        agent_task_running = bool(set(next_task_changed) - ROUTE_SETTING_KEYS) and started_before_save
         if agent_task_running:
-            # Owner decision (2026-08-05): the task-start snapshot boundary STAYS —
-            # a running task keeps the config it started with, and the save says so
-            # loudly instead of letting "Saved" read as "applied to the task you are
-            # watching" (the reviewer-slot save at 21:56 read exactly that way).
-            # Only what the task owns waits for it: a skill reads its granted keys as saved (#1122).
             warnings.append(
-                "An agent task is running right now: it keeps the models, reviewers and "
-                "subagents it started with; those apply from the next task."
+                "An agent task is running right now: it keeps the reviewers, subagents, context and "
+                "effort it started with; those apply from the next task."
             )
         resp: Dict[str, Any] = {"status": "saved"}
         # A key with its own writer is skipped here, and the save says so instead of reading as applied.

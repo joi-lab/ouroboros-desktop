@@ -691,8 +691,13 @@ def test_settings_save_warns_when_an_agent_task_is_running(isolated_settings, mo
     assert data["status"] == "saved"
     assert data.get("agent_task_running") is True
     warnings = data.get("warnings") or []
-    assert any("keeps the models, reviewers and subagents it started with" in w for w in warnings), warnings
+    assert any("keeps the reviewers, subagents, context and effort it started with" in w for w in warnings), warnings
     assert any("next task" in w for w in warnings), warnings
+    # A route key alone (models, accounts, keys) reaches running work on its next call: no such warning.
+    resp_route = client.post("/api/settings", json={"OUROBOROS_MODEL_CONTEXT_WINDOWS": {"main": 123000}})
+    assert resp_route.status_code == 200, resp_route.text
+    assert "agent_task_running" not in resp_route.json()
+    assert not any("it started with" in w for w in resp_route.json().get("warnings") or [])
 
     # No running task -> no warning noise.
     monkeypatch.setattr(settings_mod, "_has_started_agent_tasks", lambda: False)
