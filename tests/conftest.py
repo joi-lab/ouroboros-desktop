@@ -142,6 +142,23 @@ def provider_catalog_offline(monkeypatch):
         yield saved
 
 
+@pytest.fixture(scope="session")
+def ui_candidate_checkout(tmp_path_factory):
+    """One origin-proof copy of this checkout for the session's host UI cases.
+
+    `direct_server_with_data` enters `case_checkout` over it, so each case keeps its own custody,
+    data, ports and processes; copying, the final source check and proven-teardown retirement
+    stay `candidate_checkout`'s own (tests/candidate_checkout.py).
+    """
+    if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
+        pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1 to run browser UI smoke")
+    from tests.candidate_checkout import candidate_checkout
+
+    with candidate_checkout(pathlib.Path(__file__).resolve().parents[1],
+                            tmp_path_factory.mktemp("ui-candidate") / "repo", origin_proof=True) as owner:
+        yield owner
+
+
 @pytest.fixture
 def preflight_timeout_diagnostics(request, monkeypatch, tmp_path):
     """Observe the Windows nested-pytest timeout without changing its gate."""

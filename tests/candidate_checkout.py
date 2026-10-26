@@ -15,6 +15,10 @@ Deletion needs proof, not an exit: a holder calls `hold()` before it starts a
 process from the copy and `release()` only once that process tree is PROVEN gone.
 Teardown with an unreleased hold, or with a retention marker beneath the copy,
 keeps the tree in place and marks it for every enclosing cleanup layer.
+
+A fixture that boots many cases from one copy enters `case_checkout` per case:
+the case runs the owner's bytes under its own custody and overlay, needs the
+source to still hold what was copied, and must leave the copy as it found it.
 """
 from __future__ import annotations
 
@@ -259,6 +263,8 @@ class CandidateCheckout:
     overlay: dict = field(default_factory=dict)
     # Processes started from this copy that have not yet been PROVEN gone.
     unproven: int = 0
+    # Established on first shared use; unrelated one-shot callers do not need it.
+    git_refs: bytes | None = None
 
     def hold(self) -> None:
         """Before a process starts from the copy: its teardown now needs proof."""
@@ -300,6 +306,31 @@ class CandidateCheckout:
     @property
     def version_text(self) -> str:
         return self.overlay[VERSION_PATH][0].decode("utf-8").strip()
+
+
+@dataclass
+class CaseCheckout(CandidateCheckout):
+    """One case's custody and overlay over a copy its owner shares between cases.
+
+    A hold also pins the owner, whose retirement must see every case's processes,
+    and an overlay rewrite waits until nothing started from the shared bytes may run.
+    """
+
+    owner: CandidateCheckout | None = None
+    git_config: bytes = b""
+
+    def hold(self) -> None:
+        self.owner.hold()
+        super().hold()
+
+    def release(self) -> None:
+        super().release()
+        self.owner.release()
+
+    def rewrite(self, name: str, content: bytes) -> None:
+        if self.owner.unproven:
+            raise CandidateError("CANDIDATE_CUSTODY: overlay rewrite while a started process may run")
+        super().rewrite(name, content)
 
 
 def _origin_proof_overlay(state: CandidateState) -> dict:
@@ -478,3 +509,85 @@ def _retire_checkout(target: Path, checkout: CandidateCheckout, body_failed: boo
     _force_rmtree(target)  # Also handles Windows read-only Git objects.
     if target.exists():
         raise CandidateError(f"CANDIDATE_CLEANUP_FAILED: {target}")
+
+
+def _require_no_ignored(checkout: Path) -> None:
+    """A copy holds candidate files only: an ignored one is state a process left beside its code."""
+    left = sorted(_names(_git(checkout, "ls-files", "--others", "--ignored", "--exclude-standard",
+                              "--directory", "-z")))
+    if left:
+        raise CandidateError(f"CANDIDATE_CHANGED: ignored files in the shared checkout: {left[:10]!r} "
+                             f"({len(left)} total)")
+
+
+@contextmanager
+def case_checkout(source: Path, owner: CandidateCheckout):
+    """One case over a copy `candidate_checkout` made once for many cases.
+
+    The case starts only while the source still holds the copied content and the copy
+    holds the owner's bytes; drift during the case fails it as in `candidate_checkout`.
+    It must leave the copy as it found it: verified, nothing ignored beside it, and a
+    rewritten overlay and local Git config restored once its processes are proven gone.
+    Ref changes are rejected: a case must not alter the shared copy's history.
+    """
+    source = Path(source).resolve()
+    if owner.unproven:
+        raise CandidateError("CANDIDATE_CUSTODY: a previous case's processes are not proven gone")
+    before = observe_candidate(source)
+    if before.content_identity != owner.state.content_identity:
+        fields = [key for key in ("head", "entries", "staged_diff")
+                  if getattr(owner.state, key) != getattr(before, key)]
+        paths = _changed_paths(owner.state.files, before.files)
+        raise CandidateError("CANDIDATE_CHANGED since the shared checkout was copied: "
+                             f"metadata={fields!r}, paths={paths[:10]!r} ({len(paths)} total); "
+                             "retry with a stable source")
+    verify_checkout(owner.path, owner)
+    _require_no_ignored(owner.path)
+    refs = _git(owner.path, "for-each-ref")
+    if owner.git_refs is None:
+        owner.git_refs = refs
+    elif refs != owner.git_refs:
+        raise CandidateError("CANDIDATE_CHANGED: shared checkout refs differ from their initial state")
+    case = CaseCheckout(owner.state, owner.path, dict(owner.overlay), owner=owner,
+                        git_config=(owner.path / ".git" / "config").read_bytes())
+    body_failed = False
+    try:
+        yield case
+    except GeneratorExit:
+        raise  # An owner closing its fixture generator: ordinary teardown, not a failure.
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
+        try:
+            _verify_source(source, before, "during browser verification")
+            verify_checkout(owner.path, case)
+            _require_no_ignored(owner.path)
+            if _git(owner.path, "for-each-ref") != owner.git_refs:
+                raise CandidateError("CANDIDATE_CHANGED: shared checkout refs changed during case")
+        finally:
+            _retire_case(owner, case, body_failed)
+
+
+def _retire_case(owner: CandidateCheckout, case: CaseCheckout, body_failed: bool) -> None:
+    """Give the copy back: the owner's overlay once the case's processes are proven gone, else its hold."""
+    if not case.unproven:
+        config = owner.path / ".git" / "config"
+        if config.read_bytes() != case.git_config:
+            if owner.unproven:
+                raise CandidateError("CANDIDATE_CUSTODY: Git config changed while a process may run")
+            config.write_bytes(case.git_config)
+        for name, value in owner.overlay.items():
+            if case.overlay[name] != value:
+                case.rewrite(name, value[0])
+        return
+    # The hold stays on the owner, whose retirement keeps the tree. Mark it now, beside
+    # the copy rather than in it, so no enclosing layer removes it first and later
+    # cases still verify the same bytes.
+    reason = f"{case.unproven} process tree(s) started from this checkout were never proven gone"
+    retain_tree(owner.path.parent, reason)
+    message = f"CANDIDATE_RETAINED {owner.path}: {reason}"
+    if body_failed:
+        print(message, file=sys.stderr, flush=True)
+        return
+    raise CandidateError(message)
