@@ -28,6 +28,13 @@ def record_facts(entry):
     delivery = transport.get('delivery') or {}
     if isinstance(delivery, dict) and delivery.get('state') in {'authored', 'accepted', 'delivered', 'failed', 'uncertain'}:
         facts['delivery_state'] = delivery['state']
+    for key in ('identity', 'sends_as', 'sends_as_owner'):
+        if (value := transport.get(key)) is not None:
+            facts[key] = value
+    if kind == 'place_notice':
+        for key in ('held_text', 'held', 'checked'):
+            if (value := entry.get(key)) is not None:
+                facts[key] = value
     return facts
 
 
@@ -60,12 +67,16 @@ def annotate_place_history(messages, entries, root, reads):
                 except (PlaceError, OSError, ValueError, StoreError):
                     places[place_id] = None
             transport = entry.get('transport') or {}
+            actor = transport.get('actor') or {}
+            authenticated = actor.get('authenticated') if isinstance(actor, dict) else None
             if places.get(place_id) is not None:
-                facts['owner_confirmed'] = is_owner_account(places[place_id], str(entry.get('sender_session_id') or ''),
-                                                           str(transport.get('account_id') or ''))
+                facts['owner_confirmed'] = authenticated is not False and is_owner_account(
+                    places[place_id], str(entry.get('sender_session_id') or ''), str(transport.get('account_id') or ''))
             attention = heard.get(entry.get('history_position', {}).get('offset'), {})
             if attention.get('decision') == 'heard':
                 facts['attention'] = {'decision': 'heard', 'reason': str(attention.get('reason') or '')}
+                if attention.get('facts') is not None:
+                    facts['facts'] = attention['facts']
             elif entry.get('type') == 'place_arrival' and entry.get('task_id'):
                 try:
                     task = reads.load(root, entry['task_id']) or {}

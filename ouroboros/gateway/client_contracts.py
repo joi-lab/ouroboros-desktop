@@ -318,7 +318,10 @@ class RecentWakeCheck(TypedDict):
     tool: str
 
 
-class RecentWake(TypedDict):
+_RecentWakeIdentity = TypedDict("_RecentWakeIdentity", {"as": NotRequired[Dict[str, Any]]})  # {label: str, owner: bool}
+
+
+class RecentWake(_RecentWakeIdentity):
     """GET /api/consciousness recent_wakes: ledger-selected facts, never authored by the view."""
 
     task_id: str
@@ -411,6 +414,8 @@ class PlaceSummary(TypedDict):
     facts: NotRequired[List[Any]]
     source: NotRequired[Dict[str, Any]]
     settings: NotRequired[str]
+    safety_mode: Literal["off", "light", "full"]
+    labels: Dict[str, str]
     rooms: Optional[List[Dict[str, Any]]]
     unanswered: Optional[int]  # open focus turns, not owed replies
     last_activity_at: str

@@ -2,6 +2,8 @@
 import { apiClient } from './api_client.js';
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { mountChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
+import { tr } from './i18n.js';
+import { sendsAsHtml, signalLabels, heardFactWord } from './consciousness_words.js';
 
 export const INDEX_NOTE = 'The list finds conversations with saved incoming Place events. Older records and conversations where it only wrote may not be listed.';
 const LOCAL_NOTE = 'Only records saved by Ouroboros are shown. Some events may never have reached it. Attention and delivery appear only when recorded; a saved reply alone does not confirm delivery.';
@@ -71,17 +73,39 @@ export function placeHistoryState(place) {
         active: 'Active now: it hears, wakes, speaks and acts here.' }[place.state] || 'The current Place state is unavailable.';
 }
 
-function messageNode(row, markdown) {
+function updateHeardLabels(host, place) {
+    const labels = { ...signalLabels(place.facts), ...place.labels };
+    for (const node of host.querySelectorAll('[data-heard-fact]')) {
+        const fact = node.dataset.heardFact, declared = labels[fact];
+        const word = heardFactWord(fact, labels);
+        if (node.textContent !== word) node.textContent = word;
+        if (declared) node.setAttribute('data-i18n-authored', ''); else node.removeAttribute('data-i18n-authored');
+    }
+}
+
+function messageNode(row, markdown, place) {
     const voice = row.role === 'user' ? (row.place_history.owner_confirmed ? 'owner' : 'participant') : row.role;
+    const facts = row.place_history;
+    const heard = facts.attention?.decision === 'heard' ? (facts.facts || []).filter((fact) => heardFactWord(fact)).map((fact) =>
+        `<span class="place-convo-fact" data-heard-fact="${escapeHtml(fact)}"></span>`).join('') : '';
+    const sender = facts.sends_as && sendsAsHtml({ ...facts.sends_as, owner: facts.sends_as_owner });
     const article = document.createElement('article'); article.className = `place-convo-row is-${voice}`;
     const meta = document.createElement('div'); meta.className = 'place-convo-meta';
     meta.innerHTML = `<span class="place-convo-who"${row.role === 'user' ? ' data-i18n-authored' : ''}>${escapeHtml(historySpeaker(row))}</span>${voice === 'owner' ? '<span>(you)</span>' : ''}
         <time data-i18n-authored datetime="${escapeHtml(row.ts || '')}" title="${escapeHtml(row.ts || '')}">${escapeHtml(timeText(row.ts))}</time>
-        ${historyFactWords(row).map((fact) => `<span class="place-convo-fact">${escapeHtml(fact)}</span>`).join('')}`;
+        ${historyFactWords(row).map((fact) => `<span class="place-convo-fact">${escapeHtml(fact)}</span>`).join('')}${heard}${sender ? `<span class="place-convo-fact">${sender}</span>` : ''}`;
+    updateHeardLabels(meta, place);
     const text = document.createElement('div'); text.className = 'chat-markdown place-convo-text'; text.dataset.i18nAuthored = '';
     if (row.role === 'assistant' || row.markdown) { mountChatMarkdown(text, row.text, { softBreaks: true }); markdown.add(text); }
     else { text.classList.add('place-history-plain'); text.textContent = row.text; }
     article.append(meta, text);
+    if (facts.held === true && facts.checked === false && typeof facts.held_text === 'string') {
+        const label = document.createElement('p'); label.className = 'place-sheet-note';
+        label.textContent = tr('places.history.held_unchecked', 'held, unchecked');
+        const held = document.createElement('div'); held.className = 'chat-markdown place-convo-text'; held.dataset.i18nAuthored = '';
+        mountChatMarkdown(held, facts.held_text, { softBreaks: true }); markdown.add(held);
+        article.append(label, held);
+    }
     const attachments = Array.isArray(row.attachments) ? row.attachments : [];
     if (attachments.length || row.msg_type) {
         const note = document.createElement('p'); note.className = 'place-sheet-note';
@@ -117,7 +141,7 @@ export function mountPlaceHistory(host, place, room, { onBack, readHistory = api
             const id = row.row_address || row.history_id;
             if (id && seen.has(id)) continue;
             if (id) seen.add(id);
-            find('[data-history-messages]').append(messageNode(row, markdown));
+            find('[data-history-messages]').append(messageNode(row, markdown, place));
         }
         find('[data-history-coverage]').innerHTML = pages.map(({ page }, index) => `<div class="place-convo-edge">
             <p class="place-sheet-note">${escapeHtml(capturedWindowNote(page))}</p>${windowIssues(page).retry
@@ -164,7 +188,11 @@ export function mountPlaceHistory(host, place, room, { onBack, readHistory = api
         if (event.target.closest('[data-history-older]')) void loadPage(pages[0]?.page.next_cursor);
     };
     host.addEventListener('click', click);
-    const updatePlace = (value) => { find('[data-history-state]').textContent = placeHistoryState(value); };
+    const updatePlace = (value) => {
+        place = value;
+        find('[data-history-state]').textContent = placeHistoryState(place);
+        updateHeardLabels(host, place);
+    };
     updatePlace(place);
     void loadPage();
     return { updatePlace, close() {
