@@ -857,22 +857,23 @@ def legacy_candidates(root: Any, gen: str, line: int) -> List[Row]:
 
 
 def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tuple[str, int], List[Row]]:
-    """The candidates of many ``(gen, line)`` addresses in one read: each address's rows in chain order."""
+    """The candidates of many ``(gen, line)`` addresses in one read: each address's rows in chain order (a chunk
+    of addresses, then of rows, in ONE step each, as ``_page`` reads a page)."""
     wanted = sorted({(str(gen), int(line)) for gen, line in pairs if gen and line})
     seqs: Dict[Tuple[str, int], List[int]] = {}
     records = []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 250):
             chunk = wanted[start:start + 250]
-            for record in conn.execute("SELECT gen, line, seq FROM legacy_addresses WHERE "
-                                       + " OR ".join("(gen=? AND line=?)" for _pair in chunk),
-                                       [value for pair in chunk for value in pair]):
-                seqs.setdefault((record["gen"], record["line"]), []).append(record["seq"])
+            listed = conn.execute("SELECT json_group_array(json_array(gen, line, seq)) FROM legacy_addresses WHERE "
+                                  + " OR ".join("(gen=? AND line=?)" for _pair in chunk),
+                                  [value for pair in chunk for value in pair]).fetchone()[0]
+            for gen, line, seq in json.loads(listed or "[]"):
+                seqs.setdefault((gen, line), []).append(seq)
         found = sorted({seq for listed in seqs.values() for seq in listed})
         for start in range(0, len(found), 500):
             chunk = found[start:start + 500]
-            records += conn.execute(f"{_SELECT} WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})",
-                                    chunk).fetchall()
+            records += _page(conn, f"WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})", tuple(chunk))
     rows = {record["seq"]: _row(record) for record in records}
     return {pair: [rows[seq] for seq in sorted(seqs.get(pair, ())) if seq in rows] for pair in wanted}
 
@@ -891,16 +892,18 @@ def legacy_address(root: Any, seq: int) -> Optional[Tuple[str, int]]:
 
 def legacy_addresses(root: Any, seqs: Iterable[int]) -> Dict[int, Tuple[str, int]]:
     """The ``(gen, line)`` each imported chat row had, for many rows in one indexed read (``legacy_seq``,
-    a statement per 500 rows, whatever the other rooms imported): a row's first in that order when an
-    alias gave it several; no entry for a row appended here."""
+    a statement and ONE step per 500 rows, whatever the other rooms imported): a row's first in
+    ``(gen, line)`` order when an alias gave it several; no entry for a row appended here."""
     wanted = sorted({int(seq) for seq in seqs})
     found: Dict[int, Tuple[str, int]] = {}
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 500):
             chunk = wanted[start:start + 500]
-            for record in conn.execute("SELECT seq, gen, line FROM legacy_addresses INDEXED BY legacy_seq "
-                                       f"WHERE seq IN ({','.join('?' * len(chunk))}) ORDER BY seq, gen, line", chunk):
-                found.setdefault(record["seq"], (record["gen"], record["line"]))
+            listed = conn.execute("SELECT json_group_array(json_array(seq, gen, line)) FROM legacy_addresses "
+                                  f"INDEXED BY legacy_seq WHERE seq IN ({','.join('?' * len(chunk))})",
+                                  chunk).fetchone()[0]
+            for seq, gen, line in sorted(json.loads(listed or "[]")):
+                found.setdefault(seq, (gen, line))
     return found
 
 

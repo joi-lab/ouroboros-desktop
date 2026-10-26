@@ -315,6 +315,16 @@ def iter_stream(root: Any, *, lower: int, upper: int) -> Iterator[Tuple[ds.Row, 
     return _paged(root, ds.iter_rows(root, "chat", lower=lower, upper=upper))
 
 
+_REACH = ("WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+          "SELECT task_id FROM tasks JOIN reach ON parent_task_id=reach.id UNION "
+          "SELECT task_id FROM tasks JOIN reach ON root_task_id=reach.id) SELECT json_group_array(id) FROM reach")
+
+
+def _reached(conn: Any, tasks: Iterable[str]) -> set:
+    """The tasks and every task under them (by parent or root), read in ONE step: each step releases the GIL."""
+    return {str(task) for task in json.loads(conn.execute(_REACH, (json.dumps(sorted(tasks)),)).fetchone()[0] or "[]")}
+
+
 def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
               upper: Optional[int] = None) -> Iterator[ds.Row]:
     """Indexed candidate union for the canonical room rule, including late task bindings."""
@@ -339,11 +349,7 @@ def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
                  if int(binding.get("project_chat_id") or 0) == chat}
         if tasks and store_path(root).exists():
             with open_store(root, write=False) as txn:
-                tasks.update(str(row[0]) for row in txn.conn.execute(
-                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                    "SELECT task_id FROM tasks JOIN reach ON parent_task_id=reach.id UNION "
-                    "SELECT task_id FROM tasks JOIN reach ON root_task_id=reach.id) SELECT id FROM reach",
-                    (json.dumps(sorted(tasks)),)))
+                tasks.update(_reached(txn.conn, tasks))
         keys.extend((field, tid) for tid in sorted(tasks) for field in _LINEAGE_FIELDS)
         for ref in refs:
             if ref.get("client_message_id"):
