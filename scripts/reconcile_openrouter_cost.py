@@ -22,13 +22,13 @@ if str(REPO_ROOT) not in sys.path:
 def _target() -> dict:
     """Read the existing settings/route owners without load_settings' migrations."""
     from ouroboros import config
-    from ouroboros.llm_routing import _ProviderRoutingMixin
+    from ouroboros.llm_routing import resolve_target
     from ouroboros.settings_integrity import read_settings_json_verified
 
     raw = read_settings_json_verified(config.SETTINGS_PATH) if config.SETTINGS_PATH.exists() else {}
     settings = {"OPENROUTER_API_KEY": (raw or {}).get("OPENROUTER_API_KEY",
                                                     config.runtime_setting("OPENROUTER_API_KEY", ""))}
-    return _ProviderRoutingMixin()._resolve_remote_target("openrouter::", settings=settings)
+    return resolve_target("openrouter::", settings)
 
 
 def _custody(root: Path, row: dict) -> str | None:
