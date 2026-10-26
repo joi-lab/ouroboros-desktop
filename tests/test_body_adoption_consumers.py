@@ -12,7 +12,7 @@ import pytest
 
 from ouroboros import body_adoption, body_candidate, body_switch
 from tests.body_candidate_support import (
-    candidate_commit, git, isolate, make_ctx, make_serving, restart_receipt, rich_commit,
+    candidate_commit, git, host_restart_ack, isolate, make_ctx, make_serving, restart_receipt, rich_commit,
 )
 
 EXITED = {"doomed": [4001], "dead": [4001], "unconfirmed": [], "cleanup_ok": True, "snapshot_ok": True}
@@ -433,12 +433,15 @@ def test_request_restart_from_a_forked_drive_reaches_the_supervisor_binding_and_
     fork = tmp_path / "forked-drive"
     (fork / "state").mkdir(parents=True)
     scene.ctx.drive_root, scene.ctx.budget_drive_root = fork, scene.data
+    sent = host_restart_ack(scene.ctx, scene.data)  # the server answers in its canonical DATA_DIR only
     registry = ToolRegistry(repo_dir=scene.serving, drive_root=fork)
     registry.set_context(scene.ctx)
 
     adopting = registry.execute("request_restart", {"reason": "adopt from project", "adopt_commit": scene.cand})
 
     assert f"adopts candidate commit {scene.cand[:12]}" in adopting, adopting
+    [intent] = sent
+    assert (intent["phase"], intent["task_id"], intent["reason"]) == ("intent", "root-consumer", "adopt from project")
     assert not (fork / "state" / "pending_restart_verify.json").exists() and body_adoption.read(fork) == {}
     receipt = json.loads((scene.data / "state" / "pending_restart_verify.json").read_text())
     assert (receipt["expected_sha"], receipt["reason"]) == (scene.cand, "adopt from project")
@@ -467,6 +470,7 @@ def test_request_restart_reply_quotes_the_reason_as_the_callers_own_words(scene,
     from ouroboros.tools.registry import ToolRegistry
 
     ctx = make_ctx(scene.serving, scene.data, "plain-task") if mode == "unbound" else scene.ctx
+    sent = host_restart_ack(ctx, scene.data)
     registry = ToolRegistry(repo_dir=scene.serving, drive_root=scene.data)
     registry.set_context(ctx)
 
@@ -482,6 +486,7 @@ def test_request_restart_reply_quotes_the_reason_as_the_callers_own_words(scene,
     recorded = stated or "agent_requested_restart"
     receipt = json.loads((scene.data / "state" / "pending_restart_verify.json").read_text())
     assert receipt["reason"] == ctx.pending_restart_reason == recorded
+    assert [intent["reason"] for intent in sent] == [recorded]
     handoff = body_adoption.read(scene.data)
     if mode == "adopt":
         assert handoff["reason"] == recorded and handoff["events"][-1]["detail"] == f"restart reason: {recorded}"
