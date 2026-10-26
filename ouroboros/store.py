@@ -158,8 +158,7 @@ def physical_acquisition():
     """At accepted handoff, copy only the caller's physical budget into its body.
 
     Other ContextVars and explicit acquisition_budget scopes remain unchanged;
-    a nested physical start must acquire its own fresh admission guard.
-    """
+    a nested physical start must acquire its own fresh admission guard."""
     token = _ADMISSION_NO_WAIT.set(False)
     try:
         yield
@@ -541,8 +540,7 @@ def _bsd_filesystem(path: pathlib.Path) -> Optional[str]:
     if sys.platform == "darwin":
         fields = [("bsize", u32), ("iosize", ctypes.c_int32)] + [
             (name, u64) for name in ("blocks", "bfree", "bavail", "files", "ffree")]
-        fields += [("fsid", ctypes.c_int32 * 2), ("owner", u32), ("type", u32),
-                   ("flags", u32), ("subtype", u32)]
+        fields += [("fsid", ctypes.c_int32 * 2), ("owner", u32), ("type", u32), ("flags", u32), ("subtype", u32)]
         symbol = "statfs64"
     elif sys.platform.startswith("freebsd"):
         fields = [("version", u32), ("type", u32)] + [(name, u64) for name in (
@@ -653,8 +651,7 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
     if tier == TIER_NAME:
         query += "&vfs=" + ("win32-none" if os.name == "nt" else "unix-none")
     conn = counted_connect(f"{path.absolute().as_uri()}?{query}", path, uri=True, isolation_level=None,
-                           timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0,
-                           check_same_thread=not shared)
+                           timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0, check_same_thread=not shared)
     conn.row_factory = sqlite3.Row
     conn._store_kind = store_timing.kind_of(path)
     try:
@@ -711,8 +708,7 @@ def connection(path: pathlib.Path, tier: str, *, wait_sec: float = 0.0, identity
 
     A nested access keeps its historical independent transaction (a temporary connection),
     never commits or rolls back the caller's transaction. A new file ``identity`` (the caller's stat, never one
-    across a wait) or tier invalidates the cached connection. Name-tier callers hold their name lock throughout.
-    """
+    across a wait) or tier invalidates the cached connection. Name-tier callers hold their name lock throughout."""
     path = pathlib.Path(os.path.abspath(path))
     key, opener = str(path), opener or connect
     identity = file_identity(path) if identity is None else identity  # a stat waits for the GIL: never under the guard
@@ -769,8 +765,7 @@ def _close_cached(selected: Callable[[str], bool], *, idle_only: bool = False) -
 
     The lifecycle owner must quiesce users first. An active lease refuses the handoff
     with StoreBusy; it is never interrupted or silently rolled back by another thread.
-    ``idle_only`` closes the idle ones and leaves a leased handle to its thread instead.
-    """
+    ``idle_only`` closes the idle ones and leaves a leased handle to its thread instead."""
     with _CONNECTION_GUARD:
         entries = [(pool, name, entry) for pool in list(_CONNECTION_POOLS)
                    for name, entry in pool.entries.items() if selected(name)]
@@ -796,8 +791,7 @@ def close_connections_under(root: pathlib.Path, *, idle_only: bool = False) -> N
     handle kept past the move holds the moved files' space. Another process (a pool worker
     that ran the task) releases its own, ``idle_only``: a late thread's lease stays with
     that thread, which closes it on exit. Contract as ``_close_cached``; paths resolve
-    outside the pool guard, so a slow volume never stalls other stores' leases.
-    """
+    outside the pool guard, so a slow volume never stalls other stores' leases."""
     def canonical(name: Any) -> str:
         return os.path.normcase(os.path.realpath(name))  # a short or linked spelling names the same file
 
