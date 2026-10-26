@@ -1480,10 +1480,11 @@ def _assemble_history_response(
         evidence_anchors = dict.fromkeys(current_work_in_room(
             data_dir, bindings_by_task, row_matches_thread.evidence_matches), "")
     represented = {str(row.get("task_id") or "") for row in messages} | evidence_anchors.keys()
-    for row in messages:
-        # A notice names its target, never a speaker (no parent); a legacy child row's parent is in the facts index.
-        parent = "" if row.get("system_type") in ("project_question_pointer", *ORIGIN_ADDRESSED_NOTICE_TYPES) else str(
-            row.get("parent_task_id") or rooms.lineage(row.get("task_id")).get("parent_task_id") or "")
+    # A notice names its target, never a speaker (no parent); a legacy child row's parent is in the facts index.
+    parents = ["" if row.get("system_type") in ("project_question_pointer", *ORIGIN_ADDRESSED_NOTICE_TYPES) else str(
+        row.get("parent_task_id") or rooms.lineage(row.get("task_id")).get("parent_task_id") or "") for row in messages]
+    rooms.warm(set(parents) - represented - {""})  # the parents this pass resolves, read together
+    for row, parent in zip(messages, parents):
         if not parent or parent in represented or (floor and str(row.get("ts") or "") < floor
                                                    and row.get("task_id") not in anchored_children):
             continue
