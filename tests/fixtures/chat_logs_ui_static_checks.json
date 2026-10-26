@@ -855,37 +855,37 @@
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ":is(.chat-context-mode, .chat-subagents-mode) .chat-seg {"
+    "value": ".capsule-panel .chat-seg {"
   },
   {
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ":is(.chat-context-mode, .chat-subagents-mode) .chat-seg[aria-checked=\"true\"]"
+    "value": ".capsule-panel .chat-seg[aria-checked=\"true\"]"
   },
   {
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-context-mode[data-context-mode=\"low\"] {"
+    "value": ":is(.chat-context-mode[data-context-mode=\"low\"], .capsule-panel[data-kind=\"context\"][data-mode=\"low\"]) {"
   },
   {
     "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-subagents-mode {"
+    "value": ":is(.chat-subagents-mode, .capsule-panel[data-kind=\"subagents\"]) {"
   },
   {
     "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-subagents-note {"
+    "value": ".capsule-panel {"
   },
   {
     "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-context-mode {"
+    "value": ":is(.chat-context-mode, .capsule-panel[data-kind=\"context\"]) {"
   },
   {
     "id": "test_composer_capsules_css_exists",

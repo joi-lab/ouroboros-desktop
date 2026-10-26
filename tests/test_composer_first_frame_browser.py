@@ -33,7 +33,7 @@ PROBE = """() => {
             width: r.width, height: r.height,
             oneLine: Math.max(...boxes.map(b => b.top)) - Math.min(...boxes.map(b => b.top)) < 2,
             contained: boxes.every(b => b.left >= r.left + parseFloat(css.paddingLeft) - 1 && b.right <= r.right - parseFloat(css.paddingRight) + 1),
-            compact: row.dataset.ownerCompact || '', solo: row.dataset.ownerSolo || '',
+            compact: row.dataset.ownerCompact || '',
             known: row.querySelector('.chat-effort-range')?.dataset.known,
             names: [...row.querySelectorAll('.chat-capsule-name')].map(n => n.getBoundingClientRect().width > 0),
         });
@@ -41,7 +41,7 @@ PROBE = """() => {
     probe.sampleAll = () => rows.filter(r => r.isConnected).forEach(probe.sample);
     const mount = new MutationObserver(() => {
         for (const row of document.querySelectorAll('.chat-toolbar-row')) {
-            if (seen.has(row) || row.querySelectorAll('.chat-capsule').length !== 2) continue;
+            if (seen.has(row) || row.querySelectorAll('.chat-capsule').length !== 3) continue;  // Subagents, Context, Effort
             seen.add(row); rows.push(row);
             const observer = new ResizeObserver(() => probe.sample(row));
             observer.observe(row); observers.push(observer);
@@ -72,7 +72,7 @@ def _assert_phase(page, room, *, names=None):
     assert rows, (room, facts)
     assert all(row["oneLine"] and row["contained"] for row in rows), rows
     if names is not None:
-        assert all(row["names"] == [names, names] for row in rows), rows
+        assert all(row["names"] == [names] * 3 for row in rows), rows
     assert page.evaluate("__composerPaint.errors") == []
     return rows
 
@@ -196,12 +196,16 @@ def test_value_change_preserves_owner_selection_motion(direct_server_with_data, 
             assert page.request.post(url + "/api/owner/effort-range", data={"min": "low", "recommended": "high", "max": "max"}).status == 200
             _open_chat(page, url, width=1440)
             selector = f"#page-chat .chat-{'context-mode' if kind == 'context' else 'effort-range'}"
+            panel = f'.capsule-panel[data-kind="{kind}"]:not([data-leaving])'
             page.locator(selector + " .chat-capsule-head").click()
-            page.wait_for_function("sel => { const el = document.querySelector(sel); return el.dataset.open === 'true' && !el.getAnimations({subtree: true}).length; }", arg=selector)
+            page.wait_for_function("""({selector, panel}) => {
+                const el = document.querySelector(selector), open = document.querySelector(panel);
+                return el.dataset.open === 'true' && open && !open.getAnimations({subtree: true}).length;
+            }""", arg={"selector": selector, "panel": panel})
             _frames(page)
-            page.evaluate("""({selector, kind}) => {
+            page.evaluate("""({selector, panel, kind}) => {
                 const el = document.querySelector(selector), value = el.querySelector('.chat-capsule-value');
-                const mark = el.querySelector(kind === 'context' ? '.chat-context-thumb' : '.chat-effort-rec');
+                const mark = document.querySelector(panel).querySelector(kind === 'context' ? '.chat-context-thumb' : '.chat-effort-rec');
                 const sample = () => ({left: parseFloat(getComputedStyle(mark).left), animations: mark.getAnimations().length});
                 const probe = window.__selectionMotion = {start: sample(), samples: [], done: false};
                 let started = false;
@@ -220,11 +224,11 @@ def test_value_change_preserves_owner_selection_motion(direct_server_with_data, 
                     });
                 });
                 observer.observe(value, {childList: true, characterData: true, subtree: true});
-            }""", {"selector": selector, "kind": kind})
+            }""", {"selector": selector, "panel": panel, "kind": kind})
             if kind == "context":
-                page.locator(selector + ' .chat-seg[data-mode="nano"]').click()
+                page.locator(panel + ' .chat-seg[data-mode="nano"]').click()
             else:
-                page.locator(selector + " .chat-effort-rec").focus()
+                page.locator(panel + " .chat-effort-rec").focus()
                 page.keyboard.press("ArrowLeft")
             page.wait_for_function("window.__selectionMotion?.done")
             facts = page.evaluate("__selectionMotion")
