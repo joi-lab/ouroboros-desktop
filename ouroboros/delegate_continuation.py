@@ -360,9 +360,9 @@ def continuation_prompt(facts: Dict[str, Any], caller_text: str) -> str:
         tree = ("You continue in the SAME private snapshot the previous run worked in (same path, same "
                 "baseline): everything it changed there is still there, and one cumulative patch of the whole "
                 "work is captured when you finish."
-                + (" Its checkout was restored from the saved result, so files Git ignores (environments, "
-                   "build outputs) and its .review-evidence/ files are not here; that evidence stays retained "
-                   "beside its capture." if facts.get("checkout") == "recreated" else ""))
+                + (" Its checkout was restored from the saved result, so files Git ignores that the result never "
+                   "added (environments, build outputs) and its .review-evidence/ files are not here; that "
+                   "evidence stays retained beside its capture." if facts.get("checkout") == "recreated" else ""))
     elif disposition == "applied":
         tree = ("Its captured changes were APPLIED to the target, so the tree you start from contains them: "
                 "do not redo or re-apply that work.")
