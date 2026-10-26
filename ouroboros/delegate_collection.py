@@ -19,7 +19,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from ouroboros import delegate_custody as c
 from ouroboros import delegate_custody_current as current
 from ouroboros.delegate_custody_current import collection_pending
-from ouroboros.delegate_capture_attempt import collection_due, record_attempt, GENERATION, failure_retry, output_owed, capture_required
+from ouroboros.delegate_capture_attempt import (collection_due, record_attempt, GENERATION, failure_retry, output_owed,
+                                                capture_required, legacy_cap)
+from ouroboros.delegate_directory import is_in_place_run
 from ouroboros.delegate_named_evidence import saved_named_evidence
 from ouroboros._usage_rows import REVIEW_ATTRIBUTION_KEYS
 
@@ -293,7 +295,7 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
                 owned_gateway = gateway = gateway_factory()
             except Exception:
                 pass  # Retained output, local capture and money do not require transport.
-        retry_capture = recapture or (entry.collection_attempt.get("generation") != generation
+        retry_capture = recapture or legacy_cap(entry) or (entry.collection_attempt.get("generation") != generation
             and (entry.named_evidence.get("retry") == "transient" or entry.capture_job.get("retry") == "transient"))
         if (background and retry_output and gateway is not None and entry.collection_attempt
                 and entry.collection_attempt.get("generation") != generation):
@@ -335,7 +337,8 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
         if (due and entry is not None and not (stopped is not None and stopped())
                 and not disposition_refusal(root, entry)):
             try:
-                if background and (entry.execution_root or entry.resource_ref.get("workspace_kind") == "directory"):
+                if background and (entry.execution_root or entry.resource_ref.get("workspace_kind") == "directory") \
+                        and not is_in_place_run(entry):  # an in-place run's capture is its fixed projection
                     capture = delegate_capture_job.request_or_result(root, entry, generation=generation, recapture=retry_capture)
                     if capture.get("status") != "pending":
                         if not delegate_capture_job.accept_result(root, entry, capture):
@@ -401,6 +404,10 @@ def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
 
     A Git run's saved named-evidence summary rides along, so saved-result and
     retry-successor delivery keep its status and reader."""
+    from ouroboros.delegate_directory import in_place_block
+
+    if is_in_place_run(entry):
+        return in_place_block(entry)
     directory = entry.resource_ref.get("workspace_kind") == "directory"
     if not entry.execution_root and not directory:
         return None
@@ -422,7 +429,7 @@ def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
         block = directory_capture_block(root, entry, manifest)
     else:
         from ouroboros.tools.delegate_integration import _capture_block
-        block = _capture_block(entry, cap_dir, manifest, manifest.get("authority_drift") or {})
+        block = _capture_block(entry, cap_dir, manifest)
         summary, named = saved_named_evidence(root, entry)
         if named:  # another task reads it by absolute artifact path, as the patch and manifest below
             block["named_evidence"] = ({**named, "summary_read": {"root": "artifact_store", "path": str(summary)}}

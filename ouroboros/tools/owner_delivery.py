@@ -136,24 +136,26 @@ def deliver_owner_event(ctx: Any, evt: Dict[str, Any]) -> str:
     for every task frame so the supervisor can resolve project binding for
     live deliveries exactly as it does for the end-of-task drain.
     """
+    from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
+
     meta = getattr(ctx, "task_metadata", {})
     meta = meta if isinstance(meta, dict) else {}
 
+    def _accepted(mode: str) -> str:
+        if not is_a2a_chat_id(evt.get("chat_id")):
+            ctx._owner_message_sent = True
+        _retain_dialogue(ctx, evt, mode)
+        return mode
+
     def _deferred() -> str:
         ctx.pending_events.append(evt)
-        _retain_dialogue(ctx, evt, "deferred")
-        return "deferred"
+        return _accepted("deferred")
 
     evt.setdefault("task_id", str(getattr(ctx, "task_id", "") or ""))
     evt.setdefault("parent_task_id", str(meta.get("parent_task_id") or ""))
     evt.setdefault("root_task_id", str(meta.get("root_task_id") or ""))
-    try:
-        from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
-
-        if is_a2a_chat_id(int(evt.get("chat_id"))):
-            return _deferred()
-    except (TypeError, ValueError):
-        pass
+    if is_a2a_chat_id(evt.get("chat_id")):
+        return _deferred()
     if getattr(ctx, _STICKY_ATTR, False):
         return _deferred()
     event_queue = getattr(ctx, "event_queue", None)
@@ -167,5 +169,4 @@ def deliver_owner_event(ctx: Any, evt: Dict[str, Any]) -> str:
         except Exception:
             pass
         return _deferred()
-    _retain_dialogue(ctx, evt, "live")
-    return "live"
+    return _accepted("live")

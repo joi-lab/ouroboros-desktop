@@ -637,9 +637,18 @@ def pending_dispatches(root: Any) -> List[Tuple[Row, Dict[str, Any]]]:
 # --- addressed reads -------------------------------------------------------------------------
 
 def row_at(root: Any, stream: str, seq: int) -> Optional[Row]:
+    return rows_at(root, stream, [seq]).get(int(seq))
+
+
+def rows_at(root: Any, stream: str, seqs: Iterable[int]) -> Dict[int, Row]:
+    """The rows at many coordinates in one read (a statement per 500): each row found, by coordinate."""
+    wanted, records = sorted({int(seq) for seq in seqs}), []
     with transaction(root, write=False) as conn:
-        record = conn.execute(f"{_SELECT} WHERE stream=? AND seq=?", (stream, seq)).fetchone()
-    return None if record is None else _row(record)
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            records += conn.execute(f"{_SELECT} WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})",
+                                    (stream, *chunk)).fetchall()
+    return {record["seq"]: _row(record) for record in records}
 
 
 def rows_between(root: Any, stream: str, lower: int, upper: int) -> List[Row]:
@@ -827,12 +836,28 @@ def legacy_candidates(root: Any, gen: str, line: int) -> List[Row]:
     generation's first-line sha256 (``utils.jsonl_generation_signature``), ``line`` its physical
     line number. Two generations that start with the same line share a signature; the old
     reader checked each against the address's chat, time and hash -- the caller still does."""
-    if not gen or not line:
-        return []
+    return legacy_candidates_of(root, [(gen, line)]).get((str(gen), int(line)), []) if gen and line else []
+
+
+def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tuple[str, int], List[Row]]:
+    """The candidates of many ``(gen, line)`` addresses in one read: each address's rows in chain order."""
+    wanted = sorted({(str(gen), int(line)) for gen, line in pairs if gen and line})
+    seqs: Dict[Tuple[str, int], List[int]] = {}
+    records = []
     with transaction(root, write=False) as conn:
-        records = conn.execute(f"{_SELECT} WHERE stream='chat' AND seq IN (SELECT seq FROM legacy_addresses WHERE gen=? AND line=?) "
-                               "ORDER BY seq", (gen, int(line))).fetchall()
-    return [_row(record) for record in records]
+        for start in range(0, len(wanted), 250):
+            chunk = wanted[start:start + 250]
+            for record in conn.execute("SELECT gen, line, seq FROM legacy_addresses WHERE "
+                                       + " OR ".join("(gen=? AND line=?)" for _pair in chunk),
+                                       [value for pair in chunk for value in pair]):
+                seqs.setdefault((record["gen"], record["line"]), []).append(record["seq"])
+        found = sorted({seq for listed in seqs.values() for seq in listed})
+        for start in range(0, len(found), 500):
+            chunk = found[start:start + 500]
+            records += conn.execute(f"{_SELECT} WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})",
+                                    chunk).fetchall()
+    rows = {record["seq"]: _row(record) for record in records}
+    return {pair: [rows[seq] for seq in sorted(seqs.get(pair, ())) if seq in rows] for pair in wanted}
 
 
 def resolve_legacy(root: Any, gen: str, line: int) -> Optional[Row]:
@@ -843,11 +868,23 @@ def resolve_legacy(root: Any, gen: str, line: int) -> Optional[Row]:
 
 
 def legacy_address(root: Any, seq: int) -> Optional[Tuple[str, int]]:
-    """The ``(gen, line)`` an imported chat row had (``None`` for a row appended here); one indexed
-    probe (``legacy_seq``), whatever the other rooms imported."""
+    """The ``(gen, line)`` an imported chat row had (``None`` for a row appended here)."""
+    return legacy_addresses(root, [seq]).get(int(seq))
+
+
+def legacy_addresses(root: Any, seqs: Iterable[int]) -> Dict[int, Tuple[str, int]]:
+    """The ``(gen, line)`` each imported chat row had, for many rows in one indexed read (``legacy_seq``,
+    a statement per 500 rows, whatever the other rooms imported): a row's first in that order when an
+    alias gave it several; no entry for a row appended here."""
+    wanted = sorted({int(seq) for seq in seqs})
+    found: Dict[int, Tuple[str, int]] = {}
     with transaction(root, write=False) as conn:
-        record = conn.execute("SELECT gen, line FROM legacy_addresses INDEXED BY legacy_seq WHERE seq=? LIMIT 1", (seq,)).fetchone()
-    return None if record is None else (record["gen"], record["line"])
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            for record in conn.execute("SELECT seq, gen, line FROM legacy_addresses INDEXED BY legacy_seq "
+                                       f"WHERE seq IN ({','.join('?' * len(chunk))}) ORDER BY seq, gen, line", chunk):
+                found.setdefault(record["seq"], (record["gen"], record["line"]))
+    return found
 
 
 def legacy_generation(root: Any, gen: str) -> Optional[Dict[str, Any]]:

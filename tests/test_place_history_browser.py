@@ -76,7 +76,8 @@ def test_skills_place_reader_drafts_facts_and_teardown(skills_browser, tmp_path,
         room = sheet.locator('[data-place-room]').first
         room.wait_for()
         assert page.locator('dialog[open]').count() == 1
-        assert sheet.locator('[data-place-section]').evaluate_all("nodes => nodes.map(n=>n.dataset.placeSection).slice(0,3)") == ['state', 'conversations', 'wakes']
+        # The readiness line (the connector's status) precedes the state when the connector reports one.
+        assert sheet.locator('[data-place-section]').evaluate_all("nodes => nodes.map(n=>n.dataset.placeSection).slice(0,4)") == ['readiness', 'state', 'conversations', 'wakes']
         capture('settings', '.place-sheet')
         note = sheet.locator('[data-place-draft="note"]')
         sheet.locator('[data-place-act="add-note"]').click()  # local validation, no write

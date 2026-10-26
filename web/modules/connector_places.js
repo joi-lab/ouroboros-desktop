@@ -1,7 +1,8 @@
 // The connector detail's visible Places section uses the same rows as Settings.
 import { readPlaces, PLACES_CHANGED_EVENT } from './consciousness_api.js';
 import { settingsPlaceRowHtml } from './settings_consciousness.js';
-import { connectPlaceButtonHtml, openConnectPlace, openPlaceSheet } from './place_sheet.js';
+import { openPlaceSheet } from './place_sheet.js';
+import { connectPlaceButtonHtml, openConnectPlace } from './place_connect.js';
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 
 export function mountConnectorPlaces(host, connector, { leave, returnFocus, read = readPlaces } = {}) {

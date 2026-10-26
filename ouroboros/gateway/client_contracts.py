@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ouroboros.delegate_custody_usage import CostCustody
+from ouroboros.cost_projection import CostPresentation
+
 try:  # Python 3.11+
     from typing import Literal, NotRequired, Required, TypedDict  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - CI supports Python 3.10.
@@ -308,12 +311,116 @@ class OwnerEnabledRequest(TypedDict):
     enabled: bool
 
 
+class RecentWakeCheck(TypedDict):
+    """One stored safety check, retaining both its chip and the tool it checked."""
+
+    chip: str
+    tool: str
+
+
+class RecentWake(TypedDict):
+    """GET /api/consciousness recent_wakes: ledger-selected facts, never authored by the view."""
+
+    task_id: str
+    chat_id: Optional[int]
+    cause: Literal["own", "focus"]
+    place_label: str
+    conversation: str
+    started_at: Optional[str]
+    first_reply_at: NotRequired[Optional[str]]
+    ended_at: Optional[str]
+    live: bool
+    phase: Literal["running", "waiting", "queued", "paused", "unknown", "working", "done", "warn", "error", "cancelled"]
+    quiet: bool
+    summary: NotRequired[str]
+    note: Optional[str]
+    tool_calls: NotRequired[Optional[int]]
+    rounds: NotRequired[Optional[int]]
+    checks: List[RecentWakeCheck]
+    said_owner: NotRequired[bool]
+    accounted_upper_bound_usd: NotRequired[Optional[float]]
+    accounted_upper_bound_usd_with_children: NotRequired[Optional[float]]
+    cost_presentation: NotRequired[Optional[CostPresentation]]
+    cost_accounting_status: NotRequired[Literal["available", "unavailable"]]
+    cost_accounting_error: NotRequired[str]
+    cost_final: NotRequired[bool]
+    cost_with_children_partial: NotRequired[bool]
+    cost_custody: NotRequired[Optional[CostCustody]]
+    unknown_unmetered: NotRequired[Optional[int]]
+    non_final_rows: NotRequired[Optional[int]]
+    reserved_usd: NotRequired[Optional[float]]
+    unresolved_upper_bound_usd: NotRequired[Optional[float]]
+    ledger_integrity_degraded: NotRequired[Optional[bool]]
+
+
+class RecentWakesView(TypedDict):
+    """Recent-wakes fields of /api/consciousness; status fields remain an open JSON shape."""
+
+    recent_wakes: Optional[List[RecentWake]]
+    recent_wakes_coverage: NotRequired[str]  # names the cap or the typed read failure; absent without a clock
+
+
 class PlaceConnectRequest(TypedDict):
-    """Connect an installed connector; omitted account and conversation ids default to empty."""
+    """Connect Silent; ids default to empty. An instance label is prefixed with the service."""
 
     connector: str
     account_id: NotRequired[str]
     conversation_id: NotRequired[str]
+    label: NotRequired[str]
+
+
+class PlaceIcon(TypedDict, total=False):
+    """Sanitized host mark or SVG geometry; an unavailable mark is {}."""
+
+    kind: Literal["host", "svg"]
+    name: str
+    svg: str
+
+
+class PlaceReadiness(TypedDict):
+    text: str
+    tone: str
+
+
+class PlaceSummary(TypedDict):
+    """One projection for list, write/conflict responses and the model's place map."""
+
+    place_id: str
+    connector: str
+    provider: str
+    account_id: str
+    conversation_id: str
+    label: str
+    state: Literal["active", "silent", "paused"]
+    wakes: List[Dict[str, str]]
+    notes: List[Dict[str, str]]
+    owner_accounts: List[Dict[str, str]]
+    working_folder: str
+    model: str
+    context_topics: List[str]
+    legacy_binding_ids: List[str]
+    revision: int
+    thread_id: str
+    destination: str
+    scope: str
+    contribution_id: str
+    reply_destination: Optional[Dict[str, str]]
+    icon: PlaceIcon
+    readiness: PlaceReadiness
+    wake_suggestions: List[str]
+    facts: NotRequired[List[Any]]
+    source: NotRequired[Dict[str, Any]]
+    settings: NotRequired[str]
+    rooms: Optional[List[Dict[str, Any]]]
+    unanswered: Optional[int]  # open focus turns, not owed replies
+    last_activity_at: str
+    activity_coverage: str
+    spent_24h_usd: Optional[float]
+    account_candidates: List[Dict[str, Any]]
+
+
+class PlaceDisconnectRequest(TypedDict, total=False):
+    expected_revision: int
 
 
 class PlaceRoomSummary(TypedDict):
@@ -623,7 +730,9 @@ __all__ = [
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
     "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
-    "PlaceConnectRequest", "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
+    "RecentWake", "RecentWakeCheck", "RecentWakesView",
+    "PlaceConnectRequest", "PlaceIcon", "PlaceReadiness", "PlaceSummary", "PlaceDisconnectRequest",
+    "PlaceOwnerAccountRequest", "PlaceUpdateRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",
     "ProjectListResponse", "ProjectCreateResponse", "ProjectUpdateRequest", "ProjectUpdateResponse",
     "ProjectFromTaskRequest", "ProjectTaskBinding", "ProjectFromTaskResponse",

@@ -475,7 +475,9 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
             if origin is not None:
                 if reply_to_relay is not None:
                     raise ContactRequestInvalid("omit reply_to_relay; Presence Main contact uses its host-bound source")
-                return send_main_message(ctx, text, origin, request_id)
+                receipt = send_main_message(ctx, text, origin, request_id)
+                ctx._owner_message_sent = True
+                return receipt
         except ContactRequestConflict as exc:
             return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(
                 f"OWNER_CONTACT_REQUEST_CONFLICT: {exc}. The original message is unchanged. "
@@ -939,19 +941,24 @@ def _effort_switch(ctx: ToolContext, requested: str) -> tuple[str, str]:
 def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
                  answer_sha256: str | None = None, rationale: str = "",
                  acceptance_subject: dict | None = None, pending_review: str | None = None,
-                 silent: bool = False, swarm_comparison: str | None = None) -> str:
+                 silent: bool = False, swarm_comparison: str | None = None, summary: str = "") -> str:
     """Stage an author act; an own-clock or focused wake, or a schedule-born root, may choose silence."""
+    from ouroboros.consciousness_authority import is_focus_wake, is_own_clock_wake
+
+    metadata = getattr(ctx, "task_metadata", None) or {}
+    wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
+    summary = " ".join(str(summary or "").split())
+    if summary and not wake:
+        return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+            text="ERROR: COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn"))
     allow_empty = False
     if silent:
         if action != "finish":
             return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
                 text="ERROR: COMPLETION_ARGUMENT: silent requires action=finish"))
-        from ouroboros.consciousness_authority import is_focus_wake, is_own_clock_wake
         from ouroboros.dialogue_provenance import presence_caller_binding
         from ouroboros.task_results import resolve_ctx_lineage
 
-        metadata = getattr(ctx, "task_metadata", None) or {}
-        wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
         occurrence = metadata.get("schedule_occurrence")
         scheduled_root = (isinstance(occurrence, dict)
                           and str(occurrence.get("schedule_id") or "").strip()
@@ -968,7 +975,7 @@ def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
     return stage_completion_request(ctx, {
         "action": action, "answer": answer, "answer_sha256": answer_sha256,
         "rationale": rationale, "acceptance_subject": acceptance_subject,
-        "pending_review": pending_review, "wake_silent": bool(silent) or None,
+        "pending_review": pending_review, "wake_silent": bool(silent) or None, "wake_summary": summary or None,
         "swarm_comparison": swarm_comparison,
     }, allow_empty=allow_empty)
 

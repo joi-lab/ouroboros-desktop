@@ -18,7 +18,9 @@ import ouroboros.loop as loop
 from ouroboros.consciousness_authority import CONSCIOUSNESS_CATEGORY, CONSCIOUSNESS_TASK_CATEGORY
 from ouroboros.owner_mailbox import write_owner_message
 from ouroboros.task_results import load_task_result
+from ouroboros.task_finalization import quiet_finish
 from ouroboros.tools.registry import ToolRegistry
+from tests._wake_summary_shared import seed_wake
 
 TASK_ID = "wake-task"
 WAKE = {"initiator": "consciousness", "usage_category": CONSCIOUSNESS_CATEGORY, "wake_reason": "heartbeat", "wake_cause": "own_clock"}
@@ -132,6 +134,7 @@ def test_clean_silent_wake_publishes_nothing_and_keeps_its_record(wake, answer, 
     assert sends(pending) == [] and sends(drained(bus)) == [], "no final row, live or buffered"
     assert owed_rows(wake.root) == [], "boot replay owes nothing"
     assert stored["status"] == "completed" and stored.get("wake_silent") is True
+    assert quiet_finish(stored) and "owner_message_sent" not in stored
     assert stored["outcome_axes"]["execution"]["status"] == "ok"
     assert stored["result"] == (answer or ""), "internal words are retained, not erased"
     assert "​" not in json.dumps(stored, ensure_ascii=False)
@@ -152,6 +155,114 @@ def test_internal_work_and_earlier_sends_remain(wake):
     pending, stored = emit(wake, text, usage, trace, bus=bus)
     assert sends(pending) == [] and sends(drained(bus)) == []
     assert stored.get("wake_silent") is True
+    assert usage["owner_message_sent"] is True and stored["owner_message_sent"] is True
+    assert not quiet_finish(stored)
+
+
+@pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("tool", ["send_links", "send_file"])
+def test_send_family_prevents_a_quiet_finish(wake, live, tool):
+    path = wake.root / "note.txt"
+    path.write_text("A source for you.", encoding="utf-8")
+    arguments = {"file_path": str(path)} if tool == "send_file" else {
+        "title": "A source for you", "links": [{"label": "Source", "url": "https://example.org/"}]}
+    text, usage, trace, bus = wake.run([call(tool, arguments), finish("Private note.", silent=True)], live=live)
+    events = drained(bus) if live else wake.ctx.pending_events
+    assert any(row.get("type") == ("send_document" if tool == "send_file" else "send_links") for row in events)
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert stored["wake_silent"] is True and stored.get("owner_message_sent") is True
+    assert not quiet_finish(stored)
+
+
+@pytest.mark.parametrize("cause", ["own_clock", "focus"])
+@pytest.mark.parametrize("action,silent", [("finish", True), ("finish", False), ("stop", False)])
+def test_wake_summary_titles_the_stored_wake_without_changing_its_words(wake, cause, action, silent):
+    metadata = {**WAKE, "wake_cause": cause}
+    summary = "Проверил состояние системы; вмешательство не требуется."
+    text, usage, trace, bus = wake.run([finish(
+        "Whole note.\n\nSecond paragraph stays as written.", action=action,
+        silent=silent, rationale="The remaining probe can wait.", summary="  Проверил\n состояние\tсистемы; вмешательство не требуется.  ")], metadata=metadata)
+    assert usage["wake_summary"] == summary
+    seed_wake(wake.root, task_id=TASK_ID)
+    _, stored = emit(wake, text, usage, trace, bus=bus, metadata=metadata)
+    assert stored["wake_summary"] == stored["suggested_name"] == summary
+    assert "summary" not in stored, "generic summary would override result in project dialogue"
+    assert stored["result"] == "Whole note.\n\nSecond paragraph stays as written."
+
+
+@pytest.mark.parametrize("summary", [None, "", " \n\t"])
+def test_absent_summary_keeps_the_existing_title(wake, summary):
+    text, usage, trace, bus = wake.run([finish(silent=True, **({"summary": summary} if summary is not None else {}))])
+    before = seed_wake(wake.root, task_id=TASK_ID)
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert "wake_summary" not in usage and "wake_summary" not in stored
+    assert stored["suggested_name"] == before["suggested_name"]
+
+
+@pytest.mark.parametrize("arguments", [{}, {"summary": ""}, {"summary": None}])
+def test_ordinary_finish_accepts_an_omitted_empty_or_null_summary(wake, arguments):
+    from ouroboros.tools.control_runtime import _finish_task
+
+    wake.ctx.task_metadata = {}
+    result = _finish_task(wake.ctx, action="finish", answer="x", **arguments)
+    assert "completion_requested" in result and "TOOL_ERROR" not in result
+    assert wake.ctx._completion_request["answer"] == "x"
+    assert "wake_summary" not in wake.ctx._completion_request
+
+
+@pytest.mark.parametrize("cause,title", [("own_clock", "Own time"), ("focus", "Research room")])
+@pytest.mark.parametrize("summary", ["", "S2"])
+@pytest.mark.parametrize("reset_at_start", [False, True])
+def test_retry_does_not_inherit_the_previous_attempts_summary(wake, cause, title, summary, reset_at_start):
+    from ouroboros.task_results import write_task_result
+    from ouroboros.task_store import patch_document
+
+    metadata = {**WAKE, "wake_cause": cause, "focus": {"label": "Research room"}}
+    seed_wake(wake.root, task_id=TASK_ID, status="running", task_attempt=1,
+              metadata=metadata, suggested_name=title, title="")
+    text, usage, trace, bus = wake.run([finish("First note", silent=True, summary="S1")], metadata=metadata)
+    _, first = emit(wake, text, usage, trace, bus=bus, metadata=metadata)
+    assert first["wake_summary"] == first["suggested_name"] == "S1"
+    enriched = write_task_result(wake.root, TASK_ID, first["status"], cost_usd=0.1)
+    assert enriched["wake_summary"] == enriched["suggested_name"] == "S1", "same-attempt enrichment keeps authorship"
+    # Explicit reopen owns lifecycle; the merge writer must scope carried words itself.
+    patch_document(wake.root, TASK_ID, lambda row: {**row, "status": "running"})
+    if reset_at_start:
+        running = write_task_result(wake.root, TASK_ID, "running", task_attempt=2)
+        assert not running.get("wake_summary") and running["suggested_name"] == title
+    text, usage, trace, bus = wake.run([finish("Second note", silent=True, summary=summary)], metadata=metadata)
+    _, second = emit(wake, text, usage, trace, bus=bus, metadata=metadata)
+    assert second.get("wake_summary") == (summary or None)
+    assert second["suggested_name"] == (summary or title)
+    assert second["result"] == "Second note" and not second.get("title") and "summary" not in second
+
+
+@pytest.mark.parametrize("metadata,direct", [({}, True), (SCHEDULE, False),
+    ({"initiator": "consciousness", "usage_category": CONSCIOUSNESS_TASK_CATEGORY}, False), (WAKE, False)])
+@pytest.mark.parametrize("action", ["finish", "stop"])
+def test_summary_refuses_non_wakes_but_empty_summary_keeps_ordinary_completion(wake, metadata, direct, action):
+    from ouroboros.tools.control_runtime import _finish_task
+
+    wake.ctx.task_metadata, wake.ctx.is_direct_chat = metadata, direct
+    wake.ctx._active_builtin_tool_result = None
+    rejected = _finish_task(wake.ctx, action=action, answer="Answer", rationale="Unfinished", summary="A line")
+    assert "COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn" in rejected
+    assert wake.ctx._active_builtin_tool_result.code == "TOOL_ARG_ERROR"
+    assert getattr(wake.ctx, "_completion_request", None) is None
+    assert "completion_requested" in _finish_task(wake.ctx, action=action, answer="Answer", rationale="Unfinished", summary=" \n")
+    assert "wake_summary" not in wake.ctx._completion_request
+
+
+def test_finish_schema_offers_optional_summary():
+    from ouroboros.tools.control import get_tools
+
+    entry = next(entry for entry in get_tools() if entry.name == "finish_task")
+    parameters = entry.schema["parameters"]
+    assert parameters["properties"]["summary"]["type"] == "string"
+    assert parameters["properties"]["summary"]["default"] == ""
+    assert "summary" not in parameters["required"]
+    assert "silent=true sends no message (any answer stays your internal note)" in entry.schema["description"]
+    assert "no owner-facing line" not in entry.schema["description"]
 
 
 def test_silent_terminal_ships_no_deferred_mid_turn_send_early(wake):
@@ -511,12 +622,14 @@ def test_cold_continuation_carries_the_quiet_selection_and_reply_mark(wake):
     ctx._delivery_candidate = DeliveryCandidate(full_text="internal", content_sha256="a" * 64, revision=1,
                                                 evidence_revision=0, evidence_fingerprint="",
                                                 acceptance_binding={}, quiet=True)
-    ctx._completion_selected = {"action": "finish", "answer": "internal", "wake_silent": True}
+    ctx._completion_selected = {"action": "finish", "answer": "internal", "wake_silent": True,
+                                "wake_summary": "Checked the journal."}
     ctx._owner_reply_revision = 2
     state = json.loads(json.dumps(continuation_state(ctx, [], {}, {}, 3, [], set())))
     ctx._delivery_candidate = ctx._completion_selected = ctx._owner_reply_revision = None
     restore_continuation_state(wake.registry, state, [], {}, {}, set())
     assert ctx._delivery_candidate.quiet is True and ctx._completion_selected["wake_silent"] is True
+    assert ctx._completion_selected["wake_summary"] == "Checked the journal."
     assert ctx._owner_reply_revision == 2
     # A resumed boundary without the selection (a new execution id) re-asks instead of publishing.
     ctx._completion_selected = None
@@ -576,25 +689,34 @@ def _resume_in_new_process(wake, monkeypatch, wait):
 INTERNAL = "INTERNAL: journal read, nothing new."
 
 
-def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch):
-    wait = _park_after_selection(wake, monkeypatch, [finish(INTERNAL, silent=True)])
+@pytest.mark.parametrize("summary", ["", "Checked the journal."])
+@pytest.mark.parametrize("sent", [False, True])
+def test_cold_resume_completes_the_restored_quiet_selection_silently(wake, monkeypatch, summary, sent):
+    responses = [call("send_user_message", {"text": "A visible progress update."})] if sent else []
+    wait = _park_after_selection(wake, monkeypatch, [*responses, finish(INTERNAL, silent=True, summary=summary)])
+    assert bool(getattr(wake.ctx, "_owner_message_sent", False)) is sent
     _resume_in_new_process(wake, monkeypatch, wait)
     text, usage, trace, bus = wake.run([{"content": ""}])
     assert usage.get("wake_silent") is True and text == INTERNAL
     pending, stored = emit(wake, text, usage, trace, bus=bus)
     assert sends(pending) == [] and sends(drained(bus)) == [] and owed_rows(wake.root) == []
     assert stored["result"] == INTERNAL and stored.get("wake_silent") is True
+    assert stored.get("wake_summary", "") == summary and usage.get("wake_summary", "") == summary
+    assert "summary" not in stored
+    assert bool(stored.get("owner_message_sent")) is sent
+    assert quiet_finish(stored) is (not sent)
 
 
-def test_cold_resume_new_owner_words_void_the_quiet_selection_without_leaking(wake, monkeypatch):
+@pytest.mark.parametrize("summary", ["", "Checked the tests."])
+def test_cold_resume_new_owner_words_void_the_quiet_selection_without_leaking(wake, monkeypatch, summary):
     wait = _park_after_selection(wake, monkeypatch, [
         wake.owner_writes("Status?", call("chat_history", {}), "m1"),
         call("send_user_message", {"text": "Quiet day."}),
-        finish(INTERNAL, silent=True)])
+        finish(INTERNAL, silent=True, summary="Stale journal line.")])
     _resume_in_new_process(wake, monkeypatch, wait)
     write_owner_message(wake.root, "Actually, what about the tests?", TASK_ID, msg_id="m2")
     text, usage, trace, bus = wake.run([{"content": ""}, finish(silent=True), {"content": ""},
-                                        finish("Tests pass.")])
+                                        finish("Tests pass.", summary=summary)])
     assert wake.ctx._owner_reply_revision == 1, "the restored mark covers m1, not the new m2"
     reasons = [row["reason"] for row in trace.get("completion_refusals") or []]
     assert any(reason.startswith("owner_reply_owed") for reason in reasons)
@@ -602,6 +724,8 @@ def test_cold_resume_new_owner_words_void_the_quiet_selection_without_leaking(wa
     pending, stored = emit(wake, text, usage, trace, bus=bus)
     spoken = json.dumps([sends(pending), sends(drained(bus)), owed_rows(wake.root)], ensure_ascii=False)
     assert "Tests pass." in spoken and INTERNAL not in spoken
+    assert usage.get("wake_summary", "") == stored.get("wake_summary", "") == summary
+    assert "Stale journal line." not in spoken and "summary" not in stored
 
 
 def test_cold_resume_restored_reply_mark_still_answers_earlier_owner_words(wake, monkeypatch):
@@ -613,6 +737,45 @@ def test_cold_resume_restored_reply_mark_still_answers_earlier_owner_words(wake,
     _resume_in_new_process(wake, monkeypatch, wait)
     text, usage, trace, _ = wake.run([finish(silent=True)])  # a fresh selection after the restored one
     assert usage.get("wake_silent") is True and not trace.get("completion_refusals")
+
+
+@pytest.mark.parametrize("hard_rail", [False, True])
+def test_authored_stop_publishes_a_summary_only_when_accepted(wake, monkeypatch, hard_rail):
+    from ouroboros import loop_budget
+
+    fallback, rails = loop._forced_fallback_result, []
+
+    def record_rail(*args, **kwargs):
+        rails.append(kwargs["source"])
+        return fallback(*args, **kwargs)
+
+    monkeypatch.setattr(loop, "_forced_fallback_result", record_rail)
+    monkeypatch.setattr(loop_budget, "authored_completion_budget_exhausted", lambda *a: hard_rail)
+    text, usage, trace, bus = wake.run([finish("Unfinished note.", action="stop", rationale="One probe remains.",
+                                               summary="Checked what I could.")])
+    assert len(wake.calls) == 1
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    if hard_rail:
+        assert rails == ["authored_stop_at_hard_rail"] and trace["forced_finalization"]
+        assert "wake_summary" not in usage and "wake_summary" not in stored
+    else:
+        assert not rails and "forced_finalization" not in trace
+        assert stored["wake_summary"] == stored["suggested_name"] == "Checked what I could."
+    assert "summary" not in stored
+
+
+def test_forced_exit_discards_a_carried_sentence_even_with_retained_candidate(wake, monkeypatch):
+    original = loop._record_forced_finalization
+
+    def carried_sentence(ctx, *args, **kwargs):
+        ctx.accumulated_usage["wake_summary"] = "A stale checkpoint's sentence."
+        return original(ctx, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "_record_forced_finalization", carried_sentence)
+    _control_at_admission_close(wake, monkeypatch, "deadline", expire=True)
+    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True, summary="Unaccepted sentence.")])
+    _, stored = emit(wake, text, usage, trace, bus=bus)
+    assert trace["forced_finalization"] and "wake_summary" not in usage and "wake_summary" not in stored
 
 
 # --- forced rails after a quiet selection -------------------------------------------------
@@ -663,7 +826,7 @@ def test_forced_rail_retaining_quiet_bytes_publishes_only_the_host_notice(wake, 
     from ouroboros.task_finalization import build_sealed_final_package
 
     injected = _control_at_admission_close(wake, monkeypatch, control, expire=expire)
-    text, usage, trace, bus = wake.run([finish(internal or None, silent=True)])
+    text, usage, trace, bus = wake.run([finish(internal or None, silent=True, summary="Checked the probe.")])
     assert injected and len(wake.calls) == 1, "no paid wrap-up call"
     assert trace["forced_finalization"]["source"] == source
     assert text == internal and usage.get("wake_silent") is True
@@ -675,13 +838,14 @@ def test_forced_rail_retaining_quiet_bytes_publishes_only_the_host_notice(wake, 
     spoken = _spoken(wake, pending, bus)
     assert owed_rows(wake.root) and (not internal or internal not in spoken), "the notice is owed, never the words"
     assert stored["result"] == internal and stored.get("wake_silent") is True
+    assert "wake_summary" not in usage and "wake_summary" not in stored
     assert build_sealed_final_package(stored, shown[0]["text"])["final_result_text"] == ""
 
 
 def test_forced_wrap_up_with_new_ordinary_words_speaks_them(wake, monkeypatch):
     """A wrap-up the model authors afresh replaces the quiet candidate and is ordinary speech."""
     _control_at_admission_close(wake, monkeypatch, "deadline")
-    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True),
+    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True, summary="Checked the probe."),
                                         {"role": "assistant", "content": "Wrap-up: the probe is still red."}])
     assert len(wake.calls) == 2 and trace["forced_finalization"]["source"] == "model"
     assert "wake_silent" not in usage and text == "Wrap-up: the probe is still red."
@@ -689,6 +853,7 @@ def test_forced_wrap_up_with_new_ordinary_words_speaks_them(wake, monkeypatch):
     spoken = _spoken(wake, pending, bus)
     assert "Wrap-up: the probe is still red." in spoken and INTERNAL not in spoken
     assert "wake_silent" not in stored
+    assert "wake_summary" not in usage and "wake_summary" not in stored
 
 
 def test_forced_retention_of_stale_quiet_bytes_stays_internal(wake, monkeypatch):

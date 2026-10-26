@@ -5,7 +5,7 @@ import asyncio
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from ouroboros.gateway._helpers import request_drive_root, run_sync_to_completion
-from ouroboros.places import AUTHOR_OWNER, PlaceError, edit_place, place_room_index
+from ouroboros.places import AUTHOR_OWNER, PlaceError, edit_place, get_place, place_room_index
 from ouroboros.place_projection import connect_declared_place, place_view, places_view
 from ouroboros.store import StoreError
 
@@ -42,12 +42,17 @@ async def api_places(request):
         if request.method == "GET":
             return JSONResponse(await asyncio.to_thread(places_view, root))
         if request.method == "DELETE":
-            await run_sync_to_completion(edit_place, root, place_id, "disconnect", author=AUTHOR_OWNER)
+            raw = await request.body()
+            body = await request.json() if raw else {}
+            if not isinstance(body, dict) or set(body) - {"expected_revision"}:
+                raise PlaceError("place_update_invalid")
+            await run_sync_to_completion(edit_place, root, place_id, "disconnect", author=AUTHOR_OWNER,
+                                         expected_revision=body.get("expected_revision"))
             return JSONResponse({"ok": True})
         body = await request.json()
         if place_id:
             return JSONResponse(await run_sync_to_completion(update_place, root, place_id, body))
-        if not isinstance(body, dict) or set(body) - {"connector", "account_id", "conversation_id"}:
+        if not isinstance(body, dict) or set(body) - {"connector", "account_id", "conversation_id", "label"}:
             raise PlaceError("place_connect_invalid")
         if not isinstance(body.get("connector"), str):
             raise PlaceError("place_connect_invalid", "connector")
@@ -55,8 +60,18 @@ async def api_places(request):
             return {"ok": True, "place": place_view(root, connect_declared_place(root, **body))}
         return JSONResponse(await run_sync_to_completion(connect))
     except (ValueError, TypeError) as exc:
-        return JSONResponse({"ok": False, "error": str(exc), "code": getattr(exc, "code", "place_invalid")},
-                            status_code=409 if getattr(exc, "code", "") == "place_revision_conflict" else 400)
+        conflict = getattr(exc, "code", "") == "place_revision_conflict"
+        result = {"ok": False, "error": str(exc), "code": getattr(exc, "code", "place_invalid")}
+        if conflict:
+            def current():
+                try:
+                    return place_view(root, get_place(root, place_id))
+                except PlaceError as error:
+                    if error.code != "place_not_found":
+                        raise
+                    return None
+            result["place"] = await asyncio.to_thread(current)
+        return JSONResponse(result, status_code=409 if conflict else 400)
 
 
 async def api_place_rooms(request):

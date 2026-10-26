@@ -70,3 +70,32 @@ def test_hub_pointer_optional_fields_do_not_change_schema(tmp_path):
     assert catalog._hub_entry({**entry, "connects": True}, "connector", tmp_path)["connects"] == []
     assert catalog._hub_entry({**entry, "connects": "true", "icon": "https://example.test/icon.svg"},
                               "connector", tmp_path)["icon"] == {}
+
+
+@pytest.mark.parametrize("facts,wakes", [
+    (["mention", {"id": "signal.words", "label": "Words you chose appear"}], ["mention", "signal.words"]),
+    ([], []), (["any_message", "from_bot"], ["from_bot"]),
+])
+def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes):
+    clean, errors = validate_contributions(manifest(
+        [{**PLACE, "facts": facts, "wakes": wakes}], kind="extension", permissions=["presence"]))
+    assert not errors
+    row, = project_contributions("connector", clean, "reviewed")
+    assert row["facts"] == facts and row["wakes"] == wakes
+
+
+@pytest.mark.parametrize("patch", [
+    {"facts": ["mention"], "wakes": ["reply_to_me"]},
+    {"facts": [], "wakes": ["mention"]}, {"wakes": ["signal.words"]},
+    {"facts": ["signal.words"]}, {"facts": ["unknown"]}, {"facts": "mention"},
+    {"facts": ["mention", "mention"]},
+    *[{"facts": [{"id": value, "label": "Words"}]} for value in
+      ("mention", "signal.", "signal.Upper", "signal.a.b", "signal." + "a" * 41)],
+    {"facts": [{"id": "signal.words", "label": ""}]},
+    {"facts": [{"id": "signal.words", "label": "Words", "pattern": "text"}]},
+])
+def test_invalid_facts_drop_only_invalid_contribution(patch):
+    good = {**PLACE, "wakes": ["mention"]}  # no facts keeps existing core vocabulary
+    clean, errors = validate_contributions(manifest(
+        [good, {**PLACE, "id": "invalid", **patch}], kind="extension", permissions=["presence"]))
+    assert len(errors) == 1 and [row["id"] for row in clean] == ["place"]

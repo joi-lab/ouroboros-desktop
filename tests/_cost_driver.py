@@ -409,6 +409,15 @@ def _heartbeats(root: pathlib.Path) -> None:
         write_task_result(root, task_id, "running", ts=utc_now_iso())
 
 
+def _addressed_stream(root: pathlib.Path, result: Dict[str, Any]) -> None:
+    """``B9``: the memory's addressed chat reader over the whole stream (``chat_chain.iter_rows``: every
+    room's open rows come through it, and Main's view reads them on each turn). It reads rows in proportion
+    to the stream it is asked for; tests/test_cost_contract.py holds its read transactions to a few a page."""
+    from ouroboros import chat_chain
+
+    result["B9_rows"] = sum(1 for _entry in chat_chain.iter_rows(root))
+
+
 def _duty_rows(sm: Any) -> List[Any]:
     """The inventory the dispatcher starts from. An older body without the declaration (the negative
     control on the body that broke the owner's install) is read by the latch and runner names its
@@ -767,6 +776,7 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
                 _request(meter, client, result, "R_activew", "GET", f"/api/chat/history?chat_id={facts['active_chat_id']}")
                 _request(meter, client, result, "B5", "POST", f"/api/tasks/{CURRENT['stop_root']}/cancel",
                          json={"cascade": True})
+                _boundary(meter, result, "B9", lambda: _addressed_stream(root, result))
                 if facts.get("held_runs"):  # a root with the duties' shapes: B8 first, then B7
                     _heartbeats(root)
                     _measure_boundaries(meter, srv, result, root, facts)

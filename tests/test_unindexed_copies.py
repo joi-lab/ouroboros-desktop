@@ -122,8 +122,8 @@ def test_an_interrupted_refresh_keeps_the_path_the_engine_thread_is_bound_to(tmp
     rc.bind_checking_thread(root, TASK, "plan_review:critic", "engine-thread")
     remove = rc._remove_checking_area
 
-    def dies_after_removing(path):
-        remove(path)
+    def dies_after_removing(path, *recorded):
+        remove(path, *recorded)
         if path == bound:
             raise _Interrupted()
 

@@ -1,4 +1,8 @@
-"""Native filesystem controls for immutable delegated evidence; run on Windows CI."""
+"""Native filesystem controls for immutable delegated evidence; run on Windows CI.
+
+The copy stays because a Git repository the run made inside it cannot be saved in its
+result (``tests/test_delegate_capture_generations._prepared``), so later evidence
+generations keep happening on it."""
 from __future__ import annotations
 
 import os
