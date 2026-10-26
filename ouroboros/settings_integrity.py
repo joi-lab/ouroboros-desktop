@@ -187,11 +187,7 @@ def runtime_environ() -> dict[str, str]:
 
 
 def _actor_project(scope: tuple[Path, Mapping]) -> str:
-    """The actor's current room, including descendants of a converted task.
-
-    RoomResolver owns lineage; the admitted caller supplies the facts a new
-    direct turn has not stored yet. A working directory is not a room.
-    """
+    """Current room from lineage or admitted facts, never a working directory."""
     from ouroboros.project_admission import reserved_project_for_chat
     from ouroboros.projects_registry import RoomResolver, get_reserved_project
 
@@ -294,10 +290,7 @@ def live_effort_range() -> dict[str, str]:
 
 
 def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None = None) -> str:
-    """Current room choice; autonomous work keeps its independent delegation controls.
-
-    Explicit actor facts serve host admission before a worker binds its private scope.
-    """
+    """Live room choice from explicit or bound actor facts; autonomous work keeps its controls."""
     from ouroboros import config
     from ouroboros.composer_cognition import read_cognition
 
@@ -313,7 +306,7 @@ def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None 
 
 def record_subagents_admission(task: dict, drive_root: Path) -> None:
     """A root's admission fact for telemetry, never a future-round authority."""
-    task.setdefault("metadata", {})["subagents_mode"] = live_subagents_mode(task=task, drive_root=drive_root)
+    task.setdefault("metadata", {})["subagents_mode"] = effective_subagents_mode(task=task, drive_root=drive_root)
 
 
 def room_subagents_mode_applies() -> bool:
@@ -331,12 +324,14 @@ def actor_subagents_availability() -> str | None:
     return subagents_availability(config.load_settings()) if snapshot and snapshot.actor_scope else None
 
 
-def effective_subagents_mode() -> str:
+def effective_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None = None) -> str:
     """Settings can withhold the catalog without changing the saved room choice."""
     from ouroboros import config
     from ouroboros.subagent_runtime import subagents_availability
 
-    return live_subagents_mode() if subagents_availability(config.load_settings()) == "available" else "off"
+    if subagents_availability(config.load_settings()) != "available":
+        return "off"
+    return live_subagents_mode(task=task, drive_root=drive_root)
 
 
 def read_environ() -> Mapping:

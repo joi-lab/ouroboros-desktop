@@ -339,7 +339,7 @@ Orphan cancellation needs readable terminal owner-finish evidence or the owner's
 
 `settings_integrity.live_subagents_mode()` reads current room lineage at each new helper/session admission and round (§7). Off hides both context catalogs and refuses `schedule_subagent`/new `delegate_start` with `subagents_off_in_room`: “Subagents are off in this chat; my human can switch the Subagents capsule.” Admitted children finish; `review_pool_slots` ignores room mode. Settings-off masks the saved choice; consciousness/Evolve retain independent controls.
 
-`loop_messages` puts `Subagents: Swarm — set by my human for this chat` (Off/Auto likewise, or `off in Settings`) in the dynamic round tail. SYSTEM Delegation defines Auto judgment and Swarm breadth; words outrank mode except Off, without wider authority or a plan obligation. Owner rows record live `subagents_mode:"swarm"` at acceptance for echo/history; root metadata records admission mode for fan-out/efficiency. Retries and later switches preserve these historical facts. Receipts expose observed helpers/models, known cost plus unfinished counts, and subscription sessions.
+`loop_messages` puts `Subagents: Swarm — set by my human for this chat` (Off/Auto likewise, or `off in Settings`) in the dynamic round tail. SYSTEM Delegation defines Auto judgment and Swarm breadth; words outrank mode except Off, without wider authority or a plan obligation. Owner rows record effective `subagents_mode:"swarm"` at acceptance for echo/history; root metadata records effective admission mode for fan-out/efficiency. Retries and later switches preserve these historical facts. Receipts expose observed helpers/models, known cost plus unfinished counts, and subscription sessions.
 
 #### Dispatch, route health and history
 

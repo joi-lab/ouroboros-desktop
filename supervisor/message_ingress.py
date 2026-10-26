@@ -214,10 +214,10 @@ def _chat_record(
             "task_id": str(task_id or ""),
         }
         if direction == "in":
-            from ouroboros.settings_integrity import live_subagents_mode
+            from ouroboros.settings_integrity import effective_subagents_mode
 
             record["message_accepted_at"] = utc_now_iso()
-            if live_subagents_mode(task={"chat_id": chat_id}, drive_root=root) == "swarm":
+            if effective_subagents_mode(task={"chat_id": chat_id}, drive_root=root) == "swarm":
                 record["subagents_mode"] = "swarm"
         if direction == "in" and source == "web" and client_message_id and require_write:
             # The canonical append is the proof used by the live echo. Keep it

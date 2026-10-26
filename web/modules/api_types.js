@@ -1,6 +1,5 @@
 /** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`; the interface-language envelopes (`UiI18n*`) sit in ./ui_i18n_types.js, the model-route previews in ./model_route_types.js, the Dashboard storage envelopes (`Storage*`) in ./storage_types.js, the Dashboard Evolution history (`Evolution*`) in ./evolution_types.js, the MCP import preview in ./mcp_import_types.js, the replaceable-client envelopes (`ServedUiState`, setup bootstrap, `/api/contract`, chat history rows, journey request bodies) in ./client_contract_types.js, the product-management envelopes (skills, marketplaces, accounts, local model, MCP, update status) in ./management_contract_types.js, the owner-decision ingress in ./decision_types.js. */
-/**
- * @typedef {Object} CostPresentation
+/** @typedef {Object} CostPresentation
  * @property {'own'|'root_tree'} scope
  * @property {?number} tracked_amount
  * @property {boolean} has_unpriced
@@ -8,15 +7,13 @@
  * @property {boolean} accounting_open
  * @property {boolean} has_rows
  */
-/**
- * @typedef {Object} CostCustody
+/** @typedef {Object} CostCustody
  * @property {'available'|'unavailable'} status
  * @property {Array<string>} open_run_ids
  * @property {Array<string>} unrecorded_run_ids
  * @property {Array<string>} pending_invocation_ids
  */
-/**
- * @typedef {Object} StateResponse
+/** @typedef {Object} StateResponse
  * @property {number} uptime
  * @property {number} workers_alive
  * @property {number} workers_total
@@ -69,8 +66,7 @@
  * @property {Array<Object>} works_gaps  // typed gaps of the work projection
  * @property {import('./client_contract_types.js').ServedUiState=} served_ui  // this generation's main interface; absent on older cores
  */
-/**
- * @typedef {Object} BootDocument  // GET /api/health.boot and GET /api/state.boot: the serving generation's phases
+/** @typedef {Object} BootDocument  // GET /api/health.boot and GET /api/state.boot: the serving generation's phases
  * @property {'starting'|'serving'|'ready'|'failed'} phase
  * @property {string} since
  * @property {boolean} dialogue_ready  // an owner message is accepted durably
@@ -106,8 +102,7 @@
 /** @typedef {import('./task_activity_types.js').ToolVerificationFact} ToolVerificationFact */
 /** @typedef {import('./evolution_types.js').EvolutionRefresh} EvolutionRefresh */
 /** @typedef {import('./evolution_types.js').EvolutionDataResponse} EvolutionDataResponse */
-/**
- * @typedef {Object} HealthResponse
+/** @typedef {Object} HealthResponse
  * @property {"ok"} status
  * @property {string} version
  * @property {string} runtime_version
@@ -115,58 +110,49 @@
  * @property {string=} abi_version  // gateway ABI carrier; absent on cores older than GET /api/contract
  * @property {BootDocument=} boot  // the serving generation's phases; answered while the boot runs
  */
-/**
- * @typedef {Object} OpenAICompatibleModelsResponse
+/** @typedef {Object} OpenAICompatibleModelsResponse
  * @property {string[]} models
  * @property {string=} error
  */
-/**
- * @typedef {Object} ProviderTestRequest
+/** @typedef {Object} ProviderTestRequest
  * @property {string} provider_id
  * @property {Object<string, string>=} overrides
  */
-/**
- * @typedef {Object} ProviderTestResponse
+/** @typedef {Object} ProviderTestResponse
  * @property {boolean} ok
  * @property {string=} error
  */
-/**
- * @typedef {Object} AvailableSubagentRoute
+/** @typedef {Object} AvailableSubagentRoute
  * @property {'api_model'|'agent_session'} kind
  * @property {string} target_id
  * @property {string=} credential_profile_id
  */
-/**
- * @typedef {Object} AvailableSubagentItem
+/** @typedef {Object} AvailableSubagentItem
  * @property {string} subagent_id
  * @property {boolean=} enabled - Omitted means true; false withdraws new selections.
  * @property {string} recommended_use
  * @property {AvailableSubagentRoute} route
  * @property {string=} effort
  */
-/**
- * @typedef {Object} AvailableSubagentsSetting
+/** @typedef {Object} AvailableSubagentsSetting
  * @property {boolean} enabled
  * @property {AvailableSubagentItem[]} items
  */
-/**
- * @typedef {Object} AvailableSubagentsSettingsMeta
+/** @typedef {Object} AvailableSubagentsSettingsMeta
  * @property {string=} source
  * @property {string=} diagnostic
  * @property {Object[]=} diagnostics
  * @property {Object|null=} candidate
  * @property {boolean=} automatic The read's own unsaved catalog, following Main and access.
  */
-/**
- * @typedef {Object} SettingsMeta
+/** @typedef {Object} SettingsMeta
  * @property {string[]=} custom_secret_keys
  * @property {Object=} setup_contract
  * @property {AvailableSubagentsSettingsMeta=} available_subagents
  * @property {SettingsPolicyState=} policy_state
  * @property {{restart_required:boolean,restart_keys:string[],restart_source_unknown_keys:string[],unknown_keys:string[],local_model:Object,summary:string}=} restart_state Component application and source uncertainty.
  */
-/**
- * @typedef {Object} SettingsPolicyState
+/** @typedef {Object} SettingsPolicyState
  * @property {{configured:string,effective:string,current_process:string,next_task:string,restart_required:boolean,applies:string}} access
  * @property {{configured:string,effective:string,current_process:string,next_task:string,pending:boolean,applies:string,active_task_snapshot:boolean}} supervisor
  * @property {{configured:string,effective:string,current_process:string,next_task:string,pending:boolean,applies:string,active_task_snapshot:boolean}} review
@@ -190,16 +176,14 @@
  * declarations as onboarding completion. It returns a canonical editable actor list without persisting anything.
  * @typedef {OnboardingCompleteRequest} OnboardingSubagentsPreviewRequest
  */
-/**
- * @typedef {Object} OnboardingSubagentsPreviewResponse
+/** @typedef {Object} OnboardingSubagentsPreviewResponse
  * @property {boolean} ok
  * @property {Object} model_settings  // the model setting keys the draft would save
  * @property {AvailableSubagentsSetting} available_subagents
  * @property {string} source
  * @property {Object[]} diagnostics
  */
-/**
- * @typedef {Object} OnboardingPresetProjection
+/** @typedef {Object} OnboardingPresetProjection
  * @property {boolean} applied
  * @property {string} reason  // not_requested | not_install_time | skipped_by_owner | configured_by_owner | applied
  * @property {string[]} harnesses
@@ -240,8 +224,7 @@
  * @property {boolean} can_skip
  * @property {boolean} saved
  */
-/**
- * @typedef {Object} ChatInbound
+/** @typedef {Object} ChatInbound
  * @property {string=} reply_to
  * @property {"chat"} type
  * @property {string} content
@@ -255,8 +238,7 @@
  */
 /** @typedef {import('./client_contract_types.js').CommandInbound} CommandInbound */
 /** @typedef {import('./client_contract_types.js').PanicAcceptedOutbound} PanicAcceptedOutbound */
-/**
- * @typedef {Object} ChatOutbound
+/** @typedef {Object} ChatOutbound
  * @property {import('./client_contract_types.js').PresenceContact=} presence_contact
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
  * @property {string=} closed_reason
@@ -499,8 +481,7 @@
  * @property {string=} reply_to_relay
  * @property {string=} kind
  */
-/**
- * @typedef {Object} TypingOutbound
+/** @typedef {Object} TypingOutbound
  * @property {"typing"} type
  * @property {string} action
  * @property {number=} chat_id  // multi-project: routes the indicator to the owning panel
@@ -510,8 +491,7 @@
  * @property {string=} phase
  * @property {string=} kind  // direct_chat | managed_task, empty for children and untracked tasks; kept for wire compatibility, no in-repo client reads it. A typing frame is a submission receipt, never liveness: only the /api/state census inserts into the header live-set
  */
-/**
- * @typedef {Object} PhotoOutbound
+/** @typedef {Object} PhotoOutbound
  * @property {"photo"} type
  * @property {"user"|"assistant"} role
  * @property {string} image_base64
@@ -537,8 +517,7 @@
  * @property {string=} reply_to_relay
  * @property {string=} kind
  */
-/**
- * @typedef {Object} VideoOutbound
+/** @typedef {Object} VideoOutbound
  * @property {"video"} type
  * @property {"user"|"assistant"} role
  * @property {string} video_base64
@@ -563,14 +542,12 @@
  * @property {string=} reply_to_relay
  * @property {string=} kind
  */
-/**
- * @typedef {Object} LinkAction
+/** @typedef {Object} LinkAction
  * @property {string} label
  * @property {string} url
  */
 
-/**
- * @typedef {Object} LinksOutbound
+/** @typedef {Object} LinksOutbound
  * @property {"links"} type
  * @property {"assistant"} role
  * @property {LinkAction[]} actions
@@ -588,15 +565,13 @@
  * @property {string=} kind
  */
 
-/**
- * @typedef {Object} QuizOption
+/** @typedef {Object} QuizOption
  * @property {string} label
  * @property {string=} detail
  * @property {boolean=} recommended
  */
 
-/**
- * @typedef {Object} QuizOutbound
+/** @typedef {Object} QuizOutbound
  * @property {import('./client_contract_types.js').PresenceContact=} presence_contact
  * @property {string=} wait_ended_at
  * @property {Array<Object>=} materials Validated existing artifact references.
@@ -658,8 +633,7 @@
 /** @typedef {import('./decision_types.js').DecisionRequest} DecisionRequest */
 /** @typedef {import('./decision_types.js').DecisionResponse} DecisionResponse */
 
-/**
- * @typedef {Object} DocumentOutbound
+/** @typedef {Object} DocumentOutbound
  * @property {"document"} type
  * @property {"user"|"assistant"} role
  * @property {string} file_base64
@@ -688,23 +662,20 @@
  * @property {string=} kind
  */
 
-/**
- * @typedef {Object} LogOutbound
+/** @typedef {Object} LogOutbound
  * @property {"log"} type
  * @property {Object} data
  * @property {number=} chat_id  // multi-project thread routing (v6.32.0); main chat = 1
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  */
 
-/**
- * @typedef {Object} ProjectsChangedOutbound
+/** @typedef {Object} ProjectsChangedOutbound
  * @property {"projects_changed"} type
  * @property {string=} project_id
  * @property {number=} chat_id  // new project thread; client learns it before /api/state (v6.32.0)
  */
 
-/**
- * @typedef {Object} MessageAnnotationOutbound Bubble-free update for an existing owner message.
+/** @typedef {Object} MessageAnnotationOutbound Bubble-free update for an existing owner message.
  * @property {"message_annotation"} type
  * @property {"routing_ack"} annotation_type
  * @property {number=} chat_id
@@ -783,8 +754,7 @@
  * @property {ProjectCognition} cognition
  */
 
-/**
- * @typedef {Object} ProjectDeleteResponse
+/** @typedef {Object} ProjectDeleteResponse
  * @property {boolean} ok
  * @property {string} project_id
  * @property {boolean} folder_untouched
@@ -798,8 +768,7 @@
  * @property {boolean} is_git
  */
 
-/**
- * @typedef {Object} FsDirsResponse
+/** @typedef {Object} FsDirsResponse
  * @property {string} path
  * @property {string} parent
  * @property {string} home
@@ -807,15 +776,13 @@
  * @property {boolean} truncated  // true when the dir holds more children than the 500-entry cap
  */
 
-/**
- * @typedef {Object} TaskNamedOutbound
+/** @typedef {Object} TaskNamedOutbound
  * @property {"task_named"} type
  * @property {string} task_id
  * @property {string} suggested_name  // admission-coined name of a managed task; client sets the live card title
  */
 
-/**
- * @typedef {Object} UploadResponse
+/** @typedef {Object} UploadResponse
  * @property {boolean} ok
  * @property {string} filename
  * @property {string} display_name
@@ -826,8 +793,7 @@
  * @property {{name: string, kind: ('image'|'video'|'audio'|'file'), mime: string, size: (?number|undefined), available: boolean, url: (string|undefined)}=} view  // ChatAttachmentView (chat_uploads.attachment_view): the sender's own bubble renders exactly this; `kind` proven from bytes, `url` only while available
  */
 
-/**
- * @typedef {Object} StatusResponse
+/** @typedef {Object} StatusResponse
  * @property {string} status
  */
 
@@ -839,8 +805,7 @@
  * @property {string=} reason_code
  */
 
-/**
- * @typedef {Object} HeartbeatOutbound
+/** @typedef {Object} HeartbeatOutbound
  * @property {'heartbeat'} type
  * @property {string=} ts
  */
@@ -856,8 +821,7 @@
  * @property {Object=} data
  */
 
-/**
- * @typedef {Object} GitLogResponse
+/** @typedef {Object} GitLogResponse
  * @property {Object[]} commits
  * @property {Object[]} tags  // {tag, date, sha, message}
  * @property {string} branch
@@ -879,29 +843,25 @@
  * @property {boolean=} agent_task_running
  */
 
-/**
- * @typedef {Object} OwnerRuntimeModeResponse
+/** @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode
  * @property {boolean} restart_required
  */
 
-/**
- * @typedef {Object} OwnerAutoGrantResponse
+/** @typedef {Object} OwnerAutoGrantResponse
  * @property {boolean} ok
  * @property {boolean} enabled
  */
 
-/**
- * @typedef {Object} OwnerContextModeResponse
+/** @typedef {Object} OwnerContextModeResponse
  * @property {boolean} ok
  * @property {string} context_mode
  * @property {string} project_id
  * @property {ProjectCognition} cognition
  */
 
-/**
- * @typedef {Object} EffortRange  helper min ≤ max; primary recommended independent; each an EFFORT_SCALE tier
+/** @typedef {Object} EffortRange  helper min ≤ max; primary recommended independent; each an EFFORT_SCALE tier
  * @property {string} min
  * @property {string} recommended
  * @property {string} max

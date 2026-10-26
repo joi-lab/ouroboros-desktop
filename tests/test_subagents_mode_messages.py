@@ -7,30 +7,46 @@ import pytest
 
 from ouroboros import config, projects_registry as projects
 from ouroboros.composer_cognition import update_project_cognition
+from ouroboros.subagent_runtime import subagents_availability
 from ouroboros.gateway.history import make_chat_history_endpoint
 from supervisor import message_ingress
 from tests.test_task_settings_snapshot import document, isolated_runtime, save_owner  # noqa: F401
 from tests.test_chat_attachments import _web_bridge
 
 
+def mode_settings(mode, availability):
+    values = {**document("old"), "OUROBOROS_SUBAGENTS_MODE": mode}
+    if availability == "disabled":
+        values["OUROBOROS_SUBAGENTS"] = '{"enabled":false,"items":[]}'
+    elif availability == "unsaved":
+        values = {"OUROBOROS_SUBAGENTS_MODE": mode, "OUROBOROS_MODEL_HEAVY": "owner/unsaved-candidate"}
+    return values
+
+
+@pytest.mark.parametrize("availability", ["available", "disabled", "unsaved"])
 @pytest.mark.parametrize("project", [False, True])
 @pytest.mark.parametrize("accepted,later", [("swarm", "off"), ("auto", "swarm"), ("off", "swarm")])
-def test_acceptance_label_survives_room_switch_and_duplicate_echo(monkeypatch, project, accepted, later):
-    values = {**document("old"), "OUROBOROS_SUBAGENTS_MODE": accepted}
+def test_acceptance_label_survives_room_switch_and_duplicate_echo(monkeypatch, project, accepted, later, availability):
+    values = mode_settings(accepted, availability)
     save_owner(values)
+    settings_reader = config.load_settings
+    if availability == "unsaved":
+        # Isolate the undecided loader result from this install's factory proposals.
+        monkeypatch.setattr(config, "load_settings", lambda: dict(values))
+    assert subagents_availability(config.load_settings()) == availability
     room = projects.create_project(config.DATA_DIR, "alpha") if project else {"chat_id": 1, "id": ""}
     bridge, echoes = _web_bridge(config.DATA_DIR, monkeypatch)
     sent = dict(broadcast=True, sender_session_id="surface", client_message_id="accepted",
                 chat_id=room["chat_id"], project_id=room["id"])
     bridge.ui_send("Owner words", **sent)
     row = message_ingress.accepted_chat_message(config.DATA_DIR, room["chat_id"], "accepted")
+    monkeypatch.setattr(config, "load_settings", settings_reader)
     if project:
         update_project_cognition(config.DATA_DIR, "alpha", subagents_mode=later)
-    else:
-        save_owner({**values, "OUROBOROS_SUBAGENTS_MODE": later})
+    save_owner(mode_settings("off" if project else later, "available"))
     bridge.ui_send("Owner words", **sent)
     assert message_ingress.accepted_chat_message(config.DATA_DIR, room["chat_id"], "accepted") == row
-    assert row.get("subagents_mode") == ("swarm" if accepted == "swarm" else None)
+    assert row.get("subagents_mode") == ("swarm" if accepted == "swarm" and availability == "available" else None)
     assert len(echoes) == 2
     assert all(echo.get("subagents_mode") == row.get("subagents_mode") for echo in echoes)
     response = asyncio.run(make_chat_history_endpoint(config.DATA_DIR)(SimpleNamespace(
@@ -52,19 +68,30 @@ def test_unannotated_legacy_history_is_readable_and_has_no_inferred_label():
 
 
 @pytest.mark.parametrize("mode", ["off", "auto", "swarm"])
-def test_direct_owner_root_records_live_admission_not_client_metadata(monkeypatch, mode):
+@pytest.mark.parametrize("availability", ["available", "disabled", "unsaved"])
+@pytest.mark.parametrize("project", [False, True])
+def test_direct_owner_root_records_effective_admission_not_client_metadata(monkeypatch, mode, availability, project):
     from ouroboros import agent as agent_module
     from supervisor import workers
     from tests.test_native_conversation_activity import _lane
 
-    save_owner({**document("old"), "OUROBOROS_SUBAGENTS_MODE": mode})
+    values = mode_settings(mode, availability)
+    save_owner(values)
+    room = projects.create_project(config.DATA_DIR, "alpha") if project else {"chat_id": 1, "id": ""}
+    if project:
+        values = mode_settings("off" if mode == "swarm" else "swarm", availability)
+        save_owner(values)
+    if availability == "unsaved":
+        monkeypatch.setattr(config, "load_settings", lambda: dict(values))
+    assert subagents_availability(config.load_settings()) == availability
     _lane(monkeypatch, config.DATA_DIR)
     seen = []
     monkeypatch.setattr(agent_module, "make_agent", lambda **kwargs: SimpleNamespace(
         handle_task=lambda task: seen.append(task) or []))
-    workers.handle_chat_direct(1, "Work", task_metadata={"subagents_mode": "forged", "force_plan": True})
+    workers.handle_chat_direct(room["chat_id"], "Work", task_metadata={
+        "subagents_mode": "forged", "force_plan": True, "project_id": room["id"]})
     assert len(seen) == 1
-    assert seen[0]["metadata"]["subagents_mode"] == mode
+    assert seen[0]["metadata"]["subagents_mode"] == (mode if availability == "available" else "off")
     assert "subagents_mode" not in seen[0]["task_contract"]
 
 
@@ -109,7 +136,7 @@ def test_state_serves_stored_main_mode_with_settings_lock():
 
     save_owner({**document("old"), "OUROBOROS_SUBAGENTS_MODE": "swarm",
                 "OUROBOROS_SUBAGENTS": '{"enabled":false,"items":[]}'})
-    response = asyncio.run(api_state(SimpleNamespace(app=SimpleNamespace(
+    response = asyncio.run(api_state(SimpleNamespace(query_params={}, app=SimpleNamespace(
         state=SimpleNamespace(drive_root=config.DATA_DIR)))))
     assert response.status_code == 200, response.body
     payload = json.loads(response.body)
