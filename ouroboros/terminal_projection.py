@@ -683,9 +683,9 @@ def _source_address(address: Any) -> str | None:
 def _stamp_entry(task_id: str, row: dict, source: str, address: Any = None) -> dict:
     """One task's stamp: the keys every page carries, then optional facts copied from the same source.
 
-    Copied, never interpreted: ``outcome_final`` and ``reason_code`` as the source
-    holds them, ``objective_status`` from its ``outcome_axes``; the axes themselves
-    stay with their source (one axis can be kilobytes of policy denials).
+    Copied, never interpreted: ``outcome_final``, ``outcome_authority`` and ``reason_code``
+    as the source holds them, ``objective_status`` from its ``outcome_axes``; the axes
+    themselves stay with their source (one axis can be kilobytes of policy denials).
     """
     entry = {"task_id": task_id, "status": str(row.get("status") or ""), "outcome": str(row.get("outcome") or ""),
              "outcome_phase": str(row.get("outcome_phase") or ""), "source": source,
@@ -695,6 +695,8 @@ def _stamp_entry(task_id: str, row: dict, source: str, address: Any = None) -> d
         entry["review_verdict"] = str(row["reason_detail"])
     if isinstance(row.get("outcome_final"), bool):
         entry["outcome_final"] = row["outcome_final"]
+    if isinstance(row.get("outcome_authority"), str) and row["outcome_authority"].strip():
+        entry["outcome_authority"] = row["outcome_authority"].strip()
     if row.get("reason_code"):
         entry["reason_code"] = str(row["reason_code"])
     axes = row.get("outcome_axes")

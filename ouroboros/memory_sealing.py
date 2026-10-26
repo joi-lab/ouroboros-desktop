@@ -5,6 +5,7 @@ import json
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
+from ouroboros.dialogue_provenance import recorded_finality
 
 
 def failed_work_units(root, store):
@@ -54,10 +55,15 @@ def _terminal_after(record):
         (record.get("covers", {}).get("stream_span") or [0, 0])[-1]))
 
 
+# The stored facts a linked row's finality is read from (``dialogue_provenance.recorded_finality``).
+_FINALITY_FACTS = ("summary_kind", "outcome_final", "outcome_authority")
+
+
 def capture_terminal_rows(root, records):
     """Group the writers' later terminal rows once, from the stored facts of the rows after the legacy frontier
     (``memory_inventory.terminal_rows``): a page's writer ran after the chronicle's activation, so its later
-    terminal rows lie after the frontier. Each is ``(address, {"type", "status"}, pos)``."""
+    terminal rows lie after the frontier. Each is ``(address, {"type", "status", <the finality facts it
+    stored>}, pos)``."""
     starts = {}
     for record in records:
         task_id = _terminal_writer(record)
@@ -77,7 +83,9 @@ def capture_terminal_rows(root, records):
         task_id = str(meta["task_id"])
         for room in memory_inventory.rooms_of_row(meta, facts):
             if (room, task_id) in starts and pos > starts[(room, task_id)]:
-                grouped.setdefault((room, task_id), []).append((address, {"type": meta.get("type"), "status": status}, pos))
+                finality = {key: meta[key] for key in _FINALITY_FACTS if key in meta}
+                grouped.setdefault((room, task_id), []).append(
+                    (address, {"type": meta.get("type"), "status": status, **finality}, pos))
     return grouped
 
 
@@ -94,6 +102,9 @@ def terminal_links(root, record, cache=None):
         addr = chat_chain.format_address(address)
         speaker = "host summary" if row.get("type") in ("task_summary", "project_completion_summary") else "task final report"
         status = row.get("status") or row.get("task_terminal_status") or "status not recorded"
+        finality = recorded_finality(row.get("outcome_final"), row.get("outcome_authority"),
+                                     host_facts=row.get("summary_kind") == "host_task_facts")
+        status += f"; {finality}" if finality else ""
         links.append(f"- Linked {speaker} of task {task_id} ({status}); not page coverage; "
                      f"memory_read(room_id='{record['room_id']}', rows=true, from='{addr}', to='{addr}')")
     return links
