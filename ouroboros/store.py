@@ -276,6 +276,21 @@ class _StoreConnection(sqlite3.Connection):
                     _settle(key, entry)
 
 
+def counted_connect(target: str, path: Any, **kwargs: Any) -> sqlite3.Connection:
+    """``sqlite3.connect`` counted on PATH's inode before any statement can take a lock (``_borrow``)."""
+    conn = sqlite3.connect(target, factory=_StoreConnection, **kwargs)
+    if os.name != "nt":
+        try:
+            key = _identity_key(os.stat(path))
+        except OSError:
+            conn.close()
+            raise
+        with _INODE_GUARD:
+            _INODES.setdefault(key, _Inode()).conns += 1
+            conn._store_key = key
+    return conn
+
+
 def _read_header(path: pathlib.Path, dir_fd: Optional[int] = None) -> bytes:
     """The first 100 bytes, read through the inode registry (``_borrow``); Windows locks belong
     to their handle, and a held handle there would block the export rename."""
@@ -637,20 +652,11 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
     query = "mode=rwc" if create else "mode=rw"
     if tier == TIER_NAME:
         query += "&vfs=" + ("win32-none" if os.name == "nt" else "unix-none")
-    conn = sqlite3.connect(f"{path.absolute().as_uri()}?{query}", uri=True, isolation_level=None,
+    conn = counted_connect(f"{path.absolute().as_uri()}?{query}", path, uri=True, isolation_level=None,
                            timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0,
-                           check_same_thread=not shared, factory=_StoreConnection)
+                           check_same_thread=not shared)
     conn.row_factory = sqlite3.Row
     conn._store_kind = store_timing.kind_of(path)
-    if os.name != "nt":  # counted before any statement can take a lock (see ``_borrow``)
-        try:
-            key = _identity_key(os.stat(path))
-        except OSError:
-            conn.close()
-            raise
-        with _INODE_GUARD:
-            _INODES.setdefault(key, _Inode()).conns += 1
-            conn._store_key = key
     try:
         conn.execute("PRAGMA synchronous = FULL")
         if journal_mode is None:

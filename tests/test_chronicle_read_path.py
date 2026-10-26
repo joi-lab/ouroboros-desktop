@@ -1,6 +1,11 @@
 """Chronicle reads: lock-free while the index is current, the publisher's locked catch-up otherwise."""
 import contextlib
 import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -60,9 +65,67 @@ def test_a_read_after_an_unprojected_append_catches_up_under_the_lock(tmp_path, 
 def test_without_enforced_kernel_locks_every_read_keeps_the_lock(tmp_path, monkeypatch):
     store = ChronicleStore(tmp_path)
     kept = _note(store, "kept")
-    monkeypatch.setitem(chronicle_store._KERNEL_LOCKS, str(store.directory), False)  # the name tier
+    monkeypatch.setattr(chronicle_store, "kernel_file_locks_enforced", lambda *_a, **_k: False)  # the name tier
     taken = _counted_locks(monkeypatch)
     assert store.get(kept["id"])["text"] == "kept" and store.room_records("r") and taken == [1, 1]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX advisory locks: any close of a descriptor drops them")
+def test_a_raw_read_of_the_index_inside_a_lock_free_read_keeps_its_snapshot_locked(tmp_path):
+    """A Files preview of ``index.sqlite3`` (``store.read_file_bytes``) during a lock-free read: the reader's
+    connection is counted on the inode like every store connection, so the preview's descriptor stays open until it
+    closes and another process cannot take the write lock under the snapshot (``store._borrow``)."""
+    from ouroboros import store
+
+    chronicle = ChronicleStore(tmp_path)
+    _note(chronicle, "kept")
+    probe = ("import sqlite3, sys\ndb = sqlite3.connect(sys.argv[1], timeout=0, isolation_level=None)\n"
+             "try:\n    db.execute('BEGIN EXCLUSIVE')\n    print('taken')\nexcept sqlite3.OperationalError:\n"
+             "    print('locked')")
+
+    def another_process_writes() -> str:
+        return subprocess.run([sys.executable, "-I", "-c", probe, str(chronicle.index_path)], capture_output=True,
+                              text=True, timeout=60).stdout.strip()
+
+    with chronicle._index() as db:  # current: the read-only connection's transaction holds SQLite's shared lock
+        assert db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 1
+        assert store.read_file_bytes(chronicle.index_path, limit=16) == b"SQLite format 3\x00"
+        assert another_process_writes() == "locked"
+    assert another_process_writes() == "taken"
+
+
+def test_a_writer_meeting_a_lock_free_reader_waits_its_own_bound_and_is_told_busy(tmp_path):
+    """Lock-free readers hold SQLite's read lock, not the publication lock: the tail facts' zero-wait writer gives up
+    at once (its rows wait for the next writer) and a publication past its wait is a typed ``TimeoutError``, never
+    SQLite's own five seconds nor an untyped error; once the reader is gone both write."""
+    import time
+
+    chronicle = ChronicleStore(tmp_path)
+    _note(chronicle, "kept")
+    expected = chronicle.tail_state()
+    with chronicle._index() as db:
+        assert db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 1
+        started = time.monotonic()
+        assert chronicle.extend_tail(expected, [], {"complete": False}, wait_sec=0) is False
+        with pytest.raises(TimeoutError, match="busy"):
+            with chronicle._publishing(wait_sec=0.2) as writer:
+                writer.execute("INSERT INTO state VALUES ('probe', '1')")
+                writer.commit()
+        assert time.monotonic() - started < 3
+    assert chronicle.extend_tail(expected, [], {"complete": False}, wait_sec=0) is True
+
+
+_JSON_ARROW = re.compile(r"->>?\s*'\$")  # SQLite's JSON operators: 3.38+, above the 3.24 floor (store.py)
+
+
+def test_no_sql_uses_the_json_arrow_operators_the_sqlite_floor_lacks():
+    """``->`` and ``->>`` need SQLite 3.38: on an install whose Python links an older SQLite (Ubuntu 22.04's
+    3.37.2) the statement does not prepare, and a capture that reads it fails whole. ``json_extract`` is at the floor."""
+    root = pathlib.Path(chronicle_store.__file__).resolve().parents[1]
+    sources = [*(root / "ouroboros").rglob("*.py"), *(root / "supervisor").rglob("*.py"), root / "server.py"]
+    assert [str(path.relative_to(root)) for path in sources if _JSON_ARROW.search(path.read_text(encoding="utf-8"))] == []
+    assert _JSON_ARROW.search("body->'$.metadata.candidate'") and _JSON_ARROW.search("body ->> '$.a'")
+    assert not _JSON_ARROW.search("json_extract(body,'$.metadata.candidate')")
 
 
 def test_a_publication_between_two_reads_is_visible_to_the_second(tmp_path):

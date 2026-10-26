@@ -57,7 +57,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
-from ouroboros import store_timing
+from ouroboros import store, store_timing
 from ouroboros.platform_layer import (acquire_exclusive_file_lock, kernel_file_locks_enforced,
                                       release_exclusive_file_lock)
 from ouroboros.utils import append_jsonl, assert_test_data_path, utc_now_iso
@@ -105,7 +105,6 @@ _RESET = ("DELETE FROM records; DELETE FROM state; DELETE FROM active_marks; DEL
           f"PRAGMA user_version={SCHEMA_VERSION};")
 
 QuoteResolver = Callable[[Any], Optional[Tuple[str, str]]]
-_KERNEL_LOCKS: Dict[str, bool] = {}  # per chronicle directory: SQLite's own locks order a reader against a commit
 
 
 class PublishResult(NamedTuple):
@@ -337,7 +336,7 @@ _ACTING_PAGES = ("SELECT json_group_array(json_array(sequence,room,id,json_extra
                  "json_extract(body,'$.ts'),json_extract(body,'$.covers.ts_span.end'))) FROM records "
                  "WHERE kind='page' AND EXISTS (SELECT 1 FROM page_rows WHERE page_id=records.id)")
 _ACTING_PARTS = ("SELECT json_group_array(json_array(id,json_extract(body,'$.author.kind'),"
-                 "body->'$.metadata.candidate')) FROM records WHERE id IN (SELECT part_id FROM folded)")
+                 "json_extract(body,'$.metadata.candidate'))) FROM records WHERE id IN (SELECT part_id FROM folded)")
 # A chunk of tail rows in ONE statement (one step), as a page is read: [pos, seq, sha, legacy text, meta text, terminal].
 _TAIL_INSERT = ("INSERT OR IGNORE INTO tail_rows SELECT json_extract(value,'$[0]'), json_extract(value,'$[1]'), "
                 "json_extract(value,'$[2]'), json_extract(value,'$[3]'), json_extract(value,'$[4]'), "
@@ -505,15 +504,13 @@ class ChronicleStore:
             db.close()
 
     def _current(self) -> Optional[sqlite3.Connection]:
-        key = str(self.directory)
-        if key not in _KERNEL_LOCKS:
-            if not self.index_path.exists():
-                return None
-            _KERNEL_LOCKS[key] = kernel_file_locks_enforced(self.lock_path)
-        if not _KERNEL_LOCKS[key]:
+        # The platform layer keeps each directory's decided lock tier; an undecided probe is asked again.
+        if not self.index_path.exists() or not kernel_file_locks_enforced(self.lock_path):
             return None
         try:
-            db = sqlite3.connect(f"{self.index_path.absolute().as_uri()}?mode=ro", uri=True)
+            # Counted like every store connection: a raw read of this file never closes a descriptor under the
+            # snapshot (POSIX drops this process's locks on any close; ``store._borrow``).
+            db = store.counted_connect(f"{self.index_path.absolute().as_uri()}?mode=ro", self.index_path, uri=True)
         except sqlite3.Error:
             return None
         try:
@@ -537,20 +534,26 @@ class ChronicleStore:
         db = None
         try:
             try:
-                db = sqlite3.connect(self.index_path)
+                db = store.counted_connect(str(self.index_path), self.index_path, timeout=wait_sec)
                 db.executescript(_SCHEMA)
-            except sqlite3.DatabaseError:
+            except sqlite3.DatabaseError as exc:
                 if db is not None:
                     db.close()
+                if store.busy(exc):  # a reader's lock is contention, never a corrupt index to delete
+                    raise TimeoutError("chronicle index busy") from exc
                 # This is only an index. Preserve the authority and reconstruct it.
                 self.index_path.unlink(missing_ok=True)
-                db = sqlite3.connect(self.index_path)
+                db = store.counted_connect(str(self.index_path), self.index_path, timeout=wait_sec)
                 db.executescript(_SCHEMA)
             if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
                 # Only the disposable projection changes schema; replay the authority once.
                 db.executescript(_RESET)
             self._catch_up(db)
             yield db
+        except sqlite3.OperationalError as exc:  # lock-free readers hold SQLite's read locks: past ``wait_sec``, busy
+            if not store.busy(exc):
+                raise
+            raise TimeoutError("chronicle index busy") from exc
         finally:
             if db is not None:
                 db.close()
