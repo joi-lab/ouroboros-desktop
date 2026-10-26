@@ -43,21 +43,23 @@ export const SAFETY_LEVELS = Object.freeze([
 export const SAFETY_RANK = Object.freeze({ off: 0, light: 1, full: 2 });
 export const SAFETY_KINDS = Object.freeze({ your_work: 'Your work', consciousness: 'Consciousness' });
 
-/** What wakes it, as words after "wakes for …" (the typed facts of `places.WAKE_FACTS`). */
-export const WAKE_FACT_WORDS = Object.freeze({
-    direct_message: 'direct messages',
-    group_dm: 'group messages',
-    mention: 'mentions',
-    reply_to_me: 'replies',
-    my_thread: 'replies in its threads',
-    new_issue: 'new issues',
-    new_pull_request: 'new pull requests',
-    review_requested: 'review requests addressed to me',
-    assigned: 'assignments addressed to me',
-    any_message: 'every message',
-    from_bot: 'also wakes on bot messages',
-    legacy_addressed: 'messages addressed to it',
+/** The typed facts of `places.WAKE_FACTS`: wake choices and observations about one message. */
+const FACT_WORDS = Object.freeze({
+    direct_message: { wake: 'direct messages', heard: 'addressed to you' },
+    group_dm: { wake: 'group messages', heard: 'group message' },
+    mention: { wake: 'mentions', heard: 'mentions you' },
+    reply_to_me: { wake: 'replies', heard: 'reply to you' },
+    my_thread: { wake: 'replies in its threads', heard: 'your thread' },
+    new_issue: { wake: 'new issues', heard: 'new issue' },
+    new_pull_request: { wake: 'new pull requests', heard: 'new pull request' },
+    review_requested: { wake: 'review requests addressed to me', heard: 'review requested' },
+    assigned: { wake: 'assignments addressed to me', heard: 'assigned to you' },
+    any_message: { wake: 'every message', heard: '' },
+    from_bot: { wake: 'also wakes on bot messages', heard: 'from a bot' },
+    legacy_addressed: { wake: 'messages addressed to it', heard: 'addressed to you' },
 });
+export const WAKE_FACT_WORDS = Object.freeze(Object.fromEntries(Object.entries(FACT_WORDS)
+    .map(([fact, words]) => [fact, words.wake])));
 
 /** Who added a wake item or a note. */
 export const AUTHOR_WORDS = Object.freeze({
@@ -95,6 +97,13 @@ export const capitalized = (text) => {
 /** One wake fact in words; a declared label wins; an unknown kind keeps its spelling. */
 export const wakeFactWord = (fact, labels = null) => labels?.[fact] || (WAKE_FACT_WORDS[fact]
     ? tr(`places.wake.${fact}`, WAKE_FACT_WORDS[fact]) : String(fact || '').replace(/_/g, ' '));
+
+/** A heard fact names this message; the universal any_message adds no chip, even when labelled. */
+export function heardFactWord(fact, labels = null) {
+    const word = FACT_WORDS[fact]?.heard;
+    return word === '' ? '' : labels?.[fact] || (word
+        ? tr(`places.heard.${fact}`, word) : String(fact || '').replace(/_/g, ' '));
+}
 
 /** `{id: label}` for declared facts, including signals (`facts` entries that are objects). */
 export const signalLabels = (facts) => Object.fromEntries((Array.isArray(facts) ? facts : [])

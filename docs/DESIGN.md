@@ -1909,8 +1909,8 @@ Bot messages both wake and permit hearing bots. Other events are own-wake observ
 the mind decides what to read, so the sheet must not promise exhaustive reading.
 Conflicts: “Changed elsewhere; your text is kept”. Resave uses fresh facts.
 
-Reader out rows say “as {label}” or “as you”; heard facts accompany reasons with the
-sheet's labels, else core words. Whole held replies follow the System line,
+Reader out rows say “as {label}”/“as you”. Heard chips accompany reasons with
+sheet labels or fact words; hide `any_message`. Whole held replies follow System,
 authored and labelled “held, unchecked”. Missing fields add nothing.
 
 ### Voice controls

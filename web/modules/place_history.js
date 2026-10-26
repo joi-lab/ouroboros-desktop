@@ -3,7 +3,7 @@ import { apiClient } from './api_client.js';
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { mountChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
 import { tr } from './i18n.js';
-import { sendsAsHtml, signalLabels, wakeFactWord } from './consciousness_words.js';
+import { sendsAsHtml, signalLabels, heardFactWord } from './consciousness_words.js';
 
 export const INDEX_NOTE = 'The list finds conversations with saved incoming Place events. Older records and conversations where it only wrote may not be listed.';
 const LOCAL_NOTE = 'Only records saved by Ouroboros are shown. Some events may never have reached it. Attention and delivery appear only when recorded; a saved reply alone does not confirm delivery.';
@@ -77,7 +77,7 @@ function updateHeardLabels(host, place) {
     const labels = { ...signalLabels(place.facts), ...place.labels };
     for (const node of host.querySelectorAll('[data-heard-fact]')) {
         const fact = node.dataset.heardFact, declared = labels[fact];
-        const word = declared || wakeFactWord(fact);
+        const word = heardFactWord(fact, labels);
         if (node.textContent !== word) node.textContent = word;
         if (declared) node.setAttribute('data-i18n-authored', ''); else node.removeAttribute('data-i18n-authored');
     }
@@ -86,7 +86,7 @@ function updateHeardLabels(host, place) {
 function messageNode(row, markdown, place) {
     const voice = row.role === 'user' ? (row.place_history.owner_confirmed ? 'owner' : 'participant') : row.role;
     const facts = row.place_history;
-    const heard = facts.attention?.decision === 'heard' ? (facts.facts || []).map((fact) =>
+    const heard = facts.attention?.decision === 'heard' ? (facts.facts || []).filter((fact) => heardFactWord(fact)).map((fact) =>
         `<span class="place-convo-fact" data-heard-fact="${escapeHtml(fact)}"></span>`).join('') : '';
     const sender = facts.sends_as && sendsAsHtml({ ...facts.sends_as, owner: facts.sends_as_owner });
     const article = document.createElement('article'); article.className = `place-convo-row is-${voice}`;
