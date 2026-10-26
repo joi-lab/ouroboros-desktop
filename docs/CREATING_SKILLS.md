@@ -1008,7 +1008,7 @@ labels. Both use id strings in `wakes` and event `facts`; a label changes displa
 semantics. A labelled core kind in the **manifest** is accepted only from this release on: an older host
 drops the whole place entry. A connector that may be installed on older hosts must declare plain core
 kinds and send `labels: {"direct_message": "Mail addressed to you"}` on its status payload instead.
-Status `labels` can name core kinds in the connector's own words on any host; they do not change intake.
+Status `labels` can name core kinds in the connector's own words; they are safe to send to any host (this release's sheet and reader show them, older hosts ignore the key) and do not change intake.
 The sheet merges status labels over manifest labels. A runtime `/identity` check cannot negotiate a
 static manifest.
 

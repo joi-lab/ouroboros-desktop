@@ -381,7 +381,7 @@ def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int) -> di
                   "room_chat_id": chat_id, "event_identity": presence_event_identity(admission.binding_id, event),
                   "actor": {"platform_actor_id": actor,
                             "display_name": str(event.actor.get("display_name") or event.actor.get("username") or ""),
-                            "owner_address": owner_address,
+                            **({"owner_address_unverified": True} if owner_address and event.actor.get("authenticated") is False else {}),
                             "owner_confirmed": owner_address and event.actor.get("authenticated") is not False,
                             **({"authenticated": event.actor["authenticated"]} if "authenticated" in event.actor else {}),
                             "is_bot": event.actor.get("is_bot") is True or "from_bot" in facts},
@@ -426,7 +426,7 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
     event = presence.get("event") or {}
     focus = metadata.get("focus") or {}
     actor = dict(focus.get("actor") or {})
-    owner_address = actor.pop("owner_address", False)
+    unverified = actor.pop("owner_address_unverified", False)
     allowance = metadata.get("focus_allowance") or {}
     matched = set(focus.get("matched_wakes") or [])
     state = str(place.get("state") or "unknown")
@@ -449,7 +449,7 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
         "notes": json.dumps(place.get("notes") or [], ensure_ascii=False),
         "wake_item": json.dumps([w for w in place.get("wakes", []) if w["fact"] in matched], ensure_ascii=False),
         "actor_facts": json.dumps(actor, ensure_ascii=False) + (
-            "; authenticated: no" + ("; your human's own address: yes (unverified)" if owner_address else "")
+            "; authenticated: no" + ("; your human's own address: yes (unverified)" if unverified else "")
             if actor.get("authenticated") is False else ""),
         "work_here": work or "No earlier work recorded here; recent_tasks reads current work.",
         "spent_line": json.dumps(allowance, ensure_ascii=False),

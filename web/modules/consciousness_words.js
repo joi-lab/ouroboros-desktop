@@ -45,18 +45,18 @@ export const SAFETY_KINDS = Object.freeze({ your_work: 'Your work', consciousnes
 
 /** The typed facts of `places.WAKE_FACTS`: wake choices and observations about one message. */
 const FACT_WORDS = Object.freeze({
-    direct_message: { wake: 'direct messages', heard: 'addressed to you' },
+    direct_message: { wake: 'direct messages', heard: 'addressed to it' },
     group_dm: { wake: 'group messages', heard: 'group message' },
-    mention: { wake: 'mentions', heard: 'mentions you' },
-    reply_to_me: { wake: 'replies', heard: 'reply to you' },
-    my_thread: { wake: 'replies in its threads', heard: 'your thread' },
+    mention: { wake: 'mentions', heard: 'mentions it' },
+    reply_to_me: { wake: 'replies', heard: 'reply to it' },
+    my_thread: { wake: 'replies in its threads', heard: 'in its thread' },
     new_issue: { wake: 'new issues', heard: 'new issue' },
     new_pull_request: { wake: 'new pull requests', heard: 'new pull request' },
     review_requested: { wake: 'review requests addressed to me', heard: 'review requested' },
-    assigned: { wake: 'assignments addressed to me', heard: 'assigned to you' },
+    assigned: { wake: 'assignments addressed to me', heard: 'assigned to it' },
     any_message: { wake: 'every message', heard: '' },
     from_bot: { wake: 'also wakes on bot messages', heard: 'from a bot' },
-    legacy_addressed: { wake: 'messages addressed to it', heard: 'addressed to you' },
+    legacy_addressed: { wake: 'messages addressed to it', heard: 'addressed to it' },
 });
 export const WAKE_FACT_WORDS = Object.freeze(Object.fromEntries(Object.entries(FACT_WORDS)
     .map(([fact, words]) => [fact, words.wake])));

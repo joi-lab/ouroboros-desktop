@@ -126,9 +126,9 @@ for (const labels of [null, { any_message: 'Every saved arrival', direct_message
         const reader = mount(f, { readHistory: async () => page(rows) }, { ...place, labels }); await tick();
         const metas = [...f.doc.body.querySelectorAll('.place-convo-meta')];
         assert.deepEqual(metas.map((meta) => [...meta.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent)),
-            [['from a bot', labels?.direct_message || 'addressed to you'], [], []]);
+            [['from a bot', labels?.direct_message || 'addressed to it'], [], []]);
         assert.deepEqual([...metas[0].querySelectorAll('.place-convo-fact')].map((node) => node.textContent),
-            ['Heard; no wake matched', 'from a bot', labels?.direct_message || 'addressed to you']);
+            ['Heard; no wake matched', 'from a bot', labels?.direct_message || 'addressed to it']);
         assert.equal(f.q('[data-heard-fact="direct_message"]').hasAttribute('data-i18n-authored'), Boolean(labels));
         reader.close();
     });
@@ -141,8 +141,8 @@ test('heard core facts describe one message while wake sentences keep their poli
     const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts } };
     const reader = mount(f, { readHistory: async () => page([heard]) }); await tick();
     assert.deepEqual([...f.doc.body.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent),
-        ['addressed to you', 'group message', 'mentions you', 'reply to you', 'your thread', 'new issue',
-            'new pull request', 'review requested', 'assigned to you', 'from a bot', 'addressed to you']);
+        ['addressed to it', 'group message', 'mentions it', 'reply to it', 'in its thread', 'new issue',
+            'new pull request', 'review requested', 'assigned to it', 'from a bot', 'addressed to it']);
     assert.equal(wakesForText(facts.map((fact) => ({ fact }))),
         'wakes for direct messages, group messages, mentions, replies, replies in its threads, new issues, new pull requests, review requests addressed to me, assignments addressed to me, every message and messages addressed to it · also wakes on bot messages');
     reader.close();
@@ -183,7 +183,7 @@ test('reader labels return to core words when absent without replacing the retai
     assert.equal(fact.textContent, 'Mail addressed to you');
     assert.ok(fact.hasAttribute('data-i18n-authored'));
     reader.updatePlace(place);
-    assert.equal(fact.textContent, 'addressed to you');
+    assert.equal(fact.textContent, 'addressed to it');
     assert.equal(fact.hasAttribute('data-i18n-authored'), false);
     assert.equal(f.q('.place-convo-text'), message);
     reader.close();

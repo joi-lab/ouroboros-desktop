@@ -7,7 +7,7 @@ Place facts and identity:
 - Other Safety targets/own wakes use the first valid identity in 50 newest arrivals (`place_arrivals.recent_identity`).
 - `kind: user` alone matches account-scoped owner confirmations.
 - The browser reads status identity/labels with readiness, deriving owner/can_confirm. Server views, focus, Safety and own wakes dispatch no connector route.
-- Status `labels` name core kinds on any host. Labelled core **manifest** kinds require this release; older hosts drop the whole place entry. Use plain kinds + status labels for compatibility.
+- Status `labels`: safe for any host; older hosts ignore them. Labelled core **manifest** kinds require this release (older hosts drop the place entry): use plain kinds + status labels.
 Silent can wake; Paused admits no new focus. Unverified speech grants no owner authority; unknown outcomes authorize no repeat.
 
 ### Host Service boundary

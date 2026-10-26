@@ -161,7 +161,7 @@ def call_place_facts(ctx: Any, name: str, args: Mapping[str, Any], *, ext_tool: 
         account = _call_account(ctx, place, targets)
         focus = _metadata(ctx).get("focus") or {}
         same_focus = focus.get("place_id") == place.place_id
-        identity = focus.get("identity") if same_focus else recent_identity(_drive_root(ctx), place.place_id)
+        identity = focus.get("identity") if same_focus else recent_identity(_drive_root(ctx), place.place_id, account)
         sending = (identity or {}).get("sends_as")
         keys = _conversation_keys(place, effect, targets, account_id=account)
         rows.append({"place_id": place.place_id, "place_label": place.label, "place_state": place.state,

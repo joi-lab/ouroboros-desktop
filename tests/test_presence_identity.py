@@ -162,7 +162,8 @@ def test_authentication_controls_safety_occasion_and_child_authority(focus, auth
         event = replace(event, actor={**event.actor, "authenticated": authenticated})
     metadata = focus_metadata(replace(admission, place=place), event, "focus", 1)
     owner = address_matches and authenticated is not False
-    assert metadata["focus"]["actor"]["owner_address"] is address_matches
+    # The address fact is kept only when it is unverified, under a name that says so (it reaches the Safety bundle too).
+    assert metadata["focus"]["actor"].get("owner_address_unverified", False) is (address_matches and authenticated is False)
     assert metadata["focus"]["actor"]["owner_confirmed"] is owner
     child = consciousness_origin_metadata(metadata, started_root=True)
     assert child["work_kind"] == ("owner" if owner else "consciousness")

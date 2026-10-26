@@ -212,28 +212,31 @@ def activity(root, place):
             'last_activity_at': row[0] if row else ''}
 
 
-def recent_identity(root, place_id):
-    """First valid credential declaration in the newest 50 captured arrivals; None when the room cannot be read."""
+def recent_identity(root, place_id, account_id=""):
+    """First valid credential declaration in the newest 50 captured arrivals of the place (of one account when the
+    call names it); None when nothing was declared or the room cannot be read."""
     import logging
     from ouroboros.places import validate_presence_identity
 
+    scope = " AND json_extract(body,'$.transport.account_id')=?" if account_id else ""
     try:
         if not _dialogue_indexes(root):
             return None
         with dialogue_store.transaction(root, write=False) as conn:
-            rows = conn.execute(f"SELECT body FROM dialogue INDEXED BY dialogue_place_recent WHERE {_ARRIVAL} "
-                                f"AND {_PLACE}=? ORDER BY ts DESC LIMIT 50", (place_id,)).fetchall()
+            rows = conn.execute(f"SELECT json_extract(body,'$.transport.identity') FROM dialogue INDEXED BY dialogue_place_recent "
+                                f"WHERE {_ARRIVAL} AND {_PLACE}=?{scope} ORDER BY ts DESC LIMIT 50",
+                                (place_id, account_id) if account_id else (place_id,)).fetchall()
     except (store.StoreError, OSError) as exc:
         # A supplementary fact: an own wake or a Safety check goes on without it rather than failing on the store.
         logging.getLogger(__name__).warning("Captured identity unavailable for %s: %s", place_id, exc)
         return None
-    for row in rows:
-        transport = dialogue_store.decode(row['body']).get('transport')
-        if isinstance(transport, dict):
-            try:
-                return validate_presence_identity(transport.get('identity'))
-            except ValueError:
-                continue
+    for (declared,) in rows:
+        if declared is None:
+            continue
+        try:
+            return validate_presence_identity(json.loads(declared))
+        except ValueError:
+            continue
     return None
 
 
