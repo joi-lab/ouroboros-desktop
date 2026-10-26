@@ -392,5 +392,6 @@ def test_settings_extraction_size_bounds_have_meaningful_headroom():
     # 538 -> 560: the main-interface key (OUROBOROS_UI_DIR) with its export exclusion and the
     # saved-choice precedence the config read and persist seams share.
     # +7: independent Consciousness level, Supervisor model, owner rules and disk ownership.
-    assert counts["ouroboros.settings_defaults"] <= 567
+    # +1: Main's Subagents mode (OUROBOROS_SUBAGENTS_MODE, default auto).
+    assert counts["ouroboros.settings_defaults"] <= 568
     assert (PACKAGE / "config.py").is_file()
