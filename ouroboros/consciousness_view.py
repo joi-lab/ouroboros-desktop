@@ -82,23 +82,21 @@ def place_views(drive_root, allowance=None) -> list[dict]:
 
 
 def places_text(views) -> str:
-    from ouroboros.extension_contributions import live_place_declarations
-    from ouroboros.places import OwnerAccount, identity_with_owners
+    from ouroboros.config import DATA_DIR
+    from ouroboros.place_arrivals import recent_identity
+    from ouroboros.places import OwnerAccount, owner_account_matches
     if views is None:
         return "unknown (place index unavailable)"
-    declarations = live_place_declarations() if any("identity" not in view and view.get("connector") for view in views) else []
     lines = []
     for view in views:
-        identity = view.get("identity")
-        if "identity" not in view:
-            raw = next((row.get("identity") for row in declarations if row["skill"] == view.get("connector")
-                        and (not view.get("contribution_id") or row["id"] == view["contribution_id"])), None)
-            identity = identity_with_owners(raw, (OwnerAccount(**a) for a in view.get("owner_accounts", [])), view.get("account_id", ""))
+        identity = recent_identity(DATA_DIR, view["place_id"])
         sending = (identity or {}).get("sends_as") or {}
+        owner = sending.get("kind") == "user" and owner_account_matches(
+            (OwnerAccount(**a) for a in view.get("owner_accounts", [])), sending["id"], view.get("account_id", ""))
         voice = ""
         if sending:
             voice = (f'; as Ouroboros (bot {sending["label"]})' if sending["kind"] == "bot"
-                     else f'; writes as {sending["label"]}' + (" (your human's own account)" if sending["owner"] else ""))
+                     else f'; writes as {sending["label"]}' + (" (your human's own account)" if owner else ""))
         count = view.get("unanswered")
         addresses = [str(room.get("address") or f'chat_history(chat_id={int(room["room_chat_id"])})')
                      for room in view.get("rooms") or []]

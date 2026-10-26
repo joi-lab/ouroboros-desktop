@@ -65,6 +65,26 @@ def test_producers_project_only_recorded_facts_without_rewriting_sources(tmp_pat
     client.close()
 
 
+@pytest.mark.parametrize("authenticated,owner", [(False, False), (None, True), (True, True)])
+def test_reader_owner_label_respects_captured_actor_authentication(tmp_path, monkeypatch, authenticated, owner):
+    """Opus N5: a confirmed address alone cannot label explicitly unverified mail '(you)'."""
+    from ouroboros.presence_admission import admit_presence_turn
+    client, place, task, event = scenario(tmp_path, monkeypatch)
+    actor = {"platform_actor_id": "owner", "display_name": "Owner address"}
+    if authenticated is not None:
+        actor["authenticated"] = authenticated
+    event = replace(event, source_event_id="owner-attestation", actor=actor, text="Captured owner-address mail")
+    admission = admit_presence_turn(drive_root=tmp_path, authenticated_transport_skill="bridge",
+                                    provider="chat", account_id="qa", conversation_id="design")
+    capture_presence_event(admission, event, drive_root=tmp_path)
+    before = [row.row for row in ds.iter_rows(tmp_path, "chat")]
+    page = client.get("/api/chat/history", params={"chat_id": task["chat_id"]}).json()
+    message, = [row for row in page["messages"] if row["text"] == event.text]
+    assert message["place_history"]["owner_confirmed"] is owner
+    assert before == [row.row for row in ds.iter_rows(tmp_path, "chat")]
+    client.close()
+
+
 def test_heard_facts_are_decoded_after_the_read_transaction(tmp_path, monkeypatch):
     client, _place, task, _event = scenario(tmp_path, monkeypatch)
     watch = watch_transactions(monkeypatch)

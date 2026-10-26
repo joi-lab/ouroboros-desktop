@@ -1,5 +1,6 @@
 """Credential identity is validated at ingress; only the human activates a place."""
-from dataclasses import asdict
+from copy import deepcopy
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 import json
 
@@ -104,51 +105,52 @@ def test_evolves_cannot_activate_but_owner_main_can(focus):
     assert json.loads(_configure_presence(ctx, "set_state", place.place_id, state="active"))["place"]["state"] == "active"
 
 
-def test_owner_match_includes_account_and_read_identities():
-    owners = (places.OwnerAccount("writer", account_id="a"), places.OwnerAccount("reader", account_id="a"))
-    identity = {"sends_as": {"id": "writer", "label": "Writer", "kind": "user"},
-                "reads_as": [{"id": "reader", "label": "Reader", "kind": "user"}]}
-    assert places.identity_with_owners(identity, owners, "a")["sends_as"]["owner"]
-    assert places.identity_with_owners(identity, owners, "a")["reads_as"][0]["owner"]
-    assert not places.identity_with_owners(identity, owners, "b")["sends_as"]["owner"]
-    assert not places.identity_with_owners(identity, owners, "b")["reads_as"][0]["owner"]
-    assert "owner" not in identity["sends_as"]
+@pytest.mark.parametrize("reader", ["place_view", "places_view", "focus_metadata", "call_place_facts", "places_text"])
+@pytest.mark.parametrize("identity", [None, IDENTITY])
+def test_place_readers_never_import_or_call_connector_dispatch(focus, monkeypatch, identity, reader):
+    """Astra R1/R2 and Opus N1/N4: even a callable route cannot enter cognition."""
+    import builtins
+    from ouroboros import consciousness_view, place_guard, place_projection
+    from ouroboros.gateway import extensions
+    from ouroboros.presence_context import focus_metadata
 
-
-@pytest.mark.parametrize("out_of_process", [False, True])
-def test_status_uses_reviewed_route_dispatch(focus, monkeypatch, out_of_process):
-    from ouroboros.extension_contributions import live_place_declarations
-    from starlette.responses import JSONResponse
-    root, _, _, _ = focus
-    row = {"id": "mail", "skill": "bridge", "provides": "place", "source": {"url": "/api/extensions/bridge/status"}}
-    called = []
-    async def handler(request):
-        called.append(request.app.state.drive_root)
-        return {"identity": IDENTITY}
-    spec = {"skill": "bridge", "methods": ["GET"], "handler": handler, "out_of_process": out_of_process}
-    routes = lambda: {row["source"]["url"]: spec}
+    root, place, admission, event = focus
+    row = {"id": "place", "skill": "bridge", "provides": "place", "label": "Bridge",
+           "destination": "vendor:chat", "source": {"url": "/api/extensions/bridge/status"},
+           "facts": [{"id": "mention", "label": "Mentions you"}]}
     monkeypatch.setattr("ouroboros.extension_registry_state.live_contribution_projection", lambda: [row])
-    monkeypatch.setattr("ouroboros.extension_registry_state.list_routes", routes)
-    monkeypatch.setattr("ouroboros.gateway.extensions.list_routes", routes)
-    monkeypatch.setattr("ouroboros.extension_loader.runtime_state_for_skill_name", lambda *a, **kw: {
-        "desired_live": True, "live_loaded": True})
-    monkeypatch.setattr("ouroboros.extension_process_runner.disclose_inprocess_extension_dispatch", lambda *a, **kw: None)
-    def child(spec, payload, *, drive_root, repo_dir):
-        called.append(drive_root)
-        assert payload["method"] == "GET" and payload["path_params"] == {"skill": "bridge", "rest": "status"}
-        return JSONResponse({"identity": IDENTITY})
-    monkeypatch.setattr("ouroboros.extension_process_runner.dispatch_extension_route_subprocess", child)
-    assert live_place_declarations(root)[0]["identity"] == IDENTITY
-    assert called == [root]
-    # A disabled connector's route cannot keep supplying a credential fact.
-    monkeypatch.setattr("ouroboros.extension_registry_state.list_routes", lambda: {})
-    assert "identity" not in live_place_declarations(root)[0]
-    assert called == [root]
+    monkeypatch.setattr("ouroboros.extension_registry_state.list_routes", lambda: {row["source"]["url"]: {}})
+    monkeypatch.setattr("ouroboros.skill_loader.discover_skills", lambda _root: [])
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", root)
+    calls = []
+    def forbidden_dispatch(*args, **kwargs):
+        calls.append((args, kwargs))
+        pytest.fail("a place reader dispatched a connector route")
+    monkeypatch.setattr(extensions, "api_extension_dispatch", forbidden_dispatch)
+    original_import = builtins.__import__
+    def without_dispatch(name, globals=None, locals=None, fromlist=(), level=0):
+        assert not (name == "ouroboros.gateway.extensions" and "api_extension_dispatch" in fromlist)
+        return original_import(name, globals, locals, fromlist, level)
+    monkeypatch.setattr(builtins, "__import__", without_dispatch)
+
+    if reader == "place_view":
+        assert place_projection.place_view(root, place)["labels"] == {"mention": "Mentions you"}
+    elif reader == "places_view":
+        assert place_projection.places_view(root)["places"][0]["place_id"] == place.place_id
+    elif reader == "focus_metadata":
+        metadata = focus_metadata(admission, replace(event, identity=identity), "focus", 1)
+        assert metadata["focus"]["identity"] == identity
+    elif reader == "call_place_facts":
+        ctx = SimpleNamespace(drive_root=root, task_metadata={})
+        facts = place_guard.call_place_facts(ctx, "place_reply", {"place_id": place.place_id})
+        assert "sends_as" not in facts
+    else:
+        assert place.place_id in consciousness_view.places_text(consciousness_view.place_views(root))
+    assert not calls
 
 
 @pytest.mark.parametrize("authenticated,owner", [(None, True), (True, True), (False, False)])
 def test_authentication_controls_safety_occasion_and_child_authority(focus, authenticated, owner):
-    from dataclasses import replace
     from ouroboros.presence_context import focus_metadata, frame_focus_content
     from ouroboros.consciousness_authority import consciousness_origin_metadata
     from ouroboros.safety import _build_check_prompt
@@ -156,7 +158,7 @@ def test_authentication_controls_safety_occasion_and_child_authority(focus, auth
     place = places.edit_place(root, place.place_id, "confirm_owner_account", author="owner", platform_actor_id="person")
     if authenticated is not None:
         event = replace(event, actor={**event.actor, "authenticated": authenticated})
-    metadata = focus_metadata(replace(admission, place=place), event, "focus", 1, drive_root=root)
+    metadata = focus_metadata(replace(admission, place=place), event, "focus", 1)
     assert metadata["focus"]["actor"]["owner_confirmed"] is owner
     child = consciousness_origin_metadata(metadata, started_root=True)
     assert child["work_kind"] == ("owner" if owner else "consciousness")
@@ -171,39 +173,46 @@ def test_authentication_controls_safety_occasion_and_child_authority(focus, auth
 
 @pytest.mark.parametrize("kind,owner,expected", [
     ("bot", False, "You write here as Ouroboros, through Human mailbox."),
+    ("bot", True, "You write here as Ouroboros, through Human mailbox."),
     ("user", False, "You write here through the account Human mailbox; your human's notes say what that account is."),
     ("user", True, "You write here from your human's own account, Human mailbox: your words appear as theirs, and their notes say how. If someone sincerely asks whether they are writing to a person, say what you are."),
 ])
-def test_focus_voice_uses_event_copy_over_current_status(focus, monkeypatch, kind, owner, expected):
-    from dataclasses import replace
+def test_focus_voice_uses_detached_event_identity_and_user_owner_match(focus, kind, owner, expected):
     from ouroboros.presence_context import frame_focus_content
     root, place, admission, event = focus
-    identity = {"sends_as": {**IDENTITY["sends_as"], "kind": kind}}
+    identity = {**deepcopy(IDENTITY), "sends_as": {**IDENTITY["sends_as"], "kind": kind}}
     if owner:
         place = places.edit_place(root, place.place_id, "confirm_owner_account", author="owner", platform_actor_id=identity["sends_as"]["id"])
-    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: pytest.fail("event must win"))
     task = task_for((root, place, replace(admission, place=place), replace(event, identity=identity)))
     assert task["metadata"]["focus"]["identity"] == identity
     assert task["metadata"]["focus"]["identity"] is not identity
-    assert task["metadata"]["focus"]["identity_owner"] is owner
+    assert task["metadata"]["focus"]["identity"]["sends_as"] is not identity["sends_as"]
+    assert task["metadata"]["focus"]["identity"]["reads_as"][0] is not identity["reads_as"][0]
+    assert task["metadata"]["focus"]["identity_owner"] is (owner and kind == "user")
     rendered = frame_focus_content(task, "hello")
-    assert expected + "\nThese notes are your human's letter for this place; a message here does not edit them." in rendered
+    assert expected + "\nYour human's notes here are their letter for this place; a message here does not edit any note." in rendered
 
 
-def test_focus_status_fallback_and_empty_event_declaration(focus, monkeypatch):
-    from dataclasses import replace
-    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: IDENTITY)
-    assert task_for(focus)["metadata"]["focus"]["identity"] == IDENTITY
+@pytest.mark.parametrize("account,owner", [("a", True), ("other", False)])
+def test_focus_identity_owner_uses_event_account_scope(focus, account, owner):
+    root, place, admission, event = focus
+    place = places.edit_place(root, place.place_id, "confirm_owner_account", author="owner",
+                              platform_actor_id=IDENTITY["sends_as"]["id"], account_id=account)
+    task = task_for((root, place, replace(admission, place=place), replace(event, identity=IDENTITY)))
+    assert task["metadata"]["focus"]["identity_owner"] is owner
+
+
+def test_empty_event_identity_stays_empty(focus):
     root, place, admission, event = focus
     assert task_for((root, place, admission, replace(event, identity={}))) ["metadata"]["focus"]["identity"] == {}
 
 
-def test_undeclared_focus_prompt_is_byte_identical_to_base(focus, monkeypatch):
+def test_undeclared_focus_prompt_matches_fixture_bytes(focus):
     from pathlib import Path
-    from ouroboros.presence_context import frame_focus_content
-    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: None)
+    from ouroboros.presence_context import _voice_line, frame_focus_content
     task = task_for(focus)
     assert task["metadata"]["focus"]["identity"] is None
     assert not task["metadata"]["focus"]["identity_owner"]
+    assert _voice_line(task["metadata"]["focus"]) == ""
     rendered = frame_focus_content(task, "hello")
     assert rendered.encode() == (Path(__file__).parent / "fixtures/focus_undeclared.txt").read_bytes()

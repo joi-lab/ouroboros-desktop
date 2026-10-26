@@ -358,10 +358,9 @@ PLACEHOLDERS = ("who", "place", "when", "waiting_line", "event", "place_state", 
                 "wake_item", "actor_facts", "work_here", "spent_line", "roots_line", "working_folder", "voice_line")
 
 
-def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int, *, drive_root=None) -> dict:
+def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int) -> dict:
     from copy import deepcopy
     from ouroboros.config import get_consciousness_autonomy, runtime_setting
-    from ouroboros.extension_contributions import current_place_identity
     from ouroboros.presence_runner import presence_event_identity
     from ouroboros.places import FACT_LEGACY_ADDRESSED, is_owner_account, wake_matches
     place = admission.place
@@ -369,7 +368,7 @@ def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int, *, dr
     if event.actor.get("is_bot") is True:
         facts = (*facts, "from_bot")
     actor = str(event.actor.get("platform_actor_id") or event.actor.get("id") or "")
-    identity = deepcopy(event.identity if event.identity is not None else current_place_identity(place, drive_root))
+    identity = deepcopy(event.identity)
     sending = (identity or {}).get("sends_as") or {}
     allowance = dict(admission.allowance or {})
     metadata = {
@@ -377,7 +376,7 @@ def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int, *, dr
         "consciousness_autonomy": get_consciousness_autonomy(), "wake_cause": "focus",
         "consciousness_cause": "place:" + place.place_id, "work_kind": "consciousness",
         "focus": {"place_id": place.place_id, "conversation_key": event.conversation_key,
-                  "identity": identity, "identity_owner": is_owner_account(place, sending.get("id", ""), event.account_id),
+                  "identity": identity, "identity_owner": sending.get("kind") == "user" and is_owner_account(place, sending["id"], event.account_id),
                   "room_chat_id": chat_id, "event_identity": presence_event_identity(admission.binding_id, event),
                   "actor": {"platform_actor_id": actor,
                             "display_name": str(event.actor.get("display_name") or event.actor.get("username") or ""),

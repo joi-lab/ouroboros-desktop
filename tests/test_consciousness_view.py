@@ -465,18 +465,19 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path,
 
 
 @pytest.mark.parametrize("kind,owner,clause", [("user", True, "writes as Mailbox (your human's own account)"),
-    ("user", False, "writes as Mailbox"), ("bot", False, "as Ouroboros (bot Mailbox)"), (None, False, "")])
-def test_own_clock_reads_current_identity_without_changing_brief_view(tmp_path, monkeypatch, kind, owner, clause):
+    ("user", False, "writes as Mailbox"), ("bot", False, "as Ouroboros (bot Mailbox)"), ("bot", True, "as Ouroboros (bot Mailbox)"), (None, False, "")])
+def test_own_clock_reads_captured_identity_without_changing_brief_view(tmp_path, monkeypatch, kind, owner, clause):
     place = places.connect_place(tmp_path, connector="bridge", provider="chat", account_id="account")
     if owner:
         places.edit_place(tmp_path, place.place_id, "confirm_owner_account", author="owner", platform_actor_id="writer")
-    declaration = {"skill": "bridge", "id": "mail"}
+    from tests.test_place_arrivals import seed_identity_arrival
     if kind:
-        declaration["identity"] = {"sends_as": {"id": "writer", "label": "Mailbox", "kind": kind}}
-    monkeypatch.setattr("ouroboros.extension_contributions.live_place_declarations", lambda *a, **kw: [declaration])
+        seed_identity_arrival(tmp_path, place, {"sends_as": {"id": "writer", "label": "Mailbox", "kind": kind}})
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
     brief = view.place_views(tmp_path, {})
     assert "identity" not in brief[0]
     text = view.places_text(brief)
+    assert ("your human's own account" in text) is (owner and kind == "user")
     if clause:
         assert clause in text
     else:

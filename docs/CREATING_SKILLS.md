@@ -1003,7 +1003,12 @@ non-empty text up to 120 characters. Fact ids must be unique. `wakes` remains th
 and must be a subset of `facts` when that list is present; when `facts` is absent, only core wake facts may
 be suggested. An empty `facts` list permits only empty `wakes`. Core labels are optional; signals require
 labels. Both use id strings in `wakes` and event `facts`; a label changes display words, never the fact
-semantics. Labels on core kinds require `/identity.presence_identity: 1`; plain core strings work on older hosts.
+semantics. A labelled core kind in the **manifest** is accepted only from this release on: an older host
+drops the whole place entry. A connector that may be installed on older hosts must declare plain core
+kinds and send `labels: {"direct_message": "Mail addressed to you"}` on its status payload instead.
+Status `labels` can name core kinds in the connector's own words on any host; they do not change intake.
+The sheet merges status labels over manifest labels. A runtime `/identity` check cannot negotiate a
+static manifest.
 
 Negotiate support through `/identity`: `presence_wake_signals: 1` advertises this seam. Older hosts may reject
 the `facts` manifest key, so do not publish signal declarations to a host without support. Intake accepts a
@@ -1038,8 +1043,8 @@ access, supported event kinds and outgoing tools remain the connector's responsi
 
 ### Who the connector writes as
 
-When `/identity` advertises `presence_identity: 1`, the status route may return top-level `identity`,
-and every `POST /presence/turn` may carry the same object as `event.identity`, beside `event.facts`:
+When `/identity` advertises `presence_identity: 1`, send `identity` on every `POST /presence/turn`
+as `event.identity`, beside `event.facts`, and on the connector's status payload for the owner's browser:
 
 ```json
 {"sends_as": {"id": "writer@example.test", "label": "Writer mailbox", "kind": "user"},
@@ -1049,14 +1054,17 @@ and every `POST /presence/turn` may carry the same object as `event.identity`, b
 Both members are optional; unknown members are refused. `sends_as` is one entry; `reads_as` is a list.
 Each entry has exactly nonblank `id` and `label` strings (at most 200 characters each) and `kind: user|bot`.
 `kind` describes the credential's provider account, not a chosen persona. Do not add host-derived owner flags.
-Invalid event identity returns 400 `presence_identity_invalid`; invalid status identity is logged and dropped.
-The event copy wins for its focus; without it the current status declaration is used. Neither carrier adds
-fields to `places.json`. The host passes the facts to focus/own-clock context, Safety and wake/delivery views.
+Invalid event identity returns 400 `presence_identity_invalid`. The voice line, owner match, focused
+Safety facts and delivery stamp read the event snapshot only; an undeclared event has no identity.
+Outside that focus, Safety and own-wake text use the first valid identity among the place's newest 50
+captured arrivals, or none. The sheet reads identity from the status payload it already fetches for
+readiness. The server never dispatches a connector route for a place view, focus, Safety check or own wake.
+Neither carrier adds fields to `places.json`.
 
 The owner's “This is my account” confirms `sends_as.id` using the existing `owner_accounts` writer.
-A matching `platform_actor_id` in the same `account_id` scope derives `owner: true`; revocation removes it.
+For `kind: user` only, a matching `platform_actor_id` in the same `account_id` scope derives `owner: true`; revocation removes it.
 This says whose credential writes or reads, independently of who sent an incoming message. Bot identities
-never offer this confirmation. Only the human activates a place, through its sheet or an owner-door Main turn;
+never derive owner status or offer this confirmation. Only the human activates a place, through its sheet or an owner-door Main turn;
 consciousness may still set Silent or Paused.
 
 Optional `event.actor.authenticated` must be a boolean: true means the provider attests this sender's

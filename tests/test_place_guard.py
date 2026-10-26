@@ -172,17 +172,20 @@ def test_unreadable_place_store_holds_only_connector_writes(published_tool, plac
         "Place records need repair" if declares_place else "")
 
 
-@pytest.mark.parametrize("declared", [False, True])
-def test_call_facts_include_sending_identity_only_when_declared(published_tool, places, monkeypatch, declared):
+@pytest.mark.parametrize("kind,account,owner", [("user", "account", True), ("user", "other", False),
+    ("bot", "account", False), (None, "account", False)])
+def test_call_facts_use_captured_identity_and_user_owner_match(published_tool, places, kind, account, owner):
     from ouroboros.places import OwnerAccount
+    from tests.test_place_arrivals import seed_identity_arrival
     rows, ctx = places
-    rows[1] = replace(rows[1], owner_accounts=(OwnerAccount("writer", account_id="account"),))
-    identity = {"sends_as": {"id": "writer", "label": "My mailbox", "kind": "user"}}
-    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: identity if declared else None)
+    rows[1] = replace(rows[1], owner_accounts=(OwnerAccount("writer", account_id=account),))
+    identity = {"sends_as": {"id": "writer", "label": "My mailbox", "kind": kind}}
+    if kind:
+        seed_identity_arrival(ctx.drive_root, rows[1], identity)
     name, tool = published_tool("message", target="room", conversation="room")
     facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
-    if declared:
-        assert facts["sends_as"] == identity["sends_as"] and facts["sends_as_owner"] is True
+    if kind:
+        assert facts["sends_as"] == identity["sends_as"] and facts["sends_as_owner"] is owner
         assert facts["places"][0]["sends_as"] == facts["sends_as"]
     else:
         assert "sends_as" not in facts and "sends_as_owner" not in facts
@@ -190,14 +193,23 @@ def test_call_facts_include_sending_identity_only_when_declared(published_tool, 
     assert guard.call_place_facts(ctx, "read_file", {}) == {}
 
 
-def test_safety_call_uses_focus_identity_only_for_its_target(published_tool, places, monkeypatch):
+@pytest.mark.parametrize("kind", ["user", "bot", None])
+def test_safety_call_uses_focus_snapshot_only_for_its_target(published_tool, places, kind):
+    from tests.test_place_arrivals import seed_identity_arrival
     rows, ctx = places
-    event = {"sends_as": {"id": "event", "label": "At the event", "kind": "user"}}
-    current = {"sends_as": {"id": "current", "label": "Now", "kind": "bot"}}
+    event = {"sends_as": {"id": "event", "label": "At the event", "kind": kind}} if kind else None
+    captured = {"sends_as": {"id": "current", "label": "Newer arrival", "kind": "user"}}
     ctx.task_metadata = {"focus": {"place_id": "active", "identity": event, "identity_owner": True}}
-    monkeypatch.setattr("ouroboros.extension_contributions.current_place_identity", lambda *a: current)
+    for place in rows:
+        seed_identity_arrival(ctx.drive_root, place, captured)
     name, tool = published_tool("message", target="room", conversation="room")
     facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
-    assert facts["sends_as"] == event["sends_as"] and facts["sends_as_owner"] is True
+    if kind:
+        assert facts["sends_as"] == event["sends_as"]
+        assert facts["sends_as_owner"] is (kind == "user")
+    else:
+        assert "sends_as" not in facts and "sends_as_owner" not in facts
+        del ctx.task_metadata["focus"]["identity"]  # A legacy focus has no declaration either.
+        assert "sends_as" not in guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
     facts = guard.call_place_facts(ctx, name, {"room": "C1"}, ext_tool=tool)
-    assert facts["sends_as"] == current["sends_as"] and facts["sends_as_owner"] is False
+    assert facts["sends_as"] == captured["sends_as"] and facts["sends_as_owner"] is False

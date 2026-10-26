@@ -212,6 +212,25 @@ def activity(root, place):
             'last_activity_at': row[0] if row else ''}
 
 
+def recent_identity(root, place_id):
+    """First valid credential declaration in the newest 50 captured arrivals."""
+    from ouroboros.places import validate_presence_identity
+
+    if not _dialogue_indexes(root):
+        return None
+    with dialogue_store.transaction(root, write=False) as conn:
+        rows = conn.execute(f"SELECT body FROM dialogue INDEXED BY dialogue_place_recent WHERE {_ARRIVAL} "
+                            f"AND {_PLACE}=? ORDER BY ts DESC LIMIT 50", (place_id,)).fetchall()
+    for row in rows:
+        transport = dialogue_store.decode(row['body']).get('transport')
+        if isinstance(transport, dict):
+            try:
+                return validate_presence_identity(transport.get('identity'))
+            except ValueError:
+                continue
+    return None
+
+
 def account_candidates(root, place_id):
     """At most 20 people from the newest 50 arrivals: one index seek + 50 rows.
 
