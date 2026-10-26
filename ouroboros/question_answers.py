@@ -12,6 +12,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def answer_message_id(asker: str, quiz_id: str) -> str:
+    """The mailbox identity ``deliver_answer`` gives a card's live answer, whichever task reads it."""
+    return f"quiz_answer:{asker}:{quiz_id}"
+
+
 def admitted_successor(root, predecessor: str) -> str:
     """A durable admission, independently verified on both ends of Continue."""
     from ouroboros.owner_continue import binding_sha
@@ -127,7 +132,7 @@ def deliver_answer(root, asker: str, quiz_id: str, block: dict, live_reader, fal
             current, _reason = live_reader(recipient)
             if current is not None:
                 drive = Path(root) if agent is not None else q._task_drive_for_task(current, recipient)
-                msg_id = f"quiz_answer:{asker}:{quiz_id}"
+                msg_id = answer_message_id(asker, quiz_id)
                 if previous == recipient and delivery.get("mailbox_at"):
                     return False, "awaiting_recipient_read"
                 # Name the owed effect BEFORE append. A crash retries that same identity.

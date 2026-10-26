@@ -153,10 +153,10 @@ def _describe_bg(request: Request) -> Callable[[bool], dict[str, Any]] | None:
 
 
 async def api_consciousness(request: Request) -> JSONResponse:
-    """The Dashboard's consciousness panel: status, spend by cause, places and recent wakes (read-only)."""
+    """The Dashboard's read-only status, spend by cause, place labels and recent wakes."""
     describe = _state_attr(request, "describe_consciousness")
     if describe is None:
-        return JSONResponse({"status": "unavailable", "places": [], "recent_wakes": []}, status_code=503,
+        return JSONResponse({"status": "unavailable", "recent_wakes": []}, status_code=503,
                             headers={"Cache-Control": "no-store"})
     return JSONResponse(await asyncio.to_thread(describe), headers={"Cache-Control": "no-store"})
 
@@ -246,6 +246,9 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
         else get_evolution_status_snapshot()
     )
     activity_availability = {"complete": True}
+    from ouroboros.projects_registry import bindings_revision
+
+    revision = bindings_revision(drive_root)  # stamped BEFORE the read: the map is never older than it
     task_bindings = _task_bindings_safe(request, availability=activity_availability)
     bindings_complete = activity_availability["complete"]
     direct_turns = _direct_turns_snapshot_safe(availability=activity_availability)
@@ -302,6 +305,7 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
         "project_chat_ids": project_chat_ids,
         "main_visible_revision": main_visible_revision,
         "task_bindings": task_bindings,
+        "task_bindings_revision": revision if bindings_complete else "",
         "active_direct_turns": direct_turns,
         "active_chat_activities": activities,
         "active_chat_activities_complete": activity_availability["complete"],
@@ -392,6 +396,8 @@ def _task_activity_facts(drive_root: Any, task_id: str) -> dict:
         display["model_waits"] = data["model_waits"]
     if data.get("status") or data.get("outcome_axes"):
         display["outcome_axes"] = normalize_outcome_axes(data)
+    if isinstance(data.get("cancel_origin"), dict):
+        display["cancel_origin"] = dict(data["cancel_origin"])  # the stop the status fold reads beside the axes
     if synthesis:
         display["root_phase_checkpoint"] = {"post_task_synthesis": synthesis}
     if _answer_stored(synthesis):
@@ -950,6 +956,8 @@ async def api_state(request: Request) -> JSONResponse:
 
         snap = await asyncio.to_thread(_state_snapshot, request)
         st = snap["st"]
+        since = str(request.query_params.get("bindings_since") or "")  # the revision of a map the client holds
+        unchanged = bool(since) and since == snap["task_bindings_revision"]  # a failed read's "" never is
         runtime_branch, runtime_sha = snap["runtime_identity"]
         limit = snap["limit"]
         accounting = snap["accounting"]
@@ -1050,7 +1058,9 @@ async def api_state(request: Request) -> JSONResponse:
             "projects": snap["projects"],
             "project_chat_ids": snap["project_chat_ids"],
             "main_visible_revision": snap.get("main_visible_revision"),
-            "task_bindings": snap["task_bindings"],
+            "task_bindings": None if unchanged else snap["task_bindings"],
+            "task_bindings_revision": snap["task_bindings_revision"],
+            "task_bindings_unchanged": unchanged,
             "active_direct_turns": snap.get("active_direct_turns") or [],
             "active_chat_activities": snap.get("active_chat_activities") or [],
             "active_chat_activities_complete": snap.get("active_chat_activities_complete") is True,
@@ -1089,19 +1099,11 @@ def _task_bindings_safe(request: Request, *, availability=None) -> dict:
     try:
         from ouroboros.projects_registry import all_task_project_bindings
 
-        drive_root = request_drive_root(request)
-        bindings = {
-            str(k): {"project_id": str(v.get("project_id") or ""), "chat_id": int(v.get("chat_id") or 0),
-                     "project_name": str(v.get("project_name") or "")}
-            for k, v in (all_task_project_bindings(drive_root, strict=True) or {}).items()
-        }
+        return all_task_project_bindings(request_drive_root(request), strict=True)
     except Exception:
         if availability is not None:
             availability["complete"] = False
         return {}
-    return bindings
-
-
 
 
 __all__ = ["api_contract", "api_health", "api_state"]

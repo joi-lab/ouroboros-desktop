@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ouroboros.config import runtime_setting
+from ouroboros.tool_access_reads import canonical_runtime_reader as _canonical_runtime_reader
 
 import json
 import logging
@@ -281,6 +282,7 @@ from ouroboros.context_runtime_facts import (  # noqa: E402,F401 — re-exported
     task_execution_clock_fact,
     task_schedule_fact,
     schedule_store_fact,
+    body_facts,
     storage_fact,
 )
 
@@ -405,10 +407,9 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
     from ouroboros.settings_scales import effort_range
 
     runtime_data["effort_range"] = {**effort_range(), "binds": effort_range_binds(task.get("metadata"))}
-    # What Ouroboros owns on disk, from the last finished count (Dashboard -> Storage): a fact, no threshold.
-    storage = storage_fact(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root))
-    if storage is not None:
-        runtime_data["storage"] = storage
+    # What Ouroboros owns on disk and its body's dated facts: facts, no threshold.
+    runtime_data.update(body_facts(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None)
+                                                or env.drive_root), observed_at=runtime_data["context_captured_at"]))
     runtime_data.update(_task_authority_projection(env, task))
     if supplementary_messages_out is not None:
         from ouroboros.main_context_authority import predecessor_notes_message
@@ -803,7 +804,8 @@ def _render_scratchpad_for_context(memory: "Memory", budget: int) -> str:
     return section
 
 
-def build_memory_sections(memory: Memory, partition: str = "all", *, include_scratchpad: bool = True) -> List[str]:
+def build_memory_sections(memory: Memory, partition: str = "all", *, include_scratchpad: bool = True,
+                          ctx: Any = None) -> List[str]:
     """Identity and WORLD (stable), the scratchpad (volatile); my story and rooms are ``memory_view``'s."""
     sections = []
 
@@ -829,7 +831,9 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
     if include_stable:
         identity_raw = memory.load_identity()
         _warn_if_over_budget("identity", identity_raw)
-        sections.append("## Identity (from `memory/identity.md` — already loaded; do not re-read via read_file(root='runtime_data', path='memory/identity.md'))\n\n" + identity_raw)
+        reader = _canonical_runtime_reader(ctx, memory.drive_root, "memory/identity.md")
+        sections.append(f"## Identity (already loaded from `{memory.identity_path()}`; read current bytes before revising)\n"
+                        f"Source reader: {reader}\n\n" + identity_raw)
         world_raw = memory.load_world_profile().strip()
         if world_raw:
             # The map loads whole; oversize is the mind's to compact (detail to knowledge).
@@ -847,49 +851,20 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
     return sections
 
 
-_READER_AUTHORITY_NOTE = (
-    " (reader address, subject to this task's tool/resource restrictions and Presence grants; "
-    "see Runtime context)"
-)
-
-
-def _canonical_runtime_reader(ctx: Any, canonical_root: pathlib.Path, rel: str) -> str:
-    """Address the original, without predicting dispatch or reading its contents.
-
-    Relative runtime paths keep execution-local bytes. A fork names the canonical
-    source absolutely under the same logical root; actual dispatch owns admission.
-    """
-    source = (canonical_root / rel).resolve(strict=False)
-    if ctx is None:
-        return f"{source} (no tool context here, so whether this actor can open it is unknown)"
-    path = rel if pathlib.Path(ctx.drive_root).resolve(strict=False) == canonical_root.resolve(strict=False) else str(source)
-    return f"read_file(root='runtime_data', path={path!r})" + _READER_AUTHORITY_NOTE
-
-
 def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[str]:
-    """My own recent process: this task's windows and the supervisor.
+    """My own recent process: this task's windows.
 
     Conversations are not here: the current room's open conversation, its task facts
     and the other live rooms are the memory view's (``memory_view.render_room``).
     Earlier versions' post-task reflection logs stay at their sources for their
     readers (``journal_read(source='reflections')``, ``read_file``); no context
-    renders them.
+    renders them. The supervisor's journal reaches the mind as the Runtime
+    section's ``vitals`` (boot, stalls, the busy minute), not as a section.
     """
-    sections = []
-
     # Each task reads ITS OWN newest rows through a bounded window (#131): a
     # global tail filtered afterwards handed every task whatever share of the
     # shared suffix it happened to occupy (Memory.recent_activity_sections).
-    from ouroboros.jsonl_tail import coverage_line
-
-    sections.extend(memory.recent_activity_sections(task_id))
-
-    supervisor_rows, supervisor_coverage = memory.read_task_recent("supervisor.jsonl", "", 200)
-    supervisor_summary = memory.summarize_supervisor(supervisor_rows)
-    if supervisor_summary:
-        sections.append(f"## Supervisor ({coverage_line(supervisor_coverage)})\n\n" + supervisor_summary)
-
-    return sections
+    return list(memory.recent_activity_sections(task_id))
 
 
 def _build_registry_digest(env: Any) -> str:
@@ -1161,7 +1136,7 @@ def _capture_context_core(
         semi_stable_parts.append(review_facts_block())
     except Exception:
         log.warning("Failed to build the Review block", exc_info=True)
-    semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable"))
+    semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable", ctx=ctx))
     from ouroboros.skill_catalogue import always_in_context_section, discover_context_skills
     skills = discover_context_skills(canonical_root)  # one view: the always-on block here, the catalog below
     if always_on := always_in_context_section(skills):

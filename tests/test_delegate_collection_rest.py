@@ -16,8 +16,15 @@ from ouroboros.tools.delegate_terminal_evidence import collect_and_deliver_termi
 from ouroboros.tools.registry import ToolContext
 from tests._delegate_capture_child import capture_child  # noqa: F401
 from tests.test_delegate_body_collection import started, terminal
-from tests.test_delegate_capture_generations import _prepared
 from tests.test_delegate_collection_recovery import driven_runtime  # noqa: F401
+from tests.test_recovered_capture import prepared
+
+
+def _prepared(root):
+    """An ordinary run's real private copy, its named evidence written, beside ``root``."""
+    material = root.with_name(root.name + "-material")
+    material.mkdir()
+    return prepared(material, root, "ordinary")
 
 
 @pytest.mark.parametrize("debt", ["money", "output", "gone", "over_cap", "money_and_over_cap", "daemon_down"])

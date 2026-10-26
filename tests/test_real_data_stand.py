@@ -2,7 +2,8 @@
 
 Both rules are proved in both directions on a fake install: the arm profile's canaries pass
 and catch a profile that forgets a rule; a snapshot refuses a running install and copies a
-quit one without credentials.
+quit one without credentials. The stand is macOS-only, so each test imports its module after
+its platform skip: ``snapshot`` loads libSystem on import, which would fail collection elsewhere.
 """
 
 from __future__ import annotations
@@ -16,8 +17,6 @@ import subprocess
 import sys
 
 import pytest
-
-from devtools.real_data import sandbox, snapshot
 
 
 def _fake_install(root: pathlib.Path, settings: dict) -> pathlib.Path:
@@ -35,6 +34,8 @@ def _fake_install(root: pathlib.Path, settings: dict) -> pathlib.Path:
 @pytest.mark.skipif(sys.platform != "darwin" or not pathlib.Path("/usr/bin/sandbox-exec").exists(),
                     reason="Seatbelt is macOS-only")
 def test_canaries_prove_the_arm_profile_and_catch_a_missing_rule(tmp_path):
+    from devtools.real_data import sandbox
+
     home = _fake_install(tmp_path, {})
     arm = tmp_path / "arm"
     arm.mkdir()
@@ -57,6 +58,8 @@ def test_canaries_prove_the_arm_profile_and_catch_a_missing_rule(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="clonefile is macOS-only")
 def test_snapshot_refuses_a_running_install_and_copies_a_quit_one_without_credentials(tmp_path):
+    from devtools.real_data import snapshot
+
     home = _fake_install(tmp_path, {"OPENROUTER_API_KEY": "sk-not-for-the-copy", "TELEGRAM_BOT_TOKEN": "tg-token",
                                     "OUROBOROS_MODEL": "openai/real-model", "OUROBOROS_MAX_WORKERS": 3})
     rules = {"model_keys": ("OUROBOROS_MODEL",), "credential_keys": ("OPENROUTER_API_KEY",), "stub_slug": "stub/model"}

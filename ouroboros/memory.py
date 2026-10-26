@@ -20,6 +20,7 @@ from ouroboros.platform_layer import (
 log = logging.getLogger(__name__)
 
 _SCRATCHPAD_MAX_BLOCKS = 10
+_DIALOGUE_LOGS = frozenset({"chat.jsonl", "progress.jsonl"})  # their rows live in state/dialog.sqlite
 
 
 def render_scratchpad_markdown(
@@ -616,9 +617,11 @@ class Memory:
         quota went unmet while older archives stayed unopened (BIBLE P1: the
         section discloses it; ``read_file`` on the log pages the rest).
         ``iter_objects``, ``list_archives`` and ``stat`` are the reader's parser,
-        archive-listing and metadata seams, passed through unchanged.
+        archive-listing and metadata seams, passed through unchanged; without any,
+        the log's ``archive/`` listing is reused until the log rotates and an
+        archive that holds none of this task's rows is not parsed again for it.
         """
-        if log_name in {"chat.jsonl", "progress.jsonl"}:
+        if log_name in _DIALOGUE_LOGS:
             from ouroboros import dialogue_store as ds
 
             stream, wanted, limit = log_name[:-6], str(task_id or "").strip(), max(1, int(want))
@@ -641,7 +644,7 @@ class Memory:
                         "live_size": upper, "live_window": upper - lower}
             return [entry.row for entry in reversed(records)], coverage
 
-        from ouroboros.jsonl_tail import read_rotated_jsonl_entries
+        from ouroboros.jsonl_tail import read_rotated_jsonl_entries, remembered_listing, task_archive_parser
         from ouroboros.tool_call_log import counts_as_call, logical_calls
 
         wanted = str(task_id or "").strip()
@@ -658,6 +661,9 @@ class Memory:
 
         stem = log_name[:-len(".jsonl")] if log_name.endswith(".jsonl") else log_name
         coverage: Dict[str, Any] = {"task_id": wanted, "source": f"logs/{log_name}"}
+        if iter_objects is None and list_archives is None and stat is None:
+            list_archives = remembered_listing(self.logs_path(log_name))
+            iter_objects = task_archive_parser(self.logs_path(log_name), wanted) if wanted else None
         try:
             rows = read_rotated_jsonl_entries(
                 self.logs_path(log_name), self.drive_root / "archive", stem,
@@ -741,16 +747,7 @@ class Memory:
         from ouroboros.jsonl_tail import coverage_line
 
         sections: List[str] = []
-        # (log, header, formatter, quota, note): the note names what the formatter really
-        # does with more rows than it renders (progress renders its newest 50; tools renders
-        # 10 and scans 20 for review markers; events counts every row it is given).
-        for log_name, header, formatter, want, note in (
-            ("progress.jsonl", "## Recent progress", lambda rows: self.summarize_progress(rows, limit=50), 50,
-             lambda n: f"newest 50 rendered of {n} loaded" if n > 50 else ""),
-            ("tools.jsonl", "## Recent tools", self.summarize_tools, 20,
-             lambda n: f"10 rendered, {min(n, 20)} scanned for review markers" if n > 10 else ""),
-            ("events.jsonl", "## Recent events", self.summarize_events, 200, lambda n: ""),
-        ):
+        for log_name, header, formatter, want, note in self._recent_sections():
             source = own_drive if own_drive is not None and log_name != "progress.jsonl" else self
             entries, coverage = source.read_task_recent(log_name, task_id, want if task_id else 200)
             if own_drive is not None:  # a child's header says which drive each window came from
@@ -765,6 +762,28 @@ class Memory:
             if summary or coverage.get("gaps") or coverage.get("archives_bounded"):
                 sections.append(f"{header} ({coverage_line(coverage)})" + (f"\n\n{summary}" if summary else ""))
         return sections
+
+    def _recent_sections(self) -> tuple:
+        # (log, header, formatter, quota, note): the note names what the formatter really
+        # does with more rows than it renders (progress renders its newest 50; tools renders
+        # 10 and scans 20 for review markers; events counts every row it is given).
+        return (
+            ("progress.jsonl", "## Recent progress", lambda rows: self.summarize_progress(rows, limit=50), 50,
+             lambda n: f"newest 50 rendered of {n} loaded" if n > 50 else ""),
+            ("tools.jsonl", "## Recent tools", self.summarize_tools, 20,
+             lambda n: f"10 rendered, {min(n, 20)} scanned for review markers" if n > 10 else ""),
+            ("events.jsonl", "## Recent events", self.summarize_events, 200, lambda n: ""),
+        )
+
+    def remember_log_listings(self) -> None:
+        """Off the turn (the boot): list ``archive/`` once for each rotated log the recent sections
+        read, so a process's first owner turn starts from that remembered listing (``read_task_recent``);
+        a log rotated since, or a listing that could not be remembered, is listed by its turn as before."""
+        from ouroboros.jsonl_tail import remembered_listing
+
+        for log_name, *_section in self._recent_sections():
+            if log_name not in _DIALOGUE_LOGS:
+                remembered_listing(self.logs_path(log_name))(self.drive_root / "archive", log_name[:-len(".jsonl")])
 
     def summarize_progress(self, entries: List[Dict[str, Any]], limit: int = 15) -> str:
         if not entries:
@@ -833,16 +852,6 @@ class Memory:
             lines.append("\nRecent errors:")
             lines.extend(f"  {e.get('type', '?')}: {short(str(e.get('error', '')), 120)}" for e in errors[-10:])
         return "\n".join(lines)
-
-    def summarize_supervisor(self, entries: List[Dict[str, Any]]) -> str:
-        if not entries:
-            return ""
-        for e in reversed(entries):
-            if e.get("type") in ("launcher_start", "restart", "boot"):
-                branch = e.get("branch") or e.get("git_branch") or "?"
-                sha = short(str(e.get("sha") or e.get("git_sha") or ""), 12)
-                return f"{e['type']}: {e.get('ts', '')} branch={branch} sha={sha}"
-        return ""
 
     def _default_scratchpad(self) -> str:
         return f"# Scratchpad\n\nUpdatedAt: {utc_now_iso()}\n\n(empty — write anything here)\n"

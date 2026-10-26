@@ -62,6 +62,27 @@ def _name(value):
     return value
 
 
+def _arg(name, value):
+    """``name=value`` as the call spelled it in JSON, bounded: a refusal names field and value."""
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return f"{name}={text if len(text) <= 64 else text[:60] + '...'}"
+
+
+def _over_input(subject, size, cap, repair=""):
+    """A read past the fixed per-call input budget, which every json/jsonl source spends before
+    select or max_bytes apply. ``size`` is exact, or ``None`` when a bounded read only proved it
+    larger than ``cap``; IDs share the budget, so after earlier IDs ``cap`` is what they left."""
+    budget = (f"the fixed {sql.MAX_BYTES}-byte input budget" if cap >= sql.MAX_BYTES
+              else f"the {cap} bytes earlier ids left of the {sql.MAX_BYTES}-byte input budget")
+    hints = [repair] if repair else []
+    if cap < sql.MAX_BYTES and (size is None or size <= sql.MAX_BYTES):
+        hints.append("query fewer ids per call")
+    elif not repair:
+        hints.append("select and max_bytes apply after this read and cannot admit it")
+    measured = f"is {size} bytes, over" if size is not None else "is larger than"
+    return ValueError(f"{subject} {measured} {budget}; " + "; ".join(hints))
+
+
 def _json_type(value):
     if value is None:
         return "null"
@@ -196,7 +217,7 @@ def _child_root(ctx, canonical, child):
     return roots[0]
 
 
-def _jsonl(path, where, tail, cap):
+def _jsonl(path, where, tail, cap, subject):
     rows, consumed, partial = deque(maxlen=tail or None), 0, False
     whole = bytearray() if not where and not tail else None
     with path.open("rb") as stream:
@@ -206,8 +227,11 @@ def _jsonl(path, where, tail, cap):
             partial = True
         while line := stream.readline(cap - consumed + 1):
             consumed += len(line)
-            if consumed > cap:
-                raise ValueError("input byte limit exceeded; use tail or a narrower source")
+            if consumed > cap:  # A positive tail can overrun too if the input grows during the scan.
+                repair = ("retry after input growth settles" if tail else
+                          "a nonzero tail scans only the newest bytes and reports scan_truncated")
+                raise _over_input(f"{subject} scan (tail={tail})", None, cap,
+                                  f"read at least {consumed} bytes; {repair}")
             if whole is not None:
                 whole.extend(line)
             if not line.strip():
@@ -281,14 +305,14 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
             if size is None:
                 raise FileNotFoundError("task result not found")
             if size[0] > cap:
-                raise ValueError("task document exceeds input byte limit")
+                raise _over_input(f"task_result {identity} as stored", size[0], cap)
             value = txn.load(identity)
         raw = _canonical(value)
         return raw, value, True, False, len(raw), False
     raw = _retained_run(canonical, identity, child) if kind == "run" else None
     if raw is not None:  # size and sha256 verified against the custody ref; read from the owner's store
         if len(raw) > cap:
-            raise ValueError("document exceeds input byte limit")
+            raise _over_input(f"run {identity}", len(raw), cap)
         return raw, json.loads(raw), False, False, len(raw), True
     if root is None:
         raise FileNotFoundError("owned child drive is unavailable")
@@ -296,16 +320,17 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if kind == "run" and root.parts[-2:] == ("task_drives", child):
         relative = f"delegated_runs/{identity}.json"
     path = _path(ctx, root, relative)
+    subject = f"{kind} {identity}".strip()
     if kind == "knowledge_history":
         raw, value, partial, consumed = _knowledge_history(path, where, tail)
         return raw, value, True, partial, consumed, False
     if op == "jsonl":
-        raw, value, partial, consumed = _jsonl(path, where, tail, cap)
+        raw, value, partial, consumed = _jsonl(path, where, tail, cap, subject)
         return raw, value, False, partial, consumed, False
     with path.open("rb") as stream:
         raw = stream.read(cap + 1)
-    if len(raw) > cap:
-        raise ValueError("document exceeds input byte limit")
+    if len(raw) > cap:  # the bounded read proves only a lower bound
+        raise _over_input(subject, None, cap)
     return raw, json.loads(raw), False, False, len(raw), False
 
 
@@ -319,28 +344,43 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
 
     result, plane = {}, ""
     try:
-        if op not in {"sql", "json", "jsonl", "blob"} or format not in {"json", "text"}:
-            raise ValueError("invalid op or format")
-        for value, low, high in ((max_bytes, 256, sql.MAX_BYTES), (max_rows, 1, 10000), (tail, 0, 10000)):
+        if op not in {"sql", "json", "jsonl", "blob"}:
+            raise ValueError(f"{_arg('op', op)}: use sql, json, jsonl or blob")
+        if format not in {"json", "text"}:
+            raise ValueError(f"{_arg('format', format)}: use json or text")
+        for name, value, low, high in (("max_bytes", max_bytes, 256, sql.MAX_BYTES), ("max_rows", max_rows, 1, 10000),
+                                       ("tail", tail, 0, 10000)):
             if type(value) is not int or not low <= value <= high:
-                raise ValueError("byte/row/tail limit outside the declared bounds")
+                raise ValueError(f"{_arg(name, value)}: use an integer from {low} to {high}")
         if type(timeout_sec) not in (int, float) or not 0 < timeout_sec <= 10:
             raise ValueError("timeout_sec must be greater than zero and at most 10")
         if snapshot is not None and type(snapshot) is not bool:
             raise ValueError("snapshot must be boolean")
-        if filter is not None and (op != "jsonl" or not isinstance(filter, dict)
+        if filter is not None and op != "jsonl":
+            raise ValueError(f"{_arg('filter', filter)} applies only to op=jsonl; omit it")
+        if filter is not None and (not isinstance(filter, dict)
                 or set(filter) != {"field", "op", "value"} or filter["op"] not in {"eq", "contains"}
                 or not isinstance(filter["field"], str) or not filter["field"]):
             raise ValueError("filter requires field, op=eq|contains and value (JSONL only)")
         for selector in (select, filter["field"] if filter else ""):
             if selector and (not isinstance(selector, str) or len(selector) > 512 or not _SELECTOR.fullmatch(selector)):
                 raise ValueError("select/filter fields accept dotted keys, [n] and [*]")
-        if op != "sql" and (query or db != "current" or snapshot is not None or max_rows != 100 or timeout_sec != 1):
-            raise ValueError("db/query/snapshot/max_rows/timeout_sec are SQL parameters")
-        if op in {"sql", "blob"} and (kind or ids is not None) or op != "blob" and (sha256 or blob_kind != "json"):
-            raise ValueError("source parameters do not belong to this operation")
-        if op != "jsonl" and tail != 100 or kind != "skill_state" and state_file != "review_job":
-            raise ValueError("tail is JSONL-only; state_file is skill_state-only")
+        # Another operation's or kind's parameter is refused only when it asks for something;
+        # its default value takes the omitted path.
+        rows = {"jsonl": "tail", "sql": "max_rows"}.get(op)
+        for owner, applies, given in (
+                ("op=sql", op == "sql", (("db", db, db != "current"), ("query", query, bool(query)),
+                                         ("snapshot", snapshot, snapshot is not None),
+                                         ("max_rows", max_rows, max_rows != 100), ("timeout_sec", timeout_sec, timeout_sec != 1))),
+                ("op=json or op=jsonl", op in {"json", "jsonl"}, (("kind", kind, bool(kind)), ("ids", ids, ids is not None))),
+                ("op=blob", op == "blob", (("sha256", sha256, bool(sha256)), ("blob_kind", blob_kind, blob_kind != "json"))),
+                ("op=jsonl", op == "jsonl", (("tail", tail, tail != 100),)),
+                ("kind=skill_state", kind == "skill_state", (("state_file", state_file, state_file != "review_job"),))):
+            named = [(name, value) for name, value, used in given if used]
+            if named and not applies:
+                hint = f"; {rows} bounds rows for op={op}" if rows and {"tail", "max_rows"} & {n for n, _ in named} else ""
+                raise ValueError(f"{', '.join(_arg(*item) for item in named)} {'applies' if len(named) == 1 else 'apply'} "
+                                 f"only to {owner}; omit {'it' if len(named) == 1 else 'them'}{hint}")
         if kind == "storage" and child_task_id:
             raise ValueError("storage is installation-wide; it has no child selector")
         if kind == "knowledge_history" and child_task_id:
@@ -361,7 +401,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
         if op == "sql":
             if db not in {"current", "money", "packs"} or not isinstance(query, str) or not query.strip() or len(query) > 16384:
                 raise ValueError("sql requires db=current|money|packs and one query of at most 16384 characters")
-            use_snapshot = db == "money" if snapshot is None else snapshot
+            use_snapshot = False if snapshot is None else snapshot
             if db == "current" and not use_snapshot and timeout_sec > sql.CURRENT_HOLD_SEC:
                 raise ValueError(f"a direct db=current read stops at {sql.CURRENT_HOLD_SEC:g} s because task writes wait "
                                  "on it; use snapshot=true for a longer query")
@@ -397,11 +437,13 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
             value = json.loads(raw) if blob_kind == "json" else {"hex": raw.hex()} if blob_kind == "bin" else raw.decode("utf-8")
             source.update(sha256=sha256, blob_kind=blob_kind)
         else:
-            if kind not in _FILES and kind != "task_result" or state_file not in _STATES:
-                raise ValueError("invalid kind or state_file")
+            if kind not in _FILES and kind != "task_result":
+                raise ValueError(f"{_arg('kind', kind)}: op={op} needs one of task_result, {', '.join(_FILES)}")
+            if state_file not in _STATES:
+                raise ValueError(f"{_arg('state_file', state_file)}: use one of {', '.join(_STATES)}")
             is_lines = kind.endswith("_log") or kind in {"verification_receipts", "knowledge_history"}
             if (op == "jsonl") != is_lines:
-                raise ValueError("this kind requires " + ("jsonl" if is_lines else "json"))
+                raise ValueError(f"kind={kind} requires op=" + ("jsonl" if is_lines else "json"))
             identities = ids if ids is not None else ([ctx.task_id] if kind == "verification_receipts" else [""])
             if not isinstance(identities, list) or not 1 <= len(identities) <= 32:
                 raise ValueError("ids must be an array of 1..32 identities")
@@ -426,9 +468,12 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                     ctx, root, kind, identity, _name(child_task_id or ctx.task_id) if kind == "run" else "",
                     state_file, op, filter, tail, remaining, canonical)
                 retained += owned
+                if consumed > remaining:  # history rows and a rebuilt task document are measured only here
+                    history = kind == "knowledge_history"
+                    raise _over_input(f"{kind} {identity}".strip() + (" without note bodies" if history else " as canonical JSON"),
+                                      consumed, remaining,
+                                      "keep fewer rows with tail or filter; select applies only after this check" if history else "")
                 remaining -= consumed
-                if remaining < 0:
-                    raise ValueError("input byte limit exceeded")
                 if select:
                     value = _select(value, select)
                     raw = _canonical(value)
@@ -453,8 +498,16 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 if not isinstance(value, str):
                     raise ValueError("format=text requires exactly one selected string")
                 raw = value.encode("utf-8")
-            if len(raw) > max_bytes or len(_canonical(value)) > max_bytes:
-                raise ValueError("selected bytes exceed max_bytes; narrow select or raise the limit")
+            if (need := max(len(raw), len(_canonical(value)))) > max_bytes:
+                # Both the exact bytes and their canonical JSON must fit; format=text strings differ.
+                sizes = f"{len(raw)} bytes" + (f" ({len(_canonical(value))} as canonical JSON)" if need != len(raw) else "")
+                raise_to = (f"raise max_bytes to at least {need} (at most {sql.MAX_BYTES})" if need <= sql.MAX_BYTES
+                            else f"no max_bytes admits it (at most {sql.MAX_BYTES})")
+                narrow = {"jsonl": "select, filter or tail", "sql": "select or the query",
+                          "json": "select" + (" or fewer ids" if len(source.get("ids") or ()) > 1 else ""),
+                          "blob": "select" if blob_kind == "json" else ""}[op]
+                raise ValueError(f"selected result is {sizes}, over max_bytes={max_bytes}; {raise_to}"
+                                 + (f", or narrow it with {narrow}" if narrow else ""))
             source["plane"] = plane
             result = dict(status="ok", data=value, source=source, reconstructed=reconstructed)
             if save_as:
@@ -475,9 +528,10 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
 def get_tools():
     return [ToolEntry("query_data", {"name": "query_data", "description": (
         "Read runtime facts, money, pack indexes, typed JSON/JSONL and verified blobs. No paths accepted. "
-        "Current SQL exposes tasks facts; use json/task_result for bodies. Money snapshots default on. "
+        "Current SQL exposes tasks facts; use json/task_result for bodies. SQL defaults to guarded direct reads. "
         f"Current-store reads hold the lock task writes wait on: at most {sql.CURRENT_HOLD_SEC:g} s; longer: snapshot=true. "
-        "One allocating SQL function's TIME is not bounded by interrupt (its memory is); the child has a deadline. "
+        "One SQL operation budget spans acquisition, optional snapshot copy/check and query; deadlines name the phase. "
+        "The supervised child bounds functions that outlast interrupt, with separate startup/cleanup allowance. "
         "save_as retains exact whole-record bytes in the calling task's artifact_store with path/sha256/size/source. "
         "Projections use sorted UTF-8 JSON; store documents and multi-ID bundles are flagged reconstructed. "
         "format=text saves one selected string exactly. Complete tool output is retained before any delivery cut. "
@@ -492,18 +546,23 @@ def get_tools():
             "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 32,
                     "description": "Task, run, review-record or skill names; one returns its value, several return an ID map."},
             "child_task_id": {"type": "string", "description": "Owned descendant's execution drive; default caller drive. Task documents/ledger/skills and the default queue files use the installation owner's state."},
-            "state_file": {"type": "string", "enum": list(_STATES), "default": "review_job"},
+            "state_file": {"type": "string", "enum": list(_STATES), "default": "review_job", "description": "kind=skill_state only."},
             "sha256": {"type": "string", "description": "Blob SHA-256; the host locates loose or packed bytes, locally first, then the owner's when absent and readable."},
-            "blob_kind": {"type": "string", "enum": ["json", "txt", "bin"], "default": "json"},
+            "blob_kind": {"type": "string", "enum": ["json", "txt", "bin"], "default": "json", "description": "op=blob only."},
             "select": {"type": "string", "description": "Dotted keys, [n], [*], e.g. primary_output.text or [*].tool. Applied per ID after filter/tail."},
             "filter": {"type": "object", "required": ["field", "op", "value"], "additionalProperties": False,
+                       "description": "op=jsonl only; keeps whole rows before tail.",
                        "properties": {"field": {"type": "string"}, "op": {"type": "string", "enum": ["eq", "contains"]}, "value": {}}},
             "tail": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 100,
-                     "description": "JSONL: last matching rows; 0 reads from start. An 8 MiB scan window (256 MiB for knowledge_history) reports scan_truncated."},
+                     "description": "JSONL: last matching rows; 0 reads from start. An 8 MiB scan window shared by ids (256 MiB for knowledge_history) reports scan_truncated."},
             "max_rows": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
-            "max_bytes": {"type": "integer", "minimum": 256, "maximum": sql.MAX_BYTES, "default": 65536},
-            "snapshot": {"type": "boolean", "description": "SQL snapshot; default true for money, false otherwise."},
-            "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1},
+            "max_bytes": {"type": "integer", "minimum": 256, "maximum": sql.MAX_BYTES, "default": 65536, "description": (
+                "Output budget after select/filter/tail (canonical JSON counts); op=sql stops fetching rows at it "
+                f"(truncated=true) before select. The fixed {sql.MAX_BYTES >> 20} MiB input budget, shared by ids, "
+                "is separate and precedes select.")},
+            "snapshot": {"type": "boolean", "default": False, "description": "SQL: opt in to a checked disposable snapshot; default false for every db. Copy/check share the operation budget."},
+            "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1,
+                            "description": "SQL operation seconds across acquisition/copy/check/query, not per phase. Executor startup/cleanup is separately bounded."},
             "save_as": {"type": "string", "description": "One plain immutable artifact filename in the CALLING task."},
             "format": {"type": "string", "enum": ["json", "text"], "default": "json"},
             **RESULT_VIEW_PARAMS,

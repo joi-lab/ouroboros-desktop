@@ -27,12 +27,13 @@ from ouroboros import store_task_cards
 from ouroboros.utils import machine_json
 
 VERSION = 6
+LIST_VERSION = 9
 JOB = "hot_facts"
 TASK_COLUMNS = {
     "owner_pause_state": "TEXT", "owner_pause_fence_id": "TEXT", "owner_pause_facts": "TEXT",
     "budget_pause_state": "TEXT", "budget_pause_attempt": "INTEGER", "budget_pause_facts": "TEXT",
     "post_task_synthesis": "TEXT", "owner_wait_state": "TEXT", "owner_wait_reason": "TEXT",
-    "control_valid": "INTEGER",
+    "control_valid": "INTEGER", "list_stable": "INTEGER",
 }
 CUSTODY_COLUMNS = {
     "root_task_id": "TEXT", "billing_group_id": "TEXT", "output_unread": "INTEGER",
@@ -44,6 +45,7 @@ REQUEST_SETS = ("custody_open", "custody_refused")
 REQUEST_UNDERIVED = "set_name IN ('custody_open','custody_refused') AND request_root_task_id IS NULL"
 INDEXES = (
     f"CREATE INDEX IF NOT EXISTS tasks_underived_hot ON tasks(task_id) WHERE {TASK_UNDERIVED}",
+    "CREATE INDEX IF NOT EXISTS tasks_list_stable ON tasks(list_stable, status, ts, task_id)",
     "CREATE INDEX IF NOT EXISTS tasks_underived_root ON tasks(task_id) WHERE root_task_id IS NULL",
     "CREATE INDEX IF NOT EXISTS tasks_owner_pause ON tasks(owner_pause_state, task_id) WHERE owner_pause_state<>''",
     "CREATE INDEX IF NOT EXISTS tasks_budget_pause ON tasks(budget_pause_state, task_id) WHERE budget_pause_state<>''",
@@ -83,6 +85,8 @@ def upgrade(txn) -> None:
                 txn.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     if "request_root_task_id" not in {row["name"] for row in txn.conn.execute("PRAGMA table_info(obligations)")}:
         txn.conn.execute("ALTER TABLE obligations ADD COLUMN request_root_task_id TEXT")
+    # Schema 9 extends the underived predicate; replace its schema-6 definition.
+    txn.conn.execute("DROP INDEX IF EXISTS tasks_underived_hot")
     for sql in (*INDEXES, INVALIDATE_CUSTODY, INVALIDATE_REQUEST):
         txn.conn.execute(sql)
     owed = any(txn.conn.execute(f"SELECT 1 FROM {table} INDEXED BY {index} WHERE {where} LIMIT 1").fetchone()
@@ -96,6 +100,8 @@ _UNDERIVED_PROBES = (("tasks", "tasks_underived_hot", TASK_UNDERIVED),
 
 
 def task_columns(document: dict) -> dict:
+    from ouroboros.task_status import stored_list_order_is_final
+
     fence = document.get("owner_pause") or {}
     pause = document.get("budget_pause")
     pause = pause if isinstance(pause, dict) else {}
@@ -118,6 +124,7 @@ def task_columns(document: dict) -> dict:
         "owner_wait_state": str(wait.get("state") or "") if isinstance(wait, dict) else "",
         "owner_wait_reason": str(wait.get("reason") or "") if isinstance(wait, dict) else "",
         "control_valid": int(isinstance(document.get("status"), str) and bool(document["status"].strip())),
+        "list_stable": int(stored_list_order_is_final(document)),
     }
 
 
@@ -179,7 +186,10 @@ def _read_rows(txn, ids) -> dict:
     if not ids:
         return {}
     modern = int(txn.meta("schema_version") or VERSION) >= VERSION
-    columns = "," + ",".join(f"t.{name}" for name in TASK_COLUMNS) if modern else ""
+    # Control readers do not need list selection; its backfill must not make
+    # already-derived pause/phase facts read bodies again.
+    names = [name for name in TASK_COLUMNS if name != "list_stable"]
+    columns = "," + ",".join(f"t.{name}" for name in names) if modern else ""
     cards, join = store_task_cards.select(txn)  # the card facts ride the hot row: the census needs no document
     # A derived row answers from its columns alone: the writer derived them from the body it validated in
     # its own transaction, and an action that needs body authority (Resume, adoption, every mutation)
@@ -192,7 +202,7 @@ def _read_rows(txn, ids) -> dict:
     # Underived rows alone pay their old strict read, coherent with their sequence; a body that does not
     # parse keeps that row's authority unknown (no Resume is offered from it).
     for tid, row in found.items():
-        if not modern or any(row.get(name) is None for name in TASK_COLUMNS):
+        if not modern or any(row.get(name) is None for name in names):
             body = txn.body_text(tid)
             try:
                 document = None if body is None else json.loads(body)

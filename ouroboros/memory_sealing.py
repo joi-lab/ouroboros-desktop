@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from ouroboros import chat_chain, dialogue_store, memory_inventory
+from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
 
 
@@ -55,7 +55,9 @@ def _terminal_after(record):
 
 
 def capture_terminal_rows(root, records):
-    """Group the writers' later terminal rows once, through task indexes at one captured boundary."""
+    """Group the writers' later terminal rows once, from the stored facts of the rows after the legacy frontier
+    (``memory_inventory.terminal_rows``): a page's writer ran after the chronicle's activation, so its later
+    terminal rows lie after the frontier. Each is ``(address, {"type", "status"}, pos)``."""
     starts = {}
     for record in records:
         task_id = _terminal_writer(record)
@@ -64,27 +66,18 @@ def capture_terminal_rows(root, records):
             starts[key] = min(starts.get(key, _terminal_after(record)), _terminal_after(record))
     if not starts:
         return {}
-    upper = dialogue_store.stream_end(root, "chat")
-    lower = chat_chain.position_boundary(root, min(starts.values()) + 1)
-    dialogue_store.require_imported(root, "chat", lower=lower, upper=upper)
-    tasks = {task_id for _room, task_id in starts}
-    facts, grouped, after = memory_inventory.membership_facts(root), {}, lower - 1
-    while entries := dialogue_store.task_rows(root, tasks, stream="chat", after=after, before=upper):
-        for entry in entries:
-            row = entry.row
-            task_id = str(row.get("task_id") or "")
-            host = row.get("type") in ("task_summary", "project_completion_summary")
-            final = row.get("direction") == "out" and not row.get("is_progress") and (
-                row.get("terminal_origin") or row.get("task_terminal_status") or row.get("task_phase") == "finalizing")
-            if task_id not in tasks or not (host or final):
-                continue
-            rooms = memory_inventory.rooms_of_row(memory_inventory.row_meta(row), facts)
-            for address, _row, pos in chat_chain._addressed(root, (entry,)):
-                for room in rooms:
-                    key = (room, task_id)
-                    if key in starts and pos > starts[key]:
-                        grouped.setdefault(key, []).append((address, row, pos))
-        after = entries[-1].seq
+    tasks, first = {task_id for _room, task_id in starts}, min(starts.values())
+    chosen = [(address, meta, pos, status) for address, meta, pos, status in memory_inventory.terminal_rows(root)
+              if pos > first and str(meta.get("task_id") or "") in tasks]
+    facts, grouped = memory_inventory.membership_facts(root), {}
+    # The terminal rows' task lineages in one read a generation, then their rooms.
+    facts.rooms.warm({str(meta.get(key) or "") for _address, meta, _pos, _status in chosen
+                      for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+    for address, meta, pos, status in chosen:
+        task_id = str(meta["task_id"])
+        for room in memory_inventory.rooms_of_row(meta, facts):
+            if (room, task_id) in starts and pos > starts[(room, task_id)]:
+                grouped.setdefault((room, task_id), []).append((address, {"type": meta.get("type"), "status": status}, pos))
     return grouped
 
 

@@ -1,23 +1,25 @@
 /**
- * Consciousness in a room's bar (docs/DESIGN.md "Page header"): one compact chip right after the room's status, and
- * its Shade. The chip says the state at a glance — the house brain and the next wake (`14:20`), `Off`, or `Evolving`
+ * Consciousness in a room's bar (docs/DESIGN.md "Page header"): one compact chip at the head of the bar's end group,
+ * and its Shade. The chip says the state at a glance — the house brain and the next wake (`14:20`), `Off`, or `Evolving`
  * while an Evolve campaign runs, even with consciousness off — and carries one status mark (status_mark.js, DESIGN
  * "Status marks"): the moving dots while it is awake, the amber dot only for the owner's move (a spending limit that
  * stopped it, a first conversation it waits for, a campaign that waits for the owner), a failure's red dot, a faint
  * ring while unconfirmed, two bars for a paused wake. Its accessible name says the whole state in words.
  *
- * Pressing the chip opens the Shade and switches nothing: the state line (consciousness_dashboard.headlineView), Start
- * or Stop (the `/bg` command the Dashboard sends), the money of the last 24 hours, the three last wakes (one
- * `GET /api/consciousness` per opening, no poller of its own), `Dashboard ›` and, while evolving, `Evolution ›`. The
- * Shade is the room Shade's material and gestures (room_work.js): it hangs from the bar's bottom edge; an outside
- * press, Escape or focus leaving it close it. The facts are the `/api/state` snapshot the room already reads.
+ * Pressing the chip opens the Shade and switches nothing: the host's state line (consciousness_dashboard.headlineView),
+ * Start or Stop (the `/bg` command the Dashboard sends), the money of the last 24 hours, the three last wakes in the
+ * Dashboard's phase words (one `GET /api/consciousness` per opening, no poller of its own), `Dashboard ›` and, while
+ * evolving, `Evolution ›`. The Shade is the room's work list material and gestures (room_work.js): it hangs under the
+ * bar's capsules; an outside press, Escape or focus leaving it close it. The facts are the `/api/state` snapshot the
+ * room already reads.
  */
-import { OUTCOME_WORDS, headlineView } from './consciousness_dashboard.js';
+import { headlineView } from './consciousness_dashboard.js';
 import { normalizeConsciousness, readConsciousness } from './consciousness_api.js';
-import { clockText } from './consciousness_words.js';
+import { clockText, wakePhaseText } from './consciousness_words.js';
 import { controlIcon } from './page_icons.js';
 import { createStatusMark, paintStatusMark } from './status_mark.js';
 import { formatUsd2 } from './utils.js';
+import { hangUnderCapsules } from './room_work.js';
 import { motionMs, reducedMotion } from './motion.js';
 
 // The owner's move (DESIGN "Status marks", amber): consciousness stopped by its spending limit or waiting for a first
@@ -70,12 +72,12 @@ export function allowanceText(snapshot) {
     return `${floor}${formatUsd2(spentUsd)} of ${formatUsd2(dailyUsd)} in the last 24 hours${degraded}`;
 }
 
-/** The three last wakes, newest first: time, its one short line, how it ended (a live one is still working). */
+/** The three last wakes, newest first: time, its one short line, and its phase in the Dashboard's words. */
 export function wakeRows(wakes) {
     return (Array.isArray(wakes) ? wakes : []).slice(0, WAKES_SHOWN).map((wake) => ({
         time: clockText(wake.startedAt) || '—',
         text: wake.summary || (wake.cause === 'focus' ? wake.placeLabel || 'A place' : 'Own time'),
-        outcome: !wake.finishedAt ? 'working' : OUTCOME_WORDS[wake.outcome] || wake.outcome || '',
+        outcome: wakePhaseText(wake),
     }));
 }
 
@@ -233,6 +235,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         open = true;
         if (folding) { const fold = folding; folding = null; shade.inert = false; fold.cancel(); }
         paintShade();
+        hangUnderCapsules(bar, anchor);
         shade.hidden = false;
         chip.setAttribute('aria-expanded', 'true');
         chip.dataset.open = '1';
@@ -288,6 +291,8 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         event.preventDefault();
         close();
     });
+    // The open list follows the bar's capsules when the window changes the bar.
+    if (doc.defaultView) listen(doc.defaultView, 'resize', () => { if (open) hangUnderCapsules(bar, anchor); });
     listen(shade, 'focusout', (event) => {
         const next = event.relatedTarget;
         if (open && next && !shade.contains(next) && next !== chip) close({ restoreFocus: false });

@@ -158,12 +158,17 @@ def test_assignment_retains_pending_when_claim_authority_raises(qenv, monkeypatc
 def test_timeout_reaper_does_not_clone_over_unreadable_cancel_authority(
     tmp_path, monkeypatch,
 ):
-    """Every physical retry must prove that the old id has no cancel intent."""
+    """Every physical retry must prove that the old id has no cancel intent.
+
+    Silence alone reaps nothing (#1376); the task's explicit deadline is the timeout."""
+    import datetime as dt
+
     from supervisor import queue, workers
 
     now = 10_000.0
     task_id = "timeout-over-corrupt-intent-store"
-    task = {"id": task_id, "type": "task", "chat_id": 0}
+    task = {"id": task_id, "type": "task", "chat_id": 0,
+            "deadline_at": dt.datetime.fromtimestamp(now + 100.0, tz=dt.timezone.utc).isoformat()}
     meta = {
         "task": task,
         "started_at": now - 1000.0,
@@ -190,9 +195,14 @@ def test_timeout_reaper_does_not_clone_over_unreadable_cancel_authority(
     projection.write_bytes(b'{"intents": [broken')
 
     queue._enforce_task_timeouts_locked(workers, now, 0, {})
+    assert jobs == [] and task_id in running  # silent before its deadline: attention only
+    assert meta["silence_attention"]["state"] == "pending_attention"
+
+    queue._enforce_task_timeouts_locked(workers, now + 200.0, 0, {})
 
     assert len(jobs) == 1
     assert jobs[0]["task_id"] == task_id
+    assert jobs[0]["terminal_reason"] == "deadline"
     assert jobs[0]["will_retry"] is False
     assert jobs[0]["retry_task_id"] == ""
     assert task_id not in running

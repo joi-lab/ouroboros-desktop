@@ -178,7 +178,7 @@ test('one status-word family: the card phase matches the host over the shared fi
     );
     assert.ok(fixture.cases.length >= 10);
     for (const { name, record, phase, headline, acceptance_clause: clause, described_clause: described,
-        undescribed = [] } of fixture.cases) {
+        undescribed = [], exact_clause = false } of fixture.cases) {
         const resolved = taskDoneIsTerminal(record) ? taskTerminalPhase(record) : 'working';
         assert.deepEqual(taskPresentation(resolved), { phase, headline }, name);
         if (clause !== undefined) {
@@ -187,6 +187,7 @@ test('one status-word family: the card phase matches the host over the shared fi
             const expected = described ?? clause;
             const detail = taskReasonDetail(record);
             assert.ok(expected === detail || expected === `${detail}.`, `${name}: ${detail} vs ${expected}`);
+            if (exact_clause) assert.equal(detail, expected, name);
             assert.deepEqual(taskReasonCodes(record), undescribed, name);
         }
     }

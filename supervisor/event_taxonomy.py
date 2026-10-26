@@ -193,6 +193,9 @@ EVENT_DISPOSITIONS: Dict[str, EventDisposition] = {
     "typing_start": _handled(
         "supervisor.events_chat_delivery", "ouroboros/agent.py", "ouroboros/model_sleep.py",
         note="a start, or the same attempt running again after a wait (``announce_resumed``)"),
+    "ui_i18n_updated": _handled(
+        "supervisor.events_worker_reports", "ouroboros/tools/control_ui_translation.py",
+        note="the memory file is already written; the host broadcasts the same-named frame to its windows"),
 
     # --- telemetry_only: recorded in the ledger, no runtime action follows -----
     "plan_task_deadline_skip": _telemetry(
@@ -223,7 +226,7 @@ EVENT_DISPOSITIONS: Dict[str, EventDisposition] = {
     # --- server_intercept -----------------------------------------------------
     "restart_request": EventDisposition(
         SERVER_INTERCEPT, "ouroboros.server_liveness",
-        ("ouroboros/agent_task_pipeline.py", "supervisor/evolution_lifecycle.py"),
+        ("ouroboros/tools/control_events.py", "ouroboros/agent_task_pipeline.py", "supervisor/evolution_lifecycle.py"),
         "restarting the process is not something the supervisor thread can do to "
         "itself, so the loop's bounded drain routes this one to the server's restart "
         "handler before dispatch",

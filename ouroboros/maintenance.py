@@ -274,6 +274,36 @@ def _dialogue_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[s
     return {"state": str(row.get("state") or "unknown"), "items": int(row.get("done") or 0)}
 
 
+def _tail_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
+    """The chronicle index's stored tail facts are absent, unfinished or of another dialogue store or frontier
+    (``memory_inventory.tail_owed``: an update, a rebuilt index, a replaced store). A failed fill waits for the
+    child to run for another reason; an unreadable fact defers to the next look, never blocking the other jobs."""
+    from ouroboros.memory_inventory import tail_owed
+
+    if row.get("state") == "failed":
+        return child
+    try:
+        return tail_owed(root)
+    except Exception:
+        log.debug("Memory tail facts unreadable; the next look asks again", exc_info=True)
+        return False
+
+
+def _tail_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """``memory_inventory.fill_tail``, resumable at its stored prefix; this row keeps only its state."""
+    from ouroboros.memory_inventory import fill_tail
+
+    try:
+        report = fill_tail(root, should_stop)
+    except Exception as exc:
+        if not _contention(exc):
+            maintenance_jobs.record(root, "memory_tail", state="failed")
+        raise
+    if (maintenance_jobs.job(root, "memory_tail") or {}).get("state") != report["state"]:
+        maintenance_jobs.record(root, "memory_tail", state=report["state"])
+    return report
+
+
 def _hot_facts_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
     """Rows written before the hot-fact columns (or by an older writer since) wait for a classification
     pass (``store_hot_facts.run_hot_facts``); a root without such rows has nothing to do. A failed pass
@@ -304,6 +334,7 @@ JOBS: Dict[str, tuple] = {
     # then finishes in the same pass (the next pass rests; tests/test_cost_contract.py B6).
     "legacy_reconcile": (_legacy_due, _legacy_run),
     "dialogue_import": (_dialogue_due, _dialogue_run),  # the owner's history: newest segments first
+    "memory_tail": (_tail_due, _tail_run),  # after the import: the tail's positions are settled
     "hot_facts": (_hot_facts_due, _hot_facts_run),
     "ended_plan_asks": (plan_collection_job.due, plan_collection_job.run),
     "runtime_retirement": (maintenance_retirement.due, maintenance_retirement.run),

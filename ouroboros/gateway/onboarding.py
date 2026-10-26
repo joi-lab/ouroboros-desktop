@@ -63,11 +63,12 @@ from ouroboros.gateway.owner_settings import (
     unsaved_error,
 )
 from ouroboros.gateway._helpers import request_drive_root
+from ouroboros.gateway.onboarding_host import recorded_attempt
 from ouroboros.server_runtime import apply_runtime_provider_defaults, has_startup_ready_provider
 from ouroboros.skill_starter import after_onboarding, onboarding_skill_choices
 from ouroboros.settings_setup_contract import (
-    ONBOARDING_COMPLETED_KEY,
-    parse_subscription_intent,
+    ONBOARDING_ATTEMPT_KEY, ONBOARDING_COMPLETED_KEY,
+    parse_completion_attempt, parse_subscription_intent,
 )
 from ouroboros.subscription_install_presets import (
     PRESET_HARNESSES,
@@ -580,10 +581,9 @@ def _write_precondition(expect_preset: bool, expect_safety_light: bool, read_fin
     """Re-prove eligibility INSIDE the settings lock, against the state this
     write is about to overwrite.
 
-    The re-read is ``load_settings_lock_held``: the settings lock is not
-    re-entrant, so the ordinary ``load_settings()`` would wait out its full 2s
-    timeout and then read anyway — two seconds added to every onboarding save
-    for a lock it already holds."""
+    The re-read is ``load_settings_lock_held``, the read for a holder of the
+    settings lock, which is not re-entrant: the lock-free ``load_settings()``
+    re-reads an undecodable document behind that lock, which this caller holds."""
     def _check() -> str:
         from ouroboros.config import SETTINGS_PATH, load_settings_lock_held
 
@@ -631,10 +631,10 @@ def _prepared_settings(
     from ouroboros.config import load_settings
     from ouroboros.onboarding_wizard import prepare_onboarding_settings
 
-    # Completion keeps the ordinary runtime loader (including its established
-    # one-shot compatibility migrations).  The read-only preview passes the
-    # existing pure owner-reader so merely rendering an unsaved draft can never
-    # persist unrelated compatibility state.
+    # Completion keeps the ordinary runtime loader (its one-shot compatibility
+    # migrations persisted just before, ``migrate=True``).  The read-only preview
+    # passes the existing pure owner-reader, which never applies them, so merely
+    # rendering an unsaved draft can never persist unrelated compatibility state.
     old_settings = dict(base_settings) if base_settings is not None else load_settings()
     error = roster_save_error(body.get(SUBAGENTS_SETTING), old_settings, body)  # twins: only a roster change is judged
     prepared, error = ({}, error) if error else prepare_onboarding_settings(body, old_settings)
@@ -849,8 +849,9 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         body = None
-    if not isinstance(body, dict):
-        return unsaved_error("JSON body must be an object.", 400)
+    attempt_id, attempt_error = parse_completion_attempt(body)
+    if not isinstance(body, dict) or attempt_error:
+        return unsaved_error(attempt_error or "JSON body must be an object.", 400)
     from ouroboros.gateway.settings import ALLOW_EMPTY_REVIEW_POOL, REVIEW_LANES_KEY, review_pool_save_judgement, _run_settings_writer
 
     allow_empty_pool = body.get(ALLOW_EMPTY_REVIEW_POOL) is True
@@ -860,7 +861,7 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
 
     # Complete startup migrations before capturing freshness; our own migration is not a concurrent edit.
     from ouroboros.config import load_settings
-    migration = await _run_settings_writer(lambda *_: load_settings(), request, None)
+    migration = await _run_settings_writer(lambda *_: load_settings(migrate=True), request, None)
     if isinstance(migration, JSONResponse):
         return migration
     # The fingerprint still precedes the deciding read: concurrent owner changes must refuse the save.
@@ -919,9 +920,9 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
     if current.get(SUBAGENTS_SETTING):
         current.pop(REVIEW_LANES_KEY, None)
 
-    # The durable completion fact rides in the SAME write, whatever the preset
-    # did: a completion that connected nothing must still close the window.
-    current[ONBOARDING_COMPLETED_KEY] = utc_now_iso()
+    # The durable completion fact, with the client's attempt id ("" for none), rides in the
+    # SAME write, whatever the preset did: a completion that connected nothing must still close the window.
+    current.update({ONBOARDING_COMPLETED_KEY: utc_now_iso(), ONBOARDING_ATTEMPT_KEY: attempt_id})
     pending_mode = normalize_runtime_mode(current.get("OUROBOROS_RUNTIME_MODE"))
     active_mode = get_runtime_mode()
     boundary = CommitBoundary()
@@ -988,7 +989,7 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
 
     # Lazy, in the direction ``_persist`` already imports (settings.py imports
     # nothing from this module).
-    return await _run_settings_writer(_complete_locked, request, body)
+    return await _run_settings_writer(recorded_attempt(attempt_id, boundary, _complete_locked), request, body)
 
 
 __all__ = [

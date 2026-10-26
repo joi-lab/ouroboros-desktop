@@ -5,17 +5,32 @@ the Gateway (/api/state) and WebSocket activity pipeline have authoritative,
 thread-safe visibility into in-progress work without creating spurious queue records,
 and each turn's execution (its thread and the start facts it passed) so the
 liveness watchdog can say where a turn that stopped advancing stands.
+
+An owner turn leaves one receipt (``TurnExecution.receipt``): the canonical acceptance its wait
+started at, each start phase's seconds, the dispatch basis and its own store counts. It rides the
+turn's first dispatch frame by value to the supervisor's events consumer, which records it
+(``record_direct_turn``: one ``direct_turn`` row in ``logs/supervisor.jsonl``, written off the
+turn thread without waiting on the journal, and this serving process's bounded ring); a turn
+that ends without an observed dispatch records it from its unregister, ``dispatch: not_observed``.
 """
 
 from __future__ import annotations
 
+import copy
+import datetime
 import logging
+import pathlib
 import threading
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
+
+from ouroboros import store_timing
+from ouroboros.deadline_utils import parse_deadline_ts
+from ouroboros.utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +44,21 @@ TURN_PHASES = ("accepted", "admitted", "started", "context_building", "context_b
 CALL_PHASES = ("requested", "dispatched")
 _LOG_FACTS = {"context_building_started": "context_building", "context_building_finished": "context_built"}
 _SENDING = ("dispatching", "awaiting_response")  # a model operation's request going out (the cards' Sending)
+# How a turn's first dispatch was observed: a send seen going out; the start of a call whose route
+# observes nothing, once it finished; none before the turn ended.
+DISPATCH_BASES = ("observed_send", "unobserved_call_start", "not_observed")
+DIRECT_TURNS_KEPT = 100  # the receipt ring's length: a memory bound, never a judgment
+_DIRECT_TURNS: Deque[Dict[str, Any]] = deque(maxlen=DIRECT_TURNS_KEPT)
+_RING_LOCK = threading.Lock()
+
+
+def _iso(epoch: float) -> str:
+    return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).isoformat()
+
+
+def _epoch(stamp: Any) -> Optional[float]:
+    parsed = parse_deadline_ts(stamp)
+    return None if parsed is None else parsed.timestamp()
 
 
 def _calling_thread() -> Tuple[int, str]:
@@ -43,9 +73,14 @@ class TurnExecution:
     stamped. Facts only move forward, so there is at most one mark per phase; the list is
     only appended to, so a reader's copy never pairs one fact with another fact's instant.
     ``owner_turn``: the owner awaits its answer (its entry's ``reply_expected``); only such a
-    turn reports its first dispatch to the after-update facts, a wake or resume never does.
-    ``call``: its latest Main call (id, start instant, whether its route observed it);
-    ``ended_at``: the instant it left the registry."""
+    turn reports its first dispatch to the after-update facts and leaves a receipt, a wake or
+    resume never does. ``call``: its latest Main call (id, start instant, whether its route
+    observed it); ``ended_at``: the instant it left the registry. ``accepted_at``: the canonical
+    acceptance of the message it answers (the inbound row's UTC stamp, its entry's
+    ``origin_message_ref["ts"]``), where the owner's wait starts; ``entered_at`` is the wall-clock
+    twin of the first mark, so that wait and the monotonic phases (one process only) add up.
+    ``dispatch``: the first dispatch's basis (``DISPATCH_BASES``) once it happened; ``meter``:
+    the thread's ``store_timing.metered`` scope; ``census``: the registry's count at entry."""
 
     chat_id: int
     client_message_id: str = ""
@@ -56,6 +91,11 @@ class TurnExecution:
     marks: List[Tuple[str, float]] = field(default_factory=lambda: [("accepted", time.monotonic())])
     call: Optional[Tuple[str, float, bool]] = None
     ended_at: Optional[float] = None
+    accepted_at: str = ""
+    entered_at: float = field(default_factory=time.time)
+    dispatch: str = ""
+    meter: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
+    census: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def phase(self) -> str:
@@ -96,9 +136,55 @@ class TurnExecution:
             self.call = (call_id, self.call[1], True)
             activity = data.get("model_activity")
             if isinstance(activity, dict) and activity.get("phase") in _SENDING:
-                self.advance("dispatched")
+                self._dispatched("observed_send", data)
         elif phase == "finished" and not self.call[2]:
-            self.advance("dispatched", self.call[1])
+            self._dispatched("unobserved_call_start", data, at=self.call[1])
+
+    def _dispatched(self, basis: str, frame: Dict[str, Any], at: Optional[float] = None) -> None:
+        """The first dispatch, once: its basis, and an owner turn's receipt by value on the frame
+        that carries it to the supervisor (``events._handle_main_llm_call_state`` records it)."""
+        if self.advance("dispatched", at):
+            self.dispatch = basis
+            if self.owner_turn:
+                frame["direct_turn"] = self.receipt()
+
+    def receipt(self, until: Optional[float] = None) -> Dict[str, Any]:
+        """This execution's facts by value, as of ``until`` (monotonic: its end, else now).
+
+        ``phases``: the seconds each start phase stood, up to the next one, the dispatch, the end or
+        ``until``, the slowest named; ``handler_wait_sec``: the thread's first mark to the same point.
+        ``accepted_at``, ``wait_before_entry_sec`` (wall clock: the routing pre-pass ran before this
+        thread) and ``owner_wait_sec`` only when the canonical acceptance is known. ``dispatch``:
+        ``not_observed`` while none happened; ``dispatched_at`` from the monotonic delta once it did.
+        ``meter``: the thread's own store counts so far; ``census``: the registry's count at entry."""
+        marks = list(self.marks)
+        if until is None:
+            until = self.ended_at if self.ended_at is not None else time.monotonic()
+        dispatched = marks[-1][0] == "dispatched"
+        phases: Dict[str, float] = {}
+        for index, (phase, at) in enumerate(marks):
+            if phase == "dispatched":
+                break
+            end = marks[index + 1][1] if index + 1 < len(marks) else until
+            phases[phase] = round(end - at, 3)
+        handler_wait = (marks[-1][1] if dispatched else until) - marks[0][1]
+        row: Dict[str, Any] = {
+            "type": "direct_turn", "chat_id": self.chat_id, "task_id": self.task_id,
+            "execution_id": self.execution_id, "client_message_id": self.client_message_id,
+            "thread": self.thread[1], "entered_at": _iso(self.entered_at),
+            "handler_wait_sec": round(handler_wait, 3), "phases": phases,
+            "dispatch": self.dispatch or "not_observed",
+            "meter": store_timing.snapshot(self.meter), "census": dict(self.census)}
+        if phases:
+            row["slowest_phase"], row["slowest_phase_sec"] = max(phases.items(), key=lambda item: item[1])
+        accepted = _epoch(self.accepted_at)
+        if accepted is not None:
+            before = self.entered_at - accepted
+            row.update(accepted_at=self.accepted_at, wait_before_entry_sec=round(before, 3),
+                       owner_wait_sec=round(before + handler_wait, 3))
+        if dispatched:
+            row["dispatched_at"] = _iso(self.entered_at + (marks[-1][1] - marks[0][1]))
+        return row
 
 
 @dataclass
@@ -215,17 +301,22 @@ class DirectActivityRegistry:
         """The calling thread starts one direct turn (``accepted``), before admission decides it."""
         execution = TurnExecution(int(chat_id or 0), str(client_message_id or ""))
         with self._lock:
+            execution.census = {"direct_turns_at_entry": len(self._executions)}
             self._executions[execution.execution_id] = execution
         return execution
 
     def end_execution(self, execution: Optional[TurnExecution]) -> None:
         with self._lock:
-            self._drop(execution)
+            ended = self._drop(execution)
+        _undispatched_receipt(ended)
 
-    def _drop(self, execution: Optional[TurnExecution]) -> None:
-        """Under the lock: the execution ends now, the instant a stall episode it stood in closes at."""
+    def _drop(self, execution: Optional[TurnExecution]) -> Optional[TurnExecution]:
+        """Under the lock: the execution ends now, the instant a stall episode it stood in closes
+        at; returns it when it was still registered (its receipt, if owed, is written after the lock)."""
         if execution is not None and self._executions.pop(execution.execution_id, None) is not None:
             execution.ended_at = time.monotonic()
+            return execution
+        return None
 
     def executions(self) -> List[TurnExecution]:
         """Every running execution, registered or not yet: what the liveness watchdog reads."""
@@ -258,6 +349,7 @@ class DirectActivityRegistry:
         execution.task_id = aid
         execution.owner_turn = bool(reply_expected)
         execution.client_message_id = execution.client_message_id or str(client_message_id or "")
+        execution.accepted_at = str((origin_message_ref or {}).get("ts") or "")
         execution.advance("admitted")
         entry = DirectActivityEntry(
             activity_id=aid,
@@ -274,10 +366,12 @@ class DirectActivityRegistry:
         )
         with self._lock:
             replaced = self._activities.get(aid)
-            if replaced is not None:
-                self._drop(replaced.execution)
+            ended = self._drop(replaced.execution) if replaced is not None else None
+            if begun is None:
+                execution.census = {"direct_turns_at_entry": len(self._executions)}
             self._activities[aid] = entry
             self._executions[execution.execution_id] = execution
+        _undispatched_receipt(ended)
         log.debug("Registered direct activity: %s (chat_id=%s, kind=%s)", aid, chat_id, kind)
         return entry
 
@@ -285,9 +379,9 @@ class DirectActivityRegistry:
         aid = str(activity_id or "").strip()
         with self._lock:
             entry = self._activities.pop(aid, None)
-            if entry is not None:
-                self._drop(entry.execution)
+            ended = self._drop(entry.execution) if entry is not None else None
             self._lock.notify_all()
+        _undispatched_receipt(ended)
         if entry:
             log.debug("Unregistered direct activity: %s (chat_id=%s)", aid, entry.chat_id)
         return entry
@@ -374,6 +468,48 @@ _DIRECT_ACTIVITY_REGISTRY = DirectActivityRegistry()
 
 def get_direct_activity_registry() -> DirectActivityRegistry:
     return _DIRECT_ACTIVITY_REGISTRY
+
+
+def _undispatched_receipt(execution: Optional[TurnExecution]) -> None:
+    """An owner turn that ended without an observed dispatch records its receipt here, on the
+    thread that ended it (the turn is over: nothing waits on this), ``dispatch: not_observed``."""
+    if execution is None or not execution.owner_turn or execution.phase == "dispatched":
+        return
+    try:
+        record_direct_turn(execution.receipt())
+    except Exception:
+        log.debug("direct_turn receipt failed for %s", execution.execution_id, exc_info=True)
+
+
+def record_direct_turn(row: Dict[str, Any], *, drive_root: Any = None) -> Optional[Dict[str, Any]]:
+    """One owner turn's receipt: a ``direct_turn`` row into ``logs/supervisor.jsonl`` (one attempt,
+    no wait on the journal lock: a diagnostic never delays the loop) and into this process's ring,
+    newest last, ``journal`` saying whether the row was written. The same execution's receipt is
+    recorded once (a frame handled twice records nothing); returns the recorded row, else None."""
+    execution_id = str(row.get("execution_id") or "")
+    with _RING_LOCK:
+        if any(kept.get("execution_id") == execution_id for kept in _DIRECT_TURNS):
+            return None
+    row = {"ts": utc_now_iso(), **row}
+    try:
+        from supervisor.state import DRIVE_ROOT, append_jsonl
+
+        root = pathlib.Path(drive_root) if drive_root else DRIVE_ROOT
+        written = bool(append_jsonl(root / "logs" / "supervisor.jsonl", row, lock_timeout_sec=0))
+    except Exception:
+        log.debug("direct_turn row not written", exc_info=True)
+        written = False
+    kept = {**row, "journal": "written" if written else "not_written"}
+    with _RING_LOCK:
+        _DIRECT_TURNS.append(kept)
+    return kept
+
+
+def direct_turns(limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """The newest ``limit`` receipts this process recorded (all when None), oldest first, by value."""
+    with _RING_LOCK:
+        rows = list(_DIRECT_TURNS)
+    return copy.deepcopy(rows if limit is None else rows[-max(0, int(limit)):] if limit else [])
 
 
 def is_parked_owner_wait(task_id: str, wait: Any, *, drive_root: Any = None) -> bool:

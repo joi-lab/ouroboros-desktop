@@ -1,14 +1,13 @@
 # Usage store: the monetary authority
 
-`state/usage.sqlite` is the one monetary authority (store module
-`ouroboros/usage_store.py`, policy owner `ouroboros/usage_accounting.py`). It
-keeps ONE row per physical attempt and, beside it, every current fact the
-ordinary readers ask, maintained in the transaction that changes it. No
-ordinary path (admission, send, display, status, task start, maintenance
-candidates) aggregates the attempts: each reads summary rows and addressed rows,
-so its cost does not grow with history. The public `usage_accounting` /
-`usage_admission` API (names, shapes, exceptions) is the same as in the
-journal era.
+`state/usage.sqlite` owns money (`usage_store.py`; policy: `usage_accounting.py`).
+Each physical attempt's transaction maintains its row and summaries.
+Ordinary reads use current/addressed facts, never history. Custody owns
+execution coverage, not amounts. The public `usage_accounting` / `usage_admission`
+names, monetary shapes and exceptions retain the journal-era contract; scoped
+coverage is an opt-in projection. Storage rules import no pricing/budget policy:
+changing that policy cannot redefine valid storage, and locking or repair cannot
+change what an attempt costs.
 
 ## 1. Schema
 
@@ -109,18 +108,48 @@ network-bound runs inside it.
   HTTP-200 body errors included, is retained in private CAS before retry. Failure, administrative
   closure, answer completeness and monetary finality remain independent.
 - One-shot kinds compare identity, not payload: a subscription session's later
-  model or token observation replays the stored row.
+  observation replays the stored row. New partial session receipts retain known
+  cash and `cost_partial`, with no reservation bound; an exact subtotal remains
+  exact while `unknown_unmetered` counts its unpriced remainder once per row.
 - Nonfinite money is refused before anything is written.
 
 ## 4. Reads
 
-Money and displays read the same rows. A display read (`allow_stale`) waits
-only the short display wait, then reports the fact unavailable — never zero.
-`read_usage_records` (every row) serves the explicit audit and the export; a
-test pins its call sites. The consciousness allowance selects its roots through
-the `(category, ts_last)` index and each root's window rows through `(root,
-ts_last)`, so a tick reads a root still at work for its last day, never its whole
-life. Terminal maintenance reads the open-attempt index and `Txn.dirty_owners()`.
+`query_data` money SQL uses guarded direct `mode=ro` reads by default, so a small
+aggregate does not copy the whole ledger. Explicit `snapshot=true` makes a checked
+disposable copy, with no fallback after failure. One `timeout_sec` budget covers
+acquisition (including cold preparation), copy, check and SQL; expiry names its
+phase, while corruption/I/O and unowned interrupts remain failures. The optional
+`remaining_sec` narrows nested admission waits without changing other callers.
+The parent owns scratch and passes the whole request by file. It bounds startup
+separately; after expiry it allows 0.5 s while a source may be held, 2 s after
+release for the typed answer, then reaps noninterruptible work and removes scratch.
+
+Money and displays share rows; `allow_stale` bounds display waits, then reports
+unavailable. `read_usage_records` serves audit/export only;
+`test_bulk_readers_are_called_only_by_the_audit_and_the_export` in
+`tests/test_usage_store.py` pins its call sites. Consciousness selects
+roots by `(category, ts_last)` and window rows by `(root, ts_last)`, never lifetime
+history. Terminal maintenance reads open attempts and `Txn.dirty_owners()`.
+Finality/display consumers opt into `usage_breakdown(include_custody=True)`;
+amount-only admission, wave fit and pacing never read custody. The coverage owner
+`delegate_custody_usage` observes addressed custody before money, then joins each
+run's receipt once in the SAME money read as the amounts. Own/tree/sibling scopes
+and split execution/ledger roots retain their identities. Custody roots share one
+display wait allowance; the subsequent money read has its own allowance. Contention
+reports unavailable at debug level. Pending/live/unrecorded or unreadable custody
+keeps `cost_custody` open; cleanup holds do not. Counts stay ledger-derived; later
+starts are not atomically fenced. Exact partial cash is confirmed, estimated
+partial cash is estimated; both carry an unpriced remainder and no total bound.
+
+Custody changes owe task/root `cost_revision` in the existing `delegated_runs`
+set. No debt means no monetary read/write/emit. Refresh checks ownership at the
+addressed root and acknowledges only the observed revision after an available
+projection was published or already matches; concurrent changes and failed or
+unavailable reads keep debt. An absent optional carrier alone emits nothing.
+Missing/nonterminal owners await their terminal write without repeated projection
+attempts. Fold/import/rebuild derive debt only for still-open monetary custody,
+never a burst over closed history; no new poller or monetary backfill.
 Money-only passes select dirty revisions newer than the saved marker plus present
 owners. A successful/equal projection calls `ack_dirty_owner(owner_id, revision)`;
 newer receipts, failures, missing results and live ownership keep debt. One batched
@@ -321,11 +350,11 @@ model, timestamp or arbitrary request ID. Custom endpoints supplied only through
 an embedded client's constructor need a matching caller-supplied target to the
 receipt producer; the source command resolves the configured OpenRouter route.
 
-Received prices, including zero, outrank absent token counters and error shape.
-An explicitly malformed price stays unknown even when a token tariff is
-available; the host-derived `cost_invalid` usage fact survives normalization,
-settlement and loop projection. A valid alternate price wins, including zero.
-Absent/null prices still permit the existing nonfinal token estimate.
+Received prices, zero included, outrank absent token counters and error shape.
+`_usage_response.provider_cost_value` validates incoming cash; malformed prices
+stay unknown despite available tariffs. The host-derived `cost_invalid` fact
+survives settlement, loop and Safety telemetry. Valid alternate evidence wins;
+absent/null prices permit nonfinal token estimates, never image text tariffs.
 Generation 404, 401, 403, 429, mismatched ID and absent/invalid money are distinct
 non-price outcomes. `Retry-After` is retained for an operator's next invocation;
 the command never schedules another lookup. A valid retained price needs no

@@ -1161,6 +1161,7 @@ export function createChatMedia({
     }
 
     return {
+        openReview: openReader,
         buildMediaBubble,
         buildDocumentBubble,
         buildLinksMessage,

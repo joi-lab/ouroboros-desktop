@@ -271,11 +271,13 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
         assert facts["toast"]["bottom"] <= facts["composer"]["top"]
         assert not page.locator("#page-chat .chat-page-note").is_visible()
         assert "Shown messages may have gaps" in page.locator("#page-chat .chat-load-older-note").inner_text()
-        # The consciousness chip opens its Shade, hit-testable beside the toast, without activating a command.
+        # The consciousness chip opens its list, hit-testable beside the toast, without activating a command.
         page.click("#page-chat .cx-chip:not([hidden])")
         page.locator('#page-chat .cx-shade .cx-toggle').click(trial=True)
-        backing = page.locator('#page-chat .cx-shade').evaluate("el => getComputedStyle(el).backgroundColor")
-        assert backing.startswith('rgb(') or float(backing.rsplit(',', 1)[1].rstrip(')')) >= 0.98, backing
+        if theme == 'dark':
+            # The chip's list is opaque like the work list: its base layer at full alpha (DESIGN principle 2).
+            backing = page.locator('#page-chat .cx-shade').evaluate("el => getComputedStyle(el).backgroundColor")
+            assert backing.startswith('rgb('), backing
         page.screenshot(path=str(tmp_path / f"main-shade-{width}-{theme}.png"))
         capture(page, f"main-shade-{width}-{theme}-{ui['engine']}")
         if width == 390:

@@ -461,6 +461,7 @@ def _successor_task(q: Any, predecessor: str, result: Dict[str, Any], binding: D
                 "predecessor_task_id": predecessor, "work_id": work_id, "work_name": work_name,
                 "cause": verdict["cause"],
                 "owner_sources": {"original": sources.get("original"), "schedule": sources.get("schedule"),
+                                  **({"start": sources["start"]} if sources.get("start") else {}),
                                   "later": sources.get("later") or [],
                                   "held_owner_messages": sources.get("held_owner_messages") or {},
                                   "open_relays": sources.get("open_relays") or {}},

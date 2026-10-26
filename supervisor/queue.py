@@ -275,6 +275,7 @@ def enqueue_task(
     task: Dict[str, Any], front: bool = False, *, restoring_snapshot: bool = False,
     consciousness_window: Optional[Dict[str, Any]] = None, continuation: bool = False,
     project_admission: Optional[Dict[str, Any]] = None, timeout_retry: bool = False,
+    durable: bool = False,
 ) -> Dict[str, Any]:
     """Add task to PENDING (thread-safe: HTTP handlers enqueue concurrently
     with the supervisor main loop, so the mutation must hold the queue lock).
@@ -290,6 +291,7 @@ def enqueue_task(
     ``timeout_retry``: the reaper's own retry admission (``apply_budget_root_admission_fence``)."""
     t = dict(task)
     from ouroboros.consciousness_authority import work_kind
+    from ouroboros.server_restart import agent_restart_pending
     metadata = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
     metadata["work_kind"] = work_kind({"origin_message_ref": t.get("origin_message_ref"), **metadata})
     t["metadata"] = metadata
@@ -328,6 +330,11 @@ def enqueue_task(
         admission_token = str(t.pop("_admission_token", "") or "")
         task_id = str(t.get("id") or "").strip()
         reserved_token = str(ADMISSION_RESERVATIONS.get(task_id) or "")
+        if agent_restart_pending() and RETURNS_NAMED and not restoring_snapshot:
+            if ADMISSION_RESERVATIONS.get(task_id) == admission_token:
+                ADMISSION_RESERVATIONS.pop(task_id, None)
+            t["_admission_blocked"] = "restart_intake_closed"
+            return t
         if reserved_token and admission_token != reserved_token:
             # A reservation owns this id until its request either enqueues or releases it.
             # Tokenless internal callers and competing ingress must not consume/collide with it.
@@ -503,6 +510,13 @@ def enqueue_task(
             ) else "none"
         if ADMISSION_RESERVATIONS.get(task_id) == admission_token:
             ADMISSION_RESERVATIONS.pop(task_id, None)
+        if not restoring_snapshot and (durable or agent_restart_pending()):
+            if persist_queue_snapshot(reason="agent_restart_admission") is not True:
+                # No accepted reply and no dispatch. A partial disk publication
+                # is outside the named return set and boots held for Resume.
+                PENDING[:] = [row for row in PENDING if row is not t]
+                persist_queue_snapshot(reason="agent_restart_admission_unconfirmed")
+                return {**t, "_admission_blocked": "restart_admission_unconfirmed"}
     return t
 
 

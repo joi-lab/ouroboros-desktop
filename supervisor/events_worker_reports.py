@@ -2,8 +2,8 @@
 
 Heartbeats and dispatch resolution keep the liveness rails honest, metrics and
 forwarded log lines reach the owner's panel, the acceptance fence is
-acknowledged back to the worker, and a bounded external-wait lease spares the
-idle rail alone.
+acknowledged back to the worker, a bounded external-wait lease spares the
+idle rail alone, and a translation-memory write reaches the open windows.
 """
 
 from __future__ import annotations
@@ -153,6 +153,16 @@ def _handle_task_focus_updated(evt: Dict[str, Any], ctx: Any) -> None:
         changed = True
     if changed:
         ctx.persist_queue_snapshot(reason="task_focus_updated")
+
+
+def _handle_ui_i18n_updated(evt: Dict[str, Any], ctx: Any) -> None:
+    """A turn wrote the translation memory (``pin_ui_translation``); this process holds the
+    windows, so it tells them to read the memory again. The file is the truth: the frame
+    carries only which revision now exists."""
+    language, revision = evt.get("language"), evt.get("revision")
+    if not isinstance(language, str) or not language.strip() or type(revision) is not int or revision < 0:
+        return
+    ctx.bridge.broadcast({"type": "ui_i18n_updated", "language": language.strip(), "revision": revision})
 
 
 def _handle_task_metrics(evt: Dict[str, Any], ctx: Any) -> None:

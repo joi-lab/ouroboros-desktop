@@ -353,6 +353,61 @@ def read_json_dict(path: pathlib.Path) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+# path -> (file identity, object, parse error, its bytes while racy): one entry per path in use
+_JSON_SNAPSHOTS: Dict[str, tuple] = {}
+# A filesystem clock bound, not a policy: a coarse file clock (FAT's two seconds, HFS+ seconds,
+# Linux's jiffy, Windows' tick) can give a later write the same stamp, so a file changed this
+# recently when it was read is compared byte for byte at the next read (the racy-git rule).
+_RACY_NS = 2_000_000_000
+
+
+def file_identity(st: Any) -> tuple:
+    """What every write changes: a rename-replace is a new inode, an in-place write a new change
+    time (``st_ctime_ns``, which no ``utime`` sets back on POSIX; Windows reports creation time)."""
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def json_snapshot(path: pathlib.Path, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    """The JSON object at ``path``, parsed once per file identity and shared: no reader mutates it.
+
+    For read-mostly state its writers replace by rename (``atomic_write_json``); a writer reads
+    its own fresh copy (``read_json_dict``). ``None`` when absent. A malformed or non-object
+    document is ``None``, with ``strict`` a ``ValueError`` (also once a lenient read remembered
+    it); an unreadable file is ``None``, with ``strict`` its ``OSError``, never remembered.
+    A file changed within ``_RACY_NS`` of its read is read again and parsed only if its bytes moved.
+    """
+    key = str(path)
+    try:
+        held = _JSON_SNAPSHOTS.get(key)
+        if held is None or held[3] is not None or held[0] != file_identity(os.stat(key)):
+            started = time.time_ns()
+            with open(key, "rb") as handle:  # the identity and the bytes come from one open file
+                info, raw = os.fstat(handle.fileno()), handle.read()
+            if held is not None and held[3] == raw:
+                data, error = held[1], held[2]
+            else:
+                try:
+                    data, error = json.loads(raw.decode("utf-8")), None
+                except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError alike
+                    data, error = None, exc
+                if error is None and not isinstance(data, dict):
+                    data, error = None, ValueError(f"not a JSON object but {type(data).__name__}")
+                if error is not None:
+                    log.warning("Failed to parse JSON file %s: %s", key, error)
+            racy = max(info.st_mtime_ns, info.st_ctime_ns) >= started - _RACY_NS
+            held = _JSON_SNAPSHOTS[key] = (file_identity(info), data, error, raw if racy else None)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        if strict:
+            raise
+        log.warning("Failed to read JSON file %s", key, exc_info=True)
+        return None
+    if strict and held[2] is not None:
+        raise ValueError(f"{key} holds no readable JSON object: {held[2]}") from held[2]
+    return held[1]
+
+
 def update_json_locked(
     path: pathlib.Path,
     mutator: Any,

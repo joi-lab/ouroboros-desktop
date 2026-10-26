@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +18,7 @@ def _index(repo):
 
 @pytest.mark.parametrize("changed", [False, True], ids=["stat-dirty-same-content", "real-content"])
 @pytest.mark.parametrize("reader", ["capture", "bounded", "shell", "attribution", "review", "tool",
-                                    "preflight", "checkpoint", "patch", "streamed_patch", "subject", "pr", "drift",
+                                    "preflight", "checkpoint", "patch", "streamed_patch", "subject", "pr",
                                     "vcs_names", "selection"])
 def test_host_observations_never_write_the_index(tmp_path, monkeypatch, changed, reader):
     from ouroboros import mutation_attribution, utils
@@ -80,15 +79,10 @@ def test_host_observations_never_write_the_index(tmp_path, monkeypatch, changed,
         output = vcs_read._vcs_read(ToolContext(repo_dir=repo, drive_root=tmp_path / "data"),
                                     action="diff", root="system_repo", name_only=True)
         assert "VCS target:" in output and "ERROR" not in output, output
-    elif reader == "selection":
+    else:
+        assert reader == "selection"
         from ouroboros.test_selection import changed_paths
         output = "".join(changed_paths(repo, "HEAD")[1])
-    else:
-        from ouroboros.delegate_target_drift import _target_drift_evidence
-        entry = SimpleNamespace(target_root=repo, baseline_sha=_git(repo, "rev-parse", "HEAD"))
-        evidence = _target_drift_evidence(entry)
-        assert evidence["checked"], evidence
-        output = "".join(evidence["paths"])
     assert ("seed.txt" in output) is changed
     assert _index(repo) == before
     assert not (repo / ".git" / "index.lock").exists()
@@ -340,7 +334,7 @@ def test_workspace_capture_lists_only_real_tracked_changes(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("changed", [False, True], ids=["stat-only", "content"])
-@pytest.mark.parametrize("reader", ["vcs_names", "selection", "drift"])
+@pytest.mark.parametrize("reader", ["vcs_names", "selection"])
 @pytest.mark.parametrize("name", ["binary.dat", "binary[1].dat"])
 @pytest.mark.parametrize("count", [1, 30, 100])
 def test_binary_path_observers_compare_content(tmp_path, monkeypatch, changed, reader, name, count):
@@ -355,7 +349,6 @@ def test_binary_path_observers_compare_content(tmp_path, monkeypatch, changed, r
         path.write_bytes(b"\0before")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "binary seed")
-    baseline = _git(repo, "rev-parse", "HEAD")
     trace = tmp_path / "git-trace.jsonl"
     monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace))
     monkeypatch.setenv("GIT_OPTIONAL_LOCKS", "1")
@@ -368,11 +361,6 @@ def test_binary_path_observers_compare_content(tmp_path, monkeypatch, changed, r
     if reader == "selection":
         from ouroboros.test_selection import changed_paths
         paths = list(changed_paths(repo, "HEAD")[1])
-    elif reader == "drift":
-        from ouroboros.delegate_target_drift import _target_drift_evidence
-        evidence = _target_drift_evidence(SimpleNamespace(target_root=repo, baseline_sha=baseline))
-        assert evidence["checked"], evidence
-        paths = evidence["paths"]
     else:
         from ouroboros.tools.registry import ToolContext
         from ouroboros.tools.vcs_read import _vcs_read
@@ -389,7 +377,7 @@ def test_binary_path_observers_compare_content(tmp_path, monkeypatch, changed, r
     starts = [row["argv"] for row in rows if row.get("event") == "start"]
     probes = [args for args in starts if "--patch" in args]
     assert len(probes) == 1, probes
-    assert len(starts) == {"selection": 4, "drift": 4, "vcs_names": 2}[reader], starts
+    assert len(starts) == {"selection": 4, "vcs_names": 2}[reader], starts
     # The content oracle also reads without refreshing the index.
     result = subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=repo, env=host_git_env())
     assert result.returncode == int(changed)

@@ -10,6 +10,132 @@ RESULT_VIEWS = ("answer", "summary", "evidence", "full")
 _EVIDENCE_ARTIFACT_LIMIT = 10
 
 
+def validate_authority_selection(fields: Any, source_only: Any, digest: Any) -> None:
+    """New explicit selectors never change the legacy None/omitted path."""
+    if fields is not None and (not isinstance(fields, list)
+            or any(not isinstance(key, str) for key in fields) or len(set(fields)) != len(fields)):
+        raise ValueError("authority_fields must be an array of distinct exact top-level field names")
+    if type(source_only) is not bool:
+        raise ValueError("source_only must be a boolean")
+    if not isinstance(digest, str) or digest and (len(digest) != 64 or digest.strip("0123456789abcdef")):
+        raise ValueError("authority_projection_sha256 must be a lowercase 64-character projection digest")
+
+
+def validate_result_selectors(selectors: Mapping[str, Any]) -> tuple[str, bool]:
+    """Validate the handler's named source arguments; read no result or context.
+
+    The mapping is its argument frame, not a second serialized contract. Selector
+    compatibility lives beside field projection instead of growing the reader.
+    """
+    import re
+
+    fields, source_only = selectors["authority_fields"], selectors["source_only"]
+    digest, include = selectors["authority_projection_sha256"], selectors["include_authority"]
+    validate_authority_selection(fields, source_only, digest)
+    selected = fields is not None or bool(digest)
+    call_id, manifest = selectors["call_id"], selectors["manifest_sha256"]
+    sources = any(selectors[key] for key in (
+        "include_work_order_source", "include_completion_source", "include_focus_source",
+        "focus_source_sha256", "review_source_sha256", "delegated_output_sha256", "presence_reentry_sha256",
+    )) or selectors["presence_reentry_offset"] is not None
+    other_source = bool(sources or call_id or manifest)
+    if selected and other_source:
+        raise ValueError("authority_fields/authority_projection_sha256 cannot be combined with another source selector")
+    if digest and fields is None and not (source_only and include):
+        raise ValueError("authority_projection_sha256 requires authority_fields or source_only with include_authority")
+    if source_only and (not (fields is not None or include or other_source)
+            or selectors["focus_source_sha256"] and not selectors["include_focus_source"]
+            or selectors["presence_reentry_offset"] is not None and not selectors["presence_reentry_sha256"]):
+        raise ValueError("source_only requires an authority or complete source selector")
+    if call_id or manifest:
+        if (not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", call_id)
+                or call_id in {".", ".."} or not isinstance(manifest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", manifest)):
+            raise ValueError("call_id and a lowercase 64-character manifest_sha256 are required together")
+        if include or sources:
+            raise ValueError("call_id cannot be combined with another authority/source selector")
+    view = validate_result_view(selectors["view"])
+    source_request = (include or other_source or selected or source_only
+                      or selectors["source_start_char"] is not None or selectors["source_end_char"] is not None)
+    if view not in {"", "full"} and source_request:
+        raise ValueError(f"view={view} is incompatible with authority/source selectors; use view=full or omit view")
+    return view, other_source
+
+
+def authority_selection_response(ctx: Any, data: Dict[str, Any], drive_root: Any,
+                                 selectors: Mapping[str, Any]) -> str:
+    """Render exact fields only after the reader has admitted the selected task."""
+    from ouroboros.agent_startup_checks import task_result_authority_projection
+    from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
+
+    try:
+        payload = authority_selection(task_result_authority_projection(data, drive_root=drive_root),
+            str(selectors["task_id"]), selectors["authority_fields"], source_only=selectors["source_only"],
+            digest=selectors["authority_projection_sha256"], start=selectors["source_start_char"],
+            end=selectors["source_end_char"], presence_scope=str(selectors["presence_scope"] or ""))
+    except ValueError as exc:
+        return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=str(exc)))
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if payload.get("authority_source", {}).get("reason") == "source_range_invalid":
+        return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=text))
+    return text
+
+
+def authority_selection(authority: Dict[str, Any], task_id: str, fields: Any, *, source_only: bool,
+                        digest: str, start: Any, end: Any, presence_scope: str = "") -> Dict[str, Any]:
+    """Exact mechanical view of the SAME current authority, never a new dossier/store.
+
+    All digests/ranges describe sorted ensure_ascii=False JSON in Unicode code
+    points, not bytes. The full projection identity is separate from the chosen
+    fields' serialization and child_result_sha256; receipts/plans may change
+    while that result identity stays fixed. Re-reads are current, not immutable.
+    """
+    from ouroboros.artifacts import text_source_range_projection
+
+    def encode(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    full_text = encode(authority)
+    projection_sha = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+    keys = sorted(authority) if fields is None else fields
+    missing = [key for key in keys if key not in authority]
+    if missing:
+        raise ValueError("unknown authority_fields: " + json.dumps(missing, ensure_ascii=False))
+    arguments: Dict[str, Any] = {"task_id": task_id, "source_only": True,
+                                 "authority_projection_sha256": projection_sha}
+    arguments.update({"include_authority": True} if fields is None else {"authority_fields": list(keys)})
+    if presence_scope:
+        arguments["presence_scope"] = presence_scope
+    source = {"kind": "current_reread_recipe", "immutable": False,
+              "projection": "task_result_authority" if fields is None else "task_result_authority_fields",
+              "tool": "get_task_result", "arguments": arguments}
+    payload: Dict[str, Any] = {"status": "available", "immutable": False,
+        "authority_projection_sha256": projection_sha, "selected_fields": list(keys),
+        "partial": fields is not None, "source": source}
+    if digest and digest != projection_sha:
+        return {**payload, "status": "unavailable", "reason": "authority_identity_mismatch",
+                "expected_authority_projection_sha256": digest}
+    chosen = {key: authority[key] for key in keys}
+    text = full_text if fields is None else encode(chosen)
+    projection, reason = text_source_range_projection(text, source["projection"], start, end)
+    payload["authority_source"] = {**(projection or {}), "immutable": False,
+                                  **({"reason": reason} if reason else {})}
+    if not source_only and start is None and end is None:
+        payload["authority"] = chosen  # exact complete values, never previews
+    omitted = []
+    selected = set(keys)
+    for key, value in authority.items():
+        if key in selected:
+            continue
+        field_text = encode({key: value})
+        omitted.append({"field": key, "complete_chars": len(field_text),
+            "bytes": len(field_text.encode("utf-8")),
+            "complete_sha256": hashlib.sha256(field_text.encode("utf-8")).hexdigest(),
+            "source": {**source, "arguments": {**arguments, "authority_fields": [key]}}})
+    payload["omitted_fields"] = sorted(omitted, key=lambda row: row["field"])
+    return payload
+
+
 def retained_call_source(ctx, root, data, task_id, call_id, digest, start, end):
     """One redacted source from the already-selected task result, or its dispatch."""
     import re

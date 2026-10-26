@@ -96,8 +96,14 @@ def _direct_child_results(ctx: _RoundLimitContext) -> list[Dict[str, Any]]:
         return []
 
 
+# Child states that need no further author disposition before this task finishes.
+HANDLED_CHILD_DISPOSITIONS = frozenset({
+    "integrated", "irrelevant", "deferred", "discarded", "cancelled", "host_attention",
+})
+
+
 def _child_disposition_state(child: Dict[str, Any]) -> str:
-    """Return cancellation or the current task-tree exact-hash disposition."""
+    """Return cancellation, the current task-tree exact-hash disposition, or host attention."""
 
     # Explicit cancellation wins every completion race; late scratch results are
     # not recovered. Only a SETTLED ``cancelled`` counts as handled (GR2-8c):
@@ -115,7 +121,14 @@ def _child_disposition_state(child: Dict[str, Any]) -> str:
             return current
     except Exception:
         pass
-    return ""
+    # A host-minted silence diagnostic is attention to this task, not work it
+    # delegated: it stays listed, accounted and readable, but owes no author
+    # disposition, pending or settled (#1376). An explicit one above still wins.
+    from ouroboros.work_diagnostics import diagnostic_ref
+
+    ref = diagnostic_ref(child)
+    minted = bool(ref) and str(child.get("task_id") or child.get("id") or "") == "silence-" + ref["episode_id"]
+    return "host_attention" if minted and str(child.get("parent_task_id") or "") == ref["task_id"] else ""
 
 
 def _project_child_result_dispositions(
@@ -163,6 +176,7 @@ def _record_forced_finalization(
     # answer (`_forced_final_answer`) and the no-spend host-fallback fence
     # path (`_handle_budget_exceeded` -> `_forced_fallback_result`).
     ctx.accumulated_usage.setdefault("terminal_origin", TERMINAL_ORIGIN_HOST_NOTICE)
+    ctx.accumulated_usage.pop("wake_summary", None)  # Only the accepting exit can publish the author's sentence.
     # Every rail returns this candidate's bytes. A wake's quiet selection stays
     # internal here too (the pipeline publishes only the host's outcome notice);
     # an ordinary replacement or the host's own fallback text is speech.
@@ -280,10 +294,8 @@ def _forced_orphan_note(ctx: _RoundLimitContext, *, include_terminal: bool = Tru
         note_chat_id = getattr(tools_ctx, "current_chat_id", None)
 
         def _undecided(c: Dict[str, Any]) -> bool:
-            if _loop()._child_disposition_state(c) in {
-                "integrated", "irrelevant", "deferred", "discarded", "cancelled",
-            }:
-                return False  # explicitly handled
+            if _loop()._child_disposition_state(c) in HANDLED_CHILD_DISPOSITIONS:
+                return False  # explicitly handled, or host attention
             if (
                 canonical_task_summary_reached_chat(c, note_chat_id)
                 and str(c.get("task_id") or c.get("id") or "") not in claimed
@@ -401,9 +413,7 @@ def _undispositioned_children(ctx: _RoundLimitContext) -> list[Dict[str, Any]]:
     try:
         return [
             child for child in _loop()._direct_child_results(ctx)
-            if _loop()._child_disposition_state(child) not in {
-                "integrated", "irrelevant", "deferred", "discarded", "cancelled",
-            }
+            if _loop()._child_disposition_state(child) not in HANDLED_CHILD_DISPOSITIONS
         ]
     except Exception:
         return []

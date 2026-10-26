@@ -12,9 +12,9 @@ Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT
 
 Each task keeps its entry settings (`settings_integrity.TaskSettingsSnapshot`): models, keys and review settings stay private; absent/empty differ and explicit route overrides win. Room Context/Effort overlays never enter process env. `RoomResolver` follows conversion/lineage for new participants; Resume restores the actor's choice before dispatch/context assembly. `composer_cognition.py` copies Main once on project creation/recovery and freezes old rows before Main changes. Primary effort is independent of ordered helper bounds; old documents retain their effective range; internal `_effort_range_format=1` marks independent Main triples. Immediate keys, writers and granted skill keys read current disk, including cleared keys (`skill_settings`: credential-free children reread it; payloads carry operator variables). Access stays boot-pinned; reload failure discloses prior-env fallback and unavailable document-only values.
 
-`normalize_settings_raw()` is the only translation before every reader merges defaults (`load_settings()`, `_owner_read_settings_raw()`, `build_colab_settings()`); a dropped spelling is never promoted. Review-lane keys (`REVIEW_POOL_MIGRATED_SETTING_KEYS`) migrate, not drop: `review_pool_migration.apply_at_read_seam` maps every effectively run lane seat to an `OUROBOROS_SUBAGENTS` reviewer row (Review pool), refused values staying untouched in the document; retired comma-lists and keys (`settings_defaults.RETIRED_SETTING_KEYS`/`RETIRED_COMMA_LIST_SETTING_KEYS`) drop with an owner notice, comma-list-only and lane-free installs get factory rows, and no path reads review keys from the process environment (the boot says so once: `server_maintenance._startup_environment_review_notice`). The pure, idempotent function keeps reads read-only; every in-process reader uses `settings_integrity.read_settings_json_verified` and refuses a changed pinned snapshot. The loader proposes unauthored slots (§2); `server_runtime.apply_runtime_provider_defaults` only respells, unpersisted. `apply_settings_to_env` echoes projected slot/catalog values in internal `OUROBOROS_PROJECTED_PROPOSALS` (no setting or lever), inherited by children and distinguished from operator variables on read.
+`normalize_settings_raw()` translates documents before defaults merge in `load_settings()`, `_owner_read_settings_raw()` and `build_colab_settings()`. Pure and idempotent, it seeds absent consciousness coverage from saved owner coverage (`safety_config.normalize_consciousness_safety`); explicit choices stay, and write guards compare that same disk-derived value. Review lanes migrate via `review_pool_migration.apply_at_read_seam` into `OUROBOROS_SUBAGENTS` reviewers, retaining refused values. Retired keys/comma-lists (`settings_defaults.py`) drop with an owner notice before slot renames. Comma-list-only and lane-free installs get factory rows. Review keys never read process env; `server_maintenance._startup_environment_review_notice` says so once. Readers use `settings_integrity.read_settings_json_verified`, refusing changed pinned snapshots. The loader proposes unauthored slots (§2); `server_runtime.apply_runtime_provider_defaults` only respells, unpersisted. `apply_settings_to_env` marks slot/catalog proposals in internal `OUROBOROS_PROJECTED_PROPOSALS`, so children distinguish echoes from operator choices. Provider Test and credential plans share `provider_models.ACTIVE_MODEL_SETTING_KEYS`, including Safety pins; blank inherits.
 
-Optional bounds. `OUROBOROS_MAX_ROUNDS` and `OUROBOROS_TASK_ABS_CEILING_SEC` take a positive integer or `unlimited` (`settings_scales.parse_positive_or_unlimited`, also the review-cycle cap's vocabulary) and ship `unlimited`: a fresh install is bounded by money, deadlines, Stop/Panic and the idle rail, not by age or round count. A document an earlier release saved without the key keeps the finite value it ran under (`settings_scales.OPTIONAL_BOUND_LEGACY`: 200 rounds / 21600 s), and a blank, zero, negative or malformed value takes that value too, with a log line, never "no bound"; `upgrade_notices.py` tells the owner once which finite limit applies. Readers (`runtime_limits.get_max_rounds`, `get_task_abs_ceiling_sec`) return `None` for no bound. An operation inheriting the task lifetime takes `operation_window_sec()`, so it is never unbounded and never a transport bound.
+Optional bounds. `OUROBOROS_MAX_ROUNDS` and `OUROBOROS_TASK_ABS_CEILING_SEC` take a positive integer or `unlimited` (`settings_scales.parse_positive_or_unlimited`, also the review-cycle cap's vocabulary) and ship `unlimited`: a fresh install is bounded by money, deadlines and Stop/Panic, never by age, rounds or silence (§5). A document an earlier release saved without the key keeps the finite value it ran under (`settings_scales.OPTIONAL_BOUND_LEGACY`: 200 rounds / 21600 s), and a blank, zero, negative or malformed value takes that value too, with a log line, never "no bound"; `upgrade_notices.py` tells the owner once which finite limit applies. Readers (`runtime_limits.get_max_rounds`, `get_task_abs_ceiling_sec`) return `None` for no bound. An operation inheriting the task lifetime takes `operation_window_sec()`, so it is never unbounded and never a transport bound.
 
 Five functions persist a settings document, each via `serialize_settings()` and a byte-exact write, never a text-mode one, which would turn LF into CRLF on Windows. Three persist this process's document via `prepare_settings_for_persist()`, the single point applying the disk-authored silence rule and the ordinary-mode context/safety ratchets against the value on disk: `config.save_settings()`, `gateway/owner_settings._owner_update_settings()`, `packaged_cli._save_settings()`. Two are exempt by design: `context_mode_compat.normalize_and_persist_context_mode_compat()` (rewrites only the compat pair of an existing raw mapping) and `colab_bootstrap.write_colab_settings()` (a generated document for a foreign data root). Every writer, Colab's included, persists the review-pool migration receipts (`review_pool_receipts.persist_write_receipts`) before replacing the pre-image, because only the saving process still holds it. `tests/_shared.py::settings_writers` closes the inventory, so a sixth writer fails the tripwire.
 
@@ -22,7 +22,7 @@ An owner endpoint changes one decision in a document it does not own, so `_owner
 
 ### LLM output token budgets
 
-Providers name the output budget differently: OpenRouter and Anthropic-compatible calls send `max_tokens`, official direct OpenAI Chat `max_completion_tokens`. Model-name prefixes are not capability authority; only exact-route, success-confirmed wire evidence adapts a request. The budgets are floors, lowered only by a route's known maximum response; the constants are the numeric SSOT:
+OpenRouter/Anthropic-compatible output budgets use `max_tokens`; direct OpenAI Chat uses `max_completion_tokens`. Only successful exact-route wire evidence adapts requests, never model-name prefixes. Budgets are floors, lowered by a known route maximum; constants own the numbers:
 
 | Surface | Output-token budget |
 |---------|---------------------|
@@ -36,6 +36,8 @@ Providers name the output budget differently: OpenRouter and Anthropic-compatibl
 | Update letter LIGHT one-shot (`update_letter.UPDATE_LETTER_MAX_TOKENS`) | 1,024 |
 | Project naming LIGHT one-shot (`project_naming.llm_project_name`) | 256 |
 | Provider Test (`llm_probe.PROVIDER_TEST_MAX_TOKENS`) | 16 |
+
+Naming/translation share one deadline across preparation, slots and recovery; naming captures it before scheduling so workers cannot renew it. Earlier bounds win; detached naming refreshes cost without publishing a title.
 
 ### Default settings
 
@@ -85,13 +87,13 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MODEL_CONSCIOUSNESS | "" | Background-consciousness model (empty inherits) |
 | OUROBOROS_MODEL_FALLBACKS | openai/gpt-5.6-luna | Cross-model fallback chain (`fallback_cooldown.py`); blank = none |
 | OUROBOROS_SERVED_MODEL_REDOS | 2 | Redos of a round another model answered, each a new operation (clamped 0-5) |
-| OUROBOROS_MODEL_MAX_CONCURRENCY | 3 | Concurrent physical calls of one model on one provider route (credential, endpoint), shared by every process of the installation with a fair queue; routes the managed Claudexor engine serves are left to the engine (`model_concurrency.py`) |
+| OUROBOROS_MODEL_MAX_CONCURRENCY | 3 | Concurrent physical calls of one model on one provider route (credential, endpoint), shared by every process of the installation with a fair queue, a turn the owner awaits first; routes the managed Claudexor engine serves are left to the engine (`model_concurrency.py`) |
 | OUROBOROS_MODEL_SLOT_MAX_WAIT_SEC | 180 | Concurrency-slot wait bound |
-| OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming call ceiling |
+| OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming operation ceiling |
 | OUROBOROS_PROJECT_NAMING_ASYNC_TIMEOUT_SEC | 8 | Inline naming bound when a card becomes a project (`gateway/projects.py`) |
 | OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC | 120 | Update-letter calendar ceiling over slot wait and every send (`update_letter.py`) |
 | OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC | 120 | One translation batch, slot wait and call together (`ui_translation.py`) |
-| OUROBOROS_UI_LANGUAGE | "" | Owner interface language (BCP-47 tag; `""` = not chosen); written only by `POST /api/ui/i18n/language` (`ENDPOINT_WRITTEN_SETTINGS`), read live (§3 Settings and onboarding) |
+| OUROBOROS_UI_LANGUAGE | "" | Owner interface language (BCP-47 tag; `""` = not chosen); written only by `POST /api/ui/i18n/language` (`ENDPOINT_WRITTEN_SETTINGS`), read live (§3 Settings) |
 | OUROBOROS_FALLBACK_COOLDOWN_ENABLED | true | 429-aware per-process model cooldown |
 | OUROBOROS_FALLBACK_COOLDOWN_SEC | 120 | Cooldown window |
 | OUROBOROS_FALLBACK_ATTEMPTS_PER_MODEL | 1 | Attempts per model in the fallback walk |
@@ -133,8 +135,9 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_OBSERVABILITY_KEEP_RAW | unset | Env-only: truthy persists raw observability payloads |
 | OUROBOROS_REVIEWER_SLOTS | (migrated) | Retired review-lane key: a stored value is read once into reviewer rows of `OUROBOROS_SUBAGENTS`; an unreadable value stays for the owner; never read from the environment. Rollback: restore the keys from the `before` of `state/review_migrations/<ts>-slots-to-pool.json`, which the owner message names (Review pool) |
 | OUROBOROS_SUBSCRIPTION_PRESET_VERSION | "" | One-shot install-preset marker; endpoint-authored, disk-only (`ENDPOINT_AUTHORED_SETTINGS`); absence authorizes nothing (§2) |
-| OUROBOROS_SUBAGENT_PRESET_RECEIPT | "" | Install-preset receipt; endpoint-authored, disk-only |
-| OUROBOROS_ONBOARDING_COMPLETED_AT | "" | Onboarding completion fact; endpoint-authored, disk-only |
+| OUROBOROS_SUBAGENT_PRESET_RECEIPT | "" | Install-preset receipt; likewise |
+| OUROBOROS_ONBOARDING_COMPLETED_AT | "" | Onboarding completion fact; likewise |
+| OUROBOROS_ONBOARDING_ATTEMPT_ID | "" | Client attempt that wrote it (§2); likewise |
 | OUROBOROS_TASK_REVIEW_MODE | auto | Result review mode: `auto` forces nothing, `required` runs the host's result review at a root delivery with produced material, `off` refuses `review_change(subject="result")` (§6 Result review) |
 | OUROBOROS_SAFETY_MODE | full | Safety supervision mode; a fresh desktop wizard may author `light`; lowering is owner-guarded (§6 Safety and runtime mode) |
 | OUROBOROS_CONSCIOUSNESS_SAFETY_MODE | full | Coverage for consciousness work (own wakes, places, what they start); existing installs copy the saved Safety level once |
@@ -178,7 +181,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_EFFORT_DEEP_SELF_REVIEW | (migrated) | Retired surface default: consumed into the deep-review helper row at load; env inert |
 | OUROBOROS_RETURN_REASONING | true | Ask OpenRouter to return reasoning; direct/local request copies strip OpenRouter-only fields |
 | OUROBOROS_REASONING_SUMMARY | auto | Readable reasoning-summary rendering; presentation-only, never added to history or returned to providers |
-| OUROBOROS_TASK_IDLE_TIMEOUT_SEC | 900 | Idle timeout; requires absence of real task/subtree progress (§6 Task lifecycle) |
+| OUROBOROS_TASK_IDLE_TIMEOUT_SEC | 900 | Silence-attention threshold: no real own/subtree progress (§5); direct-chat outage/accounting-wait bound (§6) |
 | OUROBOROS_TASK_ABS_CEILING_SEC | unlimited | Optional absolute task lifetime in seconds (floor 300), activity-independent; deadline and budget stay separate axes |
 | OUROBOROS_SUPERVISOR_LIVENESS_DEADLINE_SEC | 90 | Liveness watchdog; alerts and recommends `/restart`, never frees a lock held by a wedged turn |
 | LOCAL_MODEL_SOURCE | "" | Local-model source (HF repo or path) |
@@ -222,11 +225,11 @@ The generic Settings save, the owner Safety model endpoint, the wizard and the m
 
 #### Direct-provider routes
 
-For a Main on an official direct provider, the factory review rows are its declarative reviewer roles, each in its binding (`provider_models.compute_direct_review_seats`). Scope: official OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru and GigaChat; the exclusive-provider detector (`server_runtime._exclusive_direct_remote_provider`; `_exclusive_direct_remote_provider_env` for the environment) is empty with OpenRouter, `OPENAI_BASE_URL`, `OPENAI_COMPATIBLE_BASE_URL` or several direct providers. Rows are provider-prefixed (`provider_models.migrate_model_value`; a Main off the provider mints none), so free text never enters a single-provider route; one official provider must suffice (DEVELOPMENT "Provider Independence").
+Direct-Main factory review roles (`provider_models.compute_direct_review_seats`): OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru, GigaChat. Exclusivity (`server_runtime._exclusive_direct_remote_provider` and its `_env` twin) needs one provider without OpenRouter or `OPENAI_BASE_URL`/`OPENAI_COMPATIBLE_BASE_URL`. `provider_models.migrate_model_value` prefixes rows so free text never enters a single-provider route; off-provider Main mints none (DEVELOPMENT "Provider Independence").
 
 DeepSeek (`deepseek::`) uses the fixed `provider_models.DEEPSEEK_BASE_URL`; proxies and mirrors belong to `openai-compatible::`, and `deepseek/...` stays OpenRouter. `DEEPSEEK_REASONING_EFFORT_ALIASES` maps send-time effort, every tier change reporting `reasoning_effort_clamped`; a forced tool choice disables thinking. Wire details: `llm_openai_compatible.py`.
 
-MiniMax (`minimax::`) sends `reasoning_split=true`; raw reasoning details survive same-route turns verbatim and render display-only. The live wire is unverified.
+MiniMax (`minimax::`) uses `MINIMAX_DIRECT_DEFAULTS`; scouts/reviewers use its slots. Saved choices stay; switch PAYG M2.7 pins explicitly before [18 Nov 2026](https://platform.minimax.io/docs/faq/models.md). `reasoning_split=true` requests reasoning; same-route turns replay it verbatim when present, with reasoning details display-only. Live wire unverified.
 
 Z.ai (`zai::`) is GLM through Z.ai's OpenAI-compatible API. `ZAI_PLAN` selects the endpoint (`provider_models.resolve_zai_base_url`); a proxy or the China host belongs to `openai-compatible::`, and `zai/...` stays OpenRouter. Z.ai serves an absent `reasoning_effort` at its maximum, so the canonical scale is projected onto its own enum (`ZAI_REASONING_EFFORT_ALIASES`), every tier change disclosed as `reasoning_effort_clamped`; a forced tool choice keeps its tier. HTTP 429 code 1113 is a billing refusal (also a Coding Plan key on the pay-as-you-go endpoint), so the provider Test reports `No credits`, not `Rate limited`.
 
