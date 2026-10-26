@@ -4862,6 +4862,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
    did, so seven finger-wide levels still fit a 360 px phone; where seven fingers cannot fit (a 320 px phone) the levels
    share the strip evenly and a long word takes two lines. */
 .capsule-panel[data-place="sheet"] .chat-effort-strip { margin-inline: calc(-1 * var(--space-2)); }
+.chat-effort-seg-text {
+    display: block;
+    white-space: nowrap;  /* a squeezed level keeps its word whole ("X-High" never breaks at its hyphen) */
+}
 @container effort-strip (max-width: 359.98px) {
     .chat-effort-seg { font-size: var(--type-meta); padding-inline: var(--space-1); }
 }
@@ -4881,10 +4885,6 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 }
 .chat-effort-seg[data-rec="true"] {
     color: var(--accent-light);
-}
-.chat-effort-seg-text {
-    display: block;
-    white-space: nowrap;  /* a squeezed level keeps its word whole ("X-High" never breaks at its hyphen) */
 }
 /* Handles: the pill is the recommended level, the brackets are min and max. A tap or a key
    moves every handle with the same short transition, so a pushed bracket keeps pace. */
