@@ -33,6 +33,10 @@ from ouroboros.provider_models import (
 )
 from ouroboros.config import runtime_setting
 
+# Asks OpenRouter to report its upstream attempts, so a router's final status
+# cannot hide the cause an upstream returned (the attribution headers stay their own SSOT).
+OPENROUTER_METADATA_HEADERS = {"X-OpenRouter-Metadata": "enabled"}
+
 
 _OR_PROVIDER_PRESETS = {
     # Same-model provider failover versus reproducible provider pinning.
@@ -497,7 +501,7 @@ class _ProviderRoutingMixin:
             "usage_model": usage_model,
             "api_key": current_api_key,
             "base_url": "https://openrouter.ai/api/v1" if explicit_settings else self._base_url,
-            "default_headers": dict(OPENROUTER_APP_HEADERS),
+            "default_headers": {**OPENROUTER_APP_HEADERS, **OPENROUTER_METADATA_HEADERS},
             "supports_openrouter_extensions": True,
             "supports_generation_cost": True,
         }

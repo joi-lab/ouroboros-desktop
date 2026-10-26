@@ -22,12 +22,13 @@
             "base_url": "https://openrouter.ai/api/v1",
             "default_headers": {
               "HTTP-Referer": "https://ouroboros-agent.ai/",
-              "X-OpenRouter-Title": "Ouroboros"
+              "X-OpenRouter-Title": "Ouroboros",
+              "X-OpenRouter-Metadata": "enabled"
             },
             "supports_openrouter_extensions": true,
             "supports_generation_cost": true
           },
-          "value_sha256": "90d81cc3c49473ad3fda24e76d38dec58c10df1e6f0ba5ad306c75c742537394"
+          "value_sha256": "fefbec90865126dca1ba5d509cb375644490cfae731ed0357fe823eae2723c75"
         },
         "sends": [],
         "unused_script_steps": 0
@@ -55,12 +56,13 @@
             "base_url": "https://openrouter.ai/api/v1",
             "default_headers": {
               "HTTP-Referer": "https://ouroboros-agent.ai/",
-              "X-OpenRouter-Title": "Ouroboros"
+              "X-OpenRouter-Title": "Ouroboros",
+              "X-OpenRouter-Metadata": "enabled"
             },
             "supports_openrouter_extensions": true,
             "supports_generation_cost": true
           },
-          "value_sha256": "ca8713d626ccfcea1aca3f5465dc78955bf28954b306828d53658925fb098500"
+          "value_sha256": "8eafab4196dbc14eaa7d35d4b327a7e816a7f9f04670fa287eeb5274e5c76de7"
         },
         "sends": [],
         "unused_script_steps": 0
@@ -92,12 +94,13 @@
             "base_url": "https://proxy.invalid/v1",
             "default_headers": {
               "HTTP-Referer": "https://ouroboros-agent.ai/",
-              "X-OpenRouter-Title": "Ouroboros"
+              "X-OpenRouter-Title": "Ouroboros",
+              "X-OpenRouter-Metadata": "enabled"
             },
             "supports_openrouter_extensions": true,
             "supports_generation_cost": true
           },
-          "value_sha256": "60ebc6bea2f671e71690503c799cbe5dd6b3692b59cd76952b1ffbae94b5db3a"
+          "value_sha256": "11f82646e965bfbaed409f49fcff543e3f35812d69ce1cbdf394c845928f9c33"
         },
         "sends": [],
         "unused_script_steps": 0
