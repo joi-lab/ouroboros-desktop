@@ -719,9 +719,10 @@ class RoomResolver:
         return chat
 
     def warm(self, task_ids: Any) -> bool:
-        """Read the lineage of every unseen id and of its unseen ancestors (a remembered id's
-        included), ONE transaction per generation, before the rule walks them one id at a time (a
-        page names dozens); ``False`` when the store could not answer them all now."""
+        """Read, ONE transaction per generation, the lineage the rule then walks one id at a time (a page
+        names dozens): every unseen id and the parents and roots of the rows read now, and from a
+        remembered task its parent while the walk goes on there (neither is bound to a Project; a root
+        is only asked for its binding); ``False`` when the store could not answer them all now."""
         wanted, seen = {str(tid) for tid in task_ids if tid}, set()
         while wanted:
             seen |= wanted
@@ -730,9 +731,18 @@ class RoomResolver:
             if read is None:
                 return False
             self.misses.update(unseen - read.keys())
-            known = (read.get(tid) or _TASK_LINEAGE.get((str(self.root), tid)) for tid in wanted)
-            wanted = {row[key] for row in known if row for key in ("parent_task_id", "root_task_id") if row[key]} - seen
+            fresh = {row[key] for row in read.values() for key in ("parent_task_id", "root_task_id") if row[key]}
+            walked = {row["parent_task_id"] for tid in wanted - unseen if not self._ends_walk(tid)
+                      and (row := _TASK_LINEAGE.get((str(self.root), tid))) and row["parent_task_id"]}
+            wanted = (fresh | {tid for tid in walked if not self._ends_walk(tid)}) - seen
         return True
+
+    def _ends_walk(self, task_id: str) -> bool:
+        """The rule's walk ends at a task bound to a Project; a binding that cannot be read ends nothing here."""
+        try:
+            return bool(self._bound(task_id))
+        except Exception:
+            return False
 
 
 def project_chat_for_task_tree(
