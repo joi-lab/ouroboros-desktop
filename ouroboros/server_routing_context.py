@@ -108,10 +108,12 @@ def addressable_roots(ctx: Any) -> RootSnapshot:
     One typed read gives every root's status and own drive; no result body is decoded. A root
     its actor's drive reports settled is left out (a split root's child drive: copyback can
     lag): RUNNING can mean only paid post-work remains, and a terminal result cannot drain a
-    new owner or peer message, so it is never suggested as steerable.
+    new owner or peer message, so it is never suggested as steerable. The running roots'
+    owner-Pause fences are read in one statement per store and handed to each reader check.
     """
     try:
         from ouroboros.room_reader import is_reading
+        from ouroboros.store_hot_facts import snapshot as hot_facts
         from ouroboros.task_status import SETTLED_STATUSES
         from ouroboros.task_store import task_drive_status
 
@@ -130,22 +132,24 @@ def addressable_roots(ctx: Any) -> RootSnapshot:
         for drive in set(drives) - {canonical}:
             ids = [root[0] for root, actor in zip(roots, drives) if actor == drive]
             statuses.update(((drive, tid), fact[0]) for tid, fact in task_drive_status(drive, ids).items())
+        live = [(root, drive) for root, drive in zip(roots, drives)
+                if statuses.get((drive, root[0]), "") not in SETTLED_STATUSES]
         pairs = []
-        for (tid, task, status, started_at), drive in zip(roots, drives):
-            if statuses.get((drive, tid), "") in SETTLED_STATUSES:
-                continue
-            objective = str(task.get("objective") or task.get("description") or task.get("text") or "").strip()
-            reader = is_reading(drive, tid, task, running=status == "running",
-                                fences=getattr(ctx, "BUDGET_ROOT_FENCES", None), drain_ended=False)
-            pairs.append(({
-                "task_id": tid,
-                "status": status,
-                "title": _clip_marked(task.get("title"), 120),
-                "objective": _clip_marked(objective, 600),
-                "project_id": str(task.get("project_id") or ""),
-                "started_at": started_at,
-                "steerable": True, "room_reader": reader, **_late_input_author(task),
-            }, _task_chats(ctx, tid, task)))
+        with hot_facts([(drive, str(task.get("root_task_id") or tid))  # a store that cannot answer raises below
+                        for (tid, task, status, _at), drive in live if status == "running"]):
+            for (tid, task, status, started_at), drive in live:
+                objective = str(task.get("objective") or task.get("description") or task.get("text") or "").strip()
+                reader = is_reading(drive, tid, task, running=status == "running",
+                                    fences=getattr(ctx, "BUDGET_ROOT_FENCES", None), drain_ended=False)
+                pairs.append(({
+                    "task_id": tid,
+                    "status": status,
+                    "title": _clip_marked(task.get("title"), 120),
+                    "objective": _clip_marked(objective, 600),
+                    "project_id": str(task.get("project_id") or ""),
+                    "started_at": started_at,
+                    "steerable": True, "room_reader": reader, **_late_input_author(task),
+                }, _task_chats(ctx, tid, task)))
         pairs += [(row, _task_chats(ctx, row["task_id"], row)) for row in _active_direct_roots(ctx)]
         return RootSnapshot(tuple(pairs))
     except Exception as exc:

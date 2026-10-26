@@ -180,3 +180,37 @@ def test_one_field_readers_take_the_typed_column_not_the_body(tmp_path, monkeypa
     assert mailbox_drain_ended(tmp_path, "done") is True and mailbox_drain_ended(tmp_path, "split") is False
     assert mailbox_drain_ended(tmp_path, "absent") is False
     assert decoded == []
+
+
+@pytest.fixture
+def running_roots(tmp_path):
+    running = {f"run-{index}": {"task": _root(f"run-{index}"), "started_at": float(index)} for index in range(6)}
+    for tid in running:
+        write_task_result(tmp_path, tid, "running")
+    return _ctx(tmp_path, running=running)
+
+
+def test_the_running_roots_pause_fences_cost_one_store_read(running_roots, monkeypatch):
+    """Whether a running root still reads its room depends on its owner-Pause fence: one read of the store
+    answers every root (one statement over ``json_each``), however many run; a paused root reads no input."""
+    from ouroboros import owner_pause, store_hot_facts
+
+    owner_pause.install_fence(running_roots.DRIVE_ROOT, "run-3", request_id="press-1")
+    reads = []
+    _count(monkeypatch, store_hot_facts, "_read_rows", reads, key="fences")
+
+    readers = {row["task_id"]: row["room_reader"] for row in routing.addressable_roots(running_roots).rows()}
+
+    assert readers == {**{f"run-{index}": True for index in range(6)}, "run-3": False}
+    assert len(reads) == 1
+
+
+def test_a_fence_store_that_cannot_answer_is_a_disclosed_gap(running_roots, monkeypatch):
+    from ouroboros import store_hot_facts
+
+    def busy(*_args, **_kwargs):
+        raise store.StoreBusy("index busy", reason="contention")
+
+    monkeypatch.setattr(store_hot_facts, "_read_rows", busy)
+    snapshot = routing.addressable_roots(running_roots)
+    assert snapshot.gap == "StoreBusy" and snapshot.rows() == []
