@@ -594,8 +594,11 @@ def normalize_model_name(text: Any) -> str:
     if not value or value == UNKNOWN:
         return UNKNOWN
     if "::" in value:
-        provider, _, value = value.partition("::")
-        if provider == "claudexor":
+        from ouroboros.provider_models import parse_model_route
+
+        claudexor = parse_model_route(value).kind == "claudexor"
+        value = value.partition("::")[2]
+        if claudexor:
             value = value.partition("=")[2] or value
     return value.rsplit("/", 1)[-1].split(":", 1)[0] or UNKNOWN
 

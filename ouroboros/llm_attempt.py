@@ -158,6 +158,20 @@ class ProviderPolicyRefusal(RuntimeError):
     code = PROVIDER_POLICY_REFUSAL
 
 
+class ConnectionUnavailable(ProviderPolicyRefusal):
+    """The route names an API connection that cannot serve it: ``missing`` (no such
+    row, or it lacks its credential/endpoint), ``disabled``, ``kind_mismatch`` (the
+    name belongs to another kind) or ``invalid`` (a malformed spelling). Raised while
+    the target is resolved, so nothing is dispatched ($0); never re-sent on another
+    connection's key (``provider_connections.connection_values``)."""
+
+    def __init__(self, connection: str, reason: str) -> None:
+        self.code = "connection_unavailable"
+        self.connection, self.reason = connection, reason
+        super().__init__(f"connection_unavailable: {connection or 'this route'} is {reason.replace('_', ' ')}; "
+                         "it is not sent on another connection's key")
+
+
 def _is_provider_policy_refusal(exc: BaseException) -> bool:
     """Structural test: a typed refusal, by class or by the declared ``code``."""
     return isinstance(exc, ProviderPolicyRefusal) or (

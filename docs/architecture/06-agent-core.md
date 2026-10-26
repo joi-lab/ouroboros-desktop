@@ -80,7 +80,7 @@ Credential, Bible and identity mutation fences use physical owner locations (`cr
 
 #### Web access mechanisms (three distinct paths — do not conflate)
 
-`search_routes.py` resolves built-in Source/Model (Auto or strict), apart from skills, MCP and browser. Local `unavailable_reason` feeds Settings and registry withholding; SDK discovery is not an import test. Progress: attempts, failures, answers. Pinned Anthropic applies native per-call ids; only saved bare ids keep legacy defaults. Settings writes only edited Anthropic ids as `anthropic::model`. Paths:
+`search_routes.py` resolves built-in Source/Model (Auto or strict), apart from skills, MCP and browser; `kind@name::` uses that connection's key. Local `unavailable_reason` feeds Settings and registry withholding; SDK discovery is no import test. Progress: attempts, failures, answers. Pinned Anthropic takes native per-call ids; only saved bare ids keep legacy defaults; Settings writes edited ones as `anthropic::model`. Paths:
 
 | path | reasoning model | fetch authority | evidence |
 |---|---|---|---|

@@ -520,6 +520,7 @@
  * @typedef {Object} ModelCatalogItem
  * @property {string} provider_id
  * @property {string} provider
+ * @property {string=} provider_label
  * @property {string=} source
  * @property {string} id
  * @property {string=} name

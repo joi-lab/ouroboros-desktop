@@ -6,7 +6,7 @@ Settings have one home and default; the table projects `config.SETTINGS_DEFAULTS
 
 Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`); a direct server's implicit `REPO_DIR` is its executing checkout, and `resolve_port_file` relocates only the hosting root's port file. Retained exception: a server given only `APP_ROOT` keeps `~/Ouroboros/data` (`server_process.DATA_DIR`), since deriving it would silently start a fresh brain. The document is `data/settings.json` under the data root. Writes require the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential is never read as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
 
-`openrouter_attribution.py` is the application-identity SSOT for every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL rather than competing to rename one app record.
+`openrouter_attribution.py` is the app-identity SSOT of every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL, never renaming one app record.
 
 ### Reading and writing the settings document
 
@@ -47,9 +47,9 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 |-----|---------|-------------|
 | OPENROUTER_API_KEY | "" | OpenRouter credential |
 | OPENAI_API_KEY | "" | Official direct-OpenAI credential |
-| OPENAI_BASE_URL | "" | OpenAI base-URL override; legacy compatible endpoint (only with `OPENAI_API_KEY`) |
+| OPENAI_BASE_URL | "" | Legacy compatible endpoint (only with `OPENAI_API_KEY`) |
 | OPENAI_COMPATIBLE_API_KEY | "" | OpenAI-compatible endpoint credential |
-| OPENAI_COMPATIBLE_BASE_URL | "" | OpenAI-compatible endpoint base URL; only with its own key (blank = no auth) |
+| OPENAI_COMPATIBLE_BASE_URL | "" | OpenAI-compatible endpoint; only with its own key (blank = no auth) |
 | CLOUDRU_FOUNDATION_MODELS_API_KEY | "" | Cloud.ru credential |
 | CLOUDRU_FOUNDATION_MODELS_BASE_URL | `https://foundation-models.api.cloud.ru/v1` | Cloud.ru base URL |
 | GIGACHAT_CREDENTIALS | "" | GigaChat auth key |
@@ -59,13 +59,14 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | GIGACHAT_BASE_URL | `https://api.giga.chat/v1` | GigaChat base URL |
 | GIGACHAT_VERIFY_SSL_CERTS | `true` | GigaChat TLS verification |
 | GIGACHAT_PROFANITY_CHECK | "" | GigaChat profanity filter passthrough |
-| OUROBOROS_EXTRA_CA_BUNDLE | "" | PEM file added to the trust bundle of every first-party provider call |
+| OUROBOROS_EXTRA_CA_BUNDLE | "" | PEM file added to every first-party provider call's trust bundle |
 | ANTHROPIC_API_KEY | "" | Official direct-Anthropic credential |
 | MINIMAX_API_KEY | "" | MiniMax credential |
 | MINIMAX_REGION | "" | MiniMax region (empty = `global_en`) |
-| DEEPSEEK_API_KEY | "" | DeepSeek direct key (`deepseek::` values; Direct-provider routes) |
-| ZAI_API_KEY | "" | Z.ai direct key (`zai::` values; Direct-provider routes) |
+| DEEPSEEK_API_KEY | "" | DeepSeek credential (`deepseek::`) |
+| ZAI_API_KEY | "" | Z.ai credential (`zai::`) |
 | ZAI_PLAN | "" | Z.ai endpoint: empty/`payg` = pay-as-you-go, `coding` = Coding Plan |
+| OUROBOROS_CONNECTIONS | [] | Extra keys/endpoints, a row each (Direct-provider routes), never env-exported |
 | OUROBOROS_NETWORK_PASSWORD | "" | Non-loopback HTTP gate password; unset only warns (§8 Docker) |
 | OUROBOROS_SERVER_HOST | 127.0.0.1 | HTTP bind host (`0.0.0.0` for Docker/non-loopback) |
 | OUROBOROS_UI_DIR | "" | Interface (§4, optional setup/login included): empty builtin, `none`, or a trusted directory with `index.html`; restart-required; a saved value, blank too, beats the environment, is never exported, and a merged save never authors an absent one (`SAVED_CHOICE_SETTINGS`) |
@@ -225,14 +226,12 @@ The generic Settings save, the owner Safety model endpoint, the wizard and the m
 
 #### Direct-provider routes
 
-Direct-Main factory review roles (`provider_models.compute_direct_review_seats`): OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru, GigaChat. Exclusivity (`server_runtime._exclusive_direct_remote_provider` and its `_env` twin) needs one provider without OpenRouter or `OPENAI_BASE_URL`/`OPENAI_COMPATIBLE_BASE_URL`. `provider_models.migrate_model_value` prefixes rows so free text never enters a single-provider route; off-provider Main mints none (DEVELOPMENT "Provider Independence").
+Routes carry their connection (`parse_model_route`): `kind@name::model` reads that `OUROBOROS_CONNECTIONS` row via the built-in kind's branch (`llm_routing.resolve_target`); a missing or disabled one refuses (`connection_unavailable`), never on another key. Factory review roles (`compute_direct_review_seats`): OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru, GigaChat. Exclusivity (`exclusive_direct_kind`, named connections too) needs one provider without OpenRouter, a compatible endpoint or `OPENAI_BASE_URL`. `migrate_model_value` prefixes rows so free text never enters a single-provider route; off-provider Main mints none (DEVELOPMENT "Provider Independence").
 
-DeepSeek (`deepseek::`) uses the fixed `provider_models.DEEPSEEK_BASE_URL`; proxies and mirrors belong to `openai-compatible::`, and `deepseek/...` stays OpenRouter. `DEEPSEEK_REASONING_EFFORT_ALIASES` maps send-time effort, every tier change reporting `reasoning_effort_clamped`; a forced tool choice disables thinking. Wire details: `llm_openai_compatible.py`.
+DeepSeek (`deepseek::`) uses the fixed `DEEPSEEK_BASE_URL`; proxies and mirrors belong to `openai-compatible::`, `deepseek/...` stays OpenRouter. `DEEPSEEK_REASONING_EFFORT_ALIASES` maps send-time effort, each tier change reporting `reasoning_effort_clamped`; a forced tool choice disables thinking (wire: `llm_openai_compatible.py`). MiniMax (`minimax::`) uses `MINIMAX_DIRECT_DEFAULTS`, scouts/reviewers its slots. Saved choices stay; switch PAYG M2.7 pins explicitly before [18 Nov 2026](https://platform.minimax.io/docs/faq/models.md). `reasoning_split=true` requests reasoning, replayed verbatim on same-route turns; details stay display-only. Live wire unverified.
 
-MiniMax (`minimax::`) uses `MINIMAX_DIRECT_DEFAULTS`; scouts/reviewers use its slots. Saved choices stay; switch PAYG M2.7 pins explicitly before [18 Nov 2026](https://platform.minimax.io/docs/faq/models.md). `reasoning_split=true` requests reasoning; same-route turns replay it verbatim when present, with reasoning details display-only. Live wire unverified.
+Z.ai (`zai::`) is GLM on Z.ai's OpenAI-compatible API; `ZAI_PLAN` selects the endpoint (`resolve_zai_base_url`), a proxy or the China host belongs to `openai-compatible::`, `zai/...` stays OpenRouter. Z.ai serves an absent `reasoning_effort` at maximum, so the scale maps onto its enum (`ZAI_REASONING_EFFORT_ALIASES`), each tier change disclosed as `reasoning_effort_clamped`; a forced tool choice keeps its tier. HTTP 429 code 1113 is billing (also a Coding Plan key on the PAYG endpoint): Test reports `No credits`, not `Rate limited`.
 
-Z.ai (`zai::`) is GLM through Z.ai's OpenAI-compatible API. `ZAI_PLAN` selects the endpoint (`provider_models.resolve_zai_base_url`); a proxy or the China host belongs to `openai-compatible::`, and `zai/...` stays OpenRouter. Z.ai serves an absent `reasoning_effort` at its maximum, so the canonical scale is projected onto its own enum (`ZAI_REASONING_EFFORT_ALIASES`), every tier change disclosed as `reasoning_effort_clamped`; a forced tool choice keeps its tier. HTTP 429 code 1113 is a billing refusal (also a Coding Plan key on the pay-as-you-go endpoint), so the provider Test reports `No credits`, not `Rate limited`.
-
-GigaChat (`gigachat::`) runs on the native `gigachat` library, not the OpenAI-compatible lane: one function call per turn (message vocabulary: `llm_gigachat.py`). `reasoning_effort` is deliberately omitted, because hidden reasoning can consume the whole output budget and return empty content. No live cost source exists, so cost stays unknown, never a hand-maintained tariff. A GigaChat scope row retrieves on its own window (§6 Review stack).
+GigaChat (`gigachat::`) runs on the native `gigachat` library, not the OpenAI-compatible lane, one function call per turn (`llm_gigachat.py`). `reasoning_effort` is omitted: hidden reasoning can consume the whole output budget and return empty content. With no live cost source, cost stays unknown, never a hand-maintained tariff. A GigaChat scope row retrieves on its own window (§6 Review stack).
 
 ---
