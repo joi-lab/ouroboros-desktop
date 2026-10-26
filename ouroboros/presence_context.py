@@ -453,10 +453,6 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
         "working_folder": place.get("working_folder") or "not selected",
     }
     template = (Path(__file__).resolve().parents[1] / "prompts" / "FOCUS.md").read_text(encoding="utf-8")
-    if focus.get("identity") is None:
-        # The identity/letter paragraph is optional: undeclared connectors keep the exact legacy prompt.
-        opening, _identity_paragraph, body = template.split("\n\n", 2)
-        template = opening + "\n\n" + body
     text = template.format(**fields)
     return text if isinstance(content, str) else [{"type": "text", "text": text}, *[item for item in content if item.get("type") != "text"]]
 

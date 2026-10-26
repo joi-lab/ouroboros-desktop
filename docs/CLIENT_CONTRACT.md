@@ -543,7 +543,14 @@ Connector rows retain validated status `identity` without owner flags. The serve
 the existing reviewed extension route dispatcher; malformed identity is logged and dropped. Brief views for
 status/launch remain unchanged.
 
-<!-- F1W: client twins -->
+The browser's Place identity twins live in `web/modules/place_contract_types.js`, re-exported by
+`client_contract_types.js`: `PlaceIdentity` has optional `sends_as` and `reads_as` accounts (`id`, `label`, `kind`,
+with optional derived `owner`). `PlaceSummary` declares optional `identity`, `can_confirm`, `safety_mode` and
+`labels`; old responses remain readable. `RecentWake.as` declares the optional `{label, owner}` account stamp.
+`PlaceHistoryFacts`, alongside `PlaceHistoryAttention` in the Place twins, declares optional heard `facts`,
+captured `identity`, outgoing `sends_as` / `sends_as_owner`, and held `held_text` / `held` / `checked`. These are
+retained room facts, not guesses from current settings. Every consumed wire key stays pinned by
+`tests/test_client_contract_bindings.py`.
 
 `revision` belongs to the record and increases across disconnect/reconnect. `POST /api/places/{place_id}` (`PlaceUpdateRequest`) and `DELETE /api/places/{place_id}` (optional `PlaceDisconnectRequest` JSON body) accept `expected_revision`; clients send the displayed revision for every edit/disconnect. A stale write returns 409 `place_revision_conflict` with current `place: PlaceSummary | null` (null if disconnected). Repaint current facts, preserve drafts and require a deliberate next save; do not replay a stale draft automatically. A lost response leaves the outcome unknown: re-read before retrying. Disconnect retains room history. Display accounting failures keep spend unknown and do not turn a committed write into a refusal. `GET /api/places/{place_id}/rooms` (`PlaceRoomsResponse`) returns arrival-indexed rooms: safe integer `room_chat_id`, `address`, nullable `label` (latest arrival's title/name), `conversation_id`, `thread_id`, `last_at` (latest captured arrival) and nullable `unanswered_count` (open focus turns); `coverage` names `discovery: arrivals` and store-wide chat `importing`/`gaps`; legacy/outgoing-only rooms may be absent and no provider completeness is promised; unavailable reads answer 503, an unknown place 404; GET starts no focus. Existing `/api/chat/history?chat_id=...` cursors carry optional `place_history`: `kind` message/notice/delivery; recorded `delivery_state` authored/accepted/delivered/failed/uncertain; `attention` heard with its reason or an exact task-backed focus_started; current `owner_confirmed`. Missing facts stay unknown; no exact wake match is inferred. Records and authenticated ingress: CREATING_SKILLS, “Places and focus transport ingress”. Authorship follows role, including v0 sender metadata. Page truncation differs from importing/unavailable spans; partial ranges retry via `page_cursor`, failures retain the requested cursor.
 
