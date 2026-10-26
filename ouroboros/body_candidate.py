@@ -170,7 +170,7 @@ def _provision(serving: pathlib.Path, owner: str, data_dir: Optional[Any]) -> Di
     root, data_root = _wt._resolve_root(), _wt._data_dir(data_dir)
     safe = _wt._safe_name(owner)
     candidate_id = f"body_{safe}"
-    wt_path = (root / candidate_id).resolve()
+    wt_path = _wt.copy_path(root, candidate_id).resolve()
     _wt._assert_root_isolated(wt_path, serving, data_root)
     base_sha = _git(serving, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
     serving_branch = _git(serving, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()

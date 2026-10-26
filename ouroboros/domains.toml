@@ -82,6 +82,7 @@ D20 = "Presence"
 "ouroboros/question_answers.py" = "D11"
 "ouroboros/room_reader.py" = "D11"
 "ouroboros/tools/control_relay.py" = "D05"
+"ouroboros/tools/control_ui_translation.py" = "D05"
 "ouroboros/openrouter_cost.py" = "D02"
 "ouroboros/obligations.py" = "D11"
 "ouroboros/startup_migrations.py" = "D11"
@@ -119,6 +120,7 @@ D20 = "Presence"
 "ouroboros/launcher_readiness.py" = "D18"
 "ouroboros/launcher_window_chrome.py" = "D18"
 "ouroboros/launcher_page_zoom.py" = "D18"
+"ouroboros/standalone_page.py" = "D18"  # a page served before any asset: the builtin theme.js and ui.css inlined
 "ouroboros/desktop_notifications.py" = "D18"
 "ouroboros/desktop_media.py" = "D18"
 "ouroboros/desktop_autostart.py" = "D18"
@@ -137,6 +139,7 @@ D20 = "Presence"
 "ouroboros/agent_task_pipeline.py" = "D01"
 "ouroboros/anthropic_native_custody.py" = "D02"
 "ouroboros/argv_budget.py" = "D13"
+"ouroboros/artifact_directories.py" = "D05"
 "ouroboros/artifact_storage.py" = "D05"
 "ouroboros/artifacts.py" = "D05"
 "ouroboros/chat_uploads.py" = "D05"
@@ -283,6 +286,7 @@ D20 = "Presence"
 "ouroboros/extension_reconcile_queue.py" = "D14"
 "ouroboros/extension_ui_validation.py" = "D14"
 "ouroboros/extension_contributions.py" = "D14"
+"ouroboros/extension_widget_assets.py" = "D14"
 "ouroboros/fallback_cooldown.py" = "D02"
 "ouroboros/gateway/__init__.py" = "D11"
 "ouroboros/gateway/_helpers.py" = "D11"
@@ -300,6 +304,7 @@ D20 = "Presence"
 "ouroboros/gateway/cost_breakdown.py" = "D11"
 "ouroboros/gateway/extensions.py" = "D11"
 "ouroboros/gateway/widgets.py" = "D11"
+"ouroboros/gateway/widget_assets.py" = "D11"
 "ouroboros/gateway/extension_receipts.py" = "D11"
 "ouroboros/gateway/files.py" = "D11"
 "ouroboros/gateway/history.py" = "D11"
@@ -337,6 +342,7 @@ D20 = "Presence"
 "ouroboros/gateway/work_projection.py" = "D11"  # server observations for the work projection
 "ouroboros/gateway/work_contracts.py" = "D11"
 "ouroboros/gateway/task_events.py" = "D11"
+"ouroboros/gateway/task_reviews.py" = "D11"
 "ouroboros/gateway/task_archive.py" = "D11"
 "ouroboros/gateway/task_hurry.py" = "D11"
 "ouroboros/gateway/task_pause.py" = "D11"
@@ -457,6 +463,7 @@ D20 = "Presence"
 "ouroboros/packaged_cli.py" = "D18"
 "ouroboros/packaged_cli_install.py" = "D18"
 "ouroboros/force_remove.py" = "D18"  # the permission-granting recursive removal every retirer of a copied tree shares
+"ouroboros/unindexed.py" = "D18"  # the .noindex names new generated copies are born under, shared by their makers
 "ouroboros/platform_layer.py" = "D18"
 "ouroboros/platform_win32_abi.py" = "D18"
 "ouroboros/post_task_checkpoint.py" = "D01"
@@ -537,6 +544,7 @@ D20 = "Presence"
 "ouroboros/review_execution_projection.py" = "D06"
 "ouroboros/review_ledger.py" = "D06"
 "ouroboros/review_native_episode.py" = "D06"
+"ouroboros/review_native_images.py" = "D06"
 "ouroboros/review_owner_custody.py" = "D06"
 "ouroboros/review_pool_migration.py" = "D06"
 "ouroboros/review_pool_receipts.py" = "D06"
@@ -829,6 +837,7 @@ D20 = "Presence"
 "ouroboros/image_preparation.py" = "D02"
 "ouroboros/workspace_admission.py" = "D17"
 "ouroboros/workspace_executor.py" = "D17"
+"ouroboros/workspace_executor_paths.py" = "D17"
 "ouroboros/docker_process_observer.py" = "D17"
 "ouroboros/workspace_patch_rules.py" = "D17"
 "ouroboros/workspace_preflight.py" = "D17"
@@ -891,6 +900,8 @@ D20 = "Presence"
 "supervisor/direct_pause.py" = "D08"
 "supervisor/consciousness_carriers.py" = "D08"
 "supervisor/queue_timeouts.py" = "D08"
+"supervisor/silence_attention.py" = "D08"
+"ouroboros/work_diagnostics.py" = "D09"
 "supervisor/task_model_wait.py" = "D08"
 "supervisor/queue_schedules.py" = "D08"
 "supervisor/schedule_lifecycle.py" = "D08"
@@ -1084,6 +1095,7 @@ allowed = [
   "D11->D03",
   "D11->D04",
   "D11->D05",
+  "D11->D06",
   "D11->D07",
   "D11->D08",
   "D11->D09",
@@ -1142,6 +1154,7 @@ allowed = [
   "D17->D04",
   "D17->D05",
   "D17->D06",
+  "D17->D07",
   "D17->D08",
   "D17->D11",
   "D17->D12",
@@ -1231,7 +1244,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D11->D06",
   "D12->D01",
   "D12->D05",
   "D12->D06",
@@ -1270,7 +1282,6 @@ lazy_only = [
   "D16->D11",
   "D16->D15",
   "D17->D02",
-  "D17->D07",
   "D17->D09",
   "D17->D13",
   "D17->D20",

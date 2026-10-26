@@ -23,6 +23,7 @@ import pytest
 
 from ouroboros import subagent_worktrees as wt, workspace_patch_capture as capture
 from ouroboros.platform_layer import _lock_identity, pid_is_alive
+from ouroboros.unindexed import COPIES
 from tests._delegated_transport_shared import _owned_gateway_uses_each_test_transport  # noqa: F401
 from tests.test_delegated_full_access import full_run  # noqa: F401
 from tests.test_delegated_run_isolation import _git, _nanny_ctx, _seed_target
@@ -206,7 +207,7 @@ def test_a_live_holder_is_a_typed_refusal_and_a_dead_holder_is_evicted(tmp_path,
     # Nothing was registered, pinned or checked out for the refused attempt.
     assert wt.find_execution_snapshot("snap1", data_dir=data) is None
     assert _git(target, "for-each-ref", "refs/ouroboros/").stdout == ""
-    assert not list(snaps.glob("dlg_*"))
+    assert not [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")]
 
     # A holder that died (SIGKILL, panic) left its lock file behind: the owner-aware
     # stale check evicts it at once instead of refusing for _LOCK_STALE_SEC.
@@ -407,7 +408,7 @@ def test_a_failure_inside_the_first_lock_section_after_the_row_leaves_nothing(tm
         _provision(target, snaps, data, snapshot_id="snapLockB")
     assert wt.find_execution_snapshot("snapLockB", data_dir=data) is None
     assert _git(target, "for-each-ref", "refs/ouroboros/").stdout == ""
-    assert not list(snaps.glob("dlg_*")) and not list((target / ".git" / "worktrees").glob("dlg_*"))
+    assert not [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")] and not list((target / ".git" / "worktrees").glob("dlg_*"))
     assert not _lock_held(snaps)
 
 
@@ -423,7 +424,7 @@ def test_a_failure_after_the_provisional_row_leaves_nothing_and_a_crash_is_gc_re
         _provision(target, snaps, data, snapshot_id="snapFail")
     assert wt.find_execution_snapshot("snapFail", data_dir=data) is None
     assert _git(target, "for-each-ref", "refs/ouroboros/").stdout == ""
-    assert not list(snaps.glob("dlg_*"))
+    assert not [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")]
 
     # A worker killed between the provisional row and the final row: the row is
     # registered, custody never opened -> GC can remove it once the task is proven over.
@@ -439,7 +440,7 @@ def test_a_failure_after_the_provisional_row_leaves_nothing_and_a_crash_is_gc_re
     assert report["removed"] == ["snapCrash"]
     assert wt.find_execution_snapshot("snapCrash", data_dir=data) is None
     assert _git(target, "for-each-ref", "refs/ouroboros/").stdout == ""
-    assert not list(snaps.glob("dlg_*"))
+    assert not [*snaps.glob("dlg_*"), *snaps.glob(f"{COPIES}/dlg_*")]
 
 
 @pytest.mark.parametrize("autocrlf", [False, True])

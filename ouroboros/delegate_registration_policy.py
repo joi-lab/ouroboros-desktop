@@ -269,7 +269,7 @@ STARTED_PROGRESS_FLAGS: Tuple[str, ...] = (
 # or the owner's recorded terminal-wake acknowledgement.
 STARTED_SETTLEMENT_FACTS: Tuple[str, ...] = (
     "terminal_state", "terminal_reason", "engine_model", "access_profile",
-    "spend_disclosed", "spend_estimated", "cost_usd",
+    "spend_disclosed", "spend_estimated", "cost_usd", "cost_partial",
     "settled_at", "engine_locator", "terminal_ack_attempt")
 # Binding/authority facts are FIRST-WINS (R1-2): a later idempotent STARTED row
 # may be minted by a context that no longer knows the original binding; the

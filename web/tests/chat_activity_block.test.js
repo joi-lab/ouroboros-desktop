@@ -415,6 +415,115 @@ test('a direct turn with two successful tools is the task card: ONE evidence row
     } finally { g.close(); }
 });
 
+const orderTime = seconds => `2026-10-25T07:12:${String(seconds).padStart(2, '0')}Z`;
+const feedOrder = f => f.messages.children.filter(node => node.classList.contains('chat-live-card')
+    || (node.classList.contains('chat-bubble') && !node.classList.contains('typing-bubble')))
+    .map(node => [node === f.card() ? 'card' : node.classList.contains('user') ? 'owner' : 'answer', Number(node.dataset.ts)]);
+
+for (const [name, followUp, narration] of [
+    ['speechless with intervening owner', true, null],
+    ['speechless without intervening owner', false, null],
+    ['root with earlier narration', true, 7],
+    ['root with later narration', true, 16],
+]) {
+    test(`the whole work card keeps its earliest evidence anchor: ${name} (#949)`, async () => {
+        const user = seconds => ({ role: 'user', text: `Owner at ${seconds}`, content: `Owner at ${seconds}`,
+            ts: orderTime(seconds), history_id: `chat:${seconds}`, history_position: { source: 'chat', offset: seconds } });
+        const answer = { ...final, ts: orderTime(41), history_id: 'chat:41', history_position: { source: 'chat', offset: 41 } };
+        const progress = { task_id: TASK, role: 'assistant', is_progress: true, narration: true, text: 'Reading the logs.',
+            content: 'Reading the logs.', ts: orderTime(narration), history_id: 'progress:1',
+            history_position: { source: 'progress', offset: 1 } };
+        const evidence = { observations: [
+            { key: `tool:${TASK}:host-c1`, tool: 'read_file', fact: 'started', ts: orderTime(9) },
+            { key: `tool:${TASK}:host-c1`, tool: 'read_file', fact: 'settled', status: 'ok', ts: orderTime(10) },
+        ] };
+        const carrier = toolCarrier(evidence, { ts: answer.ts, task_terminal_status: 'completed',
+            _is_direct_chat: narration === null });
+        const history = [user(5), ...(narration === null ? [] : [{ ...progress, tool_evidence: evidence }]),
+            ...(followUp ? [user(21)] : []), answer, ...(narration === null ? [carrier] : [])];
+        const expected = [['owner', Date.parse(orderTime(5))], ['card', Date.parse(orderTime(Math.min(narration ?? 9, 9)))],
+            ...(followUp ? [['owner', Date.parse(orderTime(21))]] : []), ['answer', Date.parse(answer.ts)]];
+        const live = fixture();
+        try {
+            live.emit('chat', user(5));
+            if (narration !== null && narration < 9) live.emit('chat', progress);
+            live.log({ type: 'tool_call_started', tool: 'read_file', tool_call_id: 'c1', ts: orderTime(9) });
+            live.log({ type: 'tool_call_finished', tool: 'read_file', tool_call_id: 'c1', ts: orderTime(10) });
+            if (narration !== null && narration > 9) live.emit('chat', progress);
+            if (followUp) live.emit('chat', user(21));
+            live.emit('chat', answer);
+            assert.deepEqual(feedOrder(live), expected, 'live chronological position');
+        } finally { live.close(); }
+        const replay = fixture(history);
+        try {
+            await replay.instance.refreshHistory({ revision: 1 });
+            assert.deepEqual(feedOrder(replay), expected, 'saved history keeps the whole card before the follow-up');
+            const card = replay.card();
+            const physicalPositions = () => replay.messages.children.filter(node => node.dataset.historyId)
+                .map(node => [node.dataset.historyId, node.dataset.historySource, node.dataset.historyOffset]);
+            const positions = physicalPositions();
+            history.reverse();
+            history.push(...history.slice());
+            await replay.instance.refreshHistory({ revision: 2 });
+            assert.deepEqual(feedOrder(replay), expected, 'duplicate and reordered replay stays chronological');
+            assert.equal(replay.card(), card, 'replay retains the mounted card');
+            assert.deepEqual(physicalPositions(), positions, 'source rows retain their physical history positions');
+        } finally { replay.close(); }
+    });
+}
+
+test('timestamp-free current work keeps page-end placement when its history is outside the page (#949)', async () => {
+    const carrier = toolCarrier({ observations: [
+        { key: 'old-call', tool: 'read_file', fact: 'started', ts: '2026-10-25T07:01:00Z' },
+    ] }, { ts: '', task_terminal_status: '' });
+    const history = [
+        { role: 'user', text: 'A later question.', ts: orderTime(5) },
+        { role: 'assistant', text: 'A later answer.', ts: orderTime(41) }, carrier,
+    ];
+    const f = fixture(history);
+    try {
+        await f.instance.refreshHistory({ revision: 1 });
+        assert.deepEqual(feedOrder(f).map(([kind]) => kind), ['owner', 'answer', 'card']);
+        assert.equal(f.card().dataset.ts, undefined, 'no inferred history position for current work');
+        const card = f.card();
+        await f.instance.refreshHistory({ revision: 2 });
+        assert.equal(f.card(), card);
+        assert.deepEqual(feedOrder(f).map(([kind]) => kind), ['owner', 'answer', 'card']);
+    } finally { f.close(); }
+});
+
+for (const delivery of ['history', 'live']) {
+test(`late earlier tool evidence reanchors a finished card without replacing it: ${delivery} (#949)`, async () => {
+    const carrier = toolCarrier({ observations: [
+        { key: 'later', tool: 'read_file', fact: 'started', ts: orderTime(26) },
+    ] }, { ts: orderTime(41), task_terminal_status: 'completed' });
+    const history = [
+        { role: 'user', text: 'Read the logs.', ts: orderTime(5) },
+        { role: 'user', text: 'Read the older log too.', ts: orderTime(21) },
+        { ...final, ts: orderTime(41) }, carrier,
+    ];
+    const f = fixture(history);
+    try {
+        await f.instance.refreshHistory({ revision: 1 });
+        const card = f.card();
+        assert.equal(Number(card.dataset.ts), Date.parse(orderTime(26)));
+        assert.deepEqual(feedOrder(f).map(([kind]) => kind), ['owner', 'owner', 'card', 'answer']);
+        if (delivery === 'history') {
+            carrier.tool_evidence.observations.push({ key: 'earlier', tool: 'read_file', fact: 'started', ts: orderTime(9) });
+            await f.instance.refreshHistory({ revision: 2 });
+        } else {
+            f.log({ type: 'tool_call_started', tool: 'read_file', tool_call_id: 'earlier', ts: orderTime(9) });
+        }
+        assert.equal(f.card(), card);
+        assert.equal(card.dataset.finished, '1');
+        assert.equal(Number(card.dataset.ts), Date.parse(orderTime(9)));
+        assert.deepEqual(feedOrder(f).map(([kind]) => kind), ['owner', 'card', 'owner', 'answer']);
+        assert.equal(f.rows().length, 1, 'late evidence updates the single folded row');
+        assert.match(f.meta(), /2 tool calls/);
+    } finally { f.close(); }
+});
+}
+
 test('a greeting with zero tools shows nothing live and nothing on reload', async () => {
     const f = fixture();
     try {

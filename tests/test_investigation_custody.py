@@ -94,10 +94,11 @@ def test_schedule_schema_distinguishes_native_authority_from_checking_access(tmp
 
     schema = next(tool.schema for tool in get_tools() if tool.name == "schedule_subagent")
     props = schema["parameters"]["properties"]
-    assert "native child/nanny" in props["write_surface"]["description"]
-    assert "access='readonly'" in props["write_surface"]["description"]
-    assert "evidence-only" in props["access"]["description"]
-    assert "do not call integrate_delegated_patch" in schema["description"]
+    emitted = "\n".join([schema["description"], *(prop.get("description", "") for prop in props.values())])
+    for condition in ("native child/nanny", "Select readonly for read-only session execution",
+                      "no task or product-write authority", "evidence-only private checking copy",
+                      "do not call integrate_delegated_patch"):
+        assert condition in emitted
     ctx = SimpleNamespace(repo_dir=str(tmp_path), workspace_root=None, workspace_mode="",
                           task_constraint=None, is_workspace_mode=lambda: False,
                           active_repo_dir=lambda: tmp_path)

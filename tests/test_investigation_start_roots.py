@@ -21,6 +21,7 @@ import pytest
 from ouroboros import delegate_custody as custody
 from ouroboros.delegate_registration_policy import INVESTIGATION_AUTHORITY
 from ouroboros.delegate_start_instructions import INVESTIGATION_INSTRUCTION, scratch_fact
+from ouroboros.unindexed import COPIES
 from ouroboros.workspace_preflight import SNAPSHOT_ENVIRONMENT_NOTE
 
 ENGINE_VERSION = "3.25.1"  # carries workspaceRoot (3.8.1+) and scope.ephemeral (3.3.7+)
@@ -293,7 +294,7 @@ def test_a_source_edit_during_provisioning_still_refuses_the_investigation(tmp_p
     assert refused["reason"] == "execution_snapshot_failed" and refused["definitely_unrun"] is True, refused
     assert not engine.starts and _load_registry(None) == []
     assert _git(project, "for-each-ref", "refs/ouroboros") == ""
-    assert not [p for p in (tmp_path / "snaps").iterdir() if p.is_dir()]
+    assert not [p for p in (tmp_path / "snaps").rglob("*") if p.is_dir() and p.name != COPIES]  # no copy is left
     assert (folder / "mod.py").read_bytes() == b"VALUE = 9\r\n"
     custody._CUSTODY.clear()
 
@@ -505,5 +506,5 @@ def test_a_starting_folder_outside_the_snapshot_is_refused_and_released(tmp_path
     assert "build/out" in refused["detail"] and "access='readonly'" in refused["detail"]
     assert not engine.starts and _load_registry(None) == []
     assert _git(project, "for-each-ref", "refs/ouroboros") == ""
-    assert not [p for p in (tmp_path / "snaps").iterdir() if p.is_dir()]
+    assert not [p for p in (tmp_path / "snaps").rglob("*") if p.is_dir() and p.name != COPIES]  # no copy is left
     custody._CUSTODY.clear()

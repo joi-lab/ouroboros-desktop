@@ -128,6 +128,7 @@ def _emit_swarm_fanout(
         fanout_interval = round(now - prev, 3) if prev > 0 else None
         setattr(ctx, "_last_fanout_ts", now)
     evt = {
+        "event_id": "swarm:" + uuid.uuid4().hex,
         "ts": utc_now_iso(),
         "type": "swarm_fanout",
         "task_id": parent_task_id,
@@ -149,11 +150,16 @@ def _emit_swarm_fanout(
         "fanout_interval_sec": fanout_interval,
     }
     try:
-        append_jsonl(ctx.drive_logs() / "events.jsonl", evt)
-        from ouroboros.swarm_rollup import load_swarm_rollup
-        load_swarm_rollup(ctx.drive_logs().parent, parent_task_id)
+        from ouroboros.swarm_rollup import record_swarm_fanout
+        record_swarm_fanout(ctx.drive_logs().parent, evt)
+    except LookupError:
+        pass  # Unbound/legacy emitters have no task row; retain their diagnostic event below.
     except Exception:
-        log.debug("Failed to emit swarm_fanout telemetry", exc_info=True)
+        log.debug("Failed to retain swarm_fanout telemetry", exc_info=True)
+    try:
+        append_jsonl(ctx.drive_logs() / "events.jsonl", evt)
+    except Exception:
+        log.debug("Failed to publish swarm_fanout diagnostic event", exc_info=True)
 
 
 def _subagent_slot_note(ctx: ToolContext, root_task_id: str) -> str:

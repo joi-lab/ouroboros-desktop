@@ -142,7 +142,7 @@ def test_release_receipt_retries_residual_cleanup_without_recapturing(author, tm
 def test_interrupted_materialization_refuses_unproven_cleanup(author, tmp_path, monkeypatch):  # noqa: F811
     data = tmp_path / "data"
     source = rc.freeze_checking_source(author, data_root=data, subject=rc.SUBJECT_INDEX)
-    area = rc.seat_dir(data, "task", "interrupted") / "area"
+    area = rc.seat_dir(data, "task", "interrupted") / "area.noindex"
     area.mkdir(parents=True)
     (area / "unfinished.txt").write_text("keep me\n", encoding="utf8")
     monkeypatch.setattr(sw, "_force_rmtree", lambda _path: None)
@@ -235,7 +235,7 @@ def test_sticky_consumer_refresh_recovers_readonly_objects_in_same_thread(
     first = _run(author, data, source)
     saved = pathlib.Path(first["checking_evidence"]["evidence_dir"])
     saved_bytes = {str(p.relative_to(saved)): p.read_bytes() for p in saved.rglob("*") if p.is_file()}
-    area = rc.seat_dir(data, "task-1", "thread:plan_review:t1") / "area"
+    area = rc.seat_dir(data, "task-1", "thread:plan_review:t1") / "area.noindex"
     events = _windows_readonly_unlink(monkeypatch, targets[0])
     thread_gateway.before_turn = None
     second = _run(author, data, source, operation="op-2", thread_id=first["thread_id"])
@@ -270,7 +270,7 @@ def test_interrupted_materialization_retries_after_readonly_cleanup(author, tmp_
     events = _windows_readonly_unlink(monkeypatch, targets[0])
     area = pathlib.Path(rc.prepare_seat_area(data, "task", "interrupted-readonly", source))
     assert events == ["denied", "chmod", "retried"]
-    assert area == home / "area"
+    assert area == home / "area.noindex"
     assert "materializing" not in json.loads((home / "checking.json").read_text(encoding="utf8"))
     assert _git(area, "write-tree") == source["tree"] and not (area / "readonly-probe.txt").exists()
     assert _author_state(author) == before

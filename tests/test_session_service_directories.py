@@ -652,7 +652,7 @@ def test_full_and_unsupported_seats_keep_their_request_and_rights(tmp_path, acce
     binding = rc.session_checking(gateway, custody_drive=data, task_id="task-1", operation_id="op-1",
                                   root=str(author), source=source, shape=delegated_run_shape(False, access),
                                   route_id="route")
-    area = rc.seat_dir(data, "task-1", "op-1") / "area"
+    area = rc.seat_dir(data, "task-1", "op-1") / "area.noindex"
     assert binding["execution"] == {"isolation": "live", "delegated": True, "workspaceRoot": str(area)}
     text = binding["instructions"]
     assert ("your engine grants this run none (auxiliary_roots_unsupported:" in text) is (access == "workspace_write")

@@ -157,7 +157,7 @@ def test_named_evidence_is_frozen_with_the_subject_not_read_live_by_each_seat(au
     shutil.rmtree(late)  # a lost copy: the same operation's rejoin rematerializes the frozen input
     rc.prepare_seat_area(data, "task", "op-2", source)
     assert (late / ".review-drive" / "task" / "view.txt").read_bytes() == b"byte-exact evidence\n"
-    shutil.rmtree(rc.seat_dir(data, "task", "op-2") / "area")
+    shutil.rmtree(rc.seat_dir(data, "task", "op-2") / "area.noindex")
     for view in source["evidence_views"].values():
         shutil.rmtree(view)  # no longer retained: a named gap, never the live folder instead
     (drive / "task").mkdir(parents=True)
@@ -166,7 +166,7 @@ def test_named_evidence_is_frozen_with_the_subject_not_read_live_by_each_seat(au
         rc.prepare_seat_area(data, "task", "op-2", source)
     with pytest.raises(rc.CheckingAreaUnavailable, match="no longer retained"):
         rc.thread_seat_area(data, "task", "plan_review:t2", source)
-    assert not (rc.seat_dir(data, "task", "op-2") / "area").exists()  # refused before any clone
+    assert not (rc.seat_dir(data, "task", "op-2") / "area.noindex").exists()  # refused before any clone
 
 
 def test_an_ordinary_folder_is_read_in_place_and_a_view_keeps_links_modes_and_empty_dirs(tmp_path):

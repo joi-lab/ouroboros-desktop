@@ -135,15 +135,15 @@ Enforcement: CHECKLISTS item 20 `source_completeness` (critical when applicable)
 
 #### Review presentation adapters
 
-`web/modules/review_presentation.js`, `ouroboros/review_execution_projection.py` (the
-bounded cross-domain `executions[]` wire), `web/modules/review_dom_patch.js` and
-`web/modules/harness_presentation.js` are pure read-side presentation: they never
-author, mutate or feed back canonical verdict, lifecycle, routing, attention or
-enforcement authority, never infer that a requested route executed, and omit an
-incomplete row rather than guess it. They reuse the existing chat-history, task-detail
-and physical-attempt readers and add no review ledger, endpoint, persisted UI state or
-cost copy (ARCHITECTURE §3 "Chat and Projects"). Enforcement:
-`web/tests/review_presentation.test.js`, `web/tests/harness_presentation.test.js`.
+`web/modules/review_presentation.js`, `review_opinions.js`, `review_dom_patch.js`,
+`harness_presentation.js` and `ouroboros/review_execution_projection.py` (bounded
+`executions[]`) only present producer facts: no verdict, lifecycle, routing,
+attention or enforcement changes, no requested-as-observed execution. Incomplete
+rows remain gaps. Existing chat/task/attempt readers supply the view;
+`gateway/task_reviews.py` adds passive paged history and owned saved-text exports
+through ledger/Plan/skill readers. No second ledger, persisted UI state or cost
+copy (ARCHITECTURE §3). Enforcement: `web/tests/review_presentation.test.js`,
+`web/tests/harness_presentation.test.js`, `tests/test_task_review_sources.py`.
 
 #### Context and growth matrix
 

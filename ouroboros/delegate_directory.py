@@ -293,7 +293,15 @@ def integrate_directory_result(ctx, entry, decision, reason, gateway, *, acknowl
     """Use engine CAS/disposition, retaining unknown effects under the same host intent."""
     drive = custody.custody_root(ctx)
     prepared = not entry.patch_captured if prepared is None else prepared
-    manifest = capture_directory_result(drive, entry, gateway)
+    try:
+        manifest = capture_directory_result(drive, entry, gateway)
+        original = None
+        if decision == "apply" and manifest.get("engine_manifest") and manifest["strategy"] != "direct":
+            cap_dir = custody.delegated_capture_dir(drive, entry.task_id, entry.run_id)
+            original = json.loads((cap_dir / manifest["engine_manifest"]["name"]).read_text())
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return (f"⚠️ INTEGRATE_MANIFEST_UNREADABLE: {type(exc).__name__}: {exc}. "
+                "No request was submitted by this call; retained work and any earlier apply intent remain unresolved.")
     from ouroboros.delegate_shared import orphan_apply_target_ok
     active, target = Path(ctx.active_repo_dir()).resolve(), Path(entry.target_root).resolve()
     if decision == "apply" and not (orphan_apply_target_ok(target, active) if orphan else active == target):
@@ -339,6 +347,12 @@ def integrate_directory_result(ctx, entry, decision, reason, gateway, *, acknowl
         receipt = {"source": "engine_work_product", "apply_state": manifest["apply_state"]}
         disposition = "applied"
     else:
+        from ouroboros.workspace_copies import copy_apply_refusal, target_write_refusal
+
+        touched = [row["path"] for row in original["entries"]
+                   if paths is None or row["path"] in paths]
+        if refusal := copy_apply_refusal(ctx, target, touched):
+            return target_write_refusal(target, refusal)
         if entry.patch_apply_pending and not acknowledge_ambiguous:
             return "⚠️ INTEGRATE_DELEGATED_APPLY_AMBIGUOUS: an earlier apply awaits reconciliation; inspect it before retrying."
         request = {"target": {"kind": "original_project"}, "mode": "apply"}
@@ -351,7 +365,10 @@ def integrate_directory_result(ctx, entry, decision, reason, gateway, *, acknowl
         if not custody.record_patch_apply_started(drive, entry, target_root=entry.target_root,
                                                   apply_idempotency_key=key):
             return "⚠️ INTEGRATE_INTENT_UNWRITTEN: the apply intent could not be saved; nothing was submitted."
-        if admission_check and (refusal := admission_check()):
+        refusal = admission_check() if admission_check else ""
+        if not refusal and (write_refusal := copy_apply_refusal(ctx, target, touched)):
+            refusal = target_write_refusal(target, write_refusal)
+        if refusal:
             if not replaying_intent:
                 custody.record_patch_apply_resolved(drive, entry, reason="authority_changed")
             return refusal

@@ -469,7 +469,10 @@ def review_index_view(mandatory: Mapping[str, Any], family: str, *, task_id: str
             addressed = True
             for row in wave.get("reviewers") or []:
                 if isinstance(row, Mapping) and isinstance(row.get("response"), Mapping):
-                    address(row["response"].get("source"), f"answer of seat {_seat(row)} in record {rid}")
+                    source = row["response"].get("source")
+                    role = source.get("role") if isinstance(source, Mapping) else ""
+                    what = f"{role} note" if role in ("failure", "pending") else "answer"
+                    address(source, f"{what} of seat {_seat(row)} in record {rid}")
             for decision in wave.get("author_decisions") or []:
                 if isinstance(decision, Mapping):
                     address(decision.get("source_ref"), f"author decision on record {rid}")

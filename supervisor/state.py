@@ -1177,7 +1177,7 @@ def per_task_cost_summary(max_tasks: int = 10, tail_bytes: int = 512_000) -> Lis
 
 def reconstruct_task_cost(
     task_id: str, *, fields: bool = False, drive_root: Optional[pathlib.Path] = None,
-    breakdown: Optional[Dict[str, Any]] = None,
+    breakdown: Optional[Dict[str, Any]] = None, custody_root=None,
 ) -> Any:
     """Reconstruct cost; an indexed breakdown belongs to this drive after legacy import."""
     want = str(task_id or "")
@@ -1201,7 +1201,7 @@ def reconstruct_task_cost(
 
             authority_root = pathlib.Path(drive_root) if drive_root is not None else DRIVE_ROOT
             if breakdown is None:
-                bucket = usage_breakdown(authority_root, task_id=want)
+                bucket = usage_breakdown(authority_root, task_id=want, custody_root=custody_root, include_custody=True)
             else:
                 from ouroboros._usage_rows import _breakdown_bucket, _with_integrity
 
@@ -1229,6 +1229,7 @@ def reconstruct_task_cost(
                 "ledger_integrity_degraded": bool(bucket.get("integrity_degraded")),
                 # #498: the same bucket's own explanation of its own amount.
                 "cost_presentation": build_cost_presentation(bucket, scope=COST_SCOPE_OWN),
+                **({"cost_custody": bucket["cost_custody"]} if "cost_custody" in bucket else {}),
             }
         except Exception:
             log.error("Failed to reconstruct ledger task cost for %s", task_id, exc_info=True)

@@ -52,9 +52,6 @@ _TERMINAL_TOKENS = (
 # constant from the sticky set; "dynamic" is a variable or expression that can
 # carry one, which counts because the reducer, not the caller, decides.
 TERMINAL_WRITERS = {
-    # Advances only derived fan-out facts; the locked projector preserves the
-    # CURRENT status, including a concurrently completed terminal result.
-    ('ouroboros/swarm_rollup.py::load_swarm_rollup', 'row["status"]'): 'dynamic',
     # Selects an already retained actor account; its locked projector preserves
     # CURRENT lifecycle, including terminal state, and compares the prior pointer.
     ('ouroboros/review_history_view.py::publish_review_history_view', '"running"'): 'dynamic',
@@ -79,6 +76,10 @@ TERMINAL_WRITERS = {
     # Preparation markers land only on a row still in the named non-terminal
     # status (requested by default); the projector refuses any other row.
     ('supervisor/workspace_preparation.py::_transition', 'status'): 'dynamic',
+    # #1376: the host-composed diagnostic's create-only "requested" receipt, the
+    # same seed a schedule_subagent request writes; create_only refuses any
+    # existing row, so it can neither end nor overwrite a task.
+    ('supervisor/silence_attention.py::_admit', '"requested"'): 'dynamic',
     # F6 upstream sync: the cursor/backfill refresh rewrites a stale stored
     # disclosure without changing the task's terminal status (same preserved
     # read as its record_terminal_reconciliation sibling).

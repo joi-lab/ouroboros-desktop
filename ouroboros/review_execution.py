@@ -22,7 +22,6 @@ from ouroboros.config import runtime_setting
 from ouroboros.model_wait import current_model_wait, monotonic_now, operation_wait_scope
 
 import asyncio
-import copy
 import hashlib
 import json
 import logging
@@ -63,7 +62,8 @@ from ouroboros.review_session_custody import (
 )
 from ouroboros.review_session_preparation import prepare_review_session_request, render_review_session_prompt
 from ouroboros.review_session_usage import (review_event_identity, session_custody_attribution,
-                                             session_failure_identity, session_invocation_fields, session_usage_facts)
+                                             session_failure_identity, session_invocation_fields, session_usage_facts, session_usage_chain,
+                                             combined_session_usage as _combined_session_usage)
 if TYPE_CHECKING:  # annotations only — importing the substrate here would cycle
     from ouroboros.review_substrate import ReviewRequest, ReviewSlot
 
@@ -687,8 +687,9 @@ def run_delegated_review_session(*, prompt: str, root: str, custody_drive: Any,
     gateway, route = None, session_route
     recovering, project_id, existing_project = False, "", ""  # also bound on early recovery failures
     observed, summary = {}, {}  # a failure after start still names what it observed
+    attempt_execution = None
     delivery_facts = invocation.source_delivery if invocation.source_delivery is not None else {}
-    continuations, stopped_summaries, session_usages = [], [], []
+    continuations, stopped_details, session_usages = [], [], []
     start_attempted, start_refused = False, False  # only submit witnesses POST entry
     try:
         record = custody.invocation_record(custody_drive, retry_token) if retry_token else None
@@ -855,21 +856,21 @@ def run_delegated_review_session(*, prompt: str, root: str, custody_drive: Any,
         seen_runs = {run_id}
         while True:
             summary, observed = custody.summary_of(detail), final_attempt_facts(detail, run_id)
+            attempt_execution = detail.get("attemptExecution")
             if str(summary.get("state") or "") == "succeeded":
                 break
-            stopped = summary
-            stopped_usage = session_usage_facts(run_id, requested_route=str(entry.route_id),
-                observed_attempt=observed, summary=stopped)
             successor = continue_review_run(gateway, custody_drive, entry, detail, invocation,
                 remaining=poll_deadline - time.monotonic(), seen=seen_runs)
             if successor is None:
                 break
             continuations.append({"from_run_id": run_id, "run_id": successor.run_id,
-                                  "resumable": stopped.get("resumable") or detail.get("resumable") or {}})
-            stopped_summaries.append(stopped)
-            session_usages.append(stopped_usage)
+                                  "resumable": summary.get("resumable") or detail.get("resumable") or {}})
+            stopped_details.append(detail)
+            session_usages.append(session_usage_facts(run_id, requested_route=str(entry.route_id),
+                observed_attempt=observed, summary=summary, attempt_execution=attempt_execution))
             entry, run_id = successor, successor.run_id
             observed, summary = {}, {}  # Prior-run facts never belong to an unobserved successor.
+            attempt_execution = None
             turn_id = ""  # A successor is never the stopped run's thread turn.
             seen_runs.add(run_id)
             state["delegated_run_id"] = run_id
@@ -888,7 +889,7 @@ def run_delegated_review_session(*, prompt: str, root: str, custody_drive: Any,
             failure.review_run_state = run_state
             raise failure
         text = _full_session_text(gateway, run_id, detail)
-        spend, estimated, combined_summary = _combined_session_usage(custody, stopped_summaries, summary)
+        spend, estimated, combined_summary = _combined_session_usage(custody, stopped_details, detail)
         thread_receipt: Dict[str, Any] = {}
         if use_thread:
             thread_receipt, thread_id, turn_id = _session_thread_receipt(gateway, thread_id, run_id, turn_id, route, observed,
@@ -906,11 +907,9 @@ def run_delegated_review_session(*, prompt: str, root: str, custody_drive: Any,
             # One final attempt, never the requested pool or a mixed summary route.
             "effective_route_ids": [observed["harness_id"]] if observed.get("harness_id") else [],
             "observed_attempt": observed, "model": observed.get("model", ""),
-            "usage": {**session_usage_facts(run_id, requested_route=str(entry.route_id), observed_attempt=observed,
-                                            summary=combined_summary),
-                      **({"session_usage_events": [*session_usages, session_usage_facts(run_id,
-                          requested_route=str(entry.route_id), observed_attempt=observed, summary=summary)]}
-                         if session_usages else {})},
+            "usage": session_usage_chain(run_id, requested_route=str(entry.route_id), observed_attempt=observed,
+                                         summary=summary, attempt_execution=attempt_execution,
+                                         combined_summary=combined_summary, previous=session_usages),
             "spend": spend, "spend_estimated": estimated,
             # D22/D29 applied facts are verbatim telemetry, never inferred.
             "applied_profile": observed.get("profile_id", ""),
@@ -943,11 +942,10 @@ def run_delegated_review_session(*, prompt: str, root: str, custody_drive: Any,
             carried = getattr(exc, "checking_terminal_detail", None)
             if isinstance(carried, dict) and run_id in run_names(carried) and custody.is_terminal(carried):
                 summary, observed = custody.summary_of(carried), final_attempt_facts(carried, run_id)
-            exc.delegated_usage = session_usage_facts(run_id, requested_route=str(getattr(route, "route_id", "") or ""),
-                                                      observed_attempt=observed, summary=summary)  # #1578
-            exc.delegated_usage["review_source_delivery"] = copy.deepcopy(delivery_facts)
-            if session_usages:
-                exc.delegated_usage["session_usage_events"] = [*session_usages, dict(exc.delegated_usage)]
+                attempt_execution = carried.get("attemptExecution")
+            exc.delegated_usage = session_usage_chain(run_id, requested_route=str(getattr(route, "route_id", "") or ""),
+                observed_attempt=observed, summary=summary, attempt_execution=attempt_execution, previous=session_usages,
+                source_delivery=delivery_facts)
             if continuations:
                 exc.delegated_usage["review_continuations"] = continuations
         if checking.get("evidence"):
@@ -972,22 +970,6 @@ def _require_route_headroom(gateway: Any, route: Any, shape: Any) -> None:
             reset_at=reset_at, code=(unavailable or "subscription_window_exhausted"))
     if unavailable:
         raise ReviewRouteUnavailable(f"delegated review route unavailable: {unavailable}", code=unavailable)
-
-
-def _combined_session_usage(custody: Any, stopped: List[Dict[str, Any]],
-                            summary: Dict[str, Any]) -> Tuple[Any, bool, Dict[str, Any]]:
-    """The seat's money and tokens across its continuations: a sum only when every run disclosed it."""
-    spend, estimated = custody.disclosed_spend(summary)
-    combined = dict(summary)
-    if stopped:
-        combined.pop("inputTokenUsage", None)  # per-run facts travel separately, not on a chain total
-        spends = [custody.disclosed_spend(item) for item in [*stopped, summary]]
-        spend = sum(value for value, _estimated in spends) if all(value is not None for value, _ in spends) else None
-        estimated = any(flag for _value, flag in spends)
-        for key in ("inputTokens", "outputTokens", "cachedInputTokens"):
-            values = [item.get(key) for item in [*stopped, summary]]
-            combined[key] = sum(values) if all(type(v) in (int, float) for v in values) else None
-    return spend, estimated, combined
 
 
 def _session_thread_receipt(gateway: Any, thread_id: str, run_id: str, turn_id: str, route: Any,
@@ -1410,9 +1392,10 @@ class AgentSessionReviewExecutor(ReviewSlotExecutor):
             # The ledger row is written by settle_run (record_subscription_session);
             # cost rides here for the actor record only, finality following the
             # spendEstimated fact, never re-derived.
-            "cost": spend if (spend is not None and not estimated) else None,
+            "cost": (facts.get("usage") or {}).get("cost", spend if not estimated else None),
             "cost_disclosed_usd": spend,
             "cost_estimated": estimated,
+            "cost_final": (facts.get("usage") or {}).get("cost_final", spend is not None and not estimated),
         }
         # What the vendor harness READ, folded from the tool-call journal the
         # engine keeps under the run directory (`run_dir`, the only witness of a

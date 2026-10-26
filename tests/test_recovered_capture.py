@@ -238,7 +238,7 @@ def test_relocated_failed_turn_is_captured_without_touching_active_thread(tmp_pa
     assert rc.capture_seat_evidence(root, TASK, "turn-one")["status"] == "capture_failed"
     assert _thread(root, source, "turn-two") == area
     (area / "active.txt").write_bytes(b"live turn")
-    old = rc.seat_dir(root, TASK, "turn-one") / "area"
+    old = rc.seat_dir(root, TASK, "turn-one") / "area.noindex"
     assert old.is_dir() and not (area / "only-old.txt").exists()
     monkeypatch.setattr(rc, "_directory_delta", compare)
     report = prune.prune_review_checkouts(root, {TASK}, now=10**11)
@@ -402,7 +402,7 @@ def test_stop_and_owner_restart_leave_capture_to_existing_owners(tmp_path, monke
         else:
             monkeypatch.setattr(server_restart, "DATA_DIR", root)
             monkeypatch.setattr(server_restart, "_OWNER_STOP_BEGAN", threading.Event())
-            monkeypatch.setattr(owned_shutdown, "begin_owned_stop", lambda root: None)
+            monkeypatch.setattr(owned_shutdown, "begin_owned_stop", lambda root, **_kw: None)
             monkeypatch.setattr(owned_shutdown, "stop_owned_work", lambda root: None)
             monkeypatch.setattr(claudexor_daemon, "ensure_owned_gateway",
                                 lambda **kw: pytest.fail("Restart must only attach"))

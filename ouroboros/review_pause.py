@@ -1,15 +1,17 @@
-"""A paid review operation its author leaves: owner Pause, or an addressed message.
+"""A paid review operation its author leaves: owner Pause, or a wait-only exit.
 
 Pause (owner 2026-10-08, full variant): the author is truly paused while reviewers
 it ALREADY launched
 finish the same check separately and visibly; Resume does not wait for them and
 later collects their result without another purchase; nothing new starts and
-the author commits, applies or publishes nothing. An addressed message is not
-Pause: an interactive change/commit author bound by ``receptive_author`` leaves
-only its own wait (it can answer at once instead of waiting deaf), every launched
-or still-unsent reviewer continues over the frozen subject, the same unchanged
-request rejoins for free, and ``watch_left_review`` keeps the wait intention and
-one settlement notice. This module is that seam between the review custody
+the author commits, applies or publishes nothing. A wait-only exit
+(``left_wait_only``: addressed mail, a selected helper or reviewer outcome, the
+wake time, a departed author) is not Pause: the author bound by ``receptive_author``
+leaves only its own wait (it can answer at once instead of waiting deaf), every
+launched or still-unsent reviewer continues over the frozen subject, the same
+unchanged request rejoins for free, and ``watch_left_review`` keeps the wait
+intention and one settlement notice (none for a departed author). This module is
+that seam between the review custody
 (``review_custody``/``review_operation``) and the author (``owner_pause``):
 
 - the author's synchronous drain detaches on Pause, including while a slot
@@ -220,7 +222,7 @@ def author_paused(operation: ReviewOperation) -> bool:
 
 def author_detaches(operation: Any, pending_entries: Iterable[Any]) -> bool:
     """Detach promptly, retaining workers. Pause refuses every still-unsent slot;
-    an addressed message refuses none — it ends only the author's own wait.
+    a wait-only exit (``left_wait_only``) refuses none — it ends only the author's own wait.
 
     Serialize with the first physical handoff: either that handoff armed the
     same episode first and it finishes, or Pause's refusal wins and survives
@@ -265,14 +267,22 @@ def author_detaches(operation: Any, pending_entries: Iterable[Any]) -> bool:
         return True
 
 
+def left_wait_only(entry: Any) -> bool:
+    """The author left only its own wait over this seat, never Pause: an unsent preparation still sends.
+    The one definition the drain's PENDING row (``detached_actor``) and the seat's own start checkpoint
+    (``review_state_custody``) read."""
+    return (not getattr(entry, "pause_before_launch", False) and getattr(entry, "author_left_for", "")
+            in {ADDRESSED_EVENT, HELPER_EVENT, REVIEW_EVENT, TIME_EVENT, DEPARTED_EVENT})
+
+
 def detached_actor(slot: Any, entry: Any, error_actor: Callable[..., Any], *, usage_ctx: Any,
                    request: Any, operation: Any) -> Any:
-    """The PENDING row the author takes with it when Pause or an addressed message detaches it.
+    """The PENDING row the author takes with it when Pause or a wait-only exit (``left_wait_only``) detaches it.
 
     The physical operation stays live and settles late into this process's
     custody (``_review_settled_attempts``, keyed by the attempt identity), so the
-    same request after Resume, or after the author answered its message, replays
-    it at $0. Never a verdict, never a stop.
+    same request after Resume, or after a wait-only exit, replays it at $0.
+    Never a verdict, never a stop.
     """
     from ouroboros.review_custody import _ACTIVE_LOCK
     from ouroboros.review_operation import stamp_review_controller
@@ -288,7 +298,7 @@ def detached_actor(slot: Any, entry: Any, error_actor: Callable[..., Any], *, us
             operation.author_detached = True
     preparing = bool(entry.pause_before_launch)
     left_for = getattr(entry, "author_left_for", "")
-    yielded = not preparing and left_for in {ADDRESSED_EVENT, HELPER_EVENT, REVIEW_EVENT, TIME_EVENT, DEPARTED_EVENT}
+    yielded = left_wait_only(entry)
     unsent = yielded and not episode_armed(entry.episode)
     message = (
         "Nobody waits for this reviewer (the author's speech is never held): it finishes the same check "
@@ -444,13 +454,13 @@ def notify_when_settled(rows: List[Dict[str, Any]], notify: Callable[[int], None
 
 def watch_left_review(ctx: Any, *, surface: str, retry_key: str, reissue: str, attempt: int = 0,
                       record_id: str = "") -> Optional[Dict[str, Any]]:
-    """The author left this wave on an addressed message: keep the wait intention BY VALUE on
+    """The author left this wave for mail, a selected outcome or a wake time: keep the wait intention on
     ``ctx._left_review_wait`` (the continuation serializer carries it; a new turn resets it),
     persist the wave's room duty before anything process-local can be lost (``_owe_left_review``),
     and, once the wave's whole recorded roster settles, send ONE system notice to the author's own
     mailbox, or hand the value-bound record to ``ended_left_review`` when no live drain reads that
-    mailbox. ``None`` when no seat of this wave was left for mail."""
-    # Every seat THIS call left (a seat Pause latched earlier included), once one was left for mail.
+    mailbox. ``None`` when no seat was left for one of these wait-only reasons."""
+    # Every seat THIS call left (a seat Pause latched earlier included), once one has a wait-only reason.
     rows = [row for row in (getattr(ctx, "_review_detached_operations", None) or []) if row.get("retry_key") == retry_key]
     if not retry_key or not any(row.get("reason") in {ADDRESSED_EVENT, HELPER_EVENT, REVIEW_EVENT, TIME_EVENT} for row in rows):
         return None

@@ -28,13 +28,14 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ouroboros.utils import append_jsonl, machine_json, utc_now_iso  # one compact JSON text: key order kept, facts round-trip
 from ouroboros import store_empty, store_hot_facts, store_task_cards, store_timing
+from ouroboros.swarm_rollup import retain_swarm_basis
 
 STORE_REL = pathlib.Path("state/current.sqlite")
 LOCK_NAME = "current.lock"  # the name-tier lock around every access
 IMPORT_LOCK_NAME = "current_import.lock"
 GENERATION = 8  # the lifecycle generation that owns the store
 GENERATION_KEY = "current_store_generation"  # in state/migrations.json
-SCHEMA_VERSION = 8  # 2: owner questions; 3: acceptance; 4: plans; 5: retention; 6: hot facts; 7: task cards; 8: root windows, terminal_seq
+SCHEMA_VERSION = 9  # 6: hot facts; 7: task cards; 8: root windows, terminal_seq; 9: filtered-list selection
 STORE_WAIT_SEC = 10.0
 JOURNAL_SIZE_LIMIT = 64 << 20  # retain at most 64 MiB of an idle rollback journal (PERSISTENCE.md: what it bounds)
 TIER_ENFORCED, TIER_NAME = "enforced", "name"
@@ -55,7 +56,7 @@ FLAG_COLUMNS = {"synthesis": "owes_synthesis", "terminal_projection": "owes_term
 # field): a claim, a wait or a retirement writes its one row, never the body. The body keeps a
 # present key as ``{}`` (its place and presence); ``load`` puts the rows back there, so a document
 # round-trips byte for byte. A key the body never had appears while it has rows.
-ROW_BACKED_FIELDS: Tuple[str, ...] = ("launch_handoffs", "model_waits", "retired_model_consumers")
+ROW_BACKED_FIELDS: Tuple[str, ...] = ("launch_handoffs", "model_waits", "retired_model_consumers", "swarm_fanouts")
 TERMINAL_WRITES = "terminal_writes"  # meta: terminal row writes (``obligations.task_written``, which stamps ``terminal_seq``)
 TERMINAL_SEQ_INDEX = "CREATE INDEX IF NOT EXISTS tasks_terminal_seq ON tasks(terminal_seq) WHERE terminal_seq IS NOT NULL;"
 REVIEW_COLLECTION_INDEX = ("CREATE INDEX IF NOT EXISTS tasks_review_collection ON tasks(review_collection_pending, task_id) "
@@ -1367,7 +1368,8 @@ class Txn:
         # schema step's addition runs once, with the version, never on a passive read.
         if key == "schema_version":
             held = int(self.meta(key) or 1)
-            if int(value) >= store_hot_facts.VERSION > held:
+            if (int(value) >= store_hot_facts.VERSION > held
+                    or int(value) >= store_hot_facts.LIST_VERSION > held):
                 store_hot_facts.upgrade(self)
             if int(value) >= store_task_cards.VERSION > held:
                 store_task_cards.upgrade(self)
@@ -1407,12 +1409,13 @@ class Txn:
             return None, [], None
         return body, self.handoff_records([task_id]), store_task_cards.read(self, task_id)
 
-    def store_task(self, document: Dict[str, Any], *, pending_drive: Optional[bool] = None) -> None:
-        """Upsert body, typed columns, handoffs and card; ``write_seq`` advances the memo signature.
-        The body is updated in place and only when its bytes changed (a same-size body rewrites its
-        changed pages alone, an identical one nothing); ``tasks`` keeps REPLACE, which NULLs the columns
-        an older writer does not list ("not derived", the import's cue)."""
+    def store_task(self, document: Dict[str, Any], *, pending_drive: Optional[bool] = None,
+                   current: Optional[Dict[str, Any]] = None) -> None:
+        """Upsert body/columns/handoffs/card; advance write_seq. Reuse the pristine current document
+        held by this write transaction, or read for a direct upsert. Update changed bytes in place;
+        tasks REPLACE NULLs columns omitted by older writers ("not derived", the import's cue)."""
         task_id = str(document["task_id"])
+        retain_swarm_basis(self, document, current=current)
         columns = typed_columns(document, pending_drive=pending_drive)
         columns["write_seq"] = (self.row(task_id, "write_seq") or 0) + 1
         self.conn.execute("INSERT INTO task_bodies (task_id, body) VALUES (?, ?) ON CONFLICT(task_id) DO UPDATE "
@@ -1524,6 +1527,8 @@ class Txn:
         for kind in ROW_BACKED_FIELDS:
             wanted = document.get(kind) if isinstance(document.get(kind), dict) else {}
             current = held.get(kind, {})
+            if kind == "swarm_fanouts":  # immutable producer facts survive stale replicas/older writers
+                wanted = {**wanted, **current}
             for op_id in current.keys() - wanted.keys():
                 self.delete_handoff(task_id, str(op_id))
             for op_id, facts in wanted.items():
@@ -1587,7 +1592,8 @@ def update_task(root: Any, task_id: str, mutator: Callable[[Dict[str, Any]], Opt
                 if updated is None:
                     return None
                 flag = pending_drive(txn, current, updated) if callable(pending_drive) else pending_drive
-                txn.store_task({**updated, "task_id": task_id}, pending_drive=flag)
+                updated = {**updated, "task_id": task_id}
+                txn.store_task(updated, pending_drive=flag, current=current)
                 return updated
         # No callback ran: the import owner upgrades with the same acquisition budget.
         from ouroboros.store_import import upgrade_current_schema

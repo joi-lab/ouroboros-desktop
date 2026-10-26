@@ -41,6 +41,7 @@ from ouroboros.force_remove import force_rmtree as _force_rmtree  # the shared p
 from ouroboros.utils import atomic_write_json, utc_now_iso
 from ouroboros.config import DATA_DIR, get_subagent_projects_root, get_subagent_worktree_root
 from ouroboros.retention import age_cutoff, get_gc_retention_days
+from ouroboros.unindexed import copy_path  # new checkouts are born where desktop search skips them
 from ouroboros import worktree_removal
 
 log = logging.getLogger(__name__)
@@ -671,7 +672,7 @@ def _provision_git_copy(
     task = str(task_id or "")
     started = time.monotonic()
     name = _safe_name(task_id) if task_copy else f"dlg_{_safe_name(task_id)}_{safe_snap[:16]}"
-    wt_path = (root / name).resolve()
+    wt_path = copy_path(root, name).resolve()
     _assert_root_isolated(wt_path, target, data_root)
     branch = f"{_BRANCH_PREFIX}{_safe_name(task_id)}" if task_copy else ""
     baseline_ref = f"refs/heads/{branch}" if task_copy else f"{_BASELINE_REF_PREFIX}{safe_snap}"
@@ -1287,7 +1288,7 @@ def provision_payload_snapshot(
     safe_snap = _safe_name(snap)
     task = str(task_id or "")
     started = time.monotonic()
-    wt_path = (root / f"dlgp_{_safe_name(task_id)}_{safe_snap[:16]}").resolve()
+    wt_path = copy_path(root, f"dlgp_{_safe_name(task_id)}_{safe_snap[:16]}").resolve()
     _load_registry(data_dir, strict=True, op="provision_payload_snapshot")  # refuse before the copy
     root.mkdir(parents=True, exist_ok=True)
     if _deletable(wt_path, root) and wt_path.exists():

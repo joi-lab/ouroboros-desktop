@@ -60,8 +60,12 @@ def _routing_attachments(value: Any) -> Optional[list]:
     return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else None
 
 
-def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any) -> Dict[str, Any]:
-    """Read the parent's canonical budget for supervisor-side admission."""
+def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any, *, strict: bool = False) -> Dict[str, Any]:
+    """Read the parent's canonical budget for supervisor-side admission.
+
+    ``{}`` is the omitted legacy budget. A ``strict`` caller freezing rights gets a
+    durable read failure raised instead, so unreadable authority never reads as it.
+    """
     parent = str(parent_task_id or "").strip()
     if not parent:
         return {}
@@ -80,8 +84,10 @@ def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any) ->
         roots.append(canonical)
     for root in roots:
         try:
-            row = load_task_result(root, parent)
+            row = load_task_result(root, parent, strict=strict)
         except Exception:
+            if strict:
+                raise
             row = None
         if isinstance(row, dict):
             contract = row.get("task_contract")
@@ -282,6 +288,7 @@ from supervisor.events_worker_reports import (  # noqa: E402, F401 -- intentiona
     _handle_task_focus_updated,
     _handle_task_heartbeat,
     _handle_task_metrics,
+    _handle_ui_i18n_updated,
 )
 from supervisor.queue_transitions import (  # noqa: E402, F401 -- intentional public re-exports
     _close_campaign_after_owner_stop,
@@ -307,6 +314,7 @@ EVENT_HANDLERS = {
     "task_heartbeat": _handle_task_heartbeat,
     "task_dispatch_resolved": _handle_task_dispatch_resolved,
     "task_focus_updated": _handle_task_focus_updated,
+    "ui_i18n_updated": _handle_ui_i18n_updated,
     "typing_start": _handle_typing_start,
     "send_message": _handle_send_message,
     "task_done": _handle_task_done,

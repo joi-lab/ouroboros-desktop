@@ -8,6 +8,27 @@ import pytest
 from ouroboros.tools.registry import ToolRegistry
 
 
+@pytest.mark.parametrize("constraint", [
+    {}, {"mode": "local_readonly_subagent"},
+    {"mode": "acting_subagent", "surface": "self_worktree", "root_task_id": "projection"},
+], ids=["full", "readonly", "acting"])
+def test_schedule_readonly_choice_survives_custom_projection(tmp_path, constraint):
+    from ouroboros.openai_chat_custom import project_function_tools_to_openai_custom
+
+    registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
+    registry._ctx.task_constraint = constraint
+    schema = next(tool for tool in registry.schemas() if tool["function"]["name"] == "schedule_subagent")
+    function = schema["function"]
+    # Normal/pruned function schemas carry parameter prose; the custom codec
+    # strips it and truncates the tool prose to fit its description bound.
+    assert "Select readonly for read-only session execution" in function["parameters"]["properties"]["access"]["description"]
+    catalog = project_function_tools_to_openai_custom([schema])
+    description = catalog.wire_tools()[0]["custom"]["description"]
+    assert "access='readonly' selects read-only session execution" in description
+    assert "evidence-only private checking copy" in description
+    assert catalog.schema_binding("schedule_subagent").schema() == function["parameters"]
+
+
 @pytest.mark.serial
 @pytest.mark.parametrize("name,arguments,invalid_field,invalid_value", [
     ("schedule_subagent", {"subagent_id": "actor-1", "objective": "Inspect interfaces",

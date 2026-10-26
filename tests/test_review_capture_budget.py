@@ -68,7 +68,7 @@ def test_reviewer_named_output_over_the_bound_is_retained_whole_before_release(
     [row] = [row for row in receipt["named_evidence"] if row["path"] == f"{rc.EVIDENCE_DIRNAME}/trace.bin"]
     assert row["size"] == OVER_BOUND and row["sha256"] == written["sha"]
     assert _sha(Path(receipt["evidence_dir"]) / "files" / row["path"]) == written["sha"]
-    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area").exists()
+    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area.noindex").exists()
 
 
 def test_reviewer_binary_patch_over_the_bound_is_retained_and_reproduces_the_tree(
@@ -81,7 +81,7 @@ def test_reviewer_binary_patch_over_the_bound_is_retained_and_reproduces_the_tre
     facts = {k: receipt.get(k) for k in ("status", "gaps", "patch_bytes", "patch_retained")}
     assert receipt["status"] == "retained" and receipt["patch_retained"], facts
     assert receipt["patch_bytes"] > rc.EVIDENCE_RETAIN_BYTES and not receipt["gaps"]
-    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area").exists()
+    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area.noindex").exists()
     # The retained patch alone rebuilds the reviewer's tree over the frozen subject;
     # reads borrow the author's objects and writes stay in a scratch object store.
     objects = tmp_path / "apply-objects"
@@ -176,7 +176,7 @@ def test_reviewer_capture_out_of_space_keeps_copy_without_complete_receipt(
 
     receipt = run_one_shot(author, drive, source, monkeypatch, edit)["checking_evidence"]
     assert receipt["status"] == "capture_failed" and "No space left on device" in receipt["error"], receipt
-    area = rc.seat_dir(drive, "task-1", "op-1") / "area"
+    area = rc.seat_dir(drive, "task-1", "op-1") / "area.noindex"
     assert (area / "probe_test.py").read_bytes() == b"assert True\n"
     assert (area / rc.EVIDENCE_DIRNAME / "coverage.xml").read_bytes() == b"<coverage/>\n"
     saved = rc.seat_dir(drive, "task-1", "op-1") / "evidence" / "summary.json"

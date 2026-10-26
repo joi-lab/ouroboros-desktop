@@ -427,22 +427,14 @@ def orphan_disposition_status(
 
 
 def orphan_apply_target_ok(target: Any, active_root: Any) -> bool:
-    """May a disposition APPLY a run recorded against ``target`` from ``active_root``?
+    """Target geometry for a terminal owner's orphan, never write authority.
 
-    The nanny's own run still needs exact equality. An ORPHAN of a terminal
-    owner may additionally apply into a target NESTED inside the caller's
-    active root, provided BOTH live under ``get_subagent_projects_root()`` —
-    the host-minted project area. That is the aggregator shape the host itself
-    creates: a swarm fans into ``<project>/contributions/<track>`` clones of
-    the very tree the parent works in, and the host already checkpoint-commits
-    exactly those descendants (``coop_checkpoint._task_tree_coop_roots``), so
-    the widened set adds no tree the host was not already writing to. An
-    owner-attached folder never lives there, so this can never reach one.
-
-    ONE predicate for the apply gate, the health invariant, and the tool
-    description: a rule stated three ways drifts into three rules.
+    The recorded target may equal the active folder or lie inside configured
+    projects/worktrees roots, regardless of its creator. Own/retry keep equality
+    at their callers. Apply separately rechecks current write/Presence/body rights
+    through ``workspace_copies.copy_apply_refusal``; this predicate grants none.
     """
-    from ouroboros.config import get_subagent_projects_root
+    from ouroboros.config import get_subagent_projects_root, get_subagent_worktree_root
     from ouroboros.tool_access import path_is_relative_to
 
     try:
@@ -454,10 +446,8 @@ def orphan_apply_target_ok(target: Any, active_root: Any) -> bool:
         return False
     if target_path == root_path:
         return True
-    projects_root = pathlib.Path(get_subagent_projects_root()).expanduser().resolve(strict=False)
-    return (path_is_relative_to(target_path, root_path)
-            and path_is_relative_to(target_path, projects_root)
-            and path_is_relative_to(root_path, projects_root))
+    return any(path_is_relative_to(target_path, pathlib.Path(root()).expanduser().resolve(strict=False))
+               for root in (get_subagent_projects_root, get_subagent_worktree_root))
 
 
 def orphan_capture_read_target(

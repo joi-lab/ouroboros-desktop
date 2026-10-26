@@ -9,6 +9,7 @@ import pytest
 
 from ouroboros.artifacts import stream_artifact_file
 from ouroboros.subagent_worktrees import find_execution_snapshot, provision_execution_snapshot
+from ouroboros.unindexed import COPIES
 from ouroboros.workspace_file_outputs import file_output_changes, prepare_file_outputs
 from ouroboros.workspace_patch_capture import write_workspace_patch_artifacts
 
@@ -172,7 +173,7 @@ def test_baseline_file_copy_failure_cleans_checkout_ref_and_record(tmp_path, mon
         snapshot(tmp_path, target)
     assert find_execution_snapshot("input-snapshot", tmp_path / "data") is None
     assert not git(target, "for-each-ref", "refs/ouroboros/delegated/").stdout
-    assert not list((tmp_path / "snapshots").glob("dlg_*"))
+    assert not [*(tmp_path / "snapshots").glob("dlg_*"), *(tmp_path / "snapshots").glob(f"{COPIES}/dlg_*")]
 
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
@@ -277,7 +278,7 @@ def test_a_source_local_filter_driver_is_never_carried_into_the_clone(tmp_path, 
         snapshot(tmp_path, target, independent=True)
     assert find_execution_snapshot("input-snapshot", tmp_path / "data") is None
     assert not git(target, "for-each-ref", "refs/ouroboros/delegated/").stdout
-    assert not list((tmp_path / "snapshots").glob("dlg_*"))
+    assert not [*(tmp_path / "snapshots").glob("dlg_*"), *(tmp_path / "snapshots").glob(f"{COPIES}/dlg_*")]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="no executable bit for the source to distrust")
@@ -329,7 +330,7 @@ def test_regular_input_copy_failure_cleans_snapshot_without_rewriting_target(tmp
     assert git(target, "rev-parse", "HEAD").stdout == before_head
     assert find_execution_snapshot("input-snapshot", tmp_path / "data") is None
     assert not git(target, "for-each-ref", "refs/ouroboros/delegated/").stdout
-    assert not list((tmp_path / "snapshots").glob("dlg_*"))
+    assert not [*(tmp_path / "snapshots").glob("dlg_*"), *(tmp_path / "snapshots").glob(f"{COPIES}/dlg_*")]
 
 
 def test_snapshot_keeps_git_link_entries_out_of_regular_file_copy(tmp_path, monkeypatch):

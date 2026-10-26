@@ -250,7 +250,7 @@ def test_exact_child_stop_during_copy_prevents_admission_and_frees_only_its_copy
     assert row["status"] == "cancelled" and "admission_outcome" not in row  # never overwritten
     assert row["workspace_preparation"]["phase"] == "copying"  # its own claim was not rewritten either
     assert "stop1" not in env.pending_ids() and queue.ADMISSION_RESERVATIONS == {}
-    assert not (trees._resolve_root() / "stop1").exists()
+    assert not trees.copy_path(trees._resolve_root(), "stop1").exists()
     assert not [entry for entry in trees.list_worktrees() if entry.get("task_id") == "stop1"]
 
 

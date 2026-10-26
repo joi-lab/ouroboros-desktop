@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Dict, List, Mapping, Optional
 
 from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME, scratch_fact
+from ouroboros.unindexed import unindexed  # a seat's copy is born as area.noindex; an existing area keeps its name
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
@@ -264,7 +265,7 @@ def prepare_seat_area(data_root: Any, task_id: str, operation_id: str, source: M
 
 def _prepare_locked(data_root: Any, task_id: str, operation_id: str, source: Mapping[str, Any],
                     home: pathlib.Path) -> str:
-    area, marker = home / "area", home / "checking.json"
+    area, marker = unindexed(home, "area"), home / "checking.json"
     if area.is_symlink():
         raise CheckingAreaUnavailable("checking area was replaced by a symlink; copy retained")
     try:
@@ -566,8 +567,7 @@ def _git_delta(area: pathlib.Path, source: Mapping[str, Any], evidence: pathlib.
     else:
         budget[0] -= patch_size
     return {"after_tree": after, "patch_sha256": patch_sha, "patch_bytes": patch_size,
-            "listing_warning": listing_warning,
-            "patch_retained": patch.exists(),
+            "listing_warning": listing_warning, "patch_retained": patch.exists(),
             "changed": changed.splitlines(), "ignored_not_retained": ignored}
 
 
@@ -674,18 +674,18 @@ def capture_seat_evidence(data_root: Any, task_id: str, operation_id: str) -> Di
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:  # a marker that exists but cannot be read is not absence
-        return {"status": "capture_failed", "area": str(home / "area"), "error": f"checking marker unreadable: {exc}"}
+        return {"status": "capture_failed", "area": str(unindexed(home, "area")), "error": f"checking marker unreadable: {exc}"}
     try:
         with _seat_locked(seat_dir(data_root, task_id, f"thread:{seat}") if seat else home):
             return _capture_locked(data_root, task_id, operation_id)
     except OSError as exc:
-        return {"status": "capture_failed", "area": str(home / "area"), "error": f"seat lock unavailable: {exc}"}
+        return {"status": "capture_failed", "area": str(unindexed(home, "area")), "error": f"seat lock unavailable: {exc}"}
 
 
 def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str, Any]:
     """``capture_seat_evidence`` for a caller that already holds the seat lock."""
     home = seat_dir(data_root, task_id, operation_id)
-    area, evidence = home / "area", home / "evidence"
+    area, evidence = unindexed(home, "area"), home / "evidence"
     try:
         marker = json.loads((home / "checking.json").read_text(encoding="utf-8"))
         source = marker.get("source") or {}
@@ -701,7 +701,7 @@ def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str
     # A failed predecessor moves under its operation; its local copy wins after a crash too.
     thread_copy = bool(thread_seat and not _checking_area_present(area))
     if thread_copy:
-        area = seat_dir(data_root, task_id, f"thread:{thread_seat}") / "area"
+        area = unindexed(seat_dir(data_root, task_id, f"thread:{thread_seat}"), "area")
     prior = _receipt(data_root, task_id, operation_id)
     if prior.get("status") in _RECEIPTED:
         return prior if thread_copy else _release_area(area, prior)
@@ -825,14 +825,11 @@ def _retire_previous_turn(data_root: Any, task_id: str, previous: Mapping[str, A
     if not receipt:
         raise CheckingAreaUnavailable("the previous thread turn could not be captured; copy retained")
     if receipt.get("status") == "capture_failed":  # its bytes stay with that turn, never block this one
-        area.rename(home / "area")
+        area.rename(unindexed(home, "area"))
 
 
 def _thread_locked(data_root: Any, task_id: str, seat: str, source: Mapping[str, Any], operation_id: str) -> str:
     home = seat_dir(data_root, task_id, f"thread:{seat}")
-    area = home / "area"
-    if area.is_symlink():
-        raise CheckingAreaUnavailable("thread checking area was replaced by a symlink; copy retained")
     marker_path = home / "checking.json"
     try:
         previous = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -840,6 +837,9 @@ def _thread_locked(data_root: Any, task_id: str, seat: str, source: Mapping[str,
         previous = {}  # a copy without a marker was never handed to a reviewer
     except (OSError, ValueError) as exc:
         raise CheckingAreaUnavailable(f"thread checking marker unreadable ({exc}); copy retained") from exc
+    area = unindexed(home, "area", previous.get("area"))  # its engine thread is bound to the recorded path
+    if area.is_symlink():
+        raise CheckingAreaUnavailable("thread checking area was replaced by a symlink; copy retained")
     previous_op = str(previous.get("operation_id") or "")
     if previous_op == operation_id and (previous or area.exists()):
         if previous.get("source") != dict(source):

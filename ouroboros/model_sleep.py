@@ -322,6 +322,12 @@ def wake_reason(ctx: Any, chosen: Dict[str, Any], *, seen: Any = (), review_entr
         if kind != KIND_TASK_MESSAGE:
             return f"control:{kind}"  # finalize_now, hurry, owner_pause, ... always wake
         source = str(entry.get("source_task_id") or "")
+        attention = entry.get("work_attention")
+        attention = attention if isinstance(attention, dict) else {}
+        if (entry.get("provenance") == "system" and attention.get("kind") == "silence"
+                and attention.get("task_id") == source and attention.get("episode_id")
+                and attention.get("waiting_for_task_id") in chosen.get("tasks", [])):
+            return f"work_attention:{source}"
         if (entry.get("provenance") == "descendant_task" or chosen.get("any_mail")
                 or source in chosen.get("senders", [])):
             return f"mail:{source or 'unknown'}"
@@ -556,7 +562,7 @@ def announce_resumed(ctx: Any, outcome: Any = "") -> None:
         log.debug("resume announce failed for %s", task_id, exc_info=True)
 
 
-def declare_in_slot_wait(ctx: Any, key: str, until_ts: float) -> None:
+def declare_in_slot_wait(ctx: Any, key: str, until_ts: float, *, task_ids=()) -> None:
     """A tool holds this task's slot until ``until_ts`` waiting on what ``key`` names:
     ``mail:``, ``tasks:``, a delegated run (``delegate:<run_id>``) or a review panel
     (``review:<owner_id>:``). Re-declaring the same key renews it.
@@ -579,7 +585,8 @@ def declare_in_slot_wait(ctx: Any, key: str, until_ts: float) -> None:
     emit_cognitive_operation_event(
         getattr(ctx, "event_queue", None), task_id=str(getattr(ctx, "task_id", "") or ""),
         operation_id=f"{IN_SLOT_WAIT_KIND}:{key}", phase="started", kind=IN_SLOT_WAIT_KIND,
-        task_attempt=getattr(ctx, "task_attempt", None), lease_until=float(until_ts))
+        task_attempt=getattr(ctx, "task_attempt", None), lease_until=float(until_ts),
+        wait_for_tasks=list(task_ids))
 
 
 def end_in_slot_wait(ctx: Any, key: str) -> None:
@@ -597,10 +604,10 @@ def end_in_slot_wait(ctx: Any, key: str) -> None:
 
 
 @contextlib.contextmanager
-def in_slot_wait(ctx: Any, window_sec: float, target: str = "mail") -> Iterator[None]:
+def in_slot_wait(ctx: Any, window_sec: float, target: str = "mail", *, task_ids=()) -> Iterator[None]:
     """``declare_in_slot_wait`` for one bounded window (plus a short teardown margin)."""
     key = f"{target}:{uuid.uuid4().hex}"
-    declare_in_slot_wait(ctx, key, time.time() + max(0.0, float(window_sec)) + 5.0)
+    declare_in_slot_wait(ctx, key, time.time() + max(0.0, float(window_sec)) + 5.0, task_ids=task_ids)
     try:
         yield
     finally:

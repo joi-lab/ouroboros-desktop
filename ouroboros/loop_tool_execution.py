@@ -482,6 +482,8 @@ def _typed_result_metadata(
             meta["artifact_registered"] = True
         if isinstance(tool_result.meta.get("verification"), dict):  # the criterion verdict beside this status (#1585)
             meta["verification"] = dict(tool_result.meta["verification"])
+        if isinstance(tool_result.meta.get("image_attachment"), dict):
+            meta["image_attachment"] = dict(tool_result.meta["image_attachment"])
     # Legacy non-process deliverable fallback reads the FULL result before trace
     # truncation. Process producers must supply the typed fact below.
     if (
@@ -1341,9 +1343,10 @@ def _maybe_auto_attach_image(
         observation = {"status": "unavailable"}
         from ouroboros.tools.vision import attach_local_image_to_context
 
-        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None))  # the live slot, not a staged copy
+        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None), observation=observation)
         observation["status"] = "attached" if ok else "unavailable"
         if not ok:
+            observation["reason"] = note
             log.debug("auto-attach skipped for %s: %s", path, note)
     except Exception:  # noqa: BLE001 - attachment is an enhancement, never a failure
         log.debug("auto-attach image failed", exc_info=True)

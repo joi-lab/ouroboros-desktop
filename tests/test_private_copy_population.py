@@ -22,6 +22,7 @@ import pytest
 
 from ouroboros import artifacts
 from ouroboros import subagent_worktrees as trees
+from ouroboros.unindexed import COPIES
 
 _WAIT_SEC = 30.0
 # Checkout rewrites each of these differently from its source bytes: longer (CRLF),
@@ -79,7 +80,7 @@ def open_files_deletable(tmp_path):
 def nothing_left(tmp_path, target, snapshot_id):
     assert trees.find_execution_snapshot(snapshot_id, tmp_path / "data") is None
     assert not git(target, "for-each-ref", "refs/ouroboros/delegated/").stdout
-    assert not list((tmp_path / "snapshots").glob("dlg_*"))
+    assert not [*(tmp_path / "snapshots").glob("dlg_*"), *(tmp_path / "snapshots").glob(f"{COPIES}/dlg_*")]
 
 
 @pytest.mark.parametrize("independent", [False, True], ids=["worktree", "clone"])

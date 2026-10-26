@@ -159,9 +159,9 @@ def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
             f"⚠️ INTEGRATE_DELEGATED_NOT_OWNED: run {rid!r} is {status} to this task. "
             "The starter or its host-confirmed retry successor may dispose a completed result; "
             "retry authority does not include live control; once the owner is terminal, a live "
-            "TOP-LEVEL task whose active root (Git lane) "
-            "or fresh payload binding (payload lane) is the run's recorded target — or contains it as "
-            "a host-minted project tree — may dispose the orphan."
+            "TOP-LEVEL task may dispose the orphan. Apply requires current write authority at the "
+            "recorded target; targets inside configured projects/worktrees roots need not be the active "
+            "folder, regardless of creator. Payloads keep their fresh exact binding."
         )
     from ouroboros.delegate_directory import is_directory_run
     if not entry.execution_root and not is_directory_run(entry):
@@ -565,7 +565,7 @@ def _integrate_delegated_patch_locked(
     A mutating delegated run executed in a PRIVATE execution snapshot; its diff was
     captured at terminal. NOTHING reaches the shared tree automatically — this tool is
     the only path in, it targets the run's recorded authority target (which must be
-    this task's own active root), and under the repo git lock proves no touched path
+    this task's active root, or an admitted orphan target), and under the repo git lock proves no touched path
     drifted from the run's baseline, applies the patch to the WORKING TREE (a plain
     `git apply`, deliberately NOT --3way — see `_locked_apply`: --3way implies index
     binding and refuses the normal dirty shared-tree state the baseline deliberately
@@ -657,6 +657,8 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
     """
     from ouroboros import delegate_custody as custody
     from ouroboros.delegate_shared import orphan_apply_target_ok
+    from ouroboros.workspace_copies import copy_apply_refusal, source_is_system_repo, target_write_refusal
+    from ouroboros.tools.tool_resolution import system_repo_dir_for
 
     drive, rid = custody.custody_root(ctx), entry.run_id
     snapshot_key = entry.snapshot_id or rid
@@ -743,22 +745,20 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
                 f"(manifest {expected_digest[:12]} != file {actual_digest[:12]}); refusing to apply."
             )
 
-    # The target is the run's RECORDED authority target, and it must be THIS task's
-    # own active root — the nanny integrates into its own tree, never across trees.
+    # Only the recorded target is writable: orphan recovery never rebinds the
+    # caller's workspace or selects a replacement destination.
     try:
         active_root = pathlib.Path(ctx.active_repo_dir()).resolve(strict=False)
     except Exception as exc:
         return f"⚠️ INTEGRATE_TARGET_ERROR: could not resolve active repo: {type(exc).__name__}: {exc}."
     target = pathlib.Path(str(entry.target_root or "")).resolve(strict=False)
-    # Owner decision B7=A: an ORPHAN may also apply into a target NESTED inside the
-    # caller's active root under the projects root; an OWN run keeps exact equality.
     target_ok = orphan_apply_target_ok(target, active_root) if orphan_of else target == active_root
     if not str(entry.target_root or "").strip() or not target_ok:
         return (
             "⚠️ INTEGRATE_DELEGATED_TARGET_MISMATCH: the run's recorded authority target "
             f"({entry.target_root or '(none)'}) is not this task's active root ({active_root}). "
-            "Refusing to apply across trees. A terminal owner's orphan may also target a host-minted "
-            "project tree NESTED inside that root (both under the subagent-projects root); this one is not."
+            "Only a terminal owner's orphan targeting a folder inside the configured projects/worktrees "
+            "roots may apply outside the active folder, under current write rights, regardless of creator."
         )
     if not (target / ".git").exists():
         return f"⚠️ INTEGRATE_TARGET_NOT_GIT: target {target} is not a git working tree."
@@ -771,33 +771,33 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
             f"⚠️ INTEGRATE_PATCH_UNREADABLE: cannot parse run {rid}'s captured patch "
             f"(git apply --numstat failed): {parse_error[:300]}"
         )
-    constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
-    is_acting = bool(constraint and getattr(constraint, "mode", "") == ACTING_SUBAGENT_MODE)
-    runtime_mode = _si().get_runtime_mode()
-    # The protected-path policy is about the OUROBOROS body's own invariants, so it
-    # is asked only when the target IS that body (or a self_worktree checkout of
-    # it). A foreign project's `.github/workflows/ci.yml` or `build.sh` is that
-    # project's file: gating it here would block the root-delegation lane (B5) with
-    # advice about a runtime mode that does not govern that repository — the same
-    # reason `_handle_external_workspace_integration` never applies this gate.
-    protected = (
-        protected_paths_in(sorted(patch_touched)) if _si()._target_is_system_repo(ctx) else []
-    )
+    ordered_touched = sorted(patch_touched)
+    runtime_mode = _si()._integration_runtime_mode(ctx)
+    target_is_body = (source_is_system_repo(target, system_repo_dir_for(ctx))
+                      if orphan_of else _si()._target_is_system_repo(ctx))
+    protected = (protected_paths_in(ordered_touched)
+                 if target_is_body else [])
     if protected:
-        grant_ok = (not is_acting) or bool(getattr(constraint, "protected_paths_grant", False))
+        constraint = normalize_task_constraint(getattr(ctx, "task_constraint", None))
+        is_acting = bool(constraint and getattr(constraint, "mode", "") == ACTING_SUBAGENT_MODE)
+        grant_ok = not is_acting or bool(getattr(constraint, "protected_paths_grant", False))
         if not (mode_allows_protected_write(runtime_mode) and grant_ok):
             _si()._write_verdict(
                 ctx, f"run_{rid}", outcome="blocked_protected", reason=reason, files=touched,
                 manifest=manifest, applied=False, conflicts=[],
-                protected=[p.path for p in protected], target=str(target),
-            )
+                protected=[p.path for p in protected], target=str(target))
             return protected_write_block_message(
-                path=protected[0].path,
-                runtime_mode=runtime_mode,
-                action=f"integrate delegated run {rid} patch touching",
-            )
+                path=protected[0].path, runtime_mode=runtime_mode,
+                action=f"integrate delegated run {rid} patch touching")
 
-    ordered_touched = sorted(patch_touched)
+    def admission_refusal():
+        if refusal := _current_disposition_refusal(ctx, rid):
+            return refusal
+        refusal = copy_apply_refusal(ctx, target, ordered_touched)
+        return target_write_refusal(target, refusal) if refusal else ""
+
+    if refusal := admission_refusal():
+        return refusal
     # CR1-3, owed-before-sent: the durable apply-intent row lands BEFORE the tree
     # can be mutated. Without it, a crash between `git apply` and the disposition
     # row replays as "never applied", and a later reject records a false rejection
@@ -817,7 +817,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
         file_options = {"file_changes": file_changes, "file_baseline": snapshot.get("file_baseline") or {}}
     outcome = _si()._locked_apply(
         ctx, target, patch_path, ordered_touched, entry.baseline_sha,
-        admission_check=lambda: _current_disposition_refusal(ctx, rid), **file_options)
+        admission_check=admission_refusal, **file_options)
     if outcome.get("admission_refusal"):
         custody.record_patch_apply_resolved(drive, entry, reason="authority_changed")
         return outcome["admission_refusal"]

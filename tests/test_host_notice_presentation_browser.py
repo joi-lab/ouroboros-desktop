@@ -360,20 +360,22 @@ def test_settled_no_verdict_panel_heads_in_words_and_keeps_degraded_in_detail(di
             card.wait_for(state="visible")
             if card.get_attribute("data-expanded") != "1":
                 card.locator("[data-live-disclosure]").click()
-            card.locator("[data-review-section-toggle]").click()
-            meta = card.locator(".chat-review-group-meta")
-            meta.wait_for(state="visible")
-            # The group head: the outcome in words, then its attempt count.
-            assert meta.inner_text().strip() == "no verdict · 2 of 3 answered · 1 unavailable · 1"
-            assert "warn" in (card.locator("[data-review-group]").get_attribute("class") or "")
-            card.locator("[data-review-group-toggle]").click()
-            attempt_meta = card.locator(".chat-review-attempt-meta")
-            attempt_meta.wait_for(state="visible")
-            assert "no verdict · 2 of 3 answered · 1 unavailable" in attempt_meta.inner_text()
-            for header in (meta, attempt_meta):
-                assert "DEGRADED" not in header.inner_text()
-            card.locator("[data-review-attempt-toggle]").click()
-            detail = card.locator("[data-review-attempt-detail]")
+            card.locator("[data-live-review-summary]").click()
+            group = card.locator("[data-review-group]")
+            state = group.locator(".review-check-head .review-state")
+            state.wait_for(state="visible")
+            # A's subject row keeps the state/counts readable without raw verdict tokens.
+            assert state.inner_text().strip() == "no verdict · 2 of 3 answered · 1 unavailable"
+            assert state.get_attribute("data-tone") == "warn"
+            assert group.locator(".review-check-meta").inner_text().strip() == "1 attempt"
+            assert "DEGRADED" not in group.locator(".review-check-head").inner_text()
+            group.locator("[data-review-group-toggle]").click()
+            opinion_state = group.locator("[data-review-opinion] .review-state")
+            assert opinion_state.inner_text().strip() == "no verdict · 2 of 3 answered · 1 unavailable"
+            assert opinion_state.get_attribute("data-tone") == "warn"
+            assert "DEGRADED" not in group.locator("[data-review-opinion]").inner_text()
+            group.locator("[data-review-facts] > summary").click()
+            detail = group.locator("[data-review-attempt-detail]")
             detail.wait_for(state="visible")
             detail_text = detail.inner_text()
             # The stored verdict and the provider's raw error stay in the detail.

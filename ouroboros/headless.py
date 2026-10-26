@@ -565,8 +565,7 @@ def _copy_child_task_result_locked(parent_drive_root: pathlib.Path, task: Dict[s
         except Exception:
             child_result.pop("artifact_bundle", None)
     child_result.setdefault("headless_child_drive_root", str(child_drive))
-    if (child_status in _FINAL_STATUSES and _workspace_root_from_task(task) is not None
-            and not task_is_readonly_subagent(task)):
+    if child_status in _FINAL_STATUSES and task_requires_workspace_capture(task):
         artifact_status = str(canonical_existing.get("artifact_status") or "").strip().lower()
         if artifact_status in ARTIFACT_TERMINAL_STATUSES | {ARTIFACT_STATUS_PENDING, ARTIFACT_STATUS_FINALIZING}:
             child_result["artifacts"] = _merge_artifacts(
@@ -684,9 +683,8 @@ def terminal_task_files_ready(canonical_root: pathlib.Path, task: Dict[str, Any]
                 return False
     except (OSError, ValueError, RuntimeError):
         return False
-    return not (
-        _workspace_root_from_task(task) is not None and not task_is_readonly_subagent(task)
-        and str(result.get("artifact_status") or "") in {ARTIFACT_STATUS_PENDING, ARTIFACT_STATUS_FINALIZING}
+    return not task_requires_workspace_capture(task) or (
+        str(result.get("artifact_status") or "").strip().lower() in ARTIFACT_TERMINAL_STATUSES
     )
 
 
@@ -719,7 +717,11 @@ def prepare_terminal_task_files(canonical_root: pathlib.Path, task: Dict[str, An
             current = copy_child_task_result(root, {**task, "id": task_id}) or current
         if str(current.get("status") or "") not in _FINAL_STATUSES:
             raise ValueError("terminal task result is missing or not settled")
-        if not task_is_readonly_subagent(task) and current.get("artifact_status") not in ARTIFACT_TERMINAL_STATUSES:
+        # Workspace capture and a workspace-free child's memory export share the
+        # existing finalizer. Inline turns have no workspace capture obligation.
+        memory_export = child is not None and _workspace_root_from_task(task) is None and not task_is_readonly_subagent(task)
+        if (not cancelled and (task_requires_workspace_capture(task) or memory_export)
+                and str(current.get("artifact_status") or "").strip().lower() not in ARTIFACT_TERMINAL_STATUSES):
             finalize_task_artifacts(root, {**task, "id": task_id})
         report["result"] = load_task_result(root, task_id, strict=True)
         from ouroboros.obligations import drive_finished
@@ -852,6 +854,18 @@ def task_is_readonly_subagent(task: Dict[str, Any]) -> bool:
         str(task.get("delegation_role") or metadata.get("delegation_role") or "") == "subagent"
         and str(task_constraint.get("mode") or "") == _LOCAL_READONLY_SUBAGENT_MODE
     )
+
+
+def task_requires_workspace_capture(task: Dict[str, Any]) -> bool:
+    """Capture applicability shared by completion, preparation and status readers.
+
+    The actual execution owner wins over historical direct/Presence origin.
+    Source verification, cancellation and split-result adoption precede this test.
+    """
+    from ouroboros.task_carrier import inline_execution
+
+    return (_workspace_root_from_task(task) is not None
+            and not task_is_readonly_subagent(task) and not inline_execution(task))
 
 
 def _build_deliverable_manifest(
@@ -1159,6 +1173,7 @@ __all__ = [
     "terminal_task_files_ready",
     "finalize_task_artifacts",
     "task_is_readonly_subagent",
+    "task_requires_workspace_capture",
     "prepare_task_drive",
     "drive_candidates",
     "prune_headless_task_drives",

@@ -102,7 +102,12 @@ def test_review_pool_card_and_reviewer_caption_at_phone_and_desktop_widths(direc
                     _open_review_checkpoint(card)
                     detail = card.locator("[data-review-attempt-detail]").first
                     detail.wait_for(state="visible", timeout=10_000)
-                    shown = detail.inner_text().splitlines()
+                    # Record facts is a definition list: each visible label/value pair still
+                    # reconstructs the exact sentence the old plain-text detail printed.
+                    shown = detail.locator('dl').evaluate("""dl => [...dl.querySelectorAll('dd')].map(dd => {
+                        const label = dd.previousElementSibling;
+                        return (label?.tagName === 'DT' ? label.textContent + ': ' : '') + dd.textContent;
+                    })""")
                     for line in CARD_LINES:
                         assert line in shown, (name, line, shown)
                     assert any(line.startswith("Reviewer critic: adviser, not counted · cost unknown") for line in shown)

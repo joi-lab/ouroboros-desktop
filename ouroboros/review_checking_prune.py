@@ -51,6 +51,7 @@ from ouroboros.review_checking import (
     _seat_locked,
     seat_dir,
 )
+from ouroboros.unindexed import unindexed
 
 _PASS_LOCK = threading.Lock()
 
@@ -139,7 +140,7 @@ def _checkout_hold(data_root: Any, entry: pathlib.Path, *, rounds: tuple, source
     if marker is not None and (not isinstance(marker, dict) or marker.get("schema_version") != 1):
         return "marker_unreadable"
     task_id = str(marker.get("task_id") or "") if marker is not None else owners.get(entry.name, "")
-    repo = (entry / "repo").resolve(strict=False)
+    repo = unindexed(entry, "repo").resolve(strict=False)
     if not task_id:
         return "owner_unknown"
     if entry.name in active:
@@ -176,7 +177,7 @@ def _remove_checkout(entry: pathlib.Path) -> str:
     from ouroboros.subagent_worktrees import _force_rmtree
     from ouroboros.tools.review_subject import _git_bytes
 
-    repo, common = entry / "repo", None
+    repo, common = unindexed(entry, "repo"), None
     if (repo / ".git").is_file():
         rc, out, err = _git_bytes(repo, ["rev-parse", "--git-common-dir"])
         text = out.decode("utf-8", "replace").strip()
@@ -293,7 +294,7 @@ def prune_review_checkouts(data_root: Any, live_task_ids: Any, *, views_since: O
 
         def seat(home: pathlib.Path) -> set:
             """One seat home; returns the views it still needs."""
-            area = home / "area"
+            area = unindexed(home, "area")
             if home.is_symlink():  # never followed; it names no copy this pass could own
                 if views:
                     report["errors"].append(f"{home.name}: the seat home is a link")

@@ -239,6 +239,7 @@ class RunCustody:
     cost_usd: Optional[float] = None
     spend_disclosed: bool = False
     spend_estimated: bool = False
+    cost_partial: bool = False
     engine_model: str = ""
     access_profile: str = ""
     containment_fault: Dict[str, Any] = field(default_factory=dict)
@@ -688,6 +689,7 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         custody.access_profile = str(row.get("access_profile") or "")[:32] or custody.access_profile
         custody.spend_disclosed = bool(row.get("spend_disclosed")) and row.get("cost_usd") is not None
         custody.spend_estimated = bool(row.get("spend_estimated"))
+        custody.cost_partial = bool(row.get("cost_partial"))
         try:
             custody.cost_usd = float(row["cost_usd"]) if custody.spend_disclosed else None
         except (TypeError, ValueError):

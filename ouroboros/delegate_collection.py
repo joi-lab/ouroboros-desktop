@@ -113,7 +113,9 @@ def record_terminal_money(root, entry, detail: dict, *, failures=None) -> dict:
     if not c.is_terminal(detail):
         raise ValueError("cannot record terminal money for a live execution")
     observed = final_attempt_facts(detail, entry.run_id)
-    spend, estimated = c.disclosed_spend(summary, attempt_execution=detail.get("attemptExecution"))
+    from ouroboros.delegate_custody_usage import disclosed_cost
+    cash = disclosed_cost(summary, attempt_execution=detail.get("attemptExecution"))
+    spend, estimated = cash["cost_usd"], cash["cost_estimated"]
     profile, access = observed.get("profile_id", ""), str(summary.get("effectiveAccess") or "")
     if not entry.ledger_recorded:
         try:
@@ -155,8 +157,8 @@ def record_terminal_money(root, entry, detail: dict, *, failures=None) -> dict:
             "source": entry.source, "category": entry.category, "model": observed.get("model", ""),
             "observed_attempt": observed, "state": str(summary.get("state") or ""), **failed,
             "preserve_containment": True,
-            "cost_usd": spend, "cost_final": spend is not None and not estimated,
-            "spend_disclosed": spend is not None, "spend_estimated": estimated,
+            "cost_usd": spend, "cost_final": cash["cost_final"],
+            "spend_disclosed": spend is not None, "spend_estimated": estimated, "cost_partial": cash["cost_partial"],
             "credential_profile_id": profile, "access_profile": access, "engine_locator": engine_locator(detail)})
         if entry.settled:
             entry.engine_locator = engine_locator(detail)

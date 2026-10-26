@@ -864,7 +864,7 @@ def test_call_llm_with_retry_accumulates_live_catalog_estimated_cost(tmp_path):
 
     usage = {}
     event_queue = queue.Queue()
-    with patch("ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.123456):
+    with patch("ouroboros.pricing.estimate_cost_optional", return_value=0.123456):
         _msg, _cost = call_llm_with_retry(
             _EstimatedCostLLM(),
             [{"role": "user", "content": "hi"}],
@@ -1077,7 +1077,7 @@ def test_invalid_provider_cost_is_unknown_and_never_estimated(tmp_path, caplog, 
     accumulated = {}
     llm = _ReportedCostLLM(bad_cost)
     with caplog.at_level(logging.WARNING, logger="ouroboros.loop_llm_call"), patch(
-        "ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99,
+        "ouroboros.pricing.estimate_cost_optional", return_value=0.99,
     ) as estimate:
         msg, cost = _run_cost_round(llm, tmp_path, accumulated)
 
@@ -1100,7 +1100,7 @@ def test_invalid_cost_clears_a_stale_cost_final_from_the_wire(tmp_path):
     The pair must move together."""
     accumulated = {}
     llm = _ReportedCostLLM(True, cost_final=True)
-    with patch("ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99):
+    with patch("ouroboros.pricing.estimate_cost_optional", return_value=0.99):
         _msg, cost = _run_cost_round(llm, tmp_path, accumulated)
 
     assert cost is None
@@ -1113,7 +1113,7 @@ def test_normalize_usage_cost_invalid_does_not_claim_an_estimate():
     """The tuple's 4th element is ``cost_estimated``: an UNKNOWN cost is not an
     ESTIMATED one, so the invalid path must leave that flag untouched."""
     usage = {"cost": "abc", "resolved_model": "openai/gpt-5.5", "provider": "openrouter"}
-    with patch("ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99):
+    with patch("ouroboros.pricing.estimate_cost_optional", return_value=0.99):
         cost, display_model, provider, cost_estimated = _normalize_usage_cost(
             usage, model="openai/gpt-5.5", use_local=False,
         )
@@ -1130,7 +1130,7 @@ def test_reported_zero_cost_is_a_legitimate_provider_zero(tmp_path):
     accumulated = {}
     llm = _ReportedCostLLM(0.0)
     with patch(
-        "ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99,
+        "ouroboros.pricing.estimate_cost_optional", return_value=0.99,
     ) as estimate:
         _msg, cost = _run_cost_round(llm, tmp_path, accumulated)
 
@@ -1145,7 +1145,7 @@ def test_valid_provider_cost_passes_through(tmp_path):
     accumulated = {}
     llm = _ReportedCostLLM(1.23)
     with patch(
-        "ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99,
+        "ouroboros.pricing.estimate_cost_optional", return_value=0.99,
     ) as estimate:
         _msg, cost = _run_cost_round(llm, tmp_path, accumulated)
 
@@ -1162,7 +1162,7 @@ def test_missing_provider_cost_still_uses_the_catalog_estimate(tmp_path, include
     accumulated = {}
     llm = _ReportedCostLLM(None, include_cost=include_cost)
     with patch(
-        "ouroboros.loop_llm_call.estimate_cost_optional", return_value=0.99,
+        "ouroboros.pricing.estimate_cost_optional", return_value=0.99,
     ) as estimate:
         _msg, cost = _run_cost_round(llm, tmp_path, accumulated)
 

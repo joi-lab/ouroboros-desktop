@@ -13,6 +13,9 @@
      the smallest element that holds the change) and scrollers (selectors whose scroll is kept), questions [{text, context, number,
      options [{key, text, recommended}]}] (the page adds "none of these" itself), source (one line on how
      the frames were made), strings (the page's own words in the viewer's language).
+     Clean view (C, or #…&clean=1): variants become neutral numbers (frame names and the link too) and every author's
+     word (title, names, notes, recommendation, questions) is hidden, so a critic says what it sees before it reads what
+     you meant.
      Inside the JSON block write every "</" as "<\/" (json.dumps(...).replace("</", "<\\/")): a frame that contains
      "</script>" would otherwise end this block early and the page would open blank. -->
 <style>
@@ -64,6 +67,9 @@ body.tight .stage { border:0; border-radius:0; }
 .opt[aria-pressed="true"] { outline:2px solid var(--ink); }
 .answer { display:flex; flex-wrap:wrap; align-items:center; gap:12px; color:var(--meta); }
 .source { margin:0; color:var(--meta); font-size:12px; }
+.num { display:none; }
+body.clean :is(.lab, .rec, #notes, #scene-note, #more) { display:none; }
+body.clean .num { display:inline; }
 </style>
 </head>
 <body>
@@ -73,6 +79,7 @@ body.tight .stage { border:0; border-radius:0; }
     <nav class="tabs" id="scenes" aria-label="Scenes"></nav>
     <div class="seg" id="variants" role="group" aria-label="Variants"></div>
     <button type="button" class="tool" id="side" aria-pressed="false"></button>
+    <button type="button" class="tool" id="clean" aria-pressed="false"></button>
   </div>
   <div class="notes" id="notes" aria-live="polite"></div>
   <div class="meta"><span id="scene-note"></span><span id="scale"></span><span id="keys"></span></div>
@@ -90,22 +97,27 @@ body.tight .stage { border:0; border-radius:0; }
   const D = JSON.parse(document.getElementById('compare-data').textContent);
   const T = Object.assign({ side: 'Side by side', rec: 'recommended', scale: 'Shown at', none: 'None of these: say what bothers you',
     noneKey: 'none', copy: 'Copy answer', copied: 'Copied', chat: 'or write it in the chat',
-    keys: 'Keys: 1–9 or ←/→ switch variants, S shows them side by side' }, D.strings || {});
+    keys: 'Keys: 1–9 or ←/→ switch variants, S shows them side by side, C hides every author\'s word',
+    clean: 'Clean view', cleanTitle: 'Clean view: say what you see before reading what was meant' }, D.strings || {});
   const $ = (id) => document.getElementById(id), W = D.viewport.width, H = D.viewport.height;
+  const number = (id) => `${D.variants.findIndex((v) => v.id === id) + 1}`;
   const scenes = D.scenes && D.scenes.length ? D.scenes : [{ id: 'main', label: '' }];
-  const state = { scene: scenes[0].id, variant: D.start || D.variants[0].id, side: false };
+  const state = { scene: scenes[0].id, variant: D.start || D.variants[0].id, side: false, clean: false };
   const frames = {}, scroll = {}, anchors = {};
   document.documentElement.lang = D.lang || 'en';
   document.title = $('title').textContent = D.title || '';
   $('keys').textContent = T.keys;
   $('side').textContent = T.side;
+  $('clean').textContent = T.clean;
 
   const button = (text, onclick, kind, id) => { const b = document.createElement('button'); b.type = 'button';
     b.textContent = text; b.onclick = onclick; b.dataset[kind] = id; b.setAttribute('aria-pressed', 'false'); return b; };
   if (scenes.length > 1) for (const s of scenes) $('scenes').append(button(s.label, () => show({ scene: s.id }), 'scene', s.id));
   D.variants.forEach((v, i) => {
-    const b = button(v.label, () => show({ variant: v.id, side: false }), 'variant', v.id);
-    b.title = `${i + 1}`;
+    const b = button('', () => show({ variant: v.id, side: false }), 'variant', v.id);
+    const lab = document.createElement('span'), no = document.createElement('span');
+    lab.className = 'lab'; lab.textContent = v.label; no.className = 'num'; no.textContent = `${i + 1}`;
+    b.append(lab, no); b.title = `${i + 1}`;
     if (v.recommended) { const m = document.createElement('span'); m.className = 'rec'; m.textContent = '★'; m.title = T.rec; b.append(m); }
     $('variants').append(b);
     const p = document.createElement('p'), k = document.createElement('b');   // every caption shares one cell: no jump on a swap
@@ -113,6 +125,7 @@ body.tight .stage { border:0; border-radius:0; }
     p.dataset.note = v.id; p.append(k, document.createTextNode(v.note || '')); $('notes').append(p);
   });
   $('side').onclick = () => show({ side: !state.side });
+  $('clean').onclick = () => show({ clean: !state.clean });
 
   const ready = (f) => new Promise((ok) => { try { const w = f.contentWindow; w.requestAnimationFrame(() => w.requestAnimationFrame(ok)); } catch (e) { ok(); } setTimeout(ok, 300); });
   const editable = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -182,8 +195,9 @@ body.tight .stage { border:0; border-radius:0; }
       if (!q || !q.width) continue;
       const pad = 6, w = (W - q.left + pad) * s, x0 = Math.max(0, (W * s - w) / 2);
       const cap = document.createElement('p'), b = document.createElement('b');
-      b.textContent = v.label + (v.recommended ? ' ★' : ''); cap.className = 'cap';
-      cap.append(b, document.createTextNode(v.note ? ` ${v.note}` : ''));
+      const plain = state.clean ? `${D.variants.indexOf(v) + 1}` : v.label + (v.recommended ? ' ★' : '');
+      b.textContent = plain; cap.className = 'cap';
+      cap.append(b, document.createTextNode(v.note && !state.clean ? ` ${v.note}` : ''));
       cap.style.left = `${x0}px`; cap.style.width = `${w}px`; cap.style.top = `${y}px`; $('stage').append(cap);
       y += cap.offsetHeight + 4;
       f.style.clipPath = `inset(${Math.max(0, q.top - pad)}px 0px ${Math.max(0, H - q.bottom - pad)}px ${Math.max(0, q.left - pad)}px round 8px)`;
@@ -214,8 +228,12 @@ body.tight .stage { border:0; border-radius:0; }
     document.querySelectorAll('[data-scene]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === state.scene)));
     document.querySelectorAll('[data-note]').forEach((p) => p.classList.toggle('on', p.dataset.note === state.variant && !state.side));
     $('side').setAttribute('aria-pressed', String(state.side));
+    $('clean').setAttribute('aria-pressed', String(state.clean));
+    document.body.classList.toggle('clean', state.clean);
+    for (const g of Object.values(frames)) g.title = state.clean ? number(g.dataset.key.split('/')[0]) : g.dataset.key;
+    document.title = $('title').textContent = state.clean ? T.cleanTitle : (D.title || '');
     $('scene-note').textContent = (scenes.find((s) => s.id === state.scene) || {}).note || '';
-    history.replaceState(null, '', `#scene=${encodeURIComponent(state.scene)}&v=${encodeURIComponent(state.variant)}${state.side ? '&side=1' : ''}`);
+    history.replaceState(null, '', `#scene=${encodeURIComponent(state.scene)}&v=${encodeURIComponent(state.clean ? number(state.variant) : state.variant)}${state.side ? '&side=1' : ''}${state.clean ? '&clean=1' : ''}`);
   }
   function onKey(e) {
     if (editable(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -223,6 +241,7 @@ body.tight .stage { border:0; border-radius:0; }
     if (/^[1-9]$/.test(e.key) && D.variants[+e.key - 1]) show({ variant: D.variants[+e.key - 1].id, side: false });
     else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') show({ variant: D.variants[(i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n].id, side: false });
     else if (e.code === 'KeyS') show({ side: !state.side });
+    else if (e.code === 'KeyC') show({ clean: !state.clean });
     else return;
     e.preventDefault();
   }
@@ -251,11 +270,12 @@ body.tight .stage { border:0; border-radius:0; }
   if ((D.questions || []).length) { const row = document.createElement('div'); row.className = 'answer'; answer.textContent = T.chat; row.append(copy, answer); $('more').append(row); }
   if (D.source) { const p = document.createElement('p'); p.className = 'source'; p.textContent = D.source; $('more').append(p); }
 
-  // Deep link (#scene=…&v=…&side=1) and a small API for scripted looks.
-  const h = new URLSearchParams(location.hash.slice(1));
-  window.compare = { subject: D.subject || null, show: (s) => show({ scene: s.scene || state.scene, variant: s.variant || state.variant, side: !!s.side }),
+  // Deep link (#scene=…&v=…&side=1; v is the variant's id, or its number in a clean link) and a small API for scripted looks.
+  const h = new URLSearchParams(location.hash.slice(1)), cleanLink = h.get('clean') === '1';
+  const pick = (v) => (cleanLink ? D.variants[Number(v) - 1] : D.variants.find((x) => x.id === v)) || {};
+  window.compare = { subject: D.subject || null, show: (s) => show({ scene: s.scene || state.scene, variant: s.variant || state.variant, side: !!s.side, clean: !!s.clean }),
     states: () => scenes.flatMap((s) => [...D.variants.map((v) => ({ scene: s.id, variant: v.id })), { scene: s.id, variant: D.variants[0].id, side: true }]) };
-  show({ scene: h.get('scene') || state.scene, variant: h.get('v') || state.variant, side: h.get('side') === '1' });
+  show({ scene: h.get('scene') || state.scene, variant: pick(h.get('v')).id || state.variant, side: h.get('side') === '1', clean: cleanLink });
 })();
 </script>
 </body>

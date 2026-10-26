@@ -120,6 +120,8 @@ def _ctx(drive_root, active_model="google/gemini-3.5-flash"):
     from ouroboros.tools.registry import ToolContext
 
     ctx = MagicMock(spec=ToolContext)
+    ctx.budget_drive_root = None
+    ctx.task_metadata = {}
     ctx.event_queue = None
     ctx.task_id = "t"
     ctx.current_task_type = "task"

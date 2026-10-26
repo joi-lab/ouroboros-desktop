@@ -2,7 +2,7 @@ import { escapeHtmlAttr as escapeHtml } from './utils.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { showToast } from './toast.js';
 import { apiClient, apiFetch } from './api_client.js';
-import { UPDATE_STAGE_LABELS, afterUpdateFactsText, attemptTime, bindPreflightDescription, preflightEvidenceText, updateAttemptView, verifiedUpdatePlan } from './update_status.js';
+import { UPDATE_STAGE_LABELS, afterUpdateRows, attemptTime, bindPreflightDescription, preflightEvidenceText, updateAttemptView, verifiedUpdatePlan } from './update_status.js';
 import { destroyChatMarkdown, enhanceChatMarkdown, mountChatMarkdown } from './chat_markdown.js';
 import { updateEffectsText } from './update_effects.js';
 
@@ -479,12 +479,15 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
                         <details class="updates-attempt-details" id="updates-attempt-details">
                             <summary><time id="updates-attempt-time">Last attempt</time></summary>
                             <dl class="updates-attempt-facts" id="updates-attempt-facts"></dl>
+                            <details class="updates-raw" id="updates-attempt-raw" hidden>
+                                <summary id="updates-attempt-raw-label">Raw record</summary>
+                                <pre class="updates-raw-text" id="updates-attempt-raw-text"></pre>
+                            </details>
                         </details>
                         <button type="button" class="btn btn-default btn-sm" id="updates-attempt-restore" hidden>Restore previous version</button>
                     </div>
                 </section>
                 <div class="updates-meta" id="updates-meta"></div>
-                <section id="updates-generation-facts" hidden><h4>After-update observations</h4><p></p></section>
                 <div class="settings-action-row updates-action-row">
                     <span class="updates-action-note" id="updates-action-note"></span>
                     <button class="btn btn-primary" id="btn-update-primary" hidden></button>
@@ -541,6 +544,9 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     const attemptText = page.querySelector('#updates-attempt-text');
     const attemptFacts = page.querySelector('#updates-attempt-facts');
     const attemptRestore = page.querySelector('#updates-attempt-restore');
+    const attemptRaw = page.querySelector('#updates-attempt-raw');
+    const attemptRawLabel = page.querySelector('#updates-attempt-raw-label');
+    const attemptRawText = page.querySelector('#updates-attempt-raw-text');
     const meta = page.querySelector('#updates-meta');
     const actionNote = page.querySelector('#updates-action-note');
     const current = page.querySelector('#updates-current');
@@ -571,6 +577,14 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
             return `<button type="button" class="updates-chip updates-chip-link" data-open-settings-advanced title="Change in Settings -> Advanced">${body}</button>`;
         }
         return `<span class="updates-chip">${body}</span>`;
+    }
+
+    // One row of the Last attempt list: a group heading spans both columns; an exact stamp sits under its value.
+    function factRowHtml(row) {
+        if (row.head) return `<dt class="updates-facts-head">${escapeHtml(row.head)}</dt>`;
+        const exact = row.exact
+            ? `<time class="updates-fact-raw" datetime="${escapeHtml(row.exact)}">${escapeHtml(row.exact)}</time>` : '';
+        return `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}${exact}</dd>`;
     }
 
     // The letter body hosts rendered markdown, so its enhancement owns real
@@ -700,8 +714,17 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
         attemptWhen.dateTime = view.when;
         attemptText.textContent = view.text;
         attemptText.hidden = !view.text;
-        attemptFacts.innerHTML = view.details.map((row) => (
-            `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`)).join('');
+        // The retained samples (after_update) join the rows only of the attempt they name, so they appear with this
+        // section, which stays hidden while an update runs (owner 25.10: A). A record of another operation is never
+        // read as this attempt's: it keeps only its exact text below, labelled so.
+        const observed = latestStatus?.after_update || null;
+        const own = Boolean(observed) && String(observed.operation_id || '') === view.id;
+        attemptFacts.innerHTML = [...view.details, ...(own ? afterUpdateRows(observed) : [])].map(factRowHtml).join('');
+        attemptRaw.hidden = !observed;
+        attemptRawLabel.textContent = own ? 'Raw record' : 'Raw record (not matched to this attempt)';
+        // Rewritten only when the record changes, so a refresh keeps the owner's selection in it.
+        const raw = observed ? JSON.stringify(observed, null, 2) : '';
+        if (attemptRawText.textContent !== raw) attemptRawText.textContent = raw;
         attemptRestore.hidden = !view.restoreTarget;
         attemptRestore.dataset.target = view.restoreTarget || '';
         attemptRestore.disabled = replaceInFlight || Boolean(latestStatus?.update_tx?.active)
@@ -709,10 +732,6 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     }
 
     function render() {
-        const observed = afterUpdateFactsText(latestStatus?.after_update);
-        const facts = page.querySelector('#updates-generation-facts');
-        facts.hidden = !observed;
-        facts.querySelector('p').textContent = observed;
         const verdict = updateVerdict(latestStatus || {}, phase);
         dot.dataset.tone = verdict.tone;
         summary.textContent = verdict.headline;

@@ -81,7 +81,7 @@ from ouroboros.tools.shell_effects import (  # noqa: F401
 from ouroboros.tools.shell_outputs import (  # noqa: F401
     _directory_fingerprint,
     _changed_path_covers,
-    _declared_output_baseline, _declared_output_refusal,
+    _declared_output_baseline, _declared_output_refusal, _prepare_declared_output_context,
     _directory_fingerprint_from_entries,
     _fingerprint_output,
     _protected_output_source_reason,
@@ -367,7 +367,11 @@ def _run_shell(
     if not work_dir.exists() or not work_dir.is_dir():
         return _pre_spawn_refusal(ctx, f"⚠️ SHELL_CWD_BLOCKED: cwd is not a directory: {work_dir}. "
             f"root={binding.root}, source={binding.source}.")
-    if output_refusal := _declared_output_refusal(ctx, outputs, pathlib.Path(work_dir), cwd_root=cwd_root, binding=binding):
+    output_context, output_error = _prepare_declared_output_context(ctx, outputs, work_dir)
+    if output_error is not None:
+        return _publish_tool_result(ctx, output_error)
+    if output_refusal := _declared_output_refusal(ctx, outputs, pathlib.Path(work_dir), cwd_root=cwd_root, binding=binding,
+                                                 output_context=output_context):
         return _pre_spawn_refusal(ctx, output_refusal)
     # Disclose the room-lens default once; explicit cwd is already caller-visible.
     if not str(cwd or "").strip() and not getattr(ctx, "_room_cwd_noted", False):
@@ -392,7 +396,8 @@ def _run_shell(
         else None
     )
     before_outputs, baseline_problem = _declared_output_baseline(ctx, outputs, pathlib.Path(work_dir), cwd_root=cwd_root,
-                                                                 changed_paths=set(before_changed or []), binding=binding)
+                                                                 changed_paths=set(before_changed or []), binding=binding,
+                                                                 output_context=output_context)
 
     # Scratch is confined/new/untracked, patch-excluded, and never an artifact.
     scratch_abs = _resolve_scratch_abs(scratch, work_dir)
@@ -413,11 +418,11 @@ def _run_shell(
     _command_start_ts = time.monotonic()
     res = None
     try:
-        if _executor_can_run_cwd(ctx, pathlib.Path(work_dir)):
+        if output_context is not None or _executor_can_run_cwd(ctx, pathlib.Path(work_dir)):
             res = executor_execute(ctx, cmd, pathlib.Path(work_dir), timeout_sec,
                                    env_overlay=interpreter_path_overlay(node_resolution),
+                                   **({"executor": output_context.executor} if output_context else {}),
                                    **({"target_env": selected_env} if selected_env else {}))
-            process_meta = {"operation_outcome": getattr(res, "operation_outcome", "unknown")}
         else:
             res = _tracked_subprocess_run(
                 cmd, cwd=str(work_dir),
@@ -425,14 +430,14 @@ def _run_shell(
                 text=True, timeout=timeout_sec,
                 **({"env": run_env} if run_env is not None else {}),
             )
-            process_meta = {"operation_outcome": "completed"}
+        process_meta = {"operation_outcome": getattr(res, "operation_outcome", "completed")}
         _lived_ms = _publish_finished_process_facts(ctx, res, _command_start_ts)
         # Post-run hashes exclude scratch only while its exact bytes still match.
         _record_scratch_fingerprints(ctx, scratch_abs)
+        executor_note = ""
+        if getattr(res, "backend_trace", None):
+            executor_note = "\n\nEXECUTOR_TRACE:\n" + json.dumps(res.backend_trace, ensure_ascii=False, indent=2)
         if res.returncode != 0:
-            executor_note = ""
-            if getattr(res, "backend_trace", None):
-                executor_note = "\n\nEXECUTOR_TRACE:\n" + json.dumps(res.backend_trace, ensure_ascii=False, indent=2)
             if _is_search_no_match(res):
                 text = autocorrect_note + (
                     f"{_describe_returncode(res.returncode, cwd=work_dir, binding=binding)} (no matches)\n"
@@ -481,6 +486,7 @@ def _run_shell(
             changed_paths=set(after_changed or []),
             before_outputs=before_outputs,
             binding=binding,
+            output_context=output_context,
         )
         artifact_note += f"\n- output baseline unavailable before the run ({baseline_problem}): a registered output may predate it" if baseline_problem and artifact_note else ""
         audit_note = ""
@@ -518,12 +524,10 @@ def _run_shell(
                 + f"{_describe_returncode(0, cwd=work_dir, binding=binding)}\n"
                 + f"{_format_process_output(res.stdout or '', res.stderr or '')}"
                 + artifact_note
+                + executor_note
             )
             result = _masked_green_disclosure(ctx, _publish_process_result(ctx, "ARTIFACT_OUTPUT_ERROR", text, exit_code=0, shell_regex_auto_corrected=regex_autocorrected, meta=process_meta), cmd)
             return _disclose_output_audit_failure(ctx, result, audit_error)
-        executor_note = ""
-        if getattr(res, "backend_trace", None):
-            executor_note = "\n\nEXECUTOR_TRACE:\n" + json.dumps(res.backend_trace, ensure_ascii=False, indent=2)
         text = autocorrect_note + f"{_describe_returncode(0, cwd=work_dir, binding=binding)}\n{_format_process_output(res.stdout or '', res.stderr or '')}{artifact_note}{audit_note}{scratch_note}{executor_note}"
         result = _masked_green_disclosure(ctx, _publish_process_result(ctx, "SHELL_REGEX_AUTO_CORRECTED" if regex_autocorrected else "OK", text, exit_code=0, artifact_registered=bool(artifact_registered and not artifact_failed), shell_regex_auto_corrected=regex_autocorrected, meta=process_meta), cmd)
         return _disclose_output_audit_failure(ctx, result, audit_error)

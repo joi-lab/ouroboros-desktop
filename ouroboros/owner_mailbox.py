@@ -344,6 +344,7 @@ def write_task_message(
     relayed_from_task_id: str = "",
     msg_id: Optional[str] = None,
     review_feedback: Optional[Dict[str, Any]] = None,
+    work_attention: Optional[Dict[str, Any]] = None,
     relation: str = "",
     sender_origin: Optional[Dict[str, Any]] = None,
     reply_to: Optional[Dict[str, Any]] = None,
@@ -384,6 +385,8 @@ def write_task_message(
         entry["sender_origin"] = {str(key): str(value) for key, value in dict(sender_origin).items()}
     if provenance == "system" and isinstance(review_feedback, dict):
         entry["review_feedback"] = dict(review_feedback)
+    if provenance == "system" and isinstance(work_attention, dict):
+        entry["work_attention"] = dict(work_attention)
     try:
         return _append_mail(drive_root, task_id, path, entry)
     except StoreForeign:
@@ -804,6 +807,8 @@ def drain_owner_entries(
                     drained["provenance"] = str(entry.get("provenance") or "ancestor_task")
                     if drained["provenance"] == "system" and isinstance(entry.get("review_feedback"), dict):
                         drained["review_feedback"] = dict(entry["review_feedback"])
+                    if drained["provenance"] == "system" and isinstance(entry.get("work_attention"), dict):
+                        drained["work_attention"] = dict(entry["work_attention"])
                     drained["source_task_id"] = str(entry.get("source_task_id") or "")
                     drained["relayed_from_task_id"] = str(entry.get("relayed_from_task_id") or "")
                     # The peer relation is a written fact the renderer reads;

@@ -483,14 +483,13 @@ def _is_host_minted_projects_tree(path: pathlib.Path) -> bool:
     """True when ``path`` is a host-minted genesis/coop tree — i.e. inside the
     durable subagent-projects root. Owner-attached folders never live there, so this
     is the structural boundary for the coop no-op (and the checkpoint-commit).
-    It asks the SAME containment predicate the orphan apply gate asks
-    (``delegate_shared.orphan_apply_target_ok``); here the projects root is both
-    the boundary and the containment root, so the two can never drift apart."""
+    Child/body checkouts are not coop projects, even when an orphan result may
+    return to one under the caller's existing write rights."""
     try:
         from ouroboros.config import get_subagent_projects_root
-        from ouroboros.delegate_shared import orphan_apply_target_ok
+        from ouroboros.tool_access import path_is_relative_to
 
-        return orphan_apply_target_ok(path, get_subagent_projects_root())
+        return path_is_relative_to(path.resolve(), pathlib.Path(get_subagent_projects_root()).expanduser().resolve())
     except Exception:
         return False
 
@@ -1205,7 +1204,9 @@ def get_tools() -> List[ToolEntry]:
                     "orphan recovery remains available to top-level tasks. Current target authority still applies. "
                     "Git runs edit a private execution snapshot; apply verifies its complete result "
                     "against the recorded baseline under the repository lock, applies and stages "
-                    "changed files into your active root, and never commits. Skill-payload runs "
+                    "changed files into the recorded target, and never commits. A terminal owner's orphan "
+                    "may return to its original target inside the configured projects/worktrees roots, "
+                    "including manually placed folders, under current write authority; no workspace is rebound. Skill-payload runs "
                     "apply LIVE apply into the non-Git payload with content-hash CAS (nothing is staged into your active root) and make its review "
                     "stale before reuse. Ordinary-folder copies use the engine's complete file "
                     "manifest and per-file baseline checks; paths may select files and remaining "
@@ -1226,7 +1227,7 @@ def get_tools() -> List[ToolEntry]:
                     "type": "object",
                     "properties": {
                         "run_id": {"type": "string", "description": "The delegated run whose captured patch to integrate (from delegate_start)."},
-                        "decision": {"type": "string", "enum": ["apply", "reject"], "default": "apply", "description": "apply = integrate the captured result: Git changes are STAGED into your active root; skill changes are applied LIVE into the non-Git payload with content-hash CAS; directory copies use engine file delivery. reject = explicit discard of unapplied results, never an undo of direct effects."},
+                        "decision": {"type": "string", "enum": ["apply", "reject"], "default": "apply", "description": "apply = integrate the captured result: Git changes are STAGED into the recorded target; skill changes are applied LIVE into the non-Git payload with content-hash CAS; directory copies use engine file delivery. reject = explicit discard of unapplied results, never an undo of direct effects."},
                         "paths": {"type": "array", "items": {"type": "string"}, "description": "For an engine directory copy, optionally select a nonempty list of captured file paths to apply; omit for the complete result. Remaining changes stay retained until applied or explicitly rejected. Git and skill captures are whole-result operations: omit paths or pass [] for the complete capture; nonempty selections are unsupported there."},
                         "reason": {"type": "string", "description": "Optional rationale recorded in the verdict and the durable disposition row."},
                         "acknowledge_ambiguous": {"type": "boolean", "default": False, "description": "Set true ONLY after inspecting an INTEGRATE_DELEGATED_APPLY_AMBIGUOUS state (a crashed apply left a durable unresolved intent): resolves that stale intent and re-runs the normal disposition guards, which re-verify the tree. A no-op when no ambiguity is pending."},
