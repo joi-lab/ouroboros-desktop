@@ -72,17 +72,20 @@ def test_hub_pointer_optional_fields_do_not_change_schema(tmp_path):
                               "connector", tmp_path)["icon"] == {}
 
 
-@pytest.mark.parametrize("facts,wakes", [
-    (["mention", {"id": "signal.words", "label": "Words you chose appear"}], ["mention", "signal.words"]),
-    ([{"id": "direct_message", "label": "Mail addressed to you"}], ["direct_message"]),
-    ([], []), (["any_message", "from_bot"], ["from_bot"]),
+@pytest.mark.parametrize("facts,wakes,labels", [
+    (["mention", {"id": "signal.words", "label": "Words you chose appear"}], ["mention", "signal.words"],
+     {"signal.words": "Words you chose appear"}),
+    ([{"id": "direct_message", "label": "Mail addressed to you"}], ["direct_message"],
+     {"direct_message": "Mail addressed to you"}),
+    ([], [], {}), (["any_message", "from_bot"], ["from_bot"], {}),
 ])
-def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes):
+def test_declared_facts_and_signal_labels_project_unchanged(facts, wakes, labels):
     clean, errors = validate_contributions(manifest(
         [{**PLACE, "facts": facts, "wakes": wakes}], kind="extension", permissions=["presence"]))
     assert not errors
     row, = project_contributions("connector", clean, "reviewed")
     assert row["facts"] == facts and row["wakes"] == wakes
+    assert row["labels"] == labels
 
 
 @pytest.mark.parametrize("patch", [

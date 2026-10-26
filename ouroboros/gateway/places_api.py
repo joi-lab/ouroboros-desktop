@@ -18,11 +18,11 @@ from ouroboros.store import StoreError
 def read_place_status(root, declaration: dict) -> dict:
     """Use the same reviewed route dispatch as the sheet, from synchronous readers."""
     from ouroboros.extension_registry_state import list_routes
-    from ouroboros.gateway.extensions import api_extension_dispatch
 
     url = (declaration.get("source") or {}).get("url", "")
     if not url or url not in list_routes():
         return {}
+    from ouroboros.gateway.extensions import api_extension_dispatch
     skill = declaration["skill"]
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}

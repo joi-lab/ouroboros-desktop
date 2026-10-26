@@ -17,7 +17,7 @@ from tests.test_extension_icons import PLACE, SVG, staged_icon
 def connector(tmp_path, monkeypatch):
     skill, staged = staged_icon(tmp_path, entries=[{
         **PLACE, "label": "GitHub", "destination": "vendor:GitHub", "wakes": ["mention", "signal.words"],
-        "facts": ["mention", {"id": "signal.words", "label": "Words you chose appear"}],
+        "facts": [{"id": "mention", "label": "Mentions you"}, {"id": "signal.words", "label": "Words you chose appear"}],
         "source": {"route": "status", "refresh_s": 60}, "settings": "connection",
     }])
     monkeypatch.setattr("ouroboros.skill_loader.discover_skills", lambda _root: [skill])
@@ -220,7 +220,7 @@ def test_status_identity_owner_confirmation_revocation_and_safety(client, connec
     place = client.post("/api/places", json={"connector": skill.name, "account_id": "account"}).json()["place"]
     assert place["identity"]["sends_as"]["owner"] is False and place["can_confirm"]
     assert place["identity"]["reads_as"][0]["owner"] is False and place["safety_mode"] == mode
-    assert place["labels"] == {"signal.words": "Words you chose appear"}
+    assert place["labels"] == {"mention": "Mentions you", "signal.words": "Words you chose appear"}
     path = "/api/places/" + place["place_id"]
     confirmed = client.post(path, json={"confirm_owner_account": {"platform_actor_id": IDENTITY["sends_as"]["id"]}}).json()["place"]
     assert confirmed["identity"]["sends_as"]["owner"] and not confirmed["can_confirm"]
