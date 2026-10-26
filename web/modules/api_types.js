@@ -859,7 +859,6 @@
  * @property {string} branch
  * @property {string} sha
  */
-
 /**
  * `POST /api/settings` success; `restart_keys` apply only after a restart.
  * @typedef {Object} SettingsSaveResponse
@@ -875,14 +874,12 @@
  * @property {boolean=} agent_task_running
  * @property {Object[]=} connection_references Rows naming a connection that cannot serve them: {setting, entry?, route, connection, reason}.
  */
-
 /**
  * @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode
  * @property {boolean} restart_required
  */
-
 /**
  * @typedef {Object} OwnerAutoGrantResponse
  * @property {boolean} ok
