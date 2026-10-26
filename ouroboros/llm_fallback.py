@@ -151,11 +151,14 @@ class _RecoveryLadderMixin:
         After failover OpenRouter answers with its LAST error, which can be its own verdict
         on a fallback the caller never needed (a credit check on paid shared capacity after
         every upstream refused the prompt as too long). Its opt-in receipt
-        (``X-OpenRouter-Metadata``) lists the upstream attempts' statuses, never their text:
-        a final status absent from them came from no upstream. Before any model output, one
-        re-send with ``provider.allow_fallbacks=False`` (all other routing kept) makes an
-        upstream's own error the final one, for the classifier and size recovery, or returns
-        its answer as this call's answer. Attempts name providers, not ``provider.only`` slugs.
+        (``X-OpenRouter-Metadata``) lists the upstream attempts' providers and statuses, never
+        their text: a final status absent from them came from no upstream. Before any model
+        output, one re-send with ``provider.allow_fallbacks=False`` and ``provider.only`` = the
+        attempted providers (the receipt's names, which ``only`` accepts; all other routing kept)
+        makes an upstream's own error the final one, for the classifier and size recovery, or
+        returns its answer as this call's answer. Without ``only`` the router picks one endpoint
+        of its own, which can be paid shared capacity (probe 2026-10-26: one Amazon Bedrock
+        attempt instead of the thirteen BYOK Anthropic keys), so a missing credit masks it again.
         """
         if str(target.get("provider") or "") != "openrouter":
             return None
@@ -184,21 +187,25 @@ class _RecoveryLadderMixin:
                     full = None
                 receipt = full.get("openrouter_metadata") if isinstance(full, dict) else None
         attempts = receipt.get("attempts") if isinstance(receipt, dict) else None
-        statuses = {row.get("status") for row in (attempts if isinstance(attempts, list) else [])
-                    if isinstance(row, dict) and type(row.get("status")) is int}
+        rows = [row for row in (attempts if isinstance(attempts, list) else []) if isinstance(row, dict)]
+        statuses = {row.get("status") for row in rows if type(row.get("status")) is int}
         if not statuses or type(status) is not int or status in statuses:
             return None
+        providers = list(dict.fromkeys(row["provider"].strip() for row in rows
+                                       if isinstance(row.get("provider"), str) and row["provider"].strip()))
         extra = payload.get("extra_body", {})
         routing = extra.get("provider", {}) if isinstance(extra, dict) else None
         if not isinstance(routing, dict) or routing.get("allow_fallbacks") is False:
             return None  # fallbacks already forbidden, or a carrier shape this rung does not rewrite
         retry_payload = copy.deepcopy(payload)
-        retry_payload.setdefault("extra_body", {}).setdefault("provider", {})["allow_fallbacks"] = False
+        retry_routing = retry_payload.setdefault("extra_body", {}).setdefault("provider", {})
+        retry_routing.update({"allow_fallbacks": False, **({"only": providers} if providers else {})})
         log.warning(
             "OpenRouter final status %s is not among its upstream attempts' statuses %s; "
-            "re-asking %s once without provider fallbacks",
+            "re-asking %s once on %s without provider fallbacks",
             status, sorted(statuses),
             str(target.get("usage_model") or target.get("resolved_model") or "(unknown model)"),
+            ", ".join(providers) or "its own choice of provider",
         )
         return retry_payload
 

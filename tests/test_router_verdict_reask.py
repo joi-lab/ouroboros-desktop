@@ -3,9 +3,13 @@
 The recorded shape (BYOK incident receipts, 2026-10-22): an HTTP-200 stream whose only
 frame is OpenRouter's ``402 payment_required`` (a credit check on paid shared capacity),
 with ``openrouter_metadata.attempts`` listing twelve Anthropic attempts that each answered
-400; the same request with ``provider.allow_fallbacks=False`` answered the upstream's own
-``400 prompt is too long: 1067828 tokens > 1000000 maximum``. Nothing here touches the
-network: the SDK create call is a scripted fake, and accounting runs on a temp root.
+400; the same request with ``provider.only=["anthropic"]`` and ``allow_fallbacks=False``
+answered the upstream's own ``400 prompt is too long: 1067828 tokens > 1000000 maximum``. A $0
+probe (2026-10-26, an oversized prompt to a 200k-window model through BYOK keys) showed that
+``allow_fallbacks=False`` alone lets the router pick one endpoint itself (Amazon Bedrock, paid
+shared capacity) and that ``only`` accepts the receipt's provider names ("Amazon Bedrock",
+"Google"). Nothing here touches the network: the SDK create call is a scripted fake, and
+accounting runs on a temp root.
 """
 from __future__ import annotations
 
@@ -31,12 +35,13 @@ CREDITS = ("This request's maximum cost exceeds your available credits. "
            "Add credits, or lower max_tokens or prompt size.")
 
 
-def receipt(*statuses):
+def receipt(*statuses, providers=("Anthropic",)):
     """The router receipt as the incident recorded it (provider display names, statuses only)."""
     return {"requested": MODEL, "strategy": "direct", "summary": f"available=16, attempts={len(statuses)}",
             "attempt": len(statuses), "is_byok": False,
-            "attempts": [{"provider": "Anthropic", "model": "anthropic/claude-opus-5.5-20260921", "status": s}
-                         for s in statuses]}
+            "attempts": [{"provider": providers[index % len(providers)],
+                          "model": "anthropic/claude-opus-5.5-20260921", "status": s}
+                         for index, s in enumerate(statuses)]}
 
 
 def error_frame(code, message, metadata):
@@ -151,9 +156,8 @@ def test_masked_402_is_reasked_once_and_the_upstream_overflow_classifies(isolate
 
     assert len(sends) == 2
     assert "allow_fallbacks" not in routing(sends[0])
-    # The re-ask forbids fallbacks only: the owner/route routing and the other carriers stay.
-    assert routing(sends[1]) == {"require_parameters": True, "allow_fallbacks": False}
-    assert "only" not in routing(sends[1])  # attempts name providers, never slugs
+    # The re-ask forbids fallbacks and stays on the attempted providers; the rest of the routing stays.
+    assert routing(sends[1]) == {"require_parameters": True, "allow_fallbacks": False, "only": ["Anthropic"]}
     assert sends[1]["extra_body"]["session_id"] == sends[0]["extra_body"]["session_id"]
     assert sends[1]["messages"] == sends[0]["messages"]
     assert isinstance(outcome, ProviderStreamError) and outcome.status_code == 400
@@ -162,6 +166,17 @@ def test_masked_402_is_reasked_once_and_the_upstream_overflow_classifies(isolate
     assert classification.retry_same_request is False
     # Each send is its own physical attempt in the ledger.
     assert len(ledger_rows(isolated)) == 2
+
+
+@pytest.mark.parametrize("attempts,only", [
+    (receipt(400, 400, 400, providers=("Anthropic", "Amazon Bedrock", "Anthropic")), ["Anthropic", "Amazon Bedrock"]),
+    ({"attempts": [{"status": 400}, {"provider": " ", "status": 400}]}, None),  # no names: the router's own choice
+], ids=["named-providers-in-order", "unnamed"])
+def test_the_reask_stays_on_the_attempted_providers(isolated, attempts, only):
+    _outcome, sends = drive([Wire(error_frame(402, CREDITS, attempts)), Wire(UPSTREAM)])
+
+    assert len(sends) == 2 and routing(sends[1])["allow_fallbacks"] is False
+    assert routing(sends[1]).get("only") == only
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
