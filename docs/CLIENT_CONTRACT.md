@@ -545,8 +545,11 @@ status/launch remain unchanged.
 
 The browser's Place identity twins live in `web/modules/place_contract_types.js`, re-exported by
 `client_contract_types.js`: `PlaceIdentity` has optional `sends_as` and `reads_as` accounts (`id`, `label`, `kind`,
-with optional derived `owner`). `PlaceSummary` declares optional `identity`, `can_confirm`, `safety_mode` and
-`labels`; old responses remain readable. `RecentWake.as` declares the optional `{label, owner}` account stamp.
+with `owner` derived by the client only for confirmed user accounts). `PlaceSummary` keeps optional `safety_mode`
+and manifest `labels`, without `identity` or `can_confirm`. `PlaceStatusPayload` declares `text`, `tone`, optional
+`identity` and `labels` from the existing status GET. The sheet validates identity, derives its confirm action,
+and overlays status labels on manifest labels; absent fields preserve older rendering. `RecentWake.as` declares
+the optional `{label, owner}` account stamp.
 `PlaceHistoryFacts`, alongside `PlaceHistoryAttention` in the Place twins, declares optional heard `facts`,
 captured `identity`, outgoing `sends_as` / `sends_as_owner`, and held `held_text` / `held` / `checked`. These are
 retained room facts, not guesses from current settings. Every consumed wire key stays pinned by

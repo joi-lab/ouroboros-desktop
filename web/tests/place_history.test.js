@@ -5,6 +5,7 @@ import { installCardDom, TextNode } from './helpers/card_dom.js';
 import { applyPayload, createTranslator, setMissTransport } from '../modules/i18n.js';
 import { normalizePlace, readPlaceRooms } from '../modules/consciousness_api.js';
 import { mountPlaceHistory, capturedWindowNote, historySpeaker, historyFactWords, placeRoomsHtml } from '../modules/place_history.js';
+import { openPlaceSheet } from '../modules/place_sheet.js';
 import { mountConnectorPlaces } from '../modules/connector_places.js';
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
@@ -20,6 +21,8 @@ function fixture(t) {
     const dom = installCardDom(); const { doc, win } = dom;
     // Missing fixture DOM mechanics, not a replacement for production behavior.
     doc.defaultView = win; win.getComputedStyle = () => ({ visibility: 'visible' });
+    doc.getElementById = (id) => doc.body.querySelector(`[id="${id}"]`);
+    doc.addEventListener = win.addEventListener; doc.removeEventListener = win.removeEventListener;
     const create = doc.createElement;
     doc.createElement = (tag) => {
         const node = create(tag);
@@ -103,12 +106,53 @@ test('heard facts sit beside the reason with core words and authored signal labe
     await tick();
     const metas = [...f.doc.body.querySelectorAll('.place-convo-meta')];
     assert.deepEqual([...metas[0].querySelectorAll('.place-convo-fact')].map((node) => node.textContent),
-        ['Heard; no wake matched', 'direct messages', 'also wakes on bot messages', unsafeText]);
-    assert.equal(metas[0].querySelectorAll('.place-convo-fact[data-i18n-authored]').length, 1);
-    assert.ok(!metas[0].textContent.includes('Mail addressed to you'), 'reader core facts keep host words');
+        ['Heard; no wake matched', 'Mail addressed to you', 'also wakes on bot messages', unsafeText]);
+    assert.equal(metas[0].querySelectorAll('.place-convo-fact[data-i18n-authored]').length, 2);
+    assert.ok(!metas[0].textContent.includes('direct messages'), 'declared core labels also name the reader fact');
     assert.deepEqual(metas.slice(1).map((meta) => meta.querySelectorAll('.place-convo-fact').length), [1, 1, 1]);
     assert.match(metas[3].textContent, /Focus started/);
     assert.equal(f.q('img'), null);
+    reader.close();
+});
+
+for (const late of [false, true]) test(`the sheet reader merges status labels (${late ? 'after' : 'before'} opening) and keeps authored nodes`, async (t) => {
+    const f = fixture(t), status = deferred();
+    const current = normalizePlace({ ...rawPlace(), source: { url: '/api/extensions/telegram-user-session/status' },
+        facts: ['direct_message', 'from_bot', { id: 'signal.words', label: 'PR words' }], labels: { direct_message: 'Declared mail' } });
+    const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' },
+        facts: ['direct_message', 'from_bot', 'signal.words'] } };
+    f.reply(({ url }) => url === current.source.url ? status.promise : page([heard]));
+    const sheet = openPlaceSheet(current, { readRooms: async () => index() });
+    t.after(() => sheet.close());
+    const payload = { text: 'Ready', tone: 'ok', labels: { direct_message: unsafeText } };
+    if (!late) status.resolve(payload);
+    await tick();
+    f.q(`[data-place-room="${room.room_chat_id}"]`).click(); await tick();
+    const words = () => [...f.doc.body.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent);
+    assert.deepEqual(words(), [late ? 'Declared mail' : unsafeText, 'also wakes on bot messages', 'PR words']);
+    const message = f.q('.place-convo-text'), article = f.q('.place-convo-row');
+    if (late) { status.resolve(payload); await tick(); }
+    assert.deepEqual(words(), [unsafeText, 'also wakes on bot messages', 'PR words']);
+    assert.equal(f.q('.place-convo-text'), message);
+    assert.equal(f.q('.place-convo-row'), article);
+    assert.ok(f.q('[data-heard-fact="direct_message"]').hasAttribute('data-i18n-authored'));
+    assert.equal(f.q('img'), null);
+    assert.deepEqual(sheet.place.labels, { direct_message: 'Declared mail' });
+    assert.equal(f.requests.filter(({ url }) => url === current.source.url).length, 1);
+});
+
+test('reader labels return to core words when absent without replacing the retained message', async (t) => {
+    const f = fixture(t);
+    const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts: ['direct_message'] } };
+    const reader = mount(f, { readHistory: async () => page([heard]) }, { ...place, labels: { direct_message: 'Mail addressed to you' } });
+    await tick();
+    const fact = f.q('[data-heard-fact]'), message = f.q('.place-convo-text');
+    assert.equal(fact.textContent, 'Mail addressed to you');
+    assert.ok(fact.hasAttribute('data-i18n-authored'));
+    reader.updatePlace(place);
+    assert.equal(fact.textContent, 'direct messages');
+    assert.equal(fact.hasAttribute('data-i18n-authored'), false);
+    assert.equal(f.q('.place-convo-text'), message);
     reader.close();
 });
 

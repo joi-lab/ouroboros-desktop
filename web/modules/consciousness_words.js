@@ -100,12 +100,16 @@ export const wakeFactWord = (fact, labels = null) => labels?.[fact] || (WAKE_FAC
 export const signalLabels = (facts) => Object.fromEntries((Array.isArray(facts) ? facts : [])
     .filter((item) => item && typeof item === 'object' && item.id && item.label).map((item) => [item.id, item.label]));
 
+/** Lower an initial capital only in an otherwise lowercase first word; keep GitHub and PR intact. */
+export const sentenceLabel = (label) => /^\p{Lu}\p{Ll}+(?!\p{L})/u.test(label)
+    ? label[0].toLowerCase() + label.slice(1) : label;
+
 /** «wakes for direct messages, mentions and replies», or '' when nothing wakes it here. */
 export function wakesForText(wakes = [], declared = null, labels = null) {
     const facts = [...new Set(wakes.map((item) => item?.fact).filter(Boolean))];
     const kinds = facts.filter((fact) => fact !== 'from_bot');
     const named = { ...signalLabels(declared), ...labels };
-    const word = (fact) => named[fact] ? named[fact].toLowerCase() : wakeFactWord(fact);
+    const word = (fact) => named[fact] ? sentenceLabel(named[fact]) : wakeFactWord(fact);
     return [kinds.length ? fmt('wakes for {kinds}', { kinds: listWords(kinds.map(word)) }) : '',
         facts.includes('from_bot') ? word('from_bot') : ''].filter(Boolean).join(' · ');
 }

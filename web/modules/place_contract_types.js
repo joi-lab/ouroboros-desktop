@@ -25,7 +25,7 @@
  */
 
 /**
- * The connector's declared account; owner is derived on the owner-facing Place view.
+ * The connector's declared account; the client derives owner from confirmed user accounts.
  * @typedef {Object} PlaceIdentityAccount
  * @property {string} id
  * @property {string} label
@@ -38,6 +38,15 @@
  * @typedef {Object} PlaceIdentity
  * @property {PlaceIdentityAccount=} sends_as
  * @property {Array<PlaceIdentityAccount>=} reads_as
+ */
+
+/**
+ * The declared source.url response; identity and labels are optional on older connectors.
+ * @typedef {Object} PlaceStatusPayload
+ * @property {string} text
+ * @property {string} tone
+ * @property {PlaceIdentity=} identity
+ * @property {Object<string,string>=} labels
  */
 
 /**
@@ -65,8 +74,6 @@
  * @property {Object<string,string>|null} reply_destination
  * @property {PlaceIcon} icon
  * @property {PlaceReadiness} readiness
- * @property {(PlaceIdentity|null)=} identity
- * @property {boolean=} can_confirm
  * @property {'off'|'light'|'full'=} safety_mode
  * @property {Object<string,string>=} labels
  * @property {Array<string>} wake_suggestions
