@@ -671,7 +671,7 @@ without a sentence reads "The recorded reason has no description yet", with
 its exact code in accessible details. Authored warning prose and raw host text
 stay intact; never infer meaning from spelling. The loop's forced-finalization rails
 (round limit, deadline, grace window, context, unabsorbed children) and the
-supervisor's timeout reaper (maximum running time, deadline, idle silence)
+supervisor's timeout reaper (maximum running time, deadline)
 keep typed codes on the record and incident key, and the
 card, the reaper's grace toast, kill notice and salvage line, and the loop's own
 fallback text all say the one sentence from the shared table

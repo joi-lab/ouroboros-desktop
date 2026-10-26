@@ -1,8 +1,8 @@
-"""#1729: an idle-reaped MONEY seed that saved nothing keeps the existing ordinary idle retry.
+"""#1729: a previously owned reaper job preserves the MONEY seed retry policy.
 
 Restored baseline policy (owner: eligibility, count and cadence stay): only an owner Pause seed
 with nothing saved is held as pause intent (``worker_health._hold_unsaved_pause``). Real producers:
-admission, assignment, the handler's money boundary, the idle rail and ``reap_timed_out_task``,
+admission, assignment, the handler's money boundary, a captured historical job and ``reap_timed_out_task`` (new silence never reaps, #1376),
 the owner's Pause and HTTP Stop, the boot hold and the real loop's continuation; the shared
 fixtures double only OS processes and model calls.
 """

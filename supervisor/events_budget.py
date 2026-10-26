@@ -768,8 +768,9 @@ HOLD_CONTINUATION_WRITER = "continuation_writer_unsettled"
 HOLD_PANIC = "panic_hold"
 # Quit, crash, Panic or an unacknowledged restart: explicit same-ID Resume (restart_retention).
 HOLD_SAVED_WORK = "saved_work_hold"
-# An owner Pause seed whose attempt the idle reaper killed with no usable saved state: pause
-# intent, never an exact pause; the same id waits for explicit Resume (worker_health, #1729).
+# An owner Pause seed whose attempt ended with no usable saved state (an inline actor that ended
+# while pausing, or the retained timeout-retry consumer): pause intent, never an exact pause; the
+# same id waits for explicit Resume (worker_health, #1729).
 HOLD_UNSAVED_PAUSE = "unsaved_pause_intent"
 # Malformed acceptance-fence evidence in the snapshot fails the restore closed
 # for ordinary rows; a saved exact pause is retained under this hold instead.

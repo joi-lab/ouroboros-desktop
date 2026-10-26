@@ -346,6 +346,7 @@ D20 = "Presence"
 "ouroboros/gateway/task_pause.py" = "D11"
 "ouroboros/gateway/task_continue.py" = "D11"
 "ouroboros/gateway/tasks.py" = "D11"
+"ouroboros/gateway/task_reviews.py" = "D11"
 "ouroboros/gateway/ui_preferences.py" = "D11"
 "ouroboros/gateway/ui_holds.py" = "D11"  # a page's found holds named as System rows
 "ouroboros/gateway/contributions.py" = "D14"
@@ -898,6 +899,8 @@ D20 = "Presence"
 "supervisor/direct_pause.py" = "D08"
 "supervisor/consciousness_carriers.py" = "D08"
 "supervisor/queue_timeouts.py" = "D08"
+"supervisor/silence_attention.py" = "D08"
+"ouroboros/work_diagnostics.py" = "D09"
 "supervisor/task_model_wait.py" = "D08"
 "supervisor/queue_schedules.py" = "D08"
 "supervisor/schedule_lifecycle.py" = "D08"
@@ -1091,6 +1094,7 @@ allowed = [
   "D11->D03",
   "D11->D04",
   "D11->D05",
+  "D11->D06",
   "D11->D07",
   "D11->D08",
   "D11->D09",
@@ -1239,7 +1243,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D11->D06",
   "D12->D01",
   "D12->D05",
   "D12->D06",

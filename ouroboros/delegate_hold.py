@@ -54,7 +54,7 @@ _CONTROL_WAKE_KINDS = frozenset({"finalize_now"})
 _NON_WAKE_STATUSES = frozenset({"refused", "fault"})
 # Inter-cycle backoff floor: repeated unknown outcomes on resume rounds must not
 # tighten into a paid dispatch loop. Deliberately BELOW the 60s idle-rail floor
-# so this plain bounded sleep can never race the idle reaper (the interruptible
+# so this plain bounded sleep can never outlast the silence window (the interruptible
 # owner surface is the supervised_wait right after it).
 _HOLD_BACKOFF_CAP_SEC = 15.0
 _ACK_ATTEMPTS = 3

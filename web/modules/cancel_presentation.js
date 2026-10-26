@@ -12,6 +12,7 @@ export const CANCEL_SOURCE_PHRASES = {
     owner_restart: 'Stopped by the Restart command',
     snapshot_restore: 'The server stopped while this task was still running',
     agent_tool: 'Stopped by Ouroboros',
+    silence_resolved: 'Silence check withdrawn: the observed work no longer needed it',
 };
 // The English control word each app-stop phrase names (owner decision: these five words stay English).
 export const CANCEL_CONTROL_WORDS = { http_single: 'Stop now', http_cascade: 'Stop now', http_graceful: 'Wrap up' };

@@ -537,24 +537,17 @@ def _finish_task_done_dispatch(
     with _queue_lock:
         if task_id:
             ctx.RUNNING.pop(str(task_id), None)
-            # A child's settled result is the parent's cue to START integrating,
-            # so settlement counts as the PARENT's own progress. Without this
-            # stamp a coordinator blocked in wait_tasks was idle-killed exactly
-            # when its last child delivered (the completed child instantly left
-            # RUNNING, so _subtree_progressing went dark and only the grace
-            # window remained). Own progress also lets the existing spare
-            # machinery (resolve_grace_episode_for_spared_task) withdraw an
-            # outstanding finalization-grace episode on the next enforce tick.
-            # A one-shot event per child terminal — unlike subtree narration,
-            # it cannot re-arm/flicker episodes. `task` is {} for reaper-delivered
-            # terminals (RUNNING popped before dispatch), so fall back to the
-            # durable result for the parent id — same shape the notification
-            # gate handles.
+            # Real child results give the parent time to integrate. A diagnostic
+            # settling is no source progress and cannot buy a new silence episode.
+            # Reaper-delivered terminals may have no RUNNING row; the durable
+            # result retains both lineage and diagnostic identity.
+            from ouroboros.work_diagnostics import diagnostic_ref
+
             parent_meta = ctx.RUNNING.get(str(
                 task.get("parent_task_id")
                 or final_task_result.get("parent_task_id") or ""
             ))
-            if isinstance(parent_meta, dict):
+            if isinstance(parent_meta, dict) and not (diagnostic_ref(task) or diagnostic_ref(final_task_result)):
                 parent_meta["last_progress_at"] = _events().time.time()
         if worker_id in ctx.WORKERS and ctx.WORKERS[worker_id].busy_task_id == task_id:
             # A `reaping` slot is OWNED — by the reaper or by an in-flight
