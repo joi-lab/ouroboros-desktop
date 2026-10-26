@@ -151,15 +151,17 @@ def test_host_rechecks_room_mode_on_delayed_admission(mode):
 
 
 def test_global_settings_off_withholds_new_admission_from_running_actor():
+    from ouroboros.tools.registry import ToolContext
+
     values = configured()
+    ctx = ToolContext(repo_dir=config.REPO_DIR, drive_root=config.DATA_DIR, task_id="parent")
     with task_settings_scope(snapshot({"id": "parent", "project_id": "alpha"})):
         catalog = json.loads(values["OUROBOROS_SUBAGENTS"])
         catalog["enabled"] = False
         save_owner({**values, "OUROBOROS_SUBAGENTS": json.dumps(catalog)})
         assert not runtime.current_model_visible_subagent_catalog()
-        with pytest.raises(runtime.SubagentSelectionError) as refused:
-            runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")
-        assert refused.value.code == "subagents_disabled"
+        result = runtime.exact_start(ctx, "new work", {"subagent_id": "session"})
+        assert "subagents_disabled" in result.text
 
 
 def test_room_switch_reaches_next_round_and_next_admission_without_rewriting_prefix(monkeypatch, tmp_path):
@@ -167,10 +169,15 @@ def test_room_switch_reaches_next_round_and_next_admission_without_rewriting_pre
     from ouroboros.loop_messages import append_context_facts
     from tests.test_round_facts_line import _facts_ctx
     from tests.test_loop_compaction import _fit
+    from ouroboros.tools import delegate
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.delegate_shared import delegate_result
 
     configured()
     ctx = _facts_ctx(tmp_path, monkeypatch)
     monkeypatch.setattr(loop, "_measure_round_main_fit", lambda *a, **k: _fit())
+    monkeypatch.setattr(delegate, "_delegate_start", lambda *a, **k: delegate_result({"status": "started", "run_id": "run"}))
+    child_ctx = ToolContext(repo_dir=config.REPO_DIR, drive_root=config.DATA_DIR, task_id="parent")
     prefix = list(ctx.messages)
     with task_settings_scope(snapshot({"id": "parent", "project_id": "alpha"})):
         for mode in ("auto", "swarm", "off", "auto"):
@@ -179,17 +186,36 @@ def test_room_switch_reaches_next_round_and_next_admission_without_rewriting_pre
             assert append_context_facts(ctx, money={})
             assert ctx.messages[-1]["content"].splitlines()[-1] == f"Subagents: {mode.title()} — set by my human for this chat"
             assert "cache_control" not in ctx.messages[-1]
-            if mode == "off":
-                with pytest.raises(runtime.SubagentSelectionError, match="Subagents are off"):
-                    runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")
-            else:
-                assert runtime.select_subagent_snapshot(config.runtime_settings(), subagent_id="critic")[0]
+            result = runtime.exact_start(child_ctx, "new work", {"subagent_id": "session"})
+            assert ("subagents_off_in_room" in result.text) is (mode == "off")
+            assert ("started" in result.text) is (mode != "off")
         assert ctx.messages[:len(prefix)] == prefix
         # A late owner switch also refreshes an unsent prepare in the SAME round.
         update_project_cognition(config.DATA_DIR, "alpha", subagents_mode="swarm")
         assert append_context_facts(ctx, money={})
         assert "Subagents: Swarm" in ctx.messages[-1]["content"]
         assert not append_context_facts(ctx, money={})
+
+
+@pytest.mark.parametrize("mode", ["off", "auto", "swarm"])
+def test_loading_legacy_review_slots_never_reads_the_room(mode, monkeypatch):
+    from ouroboros import review_pool_migration, settings_integrity
+    from ouroboros.reviewer_slot_config import review_pool_rows
+    from tests.test_review_pool_migration import anton_document
+
+    def unexpected_room_read(*args, **kwargs):
+        pytest.fail("Review slot resolution must not read the room or reload settings")
+
+    review_pool_migration._MIGRATIONS_SEEN.clear()
+    values = {**anton_document(), "OUROBOROS_SUBAGENTS_MODE": mode}
+    config.SETTINGS_PATH.write_text(json.dumps(values), encoding="utf-8")
+    monkeypatch.setattr(settings_integrity, "live_subagents_mode", unexpected_room_read)
+    monkeypatch.setattr(settings_integrity, "actor_subagents_availability", unexpected_room_read)
+    loaded = config.load_settings()
+    assert len(review_pool_rows(loaded)) == 3
+    assert len(config.review_pool_migrations_seen()) == 1
+    assert config.load_settings()["OUROBOROS_SUBAGENTS"] == loaded["OUROBOROS_SUBAGENTS"]
+    assert len(config.review_pool_migrations_seen()) == 1
 
 
 def test_round_fact_names_settings_lock_and_omits_autonomous_scope():

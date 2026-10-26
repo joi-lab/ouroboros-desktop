@@ -588,7 +588,6 @@ def _require_room_subagents() -> None:
 def _resolution(
     settings: Mapping[str, Any], *, allow_undecided_legacy: bool,
 ) -> ConfiguredSubagentsResolution:
-    _require_room_subagents()
     resolution = offered_subagents(settings)
     if resolution.source == SOURCE_INVALID:
         raise SubagentSelectionError(

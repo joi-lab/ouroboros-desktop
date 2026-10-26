@@ -34,6 +34,7 @@ from ouroboros.owner_words import governing_words_for_schedule
 from ouroboros.subagent_history import snapshot_handle
 from ouroboros.subagent_runtime import (
     SubagentSelectionError,
+    _require_room_subagents,
     effective_runtime_subagent_settings,
     select_subagent_snapshot,
 )
@@ -818,6 +819,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
     try:
         from ouroboros.supervisor_route import capture_cognitive_route
 
+        _require_room_subagents()
         settings = effective_runtime_subagent_settings(runtime_settings(settings_reader=_ctl().load_settings))
         configured_subagent, legacy_selection = select_subagent_snapshot(
             settings,
