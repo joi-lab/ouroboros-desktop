@@ -13,6 +13,7 @@ import pytest
 
 from tests._shared import producer_evidence_dir
 from tests._work_projection_shared import with_work_fields
+from tests.ui_console_errors import PageErrors
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -121,8 +122,7 @@ def project_chat(request):
                 page.add_init_script("""Object.defineProperty(navigator, 'clipboard', {
                     value: {writeText: async text => {window.copiedText = text;}}});""")
                 page.route("**/api/**", respond)
-                errors = []
-                page.on("pageerror", lambda error: errors.append(str(error)))
+                errors = PageErrors(page, engine)
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
                 if chat_id == 1:
                     page.wait_for_function("() => window.chat && document.querySelector('#chat-messages .chat-bubble')")
@@ -130,7 +130,7 @@ def project_chat(request):
                 yield {"page": page, "expect": playwright.expect, "rows": rows, "state": state, "conversions": conversions,
                        "details": details, "requests": requests, "continues": continues, "history": history,
                        "engine": engine, "theme": theme, "width": width}
-                assert not errors
+                assert not errors.unexpected(), errors
             finally:
                 browser.close()
     finally:

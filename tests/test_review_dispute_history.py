@@ -73,6 +73,42 @@ def test_public_packet_and_two_part_brief_keep_all_supplied_arguments(staged_bod
     assert "An author's rejection is not reviewer agreement" in text
 
 
+def test_failed_and_open_seat_notes_reach_the_next_round(tmp_path):
+    """The ledger keeps a refusal as `failure` and an open seat's note as historical `pending`; history reads both."""
+    from ouroboros import review_ledger as ledger
+    from ouroboros.review_history import review_dispute_history
+    from tests.test_review_ledger import BOTH, _facts, _raw
+
+    refusal = "Engine refusal: measured 940000 characters; limit 900000 characters"
+    note = "Timeout at dispatch; the physical review operation is still in flight."
+    raws = [_raw("ok", "m1", parts=BOTH, raw_text="Received answer\nEND"),
+            _raw("refused", "m2", "error", parts=BOTH, raw_text="", error=refusal),
+            _raw("open", "m3", "timeout", parts=BOTH, raw_text=note, operation_id="op", operation_state="in_flight")]
+    rid = ledger.write_record(tmp_path, ledger.build_commit_gate_record(_facts(raws), drive_root=tmp_path))["record_id"]
+
+    def seats(labels=None):
+        history = review_dispute_history(drive_root=tmp_path, repo_root="/nowhere", task_id="task-1", previous_records=[rid])
+        assert not [gap for gap in history["gaps"] if "binding is absent" in gap["reason"]], history["gaps"]
+        if labels is not None:
+            from ouroboros.review_history_view import review_index_view
+            labels.extend(sorted(entry["what"].split(" in record ")[0]
+                                 for entry in review_index_view(history, "commit")["addresses"].values() if " of seat " in entry["what"]))
+        return {seat["seat_id"]: (seat["response"]["source"]["role"], seat["response"]["text"])
+                for seat in history["rounds"][0]["reviewers"]}
+
+    labels = []
+    assert seats(labels) == {"ok": ("response", "Received answer\nEND"), "refused": ("failure", refusal), "open": ("pending", note)}
+    assert labels == ["answer of seat ok (m1)", "failure note of seat refused (m2)", "pending note of seat open (m3)"]
+    ledger.settle_from_collected(tmp_path, rid, [_raw("open", "m3", parts=BOTH, raw_text="Late answer\nEND", operation_id="op")])
+    assert seats()["open"] == ("response", "Late answer\nEND"), "a received answer outranks its stale note"
+    # Records of the earlier writer named every text `response`, in write order: the newest is the answer.
+    stale = ledger.retain_text_source(tmp_path, "task-1", record_id=rid, seat_id="ok", role="response",
+                                      part="change,coupling", text=note)
+    ledger.revise_record(tmp_path, rid, lambda r: {**r, "rows": [
+        {**row, "source_refs": [stale, *row["source_refs"]]} if row["seat_id"] == "ok" else row for row in r["rows"]]})
+    assert seats()["ok"] == ("response", "Received answer\nEND")
+
+
 def test_missing_durable_obligations_are_an_explicit_gap_with_available_history(tmp_path):
     state = tmp_path / "state"
     state.mkdir()

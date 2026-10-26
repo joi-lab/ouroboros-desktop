@@ -64,6 +64,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 
 from ouroboros.tools import review_binary_context as _rbc
 from ouroboros.tools.review_binary_context import StagedDiffUnavailable
+from ouroboros.unindexed import unindexed
 
 # The staged capture stays resolvable through its owning module at call time:
 # ``review_binary_context.capture_staged_diff`` is a documented patch seam.
@@ -659,8 +660,9 @@ SUBJECT_KINDS = (SUBJECT_KIND_INDEX, SUBJECT_KIND_WORKTREE, SUBJECT_KIND_RANGE)
 ROOT_KIND_SYSTEM, ROOT_KIND_WORKSPACE = "system_repo", "active_workspace"
 ROOT_KINDS = (ROOT_KIND_SYSTEM, ROOT_KIND_WORKSPACE)
 # Isolated checkouts live under the install's data root (never a foreign repo,
-# never the process temp dir): ``state/review_checkouts/<token>/repo``, beside it the marker
-# naming the task whose round it serves (``review_checking_prune`` retires what no review reads).
+# never the process temp dir): ``state/review_checkouts/<token>/repo.noindex`` (``unindexed``: one made
+# as ``repo`` keeps it), beside it the marker naming the task whose round it serves
+# (``review_checking_prune`` retires what no review reads).
 CHECKOUT_SUBDIR = "review_checkouts"
 CHECKOUT_MARKER = "checkout.json"
 _BINARY_PATCH_FLAGS = ("--binary", "--no-ext-diff", "--no-textconv")
@@ -896,7 +898,7 @@ def isolated_checkout(ctx: Any, spec: ReviewSubjectSpec, *,
                       retain: Optional[Callable[[], Mapping[str, Any]]] = None,
                       token: Optional[Callable[[FrozenSubject], str]] = None) -> Iterator[FrozenSubject]:
     """A detached worktree at the subject's parent with its patch applied to the
-    index, under the install's data root (``state/review_checkouts/<token>/repo``);
+    index, under the install's data root (``state/review_checkouts/<token>/repo.noindex``);
     the yielded subject reads there, so edits in the primary worktree during the
     run cannot change what the reviewers see. The checkout's ``write-tree`` must
     equal the frozen ``tree_sha`` or the subject is refused.
@@ -926,7 +928,7 @@ def isolated_checkout(ctx: Any, spec: ReviewSubjectSpec, *,
     identity = _frozen(ctx, spec, "")
     name = str(token(identity) if token is not None else uuid.uuid4().hex[:12])
     checkout_root = canonical_data_root(ctx) / "state" / CHECKOUT_SUBDIR / name
-    checkout = checkout_root / "repo"
+    checkout = unindexed(checkout_root, "repo")
     frozen = dataclasses.replace(identity, checkout=str(checkout))
     reused = failed = False
     try:
@@ -953,7 +955,7 @@ def round_checkout_repo(ctx: Any, retry_key: str, task_id: str) -> pathlib.Path:
     """Where ``isolated_checkout`` keeps the checkout of this task's round, retained or not."""
     from ouroboros.tool_access_paths import canonical_data_root
 
-    return canonical_data_root(ctx) / "state" / CHECKOUT_SUBDIR / checkout_token(retry_key, task_id=task_id) / "repo"
+    return unindexed(canonical_data_root(ctx) / "state" / CHECKOUT_SUBDIR / checkout_token(retry_key, task_id=task_id), "repo")
 
 
 @contextlib.contextmanager

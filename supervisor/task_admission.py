@@ -1273,6 +1273,7 @@ def enqueue_subagent_with_scheduled_result(
                     admitted.pop("_admission_blocked", None)
                     admitted.pop("_admission_never_admitted", None)
                     admitted["_admission_uncertain"] = "Subagent admission changed before its contended outcome; custody retained."
+                    ctx.persist_queue_snapshot(reason="schedule_subagent_admitted")
                     return "admitted", admitted
                 if admitted.get("_admission_blocked") == "task_id_lookup_failed":
                     return "refused", (

@@ -218,6 +218,18 @@
     gap: 10px;
 }
 
+/* Save, joined by Edit anyway while the stored values are unknown: one row that
+   wraps on a narrow card. A lone Save keeps the full width it always had. */
+.settings-extension-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.settings-extension-actions > .btn {
+    flex: 1 1 160px;
+}
+
 .settings-extension-checkbox {
     display: inline-flex;
     align-items: center;

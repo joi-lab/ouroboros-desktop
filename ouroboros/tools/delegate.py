@@ -101,7 +101,8 @@ from ouroboros.delegate_interactions import (  # noqa: F401
 # monkeypatch targets name them on THIS surface.
 from ouroboros.deadline_utils import deadline_expired
 from ouroboros.delegate_directory import (
-    blocked_geometry_refusal, git_directory_options_refusal, prepare_directory_execution, snapshot_checkout)
+    blocked_geometry_refusal, git_directory_options_refusal, in_place_refusal, in_place_start, is_in_place_run,
+    prepare_directory_execution, snapshot_checkout, started_receipt)
 from ouroboros.delegate_registration_policy import resolve_registration
 from ouroboros.subagent_worktrees import registered_checkout
 from ouroboros.delegate_shared import (  # noqa: F401
@@ -399,7 +400,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                     bucket: Optional[str] = None, skill_name: Optional[str] = None,
                     directory_strategy: Optional[str] = None, scope_paths: Optional[list] = None,
                     continue_from: Optional[str] = None, continue_carrier: Optional[str] = None,
-                    _resolved_binding: Any = None,
+                    workspace: Optional[str] = None, _resolved_binding: Any = None,
                     _canonical_work_order_fingerprint: str = "",
                     _work_order_source_request: Any = None,
                     _coordination_context: str = "",
@@ -461,7 +462,8 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
             payload_auth = None
             if refusal := _presence_delegate_read_refusal(ctx):
                 return refusal
-    if refusal := blocked_geometry_refusal(ctx, authority, selector_root, directory_strategy, scope_paths):
+    if refusal := (blocked_geometry_refusal(ctx, authority, selector_root, directory_strategy, scope_paths)
+                   or in_place_refusal(authority, selector_root, workspace, mode, directory_strategy, scope_paths)):
         return refusal
     ceiling_authority = authority
     if not recovering and mode is not None:
@@ -534,7 +536,10 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
             if preparation.access in SESSION_ACCESS_PROFILES or continuation.snapshot:
                 target_root = record_auth["target_root"]
                 authority_source = record_auth["source"]
-                if continuation.snapshot:
+                if workspace == "in_place":
+                    snapshot, snap_error, resource_ref, binding = in_place_start(continuation.snapshot, target_root)
+                    instructions += binding
+                elif continuation.snapshot:
                     snapshot, snap_error = continuation.snapshot, None
                 elif authority_source == "skill_payload":
                     snapshot, snap_error = _provision_payload_snapshot(
@@ -549,8 +554,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                 else:
                     if error := git_directory_options_refusal(checkout, directory_strategy, scope_paths):
                         return _fail("delegate_start", "directory_execution_unavailable", error, definitely_unrun=True)
-                    snapshot, snap_error = _provision_snapshot(ctx, drive, checkout, invocation_id, start=target_root,
-                                                               independent=preparation.investigation)
+                    snapshot, snap_error = _provision_snapshot(ctx, drive, checkout, invocation_id, start=target_root)
                 if snap_error:
                     _settle_refused_provision(ctx, gateway, snap_error, invocation_id, history_facts)
                     return snap_error
@@ -572,7 +576,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                 instructions += directory_copy_binding_instruction(target_root, binding_fingerprint, investigation=authority.investigation)
             project_id, owned_project_id, project_persistent, ephemeral = resolve_registration(
                 gateway, scope_root, execution_root, authority.access, minted=bool(readonly_root) or registered_checkout(scope_root))
-            if directory_options:
+            if directory_options or is_in_place_run({"resource_ref": resource_ref}):
                 project_persistent = True
             if authority.access == "full":
                 gateway.ensure_full_access(scope_root)
@@ -603,7 +607,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
             project_owned=bool(owned_project_id), project_persistent=project_persistent, route=route.route_id,
             root_task_id=str(lineage.get("root_task_id") or ""), parent_task_id=str(lineage.get("parent_task_id") or ""),
             **snapshot_facts,
-            execution_root=(root if snapshot_id or resource_ref.get("strategy") == "direct" else ""),
+            execution_root=(root if snapshot_id or resource_ref.get("strategy") in ("direct", "in_place") else ""),
             # Recovery proves the original actor and compiled brief before adoption.
             **actor_facts,
             processing=processing_info,
@@ -676,7 +680,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
         **actor_facts, **{k: v for k, v in snapshot_facts.items() if k not in plan_facts(snapshot_facts)},
         plan_facts=plan_facts(snapshot_facts), processing=processing_info, prompt_cache_ttl=ttl_info,
         capture_mode=("engine_directory" if resource_ref.get("workspace_kind") == "directory" else
-                      _CAPTURE_DELEGATED_SNAPSHOT if snapshot_id else ""),
+                      _CAPTURE_DELEGATED_SNAPSHOT if snapshot_id else resource_ref.get("strategy", "")),
         max_seconds_basis=seconds_basis, row_effort=None if recovering else actor.get("row_effort"),
     )
     from ouroboros.tools.control import maybe_emit_delegated_run_fanout
@@ -767,25 +771,15 @@ def _started_payload(handle: Dict[str, Any], run_id: str, route: Any, access: st
     if snapshot_id:
         # The C1 binding, stated where the nanny can read it: the run edits the
         # EXECUTION snapshot; the authority target receives nothing until apply.
+        payload["workspace"] = "copy"
         payload["execution_root"] = root
         payload["authority_target_root"] = target_root
         payload["baseline_id"] = baseline_sha
         if not (snapshot_facts or {}).get("reused_from_run"):  # a reused snapshot's manifest is its first run's
             payload["baseline_manifest_read"] = {"root": "artifact_store", "path": f"delegated_runs/{snapshot_id}/baseline_manifest.json"}
-    if isinstance(resource_ref, dict) and resource_ref.get("workspace_kind") == "directory":
-        direct = resource_ref.get("strategy") == "direct"
-        payload.update(authority_target_root=target_root,
-                       execution_root=target_root if direct else None,
-                       directory_strategy=resource_ref["strategy"], scope_paths=resource_ref["scopePaths"])
-        payload["note"] = (
-            ("CUSTODY IS NOT DURABLE. " if not durable else "")
-            + ("This run writes directly in the selected folder; effects are already on site, without a full rollback promise. "
-               if direct else "The engine prepares a separate copy of the selected inputs; its actual execution directory is not yet observed. ")
-            + "Use delegate_wait for its complete file manifest and result. "
-            + ("This evidence-only investigation's results are kept as evidence, never applied "
-               "(integrate_delegated_patch refuses); never let it commit." if authority.investigation
-               else "Copy results use integrate_delegated_patch for apply or reject.")
-        )
+    if isinstance(resource_ref, dict) and (resource_ref.get("workspace_kind") == "directory"
+                                           or is_in_place_run({"resource_ref": resource_ref})):
+        started_receipt(payload, resource_ref, target_root, durable=durable, investigation=authority.investigation)
     return delegate_result(payload)
 
 
@@ -1325,7 +1319,7 @@ def get_tools() -> List[ToolEntry]:
                 "may bill. Read delegate_wait's terminal cost (zero, billed, estimated or undisclosed); "
                 "time, quota and a worker slot are also spent. Root, route and access inherit your authority and cannot widen; "
                 "access only lowers native rights. A run lives in engine-scoped native state: it may not see the owner's own sessions "
-                "and is no courier to them. Read-only runs only read and answer. Mutating Git runs edit a PRIVATE SNAPSHOT, never commit. Ordinary folders use "
+                "and is no courier to them. Read-only runs only read and answer. Mutating Git runs edit a PRIVATE SNAPSHOT (or, with workspace='in_place', your own write root), never commit. Ordinary folders use "
                 "directory_strategy=direct (default) or copy with scope_paths. Direct edits are already "
                 "on site, without full rollback. Snapshot/copied results reach your tree only through "
                 "integrate_delegated_patch(run_id=..., decision='apply'|'reject'); inspect the captured "
@@ -1384,6 +1378,11 @@ def get_tools() -> List[ToolEntry]:
                     "(external|clawhub|ouroboroshub|user_repo)."},
                 "skill_name": {"type": "string", "description":
                     "With root='skill_payload': the exact skill name."},
+                "workspace": {"type": "string", "enum": ["copy", "in_place"], "description":
+                    "Git writers only. copy (default) gives the run a private copy whose diff you apply or reject. "
+                    "in_place lets it work right in your own write root when that is safe, for example while you edit "
+                    "nothing there yourself: its edits land at once, nothing is captured for apply or reject, undo is "
+                    "through git, and two in-place writers in one folder mix their edits."},
                 "directory_strategy": {"type": "string", "enum": ["direct", "copy"], "description":
                     "Ordinary folders: direct (default) edits the selected folder; copy prepares scope_paths separately "
                     "for explicit application. Choose by task/owner preference. Read-only callers omit this and "

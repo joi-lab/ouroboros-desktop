@@ -199,7 +199,7 @@ def pending(root):
     return current_rows(root, [facts for key, facts in rows.items() if key.startswith("invocation:")])
 
 
-def task_snapshot(root, task_id: str):
+def task_snapshot(root, task_id: str = "", *, root_task_id: str = "", wait_sec=store.STORE_WAIT_SEC):
     """One transaction's task runs and pending invocations; STARTED crosses no read gap.
 
     Runs use the task index. The request predicate scans only custody_open:
@@ -207,15 +207,24 @@ def task_snapshot(root, task_id: str):
     Only this task's typed pending facts are decoded; no request source is opened.
     """
     from ouroboros.delegate_pending import current_rows
+    from ouroboros.store_hot_facts import tree_requests
 
     mine = str(task_id or "")
-    with store.open_store(root, write=False) as txn:
-        raw = txn.custody_raw_rows("task_id=?", (mine,))
-        requests = [row["facts"] for row in txn.conn.execute(
-            "SELECT facts FROM obligations WHERE set_name='custody_open' "
-            "AND CAST(json_extract(facts, '$.request.task_id') AS TEXT)=? ORDER BY rowid", (mine,))]
+    with store.open_store(root, write=False, wait_sec=wait_sec) as txn:
+        if root_task_id:
+            where, params = _selected(txn, _TREE, _LEGACY_TREE, (root_task_id, root_task_id))
+            raw = txn.custody_raw_rows(where, params)
+            requests = [facts for _, _, facts in tree_requests(txn, root_task_id)]
+        else:
+            raw = txn.custody_raw_rows("task_id=?", (mine,))
+            requests = [json_loads(row["facts"]) for row in txn.conn.execute(
+                "SELECT facts FROM obligations WHERE set_name='custody_open' "
+                "AND CAST(json_extract(facts, '$.request.task_id') AS TEXT)=? ORDER BY rowid", (mine,))]
     runs_by_id = {rid: json_loads(text) for rid, text in raw.items()}
-    return {"runs": _decode_all(runs_by_id), "pending": current_rows(root, [json_loads(text) for text in requests])}
+    if root_task_id and mine:
+        runs_by_id = {rid: facts for rid, facts in runs_by_id.items() if facts.get("task_id") == mine}
+        requests = [facts for facts in requests if facts["request"].get("task_id") == mine]
+    return {"runs": _decode_all(runs_by_id), "pending": current_rows(root, requests)}
 
 
 def payload_snapshot(root):
@@ -327,7 +336,24 @@ def _reduce(txn, event: Dict[str, Any], state: Dict[str, Any], marks_by_task: Di
         _mark(mark, event)
         if set(mark) - {"task_id"}:  # a review-owned attempt marks nothing: no empty record row
             txn.put_row("custody_marks", tid, mark)
+    for target in _cost_targets(event, state, invocation_row):
+        debt = txn.get_row("delegated_runs", target) or {"task_id": target}
+        txn.put_row("delegated_runs", target, {**debt, "cost_revision": ordinal})
     return owed
+
+
+def _cost_targets(event, state, invocation_row):
+    """Custody-only changes owe own/root cost refresh, even without a money row."""
+    from ouroboros import delegate_custody as c
+
+    if event.get("type") not in (c.START_REQUESTED, c.STARTED, c.START_FAILED, c.TERMINAL_OBSERVED,
+                                 c.LEDGER_RECORDED, c.SETTLED, c.CLOSED_ABSENT):
+        return set()
+    entry = state.get(str(event.get("run_id") or ""))
+    request = (invocation_row or {}).get("request") or event
+    owner = entry.task_id if entry else str(request.get("task_id") or event.get("task_id") or "")
+    tree = (entry.root_task_id if entry else str(request.get("root_task_id") or "")) or owner
+    return {owner, tree} - {""}
 
 
 def _mark(mark: Dict[str, Any], event: Dict[str, Any]) -> None:
@@ -541,7 +567,7 @@ def fold(rows) -> Dict[str, Any]:
     pending_ids: List[str] = []
     refused: Dict[str, Dict[str, Any]] = {}
     marks_by_task: Dict[str, Dict[str, Any]] = {}
-    invocations, operations, event_ordinals = {}, {}, {}
+    invocations, operations, event_ordinals, cost_revisions = {}, {}, {}, {}
     ordinal = 0
     for row in c._unique_rows(rows):
         ordinal = max(ordinal + 1, int(row.get("custody_ordinal") or 0))
@@ -571,13 +597,22 @@ def fold(rows) -> Dict[str, Any]:
                     refused[iid] = {"request": requests[iid], "failure": row}
         if tid and (kind in MARK_TYPES or (not rid and kind in (_NUDGE, *_ATTEMPTS))):
             _mark(marks_by_task.setdefault(tid, {"task_id": tid}), row)
+        for target in _cost_targets(row, state, invocations.get(iid)):
+            cost_revisions[target] = ordinal
+    # A replay recovers only still-open monetary custody, not a notification
+    # for every closed run in history. Existing exact debts survive write_fold.
+    open_owners = {target for entry in state.values()
+                   if not entry.settled and not (entry.terminal_state in c.TERMINAL_STATES and entry.ledger_recorded)
+                   for target in (entry.task_id, entry.root_task_id or entry.task_id)}
+    open_owners.update(target for iid in pending_ids for target in
+                       (requests[iid].get("task_id"), requests[iid].get("root_task_id")))
     return {
         "runs": {rid: (vars(entry), HELD if _held(entry) else CLOSED) for rid, entry in state.items()},
         "open": {f"invocation:{iid}": {"request": requests[iid]} for iid in pending_ids},
         "refused": refused,
         "marks": {tid: mark for tid, mark in marks_by_task.items() if set(mark) - {"task_id"}},
         "invocations": invocations, "operations": operations, "event_ordinals": event_ordinals,
-        "ordinal": ordinal,
+        "ordinal": ordinal, "cost_revisions": {tid: rev for tid, rev in cost_revisions.items() if tid in open_owners},
     }
 
 
@@ -601,6 +636,9 @@ def write_fold(txn, folded: Dict[str, Any], *, replace: bool) -> None:
                 txn.put_row(name, identity, facts)
     txn.set_meta(inv.ORDINAL, max(int(txn.meta(inv.ORDINAL) or 0), folded["ordinal"]))
     txn.set_meta(inv.COMPLETE, True)
+    for tid, revision in folded.get("cost_revisions", {}).items():
+        debt = txn.get_row("delegated_runs", tid) or {"task_id": tid}
+        txn.put_row("delegated_runs", tid, {**debt, "cost_revision": max(revision, debt.get("cost_revision", 0))})
     held = txn.set_rows("custody_open")
     merged = dict(folded["open"]) if replace else {**folded["open"], **held}
     for key in set(held) - set(merged):
@@ -624,6 +662,8 @@ def rebuild(root, *, replace=False) -> int:
         write_fold(txn, folded, replace=replace)
         debts = txn.set_rows("delegated_runs")
         for tid, facts in debts.items():
+            if not facts.get("closed_runs"):
+                continue  # Cost-only debt does not re-owe historical cleanup receipts.
             receipts = {rid: run_facts for rid, (run_facts, _hold) in folded["runs"].items()
                         if run_facts.get("task_id") == tid and run_facts.get("settled")}
             if receipts:

@@ -8,6 +8,7 @@ rather than leaving a half-admitted row in the queue.
 
 from __future__ import annotations
 
+import copy
 import logging
 import uuid
 from typing import Any, Optional
@@ -505,8 +506,14 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
         # The door's other stamp (an owner message it never logged) rides the root
         # in METADATA, where run_origin reads it, the way a ref rides by value.
         task.setdefault("metadata", {})["origin_suppressed"] = True
+    elif evt.get("origin_message_absent") is True and task["objective_author"].get("kind") == "task":
+        # The producer's third fact: no owner message opened this drafted start (never a stamp).
+        task.setdefault("metadata", {})["origin_message_absent"] = True
     if task.get("objective_author"):
-        task.setdefault("metadata", {})["objective_author"] = dict(task["objective_author"])
+        # The start's sources ride METADATA, which the scheduled receipt, the queue snapshot,
+        # the running record and a control seed already persist.
+        task.setdefault("metadata", {}).update(objective_author=dict(task["objective_author"]),
+                                               owner_corpus=[dict(row) for row in task["owner_corpus"]])
     if isinstance(evt.get("predecessor_authority_source"), dict):
         task["predecessor_authority_source"] = dict(evt["predecessor_authority_source"])
     # Owner Surface Fact: the promoting turn's sending-surface fact lands in
@@ -611,6 +618,11 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
     # result therefore receives this admitted contract before worker startup.
     outcome = _pool()._promoted_scheduled_outcome(task, admitted, tid)
     outcome["_admitted_suggested_name"] = task["suggested_name"]
+    # The receipt keeps the admitted metadata, so a root interrupted before its first
+    # running write still names its author, owner corpus and origin facts.
+    admitted_metadata = (admitted if isinstance(admitted, dict) else task).get("metadata")
+    if isinstance(admitted_metadata, dict) and admitted_metadata:
+        outcome["_admitted_metadata"] = copy.deepcopy(admitted_metadata)
     if attachment_manifest:
         outcome.update(authority)
     if effective_pid:

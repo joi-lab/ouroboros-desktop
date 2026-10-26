@@ -61,14 +61,12 @@ follows. Diff size, line count and file count alone are not findings; CHECKLISTS
 
 ### Shared behavior and data-flow changes
 
-When changing shared behavior or data flow, identify the owning authority, the identity
-and scope of its facts, and the affected producers and consumers, including unchanged
-consumers whose inputs or assumptions the change alters. Preserve the promised
-semantics across live and recovery paths at comparable freshness, and make legitimate
-differences explicit. Verify with falsifiable checks at real consumer boundaries, not
-helper outputs or matching field names, choosing the paths from the change and its
-dependencies rather than a fixed inventory. Enforcement: review-only, through the
-coupling `implicit_contracts` item.
+For shared behavior/data changes, name the authority, fact identity/scope and affected
+producers/consumers, including unchanged consumers whose inputs or assumptions change.
+Preserve live/recovery semantics at comparable freshness; explain legitimate differences.
+Verify falsifiable behavior at real consumer boundaries, not helper outputs or matching
+field names; select paths from dependencies, not a fixed inventory. Enforcement:
+review-only, coupling `implicit_contracts`.
 
 ### Invariant: Projection over replay (hot readers of growing stores)
 
@@ -82,14 +80,15 @@ history grows 20→2,000 rows). Main batches question display views and warms li
 generation, keeping strict per-member gaps if a batch fails (`tests/test_main_decisions_reads.py`);
 `tests/test_cost_contract.py` fixes every boundary and recurring pass as history grows.
 
-- **Measure the growing operation:** history, object count, nesting, cold caches and
-  contention. Where responsiveness suffers, use existing spans and real-reader spies;
-  telemetry adds no steady-state writes/history reads. Remove redundant work or reuse
-  a validated view before adding a projection/cache. Unknown is never empty. This sets
-  no universal time limit, mandatory benchmark or approval gate.
-- **Passive GET:** no new steady-state durable writes. `usage_store.py::read` may
-  initialize an empty store with no pending import; otherwise display reads report
-  unavailable data and leave import to startup (`tests/test_usage_store.py`).
+- **Measure growth:** history, object count, nesting, cold caches and contention, using
+  existing spans and real-reader spies when responsiveness suffers. Telemetry adds no
+  steady-state writes/history reads. Remove repetition or reuse a validated view before
+  adding a projection/cache. Unknown is never empty; no universal time limit, benchmark or approval gate.
+- **Passive GET:** rendering/stored display adds no steady-state writes. Already-performed
+  external discovery may store typed provider facts through their existing evidence owner;
+  this permits no new network or control-state writes. `usage_store.py::read` may initialize
+  an empty store without pending import; otherwise display reports unavailable data and
+  leaves import to startup (`tests/test_usage_store.py`).
 - **Reuse precedents:** a writer seam whose transaction also writes the facts readers
   address (`dialogue_store.py::append`); current rows reduced by the writing transaction
   (`delegate_custody_current.py`); bounded filtered tail (`jsonl_tail.py`);
@@ -136,15 +135,15 @@ Enforcement: CHECKLISTS item 20 `source_completeness` (critical when applicable)
 
 #### Review presentation adapters
 
-`web/modules/review_presentation.js`, `ouroboros/review_execution_projection.py` (the
-bounded cross-domain `executions[]` wire), `web/modules/review_dom_patch.js` and
-`web/modules/harness_presentation.js` are pure read-side presentation: they never
-author, mutate or feed back canonical verdict, lifecycle, routing, attention or
-enforcement authority, never infer that a requested route executed, and omit an
-incomplete row rather than guess it. They reuse the existing chat-history, task-detail
-and physical-attempt readers and add no review ledger, endpoint, persisted UI state or
-cost copy (ARCHITECTURE §3 "Chat and Projects"). Enforcement:
-`web/tests/review_presentation.test.js`, `web/tests/harness_presentation.test.js`.
+`web/modules/review_presentation.js`, `review_opinions.js`, `review_dom_patch.js`,
+`harness_presentation.js` and `ouroboros/review_execution_projection.py` (bounded
+`executions[]`) only present producer facts: no verdict, lifecycle, routing,
+attention or enforcement changes, no requested-as-observed execution. Incomplete
+rows remain gaps. Existing chat/task/attempt readers supply the view;
+`gateway/task_reviews.py` adds passive paged history and owned saved-text exports
+through ledger/Plan/skill readers. No second ledger, persisted UI state or cost
+copy (ARCHITECTURE §3). Enforcement: `web/tests/review_presentation.test.js`,
+`web/tests/harness_presentation.test.js`, `tests/test_task_review_sources.py`.
 
 #### Context and growth matrix
 

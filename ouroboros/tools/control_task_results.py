@@ -19,6 +19,7 @@ from ouroboros.model_sleep import in_slot_wait
 from ouroboros.outcomes import normalize_outcome_axes
 from ouroboros.runtime_limits import NESTED_SETTLEMENT_MARGIN_SEC
 from ouroboros.task_results import (
+    STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_REJECTED_DUPLICATE,
     validate_task_id,
@@ -67,6 +68,9 @@ def disclosable_effort_fact(data: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _subtask_outcome_summary(data: Dict[str, Any], receipts: list | None = None) -> str:
+    from ouroboros.delegate_output import project_task_output_readers
+
+    data = project_task_output_readers(data)
     ledger = data.get("verification_ledger") if isinstance(data.get("verification_ledger"), dict) else {}
     summary: Dict[str, Any] = {
         "outcome_axes": normalize_outcome_axes(data),
@@ -231,6 +235,9 @@ def get_task_result_entry() -> ToolEntry:
             "known_result_sha256": {"type": "string", "description": "Conditional child_result_sha256 identity in every view; summary/evidence still refresh dynamic facts."},
             "view": {"type": "string", "enum": ["answer", "summary", "evidence", "full"], "description": "Optional semantic result view. Omitted/full preserves the legacy response exactly. Short views retain answer identity, terminal origin, outcome, host notice, and capability facts; summary adds current cost/custody/retry; evidence adds only authorized current-projection recipes."},
             "include_authority": {"type": "boolean", "default": False, "description": "Return the exact selected result, task contract, origin, artifact references, and current plan-review authority."},
+            "authority_fields": {"type": ["array", "null"], "items": {"type": "string"}, "description": "Explicit exact top-level keys of the same current authority projection; [] returns only its field index. Unknown names error. Selected values are whole; every omitted key has size/hash and a reread recipe. Not a full-authority source even with include_authority. Omit for legacy behavior."},
+            "source_only": {"type": "boolean", "default": False, "description": "Explicitly omit the authority body from a source read. With authority_fields (or include_authority), return selection metadata, then use source_start_char/source_end_char over that selection's exact JSON. Existing source calls without this flag keep their legacy combined response."},
+            "authority_projection_sha256": {"type": "string", "default": "", "description": "Expected current authority-projection digest from this reader's explicit fields/source-only response, NOT the continuation envelope's authority_sha256 or child_result_sha256. Drift returns authority_identity_mismatch without values/text; rereads are immutable=false."},
             "include_work_order_source": {"type": "boolean", "default": False, "description": "Return the canonical work-order source projection; provide both source_start_char and source_end_char for the exact bounded range."},
             "include_completion_source": {"type": "boolean", "default": False,
                                           "description": "Read the full stored completion observations for this task, including returns omitted from the summary. Omit bounds for source length/hash, then request explicit character ranges."},
@@ -259,6 +266,7 @@ def _get_task_result(
     presence_reentry_sha256: str = "", presence_reentry_offset: Any = None,
     view_head_chars: Any = None, view_tail_chars: Any = None, delegated_output_sha256: str = "",
     view: str = "", call_id: str = "", manifest_sha256: str = "",
+    authority_fields: Any = None, source_only: bool = False, authority_projection_sha256: str = "",
 ) -> str:
     """Read a task result, or a bounded canonical work-order/completion source range.
 
@@ -266,37 +274,13 @@ def _get_task_result(
     parameters bind; the loop's delivery honors them when it shapes the first
     view of this answer. They select nothing in the source arithmetic below.
     """
-    from ouroboros.tools.task_result_views import validate_result_view
+    from ouroboros.tools.task_result_views import validate_result_selectors
 
     try:
-        if call_id or manifest_sha256:
-            import re
-
-            if (not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", call_id)
-                    or call_id in {".", ".."} or not isinstance(manifest_sha256, str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256)):
-                raise ValueError("call_id and a lowercase 64-character manifest_sha256 are required together")
-            if (include_authority or include_work_order_source or include_completion_source or include_focus_source
-                    or focus_source_sha256 or review_source_sha256 or delegated_output_sha256
-                    or presence_reentry_sha256 or presence_reentry_offset is not None):
-                raise ValueError("call_id cannot be combined with another authority/source selector")
-        selected_view = validate_result_view(view)
+        selected_view, other_source = validate_result_selectors(locals())
     except ValueError as exc:
         return _publish_tool_result(ctx, ToolResult(
             status="error", code="TOOL_ARG_ERROR", text=f"⚠️ TOOL_ARG_ERROR (get_task_result): {exc}",
-        ))
-    source_request = bool(
-        include_authority or include_work_order_source or include_completion_source or include_focus_source
-        or focus_source_sha256 or review_source_sha256 or delegated_output_sha256
-        or presence_reentry_sha256 or presence_reentry_offset is not None
-        or call_id or manifest_sha256
-        or source_start_char is not None or source_end_char is not None
-    )
-    if selected_view not in {"", "full"} and source_request:
-        return _publish_tool_result(ctx, ToolResult(
-            status="error", code="TOOL_ARG_ERROR",
-            text=(f"⚠️ TOOL_ARG_ERROR (get_task_result): view={selected_view} is incompatible with "
-                  "authority/source selectors; use view=full or omit view"),
         ))
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     status_drive_root = Path(str(metadata.get("budget_drive_root") or getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
@@ -348,6 +332,10 @@ def _get_task_result(
     notice = promotion_intent_notice(task_id, data)
     if notice:
         return _publish_tool_result(ctx, ToolResult(status="unavailable", code="LEGACY_UNAVAILABLE", text=notice))
+    if authority_fields is not None or source_only and include_authority and not other_source:
+        from ouroboros.tools.task_result_views import authority_selection_response
+
+        return authority_selection_response(ctx, data, status_drive_root, locals())
     if call_id:
         from ouroboros.tools.task_result_views import retained_call_source
 
@@ -401,9 +389,9 @@ def _get_task_result(
     if bool(include_authority) or bool(include_work_order_source) or bool(include_completion_source) or bool(include_focus_source):
         from ouroboros.agent_startup_checks import task_result_authority_projection
 
-        authority = task_result_authority_projection(data, drive_root=status_drive_root)
+        authority = {} if source_only else task_result_authority_projection(data, drive_root=status_drive_root)
         payload: Dict[str, Any] = {
-            "status": "available", "authority": authority,
+            "status": "available", **({} if source_only else {"authority": authority}),
             "source": {"tool": "get_task_result", "task_id": str(task_id)},
         }
         if bool(include_work_order_source):
@@ -451,6 +439,8 @@ def _get_task_result(
                 status_drive_root, str(task_id), physical if isinstance(physical, dict) else {},
                 source_start_char, source_end_char, sha256=str(focus_source_sha256 or ""),
             )
+        if source_only and isinstance(payload["source"].get("arguments"), dict):
+            payload["source"]["arguments"]["source_only"] = True
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         if any(isinstance(view, dict) and view.get("reason") == "source_range_invalid"
                for view in (payload.get("work_order_source"), payload.get("completion_source"), payload.get("focus_source"))):
@@ -530,7 +520,10 @@ def _get_task_result(
             f"{result or 'No details available.'}"
         )
     if isinstance(data.get("cancel_origin"), dict):
-        output += f"\n\n[CANCELLED_BY] {json.dumps(data['cancel_origin'], ensure_ascii=False)}"
+        origin = data["cancel_origin"]
+        command = {"immediate": "stop_now", "finalize_then_cancel": "wrap_up"}.get(origin.get("stop_policy"), "unknown")
+        marker = "[CANCELLED_BY]" if status == STATUS_CANCELLED else f"[OWNER_CONTROL] command={command}"
+        output += f"\n\n{marker} {json.dumps(origin, ensure_ascii=False)}"
     if data.get("retired_tool_invocations"):
         output += ("\n\n[INTERRUPTED_TOOL_CALLS] Local execution ended; external effects remain unknown.\n"
                    + json.dumps(data["retired_tool_invocations"], ensure_ascii=False))
@@ -737,7 +730,7 @@ def _wait_for_task(
                                   margin=NESTED_SETTLEMENT_MARGIN_SEC)
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     status_drive_root = Path(str(metadata.get("budget_drive_root") or getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
-    with in_slot_wait(ctx, timeout, "tasks"):
+    with in_slot_wait(ctx, timeout, "tasks", task_ids=[tid]):
         waited = wait_for_effective_tasks(
             status_drive_root, [tid], timeout_sec=timeout,
             terminal_probe=_terminal_probe(ctx, [tid]),
@@ -940,7 +933,7 @@ def _await_messages(ctx: ToolContext, timeout_sec: int = 0, mode: str = "in_slot
     close of that lease is the progress stamp the next model round starts from —
     a full idle window even after a wait that spent the whole ceiling, so the
     supervisor tick between the finished wait and the next model call never
-    reaps the turn the wait was for. Its separate in_slot_wait mark identifies
+    dates the turn the wait was for as silent. Its separate in_slot_wait mark identifies
     the wait for reply-preparation readers, adds no idle exemption and lends no
     slot; tests/test_await_messages.py drives that lifecycle.
     """
@@ -1026,13 +1019,14 @@ def await_messages_entry() -> ToolEntry:
             "it arrives; you decide when waiting is worth it. The wait holds your worker slot "
             "and releases nothing; the window is clamped to the per-call timeout ceiling and, "
             "under a deadline, to the finalization emit window (the result names the bound); "
-            "while it runs, the ordinary in-flight tool lease keeps the supervisor's idle rail "
-            "off you and its completion counts as progress, so your next round starts inside a "
-            "full idle window — call again to keep waiting. It delivers nothing itself: the message "
+            "while it runs, the ordinary in-flight tool lease keeps the supervisor's silence attention "
+            "(a notice, never a stop) off you and its completion counts as progress, so your next round "
+            "starts inside a full silence window — call again to keep waiting. It delivers nothing itself: the message "
             "reaches you at the next round top, exactly as after a wait_task early return. The "
             "result says when the applied prompt-cache horizon elapsed since the last model response. "
             "mode=warm or mode=cold instead SLEEPS without holding your model slot, until what you select: "
-            "mail from `senders`, the terminal of `tasks` you can read, the terminal of delegated `runs` you "
+            "mail from `senders`, the terminal of `tasks` you can read or the host's silence notice about one of "
+            "them or its subtree, the terminal of delegated `runs` you "
             "own, the exit of your own `services` (warm only: the start each has now; a replaced, stopped "
             "or lost one wakes you as unknown, never as success), and/or `wake_at`/`wake_after_sec`; with "
             "nothing selected any addressed mail wakes you. The "
@@ -1054,7 +1048,8 @@ def await_messages_entry() -> ToolEntry:
             "senders": {"type": "array", "items": {"type": "string"},
                         "description": "Requires mode=warm or cold. Sleep: task ids whose ordinary mail wakes you; owner input and descendant escalations bypass this filter."},
             "tasks": {"type": "array", "items": {"type": "string"},
-                      "description": "Requires mode=warm or cold. Sleep: task ids whose terminal (any settled status) wakes you."},
+                      "description": "Requires mode=warm or cold. Sleep: task ids whose terminal (any settled status), "
+                                     "or a host silence notice about them or a descendant, wakes you."},
             "runs": {"type": "array", "items": {"type": "string"},
                      "description": "Requires mode=warm or cold. Sleep: your delegated run ids whose terminal wakes you."},
             "services": {"type": "array", "items": {"type": "string"},
@@ -1352,7 +1347,7 @@ def _wait_for_tasks(
     # wait and gets the rest of the requested window.
     _phantom_only = bool(entry_unknown_ids) and len(entry_unknown_ids) == len(normalized_ids)
     first_window = min(float(timeout), _UNMINTED_WAIT_GRACE_SEC) if _phantom_only else float(timeout)
-    with in_slot_wait(ctx, first_window, "tasks"):
+    with in_slot_wait(ctx, first_window, "tasks", task_ids=normalized_ids):
         waited = wait_for_effective_tasks(
             status_drive_root, normalized_ids, timeout_sec=first_window, mode=normalized_mode,
             terminal_probe=_terminal_probe(ctx, normalized_ids),
@@ -1362,7 +1357,7 @@ def _wait_for_tasks(
         entry_unknown_ids = _unminted_wait_ids(ctx, status_drive_root, normalized_ids)
         if len(entry_unknown_ids) < len(normalized_ids):
             elapsed = float(waited.get("elapsed_sec") or 0.0)
-            with in_slot_wait(ctx, max(0.0, float(timeout) - elapsed), "tasks"):
+            with in_slot_wait(ctx, max(0.0, float(timeout) - elapsed), "tasks", task_ids=normalized_ids):
                 resumed = wait_for_effective_tasks(
                     status_drive_root, normalized_ids,
                     terminal_probe=_terminal_probe(ctx, normalized_ids),

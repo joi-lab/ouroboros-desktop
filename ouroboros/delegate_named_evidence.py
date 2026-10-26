@@ -17,6 +17,7 @@ import uuid
 
 from ouroboros import delegate_custody as custody
 from ouroboros.delegate_capture_attempt import POLICY, failure_retry
+from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME
 from ouroboros.utils import atomic_write_json
 
 
@@ -39,6 +40,88 @@ def private_directory(path, anchor):
             pass
         if linked(directory) or not directory.is_dir():
             raise OSError(f"evidence parent is not a private directory: {directory}")
+
+
+def _raise(error):
+    raise error  # a skipped subtree is not a complete inventory
+
+
+def retain_files(area, paths, files_dir, *, preserve_mode=True):
+    """Copy regular files byte-exact and whole into the evidence store."""
+    from ouroboros.review_checking import _open_regular, _sha
+
+    kept = []
+    for relative in paths:
+        source = area / relative
+        if source.is_symlink() or not source.is_file():
+            continue
+        size = source.stat().st_size
+        target = files_dir / relative
+        private_directory(target.parent, files_dir.parent)
+        # Fresh regular files: ordinary delegates keep writable copies; reviewers preserve modes.
+        with _open_regular(source) as src, target.open("xb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        mode = stat.S_IMODE(source.stat().st_mode)
+        if preserve_mode:
+            target.chmod(mode)
+        kept.append({"path": relative, "size": size, "sha256": _sha(target), "mode": mode})
+    return kept
+
+
+def named_evidence_witness(area):
+    """Stat identity of the copy's evidence folder (paths, types, sizes, times); "" when it cannot be
+    listed. A retained summary is reused only while it is unchanged. Not a byte proof: it assumes the
+    run's processes stopped writing, so a same-size rewrite within one timestamp tick, or a write
+    after the final check, goes unseen."""
+    rows = []
+    try:
+        declared = area / EVIDENCE_DIRNAME
+        seen = declared.lstat()
+        rows.append(f"{EVIDENCE_DIRNAME}\0{seen.st_mode}\0{seen.st_size}\0{seen.st_mtime_ns}\0{seen.st_ctime_ns}")
+        if declared.is_symlink() or not declared.is_dir():
+            return hashlib.sha256(rows[0].encode()).hexdigest()  # never walk a linked root
+        for current, dirs, files in os.walk(declared, onerror=_raise, followlinks=False):
+            for name in sorted(dirs + files):
+                seen = (pathlib.Path(current) / name).lstat()
+                rows.append(f"{(pathlib.Path(current) / name).relative_to(area).as_posix()}\0{seen.st_mode}\0"
+                            f"{seen.st_size}\0{seen.st_mtime_ns}\0{seen.st_ctime_ns}")
+    except OSError:
+        return ""
+    return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def retain_named_evidence(area, files_dir, gaps, *, product_paths=(), preserve_mode=True):
+    """Retain a copy's ``.review-evidence/`` whole, independently of product-patch filters.
+
+    Links are not dereferenced: a linked output is a named gap, never a receipt claiming
+    its target's bytes were retained. So is an entry that is neither a file nor a folder;
+    a folder that cannot be listed raises. Baseline-owned ``product_paths`` belong to
+    capture, including symlinks; never retain them here.
+    """
+    declared = area / EVIDENCE_DIRNAME
+    if EVIDENCE_DIRNAME in product_paths and (declared.is_symlink() or not declared.is_dir()):
+        return []
+    if declared.is_symlink():
+        gaps.append({"path": EVIDENCE_DIRNAME, "reason": "evidence_symlink"})
+        return []
+    if declared.exists() and not declared.is_dir():
+        gaps.append({"path": EVIDENCE_DIRNAME, "reason": "evidence_root_not_directory"})
+        return []
+    paths = []
+    if declared.is_dir():
+        for current, dirs, files in os.walk(declared, onerror=_raise, followlinks=False):
+            for name in sorted(dirs + files):
+                path = pathlib.Path(current) / name
+                relative = path.relative_to(area).as_posix()
+                if relative in product_paths:
+                    continue
+                if path.is_symlink():
+                    gaps.append({"path": relative, "reason": "evidence_symlink"})
+                elif path.is_file():
+                    paths.append(relative)
+                elif name in files:
+                    gaps.append({"path": relative, "reason": "unsupported_entry_type"})
+    return retain_files(area, sorted(paths), files_dir, preserve_mode=preserve_mode)
 
 
 def saved_named_evidence(root, entry, *, observe=True):
@@ -115,15 +198,13 @@ def retain_named(root, entry, *, whole=False, recapture=False, reread=False, pub
     No BodyRuntime tick calls the witness walker. A new terminal observation, explicit
     recapture, or this foreground retention boundary is what observes changed sources.
     """
-    from ouroboros.review_checking import EVIDENCE_RETAIN_BYTES, named_evidence_witness, retain_named_evidence
-
     root = pathlib.Path(root).resolve()
     home = custody.delegated_capture_dir(root, entry.task_id, custody.capture_key(entry))
     previous, known = saved_named_evidence(root, entry, observe=publish)
     area = pathlib.Path(str(entry.execution_root or ""))
     if reread or not entry.execution_root or not area.is_dir():
         return known or {"status": "copy_missing", "files": [], "gaps": []}
-    source = {"policy": POLICY, "limit_bytes": None if whole else EVIDENCE_RETAIN_BYTES,
+    source = {"policy": POLICY, "limit_bytes": None,
               "whole": whole, "baseline_sha": entry.baseline_sha,
               "terminal_sha": entry.terminal_source.get("sha256"), "invocation_id": entry.invocation_id,
               "snapshot_id": entry.snapshot_id, "capture_id": entry.capture_id,
@@ -150,9 +231,10 @@ def retain_named(root, entry, *, whole=False, recapture=False, reread=False, pub
     try:
         if error is not None:
             raise error
-        files = retain_named_evidence(area, staging / "files",
-            [float("inf") if whole else EVIDENCE_RETAIN_BYTES], gaps, product_paths=products, preserve_mode=False)
-        summary = {"status": "partial" if gaps else "retained", "files": files, "gaps": gaps}
+        files = retain_named_evidence(area, staging / "files", gaps, product_paths=products, preserve_mode=False)
+        # Links and special entries are recorded, never followed: nothing more can be
+        # retained, so they do not hold the copy.
+        summary = {"status": "retained", "files": files, "gaps": gaps}
     except Exception as exc:
         # A raised copier has no complete inventory. Keep the source, not unlisted
         # partial copies in every immutable retry generation.

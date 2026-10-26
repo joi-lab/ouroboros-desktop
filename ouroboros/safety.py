@@ -10,7 +10,6 @@ actual execution remain independent of the Cyber advisory decision.
 import ast
 import json
 import logging
-import math
 import pathlib
 import hashlib
 import threading
@@ -24,7 +23,7 @@ from ouroboros.config import get_safety_model, get_runtime_mode, get_safety_call
 from ouroboros.runtime_mode_policy import mode_has_unrestricted_agency
 from ouroboros.llm import LLMClient
 from ouroboros.loop_llm_call import classify_llm_exception, is_rate_limit_text
-from ouroboros.pricing import emit_llm_usage_event, estimate_cost_optional, infer_provider_from_model
+from ouroboros.pricing import emit_llm_usage_event, normalize_usage_cost, infer_provider_from_model
 from ouroboros.utils import sanitize_tool_result_for_log
 from ouroboros.config import runtime_setting
 
@@ -1069,41 +1068,10 @@ def _run_llm_check(
     def _emit_safety_usage(usage_payload: Optional[Dict[str, Any]]) -> None:
         if not usage_payload:
             return
-        # Use provider-canonical model identity for cost/events.
-        resolved_model = str(usage_payload.get("resolved_model") or light_model)
-        if _use_local_light:
-            provider = "local"
-            model_name = f"{light_model} (local)"
-        else:
-            provider = str(usage_payload.get("provider") or infer_provider_from_model(light_model))
-            model_name = resolved_model
-        raw_cost = usage_payload.get("cost")
-        cost = None
-        if raw_cost is not None and not isinstance(raw_cost, bool):
-            try:
-                cost = float(raw_cost)
-            except (TypeError, ValueError):
-                cost = None
-            if cost is not None and not (math.isfinite(cost) and cost >= 0):
-                cost = None
-        if raw_cost is not None and cost is None:
-            log.warning("safety usage carried an invalid reported cost (%s); treating as unknown",
-                        type(raw_cost).__name__)
-            usage_payload["cost"] = None
-        if _use_local_light:
-            cost = 0.0
-        elif cost is None:
-            cost = estimate_cost_optional(
-                resolved_model,
-                int(usage_payload.get("prompt_tokens") or 0),
-                int(usage_payload.get("completion_tokens") or 0),
-                cache_usage={
-                    "cached_tokens": int(usage_payload.get("cached_tokens") or 0),
-                    "cache_write_tokens": int(usage_payload.get("cache_write_tokens") or 0),
-                },
-                provider=provider,
-            )
-            usage_payload["cost"] = cost
+        cost, model_name, provider, _estimated = normalize_usage_cost(
+            usage_payload, model=light_model, use_local=_use_local_light,
+            provider=infer_provider_from_model(light_model),
+        )
         _eq = getattr(ctx, "event_queue", None) if ctx is not None else None
         if _eq is not None:
             emit_llm_usage_event(

@@ -136,11 +136,11 @@ def _compute_subagent_handoff(tools: Any, drive_root: Any, task_id: str, content
         # Exact-hash dispositions suppress the unchanged result only: if
         # status, result, trace, or artifact identity changes, the disposition
         # goes stale and this reminder re-opens without parsing prose.
+        from ouroboros.loop_forced_finalization import HANDLED_CHILD_DISPOSITIONS
+
         children = [
             child for child in children
-            if _loop()._child_disposition_state(child) not in {
-                "integrated", "irrelevant", "deferred", "discarded", "cancelled",
-            }
+            if _loop()._child_disposition_state(child) not in HANDLED_CHILD_DISPOSITIONS
         ]
         from ouroboros.tools.join_ledger import _child_result_sha256
 
@@ -264,6 +264,9 @@ def delivery_evidence_fingerprint(
     root_task_id = str(root_task_id or metadata.get("root_task_id") or task_id)
     status_root = status_root or metadata.get("budget_drive_root") or getattr(tool_ctx, "budget_drive_root", None) or getattr(tool_ctx, "drive_root", None)
     children = _loop()._load_direct_child_results(pathlib.Path(status_root), task_id, root_task_id) if status_root and task_id else []
+    # Unclaimed host attention (#1376) is no evidence of the answer: a diagnostic that
+    # answers or is withdrawn re-arms nothing. Reading past a settled cancellation, only
+    # the author's current exact-hash claim keeps a diagnostic here.
     children = [
         {
             "task_id": str(child.get("task_id") or child.get("id") or ""),
@@ -272,6 +275,7 @@ def delivery_evidence_fingerprint(
             "disposition": _loop()._child_disposition_state(child),
         }
         for child in children
+        if _loop()._child_disposition_state({**child, "parent_decision": ""}) != "host_attention"
     ]
     receipt_root = getattr(tool_ctx, "drive_root", None) or status_root
     evidence = {

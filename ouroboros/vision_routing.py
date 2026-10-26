@@ -3,11 +3,10 @@
 A model name is not evidence. Whether a route accepts image input is a fact about
 the exact resolved route (provider, endpoint, API surface, routing options and the
 available account identity), recorded only from a catalog Ouroboros already reads
-(OpenRouter ``/models``; an OpenAI-compatible gateway's ``/models`` read by the
-task-start window probe) and valid for 24 hours from that catalog's response. No
-record means unknown, and unknown never withholds the owner's image: the route
-receives the pixels and answers for itself. A Claudexor route answers from its
-account's catalog (``provider_models.supports_vision``).
+(OpenRouter and compatible task-start ``/models``; saved picker discovery for
+compatible, Anthropic and DeepSeek) and valid for 24 hours from that response. No
+record means unknown: send pixels. Claudexor reads its account's catalog
+(``provider_models.supports_vision``); API producers/readers omit account identity.
 
 ``prepare_messages_for_send`` decides what each send carries; transport builders
 encode it (a lane that cannot carry bytes marks them as its own limit). For a Main
@@ -124,7 +123,7 @@ def image_input_from_row(row: Any) -> Optional[bool]:
     """Image input stated by one catalog row: True/False, or None when the row is unclear.
 
     Only a documented, unambiguous field counts: a complete input-modality list
-    (``architecture.input_modalities``), a strict JSON bool in ``supports_vision``
+    (``input_modalities`` or ``architecture.input_modalities``), a strict JSON bool in ``supports_vision``
     or ``capabilities.supports_vision``, or Anthropic's
     ``capabilities.image_input.supported``. A missing, null or empty field says
     nothing; any other shape, or fields that disagree, make the whole row unknown,
@@ -137,6 +136,7 @@ def image_input_from_row(row: Any) -> Optional[bool]:
         return None
     architecture, capabilities = architecture or {}, capabilities or {}
     found = [
+        _modalities(row.get("input_modalities")),
         _modalities(architecture.get("input_modalities")),
         _strict_flag(row.get("supports_vision")),
         _strict_flag(capabilities.get("supports_vision")),

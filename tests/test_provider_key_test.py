@@ -289,7 +289,8 @@ def test_compatible_discovery_and_probe_share_the_legacy_pair_never_a_mixed_one(
     }
     calls = []
 
-    async def fake_catalog(_client, _provider_id, _label, api_key, base_url):
+    async def fake_catalog(_client, _provider_id, _label, api_key, base_url, *, record_image_input=False):
+        assert record_image_input is False
         calls.append(("catalog", api_key, base_url))
         return [{"value": "openai-compatible::catalog-model"}]
 

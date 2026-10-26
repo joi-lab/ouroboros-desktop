@@ -128,9 +128,10 @@ def get_max_workers() -> int:
 
 
 def get_task_idle_timeout_sec() -> int:
-    """Idle window before a task is eligible for an activity-based stop: it has made
-    no REAL progress (its own last_progress_at) AND has no progressing subtree for
-    this long. The periodic 30s process heartbeat is liveness, NOT progress."""
+    """Silence window: a managed task with no REAL progress (its own last_progress_at)
+    AND no progressing subtree for this long gets dated attention, never a stop (#1376).
+    It also bounds a direct-chat turn's outage and accounting waits. The periodic 30s
+    process heartbeat is liveness, NOT progress."""
     return _clamped_number_setting("OUROBOROS_TASK_IDLE_TIMEOUT_SEC", low=60, cast=int)
 
 

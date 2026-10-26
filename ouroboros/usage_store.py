@@ -658,7 +658,12 @@ def _commit(conn: sqlite3.Connection) -> None:
         raise UsageAccountingError(f"usage store commit failed: {exc}") from exc
 
 
-def store_tier(root: pathlib.Path, *, wait_sec: float, migrate: bool = True) -> str:
+def _remaining_wait(seconds, remaining_sec):
+    """A caller-owned deadline narrows admission; ordinary waits keep their contract."""
+    return min(seconds, remaining_sec()) if remaining_sec is not None else seconds
+
+
+def store_tier(root: pathlib.Path, *, wait_sec: float, migrate: bool = True, remaining_sec=None) -> str:
     """The lock tier of the ready store. A missing store is migrated first
     (``migrate_from_journal``; ``migrate=False`` reports it unavailable
     instead). A caller that finds the import already running waits only its own
@@ -673,7 +678,7 @@ def store_tier(root: pathlib.Path, *, wait_sec: float, migrate: bool = True) -> 
     if cached is not None:
         forget(root)
     lock = _process_lock(path)
-    if not lock.acquire(timeout=max(0.0, wait_sec)):
+    if not lock.acquire(timeout=max(0.0, _remaining_wait(wait_sec, remaining_sec))):
         error = UsageLockUnavailable("usage store migration in progress", reason="contention")
         error.rollback_confirmed = True  # this caller acquired neither lock nor transaction
         raise error
@@ -683,7 +688,7 @@ def store_tier(root: pathlib.Path, *, wait_sec: float, migrate: bool = True) -> 
                 raise UsageLockUnavailable("usage store not migrated yet", reason="contention")
             migrate_from_journal(root)
         identity, tier = _identity(path), _header_tier(path)
-        if identity is None or tier is None or (_stored_meta(path, tier, wait_sec).get("import") or {}).get("status") != "completed":
+        if identity is None or tier is None or (_stored_meta(path, tier, wait_sec, remaining_sec=remaining_sec).get("import") or {}).get("status") != "completed":
             raise UsageLedgerCorrupt(f"usage store unreadable or without a completed import: {path}")
         _READY[str(path)] = (identity, tier)
         return tier
@@ -691,15 +696,18 @@ def store_tier(root: pathlib.Path, *, wait_sec: float, migrate: bool = True) -> 
         lock.release()
 
 
-def _stored_meta(path: pathlib.Path, tier: str, wait_sec: float) -> Dict[str, Any]:
+def _stored_meta(path: pathlib.Path, tier: str, wait_sec: float, *, remaining_sec=None) -> Dict[str, Any]:
     """``meta.import`` and ``meta.export`` of a store file (``{}`` for one that cannot be read)."""
     with contextlib.ExitStack() as stack:
         if tier == TIER_NAME:
-            stack.enter_context(_named_lock(path.parent.parent, LOCK_REL.name, timeout_sec=wait_sec, stale_sec=90.0))
+            stack.enter_context(_named_lock(path.parent.parent, LOCK_REL.name,
+                                            timeout_sec=_remaining_wait(wait_sec, remaining_sec), stale_sec=90.0))
         if path.name == STORE_REL.name:
-            conn = stack.enter_context(_core.connection(path, tier, wait_sec=wait_sec, opener=_connect))
+            conn = stack.enter_context(_core.connection(path, tier, wait_sec=_remaining_wait(wait_sec, remaining_sec), opener=_connect))
         else:  # retired copies must be closed before abandonment can rename them back
-            conn = stack.enter_context(contextlib.closing(_connect(path, tier, wait_sec=wait_sec)))
+            conn = stack.enter_context(contextlib.closing(_connect(path, tier, wait_sec=_remaining_wait(wait_sec, remaining_sec))))
+        if remaining_sec is not None:
+            conn.execute(f"PRAGMA busy_timeout = {int(_remaining_wait(wait_sec, remaining_sec) * 1000)}")
         try:
             records = conn.execute("SELECT key, value FROM meta WHERE key IN ('import', 'export')").fetchall()
         except sqlite3.OperationalError as exc:
@@ -722,18 +730,24 @@ def _sha256_file(path: pathlib.Path) -> Optional[str]:
 
 @contextlib.contextmanager
 def hold(root: pathlib.Path | str, *, timeout_sec: float = USAGE_LOCK_TIMEOUT_SEC,
-         write: bool = True, migrate: bool = True, exporting: bool = False) -> Iterator[Txn]:
+         write: bool = True, migrate: bool = True, exporting: bool = False, remaining_sec=None) -> Iterator[Txn]:
     """Bounded money acquisition (``_usage_wait``); timeout raises UsageLockUnavailable.
     Writes use BEGIN IMMEDIATE and wait for readers at COMMIT. An export mark
     refuses writes with UsageExportInProgress; only export/abandonment use exporting=True.
     Receipt callbacks run after the transaction and name lock have closed.
+    ``remaining_sec`` optionally narrows each acquisition to a caller's one deadline
+    (query_data SQL); it never enlarges a wait or changes other callers' defaults.
     """
     root = pathlib.Path(root)
-    tier = store_tier(root, wait_sec=timeout_sec, migrate=migrate)
+    tier = store_tier(root, wait_sec=timeout_sec, migrate=migrate, remaining_sec=remaining_sec)
     with contextlib.ExitStack() as stack:
         if tier == TIER_NAME:
-            stack.enter_context(_named_lock(root, LOCK_REL.name, timeout_sec=timeout_sec, stale_sec=90.0))
-        conn = stack.enter_context(_core.connection(root / STORE_REL, tier, wait_sec=timeout_sec, opener=_connect))
+            stack.enter_context(_named_lock(root, LOCK_REL.name,
+                                            timeout_sec=_remaining_wait(timeout_sec, remaining_sec), stale_sec=90.0))
+        conn = stack.enter_context(_core.connection(root / STORE_REL, tier,
+                                                    wait_sec=_remaining_wait(timeout_sec, remaining_sec), opener=_connect))
+        if remaining_sec is not None:
+            conn.execute(f"PRAGMA busy_timeout = {int(_remaining_wait(timeout_sec, remaining_sec) * 1000)}")
         txn = Txn(conn, root, write=write)
         handoff = False
         try:  # the enforced tier's COMMIT waits for readers to drain

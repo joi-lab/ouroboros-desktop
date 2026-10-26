@@ -83,6 +83,7 @@ PATCH_DISPOSED = "delegate_run_patch_disposed"
 # row took over (``_supersede``); its work rides the successor's cumulative capture.
 SUPERSEDED = "superseded"
 EVIDENCE_RETAINED = "evidence_retained"  # investigation capture; never applied
+NO_CHANGES = "no_changes"  # an empty writer result, closed on capture; nothing to apply
 # CR1-3 (owed-before-sent, one row earlier than the disposition): APPLY-INTENT lands
 # BEFORE the target tree is mutated; RESOLVED lands only when the attempt is KNOWN to
 # have left the tree unmutated. An intent with neither resolution nor disposition
@@ -239,6 +240,7 @@ class RunCustody:
     cost_usd: Optional[float] = None
     spend_disclosed: bool = False
     spend_estimated: bool = False
+    cost_partial: bool = False
     engine_model: str = ""
     access_profile: str = ""
     containment_fault: Dict[str, Any] = field(default_factory=dict)
@@ -688,6 +690,7 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         custody.access_profile = str(row.get("access_profile") or "")[:32] or custody.access_profile
         custody.spend_disclosed = bool(row.get("spend_disclosed")) and row.get("cost_usd") is not None
         custody.spend_estimated = bool(row.get("spend_estimated"))
+        custody.cost_partial = bool(row.get("cost_partial"))
         try:
             custody.cost_usd = float(row["cost_usd"]) if custody.spend_disclosed else None
         except (TypeError, ValueError):
@@ -798,12 +801,15 @@ def disposition_lock_path(drive_root: Any, custody: RunCustody) -> pathlib.Path:
 
 
 def record_patch_captured(drive_root: Any, custody: RunCustody, **payload: Any) -> bool:
-    """Durably mark a terminal mutating run's patch as captured (idempotent flag)."""
-    custody.patch_captured = True
-    return emit(drive_root, PATCH_CAPTURED, {
+    """Durably mark a terminal mutating run's patch as captured (idempotent flag).
+    The in-memory flag follows the durable row: a copy is released only after it."""
+    recorded = emit(drive_root, PATCH_CAPTURED, {
         "run_id": custody.run_id, "task_id": custody.task_id,
         "snapshot_id": custody.snapshot_id, **payload,
     })
+    if recorded:
+        custody.patch_captured = True
+    return recorded
 
 
 def record_patch_disposed(drive_root: Any, custody: RunCustody, *, disposition: str,

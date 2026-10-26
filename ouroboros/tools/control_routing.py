@@ -71,8 +71,23 @@ def _attach_origin_from_metadata(ctx: ToolContext, evt: Dict[str, Any]) -> None:
 
 
 def _attach_drafted_objective(ctx: ToolContext, evt: Dict[str, Any]) -> None:
-    """Keep the routed objective's author separate from the ingress owner corpus."""
+    """Keep the routed objective's author separate from the ingress owner corpus.
+
+    A routing run with neither owner-door stamp opens the new root with this drafted
+    objective and no owner message. Only this producer knows that, so it records
+    ``origin_message_absent``: a later reader cannot tell an absent stamp from a lost
+    one, and a suppressed stamp is owner input that the door did not log.
+
+    The corpus is persisted with the start (its receipt, the queue snapshot, the running
+    record), so each row is the retained owner corpus's text (``_owner_content_projection``):
+    the owner's words verbatim and an image as its reference beside the path of its
+    retained original, never its base64.
+    """
+    from ouroboros.review_evidence_sections import _owner_content_projection
+
     evt["objective_author"] = {"kind": "task", "task_id": str(getattr(ctx, "task_id", "") or "")}
+    if not (evt.get("source_ref") or evt.get("origin_suppressed")):
+        evt["origin_message_absent"] = True
     owner_rows = [dict(row) for row in (getattr(ctx, "_owner_directives", None) or [])
                   if isinstance(row, dict) and row.get("source") in {
                       "owner_mailbox", "owner_quiz_answer", "origin_message", "owner_corpus", "direct_incoming"}]
@@ -85,7 +100,8 @@ def _attach_drafted_objective(ctx: ToolContext, evt: Dict[str, Any]) -> None:
         # (``initial_text``) is never laundered into owner authority.
         owner_rows[:0] = [dict(row) for row in (getattr(ctx, "_owner_directives", None) or [])
                           if isinstance(row, dict) and row.get("source") == "initial_user"]
-    evt["owner_corpus"] = owner_rows
+    rows = [{**row, "content": _owner_content_projection(row.get("content"))} for row in owner_rows]
+    evt["owner_corpus"] = [row for row in rows if row["content"].strip()]
 
 
 def _inherited_project_scope(ctx: ToolContext) -> str:

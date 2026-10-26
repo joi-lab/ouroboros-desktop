@@ -5,13 +5,14 @@ while an unconsumed grant returns the same id to its exact pause instead of a re
 
 Supported producers: API ingress, saved work, stop/boot, owner Pause through the agent handler,
 owner Resume grant, ``assign_tasks`` (with ``_tick_parked_work``), the real ``run_llm_loop`` and
-``resume_paused_loop`` hold, the real ``enforce_task_timeouts`` idle rail (finalization grace, then
-the reap decision), the real ``reap_timed_out_task`` (kill confirmation, ``_enqueue_retry``), and the
-real assignment of its successor. Doubled: OS processes (a kill marks the double dead), model calls.
+``resume_paused_loop`` hold, the real ``reap_timed_out_task`` (kill confirmation,
+``_enqueue_retry``), and assignment of its successor. The retired idle-reap decision is
+synthetic (``_silence_reaper_support``); silence no longer produces it. Doubled: OS processes
+(a kill marks the double dead), model calls.
 
 Concurrency is modelled single-threaded and deterministically: the worker's first handover write
-fails (a real hold), and while it holds the supervisor's ticks run the idle rail to its reap
-decision. ``consumed`` = the hold then clears before the reaper kills (consumption after capture);
+fails (a real hold), and while it holds the legacy fixture captures the reap job.
+``consumed`` = the hold then clears before the reaper kills (consumption after capture);
 ``killed`` = the reaper kills first and the worker never reaches its next write.
 Run with ``-p tests.conftest`` from the repository root (like the 6cde probe).
 """
@@ -26,6 +27,7 @@ from ouroboros import budget_pause, working_checkpoint as wc
 from ouroboros.model_wait import execution_elapsed_seconds
 from supervisor import queue, workers
 from supervisor.events_budget import budget_hold_fact
+from tests._silence_reaper_support import _tick_until_reap_decision
 from tests.test_execution_clock_resume_handover import (  # noqa: F401
     WORK_1, WORK_2, WORK_RESUMED, ProcessLost, _fresh_plan, _granted_after_capacity, _loop_once,
     _supervisor_events, _working_then_paused, clock,
@@ -35,19 +37,6 @@ from tests.test_resume_handover import _DeadProcess
 from tests.test_swarm_host_admission import host  # noqa: F401
 
 pytestmark = pytest.mark.serial
-def _tick_until_reap_decision(clock, jobs):  # noqa: F811
-    """The supervisor's own order (server.py): enforce_task_timeouts, then assign_tasks."""
-    idle = max(float(queue.get_task_idle_timeout_sec()), float(queue.get_per_call_timeout_ceiling_sec()) + 120.0)
-    clock[0] += idle + 1
-    queue.enforce_task_timeouts()
-    meta = workers.RUNNING["held"]
-    assert meta.get("finalization_requested_at"), "the idle rail opens its finalization grace first"
-    workers.assign_tasks()  # _tick_parked_work: nothing consumed yet, nothing to fold
-    clock[0] += float(queue.FINALIZATION_GRACE_SEC) + 1
-    queue.enforce_task_timeouts()
-    assert "held" not in workers.RUNNING, "the reap decision withdrew RUNNING"
-    job = jobs.get_nowait()
-    return job, idle
 
 
 @pytest.mark.parametrize("budget", [3600, None], ids=["execution-budget", "no-budget"])

@@ -2,6 +2,32 @@
   "purpose": "One status-word family across the browser and the host. Every case is a terminal-or-not task record read by log_events.js (taskDoneIsTerminal + taskTerminalPhase + taskPresentation) and by ouroboros.project_dialogue (outcome_phase + OUTCOME_PHASE_HEADLINE + _completion_verdict). Every typed cause with an owner sentence carries a case here, so the two TASK_CAUSE_PHRASES twins cannot drift apart unnoticed. A new axis, reason or acceptance status is added to both sides in the same commit, with a row here.",
   "cases": [
     {
+      "name": "saved candidate remainder keeps Done and a terminated cause",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "mutation_attribution": {"uncommitted_remainder": {"state": "known", "count": 2, "paths_omitted": 2}}}}},
+      "phase": "done", "headline": "Done",
+      "acceptance_clause": "2 uncommitted files remain in the saved candidate.",
+      "exact_clause": true
+    },
+    {
+      "name": "single saved file follows author stop rationale",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "task_completion": {"action": "stop", "rationale": "The requested change is saved."}, "mutation_attribution": {"uncommitted_remainder": {"state": "known", "count": 1, "paths_omitted": 1}}}}},
+      "phase": "done", "headline": "Done",
+      "acceptance_clause": "Ouroboros stopped with unfinished work; no review approval was granted · The requested change is saved · 1 uncommitted file remains in the saved candidate.",
+      "exact_clause": true
+    },
+    {
+      "name": "failed remainder scan stays unknown beside Done",
+      "record": {"status": "completed", "outcome_axes": {"execution": {"status": "ok", "mutation_attribution": {"uncommitted_remainder": {"state": "unknown", "count": null}}}}},
+      "phase": "done", "headline": "Done",
+      "acceptance_clause": "Uncommitted files in the saved candidate could not be checked.",
+      "exact_clause": true
+    },
+    {
+      "name": "zero remainder adds no cause",
+      "record": {"status": "completed", "outcome_axes": {"execution": {"status": "ok", "mutation_attribution": {"uncommitted_remainder": {"state": "known", "count": 0, "paths_omitted": 0}}}}},
+      "phase": "done", "headline": "Done", "acceptance_clause": "", "exact_clause": true
+    },
+    {
       "name": "empty length recovery ends incomplete with saved work",
       "record": {"status": "failed", "reason_code": "output_recovery_exhausted", "outcome_axes": {"execution": {"status": "infra_failed"}, "objective": {"status": "not_evaluated"}}},
       "phase": "error", "headline": "Failed",
@@ -894,6 +920,104 @@
     },
     {"name": "generic unfinished stop states its own rationale without an acceptance decision", "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "task_completion": {"action": "stop", "rationale": "The **export** still fails on empty input."}}, "objective": {"status": "fail", "source": "task_completion", "reason": "author_stop"}, "review": {"status": "skipped"}}}, "phase": "error", "headline": "Failed", "acceptance_clause": "Ouroboros stopped with unfinished work; no review approval was granted · The export still fails on empty input."},
     {"name": "a generic stop preserves a stronger failure", "record": {"status": "failed", "reason_code": "provider_failure", "outcome_axes": {"execution": {"status": "infra_failed", "task_completion": {"action": "stop", "rationale": "The **export** still fails on empty input."}}, "objective": {"status": "fail", "source": "task_completion", "reason": "author_stop"}, "review": {"status": "skipped"}}}, "phase": "error", "headline": "Failed", "acceptance_clause": "The model provider failed to answer, so the task could not finish · The export still fails on empty input."},
-    {"name": "a generic stop preserves a stronger cancellation", "record": {"status": "cancelled", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "cancelled", "task_completion": {"action": "stop", "rationale": "The **export** still fails on empty input."}}, "objective": {"status": "fail", "source": "task_completion", "reason": "author_stop"}, "review": {"status": "skipped"}}}, "phase": "cancelled", "headline": "Stopped", "acceptance_clause": "The export still fails on empty input."}
+    {"name": "a generic stop preserves a stronger cancellation", "record": {"status": "cancelled", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "cancelled", "task_completion": {"action": "stop", "rationale": "The **export** still fails on empty input."}}, "objective": {"status": "fail", "source": "task_completion", "reason": "author_stop"}, "review": {"status": "skipped"}}}, "phase": "cancelled", "headline": "Stopped", "acceptance_clause": "The export still fails on empty input."},
+    {
+      "name": "Stop now that kept a prepared answer reads Stopped and names its button",
+      "record": {"status": "completed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_single", "scope": "single", "stop_policy": "immediate"}, "outcome_axes": {"execution": {"status": "best_effort", "reason_code": "owner_requested_finalization"}}},
+      "phase": "cancelled", "headline": "Stopped",
+      "acceptance_clause": "Stopped from the app (Stop now)"
+    },
+    {
+      "name": "Stop now before any answer reads Stopped, never an agent failure",
+      "record": {"status": "failed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_single", "scope": "single", "stop_policy": "immediate"}, "outcome_axes": {"execution": {"status": "failed", "reason_code": "owner_requested_finalization", "failure": {"kind": "agent", "reason_code": "owner_requested_finalization"}}}},
+      "phase": "cancelled", "headline": "Stopped",
+      "acceptance_clause": "Stopped from the app (Stop now)"
+    },
+    {
+      "name": "Stop now keeps an unsaved-files fact in its sentence, not in its word",
+      "record": {"status": "completed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_single", "scope": "single", "stop_policy": "immediate"}, "artifact_status": "failed", "outcome_axes": {"execution": {"status": "best_effort", "reason_code": "owner_requested_finalization"}, "artifacts": {"status": "failed"}}},
+      "phase": "cancelled", "headline": "Stopped",
+      "acceptance_clause": "Stopped from the app (Stop now) · Some result files are missing or could not be preserved."
+    },
+    {
+      "name": "Wrap up that produced its final answer reads Done with the owner marker in details",
+      "record": {"status": "completed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_graceful", "scope": "single", "reason": "owner requested finalize-then-stop", "requested_by": "owner", "stop_policy": "finalize_then_cancel"}, "outcome_axes": {"execution": {"status": "best_effort", "reason_code": "owner_requested_finalization"}}},
+      "phase": "done", "headline": "Done",
+      "acceptance_clause": ""
+    },
+    {
+      "name": "Wrap up without a final answer reads Stopped and names its button",
+      "record": {"status": "failed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_graceful", "scope": "single", "reason": "owner requested finalize-then-stop", "requested_by": "owner", "stop_policy": "finalize_then_cancel"}, "outcome_axes": {"execution": {"status": "failed", "reason_code": "owner_requested_finalization", "failure": {"kind": "agent", "reason_code": "owner_requested_finalization"}}}},
+      "phase": "cancelled", "headline": "Stopped",
+      "acceptance_clause": "Stopped from the app (Wrap up)"
+    },
+    {
+      "name": "Wrap up whose files could not be saved stays Failed beside its answer",
+      "record": {"status": "completed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_graceful", "scope": "single", "reason": "owner requested finalize-then-stop", "requested_by": "owner", "stop_policy": "finalize_then_cancel"}, "artifact_status": "failed", "outcome_axes": {"execution": {"status": "best_effort", "reason_code": "owner_requested_finalization"}, "artifacts": {"status": "failed"}}},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Some result files are missing or could not be preserved."
+    },
+    {
+      "name": "Wrap up without an answer and with unsaved files stays Failed and states both",
+      "record": {"status": "failed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_graceful", "scope": "single", "reason": "owner requested finalize-then-stop", "requested_by": "owner", "stop_policy": "finalize_then_cancel"}, "artifact_status": "failed", "outcome_axes": {"execution": {"status": "failed", "reason_code": "owner_requested_finalization", "failure": {"kind": "agent", "reason_code": "owner_requested_finalization"}}, "artifacts": {"status": "failed"}}},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Stopped from the app (Wrap up) · Some result files are missing or could not be preserved."
+    },
+    {
+      "name": "an older owner stop names no button and keeps its recorded Failed",
+      "record": {"status": "failed", "reason_code": "owner_requested_finalization", "outcome_axes": {"execution": {"status": "failed", "reason_code": "owner_requested_finalization", "failure": {"kind": "agent", "reason_code": "owner_requested_finalization"}}}},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": ""
+    },
+    {
+      "name": "an old Advisory refusal to re-review an unchanged answer reads Done with warnings and says why",
+      "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."
+    },
+    {
+      "name": "the same refusal under Blocking enforcement keeps its recorded Failed",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "blocking"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."
+    },
+    {
+      "name": "the same refusal with no recorded enforcement keeps its recorded Failed",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."
+    },
+    {
+      "name": "the same refusal with an unknown enforcement value keeps its recorded Failed",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "auto"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."
+    },
+    {
+      "name": "the same refusal over a reviewer's FAIL keeps its recorded Failed",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "fail", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "fail", "aggregate_signals": ["FAIL"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."
+    },
+    {
+      "name": "the same refusal over a failed execution keeps its recorded Failed",
+      "record": {"status": "failed", "reason_code": "empty_final_text", "outcome_axes": {"execution": {"status": "failed", "reason_code": "empty_final_text"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": "Done and merged: the reviewed change is in."},
+      "phase": "error", "headline": "Failed",
+      "acceptance_clause": "The task ended without a final answer."
+    },
+    {"name": "an old Advisory refusal with empty answer evidence keeps Failed", "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": ""}, "phase": "error", "headline": "Failed", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "an old Advisory refusal with unknown answer evidence keeps Failed", "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": null}, "phase": "error", "headline": "Failed", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "an old Advisory refusal with absent answer evidence keeps Failed", "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}}, "phase": "error", "headline": "Failed", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "an old ready answer without typed provenance still reads Done with warnings", "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": "Done and merged: the reviewed change is in."}, "phase": "warn", "headline": "Done with warnings", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "Wrap up hardened to Stop now names the effective button", "record": {"status": "completed", "reason_code": "owner_requested_finalization", "cancel_origin": {"source": "http_graceful", "scope": "single", "stop_policy": "immediate", "reason": "owner requested finalize-then-stop"}, "outcome_axes": {"execution": {"status": "best_effort", "reason_code": "owner_requested_finalization"}}}, "phase": "cancelled", "headline": "Stopped", "acceptance_clause": "Stopped from the app (Stop now)"},
+    {"name": "display projection True keeps affirmative answer evidence", "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "_result_text_present": true}, "phase": "warn", "headline": "Done with warnings", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "display projection False keeps affirmative answer evidence", "record": {"status": "completed", "reason_code": "final_message", "terminal_origin": "model_final", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "identical_acceptance_refused"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "identical_acceptance_refused", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "_result_text_present": false}, "phase": "error", "headline": "Failed", "acceptance_clause": "Nothing had changed since the last review, so the recorded verdict stands."},
+    {"name": "Failed states the recorded review_degraded decision when execution has no cause", "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "review_degraded"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "review_degraded", "source": "task_acceptance_review", "enforcement": "blocking"}}}, "result": "Done and merged: the reviewed change is in."}, "phase": "error", "headline": "Failed", "acceptance_clause": "The reviewers did not reach a verdict on this answer."},
+    {"name": "Failed states the recorded review_cycles_exhausted decision when execution has no cause", "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "fail", "source": "task_acceptance_review", "review_status": "degraded", "outcome_tier": "blocked_with_evidence", "reason": "review_cycles_exhausted"}, "review": {"status": "degraded", "aggregate_signals": ["DEGRADED"], "acceptance_decision": {"status": "finalized_unaccepted", "reason": "review_cycles_exhausted", "source": "task_acceptance_review", "enforcement": "advisory"}}}, "result": "Done and merged: the reviewed change is in."}, "phase": "error", "headline": "Failed", "acceptance_clause": "The task used up its review rounds before the answer was signed off."},
+    {"name": "Provider control owner_stopped_direct_chat_turn, reason provider_unavailable, policy immediate", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "cancelled", "headline": "Stopped"},
+    {"name": "Provider control absent, reason provider_unavailable, policy immediate", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": ""}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"},
+    {"name": "Provider control deadline_local, reason provider_unavailable, policy immediate", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": "deadline_local"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"},
+    {"name": "Provider control owner_stopped_direct_chat_turn, reason worker_crash_signal, policy immediate", "record": {"status": "failed", "reason_code": "worker_crash_signal", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "worker_crash_signal"}}}, "phase": "error", "headline": "Failed"},
+    {"name": "Provider control owner_stopped_direct_chat_turn, reason provider_unavailable, policy finalize_then_cancel", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "finalize_then_cancel", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"}
   ]
 }

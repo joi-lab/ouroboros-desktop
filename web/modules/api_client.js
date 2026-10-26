@@ -596,3 +596,20 @@ export function previewMcpImport(payload, signal) {
         body: JSON.stringify(payload), signal,
     });
 }
+
+/** Passive saved review history; no review or regeneration is dispatched. */
+export function getTaskReviewHistory(taskId, offset = 0) {
+    return fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/reviews?offset=${Number(offset) || 0}`);
+}
+
+/** Exact saved source selected by the owning task/record/seat, never a file path. */
+export function taskReviewSourceUrl(taskId, recordId, seatId, source = {}) {
+    const query = new URLSearchParams({ role: source.role || 'response', part: source.part || '', sha256: source.sha256 || '', domain: source.domain || 'ledger' });
+    return `/api/tasks/${encodeURIComponent(taskId)}/reviews/${encodeURIComponent(recordId)}/${encodeURIComponent(seatId)}?${query}`;
+}
+
+/** A task's saved Skill review as normalized text: Read and Download share it; the server checks the task owns it. */
+export function taskSkillReviewSourceUrl(taskId, jobOrRecordId, skill) {
+    const query = new URLSearchParams({ skill: String(skill || ''), format: 'text' });
+    return `/api/tasks/${encodeURIComponent(taskId)}/reviews/skill/${encodeURIComponent(jobOrRecordId)}?${query}`;
+}

@@ -467,7 +467,7 @@ def test_a_folderless_delegated_run_reads_but_never_writes_through_scratch(tmp_p
     assert refused is not None and "workspace_not_active" in refused.text
 
 
-def test_receipt_and_dispatch_mark_are_monotonic_and_read_back_from_disk(q, monkeypatch):
+def test_receipt_and_dispatch_mark_are_monotonic_and_require_committed_identity(q, monkeypatch):
     import ouroboros.task_results as task_results
     from supervisor import schedule_occurrence as occurrences
 
@@ -484,7 +484,7 @@ def test_receipt_and_dispatch_mark_are_monotonic_and_read_back_from_disk(q, monk
     # A terminal occurrence is never dispatched again through the barrier.
     task_results.write_task_result(q.root, task["id"], "completed", result="done")
     assert occurrences.record_dispatch_possible(task) is False
-    # The verdict is what the FILE says, not what a writer returned.
+    # An incomplete writer acknowledgement cannot prove this task's admission.
     _row(q, "s2", intent={"kind": "system_repo"}, cron=True)
     monkeypatch.setattr(task_results, "write_task_result", lambda *_a, **k: {
         "status": "scheduled", "schedule_admission": dict(k.get("schedule_admission") or {})})

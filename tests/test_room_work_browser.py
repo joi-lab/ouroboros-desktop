@@ -1007,13 +1007,11 @@ def test_project_shade_hold_outside_press_switch_and_latest_root(room_ui):
     # The room waits for the host's verification: the row says Waiting, and the hold's own label beside it.
     assert (held["word"], held["secondary"], held["tone"]) == ("Waiting", "Waiting for Project access", "held"), held
     settle_unfold(page, "project")
-    geometry = page.evaluate("""() => { const box = s => document.querySelector(s).getBoundingClientRect();
-        const bar = box('#project-panel .project-panel-bar'), shade = box('#project-panel .rw-shade'), panel = box('#project-panel');
-        return {bar: [bar.left, bar.bottom, bar.right], shade: [shade.left, shade.top, shade.right, shade.bottom],
-                panel: [panel.left, panel.right], vh: innerHeight}; }""")
-    assert abs(geometry["shade"][1] - geometry["bar"][1]) <= 1.5, geometry
-    assert geometry["shade"][0] >= geometry["panel"][0] - 0.5 and geometry["shade"][2] <= geometry["panel"][1] + 0.5
-    assert geometry["shade"][3] <= geometry["vh"], geometry
+    geometry = page.evaluate(_BAR_GEOMETRY, "project")
+    shade, panel = geometry["shade"], page.locator("#project-panel").bounding_box()
+    assert_hangs_under_capsule(shade, geometry["capsule"], "the held Project's list")
+    assert shade["x"] >= panel["x"] - 0.5 and shade["x"] + shade["w"] <= panel["x"] + panel["width"] + 0.5, (shade, panel)
+    assert shade["bottom"] <= geometry["vh"], geometry
     capture(page, "project-open")
     # The first outside press on the dimmed Main only dismisses the Shade, never the room.
     backdrop = page.locator("#project-panel-backdrop")
@@ -1133,7 +1131,8 @@ _BAR_GEOMETRY = """(scope) => {
     const reachable = [...(shade?.querySelectorAll('.rw-more, .rw-main') || [])].filter(visible).every((el) => {
         const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
         return Boolean(hit) && (hit === el || el.contains(hit)); });
-    return { bar: box(bar), title: box(title), trigger: box(trigger), neighbours, word: badge.textContent.trim(),
+    return { bar: box(bar), capsule: box(bar.querySelector('.app-page-title-row')), title: box(title), trigger: box(trigger),
+             neighbours, word: badge.textContent.trim(),
              clipped: badge.scrollWidth > badge.clientWidth + 0.5, note: !trigger.querySelector('.rw-sr').hidden,
              shade: shade && !shade.hidden ? box(shade) : null, shadeAlpha: shade ? alpha(getComputedStyle(shade).backgroundColor) : null,
              reachable, vw: innerWidth, vh: innerHeight, overflow: document.documentElement.scrollWidth - innerWidth };
@@ -1251,6 +1250,13 @@ def test_header_words_never_move_a_neighbour_or_resize_the_bar(room_ui, width, h
     evidence(f"bar-words-console-{tag}", transport.console)
 
 
+def assert_hangs_under_capsule(shade, capsule, what):
+    """The work list is a sheet of its own under the bar's capsules: from the status capsule's left edge, a gap
+    (``--space-2``, 8px) below it (DESIGN "Room work status")."""
+    assert abs((shade["y"] - capsule["bottom"]) - 8) <= 1.5, (what, "a gap below the status capsule", shade, capsule)
+    assert abs(shade["x"] - capsule["x"]) <= 1.5, (what, "from the status capsule's left edge", shade, capsule)
+
+
 def assert_project_backing(page):
     facts = page.locator("#project-panel").evaluate("""el => {
         const s = getComputedStyle(el);
@@ -1305,7 +1311,7 @@ def test_shade_geometry_light_dark_and_screenshots(room_ui, width, height, theme
         assert abs(opened["bar"]["h"] - closed["bar"]["h"]) <= 0.5, ("opening never resizes the bar", closed, opened)
         shade, bar = opened["shade"], opened["bar"]
         assert shade, opened
-        assert abs(shade["y"] - bar["bottom"]) <= 1.5, ("the Shade unfolds from the bar's bottom edge", shade, bar)
+        assert_hangs_under_capsule(shade, opened["capsule"], f"{room} {tag}")
         assert shade["x"] >= bar["x"] - 0.5 and shade["x"] + shade["w"] <= bar["x"] + bar["w"] + 0.5, (shade, bar)
         assert shade["x"] >= 0 and shade["x"] + shade["w"] <= opened["vw"] and shade["bottom"] <= opened["vh"], opened
         assert opened["shadeAlpha"] == 1, "content never shows through the Shade"

@@ -107,7 +107,7 @@ Nobody tells an unmarked page to reload. A new choice reaches it when someone ne
 - a per-request `X-Ouroboros-Password: <password>` header;
 - `Authorization: Bearer <password>` or Basic.
 
-**Refusals.** A refused HTTP request answers `401` with `{"error": "Authentication required."}`. A `GET` that asks for `text/html` gets the builtin login form with 401, or redirects to `/auth/login?next=…` when a selected login page exists. Explicit builtin setup recovery keeps the builtin form. Health, login/logout and GET/HEAD of the selected `/auth/` assets are public; the main `/static/` tree, APIs, setup bootstrap and extension resources retain the gate.
+**Refusals.** A refused HTTP request answers `401` with `{"error": "Authentication required."}`. A `GET` that asks for `text/html` gets the builtin login form with 401, or redirects to `/auth/login?next=…` when a selected login page exists. Explicit builtin setup recovery keeps the builtin form. Health, login/logout and GET/HEAD of the selected `/auth/` assets are public; the main `/static/` tree, APIs, setup bootstrap and extension routes retain the gate. The separate widget asset prefix requires a valid finite-file lease instead (§11, Widgets).
 
 **Signing in from a browser interface:**
 
@@ -125,7 +125,7 @@ Nobody tells an unmarked page to reload. A new choice reaches it when someone ne
 
 **The WebSocket.** An unauthenticated `/ws` is refused before the connection is accepted (HTTP 403 during the handshake). Browsers report it as close code 1006, never a custom code. Recognise sign-in problems through an HTTP probe, not through WebSocket close codes.
 
-**Signing out.** `GET` or `POST /auth/logout` deletes the cookie and answers `303` to `next`. Login/logout answer 404 when the gate is inactive; those names never serve selected files. Other `/auth/` paths serve the optional public bundle even without the gate: missing files answer 404, unsupported methods 405. With no bundle those paths answer 404.
+**Signing out.** `GET` or `POST /auth/logout` revokes that authentication context's widget file leases, deletes the cookie and answers `303` to `next`. This adds no global session-revocation store. Login/logout answer 404 when the gate is inactive; those names never serve selected files. Other `/auth/` paths serve the optional public bundle even without the gate: missing files answer 404, unsupported methods 405. With no bundle those paths answer 404.
 
 ## 4. First contact and setup
 
@@ -154,11 +154,12 @@ Nobody tells an unmarked page to reload. A new choice reaches it when someone ne
 Setup can also check what it is about to save: `POST /api/providers/test` probes one provider (a failed probe is `200` with `ok: false`), `POST /api/openai-compatible/models` lists the models of an OpenAI-compatible endpoint, `GET /api/model-catalog` lists selectable models (§14), and the local-model routes start and test a local model (§14). None of them saves anything.
 
 To finish setup, send `POST /api/onboarding/complete`:
-- **The body:** the settings to save, keyed by each row's `settingKey`. Add `subscriptionsConnected` and `skipSubscriptionPresets` as needed, and optionally `OUROBOROS_SUBAGENTS` and `allow_empty_review_pool`. A credential field left as `secretPlaceholder` keeps the stored value.
+- **The body:** the settings to save, keyed by each row's `settingKey`. Add `subscriptionsConnected` and `skipSubscriptionPresets` as needed, and optionally `OUROBOROS_SUBAGENTS` and `allow_empty_review_pool`. A credential field left as `secretPlaceholder` keeps the stored value. Give each save its own `attempt_id` (16–128 letters, digits, `-` or `_`), made before you send it: it is how you can ask about this save later.
 - **What it does:** this is the only setup writer. Settings, the next-start access mode and the completion record are saved together, or not at all.
 - **On success:** `200 OnboardingCompleteResponse`. `restart_required` says whether access settings apply only after a restart.
 - **If agent accounts can't be checked:** `503` with `can_skip: true` means the connected agent accounts could not be verified and nothing was saved. Resend with `skipSubscriptionPresets: true` to finish without agent defaults.
 - **Other refusals:** these follow §9's `saved` rules.
+- **When the answer is unknown** (`saved: null`, a dropped connection, or a reply that is not the endpoint's JSON), read that save back with `GET /api/onboarding/complete?attempt=<attempt_id>` (`OnboardingAttemptResponse`, writes nothing). `saved: true` means the settings now hold this attempt's write; its `receipt`, once the whole completion has finished, is the success envelope to act on. `saved: false` repeats a refusal recorded before anything was written; `null` confirms nothing: still running, never received, or replaced by a later save. `GET /api/onboarding` cannot answer this: on a configured install it says 204 whatever happened to this save.
 
 **Mapping setup state to the save body.** For `providerFields`, `modelSlots` and `budgetFields`, copy `initialState[row.stateKey]` to `row.settingKey`. The fixed fields map as follows:
 
@@ -204,7 +205,7 @@ The HTTP completion receipt is the save result. Closing a window or receiving a 
 - **A setup iframe inside the builtin or copied builtin client:** send `parent.postMessage({type: 'ouroboros:onboarding-complete', restart_required, runtime_mode}, location.origin)`. That parent's overlay owns its transition and restart display. This is a client convention; another parent can define its own handoff. Do not call the parent's setup-window bridge or close the main window.
 - **A plain top-level page:** navigate to `/` only when no restart is needed. Otherwise show that setup was saved but the new access mode is pending, and use the ordinary restart workflow (§15). A navigation alone does not apply a boot-pinned setting.
 
-On a failed or unknown save, retain the form and follow the existing readback rules; do not send a successful completion message or blindly save again. The native `onboarding_finished` method only reports the HTTP result, and introduces no second settings writer.
+On a failed or unknown save, retain the form and read the attempt back as above; only its `receipt` is a successful completion. Do not send a completion message for anything else or blindly save again. The native `onboarding_finished` method only reports the HTTP result, and introduces no second settings writer.
 
 ## 5. Conversation: live events and history
 
@@ -298,9 +299,10 @@ The core writes each stored row and its live frame with an identical `ts` string
 | a Main pointer `chat` with `system_type: "project_question_pointer"` | the pointer row | `task_id` and `quiz_id` are equal |
 | `photo`, `video`, `document` or `links` | `msg_type` equal to the frame's `type` | `task_id` and `ts` are equal |
 | `card` | `msg_type: "card"` | `card.card_id` is equal |
+| a `chat` carrying `row_client_message_id` (an outgoing row saved under its own name, such as a note between works) | the row whose `client_message_id` is that value | the two names are equal |
 | any other `chat` | a row with the same `is_progress`, `role` and `system_type` | `task_id`, `ts` and `content` = `text` are all equal |
 
-Only `role:"user"` rows merge by `client_message_id`: on a System frame it only correlates the answered submission and is not persisted, so stored System replies use the other-chat rule. Never match on `ts` or `task_id` alone: one task writes many rows with close timestamps, and the same words can come from different tasks.
+Only `role:"user"` rows merge by `client_message_id`: on a System frame it only correlates the answered submission and is not persisted, so stored System replies use the other-chat rule. An outgoing row saved under its own name repeats that name on its live frame as `row_client_message_id`, never as `client_message_id`. Never match on `ts` or `task_id` alone: one task writes many rows with close timestamps, and the same words can come from different tasks.
 
 **On every connect and reconnect:**
 1. Open the socket and keep the frames it delivers.
@@ -457,7 +459,7 @@ Every settings writer (Settings, setup, owner controls, language, desktop backgr
 |---|---|---|
 | `false` | nothing was written | correct the input and retry |
 | `true` | the settings were written; a later step (`post_commit_failed`) failed | retry that step; never save the same settings again |
-| `null` | unknown; the writer outlived the wait | read `GET /api/settings` again before deciding; an unknown outcome is never a reason to retry |
+| `null` | unknown; the writer outlived the wait | read `GET /api/settings` again before deciding (setup: read the attempt back, §4); an unknown outcome is never a reason to retry |
 
 `ignored_keys` is an optional object mapping each skipped key to its own writer, not an array. Unknown ordinary settings keys can be ignored rather than rejected. `immediate_changed` and `next_task_changed` are optional true flags for at least one key in that effect bucket, not lists. Budget-field names, types and minimums come from `setup_contract.budgetFields`. There is no public request intended to induce post-commit failure or an unknown save outcome.
 
@@ -534,7 +536,8 @@ A refused action answers `SkillActionRefusal`: `error`, the `status_code` it was
   - `iframe`: frame the extension route named by `render.route`.
   - `declarative`: a component description the interface draws; the components are described in `docs/CREATING_SKILLS.md`.
   - `module`: reviewed JavaScript run in a sandboxed frame. [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) is the complete host protocol: frame, document policy, message grammar, fetch relay, events, theme, size, downloads, links and the dispose handshake.
-- `GET /api/extensions/{skill}/module/{entry}` serves reviewed module code (never cached, any origin may load it).
+- `GET /api/extensions/{skill}/module/{entry}` serves captured classic-widget sources (no-store, any-origin CORS; network auth still applies).
+- `render.entry_type: "module"` opts into native ESM and a finite `render.assets` list. The parent mints a file lease with `{skill, tab_id, generation}` at `POST /api/widgets/asset-leases`, renews/revokes with `{token}` at its `/renew` and `/revoke` controls, and follows the full loader/lifetime contract in WIDGET_HOST_PROTOCOL. `GET/HEAD /api/widget-assets/{token}/{path}` is scoped bearer reading (`auth: "asset_lease"` in `/api/contract`); it accepts no cookie fallback or API calls. The same loader works locally and behind the network password. For these entries treat `generation`, alongside `revision`, as a remount signal; classic entries follow `revision` alone.
 - `POST /api/widgets/fault` (`WidgetFaultRequest`, `WidgetFaultResponse`) keeps one fault a running module widget's card shows as a `widget_fault` row of `GET /api/logs/events`: the card's `skill`, `tab_id` and `revision`, `where` (`board` or `message`) and the frame's `kind`, `message` (at most 500 characters), `source` (200) and `line`. The row has no task and is the page's report, not a verified execution. At most 10 rows per widget and 100 together are written per minute; past that the answer is `logged: false` and the widget's next row carries `suppressed_count`. `400` another shape, `413` a body past 8 KiB, `503` not written. A client may skip reporting.
 
 **Contributions (controls, speech engines and places):** `GET /api/ui/contributions`
@@ -738,7 +741,7 @@ Connected coding subscriptions use Claudexor. Its API v2 objects (`job`, mainten
 - `GET /api/git/log` lists recent commits and tags (`GitLogResponse`), the choices for a rollback.
 - `GET /api/logs/{name}` tails one log (`chat`, `progress`, `events`, `tools` or `supervisor`; `limit` 1 to 2000, default 100; `task_id` filters). An unknown name answers 404 with the allowed names. `chat` and `progress` are read from the dialogue store: `_line` is the row's durable position among every stored object of its stream, and while the archive import has not settled those counts the endpoint answers 503 `reason_code: migrating` (retry shortly), never a guessed number; the file logs' `_line` is a position within the read window.
 - `GET /api/storage` (`StorageResponse`) reads the last finished count of everything Ouroboros owns, a running count's progress, fresh free space and the Temporary space tray, without measuring; `?count=<finished_at>` omits a count the client already holds. `POST /api/storage/measure` starts one complete count in a child process or joins the running one; `POST /api/storage/measure/cancel` kills it and keeps the saved count (202 either way, the same envelope with `started`).
-- **Temporary space.** `POST /api/storage/free/preview` lists, without writes, what the app's own retirers would remove now (finished tasks' work folders, working copies of finished work) under a plan id; a second preview joins the running one. `POST /api/storage/free` with `{plan, groups}` (`StorageFreeRequest`) frees exactly the previewed items of those groups, for good: ask the person first, and never resend after a dropped connection (the plan id makes a repeat harmless: a replaced or missing plan answers `started: false` with `reason`). `POST /api/storage/free/cancel` stops the listing (nothing is kept) or the run (what was freed stays freed). All answer 202 with `StorageResponse`; `free.run` separates removed, still deleting, stuck and kept items.
+- **Temporary space.** `POST /api/storage/free/preview` lists, without writes, what the app's own retirers would remove now (finished tasks' work folders, working copies of finished work) and the leftovers no background pass removes (reviewers' saved files of finished tasks, review copies no task owns, copies no record names, leftover environments and test-run records, the Git pins of results never applied or rejected; the client starts those holding saved work unchecked) under a plan id; a second preview joins the running one. `POST /api/storage/free` with `{plan, groups}` (`StorageFreeRequest`) frees exactly the previewed items of those groups, for good: ask the person first, and never resend after a dropped connection (the plan id makes a repeat harmless: a replaced or missing plan answers `started: false` with `reason`). `POST /api/storage/free/cancel` stops the listing (nothing is kept) or the run (what was freed stays freed). All answer 202 with `StorageResponse`; `free.run` separates removed, still deleting, stuck and kept items.
 - `GET /api/evolution-data` (`EvolutionDataResponse`) answers at once with the saved version history (`saved_at`, `versions`, this installation's `install` journals) and `refresh` (`idle`, `running` or `failed`; `unmeasured` versions with the first reason): new tags or `force=1` start one background re-measurement, which also retries unmeasured versions, and a failure keeps the saved copy. The earlier `points` (one per tag name; null where unmeasured, memory fields null) and `cached` stay for older clients. Ask again while it runs; a value nobody measured is `null`, never zero.
 
 ## 16. Errors and unknown outcomes

@@ -485,6 +485,8 @@ def validate_ui_render(render: Dict[str, Any]) -> Dict[str, Any]:
         raise ExtensionRegistrationError("ui render must be an object")
     clean = copy.deepcopy(render)
     kind = _text(clean.get("kind"))
+    if kind != "module" and ("entry_type" in clean or "assets" in clean):
+        raise ExtensionRegistrationError("entry_type/assets apply to module widgets only")
     if kind not in _UI_RENDER_KINDS:
         raise ExtensionRegistrationError(f"ui render kind {kind!r} is unsupported; expected one of {sorted(_UI_RENDER_KINDS - {''})}")
     _validate_start_mode(clean, kind=kind)
@@ -494,6 +496,11 @@ def validate_ui_render(render: Dict[str, Any]) -> Dict[str, Any]:
     if kind == "iframe" and not _text(clean.get("route")):
         raise ExtensionRegistrationError("iframe widget render requires route (the extension route the frame loads)")
     if kind == "module":
+        from ouroboros.extension_widget_assets import validate_widget_files
+
+        validate_widget_files(clean)
+        if clean.get("entry_type") == "module":
+            return clean
         entry = _text(clean.get("entry"))
         if not entry:
             raise ExtensionRegistrationError("module widget render requires entry filename (e.g. 'widget.js')")

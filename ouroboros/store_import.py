@@ -470,11 +470,12 @@ def _custody_rows(root: pathlib.Path, records: List[Record]) -> Tuple[Dict[str, 
         raise _unreadable(exc, chain, "custody chain") from exc
     folded = {**fold(rows), "chain_offset": offset}  # the boundary: what an old body appends later is P6' input
     owed = {task_id for task_id, document in records if document.get("delegated_runs_unreconciled")}
-    receipts: Dict[str, Dict[str, Any]] = {}
+    receipts: Dict[str, Dict[str, Any]] = {tid: {"task_id": tid, "cost_revision": revision}
+                                        for tid, revision in folded["cost_revisions"].items()}
     for rid, (facts, _hold) in folded["runs"].items():
         task_id = str(facts.get("task_id") or "")
         if facts.get("settled") and task_id in owed:
-            receipts.setdefault(task_id, {"task_id": task_id, "closed_runs": {}})["closed_runs"][rid] = facts
+            receipts.setdefault(task_id, {"task_id": task_id}).setdefault("closed_runs", {})[rid] = facts
     return folded, {"custody_open": folded["open"], "delegated_runs": receipts}
 
 
@@ -483,6 +484,8 @@ def _merge_receipts(held: Dict[str, Dict[str, Any]], folded: Dict[str, Dict[str,
     for task_id, facts in folded.items():
         entry = merged.setdefault(task_id, {"task_id": task_id})
         entry["closed_runs"] = {**facts.get("closed_runs", {}), **entry.get("closed_runs", {})}
+        if facts.get("cost_revision"):
+            entry["cost_revision"] = max(facts["cost_revision"], entry.get("cost_revision", 0))
     return merged
 
 

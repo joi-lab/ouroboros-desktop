@@ -52,7 +52,7 @@ from ouroboros.server_process import (  # noqa: F401
     _request_restart_exit, _restart_requested,
     _supervisor_stop, _exit_signalled,
     _SignalStopServer, _embedded_uvicorn_server,
-    capture_server_source_baseline, server_stop_source, log,
+    capture_server_source_baseline, server_stop_cause, log,
 )
 from ouroboros.server_routing_context import (  # noqa: F401
     _active_direct_roots,
@@ -853,10 +853,10 @@ def _run_supervisor(settings: dict) -> None:
                 _last_custody_reap, _last_review_job_reconcile, stop_event=_watchdog_stop,
             )
             _loop_liveness[1], _loop_liveness[0] = loop_phase_facts(_loop_liveness, "assign"), time.monotonic()
-            # Loop-tick restart drain (no sleep, events keep flowing): while
-            # draining a deferred restart, skip starting new work the restart
-            # deadline would immediately chop (evolution / pending project tasks).
-            if not _check_pending_restart_drain(_event_ctx):
+            # The requester's finalization starts the drain; its accepted intent
+            # already holds independent starts. Existing trees still finish.
+            draining = _check_pending_restart_drain(_event_ctx)
+            if not draining and not _restart_lifecycle.agent_restart_pending():
                 try:
                     from ouroboros.post_task_evolution import apply_pending_request
                     from supervisor import state as _pte_state
@@ -865,12 +865,12 @@ def _run_supervisor(settings: dict) -> None:
                 except Exception:
                     log.debug("Post-task evolution apply failed", exc_info=True)
                 enqueue_evolution_task_if_needed()
-                assign_tasks()
             if _restart_requested.is_set():
                 break  # restart just triggered (drain done) — exit without assigning new work (bridge intake already ran early this iteration)
+            assign_tasks()
             if persist_queue_snapshot(reason="main_loop") is False:  # None: a saved queue kept as it is
                 raise RuntimeError("queue publication failed")
-            if _consciousness is not None:
+            if _consciousness is not None and not draining and not _restart_lifecycle.agent_restart_pending():
                 try:
                     _consciousness.tick(time.time())
                 except Exception:
@@ -1254,7 +1254,7 @@ async def lifespan(app):
         stop_body_runtime(lifespan_drive_root, wait=False)
         from ouroboros.maintenance import child as maintenance_child
         maintenance_child.stop()
-        begin_owned_stop(lifespan_drive_root)  # the grace starts here; pending stops are recorded before any wait
+        begin_owned_stop(lifespan_drive_root, cause=server_stop_cause())  # the grace starts here; cause and pending stops are recorded before any wait
         log.info("Server shutting down...")
         # Let the loop leave its current tick BEFORE workers are killed and the
         # bridge/Manager go down: a tick still running would otherwise respawn
@@ -1289,7 +1289,7 @@ async def lifespan(app):
                     {
                         "ts": utc_now_iso(),
                         "type": "server_shutdown",
-                        "cause": "restart_requested" if restart_requested else server_stop_source(),
+                        "cause": server_stop_cause(restart_requested),
                         "restart_exit": restart_requested,
                     },
                 )
@@ -1383,7 +1383,7 @@ def _emergency_process_cleanup() -> dict:
     maintenance_child.stop()
     storage_count.stop()
     storage_free.stop()
-    begin_owned_stop(DATA_DIR)  # the grace starts here; pending stops are recorded before any wait
+    begin_owned_stop(DATA_DIR, cause=server_stop_cause())  # the grace starts here; cause and pending stops are recorded before any wait
     worker_exits = None  # the pool's own PID census; None until kill_workers ran to its end
     try:
         from supervisor.workers import kill_workers, last_worker_exit_census

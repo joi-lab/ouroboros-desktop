@@ -39,7 +39,10 @@ def output_owed(entry):
 
 
 def capture_required(entry):
+    from ouroboros.delegate_directory import is_in_place_run
+
     return (entry.mode != "plan" and not entry.patch_disposed and not entry.superseded_by
+            and not is_in_place_run(entry)  # its edits are already in place: nothing to capture
             and bool(entry.execution_root or entry.resource_ref.get("workspace_kind") == "directory"))
 
 
@@ -49,9 +52,16 @@ def named_required(entry):
             and entry.resource_ref.get("workspace_kind") != "directory")
 
 
+def legacy_cap(entry):
+    """A named-evidence receipt made under the retired 64 MiB budget: its gapped files are
+    still only in the copy, so it earns one whole retention before the copy may go."""
+    return bool((entry.named_evidence.get("inputs") or {}).get("limit_bytes"))
+
+
 def inputs(entry):
     """Only addressed facts: never stat a snapshot or decode a summary to decide a tick."""
-    return {**{key: copy.deepcopy(getattr(entry, key)) for key in (
+    return {**({"named_legacy_cap": True} if legacy_cap(entry) else {}),
+            **{key: copy.deepcopy(getattr(entry, key)) for key in (
         "run_id", "invocation_id", "snapshot_id", "capture_id", "continuation_of", "superseded_by",
         "execution_root", "baseline_sha", "authority_source", "resource_ref", "mode")},
         "terminal_sha": entry.terminal_source.get("sha256"), "policy": POLICY,

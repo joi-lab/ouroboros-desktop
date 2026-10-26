@@ -8,6 +8,7 @@ import sys
 
 from ouroboros import delegate_capture_job as job, delegate_collection as body, delegate_custody as custody
 from ouroboros import delegate_custody_current as current, maintenance
+from ouroboros.subagent_worktrees import find_execution_snapshot
 from tests.test_delegate_body_collection import terminal
 from tests.test_recovered_capture import prepared
 
@@ -36,10 +37,10 @@ c.record_patch_captured = forbidden
 c.record_patch_disposed = forbidden
 body.record_terminal_money = forbidden
 if sys.argv[2] == "fail":
-    from ouroboros import review_checking
+    from ouroboros import delegate_named_evidence
     def locked(*a, **kw):
         raise OSError(errno.EBUSY, "a native capture handle is busy")
-    review_checking.retain_named_evidence = locked
+    delegate_named_evidence.retain_named_evidence = locked
 result = maintenance.run_job(pathlib.Path(sys.argv[1]), "delegate_capture")
 print(json.dumps({"pid": os.getpid(), "result": result}))
 '''
@@ -77,9 +78,12 @@ def test_capture_wake_follows_server_publication_and_lock_release(tmp_path, monk
     body.collect_terminal(root, entry.run_id, detail=terminal(entry.run_id), background=True)
     assert wakes == [(False, True)]
     assert _child(root)["result"] == {"state": "done", "items": 1}
+    assert area.is_dir()  # a child's prepared result never releases the copy
     wakes.clear()
     body.collect_terminal(root, entry.run_id, background=True)
-    assert not wakes and area.is_dir()
+    # The server accepted it: capture row and named evidence saved, so the checkout went (the record keeps C).
+    assert not wakes and not area.exists()
+    assert find_execution_snapshot(entry.snapshot_id)["result_sha"]
 
 
 def test_transient_waits_for_another_child_generation_without_spawning_it(tmp_path, monkeypatch):
@@ -89,6 +93,7 @@ def test_transient_waits_for_another_child_generation_without_spawning_it(tmp_pa
     failed = current.run(root, entry.run_id)
     assert failed.named_evidence["status"] == "capture_failed" and failed.settled
     assert failed.capture_job["retry"] == "transient" and current.collection_pending(failed)
+    assert area.is_dir()  # a failed retention keeps the copy for the retry
     assert not job.due(root, {}, {}, False), "a transient alone cannot spawn another child"
     assert _child(root)["result"] == {"state": "done", "items": 1}
     prepared = current.run(root, entry.run_id)
@@ -96,7 +101,7 @@ def test_transient_waits_for_another_child_generation_without_spawning_it(tmp_pa
     body.collect_terminal(root, entry.run_id, background=True)
     final = current.run(root, entry.run_id)
     assert final.named_evidence["status"] == "retained" and not current.collection_pending(final)
-    assert _child(root)["result"] is None and area.is_dir()
+    assert _child(root)["result"] is None and not area.exists()
 
 
 def test_continuation_between_child_return_and_server_acceptance_keeps_its_snapshot(tmp_path, monkeypatch):

@@ -317,9 +317,9 @@ def write_workspace_patch_artifacts(
         "manifest_name": "workspace_patch.json",
         "base_provenance": ("task_constraint" if task_base_sha else "admission_head" if preflight_head
                             else "empty_tree" if base_is_empty_tree else "capture_head"),
-        "base_explanation": ("Application patch relative to the recorded base; includes eligible workspace changes and may include branch differences. It does not attribute authorship."
+        "base_explanation": ("Current workspace at capture time relative to the recorded base; may include branch differences and later unrelated changes. It does not attribute authorship."
                              if task_base_sha or preflight_head else
-                             "Current workspace comparison at capture time; no original admission basis was recorded. It does not attribute authorship."),
+                             "Current workspace comparison at capture time; no original admission basis was recorded. It may include later unrelated changes and does not attribute authorship."),
         "comparison_note": "No auxiliary comparison target was selected. Use vcs_read(action=diff, base=..., head=...) for two trees, or base only for the current worktree.",
         "current_branch": _git_stdout(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], root, allow_rc={0, 1}, errors=diagnostics).strip(),
         "tracking_upstream": _git_stdout(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], root, allow_rc={0, 128}, errors=diagnostics).strip(),

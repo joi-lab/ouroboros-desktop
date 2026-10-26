@@ -428,6 +428,11 @@ def summary_delta(row: Dict[str, Any]) -> Bucket:
             delta.priced = weight
             if not bool(row.get("cost_final")):
                 delta.non_final = delta.tracked_nonfinal = delta.accounting_open = weight
+            if row.get("cost_partial") is True:
+                delta.unknown = delta.non_final = delta.accounting_open = weight
+                # This row carries a known subtotal and an unpriced remainder.
+                # Exact subtotal is still exact; it never bounds the entire run.
+                delta.tracked_nonfinal = weight if row.get("cost_estimated") else 0
     elif state in {"reserved", "dispatched", "unresolved"}:
         delta.non_final = delta.accounting_open = weight
         if bound is None or pricing_unknown:

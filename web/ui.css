@@ -185,7 +185,6 @@
     --elev-rest: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.28);
     --elev-float: 0 2px 8px rgba(0, 0, 0, 0.45), 0 18px 44px rgba(0, 0, 0, 0.5);
     --row-lift-dim: rgba(0, 0, 0, 0.45);  /* the feed under a row lifted by a long press */
-    --chrome-shade-shadow: var(--elev-float);
     --radius-object: 18px;
     --radius-inner: 12px;
     --radius-sheet: 24px;
@@ -197,6 +196,11 @@
     --surface-capsule-hover: rgba(255, 255, 255, 0.135);
     --chip-float: linear-gradient(var(--surface-capsule), var(--surface-capsule)), rgba(var(--shell-rgb), 0.98);
     --chip-float-hover: linear-gradient(var(--surface-capsule-hover), var(--surface-capsule-hover)), rgba(var(--shell-rgb), 0.98);
+    /* The opaque neutral sheet (DESIGN principle 2): the capsule's step over the room's own ink, fully opaque,
+       for a list of rows that must stay readable over any bubble. Both themes read it through these two tokens. */
+    --sheet-float: linear-gradient(var(--surface-capsule), var(--surface-capsule)), rgb(var(--shell-rgb));
+    /* The popups' backing, the same way opaque: the float colour over the room's ink, for menus and dialogs. */
+    --popup-float: linear-gradient(var(--surface-float), var(--surface-float)), rgb(var(--shell-rgb));
     --surface-float: rgba(32, 32, 34, 0.92);
     --surface-tray: rgba(var(--neutral-rgb), 0.045);
     --surface-side: #0f0f11;
@@ -204,6 +208,14 @@
     --voice-owner: #103e7f;
     --voice-ouroboros: #76162b;
     --voice-ouroboros-card: #76162b;
+    /* A note between works (DESIGN "Replies"): the voice one quiet step back toward the room, its hover a step less;
+       the cards peeking below a stack's front card are that material flattened toward the room again, each level
+       more. Flat colours: the ledges carry the rest shadow, which an opacity would fade with them. Written as values
+       (the voice at 74 % / 84 % over the room; the note at 84 % / 66 %), since older WebKit has no color-mix(). */
+    --voice-ouroboros-note: #5b1424;
+    --voice-ouroboros-note-hover: #661527;
+    --relay-ledge-1: #4f1321;
+    --relay-ledge-2: #41121e;
     --tone-crimson: #d32d43;
     --tone-crimson-hover: #c32a3f;
     /* The crimson tone's ink: white on the solid crimson. Its hover deepens rather than lightens, and so does its
@@ -392,6 +404,13 @@
     --voice-owner: #e9eef9;
     --voice-ouroboros: #fdf2f4;
     --voice-ouroboros-card: #fff8f9;
+    /* The note between works: the work card's rose as a value under the note's own name (the card's token stays the
+       card's), hovering to the voice; on white a card behind lies in the front card's shadow, a deeper step of the
+       accent ladder, not a paler one. */
+    --voice-ouroboros-note: #fff8f9;
+    --voice-ouroboros-note-hover: var(--voice-ouroboros);
+    --relay-ledge-1: #faebec;  /* the accent at 10 % over white */
+    --relay-ledge-2: #f7e3e5;  /* the accent at 14 % over white */
     /* The crimson tone is the accent ladder's; its hover stops at 14 % so the ink keeps 4.5:1 on it. */
     --tone-crimson: var(--accent-10);
     --tone-crimson-hover: var(--accent-14);
@@ -813,7 +832,9 @@ textarea.ui-control { resize: vertical; }
     .btn:hover, .btn:active { transform: none; }
 }
 
-/* Measured popup placement is shared; menu/listbox interaction stays separate. */
+/* Measured popup placement and its floating material are shared; menu/listbox interaction stays separate. The paint
+   belongs to the popup itself, so a menu, a dialog and a listbox are one backed sheet on
+   the float shadow: a role below chooses layout, never paint. */
 .ui-popup {
     position: fixed;
     margin: 0;
@@ -827,6 +848,13 @@ textarea.ui-control { resize: vertical; }
     overflow-y: auto;
     overscroll-behavior: contain;
     z-index: var(--z-popover);
+    border: 1px solid transparent;
+    border-radius: var(--radius-object);
+    background: var(--popup-float);
+    color: var(--text-primary);
+    box-shadow: var(--elev-float);
+    -webkit-backdrop-filter: var(--glass);
+    backdrop-filter: var(--glass);
 }
 .ui-model-chooser { display: block; min-width: 0; }
 .ui-model-chooser > .ui-control { width: 100%; }
@@ -834,13 +862,6 @@ textarea.ui-control { resize: vertical; }
     width: var(--ui-popup-anchor-width);
     margin: 0;
     padding: var(--space-1);
-    border: 1px solid transparent;
-    border-radius: var(--radius-object);
-    background: var(--surface-float);
-    color: var(--text-primary);
-    box-shadow: var(--elev-float);
-    -webkit-backdrop-filter: var(--glass);
-    backdrop-filter: var(--glass);
     list-style: none;
 }
 .ui-model-option, .ui-model-empty {
@@ -855,20 +876,13 @@ textarea.ui-control { resize: vertical; }
 .ui-model-option[aria-selected="true"] { color: var(--accent-light); background: var(--accent-12); }
 .ui-model-empty { color: var(--text-meta); }
 
-/* One menu surface, a float sheet like the model list above; callers retain only domain meaning such as danger. */
+/* One menu layout on that sheet; callers retain only domain meaning such as danger. */
 .ui-popup[role="menu"] {
     display: flex;
     flex-direction: column;
     width: max-content;
     min-width: min(160px, var(--ui-popup-max-width));
     padding: var(--space-1);
-    border: 1px solid transparent;
-    border-radius: var(--radius-object);
-    background: var(--surface-float);
-    color: var(--text-primary);
-    box-shadow: var(--elev-float);
-    -webkit-backdrop-filter: var(--glass);
-    backdrop-filter: var(--glass);
 }
 .ui-popup [role^="menuitem"] {
     flex: 0 0 auto;
@@ -917,8 +931,8 @@ textarea.ui-control { resize: vertical; }
    Controls that float over scrolling content (Main's header group) share one box: height, baseline and the pill
    corner; words, width, weight and tone stay the control's own (DESIGN §5). The group is invisible at rest and its
    padding is cancelled by an equal negative margin, so grouping moves no control. A room's separate capsules keep
-   their own reading backing, and what a bar discloses unfolds from the bar's bottom edge as one
-   Shade (room_work.css), never as a box glued to one control or one group. */
+   their own reading backing, and what a bar discloses hangs under its capsules as one work list (room_work.css),
+   never as a box glued to one control or one group. */
 @media (pointer: coarse) {
     /* A coarse pointer (a phone) raises the shared touch minimum to a finger's 44px, and the whole family with it. */
     :root { --touch-target-min: 44px; --chrome-control-h: var(--touch-target-min); }

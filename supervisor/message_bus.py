@@ -1281,7 +1281,8 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
                      role: str = "", system_type: str = "",
                      narration: Optional[bool] = None,
                      require_write: bool = False,
-                     ensure_record_boundary: bool = False) -> None:
+                     ensure_record_boundary: bool = False,
+                     replay_delivery_id: str = "") -> Optional[bool]:
     """Send an owner-visible row with one voice and timestamp for history and live.
 
     Narration True means model speech, False host speech; absent legacy rows keep
@@ -1291,6 +1292,8 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
     in the existing outbox and also requires a positive transport receipt. A
     required notice without one has one owner, its producer, which retries or
     records a failed write: it keeps the caller's wait and raises when unwritten.
+    Replay records dispatch only after those writes, before transport; False
+    means its outbox debt no longer permits sending. First live sends are unchanged.
     """
     producer_owned = require_write and not (progress_meta or {}).get("delivery_id")
     with (contextlib.nullcontext() if producer_owned
@@ -1372,6 +1375,11 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
         full = _text
 
         transport = dict(ts=msg_ts, is_progress=is_progress, task_id=task_id, progress_meta=progress_meta)
+        if replay_delivery_id:
+            from supervisor.terminal_delivery import record_replay_dispatch
+
+            if not record_replay_dispatch(DATA_DIR, replay_delivery_id):
+                return False
         try:
             if fmt == "markdown":
                 receipt = _send_markdown(chat_id, full, **transport, role=role, system_type=system_type)

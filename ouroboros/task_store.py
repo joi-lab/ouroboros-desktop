@@ -196,6 +196,35 @@ def list_documents(root: Any, *, statuses: Optional[Iterable[str]] = None) -> Li
     return _decode(*fetched)
 
 
+def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional[int]) -> List[Dict[str, Any]]:
+    """Full documents only for the stable page and rows needing an effective overlay.
+
+    A stable row's status/ts cannot change in that overlay (``task_status`` owns
+    the writer's predicate). Its first N matches therefore suffice for a global
+    top N, even when every uncertain row sorts ahead of them. Those other rows
+    still run through the complete effective reader before filtering/limiting.
+    Read selection and bodies in one transaction; preserve task-id tie order.
+    Old schemas/NULLs fall back per row, without GET writes. Maintenance's
+    existing hot_facts job derives legacy NULLs under the body's write_seq CAS.
+    """
+    from ouroboros.store_hot_facts import LIST_VERSION
+
+    wanted = sorted(set(statuses))
+    if not wanted:
+        return []
+    with open_store(root, write=False) as txn:
+        if int(txn.meta("schema_version") or 1) < LIST_VERSION:
+            fetched = _fetch(txn)
+        else:
+            bound = "" if limit is None else " LIMIT ?"
+            params = (*wanted,) if limit is None else (*wanted, int(limit))
+            selected = ("SELECT task_id FROM tasks WHERE list_stable=1 "
+                        f"AND status IN ({','.join('?' * len(wanted))}) "
+                        f"ORDER BY ts DESC, task_id ASC{bound}")
+            fetched = _fetch(txn, f"t.list_stable IS NULL OR t.list_stable=0 OR t.task_id IN ({selected})", params)
+    return _decode(*fetched)
+
+
 def lineage_where(parent: str, root_id: str, *, direct_only: bool,
                   queue_members: Iterable[str] = ()) -> Tuple[str, Tuple[str, ...]]:
     """The ``find_child_tasks`` prefilter as SQL, starting from this parent's children. Anchors: the
@@ -344,7 +373,10 @@ def _display_sql(column: str = "b.body") -> str:
                            f"ELSE {path(_KEEP)} END" for sub in kept)
         view = (f"json_replace({view}, CASE WHEN {is_object} THEN {path(key)} ELSE {path(key, _KEEP)} END, "
                 f"CASE WHEN {is_object} THEN json_remove({built}, {absent}) END)")
-    return view
+    # The old-review presenter needs affirmative answer evidence even when this view
+    # drops result. Project one bit from the same body; no extra read or stored field.
+    present = f"json_type({column}, '$.result') = 'text' AND json_extract({column}, '$.result') <> ''"
+    return f"json_set({view}, '$._result_text_present', json(CASE WHEN {present} THEN 'true' ELSE 'false' END))"
 
 
 def _card_sql(view: str) -> str:
