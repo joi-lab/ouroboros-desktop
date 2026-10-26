@@ -722,18 +722,18 @@ def _place_contribution(item: dict, manifest: Any) -> dict:
     supported = set(WAKE_FACTS)
     if "facts" in item:
         if not isinstance(item["facts"], list):
-            raise ValueError("place facts must be a list of core facts or labelled signals")
+            raise ValueError("place facts must be a list of core facts or labelled kinds")
         supported = set()
         for fact in item["facts"]:
             if isinstance(fact, dict):
-                if set(fact) != {"id", "label"} or not is_wake_signal(fact.get("id")):
-                    raise ValueError("place signal needs id: signal.<slug> and label")
+                if set(fact) != {"id", "label"} or not (fact.get("id") in WAKE_FACTS or is_wake_signal(fact.get("id"))):
+                    raise ValueError("place fact needs a core id or signal.<slug> and label")
                 fact["label"] = _contribution_text(fact["label"], "facts.label", 120)
                 name = fact["id"]
             elif isinstance(fact, str) and fact in WAKE_FACTS:
                 name = fact
             else:
-                raise ValueError("place facts must contain core fact names or labelled signals")
+                raise ValueError("place facts must contain core fact names or labelled kinds")
             if name in supported:
                 raise ValueError("place facts must have unique ids")
             supported.add(name)

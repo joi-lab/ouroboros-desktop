@@ -444,6 +444,7 @@ async def _api_identity(request: Request) -> JSONResponse:
                          "presence_work_output_version": WORK_OUTPUT_VERSION,
                          "presence_wake_facts": list(WAKE_FACTS),
                          "presence_wake_signals": 1,
+                         "presence_identity": 1,
                          "notify_version": NOTIFY_VERSION})
 
 
