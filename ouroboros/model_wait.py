@@ -1119,15 +1119,20 @@ def current_model_wait() -> TaskModelWait | None:
     return _CURRENT.get()
 
 
+_AFTER_THE_REPLY = frozenset({"post_task", "consolidation"})  # the post-task worker's usage categories
+
+
 def owner_awaits_current_call() -> bool:
-    """Whether the bound task is a direct turn the owner awaits (Main, a project room, a call): the model queue
-    lets its calls ahead of background calls that have not started (``model_concurrency``)."""
+    """Whether this call prepares the reply of a direct turn the owner awaits (Main, a project room, a call): the
+    model queue lets it ahead of background calls that have not started (``model_concurrency``). The same turn's
+    work after its answer (synthesis, memory drafts, scratchpad consolidation) queues as background."""
     task = getattr(_CURRENT.get(), "task", None)
     if not isinstance(task, dict) or not task.get("_is_direct_chat"):
         return False
+    from ouroboros.usage_accounting import current_usage_scope
     from supervisor.active_activity import reply_expected
 
-    return reply_expected(task)
+    return getattr(current_usage_scope(), "category", "") not in _AFTER_THE_REPLY and reply_expected(task)
 
 
 def announce_capability_refusal(error: Exception, *, drive_root: Any) -> None:

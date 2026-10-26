@@ -353,6 +353,24 @@ def test_only_a_direct_turn_the_owner_awaits_counts_as_awaited():
     assert model_wait.owner_awaits_current_call() is False  # no bound task: a background call
 
 
+def test_the_same_turn_s_work_after_its_answer_queues_as_background(tmp_path):
+    """After the answer, the turn's post-task worker (synthesis, memory drafts, scratchpad consolidation) keeps the
+    turn's wait owner but no longer prepares a reply: a new owner turn must not wait behind it."""
+    from types import SimpleNamespace
+
+    from ouroboros import model_wait
+    from ouroboros.usage_accounting import UsageScope, usage_scope
+
+    ref = {"chat_id": 1, "client_message_id": "c1", "ts": "2026-10-26T12:00:00+00:00"}
+    token = model_wait._CURRENT.set(SimpleNamespace(task={"_is_direct_chat": True, "metadata": {"origin_message_ref": ref}}))
+    try:
+        for category, awaited in (("task", True), ("post_task", False), ("consolidation", False), ("web_search", True)):
+            with usage_scope(UsageScope(drive_root=tmp_path, category=category, source="probe")):
+                assert model_wait.owner_awaits_current_call() is awaited, category
+    finally:
+        model_wait._CURRENT.reset(token)
+
+
 def test_async_cancellation_has_no_orphan_ticket(monkeypatch, isolated_queue):
     monkeypatch.setenv("OUROBOROS_MODEL_MAX_CONCURRENCY", "1")
 
