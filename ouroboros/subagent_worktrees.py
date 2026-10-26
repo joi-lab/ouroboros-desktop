@@ -631,13 +631,15 @@ def _git_env(repo_dir: Path, *args: str, env: Dict[str, str],
     return proc
 
 
-def _occupied(folder: Path) -> bool:
-    """A real folder that holds anything (a gitlink's folder is empty in a fresh copy)."""
+def _gitlink_held(folder: Path) -> str:
+    """Why a gitlink's folder keeps a writer's checkout, or "" (empty in a fresh copy; a link there is staged)."""
     try:
         with os.scandir(folder) as entries:
-            return not folder.is_symlink() and next(entries, None) is not None
-    except OSError:
-        return False
+            return "populated_submodule" if not folder.is_symlink() and next(entries, None) is not None else ""
+    except (FileNotFoundError, NotADirectoryError):
+        return ""
+    except OSError:  # what it holds is unknown, never "empty"
+        return "" if folder.is_symlink() else "unlistable_directory"
 
 
 def _nul_paths(raw: bytes) -> List[str]:
@@ -716,17 +718,14 @@ def snapshot_commit(source: Path, *, message: str, parent: str = "",
         def held(rel: str) -> bool:  # the folder's files, or an entry standing where the folder belongs
             return bool(prefix) and (rel == prefix.rstrip("/") or rel.startswith(prefix)) and rel not in held_keep
 
-        modes: Dict[str, bytes] = {}
-        for item in _git_env(source, "ls-files", "-s", "-z", env=env).stdout.split(b"\0"):
-            meta, _, raw = item.partition(b"\t")
-            if raw:
-                modes.setdefault(raw.decode("utf-8", errors="surrogateescape"), meta[:6])
+        rows = [item.partition(b"\t") for item in _git_env(source, "ls-files", "-s", "-z", env=env).stdout.split(b"\0")]
+        modes = {raw.decode("utf-8", errors="surrogateescape"): meta[:6] for meta, _, raw in rows if raw}
         for rel, mode in modes.items():
             if rel in absent:
                 continue
-            if parent and mode == b"160000" and _occupied(source / rel):
+            if parent and mode == b"160000" and (reason := _gitlink_held(source / rel)):
                 # A result holds a gitlink, never what a checked-out submodule or a staged repository keeps.
-                excluded.append({"path": rel, "reason": "populated_submodule"})
+                excluded.append({"path": rel, "reason": reason})
             if held(rel):
                 dropped.append(rel)
             elif is_wal_index(source / rel):

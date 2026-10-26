@@ -243,17 +243,22 @@ def _with_submodule(tmp_path, monkeypatch):
     return target, ctx, handle, copy
 
 
-@pytest.mark.parametrize("work", ["uncommitted_edit", "committed_inside", "staged_clone", "left_empty"])
+@pytest.mark.parametrize("work", ["uncommitted_edit", "committed_inside", "staged_clone", "unreadable", "left_empty"])
 def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path, monkeypatch, work):
     """A gitlink in the result is only a pointer: a submodule the run checked out, or a repository it
-    cloned and staged, keeps the checkout until apply or reject. An untouched empty gitlink does not."""
+    cloned and staged, keeps the checkout until apply or reject, and so does a gitlink folder it left
+    unreadable (its contents are unknown, never "empty"). An untouched empty gitlink does not."""
+    if work == "unreadable" and (os.name == "nt" or os.geteuid() == 0):
+        pytest.skip("needs POSIX permissions that bind this user")
     target, ctx, handle, copy = _with_submodule(tmp_path, monkeypatch)
     lib = copy / "deps" / "lib"
-    if work in ("uncommitted_edit", "committed_inside"):
+    if work in ("uncommitted_edit", "committed_inside", "unreadable"):
         _git(copy, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", "deps/lib")
         (lib / "lib.txt").write_text("the run's library fix\n", encoding="utf-8")
         if work == "committed_inside":
             _git(lib, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix")
+        if work == "unreadable":
+            lib.chmod(0o300)  # writable and searchable, but not listable
     elif work == "staged_clone":
         _git(copy, "clone", "-q", str(tmp_path / "lib"), "vendor/dep")
         (copy / "vendor" / "dep" / "lib.txt").write_text("the run's vendored fix\n", encoding="utf-8")
@@ -269,7 +274,12 @@ def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path
         assert capture["unsaved_paths"] == [held] and "KEPT" in capture["note"], capture
         assert "disposition" not in capture and "checkout_released" not in capture and entry.patch_disposed == ""
         assert copy.is_dir() and find_execution_snapshot(handle.snapshot_id) is not None
+        manifest = json.loads(pathlib.Path(capture["manifest_artifact"]).read_text(encoding="utf-8"))
+        reason = "unlistable_directory" if work == "unreadable" else "populated_submodule"
+        assert {"path": held, "reason": reason} in manifest["untracked_excluded"]
     finally:
+        if lib.exists():
+            lib.chmod(0o755)
         custody._CUSTODY.clear()
 
 
