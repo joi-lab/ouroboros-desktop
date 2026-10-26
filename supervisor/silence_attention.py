@@ -271,7 +271,6 @@ def _deadline(queue, task, meta):
 
 
 def _admit(queue, task_id, task, meta, fact) -> None:
-    from ouroboros.settings_integrity import live_subagents_mode
     from ouroboros.contracts.task_contract import attach_task_contract, build_task_contract
     from ouroboros.dialogue_provenance import presence_binding_authority_metadata
     from ouroboros.model_wait import execution_elapsed_seconds
@@ -365,10 +364,12 @@ def _admit(queue, task_id, task, meta, fact) -> None:
     if str(queue.DRIVE_ROOT) != str(count_roots[0]):
         count_roots.append(queue.DRIVE_ROOT)
 
-    room_mode = live_subagents_mode(task=task, drive_root=queue.DRIVE_ROOT)
+    room_mode, room_refusal = delegation._subagent_room_mode(queue, task)
 
     def delegation_refusal(count, *, early=False):
         # Frozen source rights; the schedule owner's current registered limits.
+        if room_refusal:
+            return room_refusal
         rights = check_delegation_admission(contract["delegation_budget"], direct_child_count=count, room_mode=room_mode)
         if not rights.ok and not (early and rights.reason_code == "delegation_rights_child_count_unknown"):
             return rights.reason_code, rights.detail
@@ -427,8 +428,10 @@ def _admit(queue, task_id, task, meta, fact) -> None:
 
     def durable_child_count():
         # Read the room again outside Q before the interlocked admission.
-        nonlocal room_mode
-        room_mode = live_subagents_mode(task=task, drive_root=queue.DRIVE_ROOT)
+        nonlocal room_mode, room_refusal
+        room_mode, room_refusal = delegation._subagent_room_mode(queue, task)
+        if room_refusal:
+            return direct_child_count
         return delegation._direct_child_count(count_roots, task_id, diagnostic_id, propagate_contention=True)
 
     def admit(preparation):

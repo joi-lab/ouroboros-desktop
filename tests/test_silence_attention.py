@@ -108,6 +108,32 @@ def test_diagnostic_admission_obeys_live_room_mode(attention, monkeypatch, mode)
     assert attention.running["root"] is attention.meta and queue._reap_queue.empty()
 
 
+@pytest.mark.parametrize("phase", ["before", "preparation"])
+def test_deleted_project_refuses_diagnostic_without_stopping_source(attention, monkeypatch, phase):
+    from ouroboros import projects_registry as registry
+    from supervisor import workspace_preparation
+
+    registry.create_project(attention.root, "room")
+    attention.meta["task"]["project_id"] = "room"
+    if phase == "before":
+        registry.begin_project_deletion(attention.root, "room")
+    else:
+        original_accept = workspace_preparation.accept
+        def accept(*args, admission, **kwargs):
+            def deleted(preparation):
+                registry.begin_project_deletion(attention.root, "room")
+                return admission(preparation)
+            return original_accept(*args, admission=deleted, **kwargs)
+        monkeypatch.setattr(workspace_preparation, "accept", accept)
+    attention.tick()
+    attention.flush()
+    fact = observation(attention)
+    assert not queue.PENDING
+    assert fact["attention_wait"].startswith("project_routing_fence")
+    assert load_task_result(attention.root, fact["diagnostic_id"])["reason_code"] == fact["attention_wait"]
+    assert attention.running["root"] is attention.meta and queue._reap_queue.empty()
+
+
 def test_diagnostic_rechecks_room_after_preparation_without_reading_under_queue_lock(attention, monkeypatch):
     from ouroboros import settings_integrity
     from supervisor import workspace_preparation
