@@ -54,7 +54,7 @@ from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
 from ouroboros.chronicle_store import ChronicleStore, source_time_span
 from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
-from ouroboros.dialogue_provenance import row_class, row_provenance
+from ouroboros.dialogue_provenance import in_reading_order, rooms_read_by_time, row_class, row_provenance
 
 # The key of the memory view's last-capture fact in a task's ``llm_trace``.
 VIEW_TRACE_KEY = "memory_view"
@@ -67,7 +67,8 @@ MAIN_ROOM = 1
 _META_FIELDS = ("chat_id", "ts", "type", "direction", "task_id", "parent_task_id", "root_task_id",
                 "client_message_id", "subagent_task_id", "delegation_role", "subagent_role", "initiator",
                 "summary_kind", "sender_label", "username", "author", "source", "transport",
-                "status", "outcome", "outcome_phase", "reason_code", "result_ref", "presence", "presence_provenance")
+                "status", "outcome", "outcome_phase", "reason_code", "result_ref", "presence", "presence_provenance",
+                "historical_import", "source_order")
 _MEMBERSHIP_FIELDS = ("chat_id", "ts", "type", "task_id", "parent_task_id", "root_task_id", "source_keys")
 
 Entry = Tuple[Dict[str, Any], Dict[str, Any], int]
@@ -205,7 +206,8 @@ def rows_after_frontier(root: Any) -> List[Entry]:
 
 
 def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
-    """The open rows of every room that has one: after the frontier, outside the room's sealed set."""
+    """The open rows of every room that has one: after the frontier, outside the room's sealed set, in
+    reading order (``open_room_rows``)."""
     store = ChronicleStore(root)
     frontier = _active_frontier(store)
     if frontier is None:
@@ -220,11 +222,12 @@ def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
         for room in rooms_of_row(entry[1], facts):
             grouped.setdefault(room, []).append(entry)
     rooms: Dict[str, List[Entry]] = {}
+    timed = rooms_read_by_time(root, (entry[1] for entry in projected))  # every room at once, sealed rows or not
     for room, entries in grouped.items():
         sealed = _sealed(store, room, authority)
         kept = [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
         if kept:
-            rooms[room] = kept
+            rooms[room] = in_reading_order(kept, timed, lambda entry: entry[1])
     return rooms
 
 
@@ -254,13 +257,17 @@ def _room_entries(root: Any, store: ChronicleStore, room: str,
 
 
 def open_room_rows(root: Any, room_id: Any) -> List[Entry]:
-    """``(address, row_meta, pos)`` of one room's open rows, in append order."""
+    """``(address, row_meta, pos)`` of one room's open rows in reading order: append order, or in a room
+    holding imported earlier messages its time order, though pages sealed them all
+    (``dialogue_provenance.in_reading_order``), so lanes and the floor's oldest-first walk follow time;
+    ``room_facts`` bounds their stored times. Addresses and positions stay physical."""
     store, room = ChronicleStore(root), str(room_id)
     entries = _room_entries(root, store, room)
     if not entries:
         return []
     sealed = _sealed(store, room, _authority(store))
-    return [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
+    kept = [entry for entry in entries if entry[0]["row_sha256"] not in sealed]
+    return in_reading_order(kept, rooms_read_by_time(root, (entry[1] for entry in kept)), lambda entry: entry[1])
 
 
 # --- legacy units -------------------------------------------------------------------------------
@@ -513,20 +520,21 @@ def room_facts(store: ChronicleStore, room: str, entries: List[Entry], lineage: 
 
     ``entries`` are the room's open rows (``open_room_rows``): ``people`` and ``mine`` are lane 1 by author
     (``dialogue_provenance.row_class``, with the chronicle's ``lineage``), ``task_facts`` lane 2, ``chars``
-    their text; ``earliest`` and ``latest`` are the open rows' times. ``notes`` are the room's notes no page
-    sealed. ``pages`` are the room's acting pages (folded ones too) and ``last_covered`` the latest row time
-    among their covers — not a boundary: a page covers a set of rows and an earlier row can stay open, so
+    their text; ``earliest`` and ``latest`` bound the open rows' stored times (``source_time_span``): in a room
+    read by time a row received now can read first and an import sent long ago last. ``notes`` are the room's
+    notes no page sealed. ``pages`` are the room's acting pages (folded ones too) and ``last_covered`` the latest
+    row time among their covers — not a boundary: a page covers a set of rows and an earlier row can stay open, so
     the gap shows from ``earliest`` beside it and no sealing frontier is computed.
     """
     spoken = [cls["author"].get("kind") for cls in (row_class(meta, pos=pos, **lineage) for _a, meta, pos in entries)
               if cls["lane"] == 1]
     pages = [record for record in store.pages_of_room(room) if record["kind"] == "page"]
     ends = [end for record in pages if (end := ((record.get("covers") or {}).get("ts_span") or {}).get("end"))]
+    span = source_time_span(meta.get("ts") for _address, meta, _pos in entries)
     return {"rows": len(entries), "people": spoken.count("human"), "mine": spoken.count("ouroboros"),
             "task_facts": len(entries) - len(spoken),
             "chars": sum(int(meta.get("text_chars") or 0) for _address, meta, _pos in entries),
-            "earliest": str(entries[0][1].get("ts") or "") if entries else "",
-            "latest": str(entries[-1][1].get("ts") or "") if entries else "", "notes": notes, "pages": len(pages),
+            "earliest": str(span["start"] or ""), "latest": str(span["end"] or ""), "notes": notes, "pages": len(pages),
             "last_covered": str(source_time_span(ends).get("end") or "") if ends else "",
             **({"place": place} if (place := place_activity(entries)) else {})}
 
@@ -535,7 +543,9 @@ def place_activity(entries: List[Entry]) -> Dict[str, Any]:
     """Index facts from open place rows; delivered event ids are facts, not an inferred obligation.
 
     Counts cover the open rows only. Multipart receipts count their source event once;
-    failed receipts do not mark an event answered. No transcript text enters this index.
+    failed receipts do not mark an event answered; imported earlier messages are history,
+    not arrivals. ``latest`` bounds the rows' stored times (as ``room_facts``), ``last_address``
+    names the last row as the room reads. No transcript text enters this index.
     """
     from ouroboros.dialogue_provenance import place_row_facts
 
@@ -544,7 +554,8 @@ def place_activity(entries: List[Entry]) -> Dict[str, Any]:
         return {}
     facts = [place_row_facts(meta) for _address, meta, _pos in rows]
     arrivals = {fact["source_event_id"] for (_address, meta, _pos), fact in zip(rows, facts)
-                if fact.get("source_event_id") and meta.get("direction") == "in"}
+                if fact.get("source_event_id") and meta.get("direction") == "in"
+                and not isinstance(meta.get("historical_import"), dict)}
     answered = {fact["source_event_id"] for (_address, meta, _pos), fact in zip(rows, facts)
                 if fact.get("source_event_id") and meta.get("type") == "presence_delivery"
                 and (meta.get("transport") or {}).get("delivery", {}).get("state") in {"delivered", "accepted"}}
@@ -552,7 +563,8 @@ def place_activity(entries: List[Entry]) -> Dict[str, Any]:
             "conversation_key": next((fact["conversation_key"] for fact in reversed(facts)
                                       if fact.get("conversation_key")), ""),
             "answered_events": len(answered), "unanswered_events": len(arrivals - answered),
-            "arrivals": len(arrivals), "rows": len(rows), "latest": str(rows[-1][1].get("ts") or ""),
+            "arrivals": len(arrivals), "rows": len(rows),
+            "latest": str(source_time_span(meta.get("ts") for _address, meta, _pos in rows)["end"] or ""),
             "last_address": chat_chain.format_address(rows[-1][0])}
 
 

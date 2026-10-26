@@ -1043,7 +1043,12 @@ Use the connector's ordinary content-hash-bound skill token for:
 - `GET /identity`: `presence_main_contact_version: 1` advertises host-bound private
   Main messages/questions and live/late answer routing; `presence_work_output_version: 1`
   advertises canonical output identities and separate producer/child references in
-  work polls. `presence_wake_facts` lists accepted provider facts. Check these facts
+  work polls. `presence_wake_facts` lists accepted provider facts.
+  `presence_history_import_version: 1` advertises `POST /presence/history` ("Importing
+  earlier history" below); `presence_source_order_version: 1` advertises
+  `event.message.source_order` on live and history events alike: an integer from 0 to
+  2^53-1 by which the provider orders the conversation's messages (Telegram: its message
+  id), refused with 400 when it is anything else. Check these facts
   for features you require: the older `places_version`, continuation and delivery
   version trio does not imply them. Missing facts mean an explicit setup/upgrade
   gap, not permission to inject owner messages or invent output identities. A
@@ -1310,6 +1315,76 @@ return HTTP409. Successful response shape is
 is the only canonical history; no separate memory or reporting scheduler is
 needed. Expose unsupported reporting or pending report failures through ordinary
 transport status and receipts.
+
+#### Importing earlier history
+
+Only a Host advertising `presence_history_import_version: 1` accepts earlier provider
+messages, on `POST /presence/history` with the connector's skill token, `presence`
+permission and the place scope a turn has (optional legacy `binding_id`, otherwise the
+event facts resolve the place). Never send history through `/presence/turn` or
+`/chat/inject`: both treat old messages as new arrivals.
+
+```json
+{"import_id": "imp_3f2a9c0d1e2b4a5f", "records": [
+  {"event": {"source_event_id": "telegram:111:-100222:0:4242", "provider": "telegram",
+             "account_id": "111", "conversation_id": "-100222", "thread_id": "",
+             "conversation_key": "telegram:111:-100222:0",
+             "actor": {"platform_actor_id": "333", "display_name": "Ann"},
+             "conversation": {"title": "Team chat"},
+             "message": {"message_id": "4242", "sent_at": "2025-03-01T10:15:00+00:00"},
+             "text": "See you at ten"},
+   "authorship": "participant", "source_timestamp": "2025-03-01T10:15:00+00:00"}]}
+```
+
+- `import_id` (1-128 characters) is provenance, never identity. `records` holds 1-100
+  records of one provider, account, conversation and thread.
+- `event` has exactly the live event fields; `facts` is refused. Use the source event id
+  and provider facts live capture would send for that revision (an edited message is its
+  current revision), with the sender in `actor.platform_actor_id`.
+- `authorship` is `participant` (someone else sent it) or `platform_account` (sent from
+  the connected account itself). Neither makes the sender the owner or Ouroboros.
+- `source_timestamp` is the provider's original send time, timezone-qualified and not
+  later than the Host's receipt; `event.message.sent_at`, when present, names the same
+  instant. Send `event.message.source_order` as live capture does, so messages sharing
+  one send time read in the provider's order whatever order your requests take. `staged_files` is absent or `[]` in version 1: media stays a fact in
+  `event.message.media`.
+
+A malformed request answers HTTP 400 `presence_history_invalid` with its `field`; place
+and binding refusals reuse the turn's codes; 429 and 503 `presence_history_importing`
+(saved history still importing) or `presence_history_unavailable` are retryable. None
+of these record anything.
+
+Records are written in order, each once, as the room's canonical arrival row: `ts` is the
+send time, and an immutable `historical_import` marker holds the import id, authorship
+and Host receipt time. `results` answers each record with its `source_event_id`:
+`recorded`, `duplicate`, `custody` (`history`, or `live` when live capture already holds
+that revision, whose custody stands), `turn_ref`, `history_id`, `ts` and `received_at`.
+A record matches a stored one when the live event identity (place, source event id,
+provider, account, conversation, thread, actor id, text) and the source message facts
+(`message_id`, `event_kind`, `revision`, `edited_at`, `reply_to_message_id`, and `media`
+without `status`, `note` and `reason`) agree, as do the authorship and send time of
+earlier history, or the `message.sent_at` a live capture recorded (a receipt time is
+never a send time; none recorded stays unknown). Other actor, conversation and message
+facts are display enrichment: the first stored values stand. A mismatch refuses that
+record with `presence_event_identity_conflict` (`rejected`). HTTP 200 means every record
+is confirmed, 409 that some conflict and the others are confirmed, 503
+`presence_history_unwritable` that a write was not confirmed: that record and every later
+one answer `retry`, and this status wins over 409. Resend unconfirmed records unchanged;
+a write that did land answers `duplicate`.
+
+Each new arrival, live or imported, keeps its send time (`source_timestamp`, or a live
+event's readable `message.sent_at` no later than its receipt) and `message.source_order`
+in an immutable `source_order` block, and a room holding imports reads by them, then by
+stored position: a row without an order reads before ordered rows of its time. Like
+other enrichment, the first stored values stand, so a later record carrying an order
+never conflicts with a row stored without one.
+
+History starts nothing, whatever the place state: no task, attention decision, wake,
+unread mark, mailbox, outbox or reply. A later live delivery of an imported revision
+answers `completed`/`silent` like a heard event; an edit with a new revision is a new
+event. Skip provider messages your own journal sent and reported through
+`/presence/delivery`, matched by the receipt's exact provider message id, never by text:
+the Host does not match history to receipts.
 
 ## Notifying the owner when work completes
 

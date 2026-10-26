@@ -768,14 +768,23 @@ def _log_dialogue(
     event: PresenceTurnEvent,
     task: Mapping[str, Any],
     task_id: str,
-) -> None:
+    ts: str = "",
+    historical_import: Mapping[str, Any] | None = None,
+) -> Any:
+    """Write one room row; an inbound one returns its store receipt. ``ts``/``historical_import``:
+    an imported earlier message keeps its provider send time and immutable marker (``presence_history``).
+    Every new arrival, live or imported, keeps its provider send time and order (``source_order``)."""
     from types import SimpleNamespace
     from ouroboros import chat_chain
     from ouroboros.dialogue_provenance import presence_provenance_from_task
+    from ouroboros.presence_history import source_order_block
 
     state = read_json_dict(drive_root / "state" / "state.json") or {}
+    at = ts or utc_now_iso()
+    block = source_order_block(event.message, received=at, sent=ts if historical_import is not None else "") \
+        if direction == "in" else None
     row = {
-        "ts": utc_now_iso(),
+        "ts": at,
         "session_id": state.get("session_id"),
         "direction": direction,
         **({"type": "place_arrival"} if direction == "in" and task["metadata"].get("focus") else {}),
@@ -805,6 +814,8 @@ def _log_dialogue(
         **({"place_id": task["metadata"]["presence"]["place_id"]}
            if task["metadata"]["presence"].get("place_id") else {}),
         **{key: task[key] for key in ("attachment_manifest", "attachment_manifest_ref") if key in task},
+        **({"historical_import": dict(historical_import)} if historical_import is not None else {}),
+        **({"source_order": block} if block is not None else {}),
     }
     if direction == "in" and not task["metadata"].get("focus"):
         # Retain the transport's exact contextual observations before publishing their address.
@@ -819,9 +830,9 @@ def _log_dialogue(
     # the store, and a turn whose row cannot be written fails before the model runs (the transport retries).
     if direction != "in":
         dialogue_store.append_quietly(drive_root, "chat", row)  # the reply: best effort, retry buffer
-        return
+        return None
     try:
-        dialogue_store.append(drive_root, "chat", row)
+        return dialogue_store.append(drive_root, "chat", row)
     except (StoreError, OSError, ValueError) as exc:
         log.warning("Presence inbound row not stored in %s", drive_root, exc_info=True)
         raise PresenceTurnError("chat_log_unwritable", "chat") from exc

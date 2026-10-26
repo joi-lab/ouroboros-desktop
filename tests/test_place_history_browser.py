@@ -180,3 +180,152 @@ def test_skills_place_reader_drafts_facts_and_teardown(skills_browser, tmp_path,
         (evidence / f'{prefix}.json').write_text(json.dumps(observations, indent=2))
         skills.close(browser)
         client.close()
+
+
+def _import_earlier(root, numbers, days_ago, import_id):
+    """Earlier messages of the scenario's room through the real Host writer (``presence_history``)."""
+    from datetime import datetime, timedelta, timezone
+
+    from ouroboros.presence_admission import admit_presence_turn
+    from ouroboros.presence_bindings import conversation_key
+    from ouroboros.presence_history import parse_history_request, record_history
+    now, key = datetime.now(timezone.utc).replace(microsecond=0), conversation_key('chat', 'qa', 'design', '')
+    records = []
+    for n in numbers:
+        sent = (now - timedelta(days=days_ago - n)).isoformat()
+        records.append({'event': {'source_event_id': f'qa-earlier-{n}', 'provider': 'chat', 'account_id': 'qa',
+                                  'conversation_id': 'design', 'thread_id': '', 'conversation_key': key,
+                                  'actor': {'platform_actor_id': 'maya', 'display_name': 'Maya Private'},
+                                  'conversation': {'title': '#design-review private'},
+                                  'message': {'message_id': f'e{n}', 'sent_at': sent}, 'text': f'Earlier message {n:03d}'},
+                        'authorship': 'participant', 'source_timestamp': sent})
+    admission = admit_presence_turn(drive_root=root, authenticated_transport_skill='bridge', provider='chat',
+                                    account_id='qa', conversation_id='design')
+    status, body = record_history(root, admission, parse_history_request({'import_id': import_id, 'records': records}))
+    assert status == 200, body
+    return {f'Earlier message {n:03d}': (now - timedelta(days=days_ago - n)).year for n in numbers}
+
+
+@pytest.mark.parametrize('engine,width,theme', [('chromium', 1280, 'light'), ('webkit', 390, 'dark')])
+def test_place_reader_reads_again_when_an_import_changes_its_room(skills_browser, tmp_path, monkeypatch, engine, width, theme):
+    """The owner reads a room's live conversation while its first import lands. The next Load older is refused
+    (409 history_view_changed: the room now reads by time); the reader reads the newest page afresh, keeps the
+    shown rows until it arrives and the keyboard focus on Load older, says why, and pages on to the imported
+    rows, each time from another year naming its year. An import landing after the reader reached its start
+    stays out of that start, which says it is the record as read; Refresh history reads it in. Drafts survive,
+    and nothing is written from the browser."""
+    from datetime import datetime, timedelta, timezone
+
+    from ouroboros import dialogue_store as ds
+    client, place, task, _ = scenario(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    for n in range(160):  # a long live conversation, read in stored order until the first import
+        ds.append(tmp_path, 'chat', {'ts': (now - timedelta(minutes=300 - n)).isoformat(), 'direction': 'in',
+                                     'chat_id': task['chat_id'], 'type': 'place_arrival', 'text': f'Live message {n:03d}',
+                                     'source': 'presence:chat', 'sender_label': 'Maya Private', 'sender_session_id': 'maya',
+                                     'client_message_id': f'qa-live-{n}', 'task_id': f'qa-live-turn-{n}', 'place_id': place.place_id})
+    skill = fixture('extensions_fix_r1.json')['skills'][0]
+    skill.update(name='bridge', description='Synthetic connector for captured conversations.', connects=['chat'], install=None)
+    evidence = Path(os.environ.get('OUROBOROS_UI_EVIDENCE_DIR', str(tmp_path / 'evidence'))) / 'place-reader-import'
+    evidence.mkdir(parents=True, exist_ok=True)
+    prefix = f'{engine}-{width}-{theme}'
+    browser = getattr(skills_browser, engine).launch(headless=True)
+    page = browser.new_page(viewport={'width': width, 'height': 844 if width == 390 else 900}, device_scale_factor=1,
+                            locale='en-US', timezone_id='UTC')
+    errors, reads = [], []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    skills = open_skills(page, extensions=[skill])
+    page.route(URL, lambda route: route.fulfill(content_type='text/html; charset=utf-8',
+        body=_document().replace('<head>', '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')))
+
+    def api(request):
+        assert request.method == 'GET', request.url
+        url = urlsplit(request.url)
+        response = client.get(url.path + ('?' + url.query if url.query else ''))
+        if url.path == '/api/chat/history':
+            reads.append([response.status_code, response.json().get('reason_code'), 'cursor=' in url.query])
+        return response.status_code, response.json()
+    for path in ('/api/places', f'/api/places/{place.place_id}/rooms', '/api/chat/history'):
+        skills.answers[path] = api
+    sheet = page.locator('.place-sheet')
+    reader = sheet.locator('.place-convo')
+    status = reader.locator('[data-history-status]')
+
+    def settled():
+        page.wait_for_function("() => { const s = document.querySelector('.place-convo [data-history-status]');"
+                               " return s && !/Reading captured history/.test(s.textContent); }")
+
+    def older_to_start():
+        while reader.locator('[data-history-older]').is_visible():
+            reader.locator('[data-history-older]').click()
+            settled()
+
+    def shown():
+        return reader.locator('.place-convo-row').evaluate_all('''rows => rows.map(row => ({
+            text: (row.querySelector('.place-convo-text')?.textContent || '').trim(),
+            time: row.querySelector('time')?.textContent || '', title: row.querySelector('time')?.title || ''}))''')
+
+    def capture(scene):
+        page.screenshot(path=str(evidence / f'{prefix}-{scene}.png'))
+    observations = {'synthetic': True, 'engine': engine, 'viewport': [width, 844 if width == 390 else 900], 'theme': theme}
+    try:
+        page.goto(URL, wait_until='networkidle')
+        page.add_script_tag(url='/static/purify.min.js')
+        page.add_script_tag(url='/static/marked.min.js')
+        page.add_style_tag(url='/static/settings.css')
+        page.add_style_tag(url='/static/consciousness.css')
+        page.evaluate("({theme,width}) => { document.documentElement.classList.add('ouro-ui'); document.documentElement.dataset.theme=theme; document.documentElement.dataset.layout=width < 720 ? 'stack' : 'docked'; }", {'theme': theme, 'width': width})
+        page.locator('.skills-card[data-skill="bridge"] .skills-card-name').click()
+        page.locator(f'.skills-detail-sheet [data-place-open="{place.place_id}"]').click()
+        room = sheet.locator('[data-place-room]').first
+        room.wait_for()
+        sheet.locator('[data-place-act="add-note"]').click()
+        sheet.locator('[data-place-draft="note"]').fill('Unsaved private note')
+        room.click()
+        reader.locator('.place-convo-row').first.wait_for()
+        settled()
+        before = shown()
+        assert reader.locator('[data-history-older]').is_visible() and not any(row['text'].startswith('Earlier') for row in before)
+        years = _import_earlier(tmp_path, range(30), 800, 'imp-first')  # the room's first import, while it is open
+        reader.locator('[data-history-older]').focus()
+        page.keyboard.press('Enter')
+        settled()
+        assert status.inner_text() == 'Saved history changed, so it was read again from the newest messages.'
+        assert reads[-2][:2] == [409, 'history_view_changed'] and reads[-1][0] == 200 and not reads[-1][2], reads
+        assert reader.locator('[data-history-older]').evaluate('el => document.activeElement === el'), 'focus stays on Load older'
+        assert reader.locator('[data-history-retry]').is_hidden()
+        capture('first-import-recovered')
+        older_to_start()
+        rows = shown()
+        texts = [row['text'] for row in rows]
+        earlier = [row for row in rows if row['text'].startswith('Earlier message')]
+        assert [row['text'] for row in earlier] == [f'Earlier message {n:03d}' for n in range(30)]
+        assert texts.index('Earlier message 029') < texts.index('Live message 000') < texts.index('Live message 159')
+        assert all(str(years[row['text']]) in row['time'] for row in earlier), earlier[:2]
+        # An import shows its send time; its title says when Ouroboros actually saved it (the import's receipt).
+        assert all(row['title'].startswith('Sent ') and ' · saved ' in row['title'] for row in earlier), earlier[:2]
+        assert str(now.year) not in next(row['time'] for row in rows if row['text'] == 'Live message 159')
+        coverage = reader.locator('[data-history-coverage]')
+        assert coverage.inner_text().startswith('Start of the record saved when this was read. Refresh history to include anything saved since.')
+        reader.locator('.place-convo-row').first.scroll_into_view_if_needed()
+        capture('start-with-years')
+        _import_earlier(tmp_path, range(100, 105), 1200, 'imp-older')  # lands after the reader reached its start
+        assert shown() == rows and 'Earlier message 100' not in reader.inner_text()
+        reader.locator('[data-history-refresh]').click()
+        settled()
+        older_to_start()
+        refreshed = [row['text'] for row in shown()]
+        assert refreshed[:5] == [f'Earlier message {n:03d}' for n in range(100, 105)] and refreshed[5:] == texts
+        reader.locator('.place-convo-row').first.scroll_into_view_if_needed()
+        capture('refreshed-start')
+        observations['geometry'] = page.evaluate("() => ({width: innerWidth, scrollWidth: document.documentElement.scrollWidth})")
+        assert observations['geometry']['scrollWidth'] <= width
+        reader.locator('[data-history-back]').click()
+        assert sheet.locator('[data-place-draft="note"]').input_value() == 'Unsaved private note'
+        assert skills.posts == [], skills.posts
+        assert errors == [], errors
+    finally:
+        observations.update(pageerrors=errors, reads=reads, browser=browser.version)
+        (evidence / f'{prefix}.json').write_text(json.dumps(observations, indent=2))
+        skills.close(browser)
+        client.close()

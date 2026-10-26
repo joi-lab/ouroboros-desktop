@@ -323,12 +323,21 @@
  */
 
 /**
+ * An earlier message its connector imported: platform authorship and Host receipt time; `ts` is its send time.
+ * @typedef {Object} PlaceHistoryImport
+ * @property {'participant'|'platform_account'} authorship
+ * @property {string} received_at
+ */
+
+/**
  * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
  * @typedef {Object} PlaceHistoryFacts
  * @property {'message'|'notice'|'delivery'} kind
  * @property {('authored'|'accepted'|'delivered'|'failed'|'uncertain')=} delivery_state
  * @property {PlaceHistoryAttention=} attention
  * @property {boolean=} owner_confirmed  // current stored account confirmation
+ * @property {PlaceHistoryImport=} historical_import  // never owner confirmation or attention
+ * @property {string=} sent_at  // the provider send time its arrival recorded; absent: unknown, never inferred
  */
 
 /**
@@ -452,13 +461,15 @@
  */
 
 /**
- * `coverage` v1: delivered stored bytes per stream; a span is `{from, to, chain, gaps}` or null.
- * Byte delivery, never chronology or proof of the conversation's start.
+ * `coverage` v1: delivered coordinates per stream; a span is `{from, to, chain, gaps}` or null. Stored
+ * order counts bytes under chain `dialog`; a room with imported history counts chat rows in time order under
+ * `dialog-chrono-<end>` (`-at-<position>` around a row) and adds `keys` (CLIENT_CONTRACT §5). Never proof of
+ * the conversation's start.
  * @typedef {Object} ChatHistoryCoverage
  * @property {number} v
  * @property {string} view
  * @property {Object.<string,number>} upper
- * @property {Object.<string,?{from: number, to: number, chain: string, gaps: string[]}>} spans
+ * @property {Object.<string,?{from: number, to: number, chain: string, gaps: string[], keys: ({from: ?Array, to: ?Array, frozen: number}|undefined)}>} spans
  */
 
 /**
