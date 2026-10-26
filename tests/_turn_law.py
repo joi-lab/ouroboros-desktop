@@ -23,18 +23,6 @@ class TurnLawBreach(AssertionError):
 # excuses, each with the growth it may not pass meanwhile: measured at k=30 for the history laws, scaled by the
 # units of history added). Measured 26.10 on the integrated tree in its steady state (tests/_turn_shapes.py).
 TURN_GAPS: Dict[Tuple[str, str], Tuple[str, Dict[str, int]]] = {
-    ("L1", "T:room"): (
-        "A project room's turn, k=1 -> k=30: a project room's direct turn integrates (BIBLE P1: the whole horizon "
-        "stays resident in a root task), so its view holds every room's story and a line per live room. Its one "
-        "capture reads every room's records and sealed sets and the stored facts of every row after the frontier: "
-        "a room's open rows are its members' rows outside its sealed set, and membership is applied at read "
-        "(chronicle_store.capture: json_chars +4.0 MB, vm_steps +96,400, +3,200 of them the counts of acting pages "
-        "and parts read in SQL); the story reads every room's acting pages and parts whole (memory_view."
-        "_story_pages: +581 KB), the retold sections its parts fold whose units have no rows (memory_inventory."
-        "record_period: +56 KB) and the legacy pointers once (+56 KB). No remover in this update: narrowing a "
-        "project room's view to its own rooms is the owner's decision (P1); counting the other rooms' open rows "
-        "without reading their sealed rows needs membership kept with each stored row, which every binding moves.",
-        {"json_loads": 234, "json_chars": 4785404, "vm_steps": 97040}),
     ("L3", "T:main:archive"): (
         "40 archived knowledge notes and 40 old rescue snapshots (k=1, the turn after the one that met them): "
         "the knowledge shelf is listed for the index the mind is shown, which counts the archived notes "

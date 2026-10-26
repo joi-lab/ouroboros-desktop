@@ -339,22 +339,13 @@ def _growth(before: Dict[str, Any], after: Dict[str, Any], keys: Iterable[str]) 
     return {key: after["counts"].get(key, 0) - before["counts"].get(key, 0) for key in keys}
 
 
-@pytest.mark.parametrize("tag", [pytest.param("T:room", marks=turn_gap("L1", "T:room"))])
-def test_b10_a_project_room_s_turn_does_the_same_work_at_every_size(measured, tag):
-    """L1. A project room's direct turn, from the loop's handling of the owner's message to its first model
-    request, does the same work at k=1 and k=30: every counter, payload included (the room's own rows and
-    story are the same at both sizes), VM steps within the deeper B-tree's allowance."""
-    large = measured["large"]
-    little, big = at_request(measured, tag, K_SMALL), at_request(measured, tag, large)
-    allowed = {key: BYTE_JITTER if key in BYTE_KEYS else COUNT_JITTER for key in WORK}
-    hold_turn_law("L1", tag, _growth(little, big, (*WORK, "vm_steps")), {**allowed, "vm_steps": vm_allowance(large)},
-                  readers_of(little, big), scale=(large - K_SMALL) / 29)
-
-
-@pytest.mark.parametrize("tag", [pytest.param(tag, marks=turn_gap("L2", tag)) for tag in MAIN_TURNS])
-def test_b10_main_s_turn_makes_the_same_round_trips_at_every_size(measured, tag):
-    """L2. Main's turn (the process's first, the next one, one after activity elsewhere) makes the same round
-    trips and decodes the same dialogue rows at k=1 and k=30. Its payload is free: Main shows its story."""
+@pytest.mark.parametrize("tag", [pytest.param(tag, marks=turn_gap("L2", tag))
+                                 for tag in (*MAIN_TURNS, "T:room")])
+def test_b10_an_integrating_turn_makes_the_same_round_trips_at_every_size(measured, tag):
+    """L2. An integrating turn makes the same round trips and decodes the same dialogue rows at k=1 and k=30:
+    Main's (the process's first, the next one, one after activity elsewhere) and a project room's direct turn,
+    which integrates as a root task does (BIBLE P1: the whole horizon stays resident there, so its view holds
+    every room's story and a line per live room). Its payload is free: an integrating view shows its story."""
     large = measured["large"]
     little, big = at_request(measured, tag, K_SMALL), at_request(measured, tag, large)
     keys = (*ROUND, "rows_decoded")
