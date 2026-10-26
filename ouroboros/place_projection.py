@@ -72,18 +72,23 @@ def place_view(root, place, *, declarations: list[dict] | None = None, allowance
     spend = next((item.get("usd") for item in (allowance or {}).get("spend_by_cause") or []
                   if item.get("cause") == cause), None)
     try:
-        activity = place_activity(root, place)
         rooms = place_room_index(root, place.place_id)
     except Exception:
-        # A busy store leaves the place's label and notes readable; only its counts are unknown.
         log.warning("Place room index unavailable for %s", place.place_id, exc_info=True)
-        activity, rooms = {"unanswered": None, "last_activity_at": None}, None
+        rooms = None
+    if brief:
+        # Status and launch need labels, notes and open turns: one index pass, counts unknown when it is unavailable.
+        counts = [room.get("unanswered_count") for room in rooms or []]
+        result.update(label=place.label or place.provider, rooms=rooms,
+                      unanswered=None if rooms is None or any(c is None for c in counts) else sum(counts),
+                      last_activity_at=max((str(room.get("last_at") or "") for room in rooms or []), default=""),
+                      activity_coverage="captured_place_events", spent_24h_usd=spend)
+        return result
+    activity = place_activity(root, place)
     result.update(label=place.label or place.provider,
                   rooms=rooms, unanswered=activity["unanswered"] if rooms is not None else None,
                   last_activity_at=activity["last_activity_at"],
                   activity_coverage="captured_place_events", spent_24h_usd=spend)
-    if brief:
-        return result
     rows = place_declarations(root) if declarations is None else declarations
     row = next((r for r in rows if r["skill"] == place.connector and (
         not place.contribution_id or r["id"] == place.contribution_id)), {})

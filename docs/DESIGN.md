@@ -1805,8 +1805,8 @@ and enhancer, counts, checks and the task door. The whole note wraps on a
 phone; wide Markdown owns its own horizontal scroller. Working, Waiting, Queued,
 Paused and State unknown remain distinct. “Done · no message” requires a silent
 finish with no accepted owner message and no host notice. A held step is not
-chosen silence; a released output is not proof of delivery. Checks name their
-tool; only warned, held and sent-despite facts get amber chips. “not checked”
+chosen silence; a released output is not proof of delivery. Checks name what
+they checked; only warned, held and sent-despite facts get amber chips. “not checked”
 does not say whether a read was exempt or the Safety Supervisor was off, and
 the row never claims that every call was checked.
 

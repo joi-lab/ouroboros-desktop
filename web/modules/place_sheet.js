@@ -163,7 +163,7 @@ export function sheetShell(titleHtml, metaText, modifier = '') {
     const dialog = document.createElement('dialog');
     dialog.className = `document-reader place-sheet${modifier ? ` ${modifier}` : ''}`;
     dialog.setAttribute('aria-labelledby', 'place-sheet-title');
-    dialog.setAttribute('aria-modal', 'true');  // the shared Back (layers.back) answers only an explicit modal
+    dialog.setAttribute('aria-modal', 'true');  // bindDialogFocus answers Escape (the shared Back) only for an explicit modal
     dialog.innerHTML = `<div class="document-reader-panel">
         <div class="document-reader-head">
             <div class="document-reader-identity">

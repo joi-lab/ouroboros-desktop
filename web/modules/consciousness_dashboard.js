@@ -270,7 +270,8 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         const current = ++generation;
         // Places are read once here and then only on their change event; a failed first read retries.
         const placesRead = places === null ? refreshPlaces() : Promise.resolve();
-        regions.status.textContent = snapshot ? '' : 'Reading…';
+        const earlier = Boolean(snapshot);
+        regions.status.textContent = earlier ? '' : 'Reading…';
         let next = null;
         let readError = '';
         try { next = await read(); } catch (error) {
@@ -285,7 +286,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         }
         if (destroyed || current !== generation) return;
         if (next) snapshot = next;
-        regions.status.textContent = readError ? `Could not read consciousness: ${readError}. ${snapshot ? 'Earlier values are shown.' : ''}` : '';
+        regions.status.textContent = readError ? `Could not read consciousness: ${readError}. ${earlier ? 'Earlier values are shown.' : ''}` : '';
         regions.status.dataset.tone = readError ? 'error' : '';
         paint();
         schedule();
@@ -318,11 +319,17 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         }
         const roomDoor = event.target.closest('[data-cx-open-room]');
         if (roomDoor) {
+            if (roomDoor.dataset.pending) return;  // one press at a time while Places are re-read
             const chatId = Number(roomDoor.dataset.cxOpenRoom);
             const owner = () => (places || []).find((entry) => entry.rooms.some((room) => room.chatId === chatId));
             let place = owner();
-            // A conversation captured after the last Places read is not absence: read once more before saying so.
-            if (!place) { await refreshPlaces({ force: true }); place = owner(); }
+            if (!place) {
+                // A conversation captured after the last Places read is not absence: read once more before saying so.
+                roomDoor.dataset.pending = '1';
+                try { await refreshPlaces({ force: true }); while (placesPending) await placesPending; } finally { delete roomDoor.dataset.pending; }
+                place = owner();
+                if (!place && placesError) return;  // the read failed: the Places card says so; the door stays
+            }
             if (place) openSheet(place, { returnFocus: roomDoor, openRoomChatId: chatId });
             else if (roomDoor.isConnected !== false) { roomDoor.disabled = true; roomDoor.textContent = tr('consciousness.room_unavailable', 'Conversation unavailable'); }
             return;

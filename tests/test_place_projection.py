@@ -183,3 +183,29 @@ def test_places_endpoint_keeps_full_connector_projection(client, connector, monk
     assert row["icon"] == icon_spec("ui/icon.svg", SVG)
     assert row["readiness"] == {"text": "Connector on", "tone": "ok"}
     assert row["account_candidates"] == []
+
+
+def test_brief_view_reads_one_index_pass_and_keeps_words_when_the_store_is_busy(tmp_path, monkeypatch):
+    from ouroboros import place_projection, places
+
+    place = places.connect_place(tmp_path, connector="bridge", provider="chat", label="Inbox")
+    places.edit_place(tmp_path, place.place_id, "add_note", author="owner", text="Answer politely.")
+    place = places.get_place(tmp_path, place.place_id)  # the stored record carries the note
+    monkeypatch.setattr(place_projection, "place_activity",
+                        lambda root, p: pytest.fail("the brief view must not read activity"))
+    rooms = [{"room_chat_id": 7, "unanswered_count": 2, "last_at": "2027-01-01T00:00:00Z"},
+             {"room_chat_id": 8, "unanswered_count": None, "last_at": ""}]
+    monkeypatch.setattr(places, "place_room_index", lambda root, place_id: rooms)
+    view = place_projection.place_view(tmp_path, place, allowance={}, brief=True)
+    assert view["label"] == "Inbox" and view["notes"][0]["text"] == "Answer politely."
+    assert view["unanswered"] is None, "an unknown room count makes the total unknown, never a smaller number"
+    assert view["last_activity_at"] == "2027-01-01T00:00:00Z"
+    rooms[1]["unanswered_count"] = 1
+    assert place_projection.place_view(tmp_path, place, allowance={}, brief=True)["unanswered"] == 3
+
+    def busy(root, place_id):
+        raise RuntimeError("store busy")
+    monkeypatch.setattr(places, "place_room_index", busy)
+    view = place_projection.place_view(tmp_path, place, allowance={}, brief=True)
+    assert view["label"] == "Inbox" and view["notes"][0]["text"] == "Answer politely."
+    assert view["rooms"] is None and view["unanswered"] is None and view["last_activity_at"] == ""

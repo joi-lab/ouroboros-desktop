@@ -70,7 +70,7 @@ test('summary is authored, note is whole and disclosed, only flagged checks get 
     assert.doesNotMatch(oldHtml, /ui-chip/);
     assert.equal((namedHtml.match(/ui-chip/g) || []).length, 3);
     assert.match(oldHtml, /Safety Supervisor checked run_command/);
-    assert.match(namedHtml, /not checked \(update_memory\)/);
+    assert.match(namedHtml, /Not checked \(update_memory\)/);
     assert.doesNotMatch(namedHtml, /Safety Supervisor checked update_memory|unmetered|omitted/);
     assert.match(namedHtml, /data-cx-open-task="w-summary" data-chat-id="1">Open in Main ↗/);
     assert.doesNotMatch(wakeRowHtml({ ...named, cause: 'focus', chatId: 1099511627777, placeLabel: 'Slack' }), /data-cx-open-task/);

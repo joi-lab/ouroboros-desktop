@@ -761,7 +761,7 @@ def _collect_chat_rows(
                                             "system_type": "task_summary", "summary_kind": entry["summary_kind"],
                                             "task_id": tid, "ts": historical["ts"],
                                             "historical_terminal": dict(historical), **_history_identity(entry)})
-                    _copy_task_summary_metadata(replay_evidence[-1], entry)
+                    replay_evidence[-1].update({**{k: entry[k] for k in ("wake_silent", "quiet_effective") if type(entry.get(k)) is bool}, **{k: str(entry[k]) for k in ("suggested_name", "wake_summary") if entry.get(k)}})
             # Skip A2A virtual chat_ids so A2A task traffic does not appear in human chat history.
             if is_a2a_chat_id(entry.get("chat_id", 1)):
                 continue

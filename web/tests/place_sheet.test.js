@@ -396,4 +396,5 @@ test('the reader state keeps the authored place name out of the translation over
     const authored = meta.querySelector('[data-i18n-authored]');
     assert.ok(authored, 'the label sits in an authored span');
     assert.equal(authored.textContent, slack.label);
+    assert.equal(meta.textContent, slack.label, 'the reader state shows the label alone, no state word');
 });

@@ -188,8 +188,10 @@ export function wakeCheckText(check) {
         held: 'Safety Supervisor held {tool}', sent_despite: '{tool} sent despite the check',
         not_checked: 'not checked ({tool})',
     };
-    const tool = { place_reply: tr('consciousness.tool.reply', 'the reply'), send_user_message: tr('consciousness.tool.message', 'the message') }[check.tool] || check.tool;
-    return words[check.chip] ? fmt(words[check.chip], { tool }) : '';
+    const named = { place_reply: tr('consciousness.tool.reply', 'the reply'), send_user_message: tr('consciousness.tool.message', 'the message') }[check.tool];
+    const text = words[check.chip] ? fmt(words[check.chip], { tool: named || check.tool }) : '';
+    // Sentence case for the chip, except when it starts with a raw tool id.
+    return !text || (!named && text.startsWith(check.tool)) ? text : text[0].toUpperCase() + text.slice(1);
 }
 
 /** Keep the card's scoped cost projection; word openness and unknown without a false zero. */

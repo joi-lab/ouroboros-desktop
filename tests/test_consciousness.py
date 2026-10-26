@@ -126,11 +126,12 @@ def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
 
     for target in ("ouroboros.skill_loader.discover_skills", "ouroboros.place_projection.place_declarations",
                    "ouroboros.place_arrivals.account_candidates", "ouroboros.place_projection.migration_problems",
-                   "ouroboros.consciousness_allowance.allowance_window"):
+                   "ouroboros.consciousness_allowance.allowance_window", "ouroboros.place_projection.place_activity"):
         monkeypatch.setattr(target, forbidden)
-    monkeypatch.setattr(place_projection, "place_activity", lambda root, place: {
-        "unanswered": 3, "last_activity_at": "2027-01-15T12:00:00Z"})
-    monkeypatch.setattr(places, "place_room_index", lambda root, place_id: [{"room_chat_id": 123}])
+    # One index pass per place: open turns and the newest arrival come from the room index.
+    monkeypatch.setattr(places, "place_room_index", lambda root, place_id: [
+        {"room_chat_id": 123, "unanswered_count": 1, "last_at": "2027-01-15T11:00:00Z"},
+        {"room_chat_id": 124, "unanswered_count": 2, "last_at": "2027-01-15T12:00:00Z"}])
     original = view.place_views
 
     def project(*args, **kwargs):
