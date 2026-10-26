@@ -365,7 +365,7 @@ def resolve_credentialed_model(default_model: str) -> str:
     if model_has_credentials(default_model):
         return default_model
     # LIGHT/MAIN are single-model slots; FALLBACKS is a comma chain expanded via the
-    # shared SSOT parser (which also honors the legacy singular OUROBOROS_MODEL_FALLBACK)
+    # shared SSOT parser (the live Fallbacks slot, route_choice)
     # instead of testing the whole comma-string as one broken model id. Empty Light
     # (default -> Main) simply contributes nothing here.
     candidates: list[str] = []
