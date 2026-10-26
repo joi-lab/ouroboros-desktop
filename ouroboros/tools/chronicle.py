@@ -57,7 +57,7 @@ from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, row_lineage
 from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, capture,
                                        correction_line, draft_signer, source_time_span, verify_quotes)
-from ouroboros.dialogue_provenance import memory_row_header, render_row_text, row_author
+from ouroboros.dialogue_provenance import memory_row_header, recorded_finality, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
 from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
 from ouroboros.memory_view_account import source_change_lines
@@ -528,13 +528,22 @@ def _covers_summary(record: Dict[str, Any], period: Optional[memory_inventory.Pe
     return ""
 
 
+def _stamp_finality(entry: Dict[str, Any], before: str, after: str = "") -> str:
+    """The finality and authority one stamp entry copied from its source, framed for its reader (a host
+    facts entry without one is unknown); '' when the entry recorded neither."""
+    finality = recorded_finality(entry.get("outcome_final"), entry.get("outcome_authority"),
+                                 host_facts=entry.get("source") == "host_task_facts")
+    return f"{before}{finality}{after}" if finality else ""
+
+
 def _stamp_summary(stamp: Any) -> str:
-    """``stamp: <task_id>=<status>, …``: which covered task failed shows in the listing."""
+    """``stamp: <task_id>=<status> (<finality>), …``: which covered task failed, and which status is
+    not yet final, shows in the listing; the recorded status stays as it was stamped."""
     tasks = stamp.get("tasks") if isinstance(stamp, dict) else None
     if not isinstance(tasks, list) or not tasks:
         return ""
     return "stamp: " + ", ".join(f"{entry.get('task_id') or '?'}={entry.get('status') or 'unknown'}"
-                                 for entry in tasks if isinstance(entry, dict))
+                                 + _stamp_finality(entry, " (", ")") for entry in tasks if isinstance(entry, dict))
 
 
 def _target_label(target: Any) -> str:
@@ -786,8 +795,9 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
                         f"to={_address_text(raw.get('last'))})")
     for entry in (record.get("host_stamp") or {}).get("tasks") or []:
         verdict = f"; verdict: {entry['review_verdict']}" if entry.get("review_verdict") else ""
+        finality = _stamp_finality(entry, "; ")
         sections.append(f"stamp {entry.get('task_id')}: status={entry.get('status')}; outcome={entry.get('outcome')}; "
-                        f"phase={entry.get('outcome_phase')}{verdict}; from {entry.get('source')}; "
+                        f"phase={entry.get('outcome_phase')}{verdict}{finality}; from {entry.get('source')}; "
                         f"result: get_task_result(task_id={entry.get('task_id')})")
     for quote in record.get("quotes") or []:
         sections.append(f"quote ({quote.get('speaker')}, {quote.get('address')}): {quote.get('text')}")

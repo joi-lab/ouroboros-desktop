@@ -269,6 +269,7 @@ class ChatOutbound(ChatReferenceFields):
     task_contract: NotRequired[Dict[str, Any]]
     reason_code: NotRequired[str]
     cancel_origin: NotRequired[Dict[str, Any]]  # the typed stop an owner-stopped turn's final carries
+    delegated_runs_unreconciled: NotRequired[List[str]]  # the row's current custody debt beside its cause (#1583)
     review_status: NotRequired[Dict[str, Any]]
     # panels retain subject/goal/revision/wave; actors separate requested/observed models,
     # dict failure_details and current source selectors. gaps name failed records;
@@ -715,6 +716,7 @@ class ActiveChatActivity(ActiveDirectTurn):  # global root census; phase and con
     outcome_axes: NotRequired[Dict[str, Any]]
     reason_code: NotRequired[str]
     cancel_origin: NotRequired[Dict[str, Any]]  # the stored result's stop origin, read by the same status fold
+    delegated_runs_unreconciled: NotRequired[List[str]]  # the stored result's current custody debt, read by that fold
     root_phase_checkpoint: NotRequired[Dict[str, Any]]
     timeout_retry_from: NotRequired[str]
     original_task_id: NotRequired[str]

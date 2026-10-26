@@ -1558,9 +1558,9 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
 // Only host-attested cancelable queue roots receive this control.
 // A card's OWN actions row: a nested child card carries a row of its own, and a
 // descendant lookup would hand a root without one its child's.
-// The row lives at the end of the card's own foot, beside its meta line (right-docked, after the quiet
-// Reviews count): a single control never floats on an empty row of its own, and the summary above it
-// keeps its own inset. A nested child's foot is its own, so a descendant lookup is never used.
+// The row lives at the end of the card's own foot, under its meta line (right-docked, after the quiet
+// Reviews count or a portal's Project reference), and the summary above it keeps its own inset. A nested
+// child's foot is its own, so a descendant lookup is never used.
 function ownFootEnd(record) {
     const foot = record?.footEl;
     const end = record?.footEndEl;

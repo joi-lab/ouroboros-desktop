@@ -651,7 +651,7 @@ _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
     ),
     "delegated_custody_unreconciled": (
         False,
-        "agent_task_pipeline.py terminal custody overlay; an additive custody-debt disclosure (Done with warnings) on any task that finished with an undisposed own delegated patch, never a truncation; a truncation rail code is preserved",
+        "stored reason of rows written before #1583 (the removed terminal custody overlay); new rows keep their own reason beside the delegated_runs_unreconciled debt list; never a truncation",
     ),
     "provider_outcome_unknown": (
         False,

@@ -131,7 +131,11 @@ def _is_root(result: Dict[str, Any], task_id: str) -> bool:
 
 
 def continuation_eligibility(result: Dict[str, Any], task_id: str) -> Dict[str, Any]:
-    """``{"eligible": bool, "cause": str, "refusal": str}`` from typed facts only."""
+    """``{"eligible": bool, "cause": str, "refusal": str}`` from typed facts only.
+
+    An older row's custody stamp is read beneath (``outcomes.recorded_cause``); a
+    stamped row whose cause was never recorded still refuses, naming the stamp."""
+    from ouroboros.outcomes import recorded_cause
     from ouroboros.task_status import SETTLED_STATUSES
 
     status = str(result.get("status") or "")
@@ -141,7 +145,7 @@ def continuation_eligibility(result: Dict[str, Any], task_id: str) -> Dict[str, 
         return {"eligible": False, "cause": "", "refusal": "predecessor_live"}
     if not _is_root(result, task_id):
         return {"eligible": False, "cause": "", "refusal": "not_a_root_task"}
-    reason = str(result.get("reason_code") or "")
+    reason = recorded_cause(result)
     if reason in HARD_LIMIT_REASON_CODES:
         return {"eligible": False, "cause": reason, "refusal": "hard_limit_reached"}
     if reason == "billing_authority_refused":  # missing/foreign lineage: Continue cannot supply one
@@ -163,7 +167,8 @@ def continuation_eligibility(result: Dict[str, Any], task_id: str) -> Dict[str, 
         return {"eligible": True, "cause": source or "server_shutdown", "refusal": ""}
     if not origin and reason in TECHNICAL_REASON_CODES:
         return {"eligible": True, "cause": reason, "refusal": ""}
-    return {"eligible": False, "cause": source or reason, "refusal": "interruption_cause_unrecorded"}
+    return {"eligible": False, "cause": source or reason or str(result.get("reason_code") or ""),
+            "refusal": "interruption_cause_unrecorded"}
 
 
 def _mail_rows(drive_root: pathlib.Path, task_id: str) -> Tuple[List[Dict[str, Any]], bool]:

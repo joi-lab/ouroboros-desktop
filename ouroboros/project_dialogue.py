@@ -865,7 +865,8 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
     Durable host rows read exactly what ``log_events.js`` paints, over
     NORMALIZED axes; web/tests/fixtures/outcome_phase_parity.json pins both.
     """
-    from ouroboros.outcomes import REASON_OWNER_REQUESTED_FINALIZATION, normalize_outcome_axes
+    from ouroboros.outcomes import (REASON_OWNER_REQUESTED_FINALIZATION, current_custody_debt, normalize_outcome_axes,
+                                    objective_warned)
     from ouroboros.post_task_checkpoint import post_task_synthesis_is_open
     from ouroboros.task_status import FINAL_STATUSES
     from supervisor.owner_stop import owner_stop_ending
@@ -898,7 +899,8 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
         return "cancelled"
     if str(record.get("reason_code") or "") == REASON_OWNER_REQUESTED_FINALIZATION:
         return "done"
-    if (lifecycle == "rejected_duplicate" or bool((axes.get("objective") or {}).get("warning"))
+    debt = current_custody_debt(result, event)  # the current list, never a stamp (#1583)
+    if (lifecycle == "rejected_duplicate" or objective_warned(axes.get("objective"), debt)
             or axis.get("execution") in {"degraded", "best_effort"}
             or axis.get("objective") in {"degraded", "best_effort"}
             or (axis.get("review") == "degraded" and not author_finished)):
@@ -1137,22 +1139,20 @@ def _completion_excerpt(result: Dict[str, Any], *, chat_id: Any = None,
 def _custody_debt_reason(reason: str, result: Dict[str, Any], event: Dict[str, Any]) -> tuple:
     """Current debt stands beside the execution cause, including a retained rail.
 
-    Write-side healing preserves reason_code, so only the record's current debt
-    list names a debt. Absence is not proof of reconciliation. When the stored
-    reason is the custody overlay, recover the execution reason beneath it.
+    The debt is the record's current list, never its reason (#1583), and healing
+    rewrites only that list. Absence is not proof of reconciliation. An older row's
+    custody stamp is read beneath, from its typed execution reason.
     """
-    from ouroboros.outcomes import WARN_DELEGATED_CUSTODY_UNRECONCILED
+    from ouroboros.outcomes import WARN_DELEGATED_CUSTODY_UNRECONCILED, current_custody_debt
 
-    debt: Any = None
     execution_reason = ""
     for source in (result, event):
-        if debt is None and isinstance(source.get("delegated_runs_unreconciled"), list):
-            debt = source["delegated_runs_unreconciled"]
         axes = source.get("outcome_axes") if isinstance(source.get("outcome_axes"), dict) else {}
         execution = axes.get("execution") if isinstance(axes.get("execution"), dict) else {}
-        execution_reason = execution_reason or str(execution.get("reason_code") or "")
+        typed = str(execution.get("reason_code") or "")  # a stamp read back as the cause names none
+        execution_reason = execution_reason or ("" if typed == WARN_DELEGATED_CUSTODY_UNRECONCILED else typed)
     return (execution_reason if reason == WARN_DELEGATED_CUSTODY_UNRECONCILED else reason,
-            WARN_DELEGATED_CUSTODY_UNRECONCILED if debt else "")
+            WARN_DELEGATED_CUSTODY_UNRECONCILED if current_custody_debt(result, event) else "")
 
 
 # The open-review classes that state a standing limitation (never the merely awaited case).
@@ -1220,7 +1220,7 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     """
     from ouroboros.outcomes import (
         ACCEPTANCE_ACCEPTED, ACCEPTANCE_BYPASS_REASON_BY_RAIL, REASON_FINAL_MESSAGE,
-        REASON_OWNER_REQUESTED_FINALIZATION, plan_review_awaiting,
+        REASON_OWNER_REQUESTED_FINALIZATION, WARN_DELEGATED_CUSTODY_UNRECONCILED, plan_review_awaiting,
     )
 
     decision: Dict[str, Any] = {}
@@ -1254,8 +1254,9 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     stopped = owner_stop_ending({"reason_code": raw_reason, "cancel_origin": origin,
                                  "outcome_axes": {"execution": execution}})[1] == "stop"
     reason, custody = _custody_debt_reason(raw_reason, result, event)
-    if reason in {REASON_FINAL_MESSAGE, ""}:
-        reason = str(execution.get("reason_code") or reason)
+    typed = str(execution.get("reason_code") or "")
+    if reason in {REASON_FINAL_MESSAGE, ""} and typed != WARN_DELEGATED_CUSTODY_UNRECONCILED:
+        reason = typed or reason
     review_cause = (cause if status and (status != ACCEPTANCE_ACCEPTED or cause in TASK_CAUSE_PHRASES)
                     and (phase in {"done", "warn"} or recorded_author_stop(decision)
                          or (phase == "error" and status != ACCEPTANCE_ACCEPTED and not custody

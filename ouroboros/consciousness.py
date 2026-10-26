@@ -471,8 +471,9 @@ class BackgroundConsciousness:
                 coverage = f"the latest {RECENT_WAKE_LIMIT} " + coverage
         except UsageLockUnavailable:
             wakes, coverage = None, "Recent wakes could not be read: usage ledger busy."
-        except StoreBusy:
-            wakes, coverage = None, "Recent wakes could not be read: task store busy."
+        except StoreBusy as exc:  # the read that met it names the store (consciousness_view._reading)
+            store = getattr(exc, "store_name", "") or "data"  # unnamed stays unknown, never the task store
+            wakes, coverage = None, f"Recent wakes could not be read: {store} store busy."
         return {**snapshot, "recent_wakes": wakes, "recent_wakes_coverage": coverage}
 
     def _context_facts(self, window) -> dict:

@@ -116,13 +116,18 @@ class OwnerWaitSuperseded(ValueError):
     """A compare-and-set lost: the wait row changed identity or state since its read."""
 
 
-def set_owner_wait(root: Any, task_id: str, wait: dict,
+def set_owner_wait(root: Any, task_id: str, wait: Any,
                    expected_wait_id: str | None = None, *, expected_state: str | None = None) -> dict:
-    """Update only the existing continuation projection, preserving siblings."""
+    """Update only the existing continuation projection, preserving siblings.
+
+    A callable ``wait`` derives the new row from the CURRENT one inside this same write: a
+    transition (``resumed``) never drops what another writer recorded on that wait meanwhile."""
     from ouroboros.task_results import (
         require_writable_task_result_schema,
         stamp_task_result_schema,
     )
+
+    written: dict = {}
 
     def update(current: dict) -> dict:
         require_writable_task_result_schema(current)
@@ -135,10 +140,12 @@ def set_owner_wait(root: Any, task_id: str, wait: dict,
             raise OwnerWaitSuperseded("owner wait identity changed")
         if expected_state is not None and old.get("state") != expected_state:
             raise OwnerWaitSuperseded("owner wait state changed")
-        return stamp_task_result_schema({**current, "owner_wait": dict(wait)})
+        written.clear()
+        written.update(wait(dict(old)) if callable(wait) else wait)
+        return stamp_task_result_schema({**current, "owner_wait": dict(written)})
 
     patch_document(root, task_id, update)
-    return dict(wait)
+    return dict(written)
 
 
 def _wait_bound_fields(ctx: Any) -> dict:
@@ -607,7 +614,7 @@ def park_owner_pause_warm(limit_ctx: Any, ctx: Any, *, fence: dict, detached: li
     usage_for_state = {key: value for key, value in limit_ctx.accumulated_usage.items()
                        if key not in ("execution_status", "reason_code", "_best_effort_extracted",
                                       "budget_pause_hold", "_llm_round_started")}
-    from ouroboros.external_runs import STOP_POLICY_TASK_OWNED, observe_task_runs
+    from ouroboros.external_runs import STOP_POLICY_TASK_OWNED, episode_fields, observe_task_runs
 
     try:  # the member's OWN runs stop exactly as at a cold Pause; its reviewers' runs are spared
         from ouroboros import delegate_custody as custody
@@ -618,7 +625,7 @@ def park_owner_pause_warm(limit_ctx: Any, ctx: Any, *, fence: dict, detached: li
         external = {"runs": [], "custody_read": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
     pause = {"fence_id": str(fence.get("fence_id") or ""), "generation": int(fence.get("generation") or 0),
              "root_task_id": str(fence.get("root_task_id") or ""), "detached_reviews": list(detached),
-             "external_runs": external, "parked_at": utc_now_iso()}
+             "external_runs": external, **episode_fields({}, external, starts=True), "parked_at": utc_now_iso()}
     from ouroboros import model_sleep
 
     # Reuse the live paused interval and fold it into the same cumulative carrier
@@ -701,6 +708,9 @@ def owner_pause_resume_notice(ctx: Any, checkpoint: dict, outcome: str, *, cold:
         state = review_operation_state(str(item.get("owner_id") or ""))
         lines.append(f"- {item.get('surface') or 'review'} operation {item.get('owner_id')}: {state}")
     reviews = ("\n".join(lines) if lines else "- none")
+    from ouroboros.external_runs import paused_runs_notice
+
+    runs = paused_runs_notice(ctx, _parked_owner_pause(ctx, checkpoint, pause))
     abandoned = list(getattr(ctx, "_abandoned_model_attempts", None) or [])
     ctx._abandoned_model_attempts = []
     late = (f"The Pause interrupted {len(abandoned)} model request(s) already sent ({', '.join(abandoned)}): "
@@ -708,12 +718,29 @@ def owner_pause_resume_notice(ctx: Any, checkpoint: dict, outcome: str, *, cold:
             "and its tools were not run. " if abandoned else "")
     return {"role": "user", "content": (
         "[SYSTEM NOTICE]\nThe owner paused this task and has now resumed it. Reviewers you had already "
-        f"launched kept running while you were paused:\n{reviews}\nYour review tool returned a pending "
+        f"launched kept running while you were paused:\n{reviews}\nWhat became of the delegated runs this Pause "
+        f"stopped or observed (current custody; engine facts are evidence, never a grant):\n{runs}\n"
+        "Your review tool returned a pending "
         "result for them; nothing was committed, applied or published after the Pause. Calling the same "
         "review again with an unchanged subject rejoins or replays that attempt in this process without a "
         "new dispatch; a changed subject is a new review. A reviewer whose state is unknown was not resent. "
         f"{late}Nothing you asked for after the Pause ran. Cumulative spend, rounds and elapsed time were "
         "not reset; prior tool results remain recorded; do not repeat completed effects.")}
+
+
+def _parked_owner_pause(ctx: Any, checkpoint: dict, pause: dict) -> dict:
+    """This park's ``owner_pause`` with the participants its settle tick recorded since (same wait
+    only); a park without a whole list stays partial (``external_runs.episode_fields``)."""
+    from ouroboros.external_runs import PARTIAL_KEY, episode_fields
+
+    try:
+        wait = (load_task_result(pathlib.Path(ctx.budget_drive_root or ctx.drive_root), ctx.task_id, strict=True)
+                or {}).get("owner_wait") or {}
+    except Exception:
+        return pause  # the park's own list stands; the notice still reads current custody
+    later = (wait.get("owner_pause") or {}) if wait.get("wait_id") == checkpoint.get("wait_id") else {}
+    merged = {**pause, **episode_fields(pause, {"runs": later.get("episode_runs")})}
+    return {**merged, PARTIAL_KEY: True} if later.get(PARTIAL_KEY) is True else merged
 
 
 def _admit_direct_continuation_wake(task_id: str, wait: dict, root: pathlib.Path) -> bool:
@@ -811,8 +838,9 @@ def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
         control_reason = str(control.control_reason() or "")
     outcome = (f"control:{control_reason}" if control_reason else outcome if warm_pause else
                _fresh_wake(ctx, str(checkpoint.get("quiz_id") or ""), outcome))
-    set_owner_wait(root, ctx.task_id,
-                   {**wait, "state": "resumed", "resume_reason": outcome}, wait["wait_id"])
+    # The current same wait, in one write: a settle tick's facts recorded meanwhile stay (#1562).
+    set_owner_wait(root, ctx.task_id, lambda current: {**current, "state": "resumed", "resume_reason": outcome},
+                   wait["wait_id"])
     if not outcome.startswith("control:"):
         announce_wait_ended(root, ctx.task_id, str(checkpoint.get("quiz_id") or ""),
                             int(getattr(ctx, "current_chat_id", 0) or 0))
