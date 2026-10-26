@@ -149,8 +149,18 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
             "source_event_id", "provider", "account_id", "conversation_id", "thread_id",
             "conversation_key", "actor", "conversation", "message", "text",
         }
-        if not isinstance(event_payload, dict) or set(event_payload) - {"facts"} != expected:
+        if not isinstance(event_payload, dict) or set(event_payload) - {"facts", "identity"} != expected:
             return _presence_error("invalid presence event", 400, "presence_event_invalid", "rejected")
+
+        from ouroboros.places import validate_presence_identity
+        try:
+            identity = validate_presence_identity(event_payload["identity"]) if "identity" in event_payload else None
+        except ValueError as exc:
+            return _presence_error(str(exc), 400, "presence_identity_invalid", "rejected")
+        actor = event_payload["actor"]
+        if not isinstance(actor, dict) or ("authenticated" in actor and type(actor["authenticated"]) is not bool):
+            return _presence_error("actor must be an object; authenticated must be a boolean", 400,
+                                   "presence_actor_invalid", "rejected")
 
         provider = str(event_payload.get("provider") or "").strip()
         account_id = str(event_payload.get("account_id") or "").strip()
@@ -186,7 +196,7 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
             # to choose the concurrency/history identity. Derive that identity
             # from the binding-checked origin facts above.
             conversation_key=conversation_key(provider, account_id, conversation_id, thread_id),
-            actor=dict(event_payload["actor"]) if isinstance(event_payload["actor"], dict) else {},
+            actor=dict(actor),
             conversation=(
                 dict(event_payload["conversation"])
                 if isinstance(event_payload["conversation"], dict)
@@ -197,6 +207,7 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
             delivery_reporting_version=reporting_version,
             continuation_version=continuing,
             facts=tuple(facts) if facts is not None else None,
+            identity=identity,
         )
         if not event.source_event_id or not event.conversation_key or not event.actor:
             return _presence_error("presence event is missing identity facts", 400,

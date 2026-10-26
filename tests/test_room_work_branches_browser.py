@@ -1183,7 +1183,7 @@ def test_real_row_hurry_wrap_up_stop_and_restart_with_page_open(direct_server_wi
                 closed = backend._wait_facts(page, "main", lambda f: f["surfaceHidden"], "closed")
                 evidence.record("closed", closed)
                 assert backend._decision_posts(log) == []
-                assert log["pageerrors"] == [], log["pageerrors"]
+                assert log["pageerrors"].unexpected() == [], log["pageerrors"]
             except Exception:
                 for label, path in (("census_on_failure", "/api/state"),
                                     ("bravo_detail_on_failure", f"/api/tasks/{bravo}")):

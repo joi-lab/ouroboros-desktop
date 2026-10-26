@@ -18,7 +18,7 @@ import sys
 from devtools.benchmarks.common.server_runner import IsolatedServer, _api, alarm_deferred, seed_owner_state
 from ouroboros.process_containment import ProcessContainer
 from ouroboros.provider_models import ACTIVE_MODEL_SETTING_KEYS, ALL_PROVIDER_CREDENTIAL_KEYS
-from ouroboros.review_records import review_slot_awaiting, review_slot_unresolved
+from ouroboros.review_records import TYPED_FAILURE_FACT_KEYS, review_slot_awaiting, review_slot_unresolved
 from ouroboros.observability import redact_projection, read_call_manifest_ref, read_blob_ref
 from ouroboros.secret_masking import redact_known_values
 from ouroboros.skill_loader import find_skill, load_enabled, save_enabled
@@ -151,11 +151,34 @@ cannot grant PASS: the independent persisted review gate is the CI authority.
 """
 
 
+def _seat_text(data: Path, task_id: str, row: dict) -> tuple[str, dict]:
+    """The one saved text a reader shows for a seat (``review_ledger.seat_text_source``), read exactly.
+
+    The source facts say what it is: ``role`` (response, failure or pending note), ``current``
+    (False for history, never the seat's answer) and ``status``: ``retained`` (read), ``empty``,
+    ``unreadable`` (with the error) or ``absent`` (the seat saved no text).
+    """
+    source = review_ledger.seat_text_source(row)
+    if source is None:
+        return "", {"status": "absent"}
+    facts = {"role": source.get("role"), "current": any(source is ref for ref in row.get("source_refs") or []),
+             "status": source.get("status")}
+    if facts["status"] == "empty":
+        return "", facts
+    try:
+        if facts["status"] != "retained":
+            raise ValueError(str(source.get("error") or "the text was not retained"))
+        return review_ledger.read_source(data, task_id, source).decode("utf-8"), facts
+    except (OSError, ValueError) as exc:
+        return "", {**facts, "status": "unreadable", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def load_review_waves(data: Path, name: str) -> list[dict]:
     """Read current shared paid stamps and their exact ledger records after tree reap.
 
-    A missing record or retained source is evidence loss, not a legacy-history
-    fallback. The small CI projection also exports the full reviewer responses.
+    A missing record or an answered seat's retained response is evidence loss,
+    not a legacy-history fallback. The small CI projection also exports each
+    seat's saved answer, failure or pending note with its source and failure facts.
     """
     state = _load_state_unlocked(data, strict_attempt_authority=True)
     waves = []
@@ -172,16 +195,15 @@ def load_review_waves(data: Path, name: str) -> list[dict]:
         # export dangling private refs or a journal's lossy response preview.
         actors = legacy_actor_records(review_result(record, reused=False))
         for row, actor in zip(record.get("rows") or [], actors):
-            responses = []
             for ref in row.get("source_refs") or []:
-                if ref.get("role") not in {"prompt", "response"}:
-                    continue  # transport observability refs are not ledger text refs
-                text = review_ledger.read_source(data, record["task_id"], ref).decode("utf-8")
-                if ref.get("role") == "response":
-                    responses.append(text)
-            if row.get("status") in {"responded", "partial"} and not responses:
-                raise ValueError("reviewer response source unavailable")
-            actor["raw_text"] = "\n".join(responses)
+                if ref.get("role") == "prompt":  # transport observability refs are not ledger text refs
+                    review_ledger.read_source(data, record["task_id"], ref)
+            text, source = _seat_text(data, record["task_id"], row)
+            if row.get("status") in {"responded", "partial"} and (source.get("role"), source.get("current"),
+                                                                   source["status"]) != ("response", True, "retained"):
+                raise ValueError(f"reviewer response source unavailable: {source.get('error') or source['status']}")
+            actor.update(raw_text=text, raw_text_source=source,
+                         **{key: row[key] for key in TYPED_FAILURE_FACT_KEYS if row.get(key) not in (None, "")})
         rebuttal = (brief.get("dispute_input") or {}).get("rebuttal")
         if rebuttal and rebuttal.get("status") != "empty":
             review_ledger.read_source(data, record["task_id"], rebuttal)
@@ -253,7 +275,7 @@ def assert_review_evidence(data: Path, name: str, original_hash: str, task_id: s
 
 
 def persist_author_evidence(root: Path, evidence: dict, credential: str) -> list[str]:
-    """Export judgment text, not the private runtime tree or dangling source refs."""
+    """Export redacted evidence, not the private runtime tree or dangling source refs."""
     errors = []
     try:
         write_record(root / "author-evidence.json", evidence)
@@ -261,7 +283,7 @@ def persist_author_evidence(root: Path, evidence: dict, credential: str) -> list
         errors.append(f"SKILL_SMOKE_EVIDENCE_INCOMPLETE: local: {type(exc).__name__}: {exc}")
         diagnostics_incomplete(errors[-1], root)
         report_diagnostic(redact_known_values(errors[-1], [credential]))
-    actor_keys = {"model_id", "status", "raw_text", "parsed_items", "failure_code",
+    actor_keys = {"model_id", "status", "raw_text", "raw_text_source", "parsed_items", *TYPED_FAILURE_FACT_KEYS,
                   "operation_state", "late_result_pending", "raw_results"}
 
     def actors(rows):

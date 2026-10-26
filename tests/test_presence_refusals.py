@@ -24,6 +24,7 @@ from ouroboros.tools.registry import ToolRegistry
 from tests.test_host_service_responsiveness import _answer, _event, _presence_app, _request, _turn
 from tests.test_presence_delivery import _payload
 from tests.test_transport_death_retry import _LedgerLLM, _events, _ledger, _no_chain
+from tests._shared import saved_settings
 
 
 def test_auth_block_and_origin_rejection_share_status_not_disposition(tmp_path):
@@ -634,7 +635,7 @@ def test_inline_turn_recovers_lost_response_without_replaying_event(tmp_path, mo
     monkeypatch.setenv("OUROBOROS_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("TOTAL_BUDGET", "100")
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
-    monkeypatch.delenv("OUROBOROS_MODEL_FALLBACKS", raising=False)
+    saved_settings(monkeypatch, tmp_path, OUROBOROS_MODEL_FALLBACKS="")  # a saved blank: no chain
     monkeypatch.delenv("USE_LOCAL_FALLBACK", raising=False)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(loop, "_run_cross_model_fallback_chain", _no_chain)

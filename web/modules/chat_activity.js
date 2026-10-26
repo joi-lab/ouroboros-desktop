@@ -6,6 +6,7 @@ import { effortChipMarkup } from './effort_chip.js';
 import { resultFilesItemHtml } from './result_files.js';
 import { taskSourceDownloadUrl, apiFetch } from './api_client.js';
 import { compactModel, formatLogDuration, modelExecutionView } from './log_events.js';
+import { connectionLabel, routeConnectionId } from './connection_labels.js';
 import { fitText, fullText } from './text_fit.js';
 import { delegatedActivityBodyHtml, delegatedHeadline, delegatedLineView } from './delegated_activity.js';
 import { REUSABLE_TASK_IDS } from './task_control_menu.js';
@@ -409,7 +410,7 @@ export function restartConfirmBody(activities) {
     const lines = [
         'Running tasks stop, then eligible saved work resumes after the restart. Tasks already paused stay paused.',
         'Runnable queued tasks return to the queue. Existing holds and limits still apply.',
-        'Saved settings apply after the restart.',
+        'Saved settings apply after the restart: work that follows a model setting resumes on the current setting; task-specific choices stay.',
     ];
     if (!Array.isArray(activities) || activities.some((row) => row?.phase === 'unknown')) {
         lines.push('Pause status could not be read: a task that is still pausing would be interrupted instead of staying paused.');
@@ -1506,6 +1507,9 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
     ) : '';
     const model = chip ? executorModelText(chip, compactModel)
         : execution && !execution.observed ? execution.value : execution?.model || coordinator;
+    // A key added under Accounts follows its model ("claude-opus-5.5 · Claude credits"); the built-in key adds nothing.
+    const keyRoute = chip || (execution && !execution.observed) ? '' : execution ? record.modelExecution?.used_model : agentModel;
+    const key = connectionLabel(routeConnectionId(keyRoute));
     const updated = record.finished ? updatedTime(record) : '';
     // The executor block is ONE part of this line, joined by the same text
     // separator as the rest: concatenating it left the chip and the first fact
@@ -1518,7 +1522,7 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
         // final (with its own end time) arrives as a message.
         toolCalls, ...cost, record.finished ? '' : clockLabel(record),
     ].filter(Boolean).map(text)) : metaLineHtml([
-        chip ? executorIdentityMarkup(chip, { model }) : (model ? text(model) : ''),
+        chip ? executorIdentityMarkup(chip, { model }) : (model ? text(key ? `${model} · ${key}` : model) : ''),
         effortChipMarkup(record.effort),
         ...[
             record.historicalUnavailable ? 'Outcome unavailable' : (record.historicalUnconfirmed ? 'Activity unconfirmed' : ''),
