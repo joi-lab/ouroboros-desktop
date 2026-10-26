@@ -11,7 +11,7 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { tr, fmt } from './i18n.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
-import { CHECK_CHIPS, clockText, durationText, noteLeadText, placeStatusText, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
+import { CHECK_CHIPS, clockText, durationText, noteLeadText, placeStatusText, sendsAsHtml, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
 import { mountChatMarkdown, enhanceChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
 import { costPresentationDetail } from './chat_activity.js';
 import { openPlaceSheet } from './place_sheet.js';
@@ -120,6 +120,7 @@ export function wakeRowHtml(wake, { open = false } = {}) {
         ? `<span class="consciousness-wake-where" data-i18n-authored>${escapeHtml(wake.placeLabel)}</span>`
         : `<span class="consciousness-wake-own"><span class="place-glyph" aria-hidden="true">${OWN_GLYPH}</span>${escapeHtml(tr('task.title.own_time', 'Own time'))}</span>`;
     const duration = durationText(wake.startedAt, wake.endedAt);
+    const sender = sendsAsHtml(wake.as);
     const counts = escapeHtml(wakeFactsText(wake));
     const checks = wake.checks.map(wakeCheckText).filter(Boolean);
     const flags = wake.checks.filter((check) => CHECK_CHIPS[check.chip]?.tone === 'warn')
@@ -136,7 +137,7 @@ export function wakeRowHtml(wake, { open = false } = {}) {
     return `<li class="consciousness-wake${wake.live ? ' is-live' : ''}" data-wake="${escapeHtml(wake.taskId)}">
         <time class="consciousness-wake-time"${wake.startedAt ? ` datetime="${escapeHtml(wake.startedAt)}"` : ''}>${escapeHtml(clockText(wake.startedAt) || '—')}</time>
         <div class="consciousness-wake-main">
-            <div class="consciousness-wake-head">${where}${SEP}${escapeHtml(wakePhaseText(wake))}${working ? dots() : ''}${duration ? SEP + escapeHtml(duration) : ''}</div>
+            <div class="consciousness-wake-head">${where}${sender ? SEP + sender : ''}${SEP}${escapeHtml(wakePhaseText(wake))}${working ? dots() : ''}${duration ? SEP + escapeHtml(duration) : ''}</div>
             ${line}${flags ? `<div class="consciousness-wake-checks">${flags}</div>` : ''}
             <details class="consciousness-wake-more"${open ? ' open' : ''}><summary class="ui-hit-area">${escapeHtml(tr('consciousness.more', 'more'))}</summary>
                 ${note}${counts ? `<p class="consciousness-wake-facts">${counts}</p>` : ''}

@@ -208,14 +208,19 @@ def test_evidence_and_status_keep_partial_exact_subtotal(tmp_path):
 
 
 def test_cost_custody_public_type_is_closed_and_nullable():
-    from typing import get_args
+    from typing import get_args, get_origin
+
+    from typing_extensions import NotRequired
 
     from ouroboros.delegate_custody_usage import CostCustody
     from ouroboros.gateway.contracts import ChatOutbound, TaskCostBreakdown
 
     assert set(get_type_hints(CostCustody)) == {"status", "open_run_ids", "unrecorded_run_ids", "pending_invocation_ids"}
     for shape in (ChatOutbound, TaskCostBreakdown):
-        annotation = get_type_hints(shape)["cost_custody"]
+        annotation = get_type_hints(shape, include_extras=True)["cost_custody"]
+        # Key optionality is not nullability; Python 3.10 keeps typing_extensions' wrapper in the hints.
+        if get_origin(annotation) is NotRequired:
+            (annotation,) = get_args(annotation)
         assert set(get_args(annotation)) == {CostCustody, type(None)}
 
 

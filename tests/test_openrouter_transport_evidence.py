@@ -292,7 +292,8 @@ def test_public_chat_invalid_price_stays_unknown_with_available_tariff(
 
     client = LLMClient()
     sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=async_create if asynchronous else create)))
-    for owner in ("ouroboros.pricing", "ouroboros.usage_accounting", "ouroboros.loop_llm_call"):
+    # These are the module-level tariff bindings the chat path reads.
+    for owner in ("ouroboros.pricing", "ouroboros.usage_accounting"):
         monkeypatch.setattr(f"{owner}.estimate_cost_optional", tariff)
     monkeypatch.setattr(requests, "get", lambda *a, **kw: pytest.fail("chat made a metadata GET"))
     monkeypatch.setattr(client, "_resolve_remote_target", lambda model: target())

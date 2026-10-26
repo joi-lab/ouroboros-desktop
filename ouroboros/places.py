@@ -67,6 +67,28 @@ class PlaceError(ValueError):
         super().__init__(message or f"{code}: {field}")
 
 
+def validate_presence_identity(value: Any) -> dict:
+    """One wire shape for the credential facts on status responses and events."""
+    def entry(item):
+        if (not isinstance(item, dict) or set(item) != {"id", "label", "kind"}
+                or any(not isinstance(item[key], str) or not item[key].strip() or len(item[key]) > 200
+                       for key in ("id", "label"))
+                or item["kind"] not in ("user", "bot")):
+            raise ValueError("identity entries need id and label (1–200 characters) and kind user or bot")
+        return dict(item)
+
+    if not isinstance(value, dict) or set(value) - {"sends_as", "reads_as"}:
+        raise ValueError("identity must be an object with only sends_as and reads_as")
+    result = {}
+    if "sends_as" in value:
+        result["sends_as"] = entry(value["sends_as"])
+    if "reads_as" in value:
+        if not isinstance(value["reads_as"], list):
+            raise ValueError("identity.reads_as must be a list")
+        result["reads_as"] = [entry(item) for item in value["reads_as"]]
+    return result
+
+
 @dataclass(frozen=True)
 class WakeItem:
     fact: str
@@ -305,9 +327,14 @@ def wake_matches(place: Place, facts: Iterable[str]) -> tuple[WakeItem, ...]:
 
 
 def is_owner_account(place: Place, platform_actor_id: str, account_id: str = "") -> bool:
+    return owner_account_matches(place.owner_accounts, platform_actor_id, account_id)
+
+
+def owner_account_matches(owner_accounts: Iterable[OwnerAccount], platform_actor_id: str, account_id: str) -> bool:
+    """Pure account-scoped owner match shared by actors and credential identities."""
     actor = str(platform_actor_id or "").strip()
     return bool(actor) and any(a.platform_actor_id == actor and (not a.account_id or a.account_id == account_id)
-                               for a in place.owner_accounts)
+                               for a in owner_accounts)
 
 
 def note_identity(place_id: str, index: int, note: NoteEntry) -> str:
@@ -386,6 +413,8 @@ def _change_place(old: Place | None, action: str, author: str, values: dict) -> 
         value = values.get(field, "")
         if not isinstance(value, str):
             raise PlaceError("place_invalid_string", field)
+        if field == "state" and value.strip() == STATE_ACTIVE and author != AUTHOR_OWNER:
+            raise PlaceError("place_activation_owner_only", "state")
         return replace(old, **{field: value.strip()})
     if action == "set_wakes":
         facts = values.get("wakes")

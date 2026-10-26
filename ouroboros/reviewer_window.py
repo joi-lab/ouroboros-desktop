@@ -152,31 +152,12 @@ def reviewer_route(model_id: str, *, session: bool = False) -> tuple:
     keeps the record honest. The caller passes the ROW's configured kind; nothing
     sniffs the string."""
     from ouroboros.config import runtime_settings
-    from ouroboros.provider_models import provider_for_model
+    from ouroboros.provider_models import capability_base_url, provider_for_model
 
     if session:
         return SESSION_ROUTE_PROVIDER, ""
-    provider = provider_for_model(str(model_id or ""))
-    if provider == "minimax":
-        # MiniMax's base url is derived from the region, not a settings key
-        # (v6.88.0 direct provider — merged from the public line).
-        from ouroboros.provider_models import resolve_minimax_base_url
-
-        return provider, str(
-            resolve_minimax_base_url(runtime_settings().get("MINIMAX_REGION") or "") or "")
-    if provider == "zai":
-        # Z.ai's base url is selected by the plan, the same way MiniMax's is by region.
-        from ouroboros.provider_models import resolve_zai_base_url
-
-        return provider, resolve_zai_base_url(runtime_settings().get("ZAI_PLAN") or "")
-    settings_key = {
-        "openai": "OPENAI_BASE_URL",
-        "openai-compatible": "OPENAI_COMPATIBLE_BASE_URL",
-        "cloudru": "CLOUDRU_FOUNDATION_MODELS_BASE_URL",
-        "gigachat": "GIGACHAT_BASE_URL",
-    }.get(provider, "")
-    base_url = str(runtime_settings().get(settings_key) or "") if settings_key else ""
-    return provider, base_url
+    model = str(model_id or "")
+    return provider_for_model(model), capability_base_url(model, runtime_settings())
 
 
 def resolve_reviewer_window(
@@ -237,12 +218,8 @@ def resolve_reviewer_window(
             provider=effective_provider, base_url=base_url, model=model,
             options=options,
         )
-        # MiniMax's catalog endpoint needs the key even for metadata (their
-        # /models is authenticated); every other provider probes keyless.
-        _probe_api_key = None
-        if effective_provider == "minimax":
-            from ouroboros.config import runtime_settings as _ls
-            _probe_api_key = str(_ls().get("MINIMAX_API_KEY") or "") or None
+        # A metadata probe that needs the key (MiniMax's /models is authenticated)
+        # reads the route's own connection inside capability_evidence.
         with _route_probe_lock(route_fp):
             ev = probe(
                 DATA_DIR,
@@ -251,7 +228,6 @@ def resolve_reviewer_window(
                 base_url=base_url,
                 use_local=use_local,
                 allow_fetch=allow_fetch,
-                api_key=_probe_api_key,
                 options=options,
             )
         ev = with_role_window(ev, asserted_window)

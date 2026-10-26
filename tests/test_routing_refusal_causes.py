@@ -76,6 +76,7 @@ EXEMPT = {
     "promote_chat_to_task_rejected", "promote_chat_to_task_failed", "promote_chat_to_task",
     "drain_all_pending", "acceptance_fence_owner_message", "evolve_off", "deep_self_review_enqueued",
     "project_hold_revalidated", "schedule_subagent_admitted",
+    "agent_restart_admission", "agent_restart_admission_unconfirmed",
     # the bind-failure events.jsonl row's reason (project_binding_unreadable), never a receipt
     "project_binding_unreadable",
     # success / pseudo reasons on a delivered ensure_project_scope receipt

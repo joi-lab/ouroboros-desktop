@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -14,6 +16,9 @@ from ouroboros import dialogue_import, dialogue_store as ds, places
 from ouroboros.chat_references import reference_from_row
 from ouroboros.gateway import place_history, places_api
 from ouroboros.gateway.history import make_chat_history_endpoint
+from ouroboros.presence_delivery import PresenceDeliveryRecorder
+from ouroboros.presence_runner import capture_presence_event
+from tests._store_shared import seed_result
 from tests.place_history_scenario import scenario, watch_transactions
 
 
@@ -31,6 +36,8 @@ def test_producers_project_only_recorded_facts_without_rewriting_sources(tmp_pat
     by_text = {row['text']: row for row in rows}
     assert by_text['Please check **frame 6**.']['place_history']['attention'] == {'decision': 'focus_started'}
     assert by_text['I can still report this while Paused.']['place_history']['attention'] == {'decision': 'heard', 'reason': 'paused'}
+    assert by_text['I can still report this while Paused.']['place_history']['facts'] == ['mention']
+    assert 'facts' not in by_text['Please check **frame 6**.']['place_history']
     assert by_text['Keep the unsaved note.']['place_history']['owner_confirmed'] is True
     for state in ('accepted', 'delivered', 'failed', 'uncertain'):
         receipt = by_text['Receipt-backed reply: ' + state]
@@ -45,13 +52,36 @@ def test_producers_project_only_recorded_facts_without_rewriting_sources(tmp_pat
             if row.get('task_id') == task['id']:
                 assert not row.get('sender_label') and not row.get('sender_session_id'), 'new v0 replies do not copy the participant'
     assert reference_from_row({'direction':'system', 'sender_label':'Maya Private'})['author_label'] == 'System'
-    assert any(row['text'].startswith('Reply held:') and row['role'] == 'system' for row in rows)
+    held, = [row for row in rows if row['text'].startswith('Reply held:')]
+    assert held['role'] == 'system'
+    assert held['place_history'] == {'kind': 'notice', 'held_text': 'Held reply body stays in its task',
+                                     'held': True, 'checked': False}
     assert all(row['text'] not in {'PRIVATE THOUGHT', 'TECHNICAL EVIDENCE'} for row in rows)
     assert not any('matched_wakes' in row['place_history'] for row in rows)
     assert before == [row.row for row in ds.iter_rows(tmp_path, 'chat')]
     if target := os.environ.get('OUROBOROS_TEST_EVIDENCE_ROOT'):
         out = Path(target); out.mkdir(parents=True, exist_ok=True)
         (out / 'place-producer-api.json').write_text(json.dumps({'synthetic':True, 'index':index, 'history':page}, indent=2))
+    client.close()
+
+
+@pytest.mark.parametrize("authenticated,owner", [(False, False), (None, True), (True, True)])
+def test_reader_owner_label_respects_captured_actor_authentication(tmp_path, monkeypatch, authenticated, owner):
+    """Opus N5: a confirmed address alone cannot label explicitly unverified mail '(you)'."""
+    from ouroboros.presence_admission import admit_presence_turn
+    client, place, task, event = scenario(tmp_path, monkeypatch)
+    actor = {"platform_actor_id": "owner", "display_name": "Owner address"}
+    if authenticated is not None:
+        actor["authenticated"] = authenticated
+    event = replace(event, source_event_id="owner-attestation", actor=actor, text="Captured owner-address mail")
+    admission = admit_presence_turn(drive_root=tmp_path, authenticated_transport_skill="bridge",
+                                    provider="chat", account_id="qa", conversation_id="design")
+    capture_presence_event(admission, event, drive_root=tmp_path)
+    before = [row.row for row in ds.iter_rows(tmp_path, "chat")]
+    page = client.get("/api/chat/history", params={"chat_id": task["chat_id"]}).json()
+    message, = [row for row in page["messages"] if row["text"] == event.text]
+    assert message["place_history"]["owner_confirmed"] is owner
+    assert before == [row.row for row in ds.iter_rows(tmp_path, "chat")]
     client.close()
 
 
@@ -63,9 +93,67 @@ def test_heard_facts_are_decoded_after_the_read_transaction(tmp_path, monkeypatc
         return json.loads(text)
     monkeypatch.setattr(place_history, 'json', SimpleNamespace(loads=loads))
     page = client.get('/api/chat/history', params={'chat_id': task['chat_id']}).json()
-    attention = [row['place_history'].get('attention') for row in page['messages'] if 'place_history' in row]
-    assert {'decision': 'heard', 'reason': 'paused'} in attention and {'decision': 'focus_started'} in attention
+    facts = [row['place_history'] for row in page['messages'] if 'place_history' in row]
+    assert any(row.get('attention') == {'decision': 'heard', 'reason': 'paused'} and row.get('facts') == ['mention'] for row in facts)
+    assert any(row.get('attention') == {'decision': 'focus_started'} and 'facts' not in row for row in facts)
     assert any('dispatch_input' in sql for sql in watch.statements), 'the retained heard facts were read'
+    client.close()
+
+
+@pytest.mark.parametrize('owner', [False, True])
+def test_captured_identity_and_receipt_snapshot_reach_the_room_reader(tmp_path, monkeypatch, owner):
+    client, place, task, event = scenario(tmp_path, monkeypatch)
+    from ouroboros.presence_admission import admit_presence_turn
+    identity = {'sends_as': {'id': 'writer', 'label': 'Writer café', 'kind': 'user'},
+                'reads_as': [{'id': 'reader', 'label': 'Reader', 'kind': 'user'}]}
+    event = replace(event, source_event_id='identity-event', text='New arrival with identity')
+    object.__setattr__(event, 'identity', identity)
+    admission = admit_presence_turn(drive_root=tmp_path, authenticated_transport_skill='bridge',
+                                    provider='chat', account_id='qa', conversation_id='design')
+    captured = capture_presence_event(admission, event, drive_root=tmp_path)
+    captured['metadata']['focus'].update(identity=identity, identity_owner=owner)
+    seed_result(tmp_path, captured['id'], {**captured, 'status': 'running'})
+    places.edit_place(tmp_path, place.place_id, 'set_state', author='owner', state='active')
+    PresenceDeliveryRecorder(tmp_path).record('bridge', {
+        'schema_version': 1, 'delivery_id': 'identity-receipt', 'part_id': '0', 'state': 'delivered',
+        'provider': 'chat', 'account_id': 'qa', 'conversation_id': 'design', 'thread_id': '',
+        'text': 'Reply with snapshot', 'format': 'markdown', 'message': {},
+        'origin': {'kind': 'automatic', 'task_id': captured['id'], 'source_event_id': event.source_event_id},
+    })
+    before = [entry.row for entry in ds.iter_rows(tmp_path, 'chat')]
+    page = client.get('/api/chat/history', params={'chat_id': task['chat_id']}).json()
+    by_text = {row['text']: row for row in page['messages'] if 'place_history' in row}
+    assert by_text[event.text]['place_history']['identity'] == identity
+    assert by_text['Reply with snapshot']['place_history'] == {
+        'kind': 'delivery', 'delivery_state': 'delivered',
+        'sends_as': identity['sends_as'], 'sends_as_owner': owner,
+    }
+    assert 'identity' not in by_text['Please check **frame 6**.']['place_history']
+    assert by_text['Receipt-backed reply: delivered']['place_history'] == {
+        'kind': 'delivery', 'delivery_state': 'delivered'}
+    assert before == [entry.row for entry in ds.iter_rows(tmp_path, 'chat')]
+    client.close()
+
+
+def test_old_heard_and_hold_rows_keep_their_absent_fields(tmp_path, monkeypatch):
+    client, place, task, _event = scenario(tmp_path, monkeypatch)
+    # A pre-F1 heard row has a decision, but no retained event-facts list.
+    with ds.transaction(tmp_path, write=True) as conn:
+        conn.execute("UPDATE dialogue SET dispatch_input=json_remove(dispatch_input, '$.place_attention.facts') "
+                     "WHERE json_extract(dispatch_input, '$.place_attention.reason')='paused'")
+        conn.execute("UPDATE dialogue SET dispatch_input=json_set(dispatch_input, '$.place_attention.facts', json('[]')) "
+                     "WHERE json_extract(dispatch_input, '$.place_attention.reason')='no_wake_match'")
+    ds.append(tmp_path, 'chat', {'ts': '2026-10-22T10:05:00Z', 'direction': 'system',
+                               'type': 'place_notice', 'chat_id': task['chat_id'], 'place_id': place.place_id,
+                               'text': 'Reply held: historical place is Silent', 'transport': {}})
+    page = client.get('/api/chat/history', params={'chat_id': task['chat_id']}).json()
+    by_text = {row['text']: row['place_history'] for row in page['messages'] if 'place_history' in row}
+    assert by_text['I can still report this while Paused.']['attention'] == {'decision': 'heard', 'reason': 'paused'}
+    assert 'facts' not in by_text['I can still report this while Paused.']
+    assert by_text['Keep the unsaved note.']['attention'] == {'decision': 'heard', 'reason': 'no_wake_match'}
+    assert by_text['Keep the unsaved note.']['facts'] == []
+    assert by_text['Reply held: historical place is Silent'] == {'kind': 'notice'}
+    assert by_text['Legacy **answer**'] == {'kind': 'message', 'delivery_state': 'authored'}
     client.close()
 
 

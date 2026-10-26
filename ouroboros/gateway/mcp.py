@@ -61,7 +61,7 @@ async def api_mcp_refresh(request: Request) -> JSONResponse:
 
 async def api_mcp_test(request: Request) -> JSONResponse:
     """Probe the edited candidate with the same URL rehydration as Settings."""
-    from ouroboros.gateway.settings import MCPSecretIdentityAmbiguous, _rehydrate_mcp_servers_payload
+    from ouroboros.gateway.secret_rows import MCPSecretIdentityAmbiguous, rehydrate_mcp_servers as _rehydrate_mcp_servers_payload
 
     try:
         body: Dict[str, Any] = await request_json_or(request, {})
