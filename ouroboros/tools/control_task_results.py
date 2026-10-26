@@ -730,7 +730,7 @@ def _wait_for_task(
                                   margin=NESTED_SETTLEMENT_MARGIN_SEC)
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     status_drive_root = Path(str(metadata.get("budget_drive_root") or getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
-    with in_slot_wait(ctx, timeout, "tasks"):
+    with in_slot_wait(ctx, timeout, "tasks", task_ids=[tid]):
         waited = wait_for_effective_tasks(
             status_drive_root, [tid], timeout_sec=timeout,
             terminal_probe=_terminal_probe(ctx, [tid]),
@@ -933,7 +933,7 @@ def _await_messages(ctx: ToolContext, timeout_sec: int = 0, mode: str = "in_slot
     close of that lease is the progress stamp the next model round starts from —
     a full idle window even after a wait that spent the whole ceiling, so the
     supervisor tick between the finished wait and the next model call never
-    reaps the turn the wait was for. Its separate in_slot_wait mark identifies
+    dates the turn the wait was for as silent. Its separate in_slot_wait mark identifies
     the wait for reply-preparation readers, adds no idle exemption and lends no
     slot; tests/test_await_messages.py drives that lifecycle.
     """
@@ -1019,13 +1019,14 @@ def await_messages_entry() -> ToolEntry:
             "it arrives; you decide when waiting is worth it. The wait holds your worker slot "
             "and releases nothing; the window is clamped to the per-call timeout ceiling and, "
             "under a deadline, to the finalization emit window (the result names the bound); "
-            "while it runs, the ordinary in-flight tool lease keeps the supervisor's idle rail "
-            "off you and its completion counts as progress, so your next round starts inside a "
-            "full idle window — call again to keep waiting. It delivers nothing itself: the message "
+            "while it runs, the ordinary in-flight tool lease keeps the supervisor's silence attention "
+            "(a notice, never a stop) off you and its completion counts as progress, so your next round "
+            "starts inside a full silence window — call again to keep waiting. It delivers nothing itself: the message "
             "reaches you at the next round top, exactly as after a wait_task early return. The "
             "result says when the applied prompt-cache horizon elapsed since the last model response. "
             "mode=warm or mode=cold instead SLEEPS without holding your model slot, until what you select: "
-            "mail from `senders`, the terminal of `tasks` you can read, the terminal of delegated `runs` you "
+            "mail from `senders`, the terminal of `tasks` you can read or the host's silence notice about one of "
+            "them or its subtree, the terminal of delegated `runs` you "
             "own, the exit of your own `services` (warm only: the start each has now; a replaced, stopped "
             "or lost one wakes you as unknown, never as success), and/or `wake_at`/`wake_after_sec`; with "
             "nothing selected any addressed mail wakes you. The "
@@ -1047,7 +1048,8 @@ def await_messages_entry() -> ToolEntry:
             "senders": {"type": "array", "items": {"type": "string"},
                         "description": "Requires mode=warm or cold. Sleep: task ids whose ordinary mail wakes you; owner input and descendant escalations bypass this filter."},
             "tasks": {"type": "array", "items": {"type": "string"},
-                      "description": "Requires mode=warm or cold. Sleep: task ids whose terminal (any settled status) wakes you."},
+                      "description": "Requires mode=warm or cold. Sleep: task ids whose terminal (any settled status), "
+                                     "or a host silence notice about them or a descendant, wakes you."},
             "runs": {"type": "array", "items": {"type": "string"},
                      "description": "Requires mode=warm or cold. Sleep: your delegated run ids whose terminal wakes you."},
             "services": {"type": "array", "items": {"type": "string"},
@@ -1345,7 +1347,7 @@ def _wait_for_tasks(
     # wait and gets the rest of the requested window.
     _phantom_only = bool(entry_unknown_ids) and len(entry_unknown_ids) == len(normalized_ids)
     first_window = min(float(timeout), _UNMINTED_WAIT_GRACE_SEC) if _phantom_only else float(timeout)
-    with in_slot_wait(ctx, first_window, "tasks"):
+    with in_slot_wait(ctx, first_window, "tasks", task_ids=normalized_ids):
         waited = wait_for_effective_tasks(
             status_drive_root, normalized_ids, timeout_sec=first_window, mode=normalized_mode,
             terminal_probe=_terminal_probe(ctx, normalized_ids),
@@ -1355,7 +1357,7 @@ def _wait_for_tasks(
         entry_unknown_ids = _unminted_wait_ids(ctx, status_drive_root, normalized_ids)
         if len(entry_unknown_ids) < len(normalized_ids):
             elapsed = float(waited.get("elapsed_sec") or 0.0)
-            with in_slot_wait(ctx, max(0.0, float(timeout) - elapsed), "tasks"):
+            with in_slot_wait(ctx, max(0.0, float(timeout) - elapsed), "tasks", task_ids=normalized_ids):
                 resumed = wait_for_effective_tasks(
                     status_drive_root, normalized_ids,
                     terminal_probe=_terminal_probe(ctx, normalized_ids),

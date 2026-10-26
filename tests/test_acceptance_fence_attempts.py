@@ -137,6 +137,7 @@ def test_timeout_reaper_retry_removes_only_the_exact_active_fence(tmp_path, monk
     from supervisor import queue, task_reaper, workers
 
     job, _events = _reserved_job(tmp_path, monkeypatch)
+    monkeypatch.setattr("supervisor.worker_pool_lifecycle.kill_worker_tree", lambda *_a, **_kw: None)
     _open_reserved_fence(job)
     task_id = job["task_id"]
     if fence == "sealed":
@@ -159,9 +160,17 @@ def test_timeout_reaper_retry_removes_only_the_exact_active_fence(tmp_path, monk
     monkeypatch.setattr(queue, "persist_queue_snapshot",
                         lambda **kw: persisted.append((kw.get("reason"), copy.deepcopy(queue.ACCEPTANCE_FENCES))))
     queue.enforce_task_timeouts()
-    timeout = queue._reap_queue.get_nowait()
-    assert timeout["terminal_reason"] == "idle_timeout"
-    assert timeout["will_retry"] and timeout["worker"] is job["worker"]
+    assert queue._reap_queue.empty()  # #1376: live silence preserves the fence and custody
+    assert queue.ACCEPTANCE_FENCES[task_id] == before
+    # The reaper still owns jobs captured before this policy; test that consumer
+    # independently of the live observation producer that no longer creates them.
+    queue.RUNNING.pop(task_id)
+    job["worker"].reaping = True
+    timeout = {**job, "terminal_reason": "idle_timeout", "will_retry": True,
+               "proc": job["worker"].proc,
+               "task_type": job["task"]["type"],
+               "retry_task_id": task_id, "deadline_reached": False, "ceiling_reached": False,
+               "orchestrator": False, "owner_chat_id": 0}
     task_reaper.reap_timed_out_task(timeout)
     if fence == "exact":
         assert queue.ACCEPTANCE_FENCES == {}

@@ -60,8 +60,12 @@ def _routing_attachments(value: Any) -> Optional[list]:
     return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else None
 
 
-def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any) -> Dict[str, Any]:
-    """Read the parent's canonical budget for supervisor-side admission."""
+def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any, *, strict: bool = False) -> Dict[str, Any]:
+    """Read the parent's canonical budget for supervisor-side admission.
+
+    ``{}`` is the omitted legacy budget. A ``strict`` caller freezing rights gets a
+    durable read failure raised instead, so unreadable authority never reads as it.
+    """
     parent = str(parent_task_id or "").strip()
     if not parent:
         return {}
@@ -80,8 +84,10 @@ def _parent_delegation_budget(ctx: Any, parent_task_id: Any, drive_root: Any) ->
         roots.append(canonical)
     for root in roots:
         try:
-            row = load_task_result(root, parent)
+            row = load_task_result(root, parent, strict=strict)
         except Exception:
+            if strict:
+                raise
             row = None
         if isinstance(row, dict):
             contract = row.get("task_contract")
