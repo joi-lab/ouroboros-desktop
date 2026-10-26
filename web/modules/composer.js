@@ -10,7 +10,7 @@ import { composerText, createComposerAttachments } from './chat_attachments.js';
 import { loadChatInputHistory, saveChatInputHistory, sendPanic } from './chat_activity.js';
 import { isPanicFrame } from './panic.js';
 import { clientSurfaceField } from './client_surface.js';
-import { apiClient, apiFetch, jsonPost } from './api_client.js';
+import { apiClient, apiFetch } from './api_client.js';
 import { bindEnterSubmit, bindMenu } from './ui_interactions.js';
 import { controlIcon, strokeIcon } from './page_icons.js';
 import { renderMobileNavToggle } from './page_header.js';
@@ -346,7 +346,7 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
     // Each composer owns its room's Subagents, Context and Effort settings.
     const ownerControls = createComposerOwnerControls({ row: page.querySelector('.chat-toolbar-row'), box: page, byId, apiFetch, showToast,
         projectId, saveEffortRange: apiClient.ownerEffortRange,
-        saveSubagentsMode: (body) => jsonPost('/api/owner/subagents-mode', body),
+        saveSubagentsMode: apiClient.ownerSubagentsMode,
         openSettings: () => openSettings?.('agents'), refreshState, readingBack });
 
     // Rooms outside the bounded sidebar still read their settings.
