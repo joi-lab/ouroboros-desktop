@@ -239,6 +239,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         shade.hidden = false;
         chip.setAttribute('aria-expanded', 'true');
         chip.dataset.open = '1';
+        bar.setAttribute('data-cx-shade', '');  // Main's history note waits behind it (room_work.css)
         void readWakes();
         // A pointer open lands on the Shade itself; a keyboard open enters its first control.
         const first = viaKeyboard ? [toggle, dashboardDoor].find((node) => !node.hidden && !node.disabled) : null;
@@ -251,6 +252,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         readSeq += 1;
         chip.setAttribute('aria-expanded', 'false');
         delete chip.dataset.open;
+        bar.removeAttribute('data-cx-shade');
         foldAway();
         if (restoreFocus && chip.isConnected && !chip.hidden) chip.focus({ preventScroll: true });
     }
@@ -317,6 +319,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
             readSeq += 1;
             for (const dispose of disposers.splice(0)) dispose();
             folding?.cancel();
+            bar.removeAttribute('data-cx-shade');
             chip.remove();
             anchor.remove();
         },

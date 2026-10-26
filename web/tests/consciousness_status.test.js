@@ -114,6 +114,7 @@ test('the chip opens its Shade and switches nothing; the Shade reads the wakes o
         assert.equal(sent.length, 0, 'a tap on the chip never toggles anything');
         assert.equal(status.isOpen(), true);
         assert.equal(status.chip.getAttribute('aria-expanded'), 'true');
+        assert.equal(bar.hasAttribute('data-cx-shade'), true, 'Main\'s history note waits behind the open Shade');
         await new Promise((resolve) => setTimeout(resolve, 0));
         assert.equal(reads, 1, 'one read of the wakes per opening, no poller');
         const shade = status.shade;
@@ -140,6 +141,7 @@ test('the chip opens its Shade and switches nothing; the Shade reads the wakes o
         doors[1].parentElement.listeners.get('click')[0]({ target: { closest: () => doors[1] } });
         assert.deepEqual(tabs, ['evolution']);
         assert.equal(status.isOpen(), false);
+        assert.equal(bar.hasAttribute('data-cx-shade'), false);
 
         status.destroy();
         assert.equal(bar.children.includes(status.chip), false, 'its nodes go with it');
