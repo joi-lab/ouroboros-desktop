@@ -171,7 +171,14 @@ def probe(output):
                             document.querySelector('#main-mount').hidden = true;
                             document.querySelector('#mount').hidden = false;
                         }""")
+                        # Closing a row is registered on the queued toggle event (the dashboard's capture listener runs before
+                        # this target listener); refreshing before it would still find the row open and keep the list.
+                        page.evaluate("""() => {
+                            const more = document.querySelector('[data-wake="214a31b6"] details');
+                            window.closedToggle = new Promise((resolve) => more.addEventListener('toggle', () => resolve(more.open), { once: true }));
+                        }""")
                         page.locator('[data-wake="214a31b6"] summary').click()
+                        assert page.evaluate("closedToggle") is False
                         page.evaluate("""async () => {
                             snapshot.recentWakes = null;
                             snapshot.coverage = 'Recent wakes could not be read: storage is busy.';
