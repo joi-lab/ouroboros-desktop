@@ -1110,63 +1110,7 @@
         },
         "wake_silent": true,
         "quiet_effective": true,
-        "model_execution": {
-          "requested_model": "claudexor::codex=gpt-6-astra",
-          "requested_use_local": false,
-          "used_model": "claudexor::codex=gpt-6-astra",
-          "reported_model": "claudexor::codex=gpt-6-astra",
-          "used_local": false,
-          "provider": "claudexor",
-          "llm_call_id": "llm_442c75b763ca44f687fc7d94d7642fc8",
-          "last_llm_error_kind": null,
-          "source": "usable_solve_response"
-        },
-        "terminal_time": {
-          "v": 1,
-          "occurred_at": "2026-10-23T07:49:41.071005+00:00",
-          "source": "executor_terminal",
-          "attempt": {
-            "task_attempt": 0,
-            "_attempt": null,
-            "started_at": "2026-10-23T07:44:23.208947+00:00",
-            "metadata_attempt": null,
-            "metadata_task_attempt": null
-          }
-        },
-        "suggested_name": "Ouroboros Autonomous Exploration",
-        "outcome_axes": {
-          "schema_version": 1,
-          "lifecycle": {
-            "status": "completed"
-          },
-          "execution": {
-            "status": "ok",
-            "reason_code": "final_message",
-            "failure": null,
-            "recoveries": [],
-            "cosmetic_tool_errors": [],
-            "ignored_tool_errors": [],
-            "policy_denials": [],
-            "unresolved_tool_errors": []
-          },
-          "artifacts": {
-            "status": "ready"
-          },
-          "objective": {
-            "status": "not_evaluated",
-            "source": "none",
-            "review_status": "skipped"
-          },
-          "review": {
-            "status": "skipped",
-            "trigger": "not_evaluated",
-            "eligibility": "not_eligible",
-            "run_count": 0
-          }
-        },
-        "reason_code": "final_message",
-        "outcome_phase": "done",
-        "outcome_final": true
+        "suggested_name": "Ouroboros Autonomous Exploration"
       },
       {
         "text": "",
@@ -1203,64 +1147,8 @@
         },
         "wake_silent": true,
         "quiet_effective": true,
-        "model_execution": {
-          "requested_model": "claudexor::codex=gpt-6-astra",
-          "requested_use_local": false,
-          "used_model": "claudexor::codex=gpt-6-astra",
-          "reported_model": "claudexor::codex=gpt-6-astra",
-          "used_local": false,
-          "provider": "claudexor",
-          "llm_call_id": "llm_442c75b763ca44f687fc7d94d7642fc8",
-          "last_llm_error_kind": null,
-          "source": "usable_solve_response"
-        },
-        "terminal_time": {
-          "v": 1,
-          "occurred_at": "2026-10-23T07:49:41.071005+00:00",
-          "source": "executor_terminal",
-          "attempt": {
-            "task_attempt": 0,
-            "_attempt": null,
-            "started_at": "2026-10-23T07:44:23.208947+00:00",
-            "metadata_attempt": null,
-            "metadata_task_attempt": null
-          }
-        },
         "suggested_name": "Проверил состояние системы и сохранил наблюдения; нового решения от тебя не требуется.",
-        "wake_summary": "Проверил состояние системы и сохранил наблюдения; нового решения от тебя не требуется.",
-        "outcome_axes": {
-          "schema_version": 1,
-          "lifecycle": {
-            "status": "completed"
-          },
-          "execution": {
-            "status": "ok",
-            "reason_code": "final_message",
-            "failure": null,
-            "recoveries": [],
-            "cosmetic_tool_errors": [],
-            "ignored_tool_errors": [],
-            "policy_denials": [],
-            "unresolved_tool_errors": []
-          },
-          "artifacts": {
-            "status": "ready"
-          },
-          "objective": {
-            "status": "not_evaluated",
-            "source": "none",
-            "review_status": "skipped"
-          },
-          "review": {
-            "status": "skipped",
-            "trigger": "not_evaluated",
-            "eligibility": "not_eligible",
-            "run_count": 0
-          }
-        },
-        "reason_code": "final_message",
-        "outcome_phase": "done",
-        "outcome_final": true
+        "wake_summary": "Проверил состояние системы и сохранил наблюдения; нового решения от тебя не требуется."
       },
       {
         "text": "",
@@ -1297,63 +1185,7 @@
         },
         "wake_silent": true,
         "quiet_effective": false,
-        "model_execution": {
-          "requested_model": "claudexor::codex=gpt-6-astra",
-          "requested_use_local": false,
-          "used_model": "claudexor::codex=gpt-6-astra",
-          "reported_model": "claudexor::codex=gpt-6-astra",
-          "used_local": false,
-          "provider": "claudexor",
-          "llm_call_id": "llm_442c75b763ca44f687fc7d94d7642fc8",
-          "last_llm_error_kind": null,
-          "source": "usable_solve_response"
-        },
-        "terminal_time": {
-          "v": 1,
-          "occurred_at": "2026-10-23T07:49:41.071005+00:00",
-          "source": "executor_terminal",
-          "attempt": {
-            "task_attempt": 0,
-            "_attempt": null,
-            "started_at": "2026-10-23T07:44:23.208947+00:00",
-            "metadata_attempt": null,
-            "metadata_task_attempt": null
-          }
-        },
-        "suggested_name": "Ouroboros Autonomous Exploration",
-        "outcome_axes": {
-          "schema_version": 1,
-          "lifecycle": {
-            "status": "completed"
-          },
-          "execution": {
-            "status": "ok",
-            "reason_code": "final_message",
-            "failure": null,
-            "recoveries": [],
-            "cosmetic_tool_errors": [],
-            "ignored_tool_errors": [],
-            "policy_denials": [],
-            "unresolved_tool_errors": []
-          },
-          "artifacts": {
-            "status": "ready"
-          },
-          "objective": {
-            "status": "not_evaluated",
-            "source": "none",
-            "review_status": "skipped"
-          },
-          "review": {
-            "status": "skipped",
-            "trigger": "not_evaluated",
-            "eligibility": "not_eligible",
-            "run_count": 0
-          }
-        },
-        "reason_code": "final_message",
-        "outcome_phase": "done",
-        "outcome_final": true
+        "suggested_name": "Ouroboros Autonomous Exploration"
       }
     ],
     "window": {
@@ -1659,63 +1491,7 @@
           },
           "wake_silent": true,
           "quiet_effective": true,
-          "model_execution": {
-            "requested_model": "claudexor::codex=gpt-6-astra",
-            "requested_use_local": false,
-            "used_model": "claudexor::codex=gpt-6-astra",
-            "reported_model": "claudexor::codex=gpt-6-astra",
-            "used_local": false,
-            "provider": "claudexor",
-            "llm_call_id": "llm_442c75b763ca44f687fc7d94d7642fc8",
-            "last_llm_error_kind": null,
-            "source": "usable_solve_response"
-          },
-          "terminal_time": {
-            "v": 1,
-            "occurred_at": "2026-10-23T07:49:41.071005+00:00",
-            "source": "executor_terminal",
-            "attempt": {
-              "task_attempt": 0,
-              "_attempt": null,
-              "started_at": "2026-10-23T07:44:23.208947+00:00",
-              "metadata_attempt": null,
-              "metadata_task_attempt": null
-            }
-          },
-          "suggested_name": "Ouroboros Autonomous Exploration",
-          "outcome_axes": {
-            "schema_version": 1,
-            "lifecycle": {
-              "status": "completed"
-            },
-            "execution": {
-              "status": "ok",
-              "reason_code": "final_message",
-              "failure": null,
-              "recoveries": [],
-              "cosmetic_tool_errors": [],
-              "ignored_tool_errors": [],
-              "policy_denials": [],
-              "unresolved_tool_errors": []
-            },
-            "artifacts": {
-              "status": "ready"
-            },
-            "objective": {
-              "status": "not_evaluated",
-              "source": "none",
-              "review_status": "skipped"
-            },
-            "review": {
-              "status": "skipped",
-              "trigger": "not_evaluated",
-              "eligibility": "not_eligible",
-              "run_count": 0
-            }
-          },
-          "reason_code": "final_message",
-          "outcome_phase": "done",
-          "outcome_final": true
+          "suggested_name": "Ouroboros Autonomous Exploration"
         }
       ],
       "window": {
@@ -1926,63 +1702,7 @@
           },
           "wake_silent": true,
           "quiet_effective": false,
-          "model_execution": {
-            "requested_model": "claudexor::codex=gpt-6-astra",
-            "requested_use_local": false,
-            "used_model": "claudexor::codex=gpt-6-astra",
-            "reported_model": "claudexor::codex=gpt-6-astra",
-            "used_local": false,
-            "provider": "claudexor",
-            "llm_call_id": "llm_442c75b763ca44f687fc7d94d7642fc8",
-            "last_llm_error_kind": null,
-            "source": "usable_solve_response"
-          },
-          "terminal_time": {
-            "v": 1,
-            "occurred_at": "2026-10-23T07:49:41.071005+00:00",
-            "source": "executor_terminal",
-            "attempt": {
-              "task_attempt": 0,
-              "_attempt": null,
-              "started_at": "2026-10-23T07:44:23.208947+00:00",
-              "metadata_attempt": null,
-              "metadata_task_attempt": null
-            }
-          },
-          "suggested_name": "Ouroboros Autonomous Exploration",
-          "outcome_axes": {
-            "schema_version": 1,
-            "lifecycle": {
-              "status": "completed"
-            },
-            "execution": {
-              "status": "ok",
-              "reason_code": "final_message",
-              "failure": null,
-              "recoveries": [],
-              "cosmetic_tool_errors": [],
-              "ignored_tool_errors": [],
-              "policy_denials": [],
-              "unresolved_tool_errors": []
-            },
-            "artifacts": {
-              "status": "ready"
-            },
-            "objective": {
-              "status": "not_evaluated",
-              "source": "none",
-              "review_status": "skipped"
-            },
-            "review": {
-              "status": "skipped",
-              "trigger": "not_evaluated",
-              "eligibility": "not_eligible",
-              "run_count": 0
-            }
-          },
-          "reason_code": "final_message",
-          "outcome_phase": "done",
-          "outcome_final": true
+          "suggested_name": "Ouroboros Autonomous Exploration"
         }
       ],
       "window": {

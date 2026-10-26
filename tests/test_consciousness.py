@@ -115,7 +115,7 @@ def test_headline_while_the_launched_own_wake_runs(clock, monkeypatch):
 
 
 def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
-    from ouroboros import consciousness_view as view, places, place_projection
+    from ouroboros import consciousness_view as view, places
 
     place = places.connect_place(clock.root, connector="bridge", provider="chat", label="Research room")
     places.edit_place(clock.root, place.place_id, "add_note", author="owner", text="Watch releases.")
