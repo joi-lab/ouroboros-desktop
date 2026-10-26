@@ -128,8 +128,9 @@ def test_new_claim_copies_only_its_previous_runs_outcome(q, cached_id):  # noqa:
     assert fact["previous"] == (row["last_outcome"] if cached_id == "previous" else {
         "task_id": "previous", "state": "pending_observation"})
     frozen = copy.deepcopy(task)
-    prepared = occurrence._prepare({"stored_task": frozen})
-    assert prepared["task"] == frozen
+    # A republish claim carries its schedule row beside the frozen task (occurrence.view).
+    prepared = occurrence._prepare(occurrence.view(_rows(q)["s1"], frozen))
+    assert prepared["task"] == frozen and "hold" not in prepared
 
 
 def test_related_followup_outcome_is_observed_even_when_policy_is_ineligible(q):  # noqa: F811

@@ -189,8 +189,10 @@ def test_review_chain_observation_is_per_run_not_final_chain_sum(tmp_path, monke
     from ouroboros import delegate_custody_usage as dcu
     from ouroboros.review_execution import AgentSessionReviewExecutor, ReviewAssignment, _combined_session_usage
     monkeypatch.setattr(dcu, "_EMITTED_SESSION_USAGE", {})
-    first, final = terminal()["summary"], terminal({**SPLIT, "total_tokens": None})["summary"]
-    _, _, combined = _combined_session_usage(custody, [first], final)
+    # The fold reads engine run details (summary and attempts), as review_execution passes them.
+    first_detail, final_detail = terminal(), terminal({**SPLIT, "total_tokens": None})
+    first, final = first_detail["summary"], final_detail["summary"]
+    _, _, combined = _combined_session_usage(custody, [first_detail], final_detail)
     assert combined["inputTokens"] == 8  # existing actor aggregate stays unchanged
     assert "inputTokenUsage" not in combined  # never attach final-run split to chain totals
     parts = [session_usage_facts(run, requested_route="claude", summary=value)

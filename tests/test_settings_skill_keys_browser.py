@@ -136,7 +136,7 @@ def test_a_settings_save_states_the_skill_key_rule_once(direct_server_with_data,
                 field = page.locator('#skill-requested-secrets [data-secret-setting="WEATHER_TOKEN"]')
                 expect(field).to_have_count(1, timeout=20_000)
                 field.fill(SYNTHETIC_SKILL_TOKEN)
-                text = save("keeps the models, reviewers and subagents it started with", "skill-key-running-task")
+                text = save("keeps the reviewers, subagents, context and effort it started with", "skill-key-running-task")
                 assert text.startswith(NEXT_TASK) and text.count(SKILL_RULE) == 1, text
                 assert "The saved changes apply from the next task" not in text, text
                 assert stored()["WEATHER_TOKEN"] == SYNTHETIC_SKILL_TOKEN

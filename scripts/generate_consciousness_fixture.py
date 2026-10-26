@@ -63,6 +63,12 @@ def generate():
                 ("checked", "run_command"), ("not_checked", "update_memory"),
                 ("warned", "run_script"), ("held", "place_reply"), ("sent_despite", "slack_send")]],
         }), ("w-spoke", {"owner_message_sent": True})]
+        variants += [("w-focus-" + kind, {"metadata": {
+            **document.get("metadata", {}), "wake_cause": "focus", "focus": {
+                "place_id": "mail", "conversation_key": "mail:account:inbox:0",
+                "identity": {"sends_as": {"id": "writer", "label": label, "kind": kind}},
+                "identity_owner": kind == "user"}}})
+            for kind, label in (("user", "Human mailbox"), ("bot", "Ouroboros bot"))]
         variants += [("w-" + phase, {"status": phase, "suggested_name": "Own time"})
                      for phase in ("running", "waiting", "queued", "paused", "unknown")]
         for index, (task_id, fields) in enumerate(variants):

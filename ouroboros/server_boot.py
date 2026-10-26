@@ -11,7 +11,6 @@ and the supervisor's outcome for the document's phase.
 from __future__ import annotations
 
 import asyncio
-import os
 import pathlib
 import threading
 from typing import Any, Callable, Optional
@@ -73,7 +72,9 @@ def start_background_services(settings: dict, *, local_model: bool, boot_managed
         from ouroboros.claudexor_daemon import warm_owned_daemon
 
         warm_owned_daemon()
-    if warm_daemon and str(settings.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY") or "").strip():
+    from ouroboros.provider_models import configured_kinds
+
+    if warm_daemon and "openrouter" in configured_kinds(settings):  # any OpenRouter key, built-in or added, that serves
         from ouroboros.llm import LLMClient
 
         threading.Thread(target=LLMClient.prefetch_openrouter_catalog, daemon=True, name="openrouter-catalog").start()

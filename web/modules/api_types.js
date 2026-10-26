@@ -122,6 +122,7 @@
  * @typedef {Object} ProviderTestRequest
  * @property {string} provider_id
  * @property {Object<string, string>=} overrides
+ * @property {string=} connection
  */
 /**
  * @typedef {Object} ProviderTestResponse
@@ -162,6 +163,7 @@
  * @property {AvailableSubagentsSettingsMeta=} available_subagents
  * @property {SettingsPolicyState=} policy_state
  * @property {{restart_required:boolean,restart_keys:string[],restart_source_unknown_keys:string[],unknown_keys:string[],local_model:Object,summary:string}=} restart_state Component application and source uncertainty.
+ * @property {{kind:string,name:string,label:string,builtin:boolean,enabled:boolean,configured:boolean,source:string,id:string,display:string}[]=} connections Every API connection as the picker shows it.
  */
 /**
  * @typedef {Object} SettingsPolicyState
@@ -859,7 +861,6 @@
  * @property {string} branch
  * @property {string} sha
  */
-
 /**
  * `POST /api/settings` success; `restart_keys` apply only after a restart.
  * @typedef {Object} SettingsSaveResponse
@@ -873,15 +874,14 @@
  * @property {string[]=} warnings
  * @property {Object<string, string>=} ignored_keys
  * @property {boolean=} agent_task_running
+ * @property {Object[]=} connection_references Rows naming a connection that cannot serve them: {setting, entry?, route, connection, reason}.
  */
-
 /**
  * @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode
  * @property {boolean} restart_required
  */
-
 /**
  * @typedef {Object} OwnerAutoGrantResponse
  * @property {boolean} ok

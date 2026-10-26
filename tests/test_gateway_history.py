@@ -1064,7 +1064,9 @@ def test_chat_history_replays_the_live_subtree_ceiling_for_a_running_root(tmp_pa
 
     seen_roots = []
 
-    def _projection(_drive, *, root_task_id="", allow_stale=False):
+    def _breakdown(_drive, *, root_task_id="", allow_stale=False, custody_root=None, include_custody=False):
+        # The live-root projection's one read: stale-allowed, with custody coverage.
+        assert allow_stale is True and include_custody is True
         seen_roots.append(root_task_id)
         if root_task_id == "root-empty":
             return {"attempt_counts": {"metadata_only": 1}, "subscription_sessions": 0}
@@ -1074,7 +1076,7 @@ def test_chat_history_replays_the_live_subtree_ceiling_for_a_running_root(tmp_pa
             "attempt_counts": {"resolved": 4}, "subscription_sessions": 0,
         }
 
-    monkeypatch.setattr(usage_accounting, "usage_projection", _projection)
+    monkeypatch.setattr(usage_accounting, "usage_breakdown", _breakdown)
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "chat.jsonl").write_text("", encoding="utf-8")
