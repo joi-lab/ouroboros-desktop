@@ -85,6 +85,12 @@ test('an engine-dated unavailable pool is its own actionable reason, not quota o
     assert.ok(MODEL_WAIT_REASONS.includes('unavailable') && !MODEL_WAIT_REASONS.includes('transport'));
 });
 
+test('a route whose API key was turned off or removed waits on its card instead of dropping out', () => {
+    const keyOff = row({ reason: 'connection_unavailable', model: 'openrouter@claude-credits::anthropic/claude-opus-5.5',
+        credential_profile_id: '' });
+    assert.deepEqual(activeModelWaits(mergeModelWaits({}, { [keyOff.wait_id]: keyOff })), [keyOff]);
+});
+
 test('switch payload binds the exact wait revision and defaults to temporary role change', () => {
     const body = modelWaitAction('task-a', row(), 'switch', {
         model: 'openai::owner-model', credential_profile_id: '', ignored: 'never sent',
