@@ -1119,6 +1119,17 @@ def current_model_wait() -> TaskModelWait | None:
     return _CURRENT.get()
 
 
+def owner_awaits_current_call() -> bool:
+    """Whether the bound task is a direct turn the owner awaits (Main, a project room, a call): the model queue
+    lets its calls ahead of background calls that have not started (``model_concurrency``)."""
+    task = getattr(_CURRENT.get(), "task", None)
+    if not isinstance(task, dict) or not task.get("_is_direct_chat"):
+        return False
+    from supervisor.active_activity import reply_expected
+
+    return reply_expected(task)
+
+
 def announce_capability_refusal(error: Exception, *, drive_root: Any) -> None:
     """One owner notice per account/model episode when no account can serve a model.
 
