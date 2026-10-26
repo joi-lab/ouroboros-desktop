@@ -2201,7 +2201,7 @@ instead, and let the status text carry the claim.
 
 ## 7. Onboarding density
 
-Accounts is the common connection surface for subscriptions and API keys. Open sign-in link hands off to the current desktop, browser or Telegram host while retaining the wizard; Copy is separate. An unavailable host opener reports a retryable failure, and a supported copy fallback says that it copied rather than claiming an open.
+Accounts is the common connection surface for subscriptions and API keys. An API key is a row of its provider's card (the built-in Default, then the keys added with the card's Add key) in the account-row anatomy: name and status, a meta line naming the roles that use it, Test, Disable/Enable and Remove (on Default it clears the key). A role names the key it uses; keys never rotate. Open sign-in link hands off to the current desktop, browser or Telegram host while retaining the wizard; Copy is separate. An unavailable host opener reports a retryable failure, and a supported copy fallback says that it copied rather than claiming an open.
 Models and Agents edit assignments; adding a connection updates available
 choices without replacing an owner's assignments. A model role uses one compact
 Source / Model / Account row. The account is a property of that role: Auto
@@ -2220,9 +2220,10 @@ Settings/wizard editor.
 A source is chosen, never spelled. Every surface that assigns a model — the
 Models roles, Available subagents (reviewers included), the first-run wizard and
 the quota-wait picker — offers one grouped source select with the same groups
-in the same order: Subscriptions · models, API keys (one entry per provider with a stored
-credential, then one disabled pointer to Accounts; a saved choice without a
-credential stays selectable as "(no key)"), Agents · sessions where a session
+in the same order: Subscriptions · models, API keys (one entry per connection:
+each enabled key holding its credential, named "OpenRouter" or "OpenRouter ·
+Claude credits", then one disabled pointer to Accounts; a saved choice that
+cannot send stays selectable as "(no key)", "(off)" or "(removed)"), Agents · sessions where a session
 is possible. The model chooser lists only the chosen source's catalog, so a
 suggestion's transport is the selected source; any id can still be typed. The
 stored spellings (`provider::model`, `claudexor::source=model`,
@@ -2232,8 +2233,8 @@ primary displayed value; the exact stored id may appear in secondary details
 (Agents use Details & history). A configured-subagent reference is the one place a stored spelling
 names a thing: a roster row is labelled by its handle — its route target plus
 the facets that row really runs with, defaults omitted — because a friendlier
-stored label rots as soon as the owner re-points the row. The route identity chip names the source (API · OpenAI, Codex · model,
-Claude Code · agent), not the channel alone. A last-run receipt is shown
+stored label rots as soon as the owner re-points the row. The route identity chip names the source (API · OpenAI, API · OpenRouter · Claude credits,
+Codex · model, Claude Code · agent), not the channel alone. A last-run receipt is shown
 against the route that produced it: when the row's route changed since, the
 line says so and names the earlier route.
 
