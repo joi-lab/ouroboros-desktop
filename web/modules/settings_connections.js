@@ -38,14 +38,20 @@ export function connectionNameFor(label, taken = []) {
 
 /**
  * Which saved roles and Agents rows name each API source (`kind` or `kind@name`), in the owner's words:
- * "Main", "Fallback 2", "Subagent 3". A role left empty uses another role and names nothing itself.
+ * the roles by name ("Main", "Fallback 2"), then the Agents rows as a count ("3 subagents"). A role left
+ * empty uses another role and names nothing itself.
  */
 export function connectionUsage(settings = {}, slots = []) {
     const used = new Map();
-    const note = (value, label) => {
+    const subagents = new Map();
+    const sourceOf = (value) => {
         const raw = String(value || '').trim();
         const { source } = parseModelSource(raw);
-        if (!raw || source.startsWith('subscription:')) return;
+        return raw && !source.startsWith('subscription:') ? source : '';
+    };
+    const note = (value, label) => {
+        const source = sourceOf(value);
+        if (!source) return;
         if (!used.has(source)) used.set(source, []);
         used.get(source).push(label);
     };
@@ -59,9 +65,14 @@ export function connectionUsage(settings = {}, slots = []) {
     if (typeof roster === 'string') {
         try { roster = JSON.parse(roster); } catch { roster = null; }
     }
-    (Array.isArray(roster?.items) ? roster.items : []).forEach((row, index) => {
-        if (row?.route?.kind !== 'agent_session') note(row?.route?.target_id, `Subagent ${index + 1}`);
-    });
+    for (const row of Array.isArray(roster?.items) ? roster.items : []) {
+        const source = row?.route?.kind === 'agent_session' ? '' : sourceOf(row?.route?.target_id);
+        if (source) subagents.set(source, (subagents.get(source) || 0) + 1);
+    }
+    for (const [source, count] of subagents) {
+        if (!used.has(source)) used.set(source, []);
+        used.get(source).push(`${count} subagent${count === 1 ? '' : 's'}`);
+    }
     return used;
 }
 

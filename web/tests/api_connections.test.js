@@ -216,9 +216,12 @@ test('a row says what is true of its key now: status, use, and who provides it',
     const usage = connectionUsage({ ...SETTINGS, OUROBOROS_SUBAGENTS: { items: [
         { route: { kind: 'api_model', target_id: 'openrouter@claude-credits::openai/gpt-6' } },
         { route: { kind: 'agent_session', target_id: 'codex=gpt-6' } },
+        { route: { kind: 'api_model', target_id: 'openai/gpt-6' } },
+        { route: { kind: 'api_model', target_id: 'anthropic/claude-opus-5.5' } },
     ] } }, contract.modelSlots);
-    assert.deepEqual(usage.get('openrouter@claude-credits'), ['Main', 'Subagent 1']);
-    assert.deepEqual(usage.get('openrouter'), ['Fallback 1']);
+    // Roles by name, Agents rows as one count: a long roster never turns the line into a list.
+    assert.deepEqual(usage.get('openrouter@claude-credits'), ['Main', '1 subagent']);
+    assert.deepEqual(usage.get('openrouter'), ['Fallback 1', '2 subagents']);
     assert.deepEqual(usage.get('openai-compatible@gigaagent'), ['Fallback 2']);
     assert.equal(usage.has('subscription:codex'), false, 'subscriptions are not API keys');
 
