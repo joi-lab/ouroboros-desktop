@@ -12,6 +12,7 @@ or capability-learning paths.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -45,10 +46,11 @@ _OR_PROVIDER_PRESETS = {
 }
 
 
-def _resolve_or_provider() -> Dict[str, Any]:
-    """Resolve ``OUROBOROS_OR_PROVIDER`` (a preset name or a raw JSON object) into an
-    OpenRouter ``provider`` routing dict. Empty/unset/invalid -> ``{}`` (no routing)."""
-    raw = (runtime_setting("OUROBOROS_OR_PROVIDER") or "").strip()
+def _or_provider_value(raw: Any) -> Dict[str, Any]:
+    """One routing value: a preset name, raw JSON object text, or an object (copied)."""
+    if isinstance(raw, dict):
+        return copy.deepcopy(raw)
+    raw = str(raw or "").strip()
     if not raw:
         return {}
     preset = _OR_PROVIDER_PRESETS.get(raw.lower())
@@ -59,6 +61,15 @@ def _resolve_or_provider() -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {}
     return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _resolve_or_provider(connection_routing: Any = None) -> Dict[str, Any]:
+    """Resolve ``OUROBOROS_OR_PROVIDER`` (a preset name or a raw JSON object) into an
+    OpenRouter ``provider`` routing dict, with a connection's own ``provider_routing``
+    (same vocabulary) merged over it for that connection's requests only.
+    Empty/unset/invalid -> ``{}`` (no routing)."""
+    return {**_or_provider_value(runtime_setting("OUROBOROS_OR_PROVIDER")),
+            **_or_provider_value(connection_routing)}
 
 
 class _ProviderRoutingMixin:

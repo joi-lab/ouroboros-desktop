@@ -19,6 +19,7 @@ import pytest
 from ouroboros import usage_accounting as ua
 from ouroboros.llm import LLMClient
 from ouroboros.llm_attempt import single_physical_send
+from ouroboros.llm_routing import _resolve_or_provider
 from ouroboros.llm_stream import AssembledResponse, ProviderStreamError
 from ouroboros.loop_llm_call import classify_llm_exception
 from ouroboros.openrouter_attribution import OPENROUTER_APP_HEADERS
@@ -261,3 +262,47 @@ def test_openrouter_targets_ask_for_the_routing_receipt():
     assert {key: headers[key] for key in OPENROUTER_APP_HEADERS} == OPENROUTER_APP_HEADERS
     assert "X-OpenRouter-Metadata" not in client._resolve_remote_target(
         "anthropic::claude-opus-5.5")["default_headers"]
+
+
+@pytest.fixture
+def global_routing(monkeypatch):
+    """The global ``OUROBOROS_OR_PROVIDER`` seen by the routing resolver, other keys untouched."""
+    import ouroboros.llm_routing as llm_routing
+
+    real = llm_routing.runtime_setting
+    value = json.dumps({"data_collection": "deny", "allow_fallbacks": True})
+    monkeypatch.setattr(llm_routing, "runtime_setting", lambda key, *args, **kwargs: (
+        value if key == "OUROBOROS_OR_PROVIDER" else real(key, *args, **kwargs)))
+    return json.loads(value)
+
+
+def provider_block(monkeypatch, model, routing_value, messages=None):
+    client = LLMClient()
+    monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)
+    route = {**target(), "resolved_model": model, "usage_model": model}
+    if routing_value is not None:
+        route["provider_routing"] = routing_value
+    kwargs = client._build_remote_kwargs(
+        route, messages or [{"role": "user", "content": "hello"}], "medium", 64, "auto", None, None)
+    return kwargs["extra_body"].get("provider", {})
+
+
+@pytest.mark.parametrize("routing_value,expected", [
+    ("repro", {"data_collection": "deny", "allow_fallbacks": False}),
+    ({"only": ["anthropic"]}, {"data_collection": "deny", "allow_fallbacks": True, "only": ["anthropic"]}),
+    ('{"order": ["anthropic"], "allow_fallbacks": false}',
+     {"data_collection": "deny", "allow_fallbacks": False, "order": ["anthropic"]}),
+    (None, {"data_collection": "deny", "allow_fallbacks": True}),
+], ids=["preset", "object", "json-text", "built-in"])
+def test_connection_routing_merges_over_the_global_setting(monkeypatch, global_routing, routing_value, expected):
+    assert provider_block(monkeypatch, MODEL, routing_value) == {"require_parameters": True, **expected}
+    # The global value itself, and so every other connection's requests, are unchanged.
+    assert _resolve_or_provider() == global_routing
+
+
+def test_connection_routing_never_lifts_the_sealed_reasoning_pin(monkeypatch, global_routing):
+    sealed = [{"role": "user", "content": "inspect"},
+              {"role": "assistant", "content": "thinking",
+               "reasoning_details": [{"type": "reasoning.encrypted", "data": "blob"}]}]
+    block = provider_block(monkeypatch, "deepseek/deepseek-v4-flash-0731", {"allow_fallbacks": True}, sealed)
+    assert block["allow_fallbacks"] is False
