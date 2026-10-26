@@ -230,7 +230,7 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/health": Shape("200:HealthResponse"),
     "GET /api/contract": Shape("200:GatewayContractResponse"),
     "GET /api/state": Shape("200:StateResponse 500:ErrorResponse"),
-    "GET /api/consciousness": Shape("200:json 503:json", note="consciousness panel: status, spend by cause, places, recent wakes"),
+    "GET /api/consciousness": Shape("200:json 503:json", note="status/detail, spend by cause, places_brief, RecentWakesView fields: recent_wakes: RecentWake[] | null, recent_wakes_coverage names the 50-wake/48 h cap or typed read failure; full Places use /api/places"),
     "GET /onboarding": Shape("200:html", query="builtin", note="selected setup or builtin wizard; builtin=1 forces builtin"),
     "GET /api/onboarding": Shape("200:html 204:empty", note="204: a ready provider exists, no setup needed"),
     "GET /api/onboarding/bootstrap": Shape("200:OnboardingBootstrapResponse", note="read-only; writes nothing"),
@@ -291,7 +291,7 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/places/{place_id}/rooms": Shape("200:PlaceRoomsResponse 404,503:ErrorResponse", note="lazy indexed captured-room discovery; history uses /api/chat/history"),
     "POST /api/places": Shape("200:json 400:json", "PlaceConnectRequest", note="connect from a declared connector"),
     "POST /api/places/{place_id}": Shape("200:json 400,409:json", "PlaceUpdateRequest", note="atomic owner-authored place choices"),
-    "DELETE /api/places/{place_id}": Shape("200:json 400:json", note="disconnect; room history stays"),
+    "DELETE /api/places/{place_id}": Shape("200:json 400,409:json", "PlaceDisconnectRequest", note="disconnect with optional revision; room history stays"),
     "POST /api/skills/{skill}/publish-preflight": Shape(
         "200,400,404,409,503:SkillPublishPreflightResponse", "SkillPublishPreflightRequest",
         note="read-only; every status carries the same shape; state hard_block is a refusal; destination "

@@ -34,6 +34,7 @@ from tests.test_gateway_parity import _js_typedef_fields
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TWIN = REPO / "web" / "modules" / "client_contract_types.js"
+PLACE_TWIN = REPO / "web" / "modules" / "place_contract_types.js"
 
 
 def _all_shapes() -> dict:
@@ -51,12 +52,16 @@ def _body_names(spec: str) -> list[str]:
 def test_every_client_envelope_has_a_field_identical_browser_twin():
     from ouroboros.gateway import history_contracts
 
-    text = TWIN.read_text(encoding="utf-8")
+    facade = TWIN.read_text(encoding="utf-8")
+    places = PLACE_TWIN.read_text(encoding="utf-8")
+    text = facade + "\n" + places
     for module in (client_contracts, history_contracts):
         for name in module.__all__:
             cls = getattr(module, name)
-            assert re.search(rf"@typedef \{{Object\}} {name}\b", text), f"client_contract_types.js lacks {name}"
+            assert re.search(rf"@typedef \{{Object\}} {name}\b", text), f"client contract twins lack {name}"
             assert _js_typedef_fields(text, name) == set(typing.get_type_hints(cls, include_extras=True)), name
+    for name in re.findall(r"@typedef \{Object\} (\w+)", places):
+        assert f"@typedef {{import('./place_contract_types.js').{name}}} {name}" in facade, name
     index = (REPO / "web" / "modules" / "api_types.js").read_text(encoding="utf-8")
     assert "./client_contract_types.js" in index.splitlines()[0]
     assert "import('./client_contract_types.js').ServedUiState" in index

@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import pathlib
 import re
 from dataclasses import dataclass
@@ -43,18 +44,20 @@ from ouroboros.consciousness_authority import (
 from ouroboros.context_health import safe_read
 from ouroboros.dialogue_provenance import is_presence_task
 
+log = logging.getLogger(__name__)
+
 PROMPT_REL = pathlib.Path("prompts") / "CONSCIOUSNESS.md"
 WAKE_OBSERVATION_KEY = "wake_observation"  # task metadata: the bound observation's source and projection
 OBSERVATION_BOUNDARY_VERSION = 1
 TRANSITIONS_VERSION = 2  # complete per-task transition inventory, including closed tasks
 PLACEHOLDERS = ("reason", "last_wake_ago", "events", "level", "level_line", "withheld_tools",
-                "spent_usd", "daily_usd", "running", "max_tasks", "interval", "spend_by_cause", "counted_roots", "places")
+                "spent_usd", "daily_usd", "running", "max_tasks", "interval", "spend_by_cause", "counted_roots", "places", "previous_wake")
 LEVEL_LINES = {
     "observe": "On its own it studies, keeps its memory and tells you; it changes nothing outside.",
     "act": "Also acts on its own: starts work, runs commands, speaks and acts in places. It does not change itself.",
     "full": "Also changes itself: its own code, its settings, connecting new places.",
 }
-_FALLBACK_TEMPLATE = "[Wake-up · {reason}] No one wrote to you: this turn is yours. Wake context (last wake {last_wake_ago}): {events}"
+_FALLBACK_TEMPLATE = "[Wake-up · {reason}] No one wrote to you: this turn is yours. Previous wake: {previous_wake}. Wake context (last wake {last_wake_ago}): {events}"
 
 
 def wake_task_metadata(level: Any, reason: str, *, root_cost_ceiling_usd: Optional[float] = None) -> Dict[str, Any]:
@@ -98,6 +101,29 @@ def _parse_iso(value: Any) -> Optional[float]:
         return _dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def previous_wake_text(drive_root: Any, task_id: str, *, now: float) -> str:
+    """One previous own wake by primary key, with its whole authored note."""
+    from ouroboros.project_dialogue import OUTCOME_PHASE_HEADLINE, outcome_phase
+    from ouroboros.task_store import read_document
+    from ouroboros.terminal_time import terminal_time_fact
+
+    if not task_id:
+        return "none"
+    try:
+        row = read_document(drive_root, task_id)
+        if not row:
+            return "unreadable"
+        stamp = _parse_iso(terminal_time_fact(row).get("occurred_at"))
+        ago = _ago(now - stamp) if stamp is not None else "at an unknown time"
+        line = f"«{row['wake_summary']}»" if row.get("wake_summary") else "no line"
+        outcome = "Interrupted" if row.get("status") == "interrupted" else OUTCOME_PHASE_HEADLINE[outcome_phase(row, {})]
+        return (f"{task_id}, {outcome} {ago}; "
+                f"its line: {line}; its note: «{row.get('result') or ''}»")
+    except Exception:
+        log.debug("consciousness: previous wake %s is unreadable", task_id, exc_info=True)
+        return "unreadable"
 
 
 def _clip_preview(value: Any, limit: int = 100) -> str:
@@ -262,6 +288,7 @@ _KIND_WORDS = {  # (one, many)
     "card_answer": ("card answer", "card answers"), "task_terminal": ("task terminal", "task terminals"),
     "direct_turn": ("own direct turn ended (counted, not listed: its exchange is the dialogue itself)",
                     "own direct turns ended (counted, not listed: their exchange is the dialogue itself)"),
+    "direct_turn_summary": ("own direct turn ended with its line", "own direct turns ended with their lines"),
     "task_error": ("task runner failure", "task runner failures"),
     "card_state": ("card closed unanswered", "cards closed unanswered"),
     "outstanding_card": ("outstanding card", "outstanding cards"),
@@ -309,8 +336,9 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     title = _clip_preview(result.get("description") or result.get("text") or row.get("text"), 100)
     project = str(row.get("project_id") or result.get("project_id") or "")
     where = f" in project {projects.get(project, project)}" if project else ""
-    if kind == "direct_turn":
-        return f"- {'wake' if is_consciousness_origin(metadata) else 'direct turn'} {task_id} {status}{where}, {when}"
+    summary = f": {result['wake_summary']}" if result.get("wake_summary") else ""
+    if kind in {"direct_turn", "direct_turn_summary"}:
+        return f"- {'wake' if is_consciousness_origin(metadata) else 'direct turn'} {task_id} {status}{where}, {when}{summary}"
     if is_presence_task(result):
         if isinstance(metadata.get("presence_unknown_outcome"), dict):
             from ouroboros.dialogue_provenance import render_row_text
@@ -320,11 +348,11 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
             retained = {"task_id": task_id, "type": "task_summary", "text": "",
                         "presence_recovery": retained_turn_facts(result, task_id),
                         "source_event": presence.get("event"), "source_text": presence.get("observed_text")}
-            return f"- Presence turn {task_id} {status}{where}, {when}; {render_row_text(retained)}"
+            return f"- Presence turn {task_id} {status}{where}, {when}; {render_row_text(retained)}{summary}"
         outcome = str(metadata.get("presence_outcome") or "unknown")
         work = str(metadata.get("presence_work_ref") or "")
         return (f"- Presence turn {task_id} {status}{where}, {when}; Presence outcome={outcome}; see get_task_result"
-                + (f"; deferred work={work}" if work else ""))
+                + (f"; deferred work={work}" if work else "") + summary)
     parent = str(row.get("parent_task_id") or result.get("parent_task_id") or "")
     role = str(row.get("delegation_role") or result.get("delegation_role") or "")
     noun = f"child task {task_id} of {parent}" if role == "subagent" and parent else f"task {task_id}"
@@ -425,7 +453,7 @@ def _transition_line(fact: Dict[str, Any], results: Dict[str, Dict[str, Any]], r
     result = results.get(task_id) or {}
     when = ago if fact["proven"] or stamp is None else f"completion time not recorded (last updated {ago})"
     if result.get("_is_direct_chat") and not _presence_failure(result):
-        kind = "direct_turn"
+        kind = "direct_turn_summary" if result.get("wake_summary") else "direct_turn"
     return kind, _event_line(kind, {"task_id": task_id}, results, rooms, projects, now, when=when)
 
 
@@ -485,7 +513,7 @@ class WakeObservation:
         return text + (f"; gaps: {', '.join(self.gaps)}" if self.gaps else "")
 
     def full_text(self) -> str:
-        """The whole observation, as the wake's own input when it fits."""
+        """The observation when it fits; only direct turns without an authored line stay counted alone."""
         lines = [self.trigger] if self.trigger else []
         if self.events:
             lines.append(f"Observed since the last accepted wake ({self.composition()}; {self._coverage()}):")
@@ -662,7 +690,7 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
             continue
         result = results.get(str(row.get("task_id") or "")) or {}
         if kind == "task_terminal" and result.get("_is_direct_chat") and not _presence_failure(result):
-            kind = "direct_turn"
+            kind = "direct_turn_summary" if result.get("wake_summary") else "direct_turn"
         events.append((kind, offset, _event_line(kind, row, results, rooms, projects, now)))
     for key, fact in sorted(((key, fact) for key, fact in fresh.items() if key not in announced),
                             key=lambda item: (item[1]["stamp"] is None, item[1]["stamp"] or 0.0, item[0])):
@@ -736,7 +764,7 @@ def bind_wake_observation(drive_root: Any, task: Dict[str, Any], observation: Wa
 def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now: float, level: Any,
                         disabled_tools: List[str], spent_usd: Any, daily_usd: Any, running: int,
                         max_tasks: int, interval: int, events: str, spent_is_floor: bool = False,
-                        spend_by_cause=None, counted_roots=None, places=None) -> str:
+                        spend_by_cause=None, counted_roots=None, places=None, previous_wake: str = "none") -> str:
     """Fill ``prompts/CONSCIOUSNESS.md`` for one wake; every placeholder is substituted."""
     template = safe_read(pathlib.Path(repo_dir) / PROMPT_REL) or _FALLBACK_TEMPLATE
     from ouroboros.consciousness_view import places_text, roots_text, spend_text
@@ -747,6 +775,7 @@ def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now:
     facts = {
         "reason": str(reason or "heartbeat"),
         "last_wake_ago": _ago(now - last_wake_at) if last_wake_at else "no wake since this process started",
+        "previous_wake": previous_wake,
         "events": events or "nothing new",
         "level": {"observe": "Advises", "act": "Acts", "full": "Evolves"}[normalized],
         "level_line": LEVEL_LINES[normalized],

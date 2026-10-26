@@ -11,6 +11,7 @@ import { fitText, fullText } from './text_fit.js';
 import { motionMs, reducedMotion } from './motion.js';
 import { projectReference } from './project_reference.js';
 import { fetchJson } from './api_client.js';
+import { noteLeadText } from './consciousness_words.js';
 import { RELAY_CARD_LINES } from './chat_reply_quote.js';
 
 let nextNoteId = 0;
@@ -104,7 +105,7 @@ export function createRelayDecks({ feed, chatId = 0, onDomWrite = (write) => wri
         const time = formatTime(row?.ts) || null;
         return {
             quoted, chatId: Number(sender?.chat_id),
-            words: String(row?.text ?? bubble.querySelector(':scope > .message')?.textContent ?? '').trim(),
+            words: noteLeadText(row?.text ?? bubble.querySelector(':scope > .message')?.textContent),
             summary: String(relay.summary || '').trim(),
             name, kind: fromMain ? 'main' : 'project', time: time?.short || '', when: time?.full || '',
             // The work the note was written for, as the host stamped it (new rows; an old row says `this work`).

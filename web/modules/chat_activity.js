@@ -1455,6 +1455,7 @@ function metaLineHtml(parts) {
 function paintLiveFacts(record, rows) {
     const el = ownLiveDetail(record, 'liveFacts');
     if (!el) return false;
+    if (record.wakeSummary) rows.unshift([tr('task.fact.wake_summary', 'In its words'), `<span data-i18n-authored>${escapeHtml(record.wakeSummary)}</span>`]);
     const html = rows.filter(([, value]) => value).map(([label, value]) =>
         `<div class="chat-live-fact"><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`).join('');
     if (el.innerHTML === html && el.hidden === !html) return false;

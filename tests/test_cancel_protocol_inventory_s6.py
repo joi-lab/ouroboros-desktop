@@ -55,6 +55,10 @@ TERMINAL_WRITERS = {
     # Selects an already retained actor account; its locked projector preserves
     # CURRENT lifecycle, including terminal state, and compares the prior pointer.
     ('ouroboros/review_history_view.py::publish_review_history_view', '"running"'): 'dynamic',
+    # Writes the admission title with the status it just read; write_task_result
+    # refuses a status regression (_is_status_regression), so a stale read
+    # cannot reopen a finished wake.
+    ('supervisor/worker_chat_lane.py::name_wake_on_admission', 'current.get("status") or STATUS_RUNNING'): 'dynamic',
     # Names the mind's surviving notes after an applied fold; its locked projector
     # preserves CURRENT lifecycle, including terminal state, and writes only the pointer.
     ('ouroboros/main_context_authority.py::publish_working_notes', '"running"'): 'dynamic',

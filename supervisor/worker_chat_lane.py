@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 from supervisor.state import append_jsonl
+from ouroboros.consciousness_authority import wake_cause
 from ouroboros.observability import stamp_finalization_enqueue
 from ouroboros.utils import utc_now_iso
 
@@ -236,6 +237,23 @@ def _broadcast_task_named(msg: dict) -> None:
         get_bridge().broadcast(msg)
     except Exception:
         log.debug("task_named broadcast failed", exc_info=True)
+
+
+def name_wake_on_admission(drive_root: Any, task: dict) -> None:
+    """Publish the wake's cause before its first frame, using the namer's enrichment seam."""
+    from ouroboros.task_finalization import wake_cause_title
+    from ouroboros.task_results import STATUS_RUNNING, load_task_result, write_task_result
+
+    name = wake_cause_title(task.get("metadata") or {})
+    if not name:
+        return
+    try:
+        task_id = str(task["id"])
+        current = load_task_result(drive_root, task_id) or {}
+        write_task_result(drive_root, task_id, current.get("status") or STATUS_RUNNING, suggested_name=name)
+        _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": name})
+    except Exception:
+        log.debug("wake admission title failed for %s", task.get("id"), exc_info=True)
 
 
 def _run_chat_task(
@@ -463,6 +481,7 @@ def _admit_chat_task(
         attach_task_contract(task)
         from ouroboros.tool_access_roots import freeze_tool_profile
         freeze_tool_profile(task)
+        name_wake_on_admission(_pool().DRIVE_ROOT, task)
 
         if deferred:
             _defer_chat_for_restart(task, chat_id, task_metadata)
@@ -551,7 +570,7 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
         # returned events can be consumed after this registry entry is gone:
         # stamp the authoritative chat identity before handing them off.
         on_first_work = None
-        if not task.get("project_id"):
+        if not task.get("project_id") and not wake_cause(task.get("metadata")):
             from ouroboros.project_naming import spawn_turn_namer
 
             on_first_work = lambda: spawn_turn_namer(  # noqa: E731
