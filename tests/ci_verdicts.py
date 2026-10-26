@@ -67,6 +67,18 @@ def valid(row) -> bool:
             and ("is_subtest" not in row or type(row["is_subtest"]) is bool))
 
 
+def error_text(row) -> str:
+    """The error type, and for a lost worker the timeout callback its own record shows was invoked."""
+    seconds = row.get("timeout_callback_seconds")
+    return str(row.get("error_type") or "") + (
+        f"; timeout callback invoked ({seconds:g}s), worker subsequently lost" if type(seconds) in (int, float) else "")
+
+
+def attempt_text(row) -> str:
+    """Phase and error of a report row or of a retry attempt (scripts/ci_retry.py)."""
+    return ", ".join(str(part) for part in (row.get("phase"), error_text(row)) if part)
+
+
 def final(root: Path) -> tuple[dict, str]:
     """The session's final projection, or the reason it cannot be trusted."""
     try:
@@ -320,14 +332,13 @@ def render_run_verdict(root: Path, *, repo: str = "", required=()) -> tuple[str,
 
     def detail(key, row):
         if key == "flaky":
-            first = ", ".join(str(row[part]) for part in ("phase", "error_type") if row.get(part))
+            first = attempt_text(row)
             return f" (first: {cell(first)})" if first else ""
         if key == "accepted":
             link = f"https://github.com/{repo}/issues/{row['issue']}" if repo else ""
             return f" — [#{row['issue']}]({link})" if link else f" — #{row['issue']}"
         if key == "failed":
-            tries = "; ".join(", ".join(str(attempt.get(part)) for part in ("phase", "error_type") if attempt.get(part))
-                              for attempt in row["attempts"] if isinstance(attempt, dict))
+            tries = "; ".join(attempt_text(attempt) for attempt in row["attempts"] if isinstance(attempt, dict))
             return f" ({cell(tries)})" if tries else ""
         return ""
     lines = ["## CI test verdicts — " + ", ".join(f"{name} {len(rows[key])}" for key, name, _ in SECTIONS), ""]
