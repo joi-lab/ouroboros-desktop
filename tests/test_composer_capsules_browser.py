@@ -478,10 +478,17 @@ SUBAGENTS_PANEL = """() => {
 }"""
 
 
-def _state_with(page, **facts) -> None:
-    """The server's /api/state with the room's subagents facts set by the test (the core lane serves them)."""
+def _state_with(page, facts: dict) -> None:
+    """The server's /api/state with the room's subagents facts held by the test (the core lane serves them); a saved
+    mode lands in `facts`, so the state read after a save answers it."""
     page.unroute("**/api/state")
+    page.unroute("**/api/owner/subagents-mode")
     page.route("**/api/state", lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
+
+    def save(route):
+        facts["subagents_mode"] = route.request.post_data_json["mode"]
+        route.fulfill(json={"ok": True, "project_id": "", "subagents_mode": facts["subagents_mode"]})
+    page.route("**/api/owner/subagents-mode", save)
 
 
 @pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 390)])
@@ -499,9 +506,7 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
         browser, page = _launch(pw, engine, **context)
         press = page.tap if phone else page.click
         try:
-            _state_with(page, subagents_mode="auto", subagents_availability="available")
-            page.route("**/api/owner/subagents-mode", lambda route: route.fulfill(json={
-                "ok": True, "project_id": "", "subagents_mode": route.request.post_data_json["mode"]}))
+            _state_with(page, {"subagents_mode": "auto", "subagents_availability": "available"})
             _open_chat(page, url, width=width, height=860, theme="light")
             # Each value's line stands in one cell: choosing another never changes the panel's height.
             for kind, sel, values, endpoint in (
@@ -527,7 +532,7 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
                 assert len(set(lines)) == len(values), ("each value says its own line", kind, lines)
                 page.keyboard.press("Escape")
             # Settings turns subagents off: Off with a lock, Auto and Swarm disabled, the reason and Open Settings.
-            _state_with(page, subagents_mode="swarm", subagents_availability="disabled")
+            _state_with(page, {"subagents_mode": "swarm", "subagents_availability": "disabled"})
             page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'dark'); } catch (e) {}")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{SUBAGENTS}')?.dataset.locked === 'true'", timeout=30_000)
