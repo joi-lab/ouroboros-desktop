@@ -17,6 +17,7 @@ import contextvars
 import copy
 import logging
 import pathlib
+import threading
 import time
 from typing import Any, Dict, Optional, Set
 
@@ -125,6 +126,9 @@ class _CapabilityPolicyMixin:
     # When this process's last /models read failed: for the failed-evidence TTL that one failure
     # answers every reader (the window, the output limit, every route) instead of another read.
     _CAPABILITIES_FAILED_AT: str = ""
+    # One /models read at a time in a process; a reader that waited takes the answer of the read it waited for.
+    _CATALOGUE_READ = threading.Lock()
+    _CATALOGUE_READS: int = 0
 
     _REJECTED_PARAMS_CACHE: Dict[str, Set[str]] = {}
 
@@ -132,13 +136,26 @@ class _CapabilityPolicyMixin:
     def _fetch_openrouter_capabilities(cls) -> None:
         """Populate the catalogue caches from OpenRouter /models; a clean answer is recorded for
         every process (``state/openrouter_models.json``). A read that failed within the
-        failed-evidence TTL answers instead: one attempt per process, not one per reader. Only a
-        finished read sets these flags: a reader overlapping one in flight pays its own GET, never a failure."""
+        failed-evidence TTL answers instead: one attempt per process, not one per reader. Reads run one
+        at a time and only a finished read sets these flags: a reader that arrives while one is in flight
+        waits for it and takes its answer, never a failure that has not happened nor a second GET."""
         from ouroboros.capability_evidence import _FAILED_TTL_SEC, _age_seconds
-        from ouroboros.utils import utc_now_iso
 
-        if cls._CAPABILITIES_FAILED_AT and _age_seconds(cls._CAPABILITIES_FAILED_AT) <= _FAILED_TTL_SEC:
-            return
+        finished = cls._CATALOGUE_READS
+        with cls._CATALOGUE_READ:
+            if cls._CATALOGUE_READS != finished:
+                return
+            if cls._CAPABILITIES_FAILED_AT and _age_seconds(cls._CAPABILITIES_FAILED_AT) <= _FAILED_TTL_SEC:
+                return
+            try:
+                cls._read_openrouter_catalogue()
+            finally:
+                cls._CATALOGUE_READS += 1
+
+    @classmethod
+    def _read_openrouter_catalogue(cls) -> None:
+        """One GET of OpenRouter /models, under ``_CATALOGUE_READ``: the caches, the evidence and the record."""
+        from ouroboros.utils import utc_now_iso
 
         def failed() -> None:  # non-200 or transport: this failure answers every reader for the TTL
             cls._SUPPORTED_PARAMS_FETCHED, cls._CAPABILITIES_FETCH_OK = True, False

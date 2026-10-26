@@ -149,26 +149,33 @@ def test_with_no_record_and_no_network_a_turn_tries_the_catalogue_once(catalogue
         ("unprobeable", "openrouter metadata: metadata read failed")}
 
 
-def test_a_reader_overlapping_a_catalogue_read_in_flight_pays_its_own_get_not_a_failure(catalogue, monkeypatch):
-    """The boot's prefetch still waits for /models when a turn's probe asks: a read in flight is no failure yet, so the
-    probe observes the catalogue itself (one more GET) and keeps the window and the output limit it reads."""
+@pytest.mark.parametrize("answers", [True, False], ids=["read-answers", "read-fails"])
+def test_a_reader_overlapping_a_catalogue_read_in_flight_takes_its_answer(catalogue, monkeypatch, answers):
+    """The boot's prefetch still waits for /models when a turn's probe asks: the probe waits for that read and takes
+    its answer, so it is never told of a failure that has not happened and pays no second GET; when the read in
+    flight fails, that finished failure answers the probe too (one attempt, as with no network)."""
     import requests
 
     client, gets, record = catalogue
     answer, in_flight, release = requests.get, threading.Event(), threading.Event()
 
-    def the_first_waits(url, **kwargs):
-        if not in_flight.is_set():
-            in_flight.set()
-            assert release.wait(10)
+    def the_read_in_flight(url, **kwargs):
+        in_flight.set()
+        assert release.wait(10)
+        if not answers:
+            gets.append(url)
+            raise requests.ConnectionError("reset by peer")
         return answer(url, **kwargs)
 
-    monkeypatch.setattr(requests, "get", the_first_waits)
+    monkeypatch.setattr(requests, "get", the_read_in_flight)
     boot = threading.Thread(target=client.prefetch_openrouter_catalog, daemon=True)
     boot.start()
     assert in_flight.wait(5)
+    threading.Timer(0.3, release.set).start()  # the boot's read answers while the probe waits for it
     probe = _turn_probe(record.parent.parent)
-    release.set()
     boot.join(10)
-    assert probe.window_tokens == 200_000 and "failed" not in probe.response_limit["source"]
-    assert not client.metadata_fetch_attempted_and_failed() and len(gets) == 2
+    assert len(gets) == 1 and client.metadata_fetch_attempted_and_failed() is not answers
+    if answers:
+        assert probe.window_tokens == 200_000 and "failed" not in probe.response_limit["source"]
+    else:
+        assert probe.response_limit["source"] == "openrouter metadata: metadata read failed"
