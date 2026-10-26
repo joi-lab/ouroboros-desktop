@@ -313,12 +313,11 @@ def test_finalizer_ttl_orders_the_sealed_anchor_on_direct_anthropic(monkeypatch)
 
 @pytest.mark.parametrize("provider,model", [
     ("openai", "gpt-5.5"),
-    ("openai-compatible", "local-glm"),
     ("cloudru", "GigaChat/some-model"),
 ])
 def test_finalizer_never_marks_non_openrouter_routes(provider, model):
-    """These three share the OpenAI-compatible transport with OpenRouter; an ungated
-    mutator would inject Anthropic-style cache_control and earn a hard provider 400."""
+    """These share the OpenAI-compatible transport with OpenRouter; an ungated mutator
+    would inject Anthropic-style cache_control into a wire they never asked to carry it."""
     client = LLMClient(api_key="unused")
     target = {
         "provider": provider,
@@ -336,6 +335,27 @@ def test_finalizer_never_marks_non_openrouter_routes(provider, model):
 
     assert kwargs == before
     assert _markers(kwargs) == []
+
+
+def test_finalizer_normalizes_the_generic_compatible_lane():
+    """A generic compatible server gets this family's markers (unknown is not no): the
+    finalizer marks the last schema within the cap and stamps the owner's TTL there too,
+    while a server that refuses a hint is answered by request-wire recovery on its route."""
+    client = LLMClient(api_key="unused")
+    target = {"provider": "openai-compatible", "resolved_model": "local-glm",
+              "usage_model": "openai-compatible/local-glm", "supports_openrouter_extensions": False}
+    kwargs = client._build_remote_kwargs(
+        target, _review_pack(), "high", 512, "auto", None, _tools(),
+        skip_capability_fetch=True,
+    )
+    assert "cache_control" not in kwargs["tools"][-1]
+
+    assert client._normalize_payload_cache_ttl(target, kwargs) == "1h"
+
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in kwargs["tools"][0]
+    assert kwargs["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in kwargs["messages"][0]["content"][1]
 
 
 def test_finalizer_leaves_unsupported_openrouter_family_untouched():

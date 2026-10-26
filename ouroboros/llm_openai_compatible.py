@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 from ouroboros.llm_attempt import (
-    apply_processing_preference, attach_processing_receipt, openai_family_route,
+    _applied_payload_cache_ttl, apply_processing_preference, attach_processing_receipt, openai_family_route,
     supports_message_cache_control,
 )
 from ouroboros.llm_messages import project_declared_system_prefix
@@ -33,6 +33,7 @@ from ouroboros.reasoning_artifacts import transcript_has_sealed_reasoning
 from ouroboros.llm_routing import _resolve_or_provider
 from ouroboros.provider_models import normalize_deepseek_reasoning_effort, normalize_zai_reasoning_effort
 from ouroboros.request_wire_recovery import (
+    current_wire_candidate,
     finalize_wire_response,
     note_provider_metadata_drop_fields,
 )
@@ -145,13 +146,18 @@ class _OpenAICompatibleLaneMixin:
                 {k: v for k, v in tool.items() if k != "cache_control"}
                 for tool in self._sanitize_chat_completion_tools(tools)
             ]
+            # A generic compatible server gets the canonical cache hints (unknown is not
+            # no); one that refuses a hint is repaired and remembered by request-wire
+            # recovery on that exact route. The other direct lanes keep their strip.
+            compatible = provider == "openai-compatible"
             clean_messages = self._strip_openrouter_roundtrip_metadata(
                 self._copy_messages_with_cache_policy(
                     messages,
-                    allow_message_cache_control=False,
+                    allow_message_cache_control=compatible,
                     flatten_tool_content_blocks=True,
                     # DeepSeek accepts content arrays only on user turns.
                     flatten_non_user_content_blocks=provider == "deepseek",
+                    allow_cache_ttl=compatible,
                 ),
                 keep_reasoning_content=provider == "minimax" or bool(target.get("requires_reasoning_echo")),
                 keep_reasoning_details=bool(target.get("reasoning_split")),
@@ -178,7 +184,7 @@ class _OpenAICompatibleLaneMixin:
                 kwargs.setdefault("extra_body", {})["reasoning_split"] = True
             if stream:
                 kwargs.update(stream=True, stream_options={"include_usage": True})
-            if provider == "openai":
+            if direct_openai or compatible:
                 cache_identity = self._prompt_cache_identity(
                     str(target.get("usage_model") or resolved_model),
                     clean_messages,
@@ -551,6 +557,8 @@ class _OpenAICompatibleLaneMixin:
 
         usage["provider"] = str(target.get("provider") or "openrouter")
         usage["resolved_model"] = str(target.get("usage_model") or target.get("resolved_model") or "")
+        terminal = current_wire_candidate()  # the TTL the terminal candidate carried, after any hint repair
+        prompt_cache_ttl = _applied_payload_cache_ttl(terminal.physical_payload()) if terminal is not None else prompt_cache_ttl
         if prompt_cache_ttl and not usage.get("prompt_cache_ttl"):
             usage["prompt_cache_ttl"] = prompt_cache_ttl
         # Anthropic's per-tier write split, when the route passed it through.
