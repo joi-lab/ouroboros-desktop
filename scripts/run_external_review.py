@@ -525,14 +525,14 @@ def _assert_contributor_review_config(resolved_config: dict) -> None:
 
 def _configured_openrouter_models(resolved_config: dict) -> list[str]:
     """OpenRouter API rows that need the wrapper's provider-specific key probe."""
-    from ouroboros.provider_models import provider_for_model
+    from ouroboros.provider_models import parse_model_route
 
     models: list[str] = []
     for row in list(resolved_config.get("pool_slots") or []):
         route = row.get("route") or {}
-        model = str(route.get("target_id") or "")
-        if route.get("kind") == "api_chat" and provider_for_model(model) == "openrouter":
-            models.append(model.removeprefix("openrouter::"))
+        parsed = parse_model_route(str(route.get("target_id") or ""))
+        if route.get("kind") == "api_chat" and parsed.kind == "openrouter" and not parsed.connection:
+            models.append(parsed.model)  # the wrapper probes the built-in OpenRouter key only
     return list(dict.fromkeys(models))
 
 
@@ -767,19 +767,18 @@ def _review_evidence_and_cost(actors: list[tuple[str, dict]]) -> tuple[list[dict
 
 
 def _seat_records(record: dict | None, drive_root: pathlib.Path) -> list[dict]:
-    """Every seat row of the record with its retained answer, in full."""
-    from ouroboros.review_ledger import read_source
+    """Every seat row of the record with its retained answer (else failure or pending note), in full."""
+    from ouroboros.review_ledger import read_source, seat_text_source
 
     seats = []
     for row in (record or {}).get("rows") or []:
-        answer = ""
-        for ref in row.get("source_refs") or []:
-            if isinstance(ref, dict) and ref.get("role") == "response" and ref.get("status") == "retained":
-                try:
-                    answer = read_source(drive_root, str(record.get("task_id") or ""), ref).decode(
-                        "utf-8", errors="replace")
-                except Exception as exc:
-                    answer = f"<retained answer unreadable: {type(exc).__name__}: {exc}>"
+        answer, ref = "", seat_text_source(row)
+        if ref is not None and ref.get("status") == "retained":
+            try:
+                answer = read_source(drive_root, str(record.get("task_id") or ""), ref).decode(
+                    "utf-8", errors="replace")
+            except Exception as exc:
+                answer = f"<retained answer unreadable: {type(exc).__name__}: {exc}>"
         seats.append({**row, "answer": answer})
     return seats
 

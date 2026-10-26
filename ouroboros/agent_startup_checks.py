@@ -131,7 +131,9 @@ def task_result_authority_projection(
             promotion=row.get("child_ref_promotion"))
         # Beside the recorded state, never inside it: every projection keeps this small field whole.
         authority.update({"plan_review_source_gap": gap} if gap else {})
-    return authority
+    from ouroboros.delegate_output import project_task_output_readers
+
+    return project_task_output_readers(authority)
 
 
 def valid_task_result_authority_source(source: Any, task_id: Any) -> bool:
@@ -148,6 +150,8 @@ def valid_task_result_authority_source(source: Any, task_id: Any) -> bool:
         and isinstance(arguments, dict)
         and str(arguments.get("task_id") or "") == selected_id
         and arguments.get("include_authority") is True
+        and arguments.get("authority_fields") is None
+        and arguments.get("source_only") is not True
     )
 
 
@@ -351,11 +355,13 @@ def check_uncommitted_changes(env: Any) -> Tuple[dict, int]:
     A read only: it takes no optional index lock and removes none, since a lock's
     age says nothing about whether its writer is still running.
     """
+    from ouroboros.git_observation import host_git_env
+
     try:
         result = subprocess.run(
             ["git", "--no-optional-locks", "status", "--porcelain"],
             cwd=str(env.repo_dir),
-            capture_output=True, text=True, timeout=10, check=True
+            capture_output=True, text=True, timeout=10, check=True, env=host_git_env()
         )
         dirty_files = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
         if dirty_files:

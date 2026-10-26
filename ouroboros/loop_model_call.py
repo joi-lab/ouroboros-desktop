@@ -37,13 +37,8 @@ _ROUND_WAIT_KINDS = ("transport_unavailable", "provider_outcome_unknown")
 
 
 def _loop():
-    """The parent loop module, read at call time.
-
-    The loop's members stay monkeypatch-addressable at their historical
-    ``ouroboros.loop`` bindings (tests rebind them there), so this leaf
-    resolves every cross-reference through the module at each call instead
-    of freezing whatever object a from-import saw at import time.
-    """
+    """The parent loop module, read at call time: its members stay monkeypatch-addressable at their
+    historical ``ouroboros.loop`` bindings, so every cross-reference resolves through the module."""
     from ouroboros import loop
 
     return loop
@@ -57,13 +52,9 @@ def _record_authoring_handover(
     reason: str,
     tool_calls_at_handover: int,
 ) -> None:
-    """Record a host-driven authoring handover for the current loop.
-
-    A route change is not itself an error: the successor may continue normally.
-    It is, however, a typed fact that the next tool-less response must see as a
-    continuation when the predecessor already used tools.  Keep the fact on the
-    existing ToolContext/usage/trace seams; no second custody store is needed.
-    """
+    """Record a host-driven authoring handover for the current loop: not an error (the successor may
+    continue normally) but a typed fact the next tool-less response must see as a continuation when the
+    predecessor already used tools. Kept on the existing ToolContext/usage/trace seams."""
     source = str(from_model or "").strip()
     target = str(to_model or "").strip()
     if not source or not target or source == target or tool_calls_at_handover < 1:
@@ -116,16 +107,11 @@ def _adopt_fallback_route(
     handover_reason: str = "fallback",
     tool_calls_at_handover: Optional[int] = None,
 ) -> tuple:
-    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback as the active
-    route for the rest of the loop. Otherwise a later round (esp. a tool
-    loop) replays THIS fallback's reasoning/thinking back to the original
-    primary family with no model-switch sanitizer firing (active_model never
-    changed) — the cross-family signature replay, in reverse. Adopting the
-    sanitized transcript keeps the old family's provider-private blocks off
-    the switched route (a later switch_model/override re-triggers the
-    round-start sanitizer); the caller already rebound the context-fit plan
-    to this exact route, so adoption makes that tested projection canonical.
-    Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
+    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback as the active route for the rest of
+    the loop, with its sanitized transcript: otherwise a later round replays THIS fallback's
+    reasoning back to the primary family with no switch sanitizer firing (the cross-family
+    signature replay, in reverse). The caller already rebound the context-fit plan to this exact
+    route. Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
     ctx.active_model = fallback_model
     ctx.active_use_local = fallback_use_local
     messages[:] = fallback_messages
@@ -209,15 +195,12 @@ def _run_cross_model_fallback_chain(
     accumulated_usage, task_type, emit_progress, context_fit_plan,
     active_context_mode,
 ) -> tuple:
-    """Try the configured routes other than the acting binding before any wait begins.
-
-    An eligible unknown outcome moves on to the next route with facts-only recovery
-    input (a real, possibly charged generation); an ineligible one (an accepted operation still readable)
-    or a spent deadline stops the walk. A round whose own failure is an
-    outage or an unknown outcome keeps that failure as its wait when none answers.
-    """
+    """Try the configured routes other than the acting binding before any wait begins. An eligible unknown
+    outcome moves on with facts-only recovery input (a real, possibly charged generation); an ineligible
+    one (an accepted operation still readable) or a spent deadline stops the walk. A round whose own
+    failure is an outage or an unknown outcome keeps that failure as its wait when none answers."""
     from ouroboros import fallback_cooldown as _fcd
-    from ouroboros.loop_transport import append_unknown_recovery_input
+    from ouroboros.loop_transport import append_unknown_recovery_input, fallback_reason_text
     from ouroboros.model_slots import MODEL_ACCOUNTS_KEY, model_role_option, task_model_binding, route_binding
     from ouroboros.model_wait import current_model_wait
     from ouroboros.loop_llm_call import _COOLDOWN_ERROR_KINDS as _cooldown_kinds
@@ -262,10 +245,8 @@ def _run_cross_model_fallback_chain(
     # otherwise read "primary -> B" beside B's predecessor's failure reason.
     previous_model, previous_tag = active_model, " (local)" if active_use_local else ""
     msg = None
-    # ABI-4: the chain ladder arrives as typed ResolvedModelTarget values; `.model_id`
-    # is read once in `_route_candidates` and crosses to strings only at the LLM
-    # transport boundary. Every chain row uses the single global USE_LOCAL_FALLBACK
-    # flag (the pre-existing chain contract); the primary keeps its own locality.
+    # ABI-4: typed ResolvedModelTarget rows cross to strings only at the transport boundary; every chain
+    # row uses the single global USE_LOCAL_FALLBACK flag, the primary keeps its own locality.
     for index, (fallback_model, fallback_role, fallback_use_local, is_primary) in enumerate(rows):
         if _fcd.is_cooling_down(*route_binding(fallback_model, fallback_use_local, fallback_role,
                                              overrides=waiter.overrides if waiter else None)):
@@ -287,10 +268,8 @@ def _run_cross_model_fallback_chain(
         reason = str(accumulated_usage.get("_last_llm_error_kind") or "")
         emit_progress(f"⚡ Fallback: {previous_model}{previous_tag} → {fallback_model}{ftag}"
                       f"{' (primary)' if is_primary else ''}{account_note}"
-                      f"{f'; reason: {reason}' if reason else ''}"
-                      f"{'; sign-in is still needed there' if reason == 'auth_error' else ''}"
-                      f"{'; the earlier attempt’s outcome and cost stay unknown' if reason == 'provider_outcome_unknown' else ''}"
-                      f"{'; pinned account: siblings were not tried' if account_route and fallback_account else ''}",
+                      f"{'; pinned account: siblings were not tried' if account_route and fallback_account else ''}."
+                      f"{fallback_reason_text(accumulated_usage)}",  # the predecessor's class and own sentence
                       incident={"task_incident": "model_lane_switch", "toast_once": f"{task_id}:model_lane_switch:{round_idx}:{fallback_model}"})
         _disclose_unknown(messages, fallback_model)
         # Cross-FAMILY fallback must not replay the primary's
@@ -388,6 +367,8 @@ def _run_cross_model_fallback_chain(
                 tools._ctx, model=fallback_model, use_local=fallback_use_local, role=fallback_role,
                 failed_model=entry_model, failure=entry_failure, waiter=waiter, usage=accumulated_usage,
                 round_idx=round_idx)
+            from ouroboros.route_choice import after_fallback
+            tools._ctx.route_choice = after_fallback(tools._ctx, is_primary)  # a chain entry is the task's own route
             if not is_primary:
                 tools._ctx.route_wait_on_primary = False  # a declared wait belonged to the primary route
             break
@@ -524,18 +505,29 @@ def _walk_fenced(tool_ctx: Any, usage: Dict[str, Any]) -> bool:
 
 def _apply_round_route_overrides(ctx: Any, tools: ToolRegistry, messages: List[Dict[str, Any]], route: tuple,
                                  context_fit_plan: Any, active_context_mode: str, preferred_mode: str,
-                                 tool_schemas: List[Dict[str, Any]]) -> tuple:
-    """Apply one-shot ``switch_model`` choices at the round boundary.
+                                 tool_schemas: List[Dict[str, Any]], llm: Any = None) -> tuple:
+    """Apply the round boundary's route: a following route's current role binding, then one-shot
+    ``switch_model`` choices.
 
     ``route`` is ``(model, use_local, effort)``. A symbolic primary return also names
     the primary's role, so the rebound fit plan, account and processing binding are the
     primary's own (Auto stays Auto: no observed account becomes a pin); effort intent is
     untouched. Returns ``(model, use_local, effort, plan, mode)``.
     """
+    from ouroboros import route_choice
+
     selected = getattr(tools._ctx, "_authored_memory_plan", None)
     if selected is not None and selected.core_sha256 == getattr(context_fit_plan, "core_sha256", None):
         context_fit_plan, tools._ctx._authored_memory_plan = selected, None
     previous = route[:2]
+    current = route_choice.round_route(ctx, llm, previous)  # a Settings change reaches a following route here
+    if current is not None:
+        ctx.active_model_override, ctx.active_use_local_override = current
+        if not getattr(ctx, "active_role_override", None):  # the mind's own return says why; this is the host's
+            route_choice.note_settings_change(ctx, previous[0], current[0], route_choice.follows(ctx.route_choice))
+            trace = getattr(ctx, "_execution_trace", None)
+            _record_authoring_handover(ctx, from_model=previous[0], to_model=current[0], reason="settings_change",
+                                       tool_calls_at_handover=len((trace or {}).get("tool_calls") or []) if isinstance(trace, dict) else 0)
     model, use_local, effort = _loop()._apply_runtime_overrides(ctx, *route)
     role, ctx.active_role_override = getattr(ctx, "active_role_override", None), None
     if role and getattr(ctx, "primary_route", None):
@@ -728,9 +720,8 @@ class _RoundModelCallContext:
     drive_root: Optional[pathlib.Path]
     attempt_cap: Optional[int] = None
     model_role: str = ""
-    # The loop-level owner notifier (run_llm_loop's own parameter), the one
-    # callable documented to accept incident=; the ToolContext ABI's
-    # emit_progress_fn takes a single argument and must not carry the pair.
+    # run_llm_loop's own notifier, the one callable documented to accept incident=; the ToolContext
+    # ABI's emit_progress_fn takes a single argument and must not carry the pair.
     emit_progress: Optional[Callable[..., None]] = None
     # None: a primary round, which defers a resource refusal while a configured route
     # follows or the turn may not wait. The chain sets it for each candidate.
@@ -1026,7 +1017,7 @@ def _dispatch_round_model(
 
 def _reprepare_waiting_main(ctx: _RoundModelCallContext, kwargs: dict):
     """Rebuild from the same immutable core; never replay completed tools/review."""
-    from ouroboros.model_wait import PreparedModelCall
+    from ouroboros.model_wait import PreparedModelCall, current_model_wait
     from ouroboros.usage_accounting import current_physical_attempt_predicate, bind_physical_attempt_context
 
     model, use_local = kwargs["model"], kwargs.get("use_local", False)
@@ -1054,6 +1045,10 @@ def _reprepare_waiting_main(ctx: _RoundModelCallContext, kwargs: dict):
     ctx.active_model, ctx.active_use_local = model, use_local
     ctx.tools._ctx.active_model = model
     ctx.tools._ctx.active_use_local = use_local
+    waiter = current_model_wait()
+    if waiter is not None and waiter.overrides.get(role):  # the owner's card choice holds for the rest of the task
+        from ouroboros.route_choice import explicit
+        ctx.tools._ctx.route_choice = explicit("wait_card")
     if _fit_route_tool_ceiling(ctx):  # an owner's switch may land on a route with a schema ceiling
         kwargs["tools"] = ctx.tool_schemas
     trace = getattr(ctx.tools._ctx, "_execution_trace", {})

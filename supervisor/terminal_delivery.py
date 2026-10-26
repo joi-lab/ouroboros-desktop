@@ -39,8 +39,8 @@ SALVAGE_PREVIEW_CHARS = 3500
 # same way the delivered registry is: newest kept.
 _PENDING_CAP = 64
 # A row younger than this is presumed still in flight through the event queue,
-# not lost; and each row is replayed at most this many times before the outbox
-# gives up loudly (an unreachable chat must not become a tick-rate retry storm).
+# not lost; each row gets this many recorded replay dispatch entries before the
+# outbox gives up loudly. Queue admission never consumes this transport bound.
 _REPLAY_MIN_AGE_SEC = 60.0
 _PENDING_MAX_REPLAYS = 5
 
@@ -346,6 +346,8 @@ def register_pending_delivery(drive_root: Any, event: Dict[str, Any]) -> bool:
             return None  # already delivered: nothing is owed
         pending = _mapping_rows(current, "pending", strict=True)
         exhausted = _mapping_rows(current, "exhausted", strict=True)
+        if did in exhausted and not token:
+            return None  # a stale copy cannot reopen exhausted debt; a real receipt can retire it
         if did in pending and not isinstance(pending[did], dict):
             raise ValueError(f"terminal-delivery registry pending row for {did} is malformed")
         if did in pending and pending[did].get("terminal_projection_token") == token:
@@ -354,6 +356,8 @@ def register_pending_delivery(drive_root: Any, event: Dict[str, Any]) -> bool:
             pending[did].update({key: event[key] for key in ("ts", "delivery_deferred", "emitted", "transport_failed") if key in event})
             return _registry_document(current, rows, pending, exhausted=exhausted)
         pending[did] = {**without_finalization_timing(event), "registered_at": utc_now_iso()}
+        if not token:
+            pending[did]["dispatch_attempts"] = 0
         pending[did].pop("type", None)
         if len(pending) > _PENDING_CAP:
             for stale in list(pending)[: len(pending) - _PENDING_CAP]:
@@ -492,48 +496,61 @@ def pending_deliveries(
 
 def _exhausted_row(row: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
     """The registry's exhausted disposition of one owed row: its payload plus how it ended."""
-    try:
-        attempts = int(row.get("replay_attempts") or 0)
-    except (TypeError, ValueError):
-        attempts = 0
-    return {**row, "exhausted_at": utc_now_iso(), "reason": reason, "attempts": attempts, "preserved_path": ""}
+    return {**row, "exhausted_at": utc_now_iso(), "reason": reason,
+            "attempts": _dispatch_attempts(row) if "dispatch_attempts" in row else None,
+            "attempts_basis": "recorded_replay_dispatch_entries", "preserved_path": ""}
 
 
-def _bump_replay_attempts(drive_root: Any, ids: List[str]) -> None:
-    """Count admitted copies/failed physical retries on the existing backoff.
-    Queued/in-flight/unknown membership or busy pre-send storage spends nothing.
-    Exhaustion is a separate transition before retry.
-    """
+def _stamp_replay_queued(drive_root: Any, ids: List[str]) -> None:
+    """Space admitted queue copies without charging a transport attempt."""
     def _mutate(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         pending = _mapping_rows(current, "pending", strict=True)
-        changed = False
-        for did in ids:
-            row = pending.get(did)
-            if not isinstance(row, dict):
-                continue
-            changed = True
-            pending[did] = {**row, "replay_attempts": int(row.get("replay_attempts") or 0) + 1,
-                            "last_replay_at": utc_now_iso()}
-        if not changed:
+        updates = {did: {**pending[did], "last_replay_at": utc_now_iso()}
+                   for did in ids if isinstance(pending.get(did), dict)}
+        if not updates:
             return None
-        rows = _delivered_rows(current, strict=True)
-        return _registry_document(current, rows, pending)
+        return _registry_document(current, _delivered_rows(current, strict=True), {**pending, **updates})
 
     try:
         update_json_locked(_registry_path(drive_root), _mutate, strict_existing_dict=True, timeout_sec=bounded_wait(4.0))
     except ValueError:
-        _log_registry_corrupt(drive_root, ",".join(ids), op="bump_replay_attempts")
+        _log_registry_corrupt(drive_root, ",".join(ids), op="stamp_replay_queued")
     except Exception:
         log.warning("terminal-delivery replay bookkeeping failed", exc_info=True)
 
 
-def _retire_exhausted(drive_root: Any, rows: List[Dict[str, Any]], *, reason: str = "replay_exhausted") -> None:
-    """Move owed rows the host gives up on into the registry's ``exhausted`` mapping, payload kept.
+def record_replay_dispatch(drive_root: Any, delivery_id: str) -> bool:
+    """Record entry after required writes, immediately before transport.
+    Unknown/interrupted sends consume the bound: a write proves no invocation or
+    outcome. Absent dispatch_attempts starts a prospective allowance, never legacy
+    physical history; replay_attempts stays untouched. Main keeps its retry owner.
+    False means no dispatch owed/allowed; write errors propagate with debt intact.
+    """
+    recorded = False
 
-    The transition re-checks each row under the registry lock (a receipt that
-    landed meanwhile wins: nothing is retired), so the only active disposition is
-    never lost between a pop and its disclosure. Each retired row is then
-    disclosed through ``_disclose_exhausted_delivery``."""
+    def _mutate(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        nonlocal recorded
+        pending = _mapping_rows(current, "pending", strict=True)
+        rows = _delivered_rows(current, strict=True)
+        row = pending.get(delivery_id)
+        if not isinstance(row, dict) or delivery_id in rows or row.get("terminal_projection_token") or row.get("emitted"):
+            return None
+        attempts = _dispatch_attempts(row)
+        if attempts is None or attempts >= _PENDING_MAX_REPLAYS:
+            return None
+        pending[delivery_id] = {**row, "dispatch_attempts": attempts + 1, "last_replay_at": utc_now_iso()}
+        recorded = True
+        return _registry_document(current, rows, pending)
+
+    update_json_locked(_registry_path(drive_root), _mutate, strict_existing_dict=True, timeout_sec=bounded_wait(4.0))
+    return recorded
+
+
+def _retire_exhausted(drive_root: Any, rows: List[Dict[str, Any]], *, reason: str = "replay_exhausted") -> None:
+    """Move debt to exhausted atomically, payload kept. Recheck under the lock:
+    a receipt or emitted fact wins. Disclose each retired row after the transition
+    through _disclose_exhausted_delivery; no pop/disclosure gap loses disposition.
+    """
     ids = [str(row.get("delivery_id") or "") for row in rows]
     retired: List[Dict[str, Any]] = []
 
@@ -544,7 +561,7 @@ def _retire_exhausted(drive_root: Any, rows: List[Dict[str, Any]], *, reason: st
         exhausted = _mapping_rows(current, "exhausted", strict=True)
         for did in ids:
             row = pending.get(did)
-            if not isinstance(row, dict) or did in rows:
+            if not isinstance(row, dict) or did in rows or row.get("emitted"):
                 continue
             exhausted[did] = _exhausted_row(pending.pop(did), reason=reason)
             retired.append({**exhausted[did], "delivery_id": did})
@@ -581,28 +598,24 @@ def _stamp_exhausted_copy(drive_root: Any, delivery_id: str, preserved: str) -> 
         log.debug("exhausted-delivery copy path could not be recorded for %s", delivery_id, exc_info=True)
 
 
-def _replay_attempts(row: Dict[str, Any]) -> int:
-    try:
-        return int(row.get("replay_attempts") or 0)
-    except (TypeError, ValueError):
-        return 0
+def _dispatch_attempts(row: Dict[str, Any]) -> Optional[int]:
+    """Prospective budget only: absence records no new entries; invalid is unknown."""
+    value = row.get("dispatch_attempts", 0)
+    return value if type(value) is int and value >= 0 else None
 
 
 def _disclose_exhausted_delivery(
     drive_root: Any, row: Dict[str, Any], *, reason: str = "replay_exhausted",
 ) -> None:
-    """Disclose an outbox row the host gave up delivering (its registry row is already ``exhausted``).
+    """Disclose replay exhaustion or capacity eviction after its registry transition.
 
-    Replay exhaustion and capacity eviction share this seam. Preserve THIS row's
-    full message (a receipt may hold only an excerpt) and stamp the copy's path on
-    the exhausted row (the Done card points at it; a failed copy stays an honest
-    empty path, never a claimed copy), emit ``terminal_delivery_exhausted`` even
-    if chat fails, and say sending was not confirmed. The separate ⚠️ chat row and
-    the card settlement belong to the supervisor process only: a worker-side
-    capacity eviction records the mark and the copy and leaves the rest to the
-    delivery/reconcile duties. Only a cancel receipt proving this delivery reached
-    this destination suppresses the notice; a bare delivery id proves no
-    destination. Every step is fail-soft."""
+    Preserve this row's FULL text (a receipt can be an excerpt); stamp its copy path
+    for the card, empty on failure. Emit terminal_delivery_exhausted even if chat
+    fails; delivery stays unconfirmed. Workers record only mark/copy: supervisor
+    duties own the separate chat notice and card settlement. Suppress the notice
+    only for a cancel receipt proving THIS delivery reached THIS destination; a
+    bare id proves no destination. Each step is fail-soft.
+    """
     from ouroboros.utils import in_worker_process
 
     did = str(row.get("delivery_id") or "")
@@ -614,12 +627,7 @@ def _disclose_exhausted_delivery(
         return
     text = str(row.get("text") or "")
     capacity = reason == "outbox_capacity"
-    try:
-        attempts = int(row.get("attempts") if "attempts" in row else row.get("replay_attempts") or 0)
-    except (TypeError, ValueError):
-        attempts = 0
-    if not capacity:
-        attempts = max(attempts, _PENDING_MAX_REPLAYS)
+    attempts = _dispatch_attempts(row) if "dispatch_attempts" in row else None
     try:
         chat_id = int(row.get("chat_id") or 0)
     except (TypeError, ValueError):
@@ -655,7 +663,8 @@ def _disclose_exhausted_delivery(
                 "ts": utc_now_iso(), "type": "terminal_delivery_exhausted",
                 "task_id": tid, "delivery_id": did, "chat_id": chat_id,
                 "reason": reason,
-                "attempts": attempts, "preserved_path": preserved, "detail": detail,
+                "attempts": attempts, "attempts_basis": "recorded_replay_dispatch_entries",
+                "preserved_path": preserved, "detail": detail,
                 **({"owner_notice": "not_sent_same_delivery_recorded_at_this_chat"} if reached else {}),
             },
         )
@@ -685,8 +694,8 @@ def _disclose_exhausted_delivery(
         cause = (
             f"its pending-outbox slot was taken by newer owed messages (capacity {_PENDING_CAP})"
             if capacity else
-            f"no send was confirmed after {_PENDING_MAX_REPLAYS} replay attempts (chat "
-            "transport failing or the supervisor kept crashing mid-send)"
+            f"no send was confirmed after {attempts} recorded replay dispatch entries" if attempts is not None else
+            "no send was confirmed; prior physical send history is unknown"
         )
         send_with_budget(
             chat_id,
@@ -728,7 +737,7 @@ def replay_pending_deliveries(drive_root: Any, *, event_queue: Any = None) -> Li
         except Exception:
             log.warning("terminal-delivery replay could not reach the event queue", exc_info=True)
             return continued
-    spent = [row for row in owed if _replay_attempts(row) >= _PENDING_MAX_REPLAYS]
+    spent = [row for row in owed if _dispatch_attempts(row) >= _PENDING_MAX_REPLAYS]
     if spent:
         # The cap is reached: the debt TRANSITIONS to exhausted (payload kept, copy
         # preserved, disclosed) instead of being enqueued once more, but only once the
@@ -740,15 +749,13 @@ def replay_pending_deliveries(drive_root: Any, *, event_queue: Any = None) -> Li
         if done:
             _retire_exhausted(drive_root, done)
         owed = [row for row in owed if row not in spent]
-    if not owed:
-        return continued
     replayed: List[str] = []
     for row in owed:
         did = str(row.get("delivery_id") or "")
         if already_delivered(drive_root, did):
             continue  # a receipt landed since the rows were read: nothing to replay
-        event = {**row, "type": "send_message"}
-        for key in ("registered_at", "replay_attempts", "last_replay_at"):
+        event = {**row, "type": "send_message", "_delivery_replay": True}
+        for key in ("registered_at", "replay_attempts", "dispatch_attempts", "last_replay_at"):
             event.pop(key, None)
         admitted = _put_unless_outstanding(event_queue, event)
         if admitted is None:
@@ -757,9 +764,7 @@ def replay_pending_deliveries(drive_root: Any, *, event_queue: Any = None) -> Li
         if admitted:
             replayed.append(did)
     if replayed:
-        # Attempts count only a copy that really entered the bus (owner: never burn
-        # retries while the message already stands in the queue).
-        _bump_replay_attempts(drive_root, replayed)
+        _stamp_replay_queued(drive_root, replayed)
         log.info("Replayed %d undelivered terminal answer(s): %s", len(replayed), replayed)
     return continued + replayed
 
@@ -767,15 +772,13 @@ def replay_pending_deliveries(drive_root: Any, *, event_queue: Any = None) -> Li
 def _put_unless_outstanding(event_queue: Any, event: Dict[str, Any]) -> Optional[bool]:
     """Atomically enqueue only with proven absent delivery membership (INTERFACES I1).
 
-    The bus holds each id from put through physical handler completion. True spends
-    one retry; False means queued/in-flight; None means missing/broken observation.
-    Neither refusal spends a retry; the next sweep or fresh boot bus can retry.
+    The bus holds each id from put through physical handler completion. True admits
+    a copy; False means queued/in-flight; None means missing/broken observation.
+    No queue operation spends a retry; only recorded transport entry does.
     """
     put = getattr(event_queue, "put_unless_outstanding", None)
-    if put is None:
-        return None
     try:
-        return bool(put(event))
+        return None if put is None else bool(put(event))
     except Exception:
         log.warning("terminal-delivery replay: bus membership unobservable for %s",
                     event.get("delivery_id"), exc_info=True)
@@ -785,19 +788,16 @@ def _put_unless_outstanding(event_queue: Any, event: Dict[str, Any]) -> Optional
 def _replay_due(row: Dict[str, Any], *, now: Optional[float] = None) -> bool:
     """Whether an owed row is old enough that its send is presumed lost.
 
-    Spaced with exponential backoff (AR2-7): attempt N waits
-    ``_REPLAY_MIN_AGE_SEC * 2**N`` after the PREVIOUS replay (60s, 120s, 240s,
-    480s, 960s — ~31 minutes of coverage), measured from ``last_replay_at``
-    once one exists. Without the stamp all five attempts burned on consecutive
-    supervisor ticks and the cap covered a ~5-minute outage at best.
+    Queue admission and dispatch both stamp last_replay_at. Only recorded dispatch
+    entries increase the exponential backoff, including unknown outcomes. Legacy
+    replay_attempts cannot establish physical history or spend the new allowance.
     """
+    attempts = _dispatch_attempts(row)
+    if attempts is None:
+        return False
     raw = str(row.get("last_replay_at") or row.get("registered_at") or "").replace("Z", "+00:00")
     if not raw:
         return True
-    try:
-        attempts = int(row.get("replay_attempts") or 0)
-    except (TypeError, ValueError):
-        attempts = 0
     try:
         from datetime import datetime, timezone
 

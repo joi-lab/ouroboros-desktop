@@ -612,11 +612,14 @@ class ReviewPoolResponse(TypedDict):
 
 class ModelCatalogItem(TypedDict, total=False):
     """One selectable model. ``value`` is what a model setting stores: the raw id for OpenRouter,
-    ``<provider_id>::<id>`` for another API provider, ``claudexor::<source>=<model>`` for an agent
-    account's model, which adds that account's facts."""
+    ``<provider_id>::<id>`` for another API provider, ``<kind>@<name>::<id>`` for a named API
+    connection (its ``provider``/``provider_id`` = ``<kind>@<name>``, ``provider_label`` its
+    picker label), ``claudexor::<source>=<model>`` for an agent account's model, which adds
+    that account's facts."""
 
     provider_id: Required[str]
     provider: Required[str]
+    provider_label: str
     source: str
     id: Required[str]
     name: str
@@ -843,6 +846,7 @@ class UpdateProgress(TypedDict, total=False):
     stash_note: str
 
     retention_unconfirmed: bool  # live only: saving this observation failed, not the update itself
+    generation_facts: Optional[Dict[str, Any]]
 
 
 class UpdateLetter(TypedDict):
@@ -862,6 +866,7 @@ class UpdateLetter(TypedDict):
     description_current: bool
     failed_at: str
     latest_failed_key: Optional[Dict[str, Any]]
+    qualification: NotRequired[Optional[Dict[str, Any]]]
 
 
 class UpdateTransactionState(TypedDict, total=False):
@@ -889,6 +894,7 @@ class UpdateStatusResponse(TypedDict, total=False):
     update_tx: Required[UpdateTransactionState]
     update_progress: Required[UpdateProgress]
     letter: Optional[UpdateLetter]
+    after_update: Optional[Dict[str, Any]]
     managed: bool
     remote: str
     remote_branch: str

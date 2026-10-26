@@ -73,6 +73,17 @@ def signature(root: Any, task_id: str, *, txn: Optional[Txn] = None) -> Optional
         return signature(root, task_id, txn=txn)
 
 
+def terminal_writes_since(root: Any, counter: int) -> List[str]:
+    """The task ids whose rows were written terminal after the terminal-write counter stood at COUNTER
+    (``obligations.task_written`` stamps each such row with the counter's new value, ``terminal_seq``),
+    in that order, through the ``tasks_terminal_seq`` index: what a pass keyed on the counter looks at
+    again, never the rows it did not move."""
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            "SELECT task_id FROM tasks INDEXED BY tasks_terminal_seq WHERE terminal_seq>? ORDER BY terminal_seq, task_id",
+            (int(counter),))]
+
+
 def delete_document(root: Any, task_id: str) -> bool:
     """Remove one task's row and body (a scheduling refusal undoing its own requested row)."""
     with open_store(root, write=True) as txn:
@@ -185,6 +196,35 @@ def list_documents(root: Any, *, statuses: Optional[Iterable[str]] = None) -> Li
     return _decode(*fetched)
 
 
+def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional[int]) -> List[Dict[str, Any]]:
+    """Full documents only for the stable page and rows needing an effective overlay.
+
+    A stable row's status/ts cannot change in that overlay (``task_status`` owns
+    the writer's predicate). Its first N matches therefore suffice for a global
+    top N, even when every uncertain row sorts ahead of them. Those other rows
+    still run through the complete effective reader before filtering/limiting.
+    Read selection and bodies in one transaction; preserve task-id tie order.
+    Old schemas/NULLs fall back per row, without GET writes. Maintenance's
+    existing hot_facts job derives legacy NULLs under the body's write_seq CAS.
+    """
+    from ouroboros.store_hot_facts import LIST_VERSION
+
+    wanted = sorted(set(statuses))
+    if not wanted:
+        return []
+    with open_store(root, write=False) as txn:
+        if int(txn.meta("schema_version") or 1) < LIST_VERSION:
+            fetched = _fetch(txn)
+        else:
+            bound = "" if limit is None else " LIMIT ?"
+            params = (*wanted,) if limit is None else (*wanted, int(limit))
+            selected = ("SELECT task_id FROM tasks WHERE list_stable=1 "
+                        f"AND status IN ({','.join('?' * len(wanted))}) "
+                        f"ORDER BY ts DESC, task_id ASC{bound}")
+            fetched = _fetch(txn, f"t.list_stable IS NULL OR t.list_stable=0 OR t.task_id IN ({selected})", params)
+    return _decode(*fetched)
+
+
 def lineage_where(parent: str, root_id: str, *, direct_only: bool,
                   queue_members: Iterable[str] = ()) -> Tuple[str, Tuple[str, ...]]:
     """The ``find_child_tasks`` prefilter as SQL, starting from this parent's children. Anchors: the
@@ -248,7 +288,34 @@ def newest_ids(root: Any, limit: Optional[int] = None, *, where: str = "", param
                 txn.conn.execute(f"SELECT task_id FROM tasks {clause}{_NEWEST_ORDER}{bound}", tuple(params))]
 
 
-ROOT_RESULT_WHERE = "parent_task_id IS NULL AND (delegation_role IS NULL OR delegation_role != 'subagent')"
+ROOT_RESULT_WHERE = store.ROOT_RESULT_WHERE
+
+
+def newest_root_ids(root: Any, limit: Optional[int] = None, *, project_id: str = "") -> List[str]:
+    """Root task ids (``ROOT_RESULT_WHERE``) newest first, walked in the root-only index of that
+    order (``store.ROOT_WINDOWS``: one project's ``tasks_project_root_ts``, the whole
+    store's ``tasks_root_ts``), so ``limit`` bounds the entries read: no child is visited, however
+    many are newer than the roots or between them. Unpinned, the planner reads every root through
+    ``tasks_parent`` and sorts them all."""
+    if not project_id and limit is None:
+        raise ValueError("the whole store's newest roots need a limit")
+    index, scope, params = (("tasks_project_root_ts", "project_id=? AND ", (project_id,)) if project_id
+                            else ("tasks_root_ts", "", ()))
+    bound = "" if limit is None else f" LIMIT {int(limit)}"
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            f"SELECT task_id FROM tasks INDEXED BY {index} WHERE {scope}{ROOT_RESULT_WHERE} {_NEWEST_ORDER}{bound}", params)]
+
+
+def project_result_counts(root: Any, project_id: str) -> Tuple[int, int]:
+    """``(roots, children)`` among one project's results, counted without a body: its roots over
+    its root index, all its rows over ``tasks_project`` alone (a child's table row is never read)."""
+    with open_store(root, write=False) as txn:
+        roots = txn.conn.execute(f"SELECT COUNT(*) FROM tasks INDEXED BY tasks_project_root_ts WHERE project_id=? "
+                                 f"AND {ROOT_RESULT_WHERE}", (project_id,)).fetchone()[0]
+        results = txn.conn.execute("SELECT COUNT(*) FROM tasks INDEXED BY tasks_project WHERE project_id=?",
+                                   (project_id,)).fetchone()[0]
+    return int(roots), int(results) - int(roots)
 
 
 def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
@@ -256,8 +323,9 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        fetched = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
-    return {str(document.get("task_id")): document for document in _decode(*fetched)}
+        rows, handoffs = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
+    # Keyed by each row's stored id: a body that names another task never stands for that one.
+    return {str(record["task_id"]): document for record, document in zip(rows, _decode(rows, handoffs))}
 
 
 # A display read (``task_reads``: history cards; ``effective_task_result`` with
@@ -306,7 +374,10 @@ def _display_sql(column: str = "b.body") -> str:
                            f"ELSE {path(_KEEP)} END" for sub in kept)
         view = (f"json_replace({view}, CASE WHEN {is_object} THEN {path(key)} ELSE {path(key, _KEEP)} END, "
                 f"CASE WHEN {is_object} THEN json_remove({built}, {absent}) END)")
-    return view
+    # The old-review presenter needs affirmative answer evidence even when this view
+    # drops result. Project one bit from the same body; no extra read or stored field.
+    present = f"json_type({column}, '$.result') = 'text' AND json_extract({column}, '$.result') <> ''"
+    return f"json_set({view}, '$._result_text_present', json(CASE WHEN {present} THEN 'true' ELSE 'false' END))"
 
 
 def _card_sql(view: str) -> str:
@@ -358,6 +429,20 @@ def task_versions(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[int, st
             "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchone()
     return {task_id: (int(seq or 0), str(status or ""), bool(owes))
             for task_id, seq, status, owes in json.loads(record[0] or "[]")}
+
+
+def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
+    """Each stored task's ``(status, its own drive)`` from typed columns in ONE read, no body
+    decoded: the drive is its ``child_drive_root``, else ``headless_child_drive_root``, else
+    ``drive_root`` (``""`` for none). An id the store does not hold is absent from the answer."""
+    ids = sorted({str(task_id) for task_id in task_ids if str(task_id or "").strip()})
+    if not ids:
+        return {}
+    with open_store(root, write=False) as txn:
+        records = txn.conn.execute(
+            "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, drive_root) FROM tasks "
+            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchall()
+    return {str(record[0]): (str(record[1] or ""), str(record[2] or "")) for record in records}
 
 
 def task_ids(root: Any) -> List[str]:

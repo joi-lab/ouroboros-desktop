@@ -291,6 +291,8 @@ def _sweep(root, monkeypatch):
     monkeypatch.setattr(preparation, "recover_interrupted_preparations", lambda *_a, **_kw: None)
     monkeypatch.setattr(maintenance_child, "tick", lambda *_a, **_kw: None)
     maintenance._run_periodic_reconcile_sweep([0], latch=SimpleNamespace(release=lambda: None))
+    from ouroboros.maintenance import run_job
+    run_job(root, "ended_plan_asks")
 
 
 def test_a_failed_publication_stays_owed_and_one_replay_after_restart_places_it_once(tmp_path, monkeypatch):
@@ -534,6 +536,8 @@ def test_an_unreadable_producer_keeps_the_seat_pending_until_a_later_pass_places
         fault.setattr(observability, "read_call_payload", unreadable)
         _sweep(h.drive, monkeypatch)
     assert _plan_marks(h.drive) == [] and _participant(h, "s1")["status"] == "pending"
+    from ouroboros.maintenance_jobs import record
+    record(h.drive, "ended_plan_asks", state="pending")  # explicit source repair
     _sweep(h.drive, monkeypatch)
     [mark] = _plan_marks(h.drive)
     assert mark["review"]["subject"]["seat_id"] == "s1"

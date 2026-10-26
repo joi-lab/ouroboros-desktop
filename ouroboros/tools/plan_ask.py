@@ -658,6 +658,8 @@ def record_reply(ctx: Any, *, state_root: pathlib.Path, task_id: str, ask_id: st
     facts = reply_facts_from_row(row)
     if facts.get("status") == "pending" and participant.get("status") != "pending":
         return record  # a settled seat is never re-opened by a late pending echo
+    if facts.get("status") == "pending" and all(participant.get(key) == value for key, value in facts.items()):
+        return record  # unchanged custody loss is an observation, not another task write
     record = plan_record.update_participant(state_root, task_id, ask_id=ask_id, seat_id=seat_id, facts=facts)
     if facts.get("status") != "pending" and ask.get("record_id"):
         reply_ref = settle_ledger_seat(state_root, task_id, str(ask["record_id"]), seat_id, facts, raw_text=str(row.get("text") or ""))

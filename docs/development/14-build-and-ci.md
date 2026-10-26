@@ -35,9 +35,9 @@ CI runs the default suite in two passes, each owned by `scripts/run_tests.py` be
 
 ### The local battery entry point
 
-`python scripts/run_tests.py` (`make test`) always runs the full Node and default Python battery; pytest arguments select focused work. `--selected [--base REF]` uses the commit selector (default base `HEAD`), prints tier/rule/module count and runs both marker passes with paths. `--extra-test PATH` or `--full-tests` widens it with `--test-reason`. Missing required Node is red `NOT_RUN`. No hermetic proof is minted.
+`python scripts/run_tests.py` (`make test`) always runs the full Node and default Python battery; pytest arguments select focused work. `--selected [--base REF]` uses the commit selector (default base `HEAD`), prints tier/rule/module count and runs both marker passes on them. `--extra-test PATH` or `--full-tests` widens it with `--test-reason`. Missing required Node is red `NOT_RUN`. No hermetic proof is minted.
 
-Full default overlaps bounded `--serial-shards` groups; `--sequential` restores the gate split. Recheck overlap-only failures sequentially. `--evidence-dir DIR` gives each pass its own explicit `--ci-evidence-dir`; selected runs add `selection.json` and full inventory JSONL. Never export evidence via `PYTEST_ADDOPTS`: nested pytest could overwrite its parent's results. The CLI's `safe_test` (below) keeps `OUROBOROS_PREFLIGHT_REQUIRE_*`.
+Full default overlaps duration-sized `--serial-shards` groups; `--sequential` restores the gate split; recheck overlap-only failures with it. `--evidence-dir DIR` gives each pass its own explicit `--ci-evidence-dir`; selected runs add `selection.json` and full inventory JSONL. Never export evidence via `PYTEST_ADDOPTS`: nested pytest could overwrite its parent's results. The CLI's `safe_test` (below) keeps `OUROBOROS_PREFLIGHT_REQUIRE_*`.
 
 ### Safe local verification and dirty browser candidates
 
@@ -64,7 +64,7 @@ OUROBOROS_RUN_UI_SMOKE=1 OUROBOROS_EXPECT_BROWSER_ENGINES=chromium,webkit \
 
 ### Flaky and accepted tests
 
-`scripts/ci_retry.py` (jobs and the post-merge check: ARCHITECTURE §8) gives a failed test one in-job retry and continues a stopped session's unrun tests: passed is FLAKY and listed, never blocking; failed again or never run is red. A failure is ACCEPTED only while `tests/accepted_failures.json` lists it with an open issue the owner labelled `not-a-product-bug`. Skill reviews and provider canaries are never retried.
+`scripts/ci_retry.py` retries a failed test once and continues unrun tests: retry PASS is listed as FLAKY; failed again or unrun is red. ACCEPTED needs `tests/accepted_failures.json` and an open issue labelled `not-a-product-bug`. Skill/provider runs are never retried. Post-merge runs the whole cost contract on its own (`tests/test_post_merge_workflow.py`); new scale shapes must fit its eight minutes.
 
 ### The tiered commit and CI gates
 
@@ -102,7 +102,7 @@ jobs:
 # ❌ WRONG — workflow fails to parse
 - name: Bad
   if: secrets.BUILD_CERTIFICATE_BASE64 != ''   # parse error
-  env:                                          # not visible to this step's if:
+  env:   # not visible to this step's if:
     P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
 ```
 
@@ -114,7 +114,7 @@ Prereleases may be unsigned and say so (ARCHITECTURE §8 "Build scripts"). Only 
 
 ### Windows Authenticode release signing (SSL.com eSigner)
 
-The nonsecret repository variable `ESIGNER_CERT_SHA1` (the certificate's SHA-1 thumbprint) selects the mode for every `v*` tag, prereleases included. Unset (forks, repositories without a certificate): no job binds a signing Environment or sees a signing secret, and the release publishes an explicitly unsigned Windows ZIP that its receipt and notes disclose. Set: signing is required, and any configuration, tool, signature, timestamp or digest failure stops the whole release rather than falling back to an unsigned ZIP.
+The nonsecret repository variable `ESIGNER_CERT_SHA1` (the certificate's SHA-1 thumbprint) selects the mode for every `v*` tag, prereleases included. Unset (forks, repositories without a certificate): no job binds a signing Environment or sees a signing secret, and the release publishes an explicitly unsigned Windows ZIP that its receipt and notes disclose. Set: signing is required, and any configuration, tool, signature, timestamp or digest failure stops the whole release, never falling back to an unsigned ZIP.
 
 Secrets stay out of the build: the `build` matrix's Windows shard always packs the unsigned ZIP with `scripts/pack_windows_archive.ps1`, the one packer for local and both release modes, and hands it over by digest. When configured, a separate `windows-sign` job binds the `windows-release-signing` Environment and runs `scripts/sign_windows_release.ps1` (signs only `Ouroboros.exe`, verifies signer and timestamp, repacks; vendor output is never shown). The secret-free `windows-proof` job re-verifies the signature, runs the packaged smoke and records the signer or `unsigned`; assembly requires a receipt matching `ESIGNER_CERT_SHA1`. Tool pin, Java runtime and exit-code handling live in the scripts.
 

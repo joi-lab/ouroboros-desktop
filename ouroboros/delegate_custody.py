@@ -75,11 +75,15 @@ TERMINAL_ACKNOWLEDGED = "delegate_run_terminal_acknowledged"
 # nanny. Capture is idempotent (the flag replays); the disposition row is what
 # releases the snapshot for GC — until then conflict material persists on disk.
 PATCH_CAPTURED = "delegate_run_patch_captured"
+NAMED_EVIDENCE_RETAINED = "delegate_run_named_evidence_retained"
+COLLECTION_ATTEMPTED = "delegate_run_collection_attempted"
+CAPTURE_JOB_CHANGED = "delegate_run_capture_job_changed"
 PATCH_DISPOSED = "delegate_run_patch_disposed"
 # Not a row: the replayed disposition of a run whose snapshot a successor's STARTED
 # row took over (``_supersede``); its work rides the successor's cumulative capture.
 SUPERSEDED = "superseded"
 EVIDENCE_RETAINED = "evidence_retained"  # investigation capture; never applied
+NO_CHANGES = "no_changes"  # an empty writer result, closed on capture; nothing to apply
 # CR1-3 (owed-before-sent, one row earlier than the disposition): APPLY-INTENT lands
 # BEFORE the target tree is mutated; RESOLVED lands only when the attempt is KNOWN to
 # have left the tree unmutated. An intent with neither resolution nor disposition
@@ -153,6 +157,9 @@ class RunCustody:
     settled: bool = False
     terminal_state: str = ""  # Engine terminal observation; independent of monetary settlement.
     terminal_source: Dict[str, Any] = field(default_factory=dict)
+    named_evidence: Dict[str, Any] = field(default_factory=dict)
+    collection_attempt: Dict[str, Any] = field(default_factory=dict)
+    capture_job: Dict[str, Any] = field(default_factory=dict)
     observation_seq: int = -1
     interaction_source: Dict[str, Any] = field(default_factory=dict)
     pending_interaction_ids: List[str] = field(default_factory=list)
@@ -233,6 +240,7 @@ class RunCustody:
     cost_usd: Optional[float] = None
     spend_disclosed: bool = False
     spend_estimated: bool = False
+    cost_partial: bool = False
     engine_model: str = ""
     access_profile: str = ""
     containment_fault: Dict[str, Any] = field(default_factory=dict)
@@ -402,11 +410,19 @@ def actor_decision_lock(drive_root: Any, task_id: str) -> Iterator[None]:
 
 def chain_length(path: pathlib.Path) -> int:
     """The chain's byte length across its segments (strict): the boundary a store records."""
+    return chain_measure(path)[0]
+
+
+def chain_measure(path: pathlib.Path) -> Tuple[int, Optional[Any]]:
+    """``chain_length`` with the live segment's stat the length was read with (``None`` when the live
+    file is absent): one listing, so the two describe the same instant of the chain."""
     from ouroboros.utils import jsonl_chain_handles
 
     snapshot: Dict[str, Any] = {}
     with jsonl_chain_handles(path, strict=True, snapshot=snapshot):
-        return int(snapshot.get("total") or 0)
+        pass
+    live = next((stat for _segment, stat, was_live in snapshot.get("entries", ()) if was_live), None)
+    return int(snapshot.get("total") or 0), live
 
 
 def rows_after(path: pathlib.Path, offset: int) -> Tuple[List[Dict[str, Any]], int]:
@@ -485,7 +501,8 @@ def _merge_started_into(entry: RunCustody, previous: RunCustody) -> None:
         setattr(entry, attr, getattr(previous, attr))
     if previous.containment_fault:
         entry.containment_fault = dict(previous.containment_fault)
-    for attr in ("terminal_source", "observation_seq", "interaction_source", "pending_interaction_ids", "output_terminal_sha"):
+    for attr in ("terminal_source", "observation_seq", "interaction_source", "pending_interaction_ids",
+                 "output_terminal_sha", "named_evidence", "collection_attempt", "capture_job"):
         setattr(entry, attr, copy.deepcopy(getattr(previous, attr)))
     entry.output_reader_receipts = previous.output_reader_receipts
     entry.daemon_store_id = previous.daemon_store_id or entry.daemon_store_id
@@ -499,10 +516,9 @@ def _merge_started_into(entry: RunCustody, previous: RunCustody) -> None:
     for attr in _STARTED_OPTION_FIELDS:
         if getattr(previous, attr) is not None:
             setattr(entry, attr, getattr(previous, attr))
-    if previous.work_order_source_request:
-        entry.work_order_source_request = dict(previous.work_order_source_request)
-    if previous.prompt_cache_ttl:
-        entry.prompt_cache_ttl = copy.deepcopy(previous.prompt_cache_ttl)
+    for attr in ("work_order_source_request", "prompt_cache_ttl"):
+        if getattr(previous, attr):
+            setattr(entry, attr, copy.deepcopy(getattr(previous, attr)))
     for start, end in previous.verified_source_ranges:
         _merge_verified_source_range(entry, start, end)
     merge_source_delivery_confirmations(entry, previous)
@@ -544,12 +560,8 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
             delegated=row.get("delegated") is True,
             resource_ref=dict(ref) if isinstance(ref, dict) else {},
             **{key: copy.deepcopy(row[key]) for key in _STARTED_MAPPING_FIELDS if isinstance(row.get(key), dict)},
-            work_order_source_request=(
-                dict(source_request) if isinstance(source_request, dict) else {}
-            ),
-            prompt_cache_ttl=(
-                copy.deepcopy(row["prompt_cache_ttl"]) if isinstance(row.get("prompt_cache_ttl"), dict) else None
-            ),
+            work_order_source_request=dict(source_request) if isinstance(source_request, dict) else {},
+            prompt_cache_ttl=copy.deepcopy(row["prompt_cache_ttl"]) if isinstance(row.get("prompt_cache_ttl"), dict) else None,
             **{attr: str(row.get(key) or "") for attr, key in _STARTED_STR_FIELDS},
             **{key: row[key] for key in _STARTED_OPTION_FIELDS if isinstance(row.get(key), str)},
         )
@@ -643,6 +655,13 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
             ) + ((reader, ack_sha),)
     elif kind == PATCH_CAPTURED:
         custody.patch_captured = True
+    elif kind in (NAMED_EVIDENCE_RETAINED, COLLECTION_ATTEMPTED):
+        if isinstance(row.get("outcome"), dict):
+            setattr(custody, "named_evidence" if kind == NAMED_EVIDENCE_RETAINED else "collection_attempt",
+                    copy.deepcopy(row["outcome"]))
+    elif (kind == CAPTURE_JOB_CHANGED and isinstance(row.get("outcome"), dict)
+          and row.get("expected_id") == custody.capture_job.get("id", "")):
+        custody.capture_job = copy.deepcopy(row["outcome"])
     elif kind == PATCH_APPLY_STARTED:
         custody.patch_apply_pending = True
         custody.patch_apply_key = str(row.get("apply_idempotency_key") or "")
@@ -671,6 +690,7 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         custody.access_profile = str(row.get("access_profile") or "")[:32] or custody.access_profile
         custody.spend_disclosed = bool(row.get("spend_disclosed")) and row.get("cost_usd") is not None
         custody.spend_estimated = bool(row.get("spend_estimated"))
+        custody.cost_partial = bool(row.get("cost_partial"))
         try:
             custody.cost_usd = float(row["cost_usd"]) if custody.spend_disclosed else None
         except (TypeError, ValueError):
@@ -781,12 +801,15 @@ def disposition_lock_path(drive_root: Any, custody: RunCustody) -> pathlib.Path:
 
 
 def record_patch_captured(drive_root: Any, custody: RunCustody, **payload: Any) -> bool:
-    """Durably mark a terminal mutating run's patch as captured (idempotent flag)."""
-    custody.patch_captured = True
-    return emit(drive_root, PATCH_CAPTURED, {
+    """Durably mark a terminal mutating run's patch as captured (idempotent flag).
+    The in-memory flag follows the durable row: a copy is released only after it."""
+    recorded = emit(drive_root, PATCH_CAPTURED, {
         "run_id": custody.run_id, "task_id": custody.task_id,
         "snapshot_id": custody.snapshot_id, **payload,
     })
+    if recorded:
+        custody.patch_captured = True
+    return recorded
 
 
 def record_patch_disposed(drive_root: Any, custody: RunCustody, *, disposition: str,
@@ -858,10 +881,7 @@ def open_snapshot_ids(drive_root: Any) -> set:
         # to be proven over; active starters can keep answering or implement it.
         if custody.snapshot_id and not (custody.settled and (custody.patch_disposed or custody.mode == "plan")):
             ids.add(custody.snapshot_id)
-    for record in pending_invocations(drive_root):
-        snap = str(record.get("snapshot_id") or "")
-        if snap:
-            ids.add(snap)
+    ids.update(str(record["snapshot_id"]) for record in pending_invocations(drive_root) if record.get("snapshot_id"))
     return ids
 
 
@@ -925,6 +945,7 @@ def record_start_requested(drive_root: Any, **payload: Any) -> bool:
     """
     body = payload.get("request")
     if isinstance(body, dict) and body:
+        from ouroboros.delegate_pending import request_shape
         from ouroboros.observability import write_blob
 
         try:
@@ -933,7 +954,7 @@ def record_start_requested(drive_root: Any, **payload: Any) -> bool:
             log.warning("delegate custody request body could not be stored", exc_info=True)
             return False
         payload = {key: value for key, value in payload.items() if key != "request"}
-        payload.update(request_ref=ref, prompt_chars=len(str(body.get("prompt") or "")))
+        payload.update(request_ref=ref, request_shape=request_shape(body), prompt_chars=len(str(body.get("prompt") or "")))
     from ouroboros.owner_pause import admit_delegated_start
 
     return admit_delegated_start(drive_root, payload)

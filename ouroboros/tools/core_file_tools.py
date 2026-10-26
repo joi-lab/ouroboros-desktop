@@ -759,20 +759,14 @@ def _access_or_block(ctx: ToolContext, root: str, operation: str) -> tuple[str, 
 
 
 def _root_display_path(root: str, path: str) -> str:
-    rel = safe_relpath(str(path or "."))
-    if rel.startswith("./"):
-        rel = rel[2:]
-    return f"{root}:{rel or '.'}"
+    return f"{root}:{safe_relpath(str(path or '.')).removeprefix('./') or '.'}"
 
 
 def _annotate_reread(ctx: ToolContext, target: Any, start_line: int, max_lines: int, result: str,
                      start_char: int = 0, max_chars: Optional[int] = None) -> str:
-    """Append an advisory hint when the SAME file slice is re-read unchanged.
-
-    Per-task, key on (resolved path, slice); the change signal is (size, mtime).
-    A repeat read of an unchanged slice is usually wasted budget — nudge the model
-    to act on what it has. Advisory only (never blocks; different slices and
-    changed files are not flagged)."""
+    """Nudge against unchanged rereads, keyed per task by resolved path and slice.
+    Size/mtime changes or different slices suppress the hint. Advisory only:
+    it asks the mind to act on already-read text, never blocks."""
     try:
         resolved = pathlib.Path(target).resolve(strict=False)
         st = resolved.stat()
@@ -784,36 +778,38 @@ def _annotate_reread(ctx: ToolContext, target: Any, start_line: int, max_lines: 
     sig = (st.st_size, st.st_mtime_ns)
     seen = getattr(ctx, "_read_file_seen", None)
     if not isinstance(seen, dict):
-        seen = {}
-        ctx._read_file_seen = seen
-    prev = seen.get(key)
+        ctx._read_file_seen = seen = {}
+    unchanged = seen.get(key) == sig
     seen[key] = sig
-    if prev is not None and prev == sig:
-        return (
-            result
-            + "\n\nℹ️ This exact view is unchanged since you already read it this task — "
-            "re-reading is usually wasted budget; act on what you have."
-        )
-    return result
+    return result + (
+        "\n\nℹ️ This exact view is unchanged since you already read it this task — "
+        "re-reading is usually wasted budget; act on what you have." if unchanged else "")
 
 
 def _stamp_read_view(ctx: ToolContext, target: Any, opened: str, opened_root: str,
                      extent: Dict[str, Any], rendered: str) -> str:
-    """Record on the context what THIS read delivered (``ctx.last_read_view``:
-    the resolved ``target``, ``opened_path`` — the root-relative path the reader
-    ACTUALLY opened, i.e. the binding's target under its root, not the model's
-    spelling (the registry normalizes absolute in-repo, whitespace-padded and
-    redundant-root spellings before the handler runs) — ``opened_root``, the
-    NORMALIZED root the binding actually used (a padded ``" system_repo "`` is
-    read as ``system_repo``), and the renderer's window facts). Same
-    per-context bookkeeping class as ``_annotate_reread``; consumed by the
-    native review episode's receipts. The stamp's binding to ONE call is
-    structural: ``_read_file`` resets it on entry and the episode clears it
-    before every dispatch (these are the ONLY writers — a static test pins the
-    writer set). Disclosure only — never gates or alters the read."""
+    """Stamp this read's resolved target, root-relative opened_path, normalized
+    opened_root and renderer window as ctx.last_read_view for native review receipts.
+    The registry normalizes absolute, padded and redundant-root spellings first.
+    Per-call binding: _read_file resets on entry; the episode clears before dispatch.
+    These sole writers are statically pinned. Like reread hints, this is per-context
+    disclosure, never a gate or a change to the actual read."""
+    identity_note = ""
+    if opened_root == "runtime_data" and opened == "memory/identity.md":
+        from ouroboros.tool_access import canonical_data_root
+        from ouroboros.tool_access_reads import canonical_runtime_reader
+
+        canonical = canonical_data_root(ctx)
+        physical = pathlib.Path(target).resolve(strict=False)
+        source = ("canonical" if physical == (canonical / opened).resolve(strict=False) else
+                  "execution_drive" if physical == (pathlib.Path(ctx.drive_root) / opened).resolve(strict=False)
+                  else "inherited_runtime")
+        identity_note = (f"identity_source={source}; source_path={physical}\n"
+                         "Any revision identifies only the bytes returned here. For shared identity publication, read:\n"
+                         f"{canonical_runtime_reader(ctx, canonical, opened)}\n")
     if "body_start" in extent:
         if opened_root == "runtime_data" and opened in ("memory/identity.md", "memory/WORLD.md") and extent.get("source_revision"):
-            revision_line = f"revision={extent['source_revision']}\n"
+            revision_line = f"revision={extent['source_revision']}\n" + identity_note
             rendered = revision_line + rendered
             extent["body_start"] += len(revision_line)
         view = {"target": str(target), "opened_path": str(opened), "opened_root": str(opened_root), **extent}
@@ -833,6 +829,10 @@ def _stamp_read_view(ctx: ToolContext, target: Any, opened: str, opened_root: st
                   ToolResult(status="ok", code="OK", text=rendered, meta={"read_view": compact}))
         rendered = _publish_tool_result(ctx, result)
         acknowledge_staged_output_read(ctx, compact, rendered)
+    elif identity_note:
+        from ouroboros.tools.tool_result import append_published_text
+
+        rendered = append_published_text(ctx, rendered, "\n" + identity_note)
     return rendered
 
 

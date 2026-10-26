@@ -1188,12 +1188,13 @@ def test_chat_history_replays_an_admission_notice_without_terminal_truth(tmp_pat
     assert "outcome_final" not in rec
 
 
-def test_history_preserves_relay_sender_summary_quotes_and_row_identity(tmp_path):
-    """The deck receives every saved relay field, including unknown senders, unchanged."""
+def test_history_preserves_relay_sender_target_summary_quotes_and_row_identity(tmp_path):
+    """The deck receives every saved relay field, including unknown senders and the stamped receiver, unchanged."""
     from ouroboros import dialogue_store as ds
     from ouroboros.chat_references import projection_fields
     relay = {'relay_id': 'deck-note', 'summary': 'Check both browser engines',
              'sender': {'name': 'Verification', 'chat_id': 42, 'task_id': 'sender-task'},
+             'target': {'task_id': 'receiver-task', 'title': 'Compare both engines'},
              'quotes': [{'text': 'Keep my words available', 'source': {'chat_id': 1, 'label': 'Main'}},
                         {'text': '', 'attachments': [{'name': 'instructions.txt'}], 'source': {'chat_id': 1}}]}
     row = {'chat_id': 1, 'ts': '2026-10-22T11:00:00Z', 'direction': 'out',

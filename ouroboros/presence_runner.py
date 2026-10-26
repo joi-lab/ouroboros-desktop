@@ -77,6 +77,7 @@ class PresenceTurnEvent:
     # (``presence_continuation``): 1 lets the transport take the initial envelope early.
     continuation_version: int = 0
     facts: tuple[str, ...] | None = None
+    identity: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -784,8 +785,9 @@ def _log_dialogue(
         "text": text,
         "format": "markdown" if direction == "out" else "",
         "source": f"presence:{event.provider}",
-        "sender_label": str(event.actor.get("display_name") or event.actor.get("username") or ""),
-        "sender_session_id": str(event.actor.get("platform_actor_id") or event.actor.get("id") or ""),
+        **({"sender_label": str(event.actor.get("display_name") or event.actor.get("username") or ""),
+            "sender_session_id": str(event.actor.get("platform_actor_id") or event.actor.get("id") or "")}
+           if direction == "in" else {}),
         "client_message_id": event.source_event_id,
         "presence_event_identity": presence_event_identity(str(task["metadata"]["presence"]["binding_id"]), event),
         "transport": {
@@ -805,6 +807,8 @@ def _log_dialogue(
            if task["metadata"]["presence"].get("place_id") else {}),
         **{key: task[key] for key in ("attachment_manifest", "attachment_manifest_ref") if key in task},
     }
+    if direction == "in" and (identity := getattr(event, "identity", None)) is not None:
+        row["transport"]["identity"] = identity
     if direction == "in" and not task["metadata"].get("focus"):
         # Retain the transport's exact contextual observations before publishing their address.
         # They remain dated context of this event, never additional incoming speech or work.
@@ -1107,8 +1111,8 @@ def run_presence_turn(
                 and not any(row.get("direction") == "in" for row in prior_rows)):
             log_dialogue(direction="in", user_id=actor_id, text=event.text or task["text"])
         if admission.place is not None:
-            from ouroboros.place_intake import attention_snapshot, settle_heard
-            decision, allowance, attention_place = attention_snapshot(Path(drive_root), admission, event)
+            from ouroboros.place_intake import decide_attention, settle_heard
+            decision, allowance = decide_attention(Path(drive_root), admission, event)
             if decision == "silent":
                 return settle_heard(Path(drive_root), task, event, allowance["reason"],
                                     captured_task_id=_task_id(admission, event))
@@ -1117,17 +1121,6 @@ def run_presence_turn(
                 error.disposition, error.retry_after = "retry", allowance["retry_after"]
                 raise error
             task["metadata"]["focus_allowance"] = allowance
-            # Intake may have queued before names were edited. Freeze the same
-            # name-rule snapshot that admitted this focus, not another store read.
-            from ouroboros.places import attention_name_matches
-            facts = event.facts if event.facts is not None else ()
-            if event.actor.get("is_bot") is True:
-                facts = (*facts, "from_bot")
-            task["metadata"]["focus"]["matched_attention_names"] = list(
-                attention_name_matches(attention_place, event.text, facts))
-            task["metadata"]["presence"]["place"].update(
-                attention_names=list(attention_place.attention_names),
-                attention_names_author=attention_place.attention_names_author)
             remaining = allowance.get("remaining_usd")
             if remaining is not None:
                 task["metadata"]["root_cost_ceiling_usd"] = min(float(remaining), float(
@@ -1147,9 +1140,7 @@ def run_presence_turn(
 
         bind_review_wait(agent, lease=lease, event=event, task_id=task_id, identity=identity,
                          drive_root=Path(drive_root))
-        # The generic agent's RUNNING writer logs and continues on failure. Presence cannot:
-        # after a crash, absence of that row would otherwise authorize a second model/tool effect.
-        # This existing task-result authority is published and read back BEFORE handle_task.
+        # Read back RUNNING before execution: absence could authorize a duplicate after a crash.
         from ouroboros.task_results import write_task_result
         from ouroboros.task_status import execution_owner_record
 
@@ -1173,6 +1164,8 @@ def run_presence_turn(
         except (OSError, ValueError, StoreError) as exc:
             raise PresenceTurnError("presence_start_unwritable", "source_event_id", turn_ref=task_id) from exc
         try:
+            from supervisor.worker_chat_lane import name_wake_on_admission
+            name_wake_on_admission(drive_root, task)
             lease.intake_agent = agent
             events = agent.handle_task(task)
             # Unlike a pooled worker, this runner has no end-of-task event drain.
@@ -1183,11 +1176,11 @@ def run_presence_turn(
         except BaseException:  # its executor ended without a terminal: record that end, never a re-run
             _notify_unresolved_turn(Path(drive_root), task_id)
             raise
-        # The model can have a draft reply before every allowed route refuses quota, and the
-        # terminal write can fail after the start barrier. The durable terminal cause, not that
-        # draft or the presence_result envelope, determines whether the transport may
-        # acknowledge the original event; a row still RUNNING here is an unproven effect.
+        # Only the durable terminal proves the outcome; a draft or RUNNING row cannot authorize acknowledgement.
         terminal = _stored_turn(Path(drive_root), task_id, identity)
+        if terminal.get("wake_summary"):
+            from supervisor.worker_chat_lane import _broadcast_task_named
+            _broadcast_task_named({"type": "task_named", "task_id": task_id, "suggested_name": terminal["wake_summary"]})
         row = next((item for item in events if item.get("type") == "presence_result"), None)
         refusal = _terminal_refusal(terminal)
         if refusal:

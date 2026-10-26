@@ -158,7 +158,16 @@ def copy_task_settings_context(context) -> None:
 
 
 def runtime_setting(key: str, default=None):
-    """Environment-shaped runtime read; absence in the snapshot stays absent."""
+    """Environment-shaped runtime read; absence in the snapshot stays absent.
+
+    A route key (``route_choice.ROUTE_SETTING_KEYS``: model slots, accounts, provider keys) reads the
+    settings document as it is now, in a task or not; every other next-task key keeps the task's snapshot."""
+    from ouroboros.route_choice import ROUTE_SETTING_KEYS, live_setting
+
+    if key in ROUTE_SETTING_KEYS:
+        served, value = live_setting(key, default)
+        if served:
+            return value
     snapshot = _TASK_SETTINGS.get()
     if snapshot is not None and _next_task_setting(key):
         return snapshot.environ.get(key, default)
@@ -183,6 +192,9 @@ def runtime_environ() -> dict[str, str]:
                     env.pop(key, None)
                 else:
                     env[key] = snapshot.environ[key]
+    from ouroboros.route_choice import live_environ_overlay
+
+    live_environ_overlay(env)  # a model call in a child (vision) uses the current model and key, never a cleared one
     return env
 
 
@@ -315,8 +327,9 @@ def skill_settings(settings_reader=None) -> dict:
     """What a skill reads: the settings document as it reads now, in a task or not (owner choice A, #1122).
 
     The one reader behind a skill's ``PluginAPI.get_settings``, its scripts' and companions' environment and the
-    funded-credential disclosure of its handlers; grants and the manifest allowlist filter it afterwards, and the
-    task's own model, account and review reads keep its snapshot (``runtime_settings``). The loader lets the
+    funded-credential disclosure of its handlers; grants and the manifest allowlist filter it afterwards; the
+    task's review reads keep its snapshot while its model, account and key reads share this view
+    (``route_choice``, ``runtime_settings``). The loader lets the
     environment stand in for a key the document leaves unset, and a long-lived process still holds what earlier
     projections mirrored there — this task's start, an earlier task's, the server's it inherited — so a key the owner
     cleared or deleted since would come back. The read overlays ``skill_environ`` instead: our mirrored values never
@@ -341,6 +354,9 @@ def runtime_settings(*, settings_reader=None) -> dict:
                 settings.pop(key, None)
             else:
                 settings[key] = copy.deepcopy(snapshot.settings[key])
+    from ouroboros.route_choice import live_settings_overlay
+
+    live_settings_overlay(settings)  # route keys read the document as it is now (route_choice)
     return settings
 
 
@@ -406,22 +422,38 @@ def read_settings_bytes_verified(settings_path: Path) -> bytes | None:
     return raw
 
 
-def read_settings_json_verified(settings_path: Path):
+def read_settings_json_verified(settings_path: Path, *, behind_writer: bool = False):
     """Decode the verified snapshot; under a pin a decode failure is typed.
 
     Returns the parsed JSON value (any type) or ``None`` for an absent or —
     without a pin — unreadable/undecodable file. One helper so the two
-    config.py read paths cannot drift apart in their pin semantics.
+    config.py read paths cannot drift apart in their pin semantics. Every
+    writer replaces the document whole, except ``save_settings``' fallback for a
+    filesystem that cannot rename, which truncates and writes in place under the
+    settings lock: a prefix of one JSON object never decodes, so a lock-free read
+    (``behind_writer``) that cannot decode reads once more behind that lock. So does
+    one that cannot open a present file (Windows: an open meeting a writer's replace).
     """
     raw_bytes = read_settings_bytes_verified(settings_path)
     if raw_bytes is None:
-        return None
+        return _read_behind_the_writer(settings_path) if behind_writer and settings_path.exists() else None
     try:
         return json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         if expected_settings_sha256():
             raise SettingsIntegrityError("settings snapshot is unreadable") from exc
-        return None
+        return _read_behind_the_writer(settings_path) if behind_writer else None
+
+
+def _read_behind_the_writer(settings_path: Path):
+    """The same read once more, behind the lock a writer holds until its bytes are complete."""
+    from ouroboros import config
+
+    fd = config._acquire_settings_lock()
+    try:
+        return read_settings_json_verified(settings_path)
+    finally:
+        config._release_settings_lock(fd)
 
 
 def verify_settings_integrity(settings_path: Path) -> str | None:

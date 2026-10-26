@@ -12,7 +12,7 @@ These tests cover:
 - A known-incompatible model has `temperature` stripped.
 - A known-compatible model keeps `temperature`.
 - Fetch failure (network/parse error) falls back to broad support — no stripping.
-- The cache is populated once per process, not per call.
+- A request reads the catalogue observed off the turn (the boot's prefetch) and never fetches it.
 """
 
 from __future__ import annotations
@@ -181,6 +181,7 @@ class TestSupportedParametersFilter:
                 ],
             }]
         })
+        LLMClient.prefetch_openrouter_catalog()  # the boot's observation, off every turn
 
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.6")
@@ -214,6 +215,7 @@ class TestSupportedParametersFilter:
                 ],
             }]
         })
+        LLMClient.prefetch_openrouter_catalog()
 
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.6")
@@ -237,6 +239,7 @@ class TestSupportedParametersFilter:
 
         import requests
         monkeypatch.setattr(requests, "get", exploding_get)
+        LLMClient.prefetch_openrouter_catalog()
 
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.6")
@@ -505,7 +508,7 @@ class TestSupportedParametersFilter:
         # Legacy model-global rows stay diagnostic and cannot mutate dispatch.
         assert kwargs["temperature"] == 0.2
 
-    def test_cache_fetched_at_most_once(self, monkeypatch):
+    def test_requests_read_the_catalogue_and_never_fetch_it(self, monkeypatch):
         from ouroboros.llm import LLMClient
 
         call_count = _install_fake_response(monkeypatch, {
@@ -517,9 +520,9 @@ class TestSupportedParametersFilter:
 
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.6")
-        # Two back-to-back calls: the second must hit the cache, not the network.
-        for _ in range(2):
-            client._build_remote_kwargs(
+
+        def build():
+            return client._build_remote_kwargs(
                 target=target,
                 messages=[{"role": "user", "content": "hi"}],
                 reasoning_effort="medium",
@@ -528,10 +531,12 @@ class TestSupportedParametersFilter:
                 temperature=0.2,
                 tools=None,
             )
-        assert call_count["n"] == 1, (
-            f"Expected supported_parameters fetch to run exactly once per process, "
-            f"got {call_count['n']} calls"
-        )
+
+        assert build().get("temperature") == 0.2 and call_count["n"] == 0  # cold: unknown, not fetched
+        LLMClient.prefetch_openrouter_catalog()
+        for _ in range(2):
+            build()
+        assert call_count["n"] == 1, f"one observation serves every request, got {call_count['n']} fetches"
 
     def test_unknown_model_falls_back_to_no_stripping(self, monkeypatch):
         """A model missing from OpenRouter's /models list keeps all kwargs."""
@@ -543,6 +548,8 @@ class TestSupportedParametersFilter:
                 "supported_parameters": ["max_tokens"],  # no temperature
             }]
         })
+
+        LLMClient.prefetch_openrouter_catalog()
 
         client = LLMClient(api_key="test")
         # Query a model NOT in our fake response

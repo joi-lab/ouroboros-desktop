@@ -231,3 +231,71 @@ def test_an_old_desktop_app_is_named_where_its_choices_are_lost():
     shell = _read("web/modules/desktop_shell.js")
     assert "PERSISTENT_STORAGE_SINCE = Object.freeze([7, 2, 0])" in shell, (
         "7.2.0 is the first release whose launcher passes private_mode=False (git tag --contains e30957143)")
+
+
+# ---- Screens before the interface (#1111): what paints before, or outside, the page that reads the choice ----
+
+def _constant(rel: str, name: str) -> str:
+    """A module-level string constant, read without importing its module (a skill's sidecar among them)."""
+    for node in ast.parse(_read(rel)).body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == name:
+            return node.value.value
+    raise LookupError(f"{rel}: {name}")
+
+
+def _palette_values(css: str, selector: str) -> dict:
+    """``--name: value`` of one rule as the stylesheet writes it, ``var(--neutral-rgb)`` and spacing normalised."""
+    body = "".join(found for sel, found in _rules(css) if sel == selector)
+    values = dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+)", body))
+    neutral = values.get("--neutral-rgb", "")
+    clean = lambda value: re.sub(r"(?<![\d])\.(\d)", r"0.\1", re.sub(r"\s+", "", value.replace("var(--neutral-rgb)", neutral)))  # noqa: E731
+    return {name: clean(value) for name, value in values.items()}
+
+
+def test_screens_before_the_interface_restate_exactly_the_palette():
+    """The macOS window's first frame and the Telegram connecting page paint before ui.css can load, in code
+    that cannot read it; they restate the palette's own room and ink, both themes."""
+    from ouroboros.launcher_window_chrome import ROOM
+
+    ui = _read("web/ui.css")
+    dark, light = _palette_values(ui, ":root"), _palette_values(ui, ':root[data-theme="light"]')
+    assert ROOM == {"light": light["--bg-primary"], "dark": dark["--bg-primary"]}
+    page = _constant("skills/telegram/scripts/sidecar.py", "_BOOTSTRAP_HTML")
+    css = re.search(r"<style>(.*?)</style>", page, re.S).group(1)
+    for theme, selector, palette in (("dark", "html", dark), ("light", 'html[data-theme="light"]', light)):
+        restated = _palette_values(css, selector)
+        assert restated["--bg-primary"] == palette["--bg-primary"], theme
+        assert restated["--text-secondary"] == palette["--text-secondary"], theme
+
+
+def test_the_telegram_connecting_page_reads_the_one_saved_choice_before_it_paints():
+    """No second store: the same key theme.js writes. The script runs in <head> after Telegram's (whose
+    colorScheme is the System source there), never deferred, so the first paint already has the palette;
+    the page's CSP still admits no inline script."""
+    key = re.search(r"const KEY = '([^']+)';", _read("web/theme.js")).group(1)
+    script = _constant("skills/telegram/scripts/sidecar.py", "_BOOTSTRAP_JS")
+    assert f"localStorage.getItem('{key}')" in script
+    assert script.index("colorScheme") < script.index("prefers-color-scheme")  # Telegram's before the device's
+    assert "DOMContentLoaded" in script  # the launch waits for the document it reports into
+    page = _constant("skills/telegram/scripts/sidecar.py", "_BOOTSTRAP_HTML")
+    head = page.split("</head>", 1)[0]
+    sdk = head.index('<script src="https://telegram.org/js/telegram-web-app.js"></script>')
+    own = head.index('<script src="/__telegram/bootstrap.js"></script>')
+    assert sdk < own and "defer" not in head and "async" not in head
+    assert re.findall(r"<script[^>]*>([^<]*)</script>", page) == ["", ""], "an inline script would break its CSP"
+
+
+def test_windows_before_the_server_wear_the_interface_not_a_fixed_palette():
+    """Every launcher window whose page is a string is built by ``_window_page`` (theme.js and ui.css inlined)
+    and opens in the room colour of macOS (``paint_room``); no colour is written into those pages."""
+    tree = ast.parse(_read("launcher.py"))
+    pages = [keyword.value for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and getattr(node.func, "attr", "") == "create_window" for keyword in node.keywords if keyword.arg == "html"]
+    assert len(pages) == 3, "already running, Git required, startup failed"
+    assert all(isinstance(page, ast.Call) and getattr(page.func, "id", "") == "_window_page" for page in pages)
+    painted = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "paint_room"]
+    assert len(painted) == len(pages)
+    source = _read("launcher.py")
+    window_css = _constant("launcher.py", "_WINDOW_CSS")
+    assert not re.search(r"#[0-9a-fA-F]{3,6}\b", window_css)
+    assert "background:#0f0f11" not in source and "color:#efeff2" not in source

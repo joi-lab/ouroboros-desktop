@@ -15,7 +15,6 @@ import sys
 import tempfile
 import threading
 import time
-import zlib
 
 _PYTEST_DATA_DIR = None
 _PYTEST_ROOT = None
@@ -114,14 +113,22 @@ def _provider_catalog_state_returns():
     """Hand `LLMClient`'s provider-catalog class state back as the test found it.
 
     A class not yet imported when the test started is found pristine; a test
-    that imports it and fetches gives the empty caches back.
+    that imports it and fetches gives the empty caches back, and the catalogue
+    a clean fetch recorded at the worker-shared data root, which any later test
+    would adopt, returns to what the test found.
     """
     cls = _provider_catalog_class()
     saved = _provider_catalog_snapshot(cls) if cls is not None else None
+    record = _PYTEST_DATA_DIR / "state" / "openrouter_models.json" if _PYTEST_DATA_DIR is not None else None
+    recorded = record.read_bytes() if record is not None and record.is_file() else None
     yield
     cls = _provider_catalog_class()
     if cls is not None:
         _restore_provider_catalog(cls, saved if saved is not None else _PROVIDER_CATALOG_PRISTINE)
+    if record is not None and recorded is None:
+        record.unlink(missing_ok=True)
+    elif record is not None and (not record.is_file() or record.read_bytes() != recorded):
+        record.write_bytes(recorded)
 
 
 @pytest.fixture
@@ -476,11 +483,13 @@ def _pin_lane_groups(items, shards: int) -> None:
     """
     if shards <= 0:
         return
+    from tests.ci_verdicts import serial_group
+
     for item in items:
         path = item.nodeid.split("::", 1)[0]
         serial = item.get_closest_marker("serial") is not None
         # Serial: by FILE (the isolation unit). Others: the scope `--dist loadscope` uses (class when present).
-        group = f"serial{zlib.crc32(path.encode('utf-8')) % shards}" if serial else item.nodeid.rsplit("::", 1)[0]
+        group = serial_group(path, shards) if serial else item.nodeid.rsplit("::", 1)[0]
         item.add_marker(pytest.mark.xdist_group(group))
     items.sort(key=lambda item: item.get_closest_marker("serial") is None)
 

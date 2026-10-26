@@ -201,10 +201,16 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
         "open_relays": dict(getattr(ctx, "_open_relays", None) or {}),
         # Own routing acts still unconfirmed: a resumed turn reports their outcomes too.
         "unconfirmed_routing_acts": list(getattr(ctx, "unconfirmed_routing_acts", None) or []),
+        "restart": {
+            "request": dict(getattr(ctx, "pending_restart_request", None) or {}),
+            "reason": getattr(ctx, "pending_restart_reason", None),
+            "evolution": bool(getattr(ctx, "pending_restart_is_evolution", False)),
+        },
         "route": {key: getattr(ctx, key, None) for key in (
             "active_model", "active_effort", "active_use_local", "active_context_mode",
             "active_model_override", "active_effort_override", "active_use_local_override",
             "active_role_override", "route_wait_on_primary", "primary_route", "_route_facts_pending",
+            "route_choice",  # following its role, or the task's own (route_choice)
         )},
         "delivery_candidate": asdict(candidate) if candidate is not None else None,
         "delivery": {key: getattr(ctx, key, None) for key in (
@@ -217,7 +223,7 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
             "_presence_forced_declaration", "_presence_forced_pending", "_presence_completion_accepted",
             "_presence_selection_seq", "_presence_released",
             "_task_acceptance_sealed_fence_token", "_task_acceptance_sealed_fence_generation", "_owner_reply_revision",
-
+            "_owner_message_sent",
         ) if getattr(ctx, key, None) is not None},
         # The block keeps its stored name; the task-acceptance flags it once carried are gone
         # (a pre-fold continuation still has them: ``restore_continuation_state`` ignores them).
@@ -1071,6 +1077,15 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
     ctx._held_owner_messages = dict(state.get("held_owner_messages") or {})
     ctx._open_relays = dict(state.get("open_relays") or {})
     ctx.unconfirmed_routing_acts = [dict(act) for act in state.get("unconfirmed_routing_acts") or [] if isinstance(act, dict)]
+    restart = state.get("restart") or {}
+    request = restart.get("request") or {}
+    # Cold Pause/Resume keeps the requester's obligation without sending again.
+    # A new task or attempt inherits no authority to finish this Restart.
+    if (request.get("task_id"), request.get("task_attempt")) == (
+            ctx.task_id, int(getattr(ctx, "task_attempt", None) or 1)):
+        ctx.pending_restart_request = dict(request)
+        ctx.pending_restart_reason = restart.get("reason")
+        ctx.pending_restart_is_evolution = bool(restart.get("evolution"))
     # Match the agent's native handoff clock; a budget grant overrides it separately.
     ctx._budget_paused_sec = budget_paused_seconds(adopt_handoff_clock(
         state.get("model_wait") or {}, getattr(ctx, "owner_wait_resume", None)))
@@ -1080,6 +1095,10 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
               if key in {"_acceptance_pending_review_choice", "_left_review_wait"}}
     for key, value in {**state["route"], **state["delivery"], **review}.items():
         setattr(ctx, key, value)
+    from ouroboros.route_choice import restored_choice
+
+    ctx.route_choice = restored_choice(ctx, state)  # a saved choice, else the legacy classification (D5)
+    ctx._route_binding = None  # the first round compares to the restored acting route (route_choice.round_route)
     candidate = state.get("delivery_candidate")
     ctx._delivery_candidate = DeliveryCandidate(**{key: value for key, value in candidate.items()
         if key != "repair_attempted"}) if candidate else None

@@ -30,11 +30,11 @@ from ouroboros.model_wait import current_model_wait, model_wait_reason, propagat
 from ouroboros.openai_chat_dispatch import CUSTOM_RECEIPTS_USAGE_KEY, pop_custom_validation_receipts
 from ouroboros.llm_attempt import PROVIDER_POLICY_REFUSAL, _is_provider_policy_refusal, single_physical_send
 from ouroboros.observability import _json_bytes, new_call_id, new_execution_id, persist_call
-from ouroboros.pricing import emit_llm_usage_event, estimate_cost_optional, infer_model_category
+from ouroboros.pricing import emit_llm_usage_event, infer_model_category, normalize_usage_cost as _normalize_usage_cost
 from ouroboros.send_clock import main_send_scope
 from ouroboros.task_pacing import main_loop_wire_options
 from ouroboros.transport_custody import attempt_custody_event_fields, is_pre_dispatch_transport_failure, is_retryable_transport_death, outcome_unknown_on_chain
-from ouroboros._usage_response import OUTPUT_LIMIT_FINISH_REASONS, output_exhaustion_facts, provider_cost_value as _provider_cost_value, response_finish_reason
+from ouroboros._usage_response import OUTPUT_LIMIT_FINISH_REASONS, output_exhaustion_facts, response_finish_reason
 from ouroboros.usage_accounting import PhysicalAttemptContext, UsageAccountingError, bind_physical_attempt_context, current_usage_scope, last_physical_attempt_capture
 from ouroboros.contracts.record_contract import RECORD_CONTRACT_VERSION
 from ouroboros.event_usage import REPORTED_TOKENS_KEY, event_token_counts
@@ -855,53 +855,6 @@ def _remember_llm_call(
     }
     usage["_last_llm_call_meta"] = call_meta
     usage.setdefault("llm_call_refs", []).append(call_meta)
-
-
-def _normalize_usage_cost(usage: Dict[str, Any], *, model: str, use_local: bool) -> tuple[Optional[float], str, str, bool]:
-    raw_cost = usage.get("cost")
-    provider_reported_cost = raw_cost is not None
-    cost = _provider_cost_value(raw_cost) if provider_reported_cost else None
-    display_model = str(usage.get("resolved_model") or model)
-    provider = "local" if use_local else str(usage.get("provider") or "openrouter")
-    if use_local:
-        cost = 0.0
-        display_model = f"{model} (local)"
-    elif cost is None and (provider_reported_cost or usage.get("cost_invalid")):
-        # Invalid reported cost stays unknown under the shared trust predicate.
-        log.warning(
-            "Provider reported an invalid cost (type=%s, value=%s) for %s; recording "
-            "cost as unknown and skipping estimation",
-            type(raw_cost).__name__,
-            truncate_review_artifact(repr(raw_cost), limit=120),
-            display_model,
-        )
-        usage["cost"] = None
-        usage["cost_final"] = False  # unknown cost is never a closed book
-        return None, display_model, provider, bool(usage.get("cost_estimated"))
-    elif cost is None and provider != "claudexor":
-        from ouroboros._usage_response import observed_processing_mode
-
-        processing_mode = observed_processing_mode(provider, usage)
-        cost = estimate_cost_optional(
-            display_model,
-            int(usage.get("prompt_tokens") or 0),
-            int(usage.get("completion_tokens") or 0),
-            cache_usage={
-                "cached_tokens": int(usage.get("cached_tokens") or 0),
-                "cache_write_tokens": int(usage.get("cache_write_tokens") or 0),
-                "prompt_cache_ttl": usage.get("prompt_cache_ttl"),
-                "cache_write_tokens_by_ttl": (
-                    usage.get("cache_write_tokens_by_ttl")
-                    if isinstance(usage.get("cache_write_tokens_by_ttl"), dict)
-                    else None
-                ),
-            },
-            provider=provider,
-            **({"processing_mode": processing_mode} if processing_mode else {}),
-        )
-    usage["cost"] = cost
-    cost_estimated = bool(usage.get("cost_estimated")) or (cost is not None and not provider_reported_cost)
-    return cost, display_model, provider, cost_estimated
 
 
 def _uncount_transport_death(accumulated_usage: Dict[str, Any]) -> None:

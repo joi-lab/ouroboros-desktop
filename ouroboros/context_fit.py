@@ -298,7 +298,7 @@ class ContextCore:
     reference_books: Tuple[ReferenceBook, ...] = ()
     compact_reference_docs: bool = False
     reference_book_errors: Tuple[str, ...] = ()
-    # Knowledge (overview, index, patterns, project journal) leading the changing block.
+    # Knowledge (overview, index, project journal) leading the changing block.
     dynamic_head_text: str = ""
     # The captured memory view (``memory_view.snapshot_json``); each projection renders
     # it for its own mode and window. Empty: no memory view (a declared-input child).

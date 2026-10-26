@@ -148,11 +148,11 @@ def test_forked_context_uses_canonical_global_cognition_not_child_noise(monkeypa
         (root / "memory" / "knowledge").mkdir(parents=True, exist_ok=True)
         (root / "logs").mkdir(parents=True, exist_ok=True)
         (root / "state").mkdir(parents=True, exist_ok=True)
-    (canonical / "memory" / "knowledge" / "patterns.md").write_text(
-        "CANONICAL_PATTERN_REGISTER", encoding="utf-8",
+    (canonical / "memory" / "knowledge" / "overview.md").write_text(
+        "CANONICAL_OVERVIEW", encoding="utf-8",
     )
-    (child / "memory" / "knowledge" / "patterns.md").write_text(
-        "CHILD_PATTERN_NOISE", encoding="utf-8",
+    (child / "memory" / "knowledge" / "overview.md").write_text(
+        "CHILD_OVERVIEW_NOISE", encoding="utf-8",
     )
     (canonical / "memory" / "deep_review.md").write_text(
         "CANONICAL_DEEP_REVIEW", encoding="utf-8",
@@ -173,8 +173,8 @@ def test_forked_context_uses_canonical_global_cognition_not_child_noise(monkeypa
     )
     rendered = json.dumps(messages, ensure_ascii=False)
 
-    assert "CANONICAL_PATTERN_REGISTER" in rendered
-    assert "CHILD_PATTERN_NOISE" not in rendered
+    assert "CANONICAL_OVERVIEW" in rendered
+    assert "CHILD_OVERVIEW_NOISE" not in rendered
     # The report rides as a pointer to the CANONICAL source (its size, its address), never a
     # body, with an absolute canonical read address; actual dispatch of that call opens it.
     assert f"{len('CANONICAL_DEEP_REVIEW')} chars" in rendered

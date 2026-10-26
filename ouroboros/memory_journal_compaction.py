@@ -1,8 +1,8 @@
 """Compatibility entry point for the retired destructive memory-journal sweep.
 
 The startup/maintenance caller still invokes this function. Retaining that call
-keeps old integrations working while new knowledge, identity and Pattern Register
-history stays complete. A previously digested row cannot be reconstructed;
+keeps old integrations working while new knowledge and identity history stays
+complete. A previously digested row cannot be reconstructed;
 no new row loses its old/new text merely because of its age.
 """
 

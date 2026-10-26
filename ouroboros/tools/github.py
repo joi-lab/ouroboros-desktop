@@ -114,9 +114,11 @@ _CAPTURE_STDERR_WITHHELD = b"[stderr exceeded 64 KiB; diagnostics withheld]"
 def _merge_refused_before_effect(cmd: List[str], res: subprocess.CompletedProcess, stderr: str) -> bool:
     """Whether the complete stderr of the merge ``merge_receipts`` sends is gh's own pre-merge refusal.
 
-    Only ``pr merge N --METHOD --match-head-commit SHA [--repo R]``, exit 1 with empty
+    Only ``pr merge N --METHOD --match-head-commit SHA [--body-file -] [--repo R]``, exit 1 with empty
     stdout, the whole refusal for N and nothing else; a status, prefix or suffix proves nothing."""
     args = cmd[1:]
+    if args[6:8] == ["--body-file", "-"]:
+        args = args[:6] + args[8:]
     if (res.returncode != 1 or res.stdout.strip() or args[:2] != ["pr", "merge"] or len(args) not in (6, 8)
             or args[3] not in ("--merge", "--squash", "--rebase") or args[4] != "--match-head-commit"
             or args[6:7] not in ([], ["--repo"])):
@@ -351,6 +353,7 @@ def _gh_run(args: List[str], ctx: ToolContext, timeout: int = 30, input_data: Op
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
             input=input_data,
             env=env,
@@ -501,10 +504,17 @@ def _send_facts(res: GhResult) -> str:
 def _pr_merge(ctx: ToolContext, number: int, expected_head_sha: str, method: str,
               review_task_ids: Optional[List[str]] = None, reviewed_head_sha: str = "",
               reviewed_base_sha: str = "", review_scope: str = "full", review_verdict: str = "",
-              review_record_id: str = "", repo: str = "") -> str:
+              review_record_id: str = "", repo: str = "", checks: Optional[List[dict]] = None) -> str:
     """Thin transport binding; the receipt contract lives in ``merge_receipts``."""
     from ouroboros.merge_receipts import REVIEW_SCOPES, _VERDICT_RE, _sha, run_pr_merge
     from ouroboros.tool_access import canonical_data_root
+    from ouroboros.update_qualification import STATES
+
+    if checks is not None and (not isinstance(checks, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("name"), str) or not row["name"].strip()
+            or row.get("status") not in STATES or not isinstance(row.get("detail", ""), str) for row in checks)):
+        return _refuse(ctx, "⚠️ TOOL_ARG_ERROR: checks need name, status (passed, failed, not_run, unknown) and optional detail.",
+                       no_effect=True)
 
     if review_scope not in REVIEW_SCOPES:
         return _refuse(ctx, "⚠️ TOOL_ARG_ERROR: review_scope is full or delta; nothing was merged.", no_effect=True)
@@ -521,7 +531,7 @@ def _pr_merge(ctx: ToolContext, number: int, expected_head_sha: str, method: str
         ctx, lambda args, **kw: _gh_run(args, ctx, repo=repo, **kw), lambda args, **kw: _gh_run(args, ctx, **kw),
         drive_root=canonical_data_root(ctx), task_id=str(ctx.task_id or ""), number=int(number or 0),
         expected_head_sha=expected_head_sha, method=method,
-        review={"declared": declared, "task_ids": list(review_task_ids or []), "record_id": record_id})
+        review={"declared": declared, "task_ids": list(review_task_ids or []), "record_id": record_id, "checks": checks})
     if receipt.get("refused"):
         code = "TOOL_ARG_ERROR" if receipt["refused"] == "arguments" else "TOOL_ERROR"
         return _refuse(ctx, f"⚠️ PR_MERGE_REFUSED: {receipt['refused']} — {receipt.get('detail', '')}", code, no_effect=True)
@@ -608,6 +618,11 @@ def get_tools() -> List[ToolEntry]:
                 "number": {"type": "integer", "description": "PR number"},
                 "expected_head_sha": {"type": "string", "description": "The PR head you intend to merge; GitHub refuses if it moved"},
                 "method": {"type": "string", "enum": ["merge", "squash", "rebase"]},
+                "checks": {"type": "array", "description": "Execution declarations retained in the merge commit. Name full_battery and cost_contract explicitly; omissions stay unknown. Describe accepted FAILs and checks not run.",
+                           "items": {"type": "object", "properties": {
+                               "name": {"type": "string"},
+                               "status": {"type": "string", "enum": ["passed", "failed", "not_run", "unknown"]},
+                               "detail": {"type": "string"}}, "required": ["name", "status"]}},
                 "review_task_ids": {"type": "array", "items": {"type": "string"}, "default": [],
                                     "description": "Task ids of the reviews you rely on; the host records whether each "
                                                    "completed, not its kind or reviewed subject"},

@@ -39,6 +39,8 @@ def _capture_read_git(repo: pathlib.Path, args: list[str]) -> subprocess.Complet
     The user and system config stay read, from the same locations status and diff
     use: their filters, excludes, autocrlf and safe.directory decide what "clean" means.
     """
+    from ouroboros.git_observation import host_git_env
+
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("GIT_") or key in _CONFIG_LOCATIONS}
     env.update({
@@ -62,7 +64,7 @@ def _capture_read_git(repo: pathlib.Path, args: list[str]) -> subprocess.Complet
         return bytes(prefix), total - len(prefix)
 
     with subprocess.Popen([*cmd, *args], cwd=repo, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, env=env) as process, ThreadPoolExecutor(max_workers=2) as pool:
+                          stderr=subprocess.PIPE, env=host_git_env(env)) as process, ThreadPoolExecutor(max_workers=2) as pool:
         stdout = pool.submit(drain, process.stdout, _CAPTURE_BYTES)
         stderr = pool.submit(drain, process.stderr, 65536)
         try:

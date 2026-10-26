@@ -38,7 +38,7 @@ from ouroboros.tool_capabilities import (
 )
 from ouroboros.tool_result_delivery import (
     FitCandidate, prepare_producer_sources, project_tool_result_batch, reader_text, render_result_view,
-    split_allowance, typed_result_facts, with_producer_source,
+    split_allowance, typed_result_facts, with_delivery_note, with_producer_source,
 )
 from ouroboros.tool_result_record import TOOL_RESULT_RECORD_KEY, make_tool_result_record
 from ouroboros.tools.registry import ToolRegistry
@@ -393,7 +393,8 @@ def _deliver_tool_results(
         # candidate, including the zero-body minimum. Never add them after fit.
         shaped = list(candidate)
         for index, row in enumerate(results, len(candidate) - len(results)):
-            shaped[index] = {**candidate[index], "content": with_producer_source(row, candidate[index]["content"])}
+            shaped[index] = {**candidate[index], "content": with_delivery_note(
+                row, with_producer_source(row, candidate[index]["content"]))}
         return fit_candidate([*shaped, *(pending_messages or [])], schemas)
 
     rows, receipt = project_tool_result_batch(
@@ -481,6 +482,8 @@ def _typed_result_metadata(
             meta["artifact_registered"] = True
         if isinstance(tool_result.meta.get("verification"), dict):  # the criterion verdict beside this status (#1585)
             meta["verification"] = dict(tool_result.meta["verification"])
+        if isinstance(tool_result.meta.get("image_attachment"), dict):
+            meta["image_attachment"] = dict(tool_result.meta["image_attachment"])
     # Legacy non-process deliverable fallback reads the FULL result before trace
     # truncation. Process producers must supply the typed fact below.
     if (
@@ -682,7 +685,6 @@ def _execute_single_tool(
             "ts": utc_now_iso(), "type": "tool_error", "task_id": task_id,
             "tool": fn_name, "args": args_for_log, "error": safe_error,
         }, correlation, tool_call_id=tool_call_id))
-
     # `status`/`is_error` are READ from the published code, never re-derived from
     # the text; process exit, signal and artifact-registration facts come from
     # typed meta, so producer-controlled stdout can forge none of them (ABI-6(b):
@@ -1341,9 +1343,10 @@ def _maybe_auto_attach_image(
         observation = {"status": "unavailable"}
         from ouroboros.tools.vision import attach_local_image_to_context
 
-        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None))  # the live slot, not a staged copy
+        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None), observation=observation)
         observation["status"] = "attached" if ok else "unavailable"
         if not ok:
+            observation["reason"] = note
             log.debug("auto-attach skipped for %s: %s", path, note)
     except Exception:  # noqa: BLE001 - attachment is an enhancement, never a failure
         log.debug("auto-attach image failed", exc_info=True)
@@ -1393,9 +1396,14 @@ def process_tool_results(
     for exec_result in results:
         record_tool_activity(ctx, exec_result)
     from ouroboros.artifacts import task_id_for_artifacts
+    from ouroboros.mark_anchors import anchored_note
 
+    # A mark the mind tied to an action trails what the mind sees of that call, once per task: a
+    # delivery note measured with the batch and kept beside the retained producer payload, so the
+    # host readers below (acknowledgements, receipts, result review) parse the result without it.
+    notes = [anchored_note(ctx, row["fn_name"], row.get("tool_args") or {}) for row in results]
     results = prepare_producer_sources(results, getattr(ctx, "drive_root", None),
-                                       task_id_for_artifacts(ctx) if ctx is not None else "")
+                                       task_id_for_artifacts(ctx) if ctx is not None else "", notes)
     review_updates, review_pending = [], {}
     if ctx is not None and getattr(ctx, "_pending_review_context", None):
         from ouroboros.review_history_view import review_context_updates
@@ -1432,13 +1440,14 @@ def process_tool_results(
         typed = exec_result.get("tool_result")
         producer_ref = exec_result.get("producer_source_ref") or {}
         truncated_result = with_producer_source(exec_result, truncated_result)
+        shown_result = with_delivery_note(exec_result, truncated_result)
 
         messages.append({
             "role": "tool",
             "tool_call_id": exec_result["tool_call_id"],
-            "content": truncated_result,
+            "content": shown_result,
             TOOL_RESULT_RECORD_KEY: make_tool_result_record(
-                exec_result, truncated_result, facts=typed_result_facts(exec_result),
+                exec_result, shown_result, facts=typed_result_facts(exec_result),
                 source_ref=result_source_ref),
         })
         published = (exec_result.get("result_meta") or {}).get("tool_result_meta") or {}
@@ -1482,7 +1491,7 @@ def process_tool_results(
             "tool_call_id": exec_result["tool_call_id"],
             "args": trace_args,
             # Review sees the same complete/bounded tool view that Main saw.
-            "result": truncated_result,
+            "result": shown_result,
             "is_error": is_error,
             "trace_ref": exec_result.get("trace_ref"), **({"round_id": exec_result["round_id"]} if exec_result.get("round_id") else {}),
             **({
@@ -1493,8 +1502,9 @@ def process_tool_results(
             } if result_partial else {}),
             **(exec_result.get("result_meta") or {}),
             **({"producer_source_ref": producer_ref,
-                "host_annotations": list(typed.host_annotations)}
-               if isinstance(typed, ToolResult) and typed.producer_text is not None else {}),
+                "host_annotations": [*(typed.host_annotations if isinstance(typed, ToolResult) else ()),
+                                     *([exec_result["delivery_note"]] if exec_result.get("delivery_note") else [])]}
+               if "producer_source_ref" in exec_result else {}),
         })
 
     # These resident facts and exact bodies were included before allocation. Append

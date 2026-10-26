@@ -629,6 +629,7 @@ def test_an_unavailable_store_is_disclosed_without_an_empty_view(tmp_path, monke
 
     monkeypatch.setattr(task_events, "task_facts", busy)
     monkeypatch.setattr(task_store, "task_facts", busy)
+    monkeypatch.setattr(task_store, "newest_root_ids", busy)
     manifest = _main_routing_manifest(SimpleNamespace(DRIVE_ROOT=root, RUNNING={}, PENDING=[]))
     assert manifest["omissions"]["final_results"] is None
     assert "result_store_unreadable" in manifest["omissions"]["final_results_error"]

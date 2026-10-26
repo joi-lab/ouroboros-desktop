@@ -102,7 +102,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     })),
     "supervisor/queue_timeouts.py": ("supervisor/queue.py", "_queue", frozenset({
         "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "FINALIZATION_GRACE_SEC", "HEARTBEAT_STALE_SEC", "PENDING",
-        "QUEUE_MAX_RETRIES", "RUNNING", "_enforce_task_timeouts_locked", "_expire_pending_deadlines_locked",
+        "RUNNING", "_enforce_task_timeouts_locked", "_expire_pending_deadlines_locked",
         "_ensure_reaper_started", "_has_live_descendant", "_has_pending_descendant",
         "_is_descendant_of", "_queue_lock", "_reap_queue",
         "_request_finalization_grace", "_subtree_progressing", "_task_deadline_ts",
@@ -221,7 +221,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_list_remotes", "_managed_remote_branch_for", "_managed_remote_name",
         "_read_managed_repo_meta", "_run_git_process_bounded", "append_jsonl",
         "atomic_write_text", "rescue_before_destructive_rollback",
-        "rescue_git_capture", "utc_now_iso",
+        "rescue_git_capture", "utc_now_iso", "host_git_env",
     })),
     "supervisor/git_ops_reset.py": ("supervisor/git_ops.py", "_go", frozenset({
         "BOOTSTRAP_PIN_MARKER_NAME", "BRANCH_DEV", "BRANCH_STABLE", "DRIVE_ROOT", "REPO_DIR",
@@ -235,7 +235,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_preserve_branch_for_official_reset", "_read_managed_repo_meta",
         "_read_update_intent", "_ref_points_at_ref", "_rescue_untracked_incomplete",
         "_run_git_resilient", "_update_source", "append_jsonl", "git_capture",
-        "checkout_and_reset", "current_drive_root", "import_test",
+        "checkout_and_reset", "current_drive_root", "current_repo_dir", "import_test",
         "preserve_local_ref_branch", "rescue_git_capture", "update_state",
         "sync_runtime_dependencies", "utc_now_iso",
     })),
@@ -273,7 +273,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     "ouroboros/tools/subagent_integration_delegated.py": ("ouroboros/tools/subagent_integration.py", "_si", frozenset({
         "_baseline_drifted_paths", "_capture_at_disposition", "_locked_apply",
         "_patch_touched_paths", "_sha256_file", "_stageable_paths",
-        "_target_is_system_repo", "_write_verdict", "get_runtime_mode",
+        "_target_is_system_repo", "_write_verdict", "_integration_runtime_mode",
     })),
     "ouroboros/tools/control_scheduling.py": ("ouroboros/tools/control.py", "_ctl", frozenset({
         "load_settings",
@@ -429,7 +429,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "LLMClient", "REVIEW_JSON_ARRAY_CONTRACT", "TYPED_FAILURE_FACT_KEYS", "_REPO_ROOT",
         "_cfg", "_parse_model_response", "_review_operation_fields",
         "_owner_deadline_at", "_review_query_error_payload", "load_governance_doc",
-        "review_drive_root", "slot_id_for_row", "truncate_review_artifact",
+        "review_drive_root", "slot_id_for_row",
     })),
     "ouroboros/tools/review_prompt_text.py": ("ouroboros/tools/review_helpers.py", "_rh", frozenset({
         "sanitize_tool_result_for_log",

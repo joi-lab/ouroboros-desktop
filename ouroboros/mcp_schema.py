@@ -16,6 +16,14 @@ from typing import Any, Callable, Dict
 
 from ouroboros.secret_masking import redact_known_values
 
+try:
+    from builtins import BaseExceptionGroup as _ExceptionGroup
+except ImportError:  # Python 3.10: AnyIO's task groups raise the backport's groups
+    try:
+        from exceptiongroup import BaseExceptionGroup as _ExceptionGroup
+    except ImportError:  # without AnyIO's dependency nothing raises a group
+        _ExceptionGroup = ()
+
 _SCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
 _SCHEMA_VALUES = frozenset({
     "additionalProperties", "unevaluatedProperties", "propertyNames", "items",
@@ -141,6 +149,35 @@ def _redact_error_text(text: Any, cfg: Any = None) -> str:
             out = out.replace(cfg.url, safe_url)
         out = redact_known_values(out, cfg.secret_values)
     return out
+
+
+def _exception_text(exc: BaseException, cfg: Any = None) -> str:
+    """``Type: message`` of a failure, each group member in brackets and the explicit cause or an
+    unsuppressed context in parentheses, all described alike and masked as one text.
+
+    The SDK's task groups wrap what names a failure (a closed connection, the server's error, an
+    invalid listing) in ``unhandled errors in a TaskGroup``, which alone cannot tell a timeout from a
+    closed stream. A context hidden by ``raise ... from None`` stays hidden: the redirect guard relies
+    on it to keep the refused URL out. Nothing is capped or merged; a branch ends only at an exception
+    already on its own path (a cycle).
+    """
+    def described(error: BaseException, path: frozenset) -> str:
+        path |= {id(error)}
+        try:
+            text = f"{type(error).__name__}: {error}"
+        except Exception:  # noqa: BLE001 - a broken __str__ must not replace the failure it reports
+            text = f"{type(error).__name__}: <exception str() failed>"
+        if isinstance(error, _ExceptionGroup):
+            text += " [" + "; ".join(described(member, path) for member in error.exceptions) + "]"
+        linked = error.__cause__ if error.__cause__ is not None else (
+            None if error.__suppress_context__ else error.__context__)
+        if linked is not None and id(linked) not in path:
+            relation = "caused by" if linked is error.__cause__ else "during handling of"
+            text += f" ({relation} {described(linked, path)})"
+        return text
+
+    return _redact_error_text(described(exc, frozenset()), cfg)
+
 
 def _model_facing_result(cfg: Any, tool_name: str, body: str) -> str:
     text = str(body or "")

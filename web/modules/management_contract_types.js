@@ -520,6 +520,7 @@
  * @typedef {Object} ModelCatalogItem
  * @property {string} provider_id
  * @property {string} provider
+ * @property {string=} provider_label
  * @property {string=} source
  * @property {string} id
  * @property {string=} name
@@ -682,6 +683,7 @@
  * @property {string=} keep_branch
  * @property {string=} stash_note
  * @property {boolean=} retention_unconfirmed - Live observation could not be saved across restart.
+ * @property {?Object=} generation_facts - Before/after observations, never an update verdict.
  */
 
 /**
@@ -704,6 +706,7 @@
  * @property {UpdateTransactionState} update_tx
  * @property {UpdateProgress} update_progress
  * @property {?import('./api_types.js').UpdateLetter=} letter
+ * @property {?Object=} after_update - Retained before/after process samples; missing observations stay null.
  * @property {boolean=} managed
  * @property {string=} remote
  * @property {string=} remote_branch

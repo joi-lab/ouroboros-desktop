@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from ouroboros.cost_projection import CostPresentation
+from ouroboros.delegate_custody_usage import CostCustody
 from ouroboros.gateway.reference_contracts import ChatReferenceFields
 from ouroboros.storage import (  # noqa: F401 -- public re-exports
     StorageCount, StorageCounting, StorageError, StoragePart, StoragePlace, StorageResponse, StorageRest,
@@ -25,7 +26,10 @@ from ouroboros.gateway.attachment_contracts import (  # noqa: F401 -- public re-
     AttachmentManifestEntry, ChatAttachmentInbound, ChatAttachmentView,
 )
 from ouroboros.gateway.contributions import UiContribution, UiContributionsResponse, UiPreferencesResponse
-from ouroboros.gateway.widgets import ExtensionLiveSnapshot, WidgetFaultRequest, WidgetFaultResponse, WidgetTab, WidgetsResponse
+from ouroboros.gateway.widgets import (
+    ExtensionLiveSnapshot, WidgetFaultRequest, WidgetFaultResponse, WidgetTab, WidgetsResponse,
+    WidgetAssetLeaseRequest, WidgetAssetTokenRequest, WidgetAssetLeaseResponse, WidgetAssetRevokeResponse,
+)
 from ouroboros.gateway.decision_contracts import DecisionRequest, DecisionResponse  # noqa: F401 -- public re-exports
 from ouroboros.gateway.card_contracts import CardOutbound, CardStateOutbound  # noqa: F401 -- public re-exports
 from ouroboros.gateway.update_contracts import (  # noqa: F401 -- public re-exports
@@ -47,6 +51,14 @@ try:  # Python 3.11+
     from typing import Literal, NotRequired, Required, TypedDict  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - CI supports Python 3.10.
     from typing_extensions import Literal, NotRequired, Required, TypedDict  # type: ignore[assignment]
+
+
+class TaskReviewHistoryResponse(TypedDict):
+    """One exact task's paged ledger projection; local gaps do not hide healthy records."""
+
+    task_id: str
+    review_projection: Dict[str, Any]
+    next_offset: Optional[int]
 
 
 class ChatInbound(TypedDict):
@@ -245,6 +257,7 @@ class ChatOutbound(ChatReferenceFields):
     ledger_integrity_degraded: NotRequired[Optional[bool]]
     # Closed shape owned by the cost producer; null means ledger unavailable.
     cost_presentation: NotRequired[Optional[CostPresentation]]
+    cost_custody: NotRequired[Optional[CostCustody]]
     result: NotRequired[str]
     result_truncated: NotRequired[bool]  # P3: WS preview was capped; fetch full via task id
     trace_summary: NotRequired[str]
@@ -255,7 +268,11 @@ class ChatOutbound(ChatReferenceFields):
     outcome_axes: NotRequired[Dict[str, Any]]
     task_contract: NotRequired[Dict[str, Any]]
     reason_code: NotRequired[str]
+    cancel_origin: NotRequired[Dict[str, Any]]  # the typed stop an owner-stopped turn's final carries
     review_status: NotRequired[Dict[str, Any]]
+    # panels retain subject/goal/revision/wave; actors separate requested/observed models,
+    # dict failure_details and current source selectors. gaps name failed records;
+    # review_records_omitted is 0|"1+"|"unknown", never proof of a review by itself.
     review_projection: NotRequired[Dict[str, Any]]
     worker_saturation_warning: NotRequired[bool]
     source: NotRequired[str]
@@ -685,6 +702,7 @@ class ActiveDirectTurn(TypedDict):
     model_waits: NotRequired[Dict[str, Any]]
     model_activity: NotRequired[Dict[str, Any]]  # content-free observation bound to the active Main call
     task_attempt: NotRequired[int]
+    turn_phase: NotRequired[str]  # the last start fact its execution passed (TURN_PHASES); display only
 
 
 class ActiveChatActivity(ActiveDirectTurn):  # global root census; phase and control facts keep their own authority
@@ -696,6 +714,7 @@ class ActiveChatActivity(ActiveDirectTurn):  # global root census; phase and con
     status: NotRequired[str]
     outcome_axes: NotRequired[Dict[str, Any]]
     reason_code: NotRequired[str]
+    cancel_origin: NotRequired[Dict[str, Any]]  # the stored result's stop origin, read by the same status fold
     root_phase_checkpoint: NotRequired[Dict[str, Any]]
     timeout_retry_from: NotRequired[str]
     original_task_id: NotRequired[str]
@@ -764,11 +783,12 @@ class StateResponse(WorkStateFields):
     project_chat_ids: list
     # Main's room revision (its standalone messages, the kind a Project's visible_revision counts); null while unreadable.
     main_visible_revision: NotRequired[Optional[int]]
-    # Task->project bindings ({task_id: {project_id, chat_id}}) so the frontend
-    # can recognise a project-scoped task card: suppress the stray "turn into
-    # project" button (v6.33.0 P2) and render a pointer that opens the bound
-    # project's panel (v6.33.0 F4).
-    task_bindings: dict
+    # Task->project bindings ({task_id: {project_id, chat_id, project_name}}): a bound card hides the stray
+    # "turn into project" button (v6.33.0 P2) and opens its project (v6.33.0 F4). Null only when
+    # ``?bindings_since`` named the current opaque ``task_bindings_revision`` ("" after a failed read).
+    task_bindings: Optional[dict]
+    task_bindings_revision: str
+    task_bindings_unchanged: bool
     active_direct_turns: NotRequired[List[ActiveDirectTurn]]
     # Combined activity snapshot (direct/ephemeral turns + root managed queue
     # tasks). Additive beside active_direct_turns, which stays unchanged for
@@ -835,6 +855,7 @@ class SettingsMeta(SettingsNetworkMeta, total=False):
     available_subagents: AvailableSubagentsSettingsMeta
     policy_state: SettingsPolicyState
     restart_state: Dict[str, Any]
+    connections: list[Dict[str, Any]]  # every API connection as the picker shows it (provider_connections.connections_meta)
 
 
 class SettingsSaveResponse(TypedDict, total=False):
@@ -848,9 +869,10 @@ class SettingsSaveResponse(TypedDict, total=False):
     warnings: list[str]
     ignored_keys: Dict[str, str]
     # True when the save landed while an agent task was already STARTED: that
-    # task keeps its start-time config (snapshot boundary); changes apply from
-    # the next task. Queued-but-unstarted tasks re-read settings at start.
+    # task keeps its start-time reviewers, subagents, context and effort; models,
+    # accounts and keys reach work that follows them at its next call.
     agent_task_running: bool
+    connection_references: list[Dict[str, str]]  # rows naming a connection that cannot serve them (they refuse)
 
 
 class OwnerRuntimeModeResponse(TypedDict):
@@ -1011,7 +1033,8 @@ class OpenAICompatibleModelsResponse(TypedDict):
 
 class ProviderTestRequest(TypedDict):
     provider_id: str
-    overrides: NotRequired[Dict[str, str]]
+    overrides: NotRequired[Dict[str, str]]  # flat keys; with ``connection``, that row's field names
+    connection: NotRequired[str]  # a named connection of ``provider_id``; absent = the built-in one
 
 
 class ProviderTestResponse(TypedDict):
@@ -1106,6 +1129,7 @@ class TaskCostBreakdown(TypedDict):
     unknown_unmetered: int
     non_final_rows: int
     cost_final: bool
+    cost_custody: Optional[CostCustody]
     authority: Literal["physical_attempt_ledger"]
 
 
@@ -1370,6 +1394,7 @@ class OnboardingCompleteRequest(TypedDict, total=False):
     allow_empty_review_pool: bool  # confirms saving agents that leave no review row
     starter_skills: List[str]  # catalog ids installed once after completion; absent: the default starter list
     skill_source_trust: Dict[str, str]  # {hub row id: trusted|review}; marks those rows confirmed
+    attempt_id: str  # client-made per save (16-128 of A-Z a-z 0-9 _ -); read back by GET with ?attempt=
 
 
 class OnboardingSubagentsPreviewResponse(TypedDict):
@@ -1405,6 +1430,20 @@ class OnboardingCompleteResponse(TypedDict):
     runtime_mode: str
     restart_required: bool
     preset: OnboardingPresetProjection
+
+
+class OnboardingAttemptResponse(TypedDict):
+    """GET /api/onboarding/complete?attempt=: one completion attempt read back, never a readiness probe.
+    ``saved``: true while the settings document holds this attempt's write, false when this server
+    refused it before writing, null when unconfirmed (still running, never arrived or replaced since).
+    ``receipt`` is the attempt's own success envelope once completion finished; the other fields repeat
+    its recorded failure. Only a receipt completes; anything else keeps the draft and never retries."""
+
+    saved: Optional[bool]
+    receipt: NotRequired[OnboardingCompleteResponse]
+    error: NotRequired[str]
+    code: NotRequired[str]
+    post_commit_failed: NotRequired[str]
 
 
 class SettingsPostCommitFailureResponse(TypedDict):
@@ -1492,7 +1531,7 @@ __all__ = [
     "SettingsSaveResponse",
     "OwnerRuntimeModeResponse", "OwnerAutoGrantResponse", "OwnerContextModeResponse", "OwnerSafetyModeResponse",
     "OwnerSkillPresenceRuntimeRequest", "OwnerSkillPresenceRuntimeResponse",
-    "OnboardingCompleteRequest", "OnboardingCompleteResponse",
+    "OnboardingCompleteRequest", "OnboardingCompleteResponse", "OnboardingAttemptResponse",
     "OnboardingSubagentsPreviewResponse",
     "OnboardingPresetFailureResponse",
     "OnboardingPresetProjection",
@@ -1506,6 +1545,7 @@ __all__ = [
     "UploadResponse",
     "ExtensionsIndexResponse", "ExtensionLiveSnapshot", "WidgetTab",
     "WidgetsResponse", "WidgetFaultRequest", "WidgetFaultResponse",
+    "WidgetAssetLeaseRequest", "WidgetAssetTokenRequest", "WidgetAssetLeaseResponse", "WidgetAssetRevokeResponse",
     "SkillPublishPreflightResponse",
     "SkillLifecycleQueueResponse",
     "MarketplaceSearchResponse",
@@ -1530,7 +1570,7 @@ __all__ = [
     "ClaudexorVendorCredentialDisposition",
     "ClaudexorCredentialProfileDeleteResponse",
     "TaskEvent", "TaskEventCursor",
-    "TaskEventsRequest",
+    "TaskEventsRequest", "TaskReviewHistoryResponse",
     "TaskCancelResponse", "TaskCancelRequest",
     "TaskPauseRequest", "TaskPauseResponse",
     "TaskContinueRequest", "TaskContinueResponse", "ContinuationOffer",

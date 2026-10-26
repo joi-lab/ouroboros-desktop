@@ -78,7 +78,7 @@ def _assert_receipt(actor, area):
     assert (evidence / "files" / checking.EVIDENCE_DIRNAME / "coverage.xml").read_bytes() == COVERAGE
     assert receipt["named_evidence"] == [{
         "path": f"{checking.EVIDENCE_DIRNAME}/coverage.xml", "size": len(COVERAGE),
-        "sha256": hashlib.sha256(COVERAGE).hexdigest(),
+        "sha256": hashlib.sha256(COVERAGE).hexdigest(), "mode": 0o644,
     }]
     assert "check.py" in receipt["changed"]
     assert json.loads((evidence / "summary.json").read_text()) == receipt

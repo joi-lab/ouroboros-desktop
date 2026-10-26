@@ -47,6 +47,11 @@ elif mode == "env":
 elif mode == "argv":
     import json
     out.write(json.dumps(sys.argv[1:]).encode() + b"\n")
+elif mode == "stdin":
+    body = sys.stdin.buffer.read()
+    with open(os.environ["FAKE_GH_STDIN_FILE"], "wb") as received:
+        received.write(body)
+    out.write(body)
 elif mode == "stderr_flood":
     token = os.environ["GH_TOKEN"].encode()
     at = int(os.environ["FAKE_GH_TOKEN_AT"])  # The token starts here; the stream always exceeds the 64 KiB cap.
@@ -77,6 +82,35 @@ def fake_gh(tmp_path, monkeypatch):
 
 def _ctx(tmp_path):
     return types.SimpleNamespace(repo_dir=tmp_path, _active_builtin_tool_result=None)
+
+
+@pytest.mark.parametrize("body", ["ASCII body", "An em dash —", "Owner's code → 🤖"])
+@pytest.mark.parametrize("method", ["merge", "squash"])
+def test_text_stdin_is_utf8_under_a_non_utf8_locale(fake_gh, tmp_path, body, method):
+    """Real parent and gh child pipes, with UTF-8 mode and locale coercion disabled."""
+    source, received = tmp_path / "body.txt", tmp_path / "received.bin"
+    source.write_text(body, encoding="utf-8")
+    fake_gh.setenv("FAKE_GH_MODE", "stdin")
+    fake_gh.setenv("FAKE_GH_STDIN_FILE", str(received))
+    script = '''
+import codecs, json, locale, pathlib, sys, types
+from ouroboros.tools.github import _gh_run
+locale.setlocale(locale.LC_CTYPE, "C")
+assert not sys.flags.utf8_mode
+assert codecs.lookup(locale.getpreferredencoding(False)).name != "utf-8"
+source = pathlib.Path(sys.argv[1])
+body = source.read_text(encoding="utf-8")
+result = _gh_run(["pr", "merge", "7", "--" + sys.argv[2], "--match-head-commit", "a" * 40,
+                  "--body-file", "-"], types.SimpleNamespace(repo_dir=source.parent), input_data=body)
+print(json.dumps({"ok": result.ok, "text": result.text, "failure": result.failure}))
+'''
+    child = subprocess.run([sys.executable, "-X", "utf8=0", "-c", script, str(source), method],
+                           env={**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0"},
+                           capture_output=True, encoding="utf-8", timeout=30)
+    assert child.returncode == 0, child.stderr
+    result = json.loads(child.stdout)
+    assert result == {"ok": True, "text": body, "failure": ""}
+    assert received.read_bytes() == body.encode("utf-8")
 
 
 def test_exact_capture_keeps_crlf_and_the_trailing_newline_the_text_branch_folds(fake_gh, tmp_path):

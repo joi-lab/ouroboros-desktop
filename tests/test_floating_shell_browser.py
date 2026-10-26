@@ -269,9 +269,10 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
         # The real menu remains hit-testable beside the toast, without activating a command.
         page.locator('#page-chat [data-chat-command="bg"]').click(trial=True)
         if theme == 'dark':
+            # More's sheet is opaque: its base layer is the room's ink at full alpha (DESIGN principle 2).
             backing = page.locator('#page-chat .chat-header-menu').evaluate(
                 "el => getComputedStyle(el).backgroundColor")
-            assert backing.startswith('rgba(') and float(backing.rsplit(',', 1)[1].rstrip(')')) >= 0.98, backing
+            assert backing.startswith('rgb('), backing
         page.screenshot(path=str(tmp_path / f"main-more-{width}-{theme}.png"))
         capture(page, f"main-more-{width}-{theme}-{ui['engine']}")
         if width == 390:

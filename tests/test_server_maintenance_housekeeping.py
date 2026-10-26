@@ -1,8 +1,6 @@
-"""Housekeeping on the two cadences a running server already has (owner 3A: a server that stays
-up for weeks retires its leftovers too). The age-only retirers of small planes run on every 300 s
-reconcile pass, task trees and service logs behind the startup recovery gate; the working copies'
-retirers (worktrees, delegated snapshots, review checkouts) run on every 600 s custody pass with
-the supervisor's settlement probe; the memory-journal observation stays once per generation."""
+"""Housekeeping stays live across a server generation. Age-only retirement runs in the child
+on producer/deadline/startup facts, with task sources behind the recovery gate. Working copies
+stay on the custody pass; the memory-journal observation stays once per generation."""
 from __future__ import annotations
 
 import os
@@ -44,10 +42,13 @@ def _reconcile_pass(monkeypatch):
     monkeypatch.setattr("ouroboros.review_operation.retire_dead_review_pointers_softly", lambda *a, **k: None)
     monkeypatch.setattr("ouroboros.late_review_marks.replay_owed_late_reviews", lambda *a, **k: None)
     sm._run_periodic_reconcile_sweep([0.0], latch=SimpleNamespace(release=lambda: None))
+    from ouroboros.maintenance import run_job
+    run_job(sm.DATA_DIR, "runtime_retirement")
 
 
 def test_the_age_only_retirers_run_again_on_a_later_pass_and_trees_wait_out_a_recovery_gap(root, monkeypatch):
-    from ouroboros import memory_journal_compaction, subagent_worktrees
+    from ouroboros import maintenance_jobs, maintenance_retirement, memory_journal_compaction, subagent_worktrees
+    from ouroboros.retention import get_gc_retention_days
 
     observations = []
     observe = memory_journal_compaction.compact_memory_journal_snapshots
@@ -71,8 +72,21 @@ def test_the_age_only_retirers_run_again_on_a_later_pass_and_trees_wait_out_a_re
 
     later = [_aged(root / "uploads" / "screenshots" / "later.png"),
              _aged(root / "state" / "delegate_supervision" / "settled.json", "{}")]
+    stamp = time.time()
+    for path in later:
+        os.utime(path, (stamp, stamp))
+        maintenance_retirement.artifact_changed(root, timestamp=stamp)
+    deadline = stamp + get_gc_retention_days() * 86400
+    assert maintenance_jobs.job(root, "runtime_retirement")["next_due"] == deadline
     _reconcile_pass(monkeypatch)
-    assert not any(path.exists() for path in later), "the second pass of the same process retires again"
+    assert all(path.exists() for path in later), "publication schedules age eligibility, not immediate deletion"
+    with monkeypatch.context() as clock:
+        clock.setattr("ouroboros.retention.time.time", lambda: deadline - 1)
+        _reconcile_pass(monkeypatch)
+        assert all(path.exists() for path in later)
+        clock.setattr("ouroboros.retention.time.time", lambda: deadline + 1)
+        _reconcile_pass(monkeypatch)
+    assert not any(path.exists() for path in later), "the recorded deadline wakes retirement in the same process"
     assert tree.exists() and service.exists()
     assert observations == [root], "the journal observation is boot's, never a pass's"
 
@@ -95,9 +109,10 @@ def test_a_generation_closed_between_two_reconcile_prunes_starts_no_further_one(
     monkeypatch.setattr(delegate_state_sweep, "sweep_settled_delegate_state", first)
     monkeypatch.setattr(skill_uninstall_state, "sweep_uninstalled_skill_state", lambda _root: calls.append("skills") or {})
     monkeypatch.setattr(code_intelligence, "prune_stale_code_intel_roots", lambda _root: calls.append("caches") or {})
-    sm._run_reconcile_prunes(closed)
+    from ouroboros.maintenance import run_job
+    run_job(root, "runtime_retirement", should_stop=closed.is_set)
     assert calls == ["delegate"], "the generation closed: no further retirer starts"
-    sm._run_reconcile_prunes(threading.Event())
+    run_job(root, "runtime_retirement")
     assert calls == ["delegate", "delegate", "skills", "caches"], "an open generation runs every step"
 
 

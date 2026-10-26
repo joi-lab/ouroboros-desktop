@@ -607,10 +607,11 @@ def test_a_202_handle_without_a_run_id_is_a_live_run_not_a_failure(tmp_path, mon
 
 def test_a_failed_ledger_write_leaves_the_session_retryable(tmp_path, monkeypatch):
     """The ledger lock can time out under worker concurrency. That is a transient, not a
-    decision — marking custody settled would burn the only chance to record the row."""
+    decision: an explicit wait retries owed money even when output is already retained."""
     import ouroboros.tools.delegate as delegate
     import ouroboros.usage_accounting as ua
     from ouroboros.gateways import claudexor as gw
+    from ouroboros.tools.delegate_terminal_evidence import retained_terminal_result
     from ouroboros.tools.registry import ToolContext
 
     retired = []
@@ -637,17 +638,24 @@ def test_a_failed_ledger_write_leaves_the_session_retryable(tmp_path, monkeypatc
     ctx.task_id = "t-a"
     ctx.task_metadata = {"root_task_id": "t-a"}
 
-    json.loads(delegate._delegate_wait(ctx, "run-1", wait_sec=1))
+    failed = json.loads(delegate._delegate_wait(ctx, "run-1", wait_sec=1))
+    assert failed["output_delivery"]["complete"] and not failed["settlement"]["settled"]
     assert custody.settled is False, "a lost write must stay retryable"
+    pending = dcust.replay(tmp_path)["run-1"]
+    assert not pending.settled and not pending.ledger_recorded
+    assert not [row for row in ledger_rows(tmp_path) if row.get("kind") == "subscription_session"]
     assert retired == [], "failed accounting must preserve the continuation's project"
     monkeypatch.setattr(ua, "record_subscription_session", record_session)
+    assert not retained_terminal_result(ctx, "run-1")["settlement"]["settled"], "a plain read does not retry money"
     ready = json.loads(delegate._delegate_wait(ctx, "run-1", wait_sec=1))
-    assert ready["output_delivery"]["complete"] and not ready["settlement"]["settled"]
-    assert not dcust.replay(tmp_path)["run-1"].settled
-    dcust.release_task_runs(tmp_path, "t-a", gateway_factory=_Stub)
+    assert ready["output_delivery"]["complete"] and ready["settlement"]["settled"]
+    assert ready["settlement"]["ledger_recorded"] and not ready["settlement"]["project_retired"]
     custody = dcust.replay(tmp_path)["run-1"]
-    assert custody.settled is True
+    assert custody.settled and custody.ledger_recorded
+    assert custody.project_id == "prj-ours" and custody.project_owned
     sessions = [row for row in ledger_rows(tmp_path) if row.get("kind") == "subscription_session"]
     assert len(sessions) == 1 and sessions[0]["cost_final"] is True
+    dcust.release_task_runs(tmp_path, "t-a", gateway_factory=_Stub)
+    assert [row for row in ledger_rows(tmp_path) if row.get("kind") == "subscription_session"] == sessions
     assert retired == [], "successful retry still defers retirement to the owner-line sweep"
     delegate._CUSTODY.clear()

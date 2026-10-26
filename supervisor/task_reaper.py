@@ -311,7 +311,7 @@ def withdraw_finalization_grace(
             # the supervisor cannot see, and claiming a cancelled stop after the task
             # took the order was a plain lie. Correcting the sentence, not adding an ack.
             "text": (
-                f"▶️ Task {task_id} resumed work before the {reason} grace window closed; "
+                f"Task {task_id}: the {reason} finalization condition no longer applies; "
                 "the stop request was retracted from its mailbox — if the task had "
                 "already read it, it may still finalize."
             ),

@@ -106,7 +106,9 @@ export function planRecordGroup(owner, record, detail) {
             verdict: raised.length ? `${raised.length} objection${raised.length === 1 ? '' : 's'}` : (pending.length ? 'awaiting' : 'no objection'),
             timestamp: text(ask.ts), ordinal: index + 1, label: `ask ${text(ask.ask_id)} · revision ${ask.revision}`,
             summary: text(ask.message), superseded: false, compact: false, replayed: false, revised: false,
-            initiatorTaskId: '', executions: [], execution: null, detailRef: null, detailText: lines.join('\n'),
+            // The host's fold for this ask (which objections stand), or null when the detail did not project it.
+            initiatorTaskId: '', executions: [], execution: null, detailRef: null, participants, objections: known ? raised : null,
+            detailText: lines.join('\n'),
         });
     });
     const awaiting = asks.some((ask) => (Array.isArray(ask.participants) ? ask.participants : []).some((p) => p?.status === 'pending'));

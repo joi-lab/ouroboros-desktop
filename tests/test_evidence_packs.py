@@ -311,7 +311,11 @@ def test_index_is_a_cache_rebuilt_from_sidecars(root):
         assert conn.execute("SELECT count(*) FROM handles").fetchone()[0] == 1
     index.write_bytes(b"not a database at all")
     packs._VALIDATED.clear()
+    # A handle is addressed by its task: its own sidecar answers, and the damaged cache is
+    # left to the readers that need every pack (a blob lookup here, the packer's pass).
     assert read_actor_source_bytes(root, "task-a", handle).startswith(b"# focus")
+    assert index.read_bytes() == b"not a database at all"
+    assert obs.read_blob_ref(root, refs[1])["message"]["content"].startswith("answer")
     with contextlib.closing(sqlite3.connect(index)) as conn:
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     # a stale index schema is rebuilt without changing the sidecar format

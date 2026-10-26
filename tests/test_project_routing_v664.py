@@ -658,30 +658,38 @@ def test_main_manifest_offers_owner_roots_not_swarm_children(tmp_path):
     assert not [tid for tid in offered if tid.startswith("child")]
     # The OLDEST owner root survives the cap the two children used to consume.
     assert "root00" in offered
-    assert manifest["omissions"]["children"] == 2
-    assert manifest["omissions"]["final_results"] == 0
+    assert manifest["omissions"]["children"] is None  # Main never counts the whole store
+    assert manifest["omissions"]["final_results"] == 0  # the window proves no root was cut
 
 
 def test_omissions_count_children_ordered_after_the_cap(tmp_path):
     """The child count must not be a by-product of the capped loop: children older
     than the 16th root were skipped but counted nowhere, and the cap number silently
-    absorbed them (A26 requires the two omissions to stay separate)."""
+    absorbed them (A26 requires the two omissions to stay separate). A room counts
+    over its own project's rows; Main's scope is the whole store, which the intake
+    on the supervisor loop never walks, so both of its omissions read "not counted"."""
     import server
+    from ouroboros.projects_registry import create_project
+    from ouroboros.server_routing_context import _project_routing_manifest
     from ouroboros.task_results import write_task_result
 
+    create_project(tmp_path, "racer", name="Racer")
     for index in range(17):
         write_task_result(tmp_path, f"root{index:02d}", "completed", objective=f"owner work {index}",
-                          ts=f"2026-08-20T00:00:{index:02d}Z")
+                          project_id="racer", ts=f"2026-08-20T00:00:{index:02d}Z")
     for index in range(2):
         write_task_result(tmp_path, f"child{index}", "completed", objective="helper work",
-                          parent_task_id="root16", root_task_id="root16",
+                          parent_task_id="root16", root_task_id="root16", project_id="racer",
                           delegation_role="subagent", ts=f"2026-08-01T00:00:{index:02d}Z")
 
-    manifest = server._main_routing_manifest(_ctx(tmp_path))
+    room = _project_routing_manifest(_ctx(tmp_path), "racer")
+    assert len(room["final_results"]) == 16
+    assert room["omissions"]["children"] == 2      # counted even though they sort last
+    assert room["omissions"]["final_results"] == 1  # exactly the root cut by the cap
 
-    assert len(manifest["final_results"]) == 16
-    assert manifest["omissions"]["children"] == 2      # counted even though they sort last
-    assert manifest["omissions"]["final_results"] == 1  # exactly the root cut by the cap
+    main = server._main_routing_manifest(_ctx(tmp_path))
+    assert [row["task_id"] for row in main["final_results"]] == [row["task_id"] for row in room["final_results"]]
+    assert main["omissions"]["children"] is None and main["omissions"]["final_results"] is None
 
 
 def _recent_dialogue(tmp_path):

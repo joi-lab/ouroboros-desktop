@@ -93,9 +93,11 @@
  */
 
 /**
- * One group the free action offers: finished tasks' work folders, working copies of finished work.
+ * One group the free action offers: finished tasks' work folders, working copies of finished work, and
+ * leftovers no background pass removes (reviewers' files, ownerless review copies, unrecorded copies,
+ * leftover environments and test-run records, Git marks of results never applied).
  * @typedef {Object} StorageFreeGroup
- * @property {string} id  // work_folders | working_copies
+ * @property {string} id  // work_folders | working_copies | review_evidence | review_checkouts | lost_copies | service_folders | result_pins
  * @property {number} count
  * @property {number} inside_wait  // finished less than retention_days ago
  * @property {number} in_use  // live, pending, unknown or non-terminal: offered nowhere, named here
@@ -147,7 +149,7 @@
  * `POST /api/storage/free`: the plan id the preview answered with and the groups to free of it.
  * @typedef {Object} StorageFreeRequest
  * @property {string} plan
- * @property {string[]} groups  // work_folders | working_copies
+ * @property {string[]} groups  // ids of StorageFreeGroup
  */
 
 /**

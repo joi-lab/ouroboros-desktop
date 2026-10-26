@@ -135,6 +135,7 @@ EXPECTED_TOOLS = [
     "move_to_project", "schedule_followup",
     "memory_map", "memory_update_registry",
     "plan_task", "recent_tasks", "live_roots", "update_focus",
+    "search_ui_translations", "pin_ui_translation",
     "finish_task", "verify_and_record", "web_search",
     "start_service", "service_status", "service_logs", "stop_service",
     "run_command", "run_script",

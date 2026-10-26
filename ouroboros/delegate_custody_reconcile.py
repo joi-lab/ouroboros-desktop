@@ -388,12 +388,14 @@ def _recover_pending_invocation(drive_root: Any, gateway: Any,
     task_id = str(record["task_id"])
     if _custody().review_owned_source(record.get("source")):
         return _retain_panel_invocation(drive_root, record)
-    body = record.get("request")
+    from ouroboros.delegate_pending import request_body
+    body = request_body(drive_root, record)
     if not isinstance(body, dict) or not body:
         result = {"invocation_id": invocation_id, "task_id": task_id,
                   "action": "invocation_retained", "reason": "invocation_request_unrecorded"}
         _custody().emit(drive_root, _custody().RECONCILED, result)
         return result
+    record = {**record, "request": body}
     from types import SimpleNamespace
 
     from ouroboros.owner_pause import OwnerPauseRefused, run_operation

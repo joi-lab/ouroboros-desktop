@@ -742,6 +742,8 @@ def _inject_native_screenshot(ctx: ToolContext, b64: str) -> str:
         shot_dir.mkdir(parents=True, exist_ok=True)
         shot_path = shot_dir / f"{ts}.png"
         shot_path.write_bytes(base64.b64decode(b64))
+        from ouroboros.maintenance_retirement import artifact_changed
+        artifact_changed(ctx.drive_root)
         caption = f"[browser screenshot {ts}]"
         from ouroboros.loop import _append_or_merge_user_content
 

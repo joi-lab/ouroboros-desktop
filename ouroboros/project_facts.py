@@ -239,7 +239,7 @@ def _project_store_reader_hint(parts: list) -> str:
     layout the path helpers below own (#1612). One text answers reads, writes, listings
     and edits, so it names the exact read/write pair and never more access than those
     tools already grant; anything they do not address is said plainly."""
-    from ouroboros.knowledge import ALWAYS_ACTIVE_TOPICS, INDEX_FILE, sanitize_topic
+    from ouroboros.knowledge import GLOBAL_ADDRESS_TOPICS, INDEX_FILE, sanitize_topic
 
     pid, rest = (parts[0], "/".join(parts[1:])) if parts else ("", "")
     if rest and explicit_project_id_ok(pid):
@@ -252,7 +252,7 @@ def _project_store_reader_hint(parts: list) -> str:
                 topic = sanitize_topic(rest[len(shelf) + 1:-3])
             except ValueError:
                 return f"This file is not addressable as a knowledge topic; knowledge_list({scope}) lists the shelf."
-            if topic in ALWAYS_ACTIVE_TOPICS:
+            if topic in GLOBAL_ADDRESS_TOPICS:
                 return (f"Topic {topic!r} is global-only: knowledge_read/knowledge_write(topic={topic!r}) read and "
                         "replace the global note even with a project scope, never this project copy; "
                         f"knowledge_list({scope}) may still list it.")

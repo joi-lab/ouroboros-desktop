@@ -300,7 +300,7 @@ def _pre_start_leaf(
         "work_order_fingerprint": str(actor_bootstrap.get("work_order_fingerprint") or ""),
         "effort_fact": dict(actor_bootstrap.get("effort_fact") or {}), "_initial_bootstrap": True,
         **({"mode": actor_bootstrap["delegated_mode"]} if "delegated_mode" in actor_bootstrap else {}),
-        **{key: actor_bootstrap[key] for key in ("directory_strategy", "scope_paths") if key in actor_bootstrap},
+        **{key: actor_bootstrap[key] for key in ("directory_strategy", "scope_paths", "workspace") if key in actor_bootstrap},
     })
     try:
         payload = delegate_payload(started)
@@ -805,8 +805,8 @@ def _prepare_actor_first_bootstrap(
                          "source": str(task.get("effort_source") or "")}
                         if task.get("effort_source") else {}),
         **({"delegated_mode": task["delegated_mode"]} if "delegated_mode" in task else {}),
-        **{key: task[key] if key == "directory_strategy" else list(task[key])
-           for key in ("directory_strategy", "scope_paths") if key in task},
+        **{key: list(task[key]) if key == "scope_paths" else task[key]
+           for key in ("directory_strategy", "scope_paths", "workspace") if key in task},
     }
     zero_run_evidence_gaps: set[str] = set()
     durable_zero_run = _durable_zero_run_receipt(

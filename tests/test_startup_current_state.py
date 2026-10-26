@@ -179,10 +179,9 @@ def test_notice_receipts_import_once_and_publication_never_reads_chat(tmp_path, 
 
 
 def test_prunes_wait_off_ready_path_and_trees_wait_for_readable_recovery_links(tmp_path, monkeypatch):
-    """Startup prunes nothing (off the ready path); task trees go on a reconcile pass only once the
-    recovery links read, and on every pass after that, never once per process. The worktree family
-    is the custody pass's, never the reconcile pass's."""
-    from ouroboros import headless, subagent_worktrees
+    """Startup prunes nothing; a due child needs readable recovery links before retiring trees.
+    Repair re-arms a resting pass. The worktree family remains the custody pass's."""
+    from ouroboros import headless, maintenance_jobs, subagent_worktrees
     migrations.prepare_startup_state(tmp_path)
     monkeypatch.setattr(maintenance, "DATA_DIR", tmp_path)
     monkeypatch.setattr(maintenance, "_STARTUP_RECOVERY_GAPS", [False])
@@ -192,12 +191,14 @@ def test_prunes_wait_off_ready_path_and_trees_wait_for_readable_recovery_links(t
     o.add(tmp_path, "pending_drives", "task")
     maintenance._startup_prune_sweeps(preserve_task_sources=True, recovery_report={"unresolved": ["task"]})
     assert calls == []
-    maintenance._run_reconcile_prunes()
+    _retire(tmp_path)
     assert calls == [], "a recovery link that cannot be read keeps every tree for this pass"
     o.remove(tmp_path, "pending_drives", "task")
-    maintenance._run_reconcile_prunes()
-    maintenance._run_reconcile_prunes()
-    assert calls == ["trees", "trees"]
+    assert _retire(tmp_path) is None and calls == [], "a recovery-set change alone does not walk history"
+    maintenance_jobs.record(tmp_path, "runtime_retirement", state="pending")  # explicit repair after the gap clears
+    _retire(tmp_path)
+    assert _retire(tmp_path) is None
+    assert calls == ["trees"], "an unchanged generation rests"
 
 
 @pytest.mark.parametrize("gap", [None, "unreadable", "coarse"])
@@ -217,15 +218,15 @@ def test_reconcile_prunes_keep_live_tree_and_wait_out_recovery_gaps(tmp_path, mo
     unreadable = unreadable_result(monkeypatch, "running") if gap == "unreadable" else {"on": False}
     maintenance._startup_prune_sweeps(preserve_task_sources=bool(gap),
         recovery_report={"errors": ["ownership unknown"]} if gap == "coarse" else {"unresolved": ["running"]})
-    maintenance._run_reconcile_prunes()
+    _retire(tmp_path)
     if gap:
         assert (tmp_path / "task_trees/settled").exists() and service.exists()
-        maintenance._run_reconcile_prunes()
+        _retire(tmp_path)
         assert (tmp_path / "task_trees/settled").exists() and service.exists(), "a later pass keeps them too"
         unreadable["on"] = False
         assert results.load_task_result(tmp_path, "running", strict=True) == running
         maintenance._startup_prune_sweeps()  # the next generation's boot, with recovery complete
-        maintenance._run_reconcile_prunes()
+        _retire(tmp_path)
     assert not (tmp_path / "task_trees/settled").exists() and not service.exists()
     assert (tmp_path / "task_trees/running").exists()
 
@@ -251,13 +252,19 @@ def test_a_failed_prune_step_spares_the_others_and_the_next_pass_runs_it_again(t
     monkeypatch.setattr("ouroboros.delegate_state_sweep.sweep_settled_delegate_state",
                         lambda *a: calls.append("delegate") or {})
     latch = SimpleNamespace(release=lambda: None)
+    maintenance._startup_prune_sweeps()
     maintenance._run_periodic_reconcile_sweep([0], latch=latch)
+    _retire(tmp_path)
     assert calls == ["trees-unavailable", "delegate"]
     monkeypatch.setattr(headless, "prune_task_trees", lambda *a, **kw: calls.append("trees"))
     monkeypatch.setattr(services, "prune_service_logs", lambda *a: calls.append("services") or {})
+    from ouroboros.maintenance_jobs import record
+    record(tmp_path, "runtime_retirement", state="pending")  # explicit repair wakes the failed input
     maintenance._run_periodic_reconcile_sweep([0], latch=latch)
+    _retire(tmp_path)
     maintenance._run_periodic_reconcile_sweep([0], latch=latch)
-    assert calls == ["trees-unavailable", "delegate"] + ["trees", "services", "delegate"] * 2
+    _retire(tmp_path)
+    assert calls == ["trees-unavailable", "delegate"] + ["trees", "services", "delegate"]
 
 
 def test_tree_exclusions_follow_only_addressed_links_and_own_child_results(tmp_path, monkeypatch):
@@ -281,3 +288,9 @@ def test_tree_exclusions_follow_only_addressed_links_and_own_child_results(tmp_p
     monkeypatch.setattr(results, "list_task_results", own_results)
     expected = {"running", "child", *fields}
     assert startup_tree_exclusions(tmp_path) == set(seen) == expected
+
+
+def _retire(root):
+    from ouroboros.maintenance import run_job
+    maintenance._run_reconcile_prunes()
+    return run_job(root, "runtime_retirement")

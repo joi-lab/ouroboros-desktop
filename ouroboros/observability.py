@@ -1075,6 +1075,9 @@ def write_call_manifest(
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         digest = hashlib.sha256(_json_bytes(payload)).hexdigest()
+    if payload.get("producer_complete") and payload.get("surface") == "plan_review":
+        from ouroboros.plan_collection_job import producer_published
+        producer_published(drive_root, [str(task_id), safe_call, digest])
     return {
         "path": str(path),
         "call_id": safe_call,

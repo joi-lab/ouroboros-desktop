@@ -9,10 +9,12 @@ from f-strings.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import posixpath
 from typing import List, Optional
 
+from ouroboros.git_observation import numstat_paths
 from ouroboros.runtime_mode_policy import format_protected_paths
 from ouroboros.tools.registry import ToolContext
 from ouroboros.tool_access import ResolvedResourceBinding
@@ -143,7 +145,8 @@ def _git_diff(
         if staged:
             cmd.append("--staged")
         if name_only:
-            cmd.append("--name-only")
+            # With index refresh disabled, name-only can mistake stat dirt for edits.
+            cmd.extend(["--numstat", "-z"])
         elif stat:
             cmd.append("--stat")
         cmd.extend(revisions)
@@ -164,9 +167,12 @@ def _git_diff(
         if protected_block:
             return _git()._vcs_result(protected_block, binding)
         output = _git().run_cmd(cmd, cwd=repo_dir)
+        if name_only:
+            paths = numstat_paths(output, cmd, lambda args: _git().run_cmd(args, cwd=repo_dir))
+            output = "\n".join(json.dumps(path, ensure_ascii=False)
+                               if any(ord(c) < 32 or c in '\\"' for c in path) else path for path in paths)
         text = _git()._vcs_result(_git()._limit_git_output(output, max_chars), binding)
         if comparison:
-            import json
             comparison["kind"] = "tree_to_tree" if head else "tree_to_index" if staged else "tree_to_worktree"
             text += "\nComparison: " + json.dumps(comparison, ensure_ascii=False, sort_keys=True)
             return _publish_tool_result(ctx, ToolResult(status="ok", code="OK", text=text, meta={"comparison": comparison}))

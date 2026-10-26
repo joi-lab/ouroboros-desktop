@@ -11,8 +11,10 @@ root's rows) names a consciousness root; the window is then every money row
 ``usage_baseline_group`` aggregate or a ``legacy_*`` row) under one of those
 roots whose transition timestamp lies in the last 24 h, open rows included,
 reduced by the ONE money reducer ``_usage_rows._summary``. Both selections are
-addressed (the ``(category, ts_last)`` and ``root_task_id`` indexes), so the
-answer never depends on unrelated history. ``settled_usd`` — the KNOWN spend,
+addressed ranges (the ``(category, ts_last_epoch)`` and ``(root_task_id,
+ts_last_epoch)`` indexes), so the tick that admits a wake reads the same rows
+with a day of usage history or a month, and a root still at work is read for its
+last day, never its whole life. ``settled_usd`` — the KNOWN spend,
 confirmed prices and disclosed estimates — is the number that decides (owner
 Q4-A, #1487), the same rule as every other money limit: a reservation or the
 upper bound of an unresolved call is shown beside it as ``accounted_usd``

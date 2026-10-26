@@ -71,3 +71,43 @@ def test_a_clock_too_coarse_to_see_a_short_hold_still_names_its_site(tmp_path, m
     for kind in ("current", "dialog"):
         bucket = window[kind]["write"]
         assert bucket["count"] >= 1 and bucket["max_sec"] == 0.0 and bucket["max_site"], (kind, bucket)
+
+
+def test_a_metered_scope_counts_its_own_transactions_and_chronicle_opens_and_nothing_else(tmp_path):
+    """The receipt's counts are one scope's: per store kind and side with summed and longest holds,
+    the chronicle's locked opens by name; a transaction on another thread, or after the scope, is
+    not in them, and two concurrent scopes keep their own."""
+    import concurrent.futures
+    import threading
+
+    from ouroboros.chronicle_store import ChronicleStore
+
+    write_task_result(tmp_path, "t", "running")
+    with dialogue_store.transaction(tmp_path, write=True):
+        pass
+    with store_timing.metered() as meter:
+        load_task_result(tmp_path, "t")
+        for _ in range(2):
+            with dialogue_store.transaction(tmp_path, write=False):
+                pass
+        ChronicleStore(tmp_path).room_head("1")
+        other = threading.Thread(target=lambda: load_task_result(tmp_path, "t"))
+        other.start()
+        other.join()
+        counts = store_timing.snapshot(meter)
+    load_task_result(tmp_path, "t")  # after the scope: not counted
+    assert {key: value for key, value in counts.items() if not key.endswith("_sec") and not key.endswith(".sec")} == {
+        "current.read": 1, "dialog.read": 2, "chronicle.locked": 1}
+    assert 0.0 <= counts["dialog.read.max_sec"] <= counts["dialog.read.sec"]
+    assert store_timing.snapshot(meter) == counts and store_timing.snapshot(None) == {}
+    assert store_timing.count("outside") is None  # no scope here: nothing to count, nothing raised
+
+    def scoped(reads: int) -> dict:
+        with store_timing.metered() as own:
+            for _ in range(reads):
+                load_task_result(tmp_path, "t")
+            return store_timing.snapshot(own)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        one, three = pool.submit(scoped, 1), pool.submit(scoped, 3)
+        assert (one.result()["current.read"], three.result()["current.read"]) == (1, 3)

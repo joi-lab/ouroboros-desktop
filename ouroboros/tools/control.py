@@ -1,4 +1,4 @@
-"""Control tools: restart, timeout settings, scheduling, review, chat history, model switching."""
+"""Control tools: restart, timeout settings, scheduling, review, chat history, model switching, interface wording."""
 
 from __future__ import annotations
 
@@ -134,9 +134,11 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "genesis gives EACH child a separate empty Git repo under the durable projects root, for a new "
     "game/site/app/Ouroboros or independent best-of-N builds; the project directory IS the deliverable, "
     "never integrated into this repo. Acting harness work uses a private snapshot and integrate_delegated_patch. "
+    # Custom-tool projection strips parameter prose; this choice must survive in the tool lead.
     "A non-acting Agent session keeps configured access in an evidence-only private checking copy; "
-    "access='readonly' selects read-only session execution. Its captured changes are retained as evidence, "
-    "not product patches: do not call integrate_delegated_patch to apply or reject them. "
+    "access='readonly' selects read-only session execution. Its "
+    "captured changes are retained as evidence, not product patches: do not call integrate_delegated_patch "
+    "to apply or reject them. "
     "Runtime data, including installed skill payloads, is never a write_surface. For skill mutation, "
     "call delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
     "yourself; children cannot open payload delegation and may only design/review it read-only. "
@@ -144,8 +146,7 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "in their own name and publish chronicle pages and parts only as drafts, which the integrating mind "
     "accepts or rejects (chronicle_write kind=decision); identity and scratchpad stay with the parent. Cyber-effective "
     "children inherit selected review/skill/runtime tools, subject to explicit task restrictions. "
-    "Nested delegation obeys configured depth/cap limits; delegation_intent, may_mutate and may_fan_out "
-    "propagate requests for further children/grandchildren structurally. Independent children scheduled "
+    "Nested delegation obeys configured depth/cap limits. Independent children scheduled "
     "in one round run concurrently; wait_tasks(any_terminal) absorbs whichever finishes first. On "
     "cache-write-priced routes, each sibling launched before the first sibling's first response pays "
     "a full prefix write: choose burst latency or spaced cost savings. For ongoing addressed turns, "
@@ -162,10 +163,12 @@ def get_tools() -> List[ToolEntry]:
     from ouroboros.subagent_inspection import inspect_subagent_tool
     from ouroboros.tools.control_maintenance import maintenance_tool_entries
     from ouroboros.tools.control_mind import mind_tool_entries
+    from ouroboros.tools.control_ui_translation import ui_translation_tool_entries
 
     return [
         *maintenance_tool_entries(),
         *mind_tool_entries(),
+        *ui_translation_tool_entries(),
         ToolEntry("inspect_subagent", {
             "name": "inspect_subagent",
             "description": "Inspect one configured actor from this task's captured catalog: exact route, model, account pin and access, with dated passive engine quota/resource facts. Works without Quotas. Never starts or refreshes an engine/provider, changes accounts, or chooses an executor. Missing/stale facts and unhonored model/request selectors remain unknown; availability is not an execution guarantee.",
@@ -177,7 +180,7 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("finish_task", {"name": "finish_task",
             "description": "Select the complete answer and request completion of your current task. "
                 "Use finish after considering the observed work, or stop with a rationale naming unfinished work. "
-                "Select exactly one of answer or a host-offered answer_sha256. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true finishes with no owner-facing line (no answer needed; any answer stays internal), refused while your human awaits a reply. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
+                "Select exactly one of answer or a host-offered answer_sha256. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["finish", "stop"]}, "answer": {"type": "string", "description": "The complete answer, including a short correction; a root's owner reads it as your reply, a child's parent as your report."},
                 "answer_sha256": {"type": "string", "description": "Exact offered retained or whole held response hash."},
@@ -187,6 +190,7 @@ def get_tools() -> List[ToolEntry]:
                 "pending_review": {"type": "string", "enum": ["wait", "finish"], "default": "wait"},
                 "swarm_comparison": {"type": "string", "description": "Optional solo-versus-swarm comparison in your own words, attributed to you separately from measured tree facts."},
                 "silent": {"type": "boolean", "default": False, "description": "A consciousness wake or a schedule-born root without a Presence binding may finish without a message when no human reply is owed; any answer stays in the durable result as internal text (wake_silent)."},
+                "summary": {"type": "string", "default": "", "description": "On a consciousness wake's own turn: one plain sentence for your human, in their language: what this wake did or decided. It titles the wake's card and its row on the Consciousness page; your answer or note stays as written."},
             }, "required": ["action"]}}, _finish_task),
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",
