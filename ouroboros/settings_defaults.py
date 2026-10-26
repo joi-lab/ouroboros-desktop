@@ -294,11 +294,11 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # STRING "N"|"unlimited": paid result/commit/skill waves (plan asks stand outside it); final feedback still permits author response. Explicit task-local author limits and free identical-material replay remain separate.
     "OUROBOROS_REVIEW_MAX_CYCLES": "2",
     # Prompt-cache TTL, one honest GLOBAL override (owner decision 2026-08-08, batch #2 Q2=A): applied to
-    # EVERY cache_control breakpoint on the Anthropic-normalizing family — main loop, review lanes, safety
-    # supervisor alike — at the ONE send-time finalizer (llm._normalize_payload_cache_ttl). 'default' = bare
-    # markers (provider default 5m tier); '5m'/'1h' = the explicit Anthropic ephemeral tiers ('1h' bills cache
-    # writes at the documented 2x-vs-1.25x ratio). Non-Anthropic wire formats are a NO-OP by construction
-    # (Gemini documents no ttl field — the v5.30.0 outage class).
+    # EVERY cache_control breakpoint on the Anthropic-normalizing family (direct, OpenRouter anthropic/, the
+    # generic compatible lane) — main loop, review lanes, safety supervisor alike — at the ONE send-time
+    # finalizer (llm._normalize_payload_cache_ttl). 'default' = bare markers (provider default 5m tier); '5m'/'1h'
+    # = the explicit Anthropic ephemeral tiers ('1h' bills writes at the documented 2x-vs-1.25x ratio). Other
+    # wire formats are a NO-OP (Gemini documents no ttl field — the v5.30.0 outage class).
     "OUROBOROS_PROMPT_CACHE_TTL": "1h",
     # Main's primary TASK is independent of the helper corridor MIN <= MAX.
     # Projects copy these once; explicit reviewer-row pins retain their precedence.

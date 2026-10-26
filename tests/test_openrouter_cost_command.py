@@ -186,6 +186,29 @@ def test_fetch_apply_real_consumer_outcomes(env, capsys, monkeypatch, status, pa
         assert code == 1 and final == row
 
 
+@pytest.mark.parametrize(("data", "expected", "price"), [
+    ({"total_cost": 0, "is_byok": True, "upstream_inference_cost": 3.647972}, "applied", 3.647972),
+    ({"total_cost": 0, "is_byok": True}, "missing_price", None),
+    ({"total_cost": 0.003064, "is_byok": False, "upstream_inference_cost": 0.003064}, "applied", 0.003064),
+])
+def test_a_receipt_prices_what_the_reply_consumed_and_never_zeroes_a_byok_amount(env, capsys, monkeypatch,
+                                                                                 data, expected, price):
+    """A BYOK generation's ``total_cost`` is the gateway charge (0 inside the allowance) beside
+    the provider-billed share: the reply's own consumed rule applies, so a receipt neither
+    refines a BYOK row to $0 nor doubles an ordinary one (whose upstream repeats the charge)."""
+    row = attempt(env)  # settled at a non-final $2.00 estimate: refinable by a receipt
+    monkeypatch.setattr("requests.get", lambda *a, **k: SimpleNamespace(
+        status_code=200, headers={}, close=lambda: None,
+        json=lambda: {"data": {"id": "generation-selected", **data}}))
+    code, result = invoke(env, row, capsys, "--fetch", "--apply")
+    final = current(env, row["attempt_id"])
+    assert result["status"] == expected
+    if price is None:
+        assert code == 1 and final == row and final["cost_usd"] == 2.0  # the estimate stands, never $0
+    else:
+        assert code == 0 and (final["cost_usd"], final["cost_final"]) == (price, True)
+
+
 def test_changed_key_refuses_get_and_foreign_receipt_refuses_application(env, capsys, monkeypatch):
     row = attempt(env)
     monkeypatch.setattr(command, "_target", lambda: {**TARGET, "api_key": "test-rotated-key"})

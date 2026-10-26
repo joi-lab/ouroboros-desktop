@@ -261,8 +261,10 @@ def openai_family_route(target: Dict[str, Any]) -> bool:
 
 
 def _route_normalizes_cache_breakpoints(target: Dict[str, Any]) -> bool:
-    """Whether the send-time finalizer may normalize cache breakpoints."""
-    if str(target.get("provider") or "") == "anthropic":
+    """Whether the send-time finalizer may normalize cache breakpoints: direct Anthropic,
+    OpenRouter ``anthropic/`` and the generic compatible lane, which sends this family's
+    markers and drops a refused one by request-wire recovery on that exact route."""
+    if str(target.get("provider") or "") in {"anthropic", "openai-compatible"}:
         return True
     model = str(target.get("resolved_model") or "").strip().lstrip("~")
     return bool(
@@ -885,8 +887,9 @@ class _PayloadCachePolicyMixin:
         ordering stays legal by construction (the 176567b every-call-400 class).
         'default' keeps the pre-setting behavior byte-for-byte: bare markers stay bare
         and a caller-declared ttl stands. It never CREATES a marker (the d32f703d
-        empty-block 400 class), and non-Anthropic wire formats are untouched (the
-        v5.30.0 Gemini ttl-field class).
+        empty-block 400 class), and other wire formats are untouched (the v5.30.0
+        Gemini ttl-field class); a compatible server that refuses the ``ttl`` this
+        family carries is answered by request-wire recovery (``cache_control.ttl``).
         """
         breakpoints = self._payload_cache_breakpoints(payload)
         note: Optional[Dict[str, Any]] = None
