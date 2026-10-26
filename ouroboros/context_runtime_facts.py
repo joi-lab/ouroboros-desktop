@@ -396,11 +396,10 @@ def storage_fact(data_root: Any) -> Optional[Dict[str, Any]]:
 
 
 # The body's own facts: bounds here are transport and memory limits, never judgments. Each item is one
-# short line of text (the Runtime section is indented JSON), because the fact must cost the context no
-# more than the lines it replaced (the owner's Nano window): clocks are HH:MM of observed_at's day
-# (MM-DD HH:MM on another day), counts carry no sums of holds, and no phrase carries a verdict.
+# short line of text (the Runtime section is indented JSON), kept small for small context windows: clocks
+# are UTC HH:MM of observed_at's day (MM-DD HH:MM on another day), and no phrase carries a verdict.
 _SUPERVISOR_TAIL_BYTES = 256_000  # the same bounded tail the health block reads
-_OWNER_TURNS_SHOWN = 2  # receipts rendered per context (three do not fit the fact's byte budget); the ring keeps 100
+_OWNER_TURNS_SHOWN = 2  # receipts rendered per context; the ring keeps 100 and the journal every one
 _STALL_ENDS = {"direct_turn_stall": "direct_turn_stall_end", "host_duty_stall": "host_duty_stall_end",
                "supervisor_loop_stall": "supervisor_loop_stall_end"}
 _STALL_WORDS = {"direct_turn_stall": "turn", "host_duty_stall": "duty", "supervisor_loop_stall": "loop"}
@@ -408,8 +407,9 @@ _STALLS_KEY = "stalls, no end in window"
 _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqlite")
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
 VITALS_READER = "query_data(kind='supervisor_log', op='jsonl')"  # the minimal working call: the kind requires op='jsonl'
-VITALS_NOTE = f"No verdict here, the weighing is mine; rows: {VITALS_READER}"
-WAL_GATE = "WAL needs SQLite ≥3.51.3; an Update keeps this interpreter, a reinstall replaces it"
+VITALS_NOTE = f"No verdict here, the weighing is mine; clocks UTC; rows: {VITALS_READER}"
+WAL_GATE = ("WAL needs a SQLite with the WAL-reset fix (3.51.3+, 3.50.7+, 3.44.6+), enforced kernel locks"
+            " and a local filesystem; an Update keeps this interpreter")
 
 
 def _clock(stamp: Any, today: Any) -> str:
@@ -434,14 +434,15 @@ def _stall_key(row: Dict[str, Any]) -> tuple:
 
 
 def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
-    """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, stall
-    onsets whose end is not in the window (an onset's ``_end`` row with the same identity closes it;
-    a closed episode's ``top_frames`` is kept by execution for the receipts). The tail is the one the
+    """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, the newest
+    ``direct_turn`` receipts (a pooled worker has no ring), stall onsets whose end is not in the window (an
+    onset's ``_end`` row with the same identity closes it; a closed episode's ``top_frames`` is kept by
+    execution for the receipts). The tail is the one the
     health block reads, memoized on the file's identity (``jsonl_tail.cached_tail_objects``): one read
     per context build serves both. An unreadable or absent journal is no fact: empty, never an error."""
     from ouroboros.jsonl_tail import cached_tail_objects
 
-    found: Dict[str, Any] = {"open": {}, "ended": {}}
+    found: Dict[str, Any] = {"open": {}, "ended": {}, "turns": []}
     try:
         rows = cached_tail_objects(root / "logs" / "supervisor.jsonl", _SUPERVISOR_TAIL_BYTES)
     except Exception:
@@ -453,6 +454,8 @@ def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
             found["boot"] = row
         elif kind == "supervisor_load":
             found["load"] = row
+        elif kind == "direct_turn":
+            found["turns"] = [*found["turns"], row][-_OWNER_TURNS_SHOWN:]
         elif kind in _STALL_ENDS:
             found["open"][(kind, _stall_key(row))] = row
         elif kind in _STALL_ENDS.values():
@@ -481,7 +484,7 @@ def _owner_turn(row: Dict[str, Any], ended: Dict[str, Any], today: Any) -> str:
         if key.endswith("_sec") or key.endswith(".sec"):
             continue
         kind, _dot, side = key.partition(".")
-        stores[kind] = stores.get(kind, "") + (f" {value}" if side == "locked" else f" {value}{side[:1]}")
+        stores[kind] = stores.get(kind, "") + (f" {value} locked" if side == "locked" else f" {value}{side[:1]}")
     if stores:
         text += "; txns " + " · ".join(f"{kind}{counts}" for kind, counts in stores.items())
     frames = (ended.get(str(row.get("execution_id") or "")) or {}).get("top_frames")
@@ -562,7 +565,8 @@ def _last_update(root: pathlib.Path) -> str:
     if not sides:
         return text
     dispatch = {name: (sample.get("direct_message_first_dispatch") or {}).get("seconds") for name, sample in sides}
-    text += ": first request " + " → ".join(f"{name} {_sec(dispatch[name]) if dispatch[name] is not None else 'none'}" for name, _s in sides)
+    text += ": first request from handler entry " + " → ".join(
+        f"{name} {_sec(dispatch[name]) if dispatch[name] is not None else 'none'}" for name, _s in sides)
     if any(sample.get("rss_bytes") is not None for _n, sample in sides):
         text += "; rss " + " → ".join(f"{int(sample['rss_bytes']) // 1048576}" if sample.get("rss_bytes") is not None else "?"
                                       for _n, sample in sides) + " MiB"
@@ -571,7 +575,7 @@ def _last_update(root: pathlib.Path) -> str:
     overruns = next((sample["duty_overruns"] for _n, sample in reversed(sides) if sample.get("duty_overruns")), None)
     if overruns:
         text += "; duty overruns " + ", ".join(f"{name} {count}" for name, count in overruns.items())
-    return text
+    return text + "; record state/state.json managed_update_attempt"
 
 
 def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -592,16 +596,16 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
     fact: Dict[str, Any] = {} if observed_at == captured_at else {"observed_at": observed_at}
     try:
         tail = _supervisor_tail(root)
-        if os.environ.get("OUROBOROS_IN_WORKER") == "1":
-            fact["owner_turns_note"] = "unknown in a pooled worker; the serving process keeps the receipts"
+        if os.environ.get("OUROBOROS_IN_WORKER") == "1":  # no ring in a pooled worker: the journal's receipts
+            turns, none = tail["turns"], "none in the journal's tail"
         else:
             from supervisor.active_activity import direct_turns
 
-            turns = direct_turns(limit=_OWNER_TURNS_SHOWN)
-            if turns:
-                fact["owner_turns"] = [_owner_turn(row, tail["ended"], observed_at) for row in turns]
-            else:
-                fact["owner_turns_note"] = "none since this process started"
+            turns, none = direct_turns(limit=_OWNER_TURNS_SHOWN), "none since this process started"
+        if turns:
+            fact["owner_turns"] = [_owner_turn(row, tail["ended"], observed_at) for row in turns]
+        else:
+            fact["owner_turns_note"] = none
         stalls = [_stall(kind, row, observed_at) for (kind, _key), row in tail["open"].items()]
         if stalls:
             fact[_STALLS_KEY] = stalls
@@ -615,8 +619,8 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
             fact["last_update"] = update
         boot = tail.get("boot")
         if isinstance(boot, dict):
-            fact["boot"] = (f"{_clock(boot.get('ts'), observed_at)} {boot.get('branch') or boot.get('git_branch')}@"
-                            f"{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
+            fact["boot"] = (f"{_clock(boot.get('ts'), observed_at)} {boot.get('type')} "
+                            f"{boot.get('branch') or boot.get('git_branch')}@{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
         fact["note"] = VITALS_NOTE
     except Exception:  # a fact about the body never breaks the Runtime section
         log.debug("vitals fact unavailable", exc_info=True)
@@ -626,8 +630,7 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
 
 def body_facts(data_root: Any, *, observed_at: str) -> Dict[str, Any]:
     """The Runtime section's ``storage`` and ``vitals`` keys, each present only with its fact: one call
-    site in ``context.build_runtime_section``; wakes and deep self-review only (owner answer B) would
-    guard ``vitals`` here with ``is_consciousness_origin``."""
+    site, ``context.build_runtime_section``."""
     facts = {"storage": storage_fact(data_root),
              "vitals": vitals_fact(data_root, observed_at=observed_at, captured_at=observed_at)}
     return {key: value for key, value in facts.items() if value is not None}

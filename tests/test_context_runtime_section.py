@@ -842,31 +842,37 @@ class TestVitalsFact:
         assert all(isinstance(value, str) for key, value in vitals.items()
                    if key not in ("owner_turns", "stalls, no end in window"))
         assert vitals["owner_turns"] == [
-            "19:55 chat 1 waited 91.2 s, slowest context_building 61.0 s; txns current 2r · chronicle 7; top memory_view.py:_live_rooms"]
+            "19:55 chat 1 waited 91.2 s, slowest context_building 61.0 s; txns current 2r · chronicle 7 locked; top memory_view.py:_live_rooms"]
         turn = vitals["owner_turns"][0]
         assert "observed_send" not in turn and "not written" not in turn  # a seen send is the default basis
         assert vitals["stalls, no end in window"] == ["duty custody since 19:30", "turn t9 started since 19:40"]
         assert vitals["busy_minute"] == "19:59: lag ≤0.4 s; holds dialog w12/0.4 s (message_bus:send:10); queue 5/0.3 s"
         assert vitals["runtime"].startswith("python ") and ", sqlite " in vitals["runtime"]
-        assert vitals["boot"] == "18:00 ouroboros@abcdef123456"
-        assert vitals["note"] == "No verdict here, the weighing is mine; rows: query_data(kind='supervisor_log', op='jsonl')"
+        assert vitals["boot"] == "18:00 boot ouroboros@abcdef123456"
+        assert vitals["note"] == "No verdict here, the weighing is mine; clocks UTC; rows: query_data(kind='supervisor_log', op='jsonl')"
         assert "last_update" not in vitals
         for word in ("WARNING", "CRITICAL", "% busy", "current\"", "threshold"):
             assert word not in json.dumps(vitals), word
         assert "## Supervisor" not in section
 
-    def test_absent_sources_omit_their_keys_and_a_pooled_worker_says_its_part_is_unknown(self, tmp_path, monkeypatch):
+    def test_absent_sources_omit_their_keys_and_a_pooled_worker_reads_the_journals_receipts(self, tmp_path, monkeypatch):
         env = self._env(tmp_path, monkeypatch)
         _section, data = self._runtime(env)
         vitals = data["vitals"]
         assert set(vitals) <= {"owner_turns_note", "runtime", "wal_gate", "note"}
         assert {"owner_turns_note", "runtime", "note"} <= set(vitals)
         assert vitals["owner_turns_note"] == "none since this process started"
-        monkeypatch.setenv("OUROBOROS_IN_WORKER", "1")
+        monkeypatch.setenv("OUROBOROS_IN_WORKER", "1")  # a deep self-review's pooled worker: no ring of its own
         _section, data = self._runtime(env)
-        assert "pooled worker" in data["vitals"]["owner_turns_note"] and "owner_turns" not in data["vitals"]
+        assert data["vitals"]["owner_turns_note"] == "none in the journal's tail" and "owner_turns" not in data["vitals"]
+        self._journal(tmp_path, [{"ts": f"2026-10-25T19:5{n}:00+00:00", "type": "direct_turn", "execution_id": f"turn_{n}",
+                                  "chat_id": 1, "owner_wait_sec": float(n), "dispatch": "observed_send"} for n in range(3)])
+        _section, data = self._runtime(env)
+        assert data["vitals"]["owner_turns"] == ["19:51 chat 1 waited 1.0 s", "19:52 chat 1 waited 2.0 s"]
+        assert "owner_turns_note" not in data["vitals"]
 
     def test_the_journal_per_store_and_the_wal_gate_only_for_a_rollback_store(self, tmp_path, monkeypatch):
+        from ouroboros import context_runtime_facts
         from ouroboros.task_results import write_task_result
 
         env = self._env(tmp_path, monkeypatch)
@@ -877,7 +883,7 @@ class TestVitalsFact:
         assert "current=wal" in journal or "current=rollback" in journal
         assert ("wal_gate" in vitals) == ("=rollback" in journal)
         if "wal_gate" in vitals:
-            assert vitals["wal_gate"] == "WAL needs SQLite ≥3.51.3; an Update keeps this interpreter, a reinstall replaces it"
+            assert vitals["wal_gate"] == context_runtime_facts.WAL_GATE and "reinstall" not in vitals["wal_gate"]
 
     def test_an_unreadable_journal_or_a_failing_source_never_breaks_the_section(self, tmp_path, monkeypatch):
         env = self._env(tmp_path, monkeypatch)

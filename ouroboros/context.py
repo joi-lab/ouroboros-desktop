@@ -407,7 +407,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
     from ouroboros.settings_scales import effort_range
 
     runtime_data["effort_range"] = {**effort_range(), "binds": effort_range_binds(task.get("metadata"))}
-    # What Ouroboros owns on disk and its body's dated facts: facts, no threshold (owner answer A, 25.10.2026).
+    # What Ouroboros owns on disk and its body's dated facts: facts, no threshold.
     runtime_data.update(body_facts(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None)
                                                 or env.drive_root), observed_at=runtime_data["context_captured_at"]))
     runtime_data.update(_task_authority_projection(env, task))
