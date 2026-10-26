@@ -357,3 +357,34 @@ def test_a_compatible_servers_cache_counters_reach_usage_and_the_ledger():
     assert (usage["cached_tokens"], usage["cache_write_tokens"]) == (80, 10)
     normalized, _cost, _final = usage_from_response(body)
     assert (normalized["cached_tokens"], normalized["cache_write_tokens"]) == (80, 10)
+
+
+def test_settings_names_a_learned_refusal_on_its_endpoint_until_it_expires(evidence_root, tmp_path):
+    from ouroboros.provider_connections import connections_meta
+
+    base = "https://gateway.example/v1"
+    assert wire.endpoint_cache_hint_refusal("openai-compatible", base) == ""
+    _send(tmp_path, "learn", _has_markers, _Refusal(KIMI))
+    learned = wire.endpoint_cache_hint_refusal("openai-compatible", base)
+    assert learned
+    assert wire.endpoint_cache_hint_refusal("openai-compatible", "https://GATEWAY.example/v1/") == learned
+    assert wire.endpoint_cache_hint_refusal("openai-compatible", "https://other.example/v1") == ""
+    assert wire.endpoint_cache_hint_refusal("openai", base) == ""
+    rows = [{"kind": "openai-compatible", "name": "gateway", "base_url": base, "api_key": "fixture-key"},
+            {"kind": "openai-compatible", "name": "local", "base_url": "http://127.0.0.1:8000/v1"}]
+    settings = {"OUROBOROS_CONNECTIONS": rows, "OPENAI_COMPATIBLE_BASE_URL": base}
+    meta = {entry["id"]: entry for entry in connections_meta(settings, settings)}
+    assert meta["openai-compatible@gateway"]["cache_hints"] == {"refused": True, "learned_at": learned}
+    assert meta["openai-compatible"]["cache_hints"] == {"refused": True, "learned_at": learned}  # same server
+    assert "cache_hints" not in meta["openai-compatible@local"]
+    path = evidence_root / "state" / wire.REQUEST_WIRE_STATE_FILE
+    store = json.loads(path.read_text())
+    records = [record for entry in store["profiles"].values() for record in entry["records"]]
+    for record in records:
+        record["observed_at"] = "2026-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(store))
+    assert wire.endpoint_cache_hint_refusal("openai-compatible", base) == ""  # 14 days later it is forgotten
+    records[0].update(observed_at=learned, action={"kind": "drop_field", "fields": ["temperature"],
+                                                    "reason_code": "provider_unsupported_field"})
+    path.write_text(json.dumps(store))
+    assert wire.endpoint_cache_hint_refusal("openai-compatible", base) == ""  # another field taught nothing about hints

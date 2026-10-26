@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from ouroboros.provider_models import (
     BUILTIN_CONNECTION, CONNECTIONS_KEY, MODEL_SETTING_KEYS, PROVIDER_KINDS, RouteParts, choice_error,
-    compatible_endpoint_configured, connection_id, parse_model_route,
+    compatible_endpoint, compatible_endpoint_configured, connection_id, parse_model_route,
 )
 from ouroboros.settings_integrity import runtime_setting
 
@@ -149,7 +149,9 @@ def connections_meta(settings: Mapping[str, Any], document: Mapping[str, Any]) -
     """``GET /api/settings`` ``_meta.connections``: every connection as the picker shows it.
 
     ``source`` says where its credential is read from now: the saved document,
-    the environment (a key the document leaves unset), or nowhere yet."""
+    the environment (a key the document leaves unset), or nowhere yet. A compatible
+    endpoint that refused prompt-cache hints and was learned without them carries
+    ``cache_hints: {refused, learned_at}`` (``request_wire_contract.endpoint_cache_hint_refusal``)."""
     read, rows = settings_view(settings)
     saved = document if isinstance(document, Mapping) else {}
     saved_read, saved_rows = saved.get, connection_rows(saved.get(CONNECTIONS_KEY))
@@ -166,8 +168,17 @@ def connections_meta(settings: Mapping[str, Any], document: Mapping[str, Any]) -
             "configured": configured,
             "source": "none" if not configured else "settings" if in_document else "environment",
             "id": connection_id(route.kind, name), "display": connection_display(route.kind, name, rows),
+            **(_cache_hints(route, read, row) if route.kind == "openai-compatible" and configured else {}),
         })
     return out
+
+
+def _cache_hints(route: RouteParts, read: Reader, row: Mapping[str, Any]) -> dict:
+    from ouroboros.request_wire_contract import endpoint_cache_hint_refusal
+
+    builtin_url = compatible_endpoint(lambda key: _text(read(key, "")))[1]
+    learned = endpoint_cache_hint_refusal(route.kind, _text(row.get("base_url")) if route.connection else builtin_url)
+    return {"cache_hints": {"refused": True, "learned_at": learned}} if learned else {}
 
 
 def _subagent_routes(raw: Any) -> list[tuple[str, str]]:
