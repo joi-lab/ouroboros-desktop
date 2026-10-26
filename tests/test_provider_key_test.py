@@ -16,7 +16,9 @@ import ouroboros.gateway.models as provider_api
 from ouroboros.llm import LLMClient
 from ouroboros.usage_accounting import current_usage_scope
 from tests._usage_store_testing import ledger_rows
-from tests._safety_fixtures import settings_install as install
+from tests._safety_fixtures import settings_install as install_fixture
+
+install = install_fixture
 
 
 class _Request:

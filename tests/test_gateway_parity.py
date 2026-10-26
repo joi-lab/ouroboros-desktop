@@ -239,6 +239,11 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for name in ("EvolutionRefresh", "EvolutionDataResponse"):
         assert f"import('./evolution_types.js').{name}" in text
     text += "\n" + (modules / "evolution_types.js").read_text(encoding="utf-8")
+    for name in ("UpdateMergePlan", "UpdatePreflightRequest", "UpdatePreflightResponse", "UpdateApplyRequest",
+                 "UpdateApplySuccessResponse", "UpdateApplyErrorResponse", "UpdateProgressChangedOutbound",
+                 "UpdateStatusReadyOutbound"):
+        assert f"import('./update_types.js').{name}" in text
+    text += "\n" + (modules / "update_types.js").read_text(encoding="utf-8")
     version = (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
     assert f"GATEWAY_CONTRACT_VERSION = '{version}'" in text
     settings_meta_fields = {
