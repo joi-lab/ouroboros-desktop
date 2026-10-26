@@ -1067,8 +1067,10 @@ export function bindSecretInputs(root) {
         const keyInput = customRow?.querySelector('[data-custom-secret-key]');
         bindSecretReveal(input, button, {
             savedSelector: () => {
-                // The reveal endpoint names a top-level key or an MCP server, not a key added in a card.
-                if (input.closest('[data-connection-row][data-uid]')) throw new Error('a saved added key is not shown here. Enter a new key to replace it.');
+                // A key added in a card is read by its connection and field; a draft has nothing saved.
+                const added = input.closest('[data-connection-row][data-uid]');
+                if (added) return added.dataset.draft === '1' ? null
+                    : { connection: `${added.dataset.kind}@${added.dataset.name}`, field: input.dataset.connectionField };
                 const key = customRow?.dataset.originalKey || input.dataset.secretSetting;
                 return key ? { key } : null;
             },

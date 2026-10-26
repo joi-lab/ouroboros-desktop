@@ -599,12 +599,14 @@
  */
 
 /**
- * `POST /api/settings/secret`: exactly one selector, `{key}`, `{mcp_server_id}` or `{mcp_server_id,
- * header_name}`.
+ * `POST /api/settings/secret`: exactly one selector, `{key}`, `{mcp_server_id}`, `{mcp_server_id,
+ * header_name}` or `{connection, field}` (an added API key `kind@name` and one of its secret fields).
  * @typedef {Object} SettingsSecretRequest
  * @property {string=} key
  * @property {string=} mcp_server_id
  * @property {string=} header_name
+ * @property {string=} connection
+ * @property {string=} field
  */
 
 /**

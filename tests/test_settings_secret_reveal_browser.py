@@ -16,6 +16,7 @@ pytest_plugins = ("tests.test_ui_smoke_playwright",)
 ANTHROPIC = "sk-ant-api03-SYNTHETIC-" + "0123456789abcdef" * 7 + "-END"
 CUSTOM = "synthetic-custom-" + "ABCDEF0123456789" * 6 + "-END"
 MCP = "synthetic-mcp-" + "fedcba9876543210" * 6 + "-END"
+ADDED = "sk-or-v1-SYNTHETIC-added-" + "13579bdf" * 8 + "-END"
 
 
 @pytest.mark.serial
@@ -30,6 +31,8 @@ def test_saved_secret_show_preserves_settings_and_drafts(direct_server_with_data
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     settings.update(ANTHROPIC_API_KEY=ANTHROPIC, TEST_REVEAL_KEY=CUSTOM,
                     GITHUB_TOKEN="synthetic-github-token", MCP_ENABLED=False,
+                    OUROBOROS_CONNECTIONS=[{"kind": "openrouter", "name": "claude-credits",
+                                            "label": "Claude credits", "api_key": ADDED}],
                     MCP_SERVERS=[{"id": "saved-mcp", "name": "Reveal fixture",
                                   "transport": "streamable_http", "enabled": False,
                                   "url": "https://example.invalid/mcp", "auth_token": MCP}])
@@ -124,6 +127,15 @@ def test_saved_secret_show_preserves_settings_and_drafts(direct_server_with_data
             expect(preview).to_have_text("")
             expect(field).to_be_visible()
 
+            # A key added in a card is read by its connection and field, never by a top-level setting.
+            added = page.locator('[data-connection-row][data-kind="openrouter"][data-name="claude-credits"]')
+            added.locator(".secret-toggle").click()
+            expect(added.locator(".settings-secret-value")).to_have_text(ADDED)
+            assert reveals[-1] == {"connection": "openrouter@claude-credits", "field": "api_key"}
+            expect(page.locator("#settings-unsaved-indicator")).not_to_have_class(re.compile(r"\bis-visible\b"))
+            added.locator(".secret-toggle").click()
+            expect(added.locator(".settings-secret-value")).to_be_hidden()
+
             # Every top-level consumer uses the same complete view, including dynamic rows. A provider
             # key has its one input in Accounts; Secrets draws no second one.
             page.click('[data-settings-tab="secrets"]')
@@ -159,7 +171,8 @@ def test_saved_secret_show_preserves_settings_and_drafts(direct_server_with_data
             assert len(saves) == 1
             assert "ANTHROPIC_API_KEY" not in saves[0] and "TEST_REVEAL_KEY" not in saves[0]
             assert saves[0]["MCP_SERVERS"][0]["auth_token"] == MCP[:8] + "..."
-            assert all(value not in json.dumps(saves[0]) for value in (ANTHROPIC, CUSTOM, MCP))
+            assert all(value not in json.dumps(saves[0]) for value in (ANTHROPIC, CUSTOM, MCP, ADDED))
+            assert "OUROBOROS_CONNECTIONS" not in saves[0], "an untouched added key travels in no save"
 
             # A real edit in Accounts survives Show: a draft is shown as typed, never as the saved key.
             page.click('[data-settings-tab="providers"]')
