@@ -160,7 +160,9 @@ SHOWN = """mode => {
     const strip = panel.querySelector('.chat-context-strip');
     const seg = strip.querySelector(`.chat-seg[data-mode="${mode}"]`);
     const s = strip.getBoundingClientRect(), m = seg.getBoundingClientRect();
-    const word = seg.querySelector('.chat-seg-text').getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(seg.querySelector('.chat-seg-text'));
+    const word = range.getBoundingClientRect();  // the glyphs, not the element: an overflowing word leaves its box
     return { word: seg.textContent, whole: m.left >= s.left - 1 && m.right <= s.right + 1 && word.left >= m.left && word.right <= m.right,
              docScroll: document.documentElement.scrollWidth > innerWidth + 1 };
 }"""

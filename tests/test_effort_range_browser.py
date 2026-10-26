@@ -46,6 +46,8 @@ FACTS = """sel => {
     const said = head.title.match(/^Primary effort: (.+?); helpers (.+?)–(.+?)\\./) || [];
     const text = (which, i) => (strip ? strip.querySelector('.chat-effort-' + which).getAttribute('aria-valuetext') : said[i]);
     const box = (node) => { const b = node ? rect(node) : null; return b && { left: b.left, right: b.right, top: b.top, bottom: b.bottom, width: b.width, height: b.height }; };
+    // A word's glyphs, not its element: a word too wide for its level overflows its own box.
+    const glyphs = (node) => { if (!node) return null; const range = document.createRange(); range.selectNodeContents(node); return box(range); };
     const recSeg = strip?.querySelector('.chat-effort-seg[data-rec="true"]');
     return {
         open: el.dataset.open, known: el.dataset.known, saving: el.dataset.saving || 'false',
@@ -71,11 +73,12 @@ FACTS = """sel => {
         rule: panel?.querySelector('.capsule-panel-rule')?.textContent || '',
         scrim: Boolean(document.querySelector('.capsule-panel-scrim')),
         extras: panel ? panel.querySelectorAll('.chat-effort-label, .chat-effort-sep, .chat-effort-reset').length : 0,
-        pill: box(strip?.querySelector('.chat-effort-rec')), seg: box(recSeg), word: box(recSeg?.querySelector('.chat-effort-seg-text')),
+        pill: box(strip?.querySelector('.chat-effort-rec')), seg: box(recSeg), word: glyphs(recSeg?.querySelector('.chat-effort-seg-text')),
         band: box(strip?.querySelector('.chat-effort-band')), minCap: box(strip?.querySelector('.chat-effort-min')),
         maxCap: box(strip?.querySelector('.chat-effort-max')), strip: box(strip),
         segs: strip ? [...strip.querySelectorAll('.chat-effort-seg')].map(box) : [],
-        words: strip ? [...strip.querySelectorAll('.chat-effort-seg-text')].map(box) : [],
+        words: strip ? [...strip.querySelectorAll('.chat-effort-seg-text')].map(glyphs) : [],
+        segBoxes: strip ? [...strip.querySelectorAll('.chat-effort-seg')].map((seg) => [box(seg), glyphs(seg.querySelector('.chat-effort-seg-text'))]) : [],
         stripScrolls: Boolean(strip) && strip.scrollWidth > strip.clientWidth + 1,
     };
 }"""
@@ -151,6 +154,9 @@ def _assert_strip_geometry(facts: dict) -> None:
     for cap in (facts["minCap"], facts["maxCap"], pill):
         assert abs(cap["top"] - band["top"]) <= 0.6 and abs(cap["bottom"] - band["bottom"]) <= 0.6, facts
     assert abs(facts["minCap"]["left"] - band["left"]) <= 0.6 and abs(facts["maxCap"]["right"] - band["right"]) <= 0.6, facts
+    # Every word stands inside its own level (a long one takes two lines where levels share a narrow strip).
+    for seg, text in facts["segBoxes"]:
+        assert seg["left"] - 0.5 <= text["left"] and text["right"] <= seg["right"] + 0.5, ("a word outgrew its level", seg, text)
     # A bracket's bar (its outer 2 px; its arms run along the band's top and bottom) keeps its air from every word.
     bars = ((facts["minCap"]["left"], facts["minCap"]["left"] + 2), (facts["maxCap"]["right"] - 2, facts["maxCap"]["right"]))
     for low, high in bars:
