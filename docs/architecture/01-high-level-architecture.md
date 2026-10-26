@@ -645,10 +645,10 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── usage_attempts.jsonl   ← imported journal; audit and older-seed input
 │   │   ├── usage_attempts.quarantine.jsonl ← the journal's proven-corrupt rows
 │   │   ├── usage_import_watermark.json ← import watermark
-│   │   ├── storage_measurement.json ← last two counts; never deletion authority
+│   │   ├── storage_measurement.json ← last two counts; derived, never deletion authority
 │   │   ├── request_wire_compatibility.json ← exact-route wire evidence
 │   │   ├── capability_evidence.json ← sourced model-capability evidence
-│   │   ├── openrouter_models.json ← last clean OpenRouter catalogue read, shared by processes
+│   │   ├── openrouter_models.json ← the OpenRouter catalogue every process adopts
 │   │   ├── extra-ca-bundle/<digest>.pem ← content-addressed CA bundle all first-party HTTP clients verify
 │   │   ├── process_ledger.jsonl   ← process-custody ledger (Runtime topology)
 │   │   ├── installation_scope.json ← scope marker
@@ -661,10 +661,10 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── server.lock            ← server-lifetime DATA admission; never unlinked
 │   │   ├── server_port            ← active HTTP port for launcher/browser handoff
 │   │   ├── server_port.bindings.json ← endpoint snapshot, never a grant or custody ledger
-│   │   ├── server_process.json    ← launcher-owned server identity for relaunch
+│   │   ├── server_process.json    ← launcher-owned server identity for relaunch cleanup
 │   │   ├── advisory_review.json   ← commit-review state (attempts, obligations, readiness debts)
 │   │   ├── code_intel/<repo_key>/inventory.json ← code-inventory facts; no source cache
-│   │   ├── evolution_metrics_cache.json ← version history
+│   │   ├── evolution_metrics_cache.json ← version history cache
 │   │   ├── evolution_campaign.json ← campaign objective, progress, budget
 │   │   ├── evolution_checkpoints.jsonl ← per-cycle checkpoints
 │   │   ├── post_task_evolution_request.json ← one-shot promotion signal for the idle tick
