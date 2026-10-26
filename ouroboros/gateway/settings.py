@@ -518,17 +518,18 @@ def _unrecognised_review_models(models: Any) -> list:
     the fetch may be unavailable, so this is a WARNING, never a save gate."""
     try:
         from ouroboros.llm import LLMClient
-        from ouroboros.provider_models import provider_for_model
+        from ouroboros.provider_models import parse_model_route
 
         candidates = [str(m or "").strip() for m in (models or []) if str(m or "").strip()]
-        openrouter = [m for m in candidates if provider_for_model(m) == "openrouter"]
+        # The catalog lists native ids; ``openrouter[@name]::`` spells the same model on a key.
+        openrouter = {m: parse_model_route(m).model for m in candidates if parse_model_route(m).kind == "openrouter"}
         if not openrouter:
             return []
-        LLMClient.openrouter_context_length(openrouter[0], allow_fetch=True)
+        LLMClient.openrouter_context_length(next(iter(openrouter.values())), allow_fetch=True)
         if not getattr(LLMClient, "_CAPABILITIES_FETCH_OK", False):
             return []  # no authoritative catalog -> cannot claim anything is unknown
         known = getattr(LLMClient, "_CONTEXT_LENGTH_CACHE", {}) or {}
-        return [m for m in openrouter if m not in known]
+        return [m for m, native in openrouter.items() if native not in known]
     except Exception:
         return []
 
