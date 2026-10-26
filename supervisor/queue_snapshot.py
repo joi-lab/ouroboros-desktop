@@ -12,6 +12,7 @@ import copy
 import datetime
 import json
 import logging
+import math
 import pathlib
 import threading
 import time
@@ -284,6 +285,21 @@ def persist_queue_snapshot(reason: str = "") -> bool:
         except Exception:
             log.warning("Failed to persist queue snapshot (reason=%s)", reason, exc_info=True)
             return False
+
+
+def _saved_pending_task(row: dict) -> dict:
+    """A saved PENDING row's task with the queue time its outer row keeps (#1805).
+
+    The outer value decides, an explicit null included; only a row without one
+    falls back to a nested copy. Text and a finite epoch (``direct_pause.retain_direct_hold``
+    stamps one) are known; a time no row kept stays unknown (``None``), never this restore's clock.
+    """
+    task = dict(row["task"])
+    value = row["queued_at"] if "queued_at" in row else task.get("queued_at")
+    known = (isinstance(value, str) and value.strip()) or (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0)
+    task["queued_at"] = value if known else None
+    return task
 
 
 def parse_iso_to_ts(iso_ts: str) -> Optional[float]:
@@ -775,11 +791,12 @@ def _refuse_restore_invalid_fences(snapshot_pending: list, *, budget: bool = Fal
 
 
 def _append_held_pending_row(task: dict) -> None:
-    """Append one proven-revivable held row to PENDING with queue-order facts (lock held)."""
+    """Append one proven-revivable held row to PENDING with queue-order facts (lock held).
+    Its queue time is the saved one; a row that kept none stays unknown (#1805)."""
     if "_queue_seq" not in task:
         _queue().QUEUE_SEQ_COUNTER_REF["value"] += 1
         task["_queue_seq"] = _queue().QUEUE_SEQ_COUNTER_REF["value"]
-    task.setdefault("queued_at", utc_now_iso())
+    task.setdefault("queued_at", None)
     _queue().PENDING.append(task)
     _queue().sort_pending()
 
@@ -1014,7 +1031,7 @@ def _restore_pending(key: str, max_age_sec: int, terminalized: Optional[list]) -
         raw_fences = snap.get("acceptance_fences", [])
         raw_budget_fences = snap.get("budget_root_fences", [])
         snapshot_pending = [
-            row.get("task")
+            _saved_pending_task(row)
             for row in (snap.get("pending") or [])
             if isinstance(row, dict) and isinstance(row.get("task"), dict)
         ]

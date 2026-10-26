@@ -926,6 +926,7 @@ _FAILURE_KIND_WORDS = {
     "request_too_large": "a request the provider found too large",
     "context_overflow": "a context overflow",
     "transport_unavailable": "a request that never reached the provider",
+    "provider_policy_refusal": "a refusal before any provider was reached (a connection that is unavailable, or a policy)",
     "provider_outcome_unknown": "an attempt with no known outcome",
     "provider_transient": "a temporary provider failure",
     "provider_incomplete_response": "an incomplete response",

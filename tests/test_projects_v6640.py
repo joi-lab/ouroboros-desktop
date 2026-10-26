@@ -541,11 +541,11 @@ def test_project_lifecycle_rows_render_design_system_action_static_contract():
     # The words sit with the other live-card labels and are read through the interface-language seam.
     chip = (root / "web" / "modules" / "task_phase_chip.js").read_text(encoding="utf-8")
     assert "turnIntoProject: () => tr('task.card.turn_into_project', 'Turn into project')," in chip
-    # One owner intent, one control: the portal's footer and every row that points at a Project get it
-    # from the door, which alone knows its classes and words.
+    # One owner intent, one control: the portal's action row and every row that points at a Project get it
+    # from the door, which alone knows its classes and words (beside the work's title it decides them too).
     door = (root / "web" / "modules" / "project_reference.js").read_text(encoding="utf-8")
     assert "chat-live-project-card-btn" in door and "chat-live-project-card-btn" not in helpers
-    assert "projectReference(target, { layout: 'footer', taskId: record.groupId })" in portal
+    assert "projectReference(target, { layout: 'footer', taskId: record.groupId, beside: record.titleEl })" in portal
     # The portal is a Main-root affordance: the controller binds nothing outside Main or on a nested child.
     assert "if (!isMain || !record || record.isSubagent || !project?.id) return false;" in portal
     assert "projectReference(" not in app and "window.__ouroTaskBindings = bindings || {};" in app

@@ -56,7 +56,7 @@ def test_previous_wake_reads_one_document_and_keeps_the_whole_note(tmp_path, mon
     assert reads == [row["task_id"]]
     assert previous == (f"{row['task_id']}, Done 1 h 0 min ago; its line: "
         + (f"«{summary}»" if summary else "no line") + f"; its note: «{row['result']}»")
-    text = wake.render_wake_message(REPO, reason="heartbeat", last_wake_at=now - 3600, now=now,
+    text = wake.render_wake_message(REPO, drive_root=tmp_path, reason="heartbeat", last_wake_at=now - 3600, now=now,
         level="act", disabled_tools=[], spent_usd=0, daily_usd=20, running=0, max_tasks=2,
         interval=3600, events="nothing new", previous_wake=previous)
     assert f"- previous wake: {previous}\n" in text
@@ -629,7 +629,7 @@ def test_render_substitutes_every_placeholder_and_keeps_every_event(tmp_path, mo
     _chat(tmp_path, *[_summary(f"t{index:02d}", T0 - 100 + index) for index in range(15)])
     observation = _observe(tmp_path, since=T0 - 5400)
     text = wake.render_wake_message(
-        repo, reason="heartbeat", last_wake_at=T0 - 5400, now=T0,
+        repo, drive_root=tmp_path, reason="heartbeat", last_wake_at=T0 - 5400, now=T0,
         level="act", disabled_tools=["toggle_evolution", "request_restart"], spent_usd=4.0, daily_usd=20.0,
         running=1, max_tasks=2, interval=3300, events=observation.full_text())
     for key in wake.PLACEHOLDERS:
@@ -643,7 +643,7 @@ def test_render_substitutes_every_placeholder_and_keeps_every_event(tmp_path, mo
     assert "- wake cause: the scheduled wake time; events never move it, they are listed as observed" in text
     assert text.count("- task t") == 15 and "more; see" not in text  # every terminal stays an event
     quiet = wake.render_wake_message(
-        repo, reason="heartbeat", last_wake_at=0.0, now=T0, level="full",
+        repo, drive_root=tmp_path / "empty", reason="heartbeat", last_wake_at=0.0, now=T0, level="full",
         disabled_tools=[], spent_usd=None, daily_usd=0, running=0, max_tasks=0, interval=900,
         events=_observe(tmp_path / "empty", since=T0 + 1).full_text())
     assert "no wake since this process started" in quiet and "wake cause: the scheduled wake time" in quiet
@@ -655,7 +655,7 @@ def test_render_survives_a_missing_template_and_an_unreadable_task_store(tmp_pat
     (tmp_path / "task_results").mkdir()
     (tmp_path / "task_results" / "broken.json").write_text("{not json", encoding="utf-8")
     text = wake.render_wake_message(
-        tmp_path / "no-repo", reason="heartbeat", last_wake_at=0.0, now=T0, level="act",
+        tmp_path / "no-repo", drive_root=tmp_path, reason="heartbeat", last_wake_at=0.0, now=T0, level="act",
         disabled_tools=[], spent_usd=0.0, daily_usd=20.0, running=0, max_tasks=2, interval=3300,
         events=_observe(tmp_path, since=T0 - 1).full_text())
     assert text.startswith("[Wake-up · heartbeat]") and "{" not in text
@@ -749,11 +749,11 @@ def test_render_substitutes_placeholders_in_one_pass(tmp_path):
     _result(tmp_path, "odd01", ts=since + 10, status="completed", cost=0.1, description="check {daily_usd} later")
     _chat(tmp_path, _summary("odd01", since + 10))
     events = _observe(tmp_path, since=since).full_text()
-    text = wake.render_wake_message(repo, reason="heartbeat", last_wake_at=since, now=T0, level="act",
+    text = wake.render_wake_message(repo, drive_root=tmp_path, reason="heartbeat", last_wake_at=since, now=T0, level="act",
                                     disabled_tools=[], spent_usd=1.0, daily_usd=20.0, running=0, max_tasks=2,
                                     interval=900, events=events)
     assert text.startswith("spent 1.00 / 20.00;") and "check {daily_usd} later" in text
-    floor = wake.render_wake_message(repo, reason="heartbeat", last_wake_at=since, now=T0, level="act",
+    floor = wake.render_wake_message(repo, drive_root=tmp_path, reason="heartbeat", last_wake_at=since, now=T0, level="act",
                                      disabled_tools=[], spent_usd=1.0, daily_usd=20.0, running=0, max_tasks=2,
                                      interval=900, events=events, spent_is_floor=True)
     assert floor.startswith("spent at least 1.00 / 20.00;")

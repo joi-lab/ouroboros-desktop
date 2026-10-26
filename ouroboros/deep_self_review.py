@@ -45,7 +45,7 @@ from ouroboros.tools.review_helpers import (  # noqa: E402
 )
 from ouroboros.shell_parse import is_absolute_path_text  # noqa: E402
 from ouroboros.utils import utc_now_iso  # noqa: E402
-from ouroboros.provider_models import provider_for_model, provider_has_credentials  # noqa: E402
+from ouroboros.provider_models import legacy_openai_base, provider_for_model, provider_has_credentials  # noqa: E402
 from ouroboros.reviewer_slot_config import (  # noqa: E402
     ROUTE_KIND_API,
     ROUTE_KIND_SESSION,
@@ -55,7 +55,6 @@ from ouroboros.reviewer_slot_config import (  # noqa: E402
 )
 from ouroboros.usage_accounting import BudgetExceeded  # noqa: E402
 from ouroboros.triad_review import REVIEW_REPORT_CONTRACT  # noqa: E402
-from ouroboros.config import runtime_setting
 
 # The report's own output reserve: what the row's model may spend answering,
 # on the request and on the slot (one number for both deliveries).
@@ -181,7 +180,7 @@ def _api_route_model(row: ConfiguredReviewerSlot) -> Tuple[str, Optional[str]]:
     if row.use_local is True or model_has_credentials(configured):
         return "", configured
     if configured.startswith("openai/"):
-        if provider_has_credentials("openai") and not runtime_setting("OPENAI_BASE_URL"):
+        if provider_has_credentials("openai") and not legacy_openai_base():
             from ouroboros.provider_models import OPENAI_DIRECT_DEFAULTS
 
             slug = configured.split("/", 1)[1]

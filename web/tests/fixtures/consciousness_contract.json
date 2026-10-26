@@ -517,6 +517,92 @@
         "ledger_integrity_degraded": false
       },
       {
+        "task_id": "w-focus-bot",
+        "cause": "focus",
+        "as": {
+          "label": "Ouroboros bot",
+          "owner": false
+        },
+        "chat_id": 1,
+        "conversation": "mail:account:inbox:0",
+        "place_label": "mail",
+        "started_at": "2026-10-23T07:44:23.208947+00:00",
+        "first_reply_at": null,
+        "ended_at": "2026-10-23T07:49:41.071005+00:00",
+        "live": false,
+        "phase": "done",
+        "quiet": true,
+        "rounds": 9,
+        "checks": [
+          {
+            "chip": "checked",
+            "tool": "run_command"
+          }
+        ],
+        "note": "В 07:46 UTC сделал короткую сверку существующим health-инструментом: свободно62,205ГиБ, на3,034ГиБ меньше среза06:41; CPU90,10%idle, compressor5,05ГиБ, swap0, ядроHTTP200/ready за5,22мс. BTLEServer вновь занимает одно ядро; причины его нагрузки и убыли APFS не установлены. Два первичных JSON сохранены, показатели независимо пересчитаны поraw и связанному прежнему источнику. Актуализировал только текущие разделы system-health-monitoring и overview с сохранением адреса предыдущего результата. Ничего не останавливал, не удалял, не обновлял; новые модели, тестовые батареи и расписания не запускал. Движок и исходы внешних тестов заново не проверял. Повторную тревогу не посылаю: по этому срезу нового необходимого решения нет. Следующий wake через час; ожидающие вопросы Presence/#498 и отдельные ограничения установки сохранены. Стоимость подписочного хода неизвестна, время и квота потрачены.",
+        "accounted_upper_bound_usd": null,
+        "accounted_upper_bound_usd_with_children": null,
+        "cost_presentation": {
+          "scope": "root_tree",
+          "tracked_amount": null,
+          "has_unpriced": true,
+          "tracked_final": false,
+          "accounting_open": false,
+          "has_rows": true
+        },
+        "cost_accounting_status": "available",
+        "cost_final": false,
+        "cost_with_children_partial": true,
+        "unknown_unmetered": 13,
+        "non_final_rows": 13,
+        "reserved_usd": 0.0,
+        "unresolved_upper_bound_usd": 0.0,
+        "ledger_integrity_degraded": false
+      },
+      {
+        "task_id": "w-focus-user",
+        "cause": "focus",
+        "as": {
+          "label": "Human mailbox",
+          "owner": true
+        },
+        "chat_id": 1,
+        "conversation": "mail:account:inbox:0",
+        "place_label": "mail",
+        "started_at": "2026-10-23T07:44:23.208947+00:00",
+        "first_reply_at": null,
+        "ended_at": "2026-10-23T07:49:41.071005+00:00",
+        "live": false,
+        "phase": "done",
+        "quiet": true,
+        "rounds": 9,
+        "checks": [
+          {
+            "chip": "checked",
+            "tool": "run_command"
+          }
+        ],
+        "note": "В 07:46 UTC сделал короткую сверку существующим health-инструментом: свободно62,205ГиБ, на3,034ГиБ меньше среза06:41; CPU90,10%idle, compressor5,05ГиБ, swap0, ядроHTTP200/ready за5,22мс. BTLEServer вновь занимает одно ядро; причины его нагрузки и убыли APFS не установлены. Два первичных JSON сохранены, показатели независимо пересчитаны поraw и связанному прежнему источнику. Актуализировал только текущие разделы system-health-monitoring и overview с сохранением адреса предыдущего результата. Ничего не останавливал, не удалял, не обновлял; новые модели, тестовые батареи и расписания не запускал. Движок и исходы внешних тестов заново не проверял. Повторную тревогу не посылаю: по этому срезу нового необходимого решения нет. Следующий wake через час; ожидающие вопросы Presence/#498 и отдельные ограничения установки сохранены. Стоимость подписочного хода неизвестна, время и квота потрачены.",
+        "accounted_upper_bound_usd": null,
+        "accounted_upper_bound_usd_with_children": null,
+        "cost_presentation": {
+          "scope": "root_tree",
+          "tracked_amount": null,
+          "has_unpriced": true,
+          "tracked_final": false,
+          "accounting_open": false,
+          "has_rows": true
+        },
+        "cost_accounting_status": "available",
+        "cost_final": false,
+        "cost_with_children_partial": true,
+        "unknown_unmetered": 13,
+        "non_final_rows": 13,
+        "reserved_usd": 0.0,
+        "unresolved_upper_bound_usd": 0.0,
+        "ledger_integrity_degraded": false
+      },
+      {
         "task_id": "w-spoke",
         "cause": "own",
         "chat_id": 1,

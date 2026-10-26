@@ -168,7 +168,7 @@ def _call_payload(call_ref: dict, drive_root: pathlib.Path) -> dict:
 def _api_model_identity(model: str) -> str:
     from ouroboros.provider_models import normalize_model_identity
 
-    return normalize_model_identity(str(model or "").removeprefix("openrouter::"))
+    return normalize_model_identity(str(model or ""))  # one identity across route spellings
 
 
 def _receipt_payloads(

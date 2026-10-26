@@ -416,25 +416,45 @@ def infra_failed_axes(reason_code: str, *, lifecycle: str = "failed", review_tri
     )
 
 
-# An undisposed own delegated patch is a DEBT, not a failure: the task's own
-# derived verdicts (execution, review, objective, artifacts) are what it earned
-# and must survive, so the custody fact is ADDED as an objective warning rather
-# than replacing the axes with an infrastructure terminal.
+# An undisposed own delegated run is a DEBT beside the cause, never the cause (#1583):
+# the row keeps the reason and axes it earned, and the debt is its current
+# ``delegated_runs_unreconciled`` list plus the reconciliation envelope, healed from the
+# write side. Rows written earlier carry this code as their ``reason_code`` and objective
+# warning; readers keep those bytes and look beneath them (``recorded_cause``).
 WARN_DELEGATED_CUSTODY_UNRECONCILED = "delegated_custody_unreconciled"
 
 
-def custody_debt_axes(axes: Any) -> Dict[str, Any]:
-    """Add the custody-debt warning to derived axes without rewriting them.
+def recorded_cause(result: Any) -> str:
+    """A terminal row's own cause: its ``reason_code``, or beneath an older custody
+    stamp the typed ``outcome_axes.execution.reason_code`` (``""`` when that is missing
+    too: the cause is unrecorded, never guessed from prose)."""
+    record = result if isinstance(result, dict) else {}
+    reason = str(record.get("reason_code") or "")
+    if reason != WARN_DELEGATED_CUSTODY_UNRECONCILED:
+        return reason
+    axes = record.get("outcome_axes") if isinstance(record.get("outcome_axes"), dict) else {}
+    execution = axes.get("execution") if isinstance(axes.get("execution"), dict) else {}
+    cause = str(execution.get("reason_code") or "")
+    return "" if cause == WARN_DELEGATED_CUSTODY_UNRECONCILED else cause  # a read-back stamp is no cause
 
-    Idempotent: the overlay is applied again when the result row is stored, and
-    ``_merge_objective_warning`` already dedups. Nothing is copied onto the
-    execution axis — the debt list itself lives on the row as
-    ``delegated_runs_unreconciled`` plus the reconciliation envelope."""
-    out = copy.deepcopy(axes) if isinstance(axes, dict) and axes else {}
-    objective = out.setdefault(
-        "objective", {"status": OBJECTIVE_NOT_EVALUATED, "source": "none"})
-    _merge_objective_warning(objective, WARN_DELEGATED_CUSTODY_UNRECONCILED)
-    return out
+
+def current_custody_debt(*records: Any) -> Optional[list]:
+    """The first ``delegated_runs_unreconciled`` list a record carries (a row before its
+    event); ``None`` when none does: absence is not proof of reconciliation."""
+    return next((record["delegated_runs_unreconciled"] for record in records if isinstance(record, dict)
+                 and isinstance(record.get("delegated_runs_unreconciled"), list)), None)
+
+
+def objective_warned(objective: Any, debt: Optional[list]) -> bool:
+    """The headline's objective warning: a nonempty current debt list warns, and an older
+    row's custody warning stops counting once that list is known empty; every other warning,
+    and one beside an absent list, keep the stored word. Twin: log_events.js ``objectiveWarned``."""
+    objective = objective if isinstance(objective, dict) else {}
+    primary = objective.get("warning")
+    if debt or debt is None or primary != WARN_DELEGATED_CUSTODY_UNRECONCILED:
+        return bool(debt) or bool(primary)
+    warnings = objective.get("warnings") if isinstance(objective.get("warnings"), list) else []
+    return any(code and code != WARN_DELEGATED_CUSTODY_UNRECONCILED for code in warnings)
 
 # Tools/roots whose successful use means the turn produced reviewable work.
 # Root-aware write tools: these take a `root` arg, so the scratch-exclusion rule
@@ -814,6 +834,8 @@ def normalize_outcome_axes(result: Dict[str, Any]) -> Dict[str, Any]:
     elif not legacy and status == "failed":
         execution = EXECUTION_FAILED
         reason = reason or status
+    if str(result.get("reason_code") or "").strip() == WARN_DELEGATED_CUSTODY_UNRECONCILED:
+        reason = ""  # an older custody stamp names no execution cause (#1583): only a typed one stands
     artifact_bundle = result.get("artifact_bundle") if isinstance(result.get("artifact_bundle"), dict) else {}
     explicit_artifact_status = str(artifact_bundle.get("status") or result.get("artifact_status") or "").strip()
     artifact_status = explicit_artifact_status or "not_applicable"

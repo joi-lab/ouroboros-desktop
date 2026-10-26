@@ -120,6 +120,29 @@ def _no_post_task_model(monkeypatch):
 
 # --- clean silence: nothing published, everything retained ----------------------------
 
+def test_a_quiet_run_with_open_delegated_custody_is_never_silenced(wake):
+    """#1583: silence hides only a clean run. An own delegated run the current audit still
+    holds is a debt the host states (its own notice, never the quiet words), beside the
+    run's own cause: the stored reason stays the loop's, never the custody code."""
+    from ouroboros import delegate_custody_current as current, store
+    from ouroboros.project_dialogue import TASK_CAUSE_PHRASES
+
+    with store.open_store(wake.root, write=True) as txn:
+        txn.put_custody("leaf", {"run_id": "leaf", "task_id": TASK_ID, "source": "delegated_subagent"},
+                        state=current.HELD)
+    text, usage, trace, bus = wake.run([finish(INTERNAL, silent=True)])
+    assert usage.get("wake_silent") is True
+    pending, stored = emit(wake, text, usage, trace, bus=bus)
+    shown = sends(pending)
+    assert len(shown) == 1 and shown[0]["terminal_origin"] == "host_notice"
+    assert shown[0]["text"].startswith("⚠️ This run chose to finish without a message, but it ended ok")
+    assert TASK_CAUSE_PHRASES["delegated_custody_unreconciled"] in shown[0]["text"]
+    assert INTERNAL not in _spoken(wake, pending, bus)
+    assert stored["result"] == INTERNAL and stored["delegated_runs_unreconciled"] == ["leaf"]
+    assert stored["reason_code"] != "delegated_custody_unreconciled"
+    assert stored["outcome_axes"]["execution"]["status"] == "ok"
+
+
 @pytest.mark.parametrize("answer", [None, "", "Read the journal; nothing changed my view."])
 @pytest.mark.parametrize("cause", ["own_clock", "focus"])
 def test_clean_silent_wake_publishes_nothing_and_keeps_its_record(wake, answer, cause):

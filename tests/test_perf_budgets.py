@@ -322,6 +322,7 @@ def test_live_root_surfaces_replay_the_ledger_zero_times_when_warm(
     asyncio.run(history(request))  # cold: opens the store
     assert counters["migrations"] == counters["full_reads"] == []
     counters["projections"].clear()
+    counters["breakdowns"].clear()
 
     messages = json.loads(asyncio.run(history(request)).body)["messages"]
     live_rows = [m for m in messages if m.get("cost_with_children_partial")]
@@ -329,10 +330,12 @@ def test_live_root_surfaces_replay_the_ledger_zero_times_when_warm(
     assert live_rows  # the live-root branch really ran (not a vacuous budget)
     assert live_rows[-1]["cost_accounting_status"] == "available"
     assert counters["migrations"] == counters["full_reads"] == []
-    assert len(counters["projections"]) == 1  # one live-root projection, cached
-    assert counters["projections"][0]["root_task_id"] == "root-1"
+    # live_root_cost_projection reads the subtree breakdown with custody coverage, never a projection.
+    assert len(counters["breakdowns"]) == 1  # one live-root breakdown, cached
+    assert counters["breakdowns"][0]["root_task_id"] == "root-1"
+    assert counters["projections"] == []
 
-    counters["projections"].clear()
+    counters["breakdowns"].clear()
     payload = json.loads(_task_get_response(request).body)
 
     assert payload["cost_breakdown"]["authority"] == "physical_attempt_ledger"
