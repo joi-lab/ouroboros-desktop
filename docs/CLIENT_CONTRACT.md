@@ -363,6 +363,10 @@ The terminal lifecycle set is exactly `completed`, `failed`, `cancelled`, `rejec
 
 `task_id` identifies the root; `chat_id` and `started_at` come from its display document. `cause` maps `metadata.wake_cause` to `own|focus`, falling back to `own` for legacy category-only roots. `conversation` copies `metadata.focus.conversation_key`; `place_label` resolves the configured `metadata.focus.place_id` label. Optional focus `first_reply_at` is the earliest confirmed receipt or automatic release in the dialogue index, null without evidence; a release alone proves no delivery. `ended_at` comes only from `terminal_time_fact(...).occurred_at`, null when unknown. The browser's `ouro:open-task {task_id, chat_id}` door uses those identities for Main cards (`chat_id: 1`); a focus row opens its captured conversation in the place sheet through the rooms endpoint below (a focus `RecentWake.chat_id` is that conversation's `room_chat_id`).
 
+A focus row optionally carries `as: {label: string, owner: boolean}`, copied from
+`metadata.focus.identity.sends_as.label` and `metadata.focus.identity_owner`. It is the credential at focus
+time, independent of the incoming actor; own-clock rows and undeclared identities omit `as`.
+
 `live` means a matching clock `live_wake_task_id` or a non-terminal stored status, not proof of execution. Terminal `phase` uses the card's `outcome_phase`, including `working` during open post-task synthesis. Non-terminal rows adapt stored status/wait/stop facts through `work_status.classify_member` into `running|waiting|queued|paused|unknown`; only running status or matching clock identity can yield `running`, and a known wait/queue/pause keeps its word even when the clock names the task. `quiet` comes from `quiet_finish`: `wake_silent: true`, no `owner_message_sent` and no terminal host notice. Optional `said_owner` copies the stored owner-message boolean (accepted delivery, not a human-read receipt).
 
 Optional `summary` copies a non-empty string from the accepted attempt's `wake_summary`; `note` is the whole stored `result` from a PK read. Neither is clipped or synthesized. Optional `tool_calls` copies the card count; `rounds` copies `loop_outcome.usage.total_rounds`. Missing counts stay absent; null stays null. `checks: RecentWakeCheck[]` copies `safety_checks` as `{chip, tool}`, empty when absent. Declared-read and Supervisor-off skips share `not_checked`; the row cannot distinguish them or claim every call was checked. Present `TASK_COST_META_FIELDS`, including scoped `cost_presentation`, pass through unchanged to the card renderer; missing money stays missing.
@@ -533,7 +537,43 @@ A refused action answers `SkillActionRefusal`: `error`, the `status_code` it was
 
 `POST /api/places` takes `PlaceConnectRequest: {connector, account_id?, conversation_id?, label?}` (strings). A new identity starts Silent atomically with the declared wake suggestions; repeat Connect preserves existing choices. A nonblank instance label becomes `<Service> · <label>`. Connect reads optional status-route `connect: [{account_id, conversation_id, label}]` lazily. Its four states, invalid-row handling and explicit Whole account action are defined in CREATING_SKILLS, “Declaring a place, tool effects and an icon”; null accounts never authorize a wildcard instance. Service, instance and account labels remain authored text.
 
-`revision` belongs to the record and increases across disconnect/reconnect. `POST /api/places/{place_id}` (`PlaceUpdateRequest`) and `DELETE /api/places/{place_id}` (optional `PlaceDisconnectRequest` JSON body) accept `expected_revision`; clients send the displayed revision for every edit/disconnect. A stale write returns 409 `place_revision_conflict` with current `place: PlaceSummary | null` (null if disconnected). Repaint current facts, preserve drafts and require a deliberate next save; do not replay a stale draft automatically. A lost response leaves the outcome unknown: re-read before retrying. Disconnect retains room history. Display accounting failures keep spend unknown and do not turn a committed write into a refusal. `GET /api/places/{place_id}/rooms` (`PlaceRoomsResponse`) returns arrival-indexed rooms: safe integer `room_chat_id`, `address`, nullable `label` (latest arrival's title/name), `conversation_id`, `thread_id`, `last_at` (latest captured arrival) and nullable `unanswered_count` (open focus turns); `coverage` names `discovery: arrivals` and store-wide chat `importing`/`gaps`; legacy/outgoing-only rooms may be absent and no provider completeness is promised; unavailable reads answer 503, an unknown place 404; GET starts no focus. Existing `/api/chat/history?chat_id=...` cursors carry optional `place_history`: `kind` message/notice/delivery; recorded `delivery_state` authored/accepted/delivered/failed/uncertain; `attention` heard with its reason or an exact task-backed focus_started; current `owner_confirmed`. Missing facts stay unknown; no exact wake match is inferred. Records and authenticated ingress: CREATING_SKILLS, “Places and focus transport ingress”. Authorship follows role, including v0 sender metadata. Page truncation differs from importing/unavailable spans; partial ranges retry via `page_cursor`, failures retain the requested cursor.
+Full place summaries retain `safety_mode: off|light|full` from the consciousness Safety setting and
+manifest-derived `labels: {kind: label}`; connector rows also carry those labels. Neither summary carries
+`identity` or `can_confirm`. The sheet reads `identity` and `labels` from the connector's status payload,
+using the `GET` of declared `source.url` it already performs for readiness. Status labels override manifest
+labels; shared core words are the fallback. Identity has optional `sends_as: {id, label, kind}` and
+`reads_as: [{id, label, kind}]`, with `kind: user|bot`. The browser derives `owner` only for user identities
+matching `owner_accounts` in the place's account scope, and `can_confirm` only for an unconfirmed user
+sender. The existing confirm writer takes `platform_actor_id = identity.sends_as.id`; no new writer or
+stored Place field is introduced. The server never dispatches a connector route for a place view, a
+focus, a Safety check or an own wake. Focus identity is the event's snapshot; other Safety targets and
+own-wake text read the first valid identity among the place's newest 50 captured arrivals (of the
+call's account, when it names one). Brief views
+for status/launch remain unchanged.
+
+The browser's Place identity twins live in `web/modules/place_contract_types.js`, re-exported by
+`client_contract_types.js`: `PlaceIdentity` has optional `sends_as` and `reads_as` accounts (`id`, `label`, `kind`,
+with `owner` derived by the client only for confirmed user accounts). `PlaceSummary` keeps optional `safety_mode`
+and manifest `labels`, without `identity` or `can_confirm`. `PlaceStatusPayload` declares `text`, `tone`, optional
+`identity` and `labels` from the existing status GET. The sheet validates identity, derives its confirm action,
+and overlays status labels on manifest labels; absent fields preserve older rendering. `RecentWake.as` declares
+the optional `{label, owner}` account stamp.
+`PlaceHistoryFacts`, alongside `PlaceHistoryAttention` in the Place twins, declares optional heard `facts`,
+captured `identity`, outgoing `sends_as` / `sends_as_owner`, and held `held_text` / `held` / `checked`. These are
+retained room facts, not guesses from current settings. Every consumed wire key stays pinned by
+`tests/test_client_contract_bindings.py`.
+
+`revision` belongs to the record and increases across disconnect/reconnect. `POST /api/places/{place_id}` (`PlaceUpdateRequest`) and `DELETE /api/places/{place_id}` (optional `PlaceDisconnectRequest` JSON body) accept `expected_revision`; clients send the displayed revision for every edit/disconnect. A stale write returns 409 `place_revision_conflict` with current `place: PlaceSummary | null` (null if disconnected). Repaint current facts, preserve drafts and require a deliberate next save; do not replay a stale draft automatically. A lost response leaves the outcome unknown: re-read before retrying. Disconnect retains room history. Display accounting failures keep spend unknown and do not turn a committed write into a refusal. `GET /api/places/{place_id}/rooms` (`PlaceRoomsResponse`) returns arrival-indexed rooms: safe integer `room_chat_id`, `address`, nullable `label` (latest arrival's title/name), `conversation_id`, `thread_id`, `last_at` (latest captured arrival) and nullable `unanswered_count` (open focus turns); `coverage` names `discovery: arrivals` and store-wide chat `importing`/`gaps`; legacy/outgoing-only rooms may be absent and no provider completeness is promised; unavailable reads answer 503, an unknown place 404; GET starts no focus. Existing `/api/chat/history?chat_id=...` cursors carry optional `place_history`: `kind` message/notice/delivery; recorded `delivery_state` authored/accepted/delivered/failed/uncertain; `attention` heard with its reason or an exact task-backed focus_started; current `owner_confirmed` only when the captured `transport.actor.authenticated` is not false (absent preserves legacy behavior). Missing facts stay unknown; no exact wake match is inferred. Records and authenticated ingress: CREATING_SKILLS, “Places and focus transport ingress”. Authorship follows role, including v0 sender metadata. Page truncation differs from importing/unavailable spans; partial ranges retry via `page_cursor`, failures retain the requested cursor.
+
+A Place room's `ChatHistoryMessage.place_history` contains retained facts. Optional `facts: string[]`
+on heard rows is the connector's declared event facts, empty when none were declared; `attention` keeps
+its `decision`/`reason` shape. Old rows without facts stay absent, and focus rows add no facts list.
+Captured incoming rows may expose `identity: {sends_as?: {id, label, kind}, reads_as?: [{id, label, kind}]}`,
+where `kind` is `user|bot`. Receipt rows may expose `sends_as: {id, label, kind}` and `sends_as_owner: boolean`,
+frozen from the delivering focus's identity/owner metadata; current accounts do not rewrite them, and
+connector receipt v1 is unchanged. Hold notices may expose complete `held_text: string`, `held: true` and
+`checked: false`: the state/autonomy hold precedes Safety checking. The visible System line stays unchanged.
+Older rows acquire no invented identity, facts or hold/check fields.
 
 **Widgets:**
 - `GET /api/widgets` (`WidgetsResponse`) lists the widget cards. Each card has a `render.kind`:

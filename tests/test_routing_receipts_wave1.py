@@ -220,7 +220,7 @@ def test_a_resumed_turn_keeps_its_own_unconfirmed_acts(tmp_path):
     act = {"action": "steer_task", "client_message_id": "agent-steer:tok", "routing_token": "tok", "target": "t-1"}
     state = json.loads(json.dumps(continuation_state(
         types.SimpleNamespace(task_id="turn-1", unconfirmed_routing_acts=[act]), [], {}, {}, 1, [], set())))
-    restored = types.SimpleNamespace(unconfirmed_routing_acts=[])
+    restored = types.SimpleNamespace(task_id="turn-1", unconfirmed_routing_acts=[])  # the resumed turn's own context
     restore_continuation_state(types.SimpleNamespace(_ctx=restored), state, [], {}, {}, set())
     assert restored.unconfirmed_routing_acts == [act]
     state.pop("unconfirmed_routing_acts")

@@ -153,7 +153,16 @@ def copy_task_settings_context(context) -> None:
 
 
 def runtime_setting(key: str, default=None):
-    """Environment-shaped runtime read; absence in the snapshot stays absent."""
+    """Environment-shaped runtime read; absence in the snapshot stays absent.
+
+    A route key (``route_choice.ROUTE_SETTING_KEYS``: model slots, accounts, provider keys) reads the
+    settings document as it is now, in a task or not; every other next-task key keeps the task's snapshot."""
+    from ouroboros.route_choice import ROUTE_SETTING_KEYS, live_setting
+
+    if key in ROUTE_SETTING_KEYS:
+        served, value = live_setting(key, default)
+        if served:
+            return value
     snapshot = _TASK_SETTINGS.get()
     if snapshot is not None and _next_task_setting(key):
         return snapshot.environ.get(key, default)
@@ -178,6 +187,9 @@ def runtime_environ() -> dict[str, str]:
                     env.pop(key, None)
                 else:
                     env[key] = snapshot.environ[key]
+    from ouroboros.route_choice import live_environ_overlay
+
+    live_environ_overlay(env)  # a model call in a child (vision) uses the current model and key, never a cleared one
     return env
 
 
@@ -368,8 +380,9 @@ def skill_settings(settings_reader=None) -> dict:
     """What a skill reads: the settings document as it reads now, in a task or not (owner choice A, #1122).
 
     The one reader behind a skill's ``PluginAPI.get_settings``, its scripts' and companions' environment and the
-    funded-credential disclosure of its handlers; grants and the manifest allowlist filter it afterwards, and the
-    task's own model, account and review reads keep its snapshot (``runtime_settings``). The loader lets the
+    funded-credential disclosure of its handlers; grants and the manifest allowlist filter it afterwards; the
+    task's review reads keep its snapshot while its model, account and key reads share this view
+    (``route_choice``, ``runtime_settings``). The loader lets the
     environment stand in for a key the document leaves unset, and a long-lived process still holds what earlier
     projections mirrored there — this task's start, an earlier task's, the server's it inherited — so a key the owner
     cleared or deleted since would come back. The read overlays ``skill_environ`` instead: our mirrored values never
@@ -394,6 +407,9 @@ def runtime_settings(*, settings_reader=None) -> dict:
                 settings.pop(key, None)
             else:
                 settings[key] = copy.deepcopy(snapshot.settings[key])
+    from ouroboros.route_choice import live_settings_overlay
+
+    live_settings_overlay(settings)  # route keys read the document as it is now (route_choice)
     return settings
 
 

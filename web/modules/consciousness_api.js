@@ -20,6 +20,26 @@ const amount = (value) => {
 };
 const placeReadiness = (value) => object(value) && text(value.text)
     ? { text: text(value.text), tone: text(value.tone) || 'muted' } : null;
+const placeLabels = (value) => object(value) && Object.values(value).every((label) => typeof label === 'string')
+    ? { ...value } : null;
+
+/** Status identities are credential facts; a malformed member invalidates the whole declaration. */
+function statusIdentity(value) {
+    const account = (entry) => object(entry) && Object.keys(entry).every((key) => ['id', 'label', 'kind'].includes(key))
+        && ['id', 'label'].every((key) => typeof entry[key] === 'string' && entry[key].trim() && entry[key].length <= 200)
+        && ['user', 'bot'].includes(entry.kind);
+    if (!object(value) || Object.keys(value).some((key) => !['sends_as', 'reads_as'].includes(key))
+        || (Object.hasOwn(value, 'sends_as') && !account(value.sends_as))
+        || (Object.hasOwn(value, 'reads_as') && (!Array.isArray(value.reads_as) || !value.reads_as.every(account)))) return null;
+    return value;
+}
+
+/** The connector's status payload, independent of the host's PlaceSummary. */
+export function normalizePlaceStatus(raw) {
+    const data = object(raw) || {};
+    return { readiness: typeof data.text === 'string' ? placeReadiness(data) : null,
+        identity: statusIdentity(data.identity), labels: placeLabels(data.labels) };
+}
 
 /** Preserve the host's sanitized icon spec, including the SVG discriminant. */
 export function normalizeIcon(raw) {
@@ -52,6 +72,7 @@ export function normalizePlace(raw) {
         })).filter((note) => note.text),
         ownerAccounts: list(place.owner_accounts).map((account) => ({
             actorId: text(account?.platform_actor_id), label: text(account?.label), confirmedAt: text(account?.confirmed_at),
+            accountId: text(account?.account_id),
         })).filter((account) => account.actorId),
         // People the place has seen, offered for «This is me» when the server lists them (not in contract v1).
         accountCandidates: list(place.account_candidates).map((account) => ({
@@ -60,6 +81,8 @@ export function normalizePlace(raw) {
         workingFolder: text(place.working_folder),
         model: text(place.model),
         readiness: placeReadiness(place.readiness),
+        safetyMode: text(place.safety_mode),
+        labels: placeLabels(place.labels),
         facts: Array.isArray(place.facts) ? place.facts : null,
         source: object(place.source),
         settings: text(place.settings),
@@ -81,6 +104,7 @@ export function normalizeConnector(raw) {
         wakes: [...new Set(list(connector.wakes).map((item) => text(object(item) ? item.fact : item)).filter(Boolean))],
         connected: connector.connected === true,
         readiness: placeReadiness(connector.readiness),
+        labels: placeLabels(connector.labels),
         facts: Array.isArray(connector.facts) ? connector.facts : null,
         source: object(connector.source),
         settings: text(connector.settings),
@@ -112,6 +136,7 @@ export function normalizeWake(raw) {
     return {
         taskId: text(wake.task_id), chatId: count(wake.chat_id), cause: text(wake.cause),
         placeLabel: text(wake.place_label), conversation: text(wake.conversation),
+        as: object(wake.as),
         startedAt: text(wake.started_at), endedAt: text(wake.ended_at), firstReplyAt: text(wake.first_reply_at),
         live: wake.live === true, phase: text(wake.phase), quiet: wake.quiet === true,
         saidOwner: typeof wake.said_owner === 'boolean' ? wake.said_owner : null,

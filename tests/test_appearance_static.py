@@ -8,7 +8,8 @@ Three of the four claims here are invisible to the Playwright suite:
   actual retention: the rebuilt desktop launcher still needs a cold-launch test.
 * a colour baked into a ``data:`` URI cannot be themed, because a CSS custom
   property cannot be interpolated into the URI string. The fix is to make the
-  whole image a token, which is a structural fact about the stylesheet.
+  whole image a token, or to cut the shape with a black SVG mask out of a token
+  background; either is a structural fact about the stylesheet.
 * the appearance choice is client-local. ``web/modules/settings.js`` collects
   ``input[id^="s-"]`` into the ``/api/settings`` payload, so the guarantee
   "Appearance never writes runtime settings" rests on the panel owning no such
@@ -78,6 +79,19 @@ def test_persistent_profile_guard_rejects_missing_or_non_false_argument(argument
         _assert_persistent_webview_starts(f"webview.start(\n    {argument}\n)", "fixture.py")
 
 
+_MASK_DECLARATION = re.compile(r"^\s*(?:-webkit-)?mask(?:-image)?\s*:")
+_SVG_INK = re.compile(r"(?:fill|stroke|stop-color|flood-color|color)\s*[=:]\s*['\"]?([^'\";)\s]+)", re.I)
+# A mask only cuts the shape out of the element's own token paint (`background: var(--…)`); its geometry
+# is drawn black, and any other ink would be a tone baked into the mask (a luminance mask reads it).
+_GEOMETRY_INKS = {"none", "black", "%23000", "%23000000"}
+
+
+def _baked_svg_lines(css: str) -> list[str]:
+    """Inline SVG lines that fix a colour: neither the `--select-arrow` token nor black mask geometry."""
+    return [line for line in css.splitlines() if "data:image/svg+xml" in line and "--select-arrow:" not in line
+            and not (_MASK_DECLARATION.match(line) and {ink.lower() for ink in _SVG_INK.findall(line)} <= _GEOMETRY_INKS)]
+
+
 def test_the_select_arrow_is_a_theme_token_not_a_baked_colour():
     ui = _read("web/ui.css")
     dark, light = ui.split(':root[data-theme="light"]', 1)
@@ -87,10 +101,24 @@ def test_the_select_arrow_is_a_theme_token_not_a_baked_colour():
     light_ink = re.search(r"--select-arrow:.*?stroke='(%23[0-9a-fA-F]{6})'", light).group(1)
     assert dark_ink.lower() != light_ink.lower()
     for rel in ("web/ui.css", "web/settings.css", "web/style.css", "web/onboarding.css"):
-        text = _read(rel)
-        baked = [line for line in text.splitlines()
-                 if "data:image/svg+xml" in line and "--select-arrow:" not in line]
+        baked = _baked_svg_lines(_read(rel))
         assert not baked, f"{rel}: inline SVG carries a fixed colour: {baked}"
+
+
+_SVG = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5 7.5 10 12.5' fill='none' stroke='{}'/%3E%3C/svg%3E\")"
+
+
+@pytest.mark.parametrize(("line", "baked"), [
+    (f"    --select-arrow: {_SVG.format('%23efeff2')};", False),
+    (f"    mask-image: {_SVG.format('black')};", False),
+    (f"    -webkit-mask-image: {_SVG.format('black')};", False),
+    (f"    background-image: {_SVG.format('black')};", True),
+    (f"    background-image: {_SVG.format('%23888')};", True),
+    (f"    -webkit-mask-image: {_SVG.format('%23888')};", True),
+    (f"    mask-image: {_SVG.format('black').replace('/%3E', ' style=%22fill:%23888%22/%3E')};", True),
+])
+def test_inline_svg_guard_separates_token_paint_and_mask_geometry_from_baked_colour(line, baked):
+    assert bool(_baked_svg_lines(line)) is baked
 
 
 def _rules(css: str) -> list[tuple[str, str]]:

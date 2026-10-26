@@ -31,8 +31,8 @@ containment facts of its attempt (``attempts/a01/attempt.yaml``).
   disposed, the live file keeps the OWNER's content — not the run's — and the
   snapshot, its registry row and the captured patch all survive as the resolution
   material the nanny owns — and the TASK's own terminal is honest about it: a task
-  that ends holding an undisposed captured patch reads ``failed`` with
-  ``reason_code=delegated_custody_unreconciled``, not ``completed``.
+  that ends holding an undisposed captured patch reads Done with warnings, its own
+  reason kept and the run named in ``delegated_runs_unreconciled`` (#1583).
 
 The default-lane test pins the fake's new mutating half against the REAL readers:
 the edits land in the workspace root the body named (never in ``scope.root``), and
@@ -372,19 +372,19 @@ def test_s25_mutating_delegated_patch_conflict_is_refused_and_keeps_its_material
                 workspace_root=str(workspace))
             result = server.wait_task(task_id, timeout=600)
             # A task that ENDS holding an undisposed captured patch completes with a
-            # DISCLOSED custody debt (upstream 09ac51b2, absorbed by F2): the model's
-            # answer is kept verbatim, the execution axis stays the model's own work,
-            # the one Reason line names the unreconciled custody, and the debt rides
-            # objective.warning(s) plus the row's debt list — never a fabricated failure.
+            # DISCLOSED custody debt beside its own cause (#1583): the model's answer is
+            # kept verbatim, the reason and the execution axis stay the model's own work,
+            # and the debt is the row's own list and envelope — never a fabricated failure.
             assert result.get("status") == "completed", result
             oracle = ArtifactOracle(server.data_root)
             stored = wait_durable_result(oracle, task_id)
             assert S25_MARKER in str(stored.get("result") or ""), stored
             assert stub.script_consumed(), "S25 script was not fully consumed"
-            assert stored.get("reason_code") == "delegated_custody_unreconciled", stored
+            assert stored.get("reason_code") != "delegated_custody_unreconciled", stored
             axes = stored.get("outcome_axes") or {}
             assert (axes.get("execution") or {}).get("status") == "ok", axes
-            assert "delegated_custody_unreconciled" in ((axes.get("objective") or {}).get("warnings") or []), axes
+            assert "delegated_custody_unreconciled" not in ((axes.get("objective") or {}).get("warnings") or []), axes
+            assert stored.get("delegated_runs_unreconciled"), stored
             envelope = stored.get("delegate_terminal_reconciliation") or {}
             assert envelope.get("audit_status") == "ok", envelope
 

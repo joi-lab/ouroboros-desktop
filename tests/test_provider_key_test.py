@@ -16,7 +16,9 @@ import ouroboros.gateway.models as provider_api
 from ouroboros.llm import LLMClient
 from ouroboros.usage_accounting import current_usage_scope
 from tests._usage_store_testing import ledger_rows
-from tests._safety_fixtures import settings_install as install
+from tests._safety_fixtures import settings_install as install_fixture
+
+install = install_fixture
 
 
 class _Request:
@@ -425,6 +427,19 @@ def test_explicit_settings_mapping_is_authoritative(monkeypatch, model, settings
 )
 def test_provider_test_model_selection(provider, settings, expected):
     assert provider_api._provider_test_model(provider, settings) == expected
+
+
+def test_provider_test_of_an_added_key_takes_a_model_its_own_server_serves():
+    """Two compatible servers list different models: Test on one never sends the other's; a fixed
+    provider's ids serve on every key of it."""
+    settings = {"OUROBOROS_MODEL": "openai-compatible@alpha::only-alpha",
+                "OUROBOROS_MODEL_LIGHT": "openai-compatible@beta::only-beta",
+                "OUROBOROS_MODEL_FALLBACKS": "anthropic::light"}
+    pick = provider_api._provider_test_model
+    assert pick("openai-compatible", settings, "beta") == "openai-compatible@beta::only-beta"
+    assert pick("openai-compatible", settings, "alpha") == "openai-compatible@alpha::only-alpha"
+    assert pick("openai-compatible", settings, "gamma") == ""  # its own catalog decides
+    assert pick("anthropic", settings, "k2") == "anthropic@k2::light"
 
 
 def test_catalog_is_used_only_for_compatible_discovery(monkeypatch):

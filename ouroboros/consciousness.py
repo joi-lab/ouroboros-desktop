@@ -277,7 +277,7 @@ class BackgroundConsciousness:
 
         def render(events: str) -> str:
             return render_wake_message(
-                self._repo_dir, reason=reason, last_wake_at=self._last_wake_at, now=now, level=level,
+                self._repo_dir, drive_root=self._drive_root, reason=reason, last_wake_at=self._last_wake_at, now=now, level=level,
                 disabled_tools=list(metadata.get("disabled_tools") or []), spent_usd=window.get("settled_usd"),
                 spent_is_floor=int(window.get("unknown_unmetered") or 0) > 0,
                 daily_usd=window.get("limit_usd") or 0.0, running=len(context["counted_roots"]),

@@ -137,14 +137,14 @@ def test_settings_more_providers_collapse_keeps_inputs_mounted():
     settings.js applyInputValue has no null guard, so a missing input id
     breaks settings load. The wrapper auto-opens when configured."""
     ui = _read("web/modules/settings_ui.js")
-    settings = _read("web/modules/settings.js")
+    connections = _read("web/modules/settings_connections.js")
     css = _read("web/settings.css")
 
     assert 'id="settings-more-providers"' in ui
     assert ui.count("advanced: true") == 5
     assert "PROVIDER_CARDS.filter((card) => !card.advanced)" in ui
     assert "PROVIDER_CARDS.filter((card) => card.advanced)" in ui
-    assert "syncMoreProvidersDisclosure" in settings
+    assert "if (fold && moreProvidersOpen(entries, advanced)) fold.open = true;" in connections
     assert ".settings-more-providers > summary" in css
     # About tab footer stays removed (v6.82 cosmetic pass).
     assert "Joi Lab" not in ui

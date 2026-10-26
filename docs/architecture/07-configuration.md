@@ -2,15 +2,15 @@
 
 Settings have one home and default; the table projects `config.SETTINGS_DEFAULTS`, never a second authority.
 
-`ouroboros/config.py` re-exports paths, loaders/writers, environment projection, normalization, runtime mode, skills location and PID lock. Vocabularies/defaults belong to its leaves (§10 invariant 3). `settings_scales.IMMEDIATE_SETTINGS` applies live; `RESTART_REQUIRED_SETTINGS` awaits restart; other keys apply to the next task. `update_channels.py` owns update defaults.
+`ouroboros/config.py` re-exports paths, loaders/writers, environment projection, normalization, runtime mode, skills location and PID lock. Vocabularies/defaults belong to its leaves (§10 invariant 3). `settings_scales.IMMEDIATE_SETTINGS` applies live; `RESTART_REQUIRED_SETTINGS` awaits restart; other keys apply from the next task, a route key from the next model call. `update_channels.py` owns update defaults.
 
-Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`); a direct server's implicit `REPO_DIR` is its executing checkout, and `resolve_port_file` relocates only the hosting root's port file. Retained exception: a server given only `APP_ROOT` keeps `~/Ouroboros/data` (`server_process.DATA_DIR`), since deriving it would silently start a fresh brain. The document is `data/settings.json` under the data root. Writes require the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential is never read as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
+Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`); a direct server's implicit `REPO_DIR` is its executing checkout; `resolve_port_file` relocates only the hosting root's port file. Retained exception: a server given only `APP_ROOT` keeps `~/Ouroboros/data` (`server_process.DATA_DIR`), since deriving it would start a fresh brain. The document is `data/settings.json` under the data root. Writes need the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential never reads as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
 
-`openrouter_attribution.py` is the application-identity SSOT for every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL rather than competing to rename one app record.
+`openrouter_attribution.py` is the app-identity SSOT of every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL, never renaming one app record.
 
 ### Reading and writing the settings document
 
-Tasks privately retain entry models, credentials, reviews and Context/Effort (`TaskSettingsSnapshot`): absent/empty differ, route overrides win, Resume restores cognition, and overlays never enter env. `RoomResolver` follows lineage/conversion. `composer_cognition.py` copies Main once on project creation/recovery and seeds legacy cognition before Main changes. Subagents stays live: Main's `OUROBOROS_SUBAGENTS_MODE` or project `cognition.subagents_mode`, `off|auto|swarm`, default Auto, including legacy rooms. It bypasses checkpoints; Settings only masks it. Main effort is independent of helper bounds (`_effort_range_format=1`). Immediate keys, writers and granted skill keys read current disk, including clears; credential-free skill children reread it, payloads carry operator variables. Access stays boot-pinned; reload failures disclose prior env and missing values.
+Tasks privately keep their entry Context/Effort, review settings and catalog (`TaskSettingsSnapshot`); route keys (`route_choice.ROUTE_SETTING_KEYS`: models, local flags, accounts, provider keys) read the saved document as it is now (none saved: as every other key). Absent/empty differ, route overrides win, Resume restores cognition, and overlays never enter env. `RoomResolver` follows lineage/conversion. `composer_cognition.py` copies Main once on project creation/recovery and seeds legacy cognition before Main changes. Subagents stays live: Main's `OUROBOROS_SUBAGENTS_MODE` or project `cognition.subagents_mode`, `off|auto|swarm`, default Auto, including legacy rooms. It bypasses checkpoints; Settings only masks it. Main effort is independent of helper bounds (`_effort_range_format=1`). Immediate keys, writers and granted skill keys read current disk, including clears; credential-free skill children reread it, payloads carry operator variables. Access stays boot-pinned; reload failures disclose prior env and missing values.
 
 `normalize_settings_raw()` runs before defaults in `load_settings`, `_owner_read_settings_raw` and `build_colab_settings`; dropped keys stay dropped. `safety_config.normalize_consciousness_safety` seeds absent coverage from saved owner coverage; explicit choices stay and guards compare the disk-derived value. `review_pool_migration.apply_at_read_seam` maps run seats to roster rows, retaining refused values. Retired keys/comma-lists drop with notice; comma-only/lane-free installs get factory rows. Review env keys are inert (one startup notice). Reads are pure/idempotent; `read_settings_json_verified` refuses changed pins. The loader proposes unauthored slots (§2); `apply_runtime_provider_defaults` only respells them, unpersisted. `apply_settings_to_env` marks slot/catalog echoes in internal `OUROBOROS_PROJECTED_PROPOSALS`, inherited by children, distinct from operator variables. Provider Test and credential plans share `provider_models.ACTIVE_MODEL_SETTING_KEYS`, including Safety pins; blank inherits.
 
@@ -47,9 +47,9 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 |-----|---------|-------------|
 | OPENROUTER_API_KEY | "" | OpenRouter credential |
 | OPENAI_API_KEY | "" | Official direct-OpenAI credential |
-| OPENAI_BASE_URL | "" | OpenAI base-URL override; legacy compatible endpoint (only with `OPENAI_API_KEY`) |
+| OPENAI_BASE_URL | "" | Legacy compatible endpoint (only with `OPENAI_API_KEY`) |
 | OPENAI_COMPATIBLE_API_KEY | "" | OpenAI-compatible endpoint credential |
-| OPENAI_COMPATIBLE_BASE_URL | "" | OpenAI-compatible endpoint base URL; only with its own key (blank = no auth) |
+| OPENAI_COMPATIBLE_BASE_URL | "" | OpenAI-compatible endpoint; only with its own key (blank = no auth) |
 | CLOUDRU_FOUNDATION_MODELS_API_KEY | "" | Cloud.ru credential |
 | CLOUDRU_FOUNDATION_MODELS_BASE_URL | `https://foundation-models.api.cloud.ru/v1` | Cloud.ru base URL |
 | GIGACHAT_CREDENTIALS | "" | GigaChat auth key |
@@ -59,13 +59,14 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | GIGACHAT_BASE_URL | `https://api.giga.chat/v1` | GigaChat base URL |
 | GIGACHAT_VERIFY_SSL_CERTS | `true` | GigaChat TLS verification |
 | GIGACHAT_PROFANITY_CHECK | "" | GigaChat profanity filter passthrough |
-| OUROBOROS_EXTRA_CA_BUNDLE | "" | PEM file added to the trust bundle of every first-party provider call |
+| OUROBOROS_EXTRA_CA_BUNDLE | "" | PEM file added to every first-party provider call's trust bundle |
 | ANTHROPIC_API_KEY | "" | Official direct-Anthropic credential |
 | MINIMAX_API_KEY | "" | MiniMax credential |
 | MINIMAX_REGION | "" | MiniMax region (empty = `global_en`) |
-| DEEPSEEK_API_KEY | "" | DeepSeek direct key (`deepseek::` values; Direct-provider routes) |
-| ZAI_API_KEY | "" | Z.ai direct key (`zai::` values; Direct-provider routes) |
+| DEEPSEEK_API_KEY | "" | DeepSeek credential (`deepseek::`) |
+| ZAI_API_KEY | "" | Z.ai credential (`zai::`) |
 | ZAI_PLAN | "" | Z.ai endpoint: empty/`payg` = pay-as-you-go, `coding` = Coding Plan |
+| OUROBOROS_CONNECTIONS | [] | Extra keys/endpoints, a row each (Direct-provider routes), never env-exported |
 | OUROBOROS_NETWORK_PASSWORD | "" | Non-loopback HTTP gate password; unset only warns (§8 Docker) |
 | OUROBOROS_SERVER_HOST | 127.0.0.1 | HTTP bind host (`0.0.0.0` for Docker/non-loopback) |
 | OUROBOROS_UI_DIR | "" | Interface (§4, optional setup/login included): empty builtin, `none`, or a trusted directory with `index.html`; restart-required; a saved value, blank too, beats the environment, is never exported, and a merged save never authors an absent one (`SAVED_CHOICE_SETTINGS`) |
@@ -161,7 +162,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_PREFLIGHT_TEST_WORKERS | unset | Env-only: xdist workers for the parallel pass (floor 2, else `os.cpu_count()`); scrubbed from the candidate |
 | OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS | true | Auto-grant manifest requests to accepted bytes (clean review or trusted install; hash-bound) |
 | OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS | true | Derived Built in trust (`false`: review); once a source list is saved its Built in row decides |
-| OUROBOROS_CONTEXT_MODE | max | Main's `nano`/`low`/`max` and initial project copy; owner-selected outside Cyber. Review remains independent (§6 Context fitting) |
+| OUROBOROS_CONTEXT_MODE | max | Main's `nano`/`low`/`max` and initial project copy; owner-selected outside Cyber. Review stays independent (§6 Context fitting) |
 | OUROBOROS_CONTEXT_MODE_AUTO_LOW | false | Provenance tombstone, not a toggle: normalization writes `false`; a persisted `low` is honoured only beside it (`context_mode_compat.py`) |
 | OUROBOROS_RUNTIME_MODE | advanced | Effective Access light/advanced/pro/cyber_pro, persisted as the next-boot value (§6 Safety and runtime mode) |
 | OUROBOROS_SKILLS_REPO_PATH | "" | Skills Repo Path: read in place as My folder (`my-folder`), even with a saved source list; removing that row clears this path. Other folders stay connected. |
@@ -173,7 +174,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_SKILL_SOURCES | "" | Skill source list (§13); empty = derived from the keys above, unwritten |
 | OUROBOROS_STARTER_SKILLS | "" | Starter catalog ids from any source; absent/"" = recommended, `[]` or "[]" = none; built-ins install before git reads |
 | OUROBOROS_STARTER_SKILLS_TURN_ON | true | Turn starter installs on when ready; an owner's Off persists |
-| OUROBOROS_PROMPT_CACHE_TTL | 1h | Prompt-cache tier default/5m/1h for Anthropic-family cache markers, applied at the send boundary and recorded in usage |
+| OUROBOROS_PROMPT_CACHE_TTL | 1h | Prompt-cache tier default/5m/1h of each normalized cache marker, stamped at send, recorded in usage |
 | OUROBOROS_EFFORT_MIN | low | Main helper floor; project composers save their own copy (`settings_scales.effort_range`) |
 | OUROBOROS_EFFORT_TASK | medium | Main primary; project copy sets its roots' primary; Auto helpers clamp it into their bounds |
 | OUROBOROS_EFFORT_MAX | high | Main helper ceiling; Auto reviewers, evolution and wakes start here; project copies are independent |
@@ -226,14 +227,12 @@ The generic Settings save, the owner Safety model endpoint, the wizard and the m
 
 #### Direct-provider routes
 
-Direct-Main factory review roles (`provider_models.compute_direct_review_seats`): OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru, GigaChat. Exclusivity (`server_runtime._exclusive_direct_remote_provider` and its `_env` twin) needs one provider without OpenRouter or `OPENAI_BASE_URL`/`OPENAI_COMPATIBLE_BASE_URL`. `provider_models.migrate_model_value` prefixes rows so free text never enters a single-provider route; off-provider Main mints none (DEVELOPMENT "Provider Independence").
+Routes carry their connection (`parse_model_route`): `kind@name::model` reads that `OUROBOROS_CONNECTIONS` row via the built-in kind's branch (`llm_routing.resolve_target`); a missing or disabled one refuses (`connection_unavailable`), never on another key. Factory review roles (`compute_direct_review_seats`): OpenAI, Anthropic, MiniMax, DeepSeek, Z.ai, Cloud.ru, GigaChat. Exclusivity (`exclusive_direct_kind`, named connections too) needs one provider without OpenRouter, a compatible endpoint or `OPENAI_BASE_URL`. `migrate_model_value` prefixes rows so free text never enters a single-provider route; off-provider Main mints none (DEVELOPMENT "Provider Independence").
 
-DeepSeek (`deepseek::`) uses the fixed `provider_models.DEEPSEEK_BASE_URL`; proxies and mirrors belong to `openai-compatible::`, and `deepseek/...` stays OpenRouter. `DEEPSEEK_REASONING_EFFORT_ALIASES` maps send-time effort, every tier change reporting `reasoning_effort_clamped`; a forced tool choice disables thinking. Wire details: `llm_openai_compatible.py`.
+DeepSeek (`deepseek::`) uses the fixed `DEEPSEEK_BASE_URL`; proxies and mirrors belong to `openai-compatible::`, `deepseek/...` stays OpenRouter. `DEEPSEEK_REASONING_EFFORT_ALIASES` maps send-time effort, each tier change reporting `reasoning_effort_clamped`; a forced tool choice disables thinking (wire: `llm_openai_compatible.py`). MiniMax (`minimax::`) uses `MINIMAX_DIRECT_DEFAULTS`, scouts/reviewers its slots. Saved choices stay; switch PAYG M2.7 pins explicitly before [18 Nov 2026](https://platform.minimax.io/docs/faq/models.md). `reasoning_split=true` requests reasoning, replayed verbatim on same-route turns; details stay display-only. Live wire unverified.
 
-MiniMax (`minimax::`) uses `MINIMAX_DIRECT_DEFAULTS`; scouts/reviewers use its slots. Saved choices stay; switch PAYG M2.7 pins explicitly before [18 Nov 2026](https://platform.minimax.io/docs/faq/models.md). `reasoning_split=true` requests reasoning; same-route turns replay it verbatim when present, with reasoning details display-only. Live wire unverified.
+Z.ai (`zai::`) is GLM on Z.ai's OpenAI-compatible API; `ZAI_PLAN` selects the endpoint (`resolve_zai_base_url`), a proxy or the China host belongs to `openai-compatible::`, `zai/...` stays OpenRouter. Z.ai serves an absent `reasoning_effort` at maximum, so the scale maps onto its enum (`ZAI_REASONING_EFFORT_ALIASES`), each tier change disclosed as `reasoning_effort_clamped`; a forced tool choice keeps its tier. HTTP 429 code 1113 is billing (also a Coding Plan key on the PAYG endpoint): Test reports `No credits`, not `Rate limited`.
 
-Z.ai (`zai::`) is GLM through Z.ai's OpenAI-compatible API. `ZAI_PLAN` selects the endpoint (`provider_models.resolve_zai_base_url`); a proxy or the China host belongs to `openai-compatible::`, and `zai/...` stays OpenRouter. Z.ai serves an absent `reasoning_effort` at its maximum, so the canonical scale is projected onto its own enum (`ZAI_REASONING_EFFORT_ALIASES`), every tier change disclosed as `reasoning_effort_clamped`; a forced tool choice keeps its tier. HTTP 429 code 1113 is a billing refusal (also a Coding Plan key on the pay-as-you-go endpoint), so the provider Test reports `No credits`, not `Rate limited`.
-
-GigaChat (`gigachat::`) runs on the native `gigachat` library, not the OpenAI-compatible lane: one function call per turn (message vocabulary: `llm_gigachat.py`). `reasoning_effort` is deliberately omitted, because hidden reasoning can consume the whole output budget and return empty content. No live cost source exists, so cost stays unknown, never a hand-maintained tariff. A GigaChat scope row retrieves on its own window (§6 Review stack).
+GigaChat (`gigachat::`) runs on the native `gigachat` library, not the OpenAI-compatible lane, one function call per turn (`llm_gigachat.py`). `reasoning_effort` is omitted: hidden reasoning can consume the whole output budget and return empty content. With no live cost source, cost stays unknown, never a hand-maintained tariff. A GigaChat scope row retrieves on its own window (§6 Review stack).
 
 ---

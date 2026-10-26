@@ -487,6 +487,8 @@ def _annotate_terminal_task_truth(
                 for key in ("model_execution", "cancel_origin", "review_projection"):
                     if isinstance(result.get(key), dict):
                         terminal_truth[key] = dict(result[key])
+                if isinstance(result.get("delegated_runs_unreconciled"), list):  # the current debt (#1583)
+                    terminal_truth["delegated_runs_unreconciled"] = list(result["delegated_runs_unreconciled"])
                 retention = retention_summary(result)
                 rounds = ((result.get("loop_outcome") or {}).get("usage") or {}).get("total_rounds")
                 if type(rounds) is int and rounds >= 0:

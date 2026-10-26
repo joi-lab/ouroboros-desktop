@@ -838,6 +838,7 @@ def _switch_model(ctx: ToolContext, model: str = "", effort: str = "", primary: 
         return _publish_tool_result(ctx, ToolResult(status="unavailable", code="CAPABILITY_UNAVAILABLE", text=(
             "⚠️ This turn has no recorded primary route to return to.")))
 
+    from ouroboros import route_choice
     if requested_primary:
         waiter = getattr(ctx, "model_wait_context", None)
         chosen = ((getattr(waiter, "overrides", None) or {}).get(route["role"]) or {})
@@ -845,6 +846,8 @@ def _switch_model(ctx: ToolContext, model: str = "", effort: str = "", primary: 
         ctx.active_use_local_override = bool(chosen.get("use_local", route["use_local"]))
         ctx.active_role_override = route["role"]
         ctx.route_wait_on_primary = requested_primary == "wait"
+        # The primary's own choice again: a following primary is re-read at the round boundary (the CURRENT one).
+        ctx.route_choice = route_choice.explicit("wait_card") if chosen else route_choice.opening_choice(ctx)
         changes.append(f"primary route {ctx.active_model_override}{' (local)' if ctx.active_use_local_override else ''}"
                        f" (role {route['role']}; if it refuses: "
                        f"{'wait for it' if requested_primary == 'wait' else 'configured routes again'})")
@@ -865,6 +868,7 @@ def _switch_model(ctx: ToolContext, model: str = "", effort: str = "", primary: 
         ctx.active_model_override = model
         ctx.active_use_local_override = use_local
         ctx.route_wait_on_primary, ctx.active_role_override = False, None  # an explicit route ends a declared wait
+        ctx.route_choice = route_choice.explicit("switch_model")  # the mind's own route: Settings no longer move it
         changes.append(f"model={model}{' (local)' if use_local else ''}")
 
     effort_note = ""

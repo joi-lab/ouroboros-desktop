@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from tests.ui_console_errors import PageErrors
+
 ROOT = Path(__file__).resolve().parents[1]
 T = '2026-10-17T08:00:00Z'
 HTML = '''<!doctype html><html data-theme="light"><head><meta charset="utf-8">
@@ -106,8 +108,7 @@ def test_physical_episode_content_survives_continue(tmp_path, engine):
             browser = getattr(playwright, engine).launch()
             try:
                 page = browser.new_page(viewport={'width': 1100, 'height': 850})
-                errors = []
-                page.on('pageerror', lambda error: errors.append(str(error)))
+                errors = PageErrors(page, engine)
                 page.goto(f'http://127.0.0.1:{server.server_port}/')
                 page.wait_for_function('window.fixture?.instance.hasPaintedHistory()')
 
@@ -285,7 +286,7 @@ def test_physical_episode_content_survives_continue(tmp_path, engine):
                 page.evaluate('fixture.instance.destroy(); fixture.instance.destroy()')
                 assert page.evaluate('fixture.handlers.size') == 0
                 assert page.locator('.chat-live-card').count() == 0
-                assert not errors, errors
+                assert not errors.unexpected(), errors
                 assert not posts, posts
                 facts.update(errors=errors, posts=posts, sent=page.evaluate('fixture.sent'), destroyed=True)
             finally:

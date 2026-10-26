@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ouroboros.config import runtime_setting
+from ouroboros.config import runtime_setting  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 
 import functools  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 import json  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
@@ -431,12 +431,13 @@ def _initial_round_route(ctx: Any, llm: LLMClient, initial_effort: str) -> tuple
     Unknown routes get one honest call; no synthetic short-window capacity, so a
     fit plan is adopted only while it still answers the preferred mode. The same
     binding is recorded as the turn's primary (task override or role slot, role,
-    locality) for configured-route recovery and ``switch_model(primary=...)``.
+    locality) for configured-route recovery and ``switch_model(primary=...)``, and
+    the turn's route choice says whether that binding follows its role live or is
+    the task's own (``route_choice``).
     """
     from ouroboros.model_slots import task_model_binding
+    from ouroboros.route_choice import open_route
 
-    task_model_override = str(getattr(ctx, "task_model_override", "") or "").strip()
-    local_override = getattr(ctx, "task_use_local_override", None)
     preferred_mode = get_context_mode()
     context_fit_plan = getattr(ctx, "context_fit_plan", None)
     if (context_fit_plan is not None
@@ -444,9 +445,7 @@ def _initial_round_route(ctx: Any, llm: LLMClient, initial_effort: str) -> tuple
         active_context_mode = str(getattr(context_fit_plan, "initial_mode", "") or preferred_mode)
     else:
         active_context_mode = preferred_mode
-    model = task_model_override or llm.default_model()
-    use_local = (bool(local_override) if local_override is not None else
-                 runtime_setting("USE_LOCAL_MAIN", "").lower() in ("true", "1"))
+    model, use_local, ctx.route_choice = open_route(ctx, llm)
     ctx.primary_route = {"model": model, "use_local": use_local, "role": task_model_binding(
         {"task_metadata": getattr(ctx, "task_metadata", {})}, context_fit_plan=context_fit_plan)[0]}
     return model, initial_effort, use_local, preferred_mode, active_context_mode, context_fit_plan
@@ -571,7 +570,7 @@ def run_llm_loop(
                 (active_model, active_use_local, active_effort, context_fit_plan,
                  active_context_mode) = _apply_round_route_overrides(
                     ctx, tools, messages, (active_model, active_use_local, active_effort), context_fit_plan,
-                    active_context_mode, _preferred_context_mode, tool_schemas)
+                    active_context_mode, _preferred_context_mode, tool_schemas, llm=llm)
             ctx.active_context_mode = active_context_mode
             ctx.active_model, ctx.active_effort, ctx.active_use_local = active_model, active_effort, active_use_local
 

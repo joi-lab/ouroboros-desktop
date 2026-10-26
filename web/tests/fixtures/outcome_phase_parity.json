@@ -891,6 +891,41 @@
       "acceptance_clause": "The task hit its round limit before it could finish cleanly."
     },
     {
+      "name": "an open custody debt warns beside the cause it never replaces",
+      "record": {"status": "completed", "reason_code": "final_message", "delegated_runs_unreconciled": ["run-a1"], "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": "Some delegated work was never reconciled."
+    },
+    {
+      "name": "an older custody stamp heals once its list is known empty",
+      "record": {"status": "completed", "reason_code": "delegated_custody_unreconciled", "delegated_runs_unreconciled": [], "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "not_evaluated", "source": "none", "warning": "delegated_custody_unreconciled", "warnings": ["delegated_custody_unreconciled"]}}},
+      "phase": "done",
+      "headline": "Done",
+      "acceptance_clause": ""
+    },
+    {
+      "name": "an older custody stamp without a list keeps its warning",
+      "record": {"status": "completed", "reason_code": "delegated_custody_unreconciled", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "not_evaluated", "source": "none", "warning": "delegated_custody_unreconciled", "warnings": ["delegated_custody_unreconciled"]}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": ""
+    },
+    {
+      "name": "an older failed stamp read back as its own execution reason names no debt",
+      "record": {"status": "failed", "reason_code": "delegated_custody_unreconciled", "delegated_runs_unreconciled": [], "outcome_axes": {"execution": {"status": "failed", "reason_code": "delegated_custody_unreconciled"}, "objective": {"status": "not_evaluated", "source": "none", "warning": "delegated_custody_unreconciled", "warnings": ["delegated_custody_unreconciled"]}}},
+      "phase": "error",
+      "headline": "Failed",
+      "acceptance_clause": ""
+    },
+    {
+      "name": "a healed custody stamp leaves the row's other warning standing",
+      "record": {"status": "completed", "reason_code": "delegated_custody_unreconciled", "delegated_runs_unreconciled": [], "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message"}, "objective": {"status": "not_evaluated", "source": "none", "warning": "delegated_custody_unreconciled", "warnings": ["delegated_custody_unreconciled", "receipt_absent"]}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": "No host verification receipt was recorded; this does not establish whether other checks ran."
+    },
+    {
       "name": "a provider failure says its own sentence",
       "record": {"status": "failed", "reason_code": "provider_failure", "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_failure"}}},
       "phase": "error",

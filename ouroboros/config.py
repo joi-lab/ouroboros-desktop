@@ -664,7 +664,7 @@ def _coerce_setting_value(key: str, value):
     # Trim so whitespace-only config is not treated as a configured skills repo.
     if key == "OUROBOROS_SKILLS_REPO_PATH":
         return str(value or "").strip()
-    if key == "MCP_SERVERS":
+    if isinstance(default, list):  # MCP_SERVERS, OUROBOROS_CONNECTIONS: a list of row objects
         if isinstance(value, str):
             try:
                 value = json.loads(value)
@@ -846,7 +846,7 @@ def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
             continue
         if raw_env == "" and key not in OPTIONAL_BOUND_LEGACY:
             continue
-        if key in loaded and key not in env_wins and settings.get(key) not in {None, ""}:
+        if key in loaded and key not in env_wins and settings.get(key) not in (None, "", []):  # a list row setting too
             continue
         settings[key] = _coerce_setting_value(key, raw_env)
         env_authored.add(key)
