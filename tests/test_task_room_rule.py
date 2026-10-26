@@ -258,12 +258,28 @@ def test_a_warm_follows_the_ancestors_of_remembered_tasks_and_says_when_it_could
     assert set(pr._read_lineage(tmp_path, leaves)) == set(leaves)  # the leaves are remembered, their ancestors not
     attempts, real = [], pr._read_lineage
     monkeypatch.setattr(pr, "_read_lineage", lambda *args, **_kwargs: attempts.append(sorted(args[1])))  # None: busy
-    assert pr.RoomResolver(tmp_path).warm(leaves) is False and attempts == [["grand-1", "root-1"]]
+    assert pr.RoomResolver(tmp_path).warm(leaves) is False and attempts == [["grand-1"]]  # a root is only asked its binding
     monkeypatch.setattr(pr, "_read_lineage", real)
     counts = _count_store_work(monkeypatch)
     resolver = pr.RoomResolver(tmp_path)
-    assert resolver.warm(leaves) is True and counts["open_store"] == 2  # two generations: grand-1 and root-1, then mid-1
+    assert resolver.warm(leaves) is True and counts["open_store"] == 2  # two generations: grand-1, then its parent and root
     assert [resolver(leaf) for leaf in leaves] == [rooms["b"]] * 6 and counts["open_store"] == 2
+
+
+def test_a_warm_stops_where_the_rule_stops_at_a_remembered_tasks_binding(tmp_path, monkeypatch):
+    """A remembered task whose walk ends at a bound parent needs no further lineage: the warm reads none
+    (not the bound parent, not the root), even while the store is busy, and the rule still answers."""
+    rooms = _world(tmp_path)
+    for key in [key for key in pr._TASK_LINEAGE if key[0] == str(tmp_path)]:
+        del pr._TASK_LINEAGE[key]
+    assert set(pr._read_lineage(tmp_path, ["grand-1"])) == {"grand-1"}  # remembered; its parent mid-1 is bound to B
+    attempts, real = [], pr._read_lineage
+    monkeypatch.setattr(pr, "_read_lineage", lambda *args, **_kwargs: attempts.append(sorted(args[1])))  # None: busy
+    assert pr.RoomResolver(tmp_path).warm(["grand-1"]) is True and attempts == []
+    monkeypatch.setattr(pr, "_read_lineage", real)
+    counts = _count_store_work(monkeypatch)
+    resolver = pr.RoomResolver(tmp_path)
+    assert resolver.warm(["grand-1"]) is True and resolver("grand-1") == rooms["b"] and counts["open_store"] == 0
 
 
 def _request(root, body):
