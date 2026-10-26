@@ -7,7 +7,7 @@ import json
 import logging
 import pathlib
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ouroboros.cost_projection import COST_ALIAS_PAIRS, COST_OPENNESS_FIELDS, normalize_task_result_cost_planes
 from ouroboros.task_store import list_documents, patch_document, read_document
@@ -310,6 +310,32 @@ def load_task_result(
         _admit_stored(data, tid, strict=strict, noun="task result authority")
         result = _normalize_swarm_efficiency(data)
     return (result, stamp) if signed else result
+
+
+def admitted_results(drive_root: Any, task_ids: Iterable[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+    """``load_task_result(strict=True)`` of many ids in ONE read, keyed by the ids as given, where a
+    refusal (an invalid id, a row whose identity or status does not bind) and an absence are both
+    ``None``: what a reader that turns every refusal into "no fact" needs
+    (``dialogue_provenance.task_lineage_lookup``). A store that cannot be read still raises."""
+    from ouroboros.task_store import documents_by_ids
+
+    valid: Dict[str, str] = {}
+    for task_id in task_ids:
+        try:
+            valid[str(task_id)] = validate_task_id(task_id)
+        except ValueError:
+            valid[str(task_id)] = ""
+    documents = documents_by_ids(drive_root, sorted({tid for tid in valid.values() if tid}))
+    results: Dict[str, Optional[Dict[str, Any]]] = {}
+    for task_id, tid in valid.items():
+        data = documents.get(tid) if tid else None
+        try:
+            if data is not None:
+                _admit_stored(data, tid, strict=True, noun="task result authority")
+        except ValueError:
+            data = None
+        results[task_id] = None if data is None else _normalize_swarm_efficiency(data)
+    return results
 
 
 def _refuse_occupied(drive_root: Any, task_id: str, *, write: bool) -> None:

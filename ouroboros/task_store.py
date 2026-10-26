@@ -323,8 +323,9 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        fetched = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
-    return {str(document.get("task_id")): document for document in _decode(*fetched)}
+        rows, handoffs = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
+    # Keyed by each row's stored id: a body that names another task never stands for that one.
+    return {str(record["task_id"]): document for record, document in zip(rows, _decode(rows, handoffs))}
 
 
 # A display read (``task_reads``: history cards; ``effective_task_result`` with

@@ -48,7 +48,7 @@ import hashlib
 import json
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
@@ -212,7 +212,11 @@ def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
         return {}
     facts, authority = membership_facts(root), _authority(store)
     grouped: Dict[str, List[Entry]] = {}
-    for entry in _projection_rows(root, frontier):
+    projected = _projection_rows(root, frontier)
+    # The rows' task lineages in one read a generation (``RoomResolver.warm``), not one read per task.
+    facts.rooms.warm({str(entry[1].get(key) or "") for entry in projected
+                      for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+    for entry in projected:
         for room in rooms_of_row(entry[1], facts):
             grouped.setdefault(room, []).append(entry)
     rooms: Dict[str, List[Entry]] = {}
@@ -279,7 +283,9 @@ class LegacyUnit:
 
 _RowSet = Tuple[FrozenSet[str], Optional[Dict[str, Any]], int]  # row_sha256 set, time span, first position
 _RETELLING_CHARS: Dict[str, Dict[str, int]] = {}
-_UNITS: Dict[str, Tuple[Tuple[Any, ...], List[LegacyUnit]]] = {}
+_Triple = Tuple[str, str, str]  # a row's (task, parent, root) ids, as the room rule takes them
+_UNITS: Dict[str, Tuple[Tuple[Any, ...], Tuple[_Triple, ...], Optional[Tuple[int, ...]], List[LegacyUnit]]] = {}
+_SPAN_ROWS: Dict[str, Dict[Tuple[int, int], List[Entry]]] = {}
 
 
 FALLBACK_REFUSAL_PREFIX = "fallback_refusal:"
@@ -307,17 +313,54 @@ def _exact_range(pointer: Mapping[str, Any]) -> Optional[Tuple[int, int]]:
     return span[0], span[1]
 
 
+def _span_rows(root: pathlib.Path, spans: Iterable[Tuple[int, int]]) -> Dict[Tuple[int, int], List[Entry]]:
+    """Every stream row of each retained span, read once a process: a unit's exact range holds rows the
+    old memory had already read, and a new row lands after every range, so a span's rows never change
+    (on the owner's install 23 spans over the stream's first 12,400 rows, about 10 MB held until exit)."""
+    known = _SPAN_ROWS.setdefault(str(root.resolve()), {})
+    for start, end in sorted(set(spans) - set(known)):
+        lower, upper = chat_chain.position_boundary(root, start), chat_chain.position_boundary(root, end)
+        known[(start, end)] = [(address, row_meta(row), pos) for address, row, pos in
+                               chat_chain.iter_rows(root, lower=lower, upper=upper)]
+    return known
+
+
 def _legacy_row_sets(root: pathlib.Path, ranges: Dict[str, Tuple[str, Tuple[int, int]]],
                      facts: MembershipFacts) -> Dict[str, _RowSet]:
-    """Each retained unit's own room and ordinal interval, without reading the preceding chain."""
-    store = ChronicleStore(root)
+    """Each retained unit's own room and ordinal interval, without reading the preceding chain: its span's
+    rows (``_span_rows``) that the room rule puts in its room under the current membership facts, the
+    rows' task lineages read together first, so a recovered lineage or a new binding counts at once."""
+    spans = _span_rows(root, {bounds for _room, bounds in ranges.values()})
+    facts.rooms.warm({str(entry[1].get(key) or "") for bounds in {bounds for _room, bounds in ranges.values()}
+                      for entry in spans[bounds] for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+    rooms: Dict[Tuple[int, int], List[FrozenSet[str]]] = {}
     sets = {}
     for record_id, (room, bounds) in ranges.items():
-        entries = _room_entries(root, store, room, bounds)
+        if not str(room).lstrip("-").isdigit():  # the room-less retelling names no chat (``_room_entries``)
+            sets[record_id] = (frozenset(), None, -1)
+            continue
+        if bounds not in rooms:
+            rooms[bounds] = [rooms_of_row(entry[1], facts) for entry in spans[bounds]]
+        entries = [entry for entry, held in zip(spans[bounds], rooms[bounds]) if room in held]
         stamps = [row.get("ts") for _addr, row, _pos in entries]
         sets[record_id] = (frozenset(address["row_sha256"] for address, _row, _pos in entries),
                            source_time_span(stamps) if stamps else None, entries[0][2] if entries else -1)
     return sets
+
+
+def _task_triples(entries: Iterable[Entry]) -> Tuple[_Triple, ...]:
+    """The distinct (task, parent, root) ids of the rows that name a task: what the room rule asks the lineage."""
+    return tuple(sorted({(str(meta.get("task_id") or ""), str(meta.get("parent_task_id") or ""),
+                          str(meta.get("root_task_id") or "")) for _address, meta, _pos in entries if meta.get("task_id")}))
+
+
+def _lineage_answers(facts: MembershipFacts, triples: Tuple[_Triple, ...]) -> Optional[Tuple[int, ...]]:
+    """The room rule's answer for each triple, the one membership input ``facts.fingerprint`` leaves out: a
+    task result admitted later, or a lineage the store could not read under contention, changes it with
+    no row written. ``None`` while the store cannot answer every task: a count made then is not reused."""
+    if not facts.rooms.warm({task_id for triple in triples for task_id in triple} - {""}):
+        return None
+    return tuple(int(facts.rooms(*triple) or 0) for triple in triples)
 
 
 def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
@@ -333,8 +376,9 @@ def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
 def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     """Every legacy record and journal gap, in the store's pointer order, with its folded verdict.
 
-    The verdicts depend only on the chronicle's authority, the registry facts and the chat
-    generations, so the last answer is reused while all three are unchanged.
+    The verdicts depend only on the chronicle's authority, the registry facts and the room rule's
+    answers for the tasks of the units' rows (the rows themselves never change, ``_span_rows``), so the
+    last answer is reused while all three are unchanged: a row written since changes none of them.
     """
     if not store.log_path.exists():
         return []
@@ -342,15 +386,20 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     authority, facts = _authority(store), membership_facts(root)
     from ouroboros import dialogue_store as ds
     ds.require_imported(root, "chat")
-    key = (authority, facts.fingerprint(), ds.stream_end(root, "chat"))
+    key = (authority, facts.fingerprint())
     cached = _UNITS.get(str(root.resolve()))
-    if cached is not None and cached[0] == key:
-        return list(cached[1])
+    if cached is not None and cached[0] == key and cached[2] is not None \
+            and _lineage_answers(facts, cached[1]) == cached[2]:
+        return list(cached[3])
     pointers = store.legacy_pointer_rows()
     refusals = fallback_refusals(store.scan_state())
     chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
     ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
               if (span := _exact_range(pointer)) is not None}
+    bounds = {span for _room, span in ranges.values()}
+    spans = _span_rows(root, bounds)
+    triples = _task_triples(entry for span in bounds for entry in spans[span])
+    answers = _lineage_answers(facts, triples)  # before the rows are counted: a lineage moving meanwhile recounts next call
     row_sets = _legacy_row_sets(root, ranges, facts)
     units = []
     for pointer in pointers:
@@ -365,7 +414,7 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
             retelling_chars=chars.get(record_id, 0),
             folded=bool(pointer.get("folded_into")) or (bool(rows) and uncovered == 0),
             refusal=dict(refusal) if isinstance(refusal, dict) else None, ts_span=span, first_pos=first))
-    _UNITS[str(root.resolve())] = (key, units)
+    _UNITS[str(root.resolve())] = (key, triples, answers, units)
     return list(units)
 
 

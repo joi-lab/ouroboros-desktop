@@ -718,16 +718,21 @@ class RoomResolver:
             self.answers[tid] = chat
         return chat
 
-    def warm(self, task_ids: Any) -> None:
-        """Read the lineage of every unseen id and of its unseen ancestors, ONE transaction per
-        generation, before the rule walks them one id at a time (a page names dozens)."""
-        wanted = {str(tid) for tid in task_ids if tid}
-        while unseen := {tid for tid in wanted if (str(self.root), tid) not in _TASK_LINEAGE} - self.misses:
-            read = _read_lineage(self.root, unseen)
+    def warm(self, task_ids: Any) -> bool:
+        """Read the lineage of every unseen id and of its unseen ancestors (a remembered id's
+        included), ONE transaction per generation, before the rule walks them one id at a time (a
+        page names dozens); ``False`` when the store could not answer them all now."""
+        wanted, seen = {str(tid) for tid in task_ids if tid}, set()
+        while wanted:
+            seen |= wanted
+            unseen = {tid for tid in wanted if (str(self.root), tid) not in _TASK_LINEAGE} - self.misses
+            read = _read_lineage(self.root, unseen) if unseen else {}
             if read is None:
-                return
+                return False
             self.misses.update(unseen - read.keys())
-            wanted = {row[key] for row in read.values() for key in ("parent_task_id", "root_task_id") if row[key]}
+            known = (read.get(tid) or _TASK_LINEAGE.get((str(self.root), tid)) for tid in wanted)
+            wanted = {row[key] for row in known if row for key in ("parent_task_id", "root_task_id") if row[key]} - seen
+        return True
 
 
 def project_chat_for_task_tree(

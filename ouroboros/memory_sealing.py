@@ -5,6 +5,7 @@ import json
 
 from ouroboros import chat_chain, dialogue_store, memory_inventory
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
+from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
 
 
 def failed_work_units(root, store):
@@ -70,20 +71,26 @@ def capture_terminal_rows(root, records):
     tasks = {task_id for _room, task_id in starts}
     facts, grouped, after = memory_inventory.membership_facts(root), {}, lower - 1
     while entries := dialogue_store.task_rows(root, tasks, stream="chat", after=after, before=upper):
+        chosen = []
         for entry in entries:
             row = entry.row
             task_id = str(row.get("task_id") or "")
             host = row.get("type") in ("task_summary", "project_completion_summary")
             final = row.get("direction") == "out" and not row.get("is_progress") and (
                 row.get("terminal_origin") or row.get("task_terminal_status") or row.get("task_phase") == "finalizing")
-            if task_id not in tasks or not (host or final):
-                continue
-            rooms = memory_inventory.rooms_of_row(memory_inventory.row_meta(row), facts)
-            for address, _row, pos in chat_chain._addressed(root, (entry,)):
-                for room in rooms:
-                    key = (room, task_id)
-                    if key in starts and pos > starts[key]:
-                        grouped.setdefault(key, []).append((address, row, pos))
+            if task_id in tasks and (host or final) and not is_a2a_chat_id(row.get("chat_id", 1)):
+                chosen.append((entry, task_id))
+        # The page's terminal rows: their task lineages in one read, then their rooms; addressed together.
+        facts.rooms.warm({str(entry.row.get(key) or "") for entry, _task in chosen
+                          for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+        chosen = [(entry, task_id, memory_inventory.rooms_of_row(memory_inventory.row_meta(entry.row), facts))
+                  for entry, task_id in chosen]
+        for (address, row, pos), (_entry, task_id, rooms) in zip(
+                chat_chain._addressed(root, [entry for entry, _task, _rooms in chosen]), chosen):
+            for room in rooms:
+                key = (room, task_id)
+                if key in starts and pos > starts[key]:
+                    grouped.setdefault(key, []).append((address, row, pos))
         after = entries[-1].seq
     return grouped
 

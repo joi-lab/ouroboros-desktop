@@ -34,7 +34,8 @@ and wake the pass dispatched joined into its count; its counts are equal at k=1 
 after each ordinary activity of a live install (``tests._cost_driver.ACTIVITIES``: a task completes,
 a task records one LLM attempt, a new child drive appears) costs the same at both sizes; and a
 positive companion per duty (an addressed input change) shows the work still happens. ``B8`` holds
-the producer and loop boundaries (``P:*``) flat on their FIRST pass. The scale root carries the
+the producer and loop boundaries (``P:*``) flat on their FIRST pass. ``B9`` holds the memory's chat
+reader, a whole-stream reader, to a few read transactions per page of rows, never one per row. The scale root carries the
 shapes of the 22.10 class in counted numbers (tests/_scale_root.py).
 """
 
@@ -280,6 +281,42 @@ def test_room_history_is_flat(measured, tag):
     for k in (K_SMALL, measured["large"]):  # a page, never the import window's refusal
         assert measured[k]["import"]["state"] == "done" and measured[k]["responses"][tag]["status"] == 200, k
     assert_flat(measured, tag)
+
+
+# ---- B9: the memory's addressed reads ------------------------------------------------------------
+
+def test_b9_the_memory_reader_looks_rows_up_a_page_at_a_time(measured):
+    """The memory's chat reader (``chat_chain.iter_rows``) is a whole-stream reader: its rows grow with the
+    stream, so the flat law does not hold it; its lookups must not grow per row. The positions and legacy
+    hints of each page of rows take one read each, beside the page itself. On the owner's install (24.10)
+    a lookup per row cost two read transactions per open row of 241 rooms on every turn of Main, about
+    50,000 reads a minute for a quarter hour after the update."""
+    for k in (K_SMALL, measured["large"]):
+        rows, begins = measured[k]["B9_rows"], boundary(measured, "B9", k)["counts"].get("begins", 0)
+        pages = -(-rows // 500)
+        # The stream's own pages (one more when it ends on a page edge), two lookups a page, its end and import check.
+        assert rows > 150 * k and begins <= 3 * pages + 3, (k, rows, begins)
+
+
+def _main_view_begins(root: pathlib.Path, rows: int) -> int:
+    """Read transactions of one cold Main view over ``rows`` open rows spread across 241 rooms."""
+    from ouroboros import memory_view as mv
+    from tests import _memory_capture_shape as shape
+
+    root.mkdir(parents=True)
+    with CostMeter(root) as meter:  # the stores' per-thread connections open under the meter, so it sees their reads
+        made = shape.open_rows(root, rows)
+        tagged("view", lambda: mv.capture_memory_view(root, made["task"], made["spec"]))
+    return meter.snapshot("view")["counts"].get("begins", 0)
+
+
+def test_b9_main_view_reads_grow_with_pages_of_open_rows_not_with_rows(tmp_path):
+    """The whole view behind each Main turn, not only its row reader: its rows' positions, texts, rooms
+    and authors are read a page at a time. Twice the open rows over the same 241 rooms cost the extra
+    page's reads only; the view that looked each row up alone spent 2,615 read transactions on 1,300."""
+    small, large = _main_view_begins(tmp_path / "small", 650), _main_view_begins(tmp_path / "large", 1_300)
+    extra_pages = -(-1_300 // 500) - -(-650 // 500)
+    assert large - small <= 3 * extra_pages, (small, large)
 
 
 # ---- B6: the rest law of the named maintenance jobs ---------------------------------------------
