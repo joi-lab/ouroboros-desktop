@@ -868,6 +868,7 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
     from ouroboros.outcomes import REASON_OWNER_REQUESTED_FINALIZATION, normalize_outcome_axes
     from ouroboros.post_task_checkpoint import post_task_synthesis_is_open
     from ouroboros.task_status import FINAL_STATUSES
+    from supervisor.owner_stop import owner_stop_ending
 
     record = {**event, **{key: value for key, value in result.items() if value not in (None, "")}}
     sources = [s.get("outcome_axes") for s in (event, result) if isinstance(s.get("outcome_axes"), dict)]
@@ -883,11 +884,18 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
     lifecycle = axis.get("lifecycle") or status
     if lifecycle in {"cancelled", "cancel_requested"}:
         return "cancelled"
+    command, ending = owner_stop_ending(record)  # Stop now is Stopped whatever it kept
+    if command == "stop_now":
+        return "cancelled"
+    unanswered = ending == "stop"  # a Wrap up without an answer: its own failure is the stop
     author_finished = axis.get("objective") == "pass" and (axes.get("objective") or {}).get("source") == "author_acceptance"
-    if (lifecycle == "failed" or axis.get("execution") in {"failed", "infra_failed"}
+    if (((lifecycle == "failed" or axis.get("execution") == "failed") and not unanswered)
+            or axis.get("execution") == "infra_failed"
             or axis.get("objective") == "fail" or (axis.get("review") == "fail" and not author_finished)
             or {axis.get("artifacts"), str(record.get("artifact_status") or "").lower()} & {"failed", "missing"}):
         return "error"
+    if unanswered:
+        return "cancelled"
     if str(record.get("reason_code") or "") == REASON_OWNER_REQUESTED_FINALIZATION:
         return "done"
     if (lifecycle == "rejected_duplicate" or bool((axes.get("objective") or {}).get("warning"))
@@ -1242,11 +1250,16 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     raw_reason = str(result.get("reason_code") or event.get("reason_code") or "")
     origin = result.get("cancel_origin") or event.get("cancel_origin")
     phase = outcome_phase(result, event)
+    from supervisor.owner_stop import owner_stop_ending
+    stopped = owner_stop_ending({"reason_code": raw_reason, "cancel_origin": origin,
+                                 "outcome_axes": {"execution": execution}})[1] == "stop"
     reason, custody = _custody_debt_reason(raw_reason, result, event)
     if reason in {REASON_FINAL_MESSAGE, ""}:
         reason = str(execution.get("reason_code") or reason)
     review_cause = (cause if status and (status != ACCEPTANCE_ACCEPTED or cause in TASK_CAUSE_PHRASES)
-                    and (phase in {"done", "warn"} or recorded_author_stop(decision)) else "")
+                    and (phase in {"done", "warn"} or recorded_author_stop(decision)
+                         or (phase == "error" and status != ACCEPTANCE_ACCEPTED and not custody
+                             and reason in {REASON_FINAL_MESSAGE, ""})) else "")
     # Author-accepted completion is not reviewer approval. Required mode, explicit
     # debts and unknown enforcement are not inferred optional from a reason string.
     trigger = str(review.get("trigger") or "").removesuffix("_after_agent_tool").removesuffix("_after_agent_advisory")
@@ -1260,9 +1273,9 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     held = phase == "error" and str(objective.get("source") or "").startswith("plan_review_")
     if reason == "foreign_install_root" and (result.get("reason_detail") or event.get("reason_detail")):
         clause = str(result.get("reason_detail") or event["reason_detail"])
-    elif raw_reason == REASON_OWNER_REQUESTED_FINALIZATION:
-        clause = review_cause = ""  # an owner-requested stop carries its own marker
-    elif phase == "cancelled" and isinstance(origin, dict) and origin:
+    elif raw_reason == REASON_OWNER_REQUESTED_FINALIZATION and not stopped:
+        clause = review_cause = ""  # a Wrap up's answer carries its own marker
+    elif (phase == "cancelled" or stopped) and isinstance(origin, dict) and origin:
         # The recorded cause and the relation the record PROVES (#1061).
         from supervisor.cancel_publication import cancel_cause_clauses
 
@@ -1300,8 +1313,13 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     if (objective.get("status") == "best_effort" and not clause and not objective.get("deferred_count")
             and raw_reason != REASON_OWNER_REQUESTED_FINALIZATION and review_cause in {"", "previous_revision_accepted"}):
         warning_clauses.append(TASK_CAUSE_PHRASES["partial_result"])
+    remainder = (execution.get("mutation_attribution") or {}).get("uncommitted_remainder") or {}
+    count = remainder.get("count")
+    remainder_clause = ("Uncommitted files in the saved candidate could not be checked" if remainder.get("state") == "unknown"
+                        else f"{count} uncommitted file{'s' if count != 1 else ''} remain{'s' if count == 1 else ''} in the saved candidate"
+                        if remainder.get("state") == "known" and type(count) is int and count > 0 else "")
     line = _join_cause_clauses([clause, *warning_clauses, _cause_phrase(review_cause, undescribed),
-                                _author_stop_rationale(decision, completion),
+                                _author_stop_rationale(decision, completion), remainder_clause,
                                 *_incident_cause_clauses(decision, reason),
                                 *_terminal_limitations(result, event, reason, held=held),
                                 TASK_CAUSE_PHRASES.get(custody, custody) if custody else ""])

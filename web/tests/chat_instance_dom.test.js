@@ -614,7 +614,8 @@ test('terminal task-bound review lifecycle resyncs canonical verdict without rec
         const owner = messages.children.find((node) => node.dataset.taskId === 'live-review');
         assert.ok(owner, 'source-complete lifecycle attaches to its owner card');
         const reviewHost = owner.querySelector('[data-live-reviews-host]');
-        assert.match(reviewHost?.innerHTML || '', /running/);
+        // A live run reads as work in progress (the moving mark beside its words), never a verdict.
+        assert.match(reviewHost?.innerHTML || '', /data-tone="working"><span class="status-mark"[^>]*data-shape="moving"[\s\S]*?in progress/);
         const initialHistoryCalls = calls.filter((url) => url.startsWith('/api/chat/history')).length;
         historyRows = [{
             chat_id: 2, role: 'system', system_type: 'skill_review',

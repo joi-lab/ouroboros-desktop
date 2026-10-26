@@ -91,10 +91,11 @@ fits your editing workflow.
 ```yaml
 ---
 name: weather                       # required, alnum/underscore/dash, ≤64 chars
+title: Weather                      # optional human title on Skills; name remains the technical id
 description: Live weather widget    # required, short summary
 version: 0.2.1                      # required, free-form (semver recommended)
 type: extension                     # instruction | script | extension
-runtime: python3                    # script skills: python/python3/bash/node/deno/ruby/go; extension entry modules are Python plugin.py
+runtime: python3                    # script interpreter; optional for Python extensions
 os: any                             # or [darwin, linux, win32]; governs new bundled offerings (legacy remote exception above)
 entry: plugin.py                    # type=extension only — relative to skill dir
 scripts:                            # type=script only
@@ -148,12 +149,12 @@ Markdown body explaining the skill to the user / reviewer / agent.
 Everything below the closing `---` becomes `manifest.body`.
 ```
 
-`runtime` is optional for `type: instruction` (instruction skills never
-execute), and required for `script` / `extension`. Allowed values are
-`python`, `python3`, `bash`, `node`, plus the v5.7.0 additions
-`deno`, `ruby`, `go`. The actual binary is resolved through
-`shutil.which` at exec time, so the operator's host must ship the
-runtime; otherwise `skill_exec` fails closed with a clear error.
+For `type: script`, `skill_exec` uses the manifest-level `runtime`, not a
+per-script override: `python`, `python3`, `bash`, `node`, `deno`, `ruby` or `go`.
+Empty, unsupported or unavailable runtimes fail at execution. Instructions never
+execute. Python extensions may omit `runtime`: the loader imports `entry`, which
+must export `register(api)`. Companions still require their own runtime and command
+(see "Declaring a companion process").
 
 Go scripts are compiled into a private temporary executable and then run with
 the caller's arguments unchanged, including arguments ending in `.go`. The
@@ -249,7 +250,7 @@ There is no additional PluginAPI registration call.
 | `placement` | `composer.plus`, `composer.chips` or `message.action`. |
 | `action` | Required on placements: `draft.insert` with text ≤4000, `notice` with text ≤300, `open.tab`, or `skill.request`. No verb sends as the owner. |
 | `action.route`, `with`, `then` | `skill.request` POSTs to its own relative route; `with: none` (default), `draft` or `message`; `then: keep_draft` (default) or `clear_draft`. The host supplies the absolute URL. |
-| `source` | Required only for chips: `{route, refresh_s}`; relative GET route, refresh integer 15..3600 seconds; reply `{text, tone?: ok|warn|bad|muted, title?}`. |
+| `source` | Required for chips, optional for `provides: place`: `{route, refresh_s}`; relative GET route, refresh integer 15..3600 seconds; reply `{text, tone?: ok|warn|bad|muted, title?}`. A place source may also return `connect: [{account_id, conversation_id, label}]`; the four list states and identity rules are defined under “Declaring a place, tool effects and an icon”. |
 | `provides`, `runtime` | Engine kind `stt` or `tts`; required runtime `server` or `client`. Server engines declare a relative POST `route`; clients register from their host module. |
 | `destination` | Required for engines: `device`, `host` or `vendor:<Name>`. Describe the real processing destination. |
 | `languages`, `formats` | Optional lists of up to 64 nonblank strings ≤120 characters. Formats: `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav`. |
@@ -706,9 +707,8 @@ When you are writing or repairing a skill,
 `skill_preflight` runs cheap, offline syntax validators on the
 payload — in-process Python `compile()` for `.py` files (no
 `__pycache__` writes), `node --check` for `.js`/`.mjs`/`.cjs` (a
-declared module-widget entry is instead parsed as a classic script, the
-grammar the widget frame runs it in, so top-level `import`/`export` in the
-entry fails preflight),
+declared widget entry uses classic grammar unless `entry_type: module` opts
+into ESM grammar for the entry and declared JavaScript assets),
 `bash -n` for `.sh`/`.bash`, plus a manifest parse, explicit
 entry/script existence checks (including a module widget's `render.entry`
 existence and containment), and static widget render-schema
@@ -932,7 +932,7 @@ A connector skill (it connects a place: a Slack workspace, a Telegram group, an 
 manifest; core reads them from the reviewed, published release:
 
 ```yaml
-icon: ui/icon.svg              # or a host icon name; geometry only, drawn by the host in currentColor
+icon: ui/icon.svg              # required author asset for provides: place; geometry in currentColor
 tools:
   - name: slack_send
     effect: message            # read | message | write; absent or unknown = write
@@ -949,7 +949,7 @@ contributes:
     destination: vendor:Slack
     scope: account             # account | conversation
     wakes: [direct_message, group_dm, mention, my_thread, reply_to_me]   # suggestions; the owner edits the list
-    source: {route: status, refresh_s: 15}                               # optional status chip
+    source: {route: status, refresh_s: 15}                               # optional status and Connect choices
 ```
 
 - `effect` is one fact with three consumers: Advises (autonomy) refuses everything but a declared read; a Silent or
@@ -960,8 +960,61 @@ contributes:
   while any place of that connector is Silent or Paused, and the refusal says so.
 - `icon` is reduced at staging to viewBox and geometry (path, circle, ellipse, line, polyline, polygon, rect, g),
   bounded, with fills and strokes set to `currentColor`; anything else falls back to the house glyph.
+  Authors of `provides: place` skills must include `ui/icon.svg` and declare `icon: ui/icon.svg`.
+  The fallback keeps an older or unavailable mark from hiding the place capability; it is not the authoring target.
 - `provides: place` requires `type: extension` and the `presence` permission. The Browse "Connectors" filter and
   "Connects <Service>" are derived from it; no tag or suffix is needed.
+- The connector carries the service name in its place `label`; the technical skill id stays in details.
+  Skills cards prefer the optional top-level, one-line `title`, then the place contribution's `label`, then `name`.
+  Catalog entries may carry `title`; it is display text, never a new skill identity. Place, instance, account and
+  signal labels render verbatim as authored content, outside the host's translation overlay.
+
+The declared `source` route may return `connect: [{account_id, conversation_id, label}]` beside its status
+`text`/`tone`. The host publishes the route as `source.url`; Connect reads it lazily with `cache: no-store`,
+without a new endpoint or credential probe. Every row needs a nonblank string `account_id`, a string
+`conversation_id` (empty may represent an explicit account-wide instance), and a nonblank string `label`.
+The ids identify the choice; a label never supplies identity. A `null` account is not a wildcard. Bad rows are
+dropped; a nonempty list with no valid rows is unavailable, not known empty.
+
+| Source response | Meaning in Connect |
+| --- | --- |
+| `connect` absent | No instance chooser is offered; the connector's declared default scope remains available. |
+| Known nonempty list | Show valid instances and mark exact connected identities as “Connected · Open”. |
+| `connect: []` | Known empty: “None offered yet”, with the declared connector settings door (Skills if none). |
+| Failed read, malformed response/list, or all rows invalid | Unavailable: keep the gap visible and offer “Try again”; do not invent an instance. A connector with no live source asks to be turned on. |
+
+The host's explicit “Whole account” action remains available in all four states; it is independent of the
+instance list and posts only `connector`. Selecting an instance posts its string ids and label through
+`POST /api/places`; the saved title is `<Service> · <label>`. A new identity starts Silent in one atomic write;
+repeat Connect preserves state, label, wakes and notes. Several identities can coexist without splitting or
+relabeling an existing broad place. Connectors remain listed with a place count and “Connect another”.
+
+A `provides: place` contribution may include `facts`, a list of the core fact names advertised in
+`/identity.presence_wake_facts` and connector-defined objects `{id: "signal.<slug>", label: "Human-readable signal"}`.
+A signal id must match `^signal\.[a-z0-9_-]{1,40}$`; its object has exactly `id` and `label`, and the label is
+non-empty text up to 120 characters. Fact ids must be unique. `wakes` remains the default wake suggestions
+and must be a subset of `facts` when that list is present; when `facts` is absent, only core wake facts may
+be suggested. An empty `facts` list permits only empty `wakes`. Core facts are plain strings; signals require
+labelled objects in `facts` and their id strings in `wakes` and event `facts`.
+
+Negotiate support through `/identity`: `presence_wake_signals: 1` advertises this seam. Older hosts may reject
+the `facts` manifest key, so do not publish signal declarations to a host without support. Intake accepts a
+signal only if the authenticated connector's current live place declaration lists it; another connector's
+declaration, a discovered-but-unloaded declaration, or arbitrary text cannot authorize it. Ordinary core fact
+intake remains compatible. New owner/tool signal choices likewise require that live declaration; existing
+choices remain readable and removable when the connector is off.
+
+Signal logic and its parameters belong to the connector's own settings. The host performs the existing fact
+membership matching, stores no new Place field, and does not match message text. A signal does not manufacture
+`mention`, addressed status or owner identity. The existing bot rule is unchanged: bot events require
+`from_bot` selected, and `from_bot` itself is an OR wake reason, not merely a gate requiring another selected match.
+
+```yaml
+facts: [mention, {id: signal.words, label: "Words you chose appear"}]
+wakes: [mention, signal.words]
+```
+
+This illustrates the supported declaration shape; it does not claim that a connector ships this signal.
 
 A place connector reports observations; the host decides attention. While running and
 authenticated, report every supported event within the connected place's granted
@@ -1370,7 +1423,7 @@ def register(api):
 
     # HTTP routes — mounted at /api/extensions/<skill>/<path>. GET/HEAD under
     # manifest, module/..., ui/<revision>/... and settings_section are
-    # host-owned (see "Loading more than one file").
+    # host-owned (see "Native modules and declared resources").
     api.register_route("search", handler=http_search, methods=("POST",))
 
     # WebSocket message handlers (inbound) and broadcasts (outbound).
@@ -1393,15 +1446,18 @@ def register(api):
     # configuration writes and markdown/json for explanatory diagnostics.
     # Rich widget-only components (media, stream, map, kanban, module JS)
     # belong on the Widgets page, not Settings.
-    # Hydration: before rendering a form/action the host issues GET on the
-    # component's own route. Answer 2xx with a JSON object
+    # Hydration: before rendering a form/action that has fields the host issues
+    # GET on the component's own route. Answer 2xx with a JSON object
     # {field_name: current_value} (strings) to pre-fill those fields; omit a
-    # field to show its declared default/first option, and never return a
-    # secret. 404/405 means "no current values", so the form renders from
-    # defaults; a failed read makes the host disable Save and tell the owner
-    # to reload. Password fields are never pre-filled, so treat an empty
-    # password on save as "unchanged". Reference: skills/telegram/plugin.py,
-    # GET+POST settings/save.
+    # field to show its declared default/first option, answer {} when nothing
+    # is stored, and never return a secret. 404/405 means the stored values
+    # are UNKNOWN: the form shows its defaults locked behind a warning until
+    # the owner chooses Edit anyway, after which Save sends every field, so a
+    # POST that replaces the whole document can erase what the owner never
+    # saw. Implement GET for any form that edits stored settings. Any other
+    # failed read disables Save and tells the owner to reload. Password
+    # fields are never pre-filled, so treat an empty password on save as
+    # "unchanged". Reference: skills/telegram/plugin.py, GET+POST settings/save.
     api.register_settings_section(
         "config",
         title="Search settings",
@@ -1471,12 +1527,16 @@ def register(api):
 `register_ui_tab` creates the tab on the Widgets page after the extension loads.
 Keep `widget.js` beside `plugin.py`; it renders into the provided `#root` element.
 
-The host fetches reviewed JS through `GET /api/extensions/<skill>/module/<entry>`,
-embeds it in an opaque-origin iframe (`sandbox="allow-scripts allow-pointer-lock
+The host fetches a classic entry (the default) through
+`GET /api/extensions/<skill>/module/<entry>` and inlines it; an
+`entry_type: "module"` entry instead loads natively from this mount's file lease
+("Native modules and declared resources" below). Either way it runs in an
+opaque-origin iframe (`sandbox="allow-scripts allow-pointer-lock
 allow-downloads"`, never `allow-same-origin`; see "What the frame may do"
-below), and injects the host bridge (`window.OuroborosWidget`, below) that
-forwards only `/api/extensions/<skill>/...` requests and the skill's own
-WebSocket events. The `widget_module_safety` review item still checks the
+below) with the host bridge (`window.OuroborosWidget`, below), which forwards
+only `/api/extensions/<skill>/...` requests, GET/HEAD reads of an ESM mount's
+own declared files and the skill's own WebSocket events. The
+`widget_module_safety` review item still checks the
 source; do not rely on the sandbox alone. A replacement interface keeps the
 same promises through the host-side protocol in
 [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md).
@@ -1525,14 +1585,19 @@ can raise the same error.
 The frame has no scriptable network of its own: `connect-src` stays closed, so
 `XMLHttpRequest`, `WebSocket`, `EventSource` and beacons are refused by the
 document policy, and every request goes through the parent over one nonce-bound
-message grammar (passive image, media and font loads from your own route prefix
-are the one exception — "What the frame may do" below). The bridge exposes:
+message grammar (passive image, media and font loads from your own route prefix,
+and an ESM widget's native imports, stylesheets and passive loads of its own
+declared files, are the exceptions — "What the frame may do" below). The bridge
+exposes:
 
 - **`OuroborosWidget.fetch(url, init)`** (also installed as the frame's
-  `fetch`). `url` must resolve under `/api/extensions/<skill>/...`; anything
-  else — another skill's prefix, a host API, an absolute URL — rejects with
-  `module widget fetch outside extension route prefix`. The parent issues the
-  request with the owner's session and refuses to follow a redirect — the
+  `fetch`). `url` must resolve under `/api/extensions/<skill>/...`, or, for an
+  ESM widget, be a GET/HEAD of one of its declared files (a relative `url`
+  resolves against the mount's file lease, the document base); anything
+  else — another skill's prefix, a host API, another mount's files, an off-origin
+  URL — rejects with `module widget fetch outside extension route prefix`. The
+  parent sends a route request with the owner's session and a declared-file
+  read with `credentials: "omit"`, and refuses to follow a redirect — the
   prefix is checked once, before the request, and a followed hop would carry
   your request and the owner's session wherever it pointed — so a route that
   answers with a redirect rejects instead of being followed; it streams the
@@ -1579,13 +1644,15 @@ are the one exception — "What the frame may do" below). The bridge exposes:
   iframe or declarative render is a registration error rather than a theme claim.
 
 - **`OuroborosWidget.download(name, source)`** saves an existing `Blob`, a
-  `data:` URL, or a URL under this skill's extension route prefix. It resolves
-  to the host's delivery result or rejects with a visible error. In the desktop
-  app it uses the same native Downloads owner as other file controls; in a
-  browser success means the download was started, not that disk writing was
-  confirmed. Large backend files should be passed as route URLs so the host
-  does not turn an HTTP stream into a Blob. Ordinary `<a download>` controls
-  using these routes, `data:` URLs or frame-created Blob URLs use this same path.
+  `data:` URL, a URL under this skill's extension route prefix or an ESM
+  widget's declared file. It resolves to the host's delivery result or rejects
+  with a visible error. In the desktop app it uses the same native Downloads
+  owner as other file controls; in a browser success means the download was
+  started, not that disk writing was confirmed. A declared file is saved as its
+  captured bytes (the 32 MiB set bounds it); pass large backend files as route
+  URLs so the host does not turn an HTTP stream into a Blob. Ordinary
+  `<a download>` controls using these URLs, `data:` URLs or frame-created Blob
+  URLs use this same path.
 
 Out-of-process routes execute standard Starlette responses in the child and
 stream their ordered headers and body to the host, including `FileResponse`
@@ -1612,7 +1679,7 @@ stays an opaque origin: no SPA cookies, storage or DOM), never top navigation,
 popups, forms (`form-action` does not fall back to `default-src`, so a form
 submit would be an exfiltration channel), modals or clipboard read.
 
-The module frame's document policy, built by the host from the page origin
+The classic module frame's document policy, built by the host from the page origin
 (an opaque frame's `'self'` matches nothing, so sources are absolute):
 
 ```
@@ -1625,11 +1692,14 @@ media-src data: blob: <origin>/api/extensions/<skill>/;
 font-src data: blob: <origin>/api/extensions/<skill>/
 ```
 
-What that gives you, verified on Chromium and WebKit through
+ESM opt-in replaces script/resource prefixes with the mount's finite asset URL,
+also admits stylesheets there and sets that document base. `connect-src` stays
+closed. The classic capabilities below are verified on Chromium and WebKit through
 `tests/test_widgets_ui_browser_capabilities.py`:
 
-- **Sibling scripts** from your module prefix, classic (`<script src>`) or
-  `import()` — "Loading more than one file" below.
+- **Classic sibling scripts** use `module/<relative path>` under your own
+  extension prefix, via `<script src>` or `import()`; network authentication
+  still applies. For leased files, see "Native modules and declared resources".
 - **WebAssembly**: `'wasm-unsafe-eval'` admits `WebAssembly.instantiate` and
   `instantiateStreaming` on bytes your own route serves — the recipe below.
 - **Workers** from `blob:` URLs (`new Worker(URL.createObjectURL(new Blob([src])))`);
@@ -1639,8 +1709,9 @@ What that gives you, verified on Chromium and WebKit through
 - **Clipboard write** (`navigator.clipboard.writeText`) from a user click; the
   clipboard is never readable from the frame.
 - **Downloads**: module widgets use `OuroborosWidget.download` or ordinary
-  `<a download>` controls for their own route files, data URLs and frame-created
-  Blobs; the existing host save path supports both the desktop app and browsers.
+  `<a download>` controls for their own route files, declared ESM files, data
+  URLs and frame-created Blobs; the existing host save path supports both the
+  desktop app and browsers.
   A legacy `kind: iframe` route page has no module bridge: its downloads still
   depend on the embedding engine. Use a module widget or a host-side declarative
   `file` component when a native Downloads handoff is required.
@@ -1680,7 +1751,7 @@ declaration, so every framed or declarative widget tab carries an explicit value
 |---|---|---|
 | `auto` | Starts when the Widgets page is shown; leaving the page stops it. For cheap instruments (a quota gauge, a status board). | `declarative` — the only value it accepts: the host draws it, there is nothing to start |
 | `manual` | The card shows the title, icon, and a Start button; the program runs only after the owner presses Start. Leaving the page is an ordered Stop: for `kind: module` the host sends the dispose message and gives the widget up to one second to save before the frame is removed; a `kind: iframe` route frame has no bridge and is removed at once. | `module`, `iframe` |
-| `retain` | "Keep running": starts on the first Widgets visit like `auto` and keeps running while the owner is on other pages; the card's status reads "Keeps running". It stops on the owner's Stop, on skill disable / unload / delete (also while Widgets is hidden), when the window reloads, and when Ouroboros closes. A server reconnect with the same served code keeps the frame when the skill is live again with the same revision; a changed revision stops it in order and starts it again. | — |
+| `retain` | "Keep running": starts on the first Widgets visit like `auto` and keeps running while the owner is on other pages; the card's status reads "Keeps running". It stops on the owner's Stop, on skill disable / unload / delete (also while Widgets is hidden), when the window reloads, and when Ouroboros closes. A server reconnect with the same served code keeps the frame when the skill is live again with the same revision; a changed revision stops it in order and starts it again. An `entry_type: "module"` widget also restarts on a new publication of the same bytes, because its file lease ends with the old one. | — |
 
 Rules every module author follows:
 
@@ -1784,14 +1855,13 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 `WebAssembly.instantiateStreaming(OuroborosWidget.fetch(url))` works too
 (the bridge hands back a real `Response`; serve the module as
 `application/wasm`). The module endpoint (`GET /api/extensions/<skill>/module/...`)
-stays JavaScript-only; binary assets always travel through the skill's own
-routes. The frame CSP admits this with `'wasm-unsafe-eval'` — there is no plain
+stays JavaScript-only; classic widgets serve binaries through their own routes; opted-in module widgets
+may instead declare them in `assets` (below). The frame CSP admits this with `'wasm-unsafe-eval'` — there is no plain
 `'unsafe-eval'`, so WebAssembly is the one compiled-code path.
 
 #### Assets: fonts, audio, video, images
 
-Widget assets are ordinary payload files and travel the same way as
-WebAssembly: your own routes serve them (`register_route` returning a standard
+For classic widgets, assets travel the same way as WebAssembly: your own routes serve them (`register_route` returning a standard
 response, streamed from an isolated child when required), the
 widget references them by `/api/extensions/<skill>/...` URL, and review
 sees each non-text asset as a content-hash-bound descriptor. The module
@@ -1833,57 +1903,70 @@ from your routes. Two rules come with that:
   img.src = URL.createObjectURL(blob);
   ```
 
-#### Loading more than one file
+#### Native modules and declared resources
 
-Every reviewed `.js`/`.mjs` file in the skill directory is served by the module
-endpoint, keyed by its path relative to the skill directory:
-`GET /api/extensions/<skill>/module/lib/x.js`. The host captures all of them
-when the module tab registers (the same moment it reads the entry), so the frame
-always receives the bytes the reviewed bundle loaded from; files under
-`node_modules`, `.ouroboros_env`, other cache directories, and dot-prefixed
-paths (directories and files) are never served, and only UTF-8 text is
-admitted — a non-UTF-8 `.js` fails the load exactly like a broken entry; the
-`.js`/`.mjs` suffix match is case-sensitive. The host owns GET/HEAD for the exact
-paths `manifest` and `settings_section` and for everything under `module/` in
-`/api/extensions/<skill>/`, so do not register skill routes there: a route
-registered at those paths is shadowed for GET/HEAD, while POST and the other
-methods are unaffected. Load a sibling either as a
-classic script or as an ES module:
+Opt in explicitly in `ui_tab.render` or `api.register_ui_tab(..., render=...)`:
 
-```html
-<script src="/api/extensions/<skill>/module/lib/x.js"></script>
+```python
+render={
+    "kind": "module", "entry_type": "module", "entry": "app/main.js",
+    "assets": ["app/helpers.js", "app/detail.mjs", "style.css", "images/logo.png", "data.bin"]
+}
 ```
 
-```js
-const { helper } = await import('/api/extensions/<skill>/module/lib/x.mjs');
-```
+`entry_type` is `classic` by default, even for `.mjs`. `module` runs the entry
+as a native browser module after the host bootstrap. `entry` is included
+implicitly; `assets` lists every other browser file, relative to the skill
+root. No globs, directory declarations, package resolution or automatic import
+crawl exist. Omitted `assets` means an empty list. Classic entries remain bare
+filenames; module entries may use subdirectories.
 
-The endpoint sends `Access-Control-Allow-Origin: *`, which the opaque-origin
-frame needs for `import()`; relative specifiers inside a module loaded this way
-resolve against its URL, so `import './y.mjs'` reaches `module/lib/y.mjs`.
+The combined set allows at most 256 distinct paths and 32 MiB of captured
+bytes per widget. Each path is at most 240 characters; segments start with an
+ASCII letter, digit, `_` or `-` and contain only those characters plus `.`.
+Paths and suffixes are case-sensitive. Symlinks, dot-prefixed segments,
+traversal, excluded dependency/cache files and missing files refuse loading.
+Accepted suffixes are `.js .mjs .css .json .txt .wasm .bin`,
+`.png .jpg .jpeg .gif .webp .avif .svg .ico`, `.woff .woff2 .ttf .otf`,
+`.mp3 .wav .ogg .mp4 .webm`. Text formats must be UTF-8. HTML applications and
+native worker graphs are outside this contract; larger runtime downloads
+continue to use the existing extension routes.
 
-A sibling loaded directly may be refused by the network gate: do not assume
-that an opaque frame's request carries the session (see the browser-dependent
-asset behaviour above). The declared entry is fetched by the host with the
-owner's session and inlined. For portable sibling loading on a network
-install, fetch the source through the bridge and run it from a `blob:` URL, which
-`script-src` admits:
+The host captures these exact reviewed bytes at publication, in both in-process
+and isolated-dependency loading. Native static imports, re-exports, valid
+cycles and computed or delayed `import()` resolve normally within that set.
+For module-relative resources use `new URL('../images/logo.png', import.meta.url)`.
+The document base is the captured skill root: `<link href="style.css">`, CSS
+`@import`, CSS-relative `url()`, images and fonts work without bundling.
+`fetch('./data.bin')` resolves from that document base through the existing
+parent bridge; `fetch(new URL(..., import.meta.url))` is module-relative.
+Explicit `/api/extensions/<skill>/...` requests retain their existing bridge.
 
-```js
-const src = await (await OuroborosWidget.fetch('/api/extensions/<skill>/module/lib/x.js')).text();
-const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-await import(url);   // relative specifiers inside x.js no longer resolve: import by URL
-```
+Each open widget receives a temporary read URL for only its declared files.
+The frame can see and share it; anyone holding it can read those bytes while
+valid. It grants no session, settings, chats, other skill or control-API access.
+HTTP exposes the URL in transit; HTTPS protects transport. The parent renews
+its 120-second lease every 40 seconds. Stop/disposal, unload/reload, disable,
+authority withdrawal, logout and password changes end access. A lost cleanup
+request or a crashed/disconnected tab leaves at most 120 seconds after the last
+accepted renewal. Already delivered or authorized in-flight bytes cannot be
+recalled. Renewal extends a copied link too. Files edited on disk never replace
+bytes under an old URL; a new publication requires a new lease and mount.
 
-Alternatively keep everything the widget needs in the entry file. The
-declared `entry` itself still executes as a classic script even when it is named
-`.mjs`, so keep `import`/`export` statements in the files you load with
-`import()`, not in the entry. The frame's `script-src` admits exactly your
-module prefix (`<origin>/api/extensions/<skill>/module/`), `blob:` URLs and
-inline scripts — a script from any other path or skill is refused by the
-document policy. Hub packages are bounded by the caps above; a
-locally installed skill has no per-file cap, so its captured JavaScript is
-bounded only by what you ship.
+The iframe remains opaque (`allow-same-origin` is absent). Responses are
+`no-store`, `nosniff`, have explicit MIME types, suppress referrers and permit
+credentialless CORS from the opaque origin. The host's access/fault logs redact
+the lease URL; a reverse proxy must redact its own access logs. Host implementers:
+[`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md).
+
+Classic widgets retain the existing `/api/extensions/<skill>/module/...`
+endpoint and inline entry semantics. It captures reviewed UTF-8 `.js`/`.mjs`
+files outside dependency/cache and dot-prefixed paths. Direct sibling loads
+still depend on network authentication; opting into the contract above gives
+ordinary modules and resources the same loader on local and network installs.
+GET/HEAD for `manifest`, `module/...`, `ui/<revision>/...` and `settings_section`
+under the extension prefix are host-owned and shadow skill routes there;
+POST dispatch is unaffected.
 
 For everything else, prefer declarative components (`form`, `action`, `poll`,
 `subscription`, `stream`, `table`, `chart`, `markdown`, `json`, `kv`, `status`,
@@ -1984,10 +2067,15 @@ ARCHITECTURE §13 for the shared runtime gate.
 
 ## Reference skills
 
-Bundled references live under `repo/skills/`: `ui_design` guides visual work;
-`design_demo` presents a visual choice in one self-contained page. Both are
-`type: instruction`, recommended and on by default on fresh and upgraded installs.
-Trusted installation needs no review call; an owner's Off or removal stands.
+Bundled references live under `repo/skills/`: `ui_design` guides visual work and
+putting a visual choice before a person in one self-contained page, whose clean view
+hides the author's names and notes from a critic. It is `type: instruction`,
+recommended and on by default on fresh and upgraded installs. Trusted installation
+needs no review call; an owner's Off or removal stands. A built-in the app stops
+bundling is uninstalled on update when its copy is unchanged (its grants survive)
+and stays as the owner's copy when edited or when another folder uses its name;
+`design_demo` was merged into `ui_design` this way. An owner's edited `ui_design`
+keeps its own text, which may still name `design_demo`.
 `unix_computer_use` and `windows_computer_use` are bundled extensions.
 
 Non-declared delegated sessions receive an index of enabled, accepted or reviewed

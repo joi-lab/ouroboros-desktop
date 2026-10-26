@@ -563,6 +563,10 @@ CURRENT_PRODUCER_CONTRACTS = {"WORLD_SIZE_NOTICE": (False, "ok"),  # the map's s
     # Owner decision (PR #1636): an exact edit that leaves .py/.json unparsable is
     # applied and reported, never refused; the warning is a successful call.
     "SYNTAX_WARNING": (False, "ok"),
+    # #1376: a silence diagnostic's capability gate (registry_guards) is a new producer
+    # after the retired oracle; a refused tool never ran, as for its subagent peers.
+    "DIAGNOSTIC_CAPABILITY_BLOCKED": (True, "blocked"),
+    "native:ACCESS_BLOCKED:DIAGNOSTIC_CAPABILITY_BLOCKED": (True, "blocked"),
 }
 
 

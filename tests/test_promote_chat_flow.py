@@ -1220,6 +1220,12 @@ def test_restart_drain_defers_then_completes_without_sleeping(tmp_path, monkeypa
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    # The drain path records its admission intent in the module-global
+    # _AGENT_RESTART; a leftover "ready" record from a sibling test makes
+    # agent_restart_pending() True and short-circuits the drain before it
+    # reaches the live-task check. Reset it so each drain test is isolated.
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     now = __import__("time").time()
     ctx = types.SimpleNamespace(
@@ -1254,6 +1260,8 @@ def test_restart_drain_no_live_tasks_restarts_immediately(tmp_path, monkeypatch)
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     ctx = types.SimpleNamespace(
         RUNNING={},
@@ -1282,6 +1290,8 @@ def test_restart_drain_uses_generic_queue_heartbeat_not_retired_planning_knob(
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     ctx = types.SimpleNamespace(
         RUNNING={
@@ -2336,12 +2346,11 @@ def test_decision_turn_metadata_injects_running_tasks_and_client_id(tmp_path):
     assert md["client_message_id"] == "cm-9"
     assert md["current_chat"]["chat_id"] == 1
     assert [t["task_id"] for t in md["current_chat"]["running_tasks"]] == ["a"]
-    # No running tasks + no client id -> no routing facts, only the live-works
-    # present every new head receives (an honest, incomplete empty roster here).
+    # No running tasks + no client id -> no routing facts at all (the head's
+    # context capture builds its own live-works present).
     empty_ctx = types.SimpleNamespace(DRIVE_ROOT=tmp_path, RUNNING={})
     md = server._decision_turn_metadata(empty_ctx, 1, "", {"k": "v"})
-    assert {key: value for key, value in md.items() if key != "live_works_present"} == {"k": "v"}
-    assert md["live_works_present"]["works"] == [] and md["live_works_present"]["incomplete"] is True
+    assert md == {"k": "v"}
 
 
 # --- Q10=A (owner, 2026-08-08): file-less project promotes auto-provision -----

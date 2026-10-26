@@ -243,7 +243,9 @@ def test_root_synthesis_uses_one_shared_nonfinal_subtree_cost_snapshot(tmp_path,
     order = []
     snapshots = []
 
-    def fake_breakdown(root, *, root_task_id="", task_id=""):
+    def fake_breakdown(root, *, root_task_id="", task_id="", custody_root=None, include_custody=False):
+        assert custody_root == tmp_path
+        assert include_custody is True
         order.append("snapshot")
         reads.append((root, root_task_id, task_id))
         return {

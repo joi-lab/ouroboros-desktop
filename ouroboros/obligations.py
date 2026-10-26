@@ -107,7 +107,8 @@ def owner_held_rows(name: str, rows: dict[str, dict]) -> dict[str, dict]:
     import nothing; ``delegated_runs`` keeps its closing receipts, ``pending_drives`` the rows a
     pool handoff published (both retire by their own owner); every other set is owner-held."""
     if name == "delegated_runs":
-        return {identity: facts for identity, facts in rows.items() if isinstance(facts, dict) and facts.get("closed_runs")}
+        return {identity: facts for identity, facts in rows.items() if isinstance(facts, dict)
+                and (facts.get("closed_runs") or facts.get("cost_revision"))}
     if name == "nonterminal" or (name in store.FLAG_COLUMNS and name != "pending_drives"):
         return {}
     return rows

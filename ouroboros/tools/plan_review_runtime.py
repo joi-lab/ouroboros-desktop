@@ -241,11 +241,14 @@ def _typed_facts_from(source: Any, get: Any) -> Dict[str, Any]:
     """The B1 typed failure facts off one source via ``get(source, key)`` — the
     ONE key list is ``review_substrate.TYPED_FAILURE_FACT_KEYS`` (shared with the
     last-execution recorder; sources differ, keys must not). ``http_status`` stays
-    raw (int-or-None); the rest coerce to honest-empty strings."""
+    raw (int-or-None), ``failure_details`` stays a dict; the rest are strings."""
     from ouroboros.review_substrate import TYPED_FAILURE_FACT_KEYS
 
-    return {key: (get(source, key) if key == "http_status" else str(get(source, key) or ""))
-            for key in TYPED_FAILURE_FACT_KEYS}
+    facts = {key: get(source, key) for key in TYPED_FAILURE_FACT_KEYS}
+    details = facts.get("failure_details")
+    facts["failure_details"] = dict(details) if isinstance(details, dict) else {}
+    return {key: value if key in {"http_status", "failure_details"} else str(value or "")
+            for key, value in facts.items()}
 
 
 def _plan_row_from_actor(actor: Dict[str, Any], slot: Any) -> dict:

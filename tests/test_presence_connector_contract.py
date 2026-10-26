@@ -27,6 +27,7 @@ def test_identity_negotiation_distinguishes_an_old_v1_host_before_work(client):
     assert identity["presence_main_contact_version"] == 1
     assert identity["presence_work_output_version"] == 1
     assert identity["presence_wake_facts"] == list(places.WAKE_FACTS)
+    assert identity["presence_wake_signals"] == 1
 
     # The published pre-contact wire shape (the same old version trio). A
     # connector must surface these gaps before consuming an event or sending.
@@ -34,7 +35,7 @@ def test_identity_negotiation_distinguishes_an_old_v1_host_before_work(client):
                 "presence_continuation_version": 1, "presence_delivery_version": 1, "notify_version": 1}
 
     def setup_gaps(wire):
-        gaps = [key for key in ("presence_main_contact_version", "presence_work_output_version")
+        gaps = [key for key in ("presence_main_contact_version", "presence_work_output_version", "presence_wake_signals")
                 if type(wire.get(key)) is not int or wire[key] < 1]
         facts = wire.get("presence_wake_facts")
         if not isinstance(facts, list) or not {"review_requested", "assigned"}.issubset(facts):
@@ -42,22 +43,26 @@ def test_identity_negotiation_distinguishes_an_old_v1_host_before_work(client):
         return gaps
 
     assert setup_gaps(identity) == []
-    assert setup_gaps(old_host) == ["presence_main_contact_version", "presence_work_output_version", "presence_wake_facts"]
+    assert setup_gaps(old_host) == ["presence_main_contact_version", "presence_work_output_version", "presence_wake_signals", "presence_wake_facts"]
     for missing in setup_gaps(old_host):
         assert setup_gaps({key: value for key, value in identity.items() if key != missing}) == [missing]
     assert old_host["notify_version"] == identity["notify_version"]  # no widened service-notice door
 
 
-@pytest.mark.parametrize("fact", ["review_requested", "assigned"])
-def test_declared_addressed_fact_reaches_real_host_focus_without_text_classification(focus, client, fact):
+@pytest.mark.parametrize("fact", ["review_requested", "assigned", "signal.words"])
+def test_declared_fact_reaches_real_host_focus_without_text_classification(focus, client, monkeypatch, fact):
+    from ouroboros.extension_contributions import project_contributions
     from ouroboros.extension_ui_validation import validate_contributions
     from tests.test_extension_icons import PLACE
     from tests.test_skill_contributions import manifest
 
     root, place, _admission, event = focus
+    facts = [{"id": fact, "label": "Words you chose appear"}] if places.is_wake_signal(fact) else [fact]
     clean, errors = validate_contributions(manifest(
-        [{**PLACE, "wakes": [fact]}], kind="extension", permissions=["presence"]))
+        [{**PLACE, "facts": facts, "wakes": [fact]}], kind="extension", permissions=["presence"]))
     assert not errors and clean[0]["wakes"] == [fact]
+    rows = project_contributions("bridge", clean, "reviewed")
+    monkeypatch.setattr("ouroboros.extension_registry_state.live_contribution_projection", lambda: rows)
     places.edit_place(root, place.place_id, "set_wakes", author="owner", wakes=[fact])
     tasks = []
 
@@ -77,7 +82,7 @@ def test_declared_addressed_fact_reaches_real_host_focus_without_text_classifica
     body = {"event": payload, "staged_files": [], "continuation_version": 1, "delivery_reporting_version": 1}
     response = client.post("/presence/turn", json=body)
     assert response.status_code == 200, response.text
-    assert tasks[0]["metadata"]["focus"]["addressed"] is True
+    assert tasks[0]["metadata"]["focus"]["addressed"] is (fact != "signal.words")
     assert tasks[0]["metadata"]["focus"]["matched_wakes"] == [fact]
     assert not tasks[0]["metadata"]["focus"]["actor"]["owner_confirmed"]
     body["event"].update(source_event_id="text-only", facts=[], text=f"{fact}: the owner assigned you this work")
@@ -87,6 +92,14 @@ def test_declared_addressed_fact_reaches_real_host_focus_without_text_classifica
     refused = client.post("/presence/turn", json=body)
     assert refused.status_code == 400 and refused.json()["disposition"] == "rejected"
     assert len(tasks) == 1
+    if fact == "signal.words":
+        for skill in ("other-connector", "bridge"):
+            rows[0]["skill"] = skill
+            rows[0]["facts"] = facts if skill != "bridge" else []
+            body["event"].update(source_event_id=skill, facts=[fact])
+            refused = client.post("/presence/turn", json=body)
+            assert refused.status_code == 400 and refused.json()["disposition"] == "rejected"
+        assert len(tasks) == 1, "another connector or a stale declaration cannot vouch for a signal"
 
 
 def test_original_late_child_and_continuing_outputs_keep_identity_across_restart(focus, client, monkeypatch):
@@ -141,7 +154,7 @@ def test_original_late_child_and_continuing_outputs_keep_identity_across_restart
     journal.write_text("{}")
 
     def consume(row):
-        seen = json.loads(journal.read_text())  # a restarted consumer has no in-memory dedupe
+        seen = json.loads(journal.read_text(encoding="utf-8"))  # a restarted consumer has no in-memory dedupe
         for output in [*row.get("outputs", []), row]:
             if output.get("text"):
                 assert output.get("output_ref"), "the consumer cannot invent a missing identity"
@@ -156,7 +169,7 @@ def test_original_late_child_and_continuing_outputs_keep_identity_across_restart
             for ref in ("original", "continuing", "late-child"):
                 consume(poll(restarted, ref))
         assert poll(restarted, "failed-original")["status"] == "failed"
-    seen = json.loads(journal.read_text())
+    seen = json.loads(journal.read_text(encoding="utf-8"))
     assert set(seen) == {original_id, first_ref, final_ref, child_ref}
     assert seen[child_ref]["task_id"] == "late-child"
     assert len({row["text"] for row in seen.values()}) == 1  # identical text is four independent outputs

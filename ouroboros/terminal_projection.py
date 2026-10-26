@@ -214,9 +214,9 @@ def completion_event_view(root: Any, event: dict, record: dict) -> dict:
 def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dict | None = None) -> dict:
     from ouroboros import project_dialogue as dialogue
     from ouroboros.project_facts import resolve_project_id
-    from ouroboros.task_finalization import terminal_host_notice_text
+    from ouroboros.task_finalization import quiet_finish
 
-    quiet = row.get("wake_silent") is True and not terminal_host_notice_text(row)
+    quiet = quiet_finish(row)
     lineage = _lineage(tid, row)
     is_root = lineage["is_root_task"]
     role = str(row.get("role") or ("root" if is_root else "child"))
@@ -262,9 +262,14 @@ def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dic
         "project_id": resolve_project_id(row), "chat_id": chat_id,
         "delegation_role": str(row.get("delegation_role") or ""), "role": role,
         "status": row["status"], "outcome": outcome, "outcome_phase": phase, "outcome_final": True,
-        "wake_silent": row.get("wake_silent") is True, "quiet_effective": quiet,
+        "wake_silent": row.get("wake_silent") is True, "quiet_effective": quiet, **{key: row[key] for key in ("suggested_name", "wake_summary") if row.get(key)},
         "outcome_authority": "canonical_task_result_after_finalization",
+        # Memory stamps copy the recorded objective; readers interpret it using answer provenance.
         "outcome_axes": row.get("outcome_axes") or {}, "reason_code": str(row.get("reason_code") or ""),
+        "_result_text_present": (isinstance(row.get("result"), str) and bool(row["result"]))
+        if "result" in row else row.get("_result_text_present") is True,
+        "terminal_origin": str(row.get("terminal_origin") or ""),
+        **({"cancel_origin": dict(row["cancel_origin"])} if isinstance(row.get("cancel_origin"), dict) else {}),
         "result_ref": {"kind": "task_result", "task_id": tid, "reader": "get_task_result"}, "text": text,
         **({"reason_detail": verdict} if verdict else {}),
         "completion_notice": notice,
@@ -589,9 +594,9 @@ def settle_terminal_projection(drive_root: Any, task_id: str, *, task: dict | No
                 return SETTLEMENT_DEFERRED
             effective = {**(task or {}), **stored, "id": tid}
             done = {**(event or {}), **stored, "ts": ready["task_done_ts"], "chat_id": ready["chat_id"]}
-            from ouroboros.task_finalization import terminal_host_notice_text
+            from ouroboros.task_finalization import quiet_finish
 
-            if stored.get("wake_silent") is True and not terminal_host_notice_text(stored):
+            if quiet_finish(stored):
                 disposition = dialogue.MAIN_MIRROR_INELIGIBLE
             else:
                 disposition, _queued = dialogue.project_completion_delivery_outcome(

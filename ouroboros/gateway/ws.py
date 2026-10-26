@@ -152,21 +152,26 @@ async def broadcast_ws(msg: dict) -> None:
             log.debug("Failed to emit broadcast_partial_failure event", exc_info=True)
 
 
-def broadcast_ws_sync(msg: dict) -> None:
-    """Thread-safe sync wrapper for broadcasting."""
+def broadcast_ws_sync(msg: dict) -> bool:
+    """Thread-safe sync wrapper for broadcasting. ``True`` when a running server loop took the
+    frame; ``False`` in a process without one (a pooled worker) or once the loop stopped."""
     loop = _event_loop
-    if loop is None:
-        return
+    if loop is None or not loop.is_running():
+        # A stopped loop would hold the coroutine without running it (lost, then never
+        # awaited at close) and a closed one refuses it: neither gets one built.
+        return False
     coro = broadcast_ws(msg)
     try:
         asyncio.run_coroutine_threadsafe(coro, loop)
     except RuntimeError:
-        # A closed or already-stopped loop never schedules the coroutine. The
+        # A loop that closed after the check never schedules the coroutine. The
         # broadcast is deliberately a no-op then, but the coroutine object must
         # still be closed here: dropped un-awaited it emits "coroutine
         # 'broadcast_ws' was never awaited" from whatever code is running when
         # it is collected, blaming an innocent caller for this line.
         coro.close()
+        return False
+    return True
 
 
 async def _dispatch_extension_message(

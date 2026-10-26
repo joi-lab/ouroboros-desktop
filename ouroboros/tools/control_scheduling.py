@@ -128,6 +128,7 @@ def _emit_swarm_fanout(
         fanout_interval = round(now - prev, 3) if prev > 0 else None
         setattr(ctx, "_last_fanout_ts", now)
     evt = {
+        "event_id": "swarm:" + uuid.uuid4().hex,
         "ts": utc_now_iso(),
         "type": "swarm_fanout",
         "task_id": parent_task_id,
@@ -149,11 +150,16 @@ def _emit_swarm_fanout(
         "fanout_interval_sec": fanout_interval,
     }
     try:
-        append_jsonl(ctx.drive_logs() / "events.jsonl", evt)
-        from ouroboros.swarm_rollup import load_swarm_rollup
-        load_swarm_rollup(ctx.drive_logs().parent, parent_task_id)
+        from ouroboros.swarm_rollup import record_swarm_fanout
+        record_swarm_fanout(ctx.drive_logs().parent, evt)
+    except LookupError:
+        pass  # Unbound/legacy emitters have no task row; retain their diagnostic event below.
     except Exception:
-        log.debug("Failed to emit swarm_fanout telemetry", exc_info=True)
+        log.debug("Failed to retain swarm_fanout telemetry", exc_info=True)
+    try:
+        append_jsonl(ctx.drive_logs() / "events.jsonl", evt)
+    except Exception:
+        log.debug("Failed to publish swarm_fanout diagnostic event", exc_info=True)
 
 
 def _subagent_slot_note(ctx: ToolContext, root_task_id: str) -> str:
@@ -830,10 +836,10 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         return _publish_scheduling_refusal(ctx, "error", "TOOL_ARG_ERROR",
             "⚠️ delegated_mode_unsupported: mode requires an agent_session row; API children keep their ordinary task execution.",
             reason="delegated_mode_unsupported")
-    if fields.get("directory_strategy") == "copy" and route.get("kind") != "agent_session":
+    if (fields.get("directory_strategy") == "copy" or fields.get("workspace") == "in_place") and route.get("kind") != "agent_session":
         return _publish_scheduling_refusal(
             ctx, "error", "TOOL_ARG_ERROR",
-            "⚠️ TOOL_ARG_ERROR (schedule_subagent): directory_strategy=copy is unsupported for native/API children, which use shared files directly; select an agent_session actor for copy.")
+            "⚠️ TOOL_ARG_ERROR (schedule_subagent): directory_strategy=copy is unsupported for native/API children, which use shared files directly; select an agent_session actor for copy or workspace=in_place.")
     requested_model_lane = "auto"  # bounded historical projection only
     requested_executor = "harness" if route.get("kind") == "agent_session" else "native"
     current_depth, depth_error = _context_task_depth(ctx)
@@ -975,7 +981,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "requested_effort": fields["requested_effort"],
         "configured_subagent": configured_subagent,
         "parent_cognitive_route": parent_cognitive_route,
-        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode") if key in fields},
+        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode", "workspace") if key in fields},
     }
     owner_origin = governing_words_for_schedule(ctx)  # the owner's words that caused this tree, by value
     child_facts = {

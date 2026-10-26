@@ -217,7 +217,7 @@ def _run_cross_model_fallback_chain(
     outage or an unknown outcome keeps that failure as its wait when none answers.
     """
     from ouroboros import fallback_cooldown as _fcd
-    from ouroboros.loop_transport import append_unknown_recovery_input
+    from ouroboros.loop_transport import append_unknown_recovery_input, fallback_reason_text
     from ouroboros.model_slots import MODEL_ACCOUNTS_KEY, model_role_option, task_model_binding, route_binding
     from ouroboros.model_wait import current_model_wait
     from ouroboros.loop_llm_call import _COOLDOWN_ERROR_KINDS as _cooldown_kinds
@@ -287,10 +287,8 @@ def _run_cross_model_fallback_chain(
         reason = str(accumulated_usage.get("_last_llm_error_kind") or "")
         emit_progress(f"⚡ Fallback: {previous_model}{previous_tag} → {fallback_model}{ftag}"
                       f"{' (primary)' if is_primary else ''}{account_note}"
-                      f"{f'; reason: {reason}' if reason else ''}"
-                      f"{'; sign-in is still needed there' if reason == 'auth_error' else ''}"
-                      f"{'; the earlier attempt’s outcome and cost stay unknown' if reason == 'provider_outcome_unknown' else ''}"
-                      f"{'; pinned account: siblings were not tried' if account_route and fallback_account else ''}",
+                      f"{'; pinned account: siblings were not tried' if account_route and fallback_account else ''}."
+                      f"{fallback_reason_text(accumulated_usage)}",  # the predecessor's class and own sentence
                       incident={"task_incident": "model_lane_switch", "toast_once": f"{task_id}:model_lane_switch:{round_idx}:{fallback_model}"})
         _disclose_unknown(messages, fallback_model)
         # Cross-FAMILY fallback must not replay the primary's

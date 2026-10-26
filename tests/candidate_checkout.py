@@ -270,6 +270,20 @@ class CandidateCheckout:
             raise CandidateError("CANDIDATE_CUSTODY: release without a matching hold")
         self.unproven -= 1
 
+    def rewrite(self, name: str, content: bytes) -> None:
+        """New bytes for one overlay file of the STOPPED copy, e.g. the VERSION a restart should report.
+
+        Only while nothing started from the copy is unproven, so no running process reads a file the
+        checkout identity does not vouch for; the next boot's verification and origin proof bind them."""
+        if self.unproven:
+            raise CandidateError("CANDIDATE_CUSTODY: overlay rewrite while a started process may run")
+        if name not in self.overlay:
+            raise CandidateError(f"CANDIDATE_UNSUPPORTED: {name!r} is not an overlay file")
+        mode = self.overlay[name][1]
+        (self.path / name).write_bytes(content)
+        (self.path / name).chmod(mode)
+        self.overlay[name] = (content, mode)
+
     @property
     def identity(self) -> str:
         return self.state.identity

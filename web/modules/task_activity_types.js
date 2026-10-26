@@ -23,6 +23,7 @@
  * @property {string=} status  // recorded lifecycle outcome; phase still owns current activity
  * @property {Object=} outcome_axes
  * @property {string=} reason_code
+ * @property {Object=} cancel_origin  // the stored stop origin the status fold reads (an owner-stopped turn's typed stop)
  * @property {Object=} root_phase_checkpoint  // compact post_task_synthesis fact only
  * @property {string=} timeout_retry_from  // explicit automatic-retry predecessor, never owner Continue
  * @property {string=} original_task_id

@@ -78,6 +78,8 @@ def _reduced(rows):
             "marks": txn.set_rows("custody_marks"),
             "invocations": txn.set_rows(inv.INVOCATIONS), "operations": txn.set_rows(inv.OPERATIONS),
             "event_ordinals": txn.set_rows(inv.EVENTS), "ordinal": txn.meta(inv.ORDINAL),
+            "cost_revisions": {tid: facts["cost_revision"] for tid, facts in txn.set_rows("delegated_runs").items()
+                               if facts.get("cost_revision")},
         }), _normalise(txn.set_rows("delegated_runs"))
 
 
@@ -87,7 +89,12 @@ def test_required_chain_matches_at_every_prefix_and_at_import(tmp_path):
     assert len({row["event_id"] for row in requests}) == 2
     for end in range(1, len(rows) + 1):
         live, _ = _reduced(rows[:end])
-        assert live == _normalise(current.fold(rows[:end])), f"prefix {end}"
+        folded = _normalise(current.fold(rows[:end]))
+        # Live publication debt and import recovery have different lifetimes:
+        # closed history needs no new publication. Custody facts remain identical.
+        live_cost, folded_cost = live.pop("cost_revisions"), folded.pop("cost_revisions")
+        assert folded_cost.items() <= live_cost.items()
+        assert live == folded, f"prefix {end}"
     assert set(live["open"]) == {"invocation:inv-c"}
     assert set(live["refused"]) == {"inv-b"}
     assert not live["runs"]["a"][0]["project_owned"]
@@ -102,8 +109,15 @@ def test_required_chain_matches_at_every_prefix_and_at_import(tmp_path):
     imported, receipts = store_import._custody_rows(tmp_path, [
         (task, {"delegated_runs_unreconciled": True}) for task in ("t1", "t4", "t9")])
     assert imported.pop("chain_offset") > 0
+    assert imported.pop("cost_revisions") == folded_cost
     assert _normalise(imported) == live
-    assert _normalise(receipts["delegated_runs"]) == _reduced(rows)[1]
+    expected = _reduced(rows)[1]
+    for tid in list(expected):
+        if tid not in folded_cost:
+            expected[tid].pop("cost_revision", None)
+        if not expected[tid].get("closed_runs") and not expected[tid].get("cost_revision"):
+            del expected[tid]
+    assert _normalise(receipts["delegated_runs"]) == expected
 
 
 def test_start_after_repeated_refused_request_preserves_equivalence():

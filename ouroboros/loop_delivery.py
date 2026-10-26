@@ -136,11 +136,11 @@ def _compute_subagent_handoff(tools: Any, drive_root: Any, task_id: str, content
         # Exact-hash dispositions suppress the unchanged result only: if
         # status, result, trace, or artifact identity changes, the disposition
         # goes stale and this reminder re-opens without parsing prose.
+        from ouroboros.loop_forced_finalization import HANDLED_CHILD_DISPOSITIONS
+
         children = [
             child for child in children
-            if _loop()._child_disposition_state(child) not in {
-                "integrated", "irrelevant", "deferred", "discarded", "cancelled",
-            }
+            if _loop()._child_disposition_state(child) not in HANDLED_CHILD_DISPOSITIONS
         ]
         from ouroboros.tools.join_ledger import _child_result_sha256
 
@@ -264,6 +264,9 @@ def delivery_evidence_fingerprint(
     root_task_id = str(root_task_id or metadata.get("root_task_id") or task_id)
     status_root = status_root or metadata.get("budget_drive_root") or getattr(tool_ctx, "budget_drive_root", None) or getattr(tool_ctx, "drive_root", None)
     children = _loop()._load_direct_child_results(pathlib.Path(status_root), task_id, root_task_id) if status_root and task_id else []
+    # Unclaimed host attention (#1376) is no evidence of the answer: a diagnostic that
+    # answers or is withdrawn re-arms nothing. Reading past a settled cancellation, only
+    # the author's current exact-hash claim keeps a diagnostic here.
     children = [
         {
             "task_id": str(child.get("task_id") or child.get("id") or ""),
@@ -272,6 +275,7 @@ def delivery_evidence_fingerprint(
             "disposition": _loop()._child_disposition_state(child),
         }
         for child in children
+        if _loop()._child_disposition_state({**child, "parent_decision": ""}) != "host_attention"
     ]
     receipt_root = getattr(tool_ctx, "drive_root", None) or status_root
     evidence = {
@@ -1285,6 +1289,8 @@ def _no_tool_final_answer(
         limit_ctx.accumulated_usage["terminal_origin"] = _loop().TERMINAL_ORIGIN_MODEL_FINAL
     if getattr(candidate, "quiet", False):  # only this exit accepts a wake's silent finish
         limit_ctx.accumulated_usage.update(wake_silent=True, terminal_origin=_loop().TERMINAL_ORIGIN_MODEL_FINAL)
+    if summary := (getattr(tools._ctx, "_completion_selected", None) or {}).get("wake_summary"): limit_ctx.accumulated_usage["wake_summary"] = summary
+    if getattr(tools._ctx, "_owner_message_sent", False): limit_ctx.accumulated_usage["owner_message_sent"] = True
     from ouroboros.swarm_receipt import retain_comparison
     retain_comparison(tools._ctx)
     return _loop()._handle_text_response(str(content or ""), llm_trace, limit_ctx.accumulated_usage)

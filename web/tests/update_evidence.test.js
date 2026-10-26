@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { afterUpdateFactsText, bindPreflightDescription, preflightEvidenceText } from '../modules/update_status.js';
+import { afterUpdateRows, bindPreflightDescription, preflightEvidenceText } from '../modules/update_status.js';
 import { updateLetterView } from '../modules/updates.js';
 
 const plan = { base_sha: 'aaaa', target_sha: 'bbbb' };
@@ -36,14 +36,53 @@ test('confirmation names failed, absent and green evidence without converting de
     assert.match(preflightEvidenceText({ merge_plan: plan, letter, qualification }), /This run also covers: earlier-/);
 });
 
-test('generation facts show scope, measured values and missing observations without a verdict', () => {
-    assert.equal(afterUpdateFactsText(null), '');
-    const row = { source_sha: 'aaaa', rss_bytes: 1048576, cpu_seconds: 2, cpu_percent: null, cpu_interval_seconds: null,
-        duty_overruns: {}, direct_message_first_dispatch: null };
-    const text = afterUpdateFactsText({ before: row, after: { ...row, direct_message_first_dispatch: { task_id: 'direct', seconds: 33 } } });
-    assert.match(text, /RSS 1.00 MiB/);
-    assert.match(text, /server process/);
-    assert.match(text, /first dispatch unobserved/);
-    assert.match(text, /first dispatch 33.00 seconds \(direct\)/);
-    assert.doesNotMatch(text, /bad update|healthy|regression|warning/i);
+const sides = (rows) => {
+    const at = rows.findIndex((row, index) => index > 0 && row.head);
+    return [rows.slice(0, at), rows.slice(at)];
+};
+const values = (rows) => Object.fromEntries(rows.filter((row) => !row.head).map((row) => [row.label, row.value]));
+
+test('after-update rows keep peak RSS, lifetime CPU, interval share and dispatch apart, each in full', () => {
+    assert.deepEqual(afterUpdateRows(null), []);
+    const source = 'c0ffee'.repeat(6) + 'abcd';
+    const after = { source_sha: source, observed_at: '2026-10-21T09:12:05.123456+00:00', scope: 'server_process',
+        rss_bytes: 734003200, rss_measure: 'peak', cpu_seconds: 412.5, cpu_percent: 12.3456, cpu_interval_seconds: 600,
+        duty_overruns: { reconcile: 2 }, direct_message_first_dispatch: { task_id: 'turn-task', seconds: 4.567 } };
+    const [before, rows] = sides(afterUpdateRows({ operation_id: 'op', before: null, after }));
+    assert.deepEqual(before, [{ head: 'Before the update' }, { label: 'Sample', value: 'unobserved' }]);
+    assert.equal(rows[0].head, 'After the update (recorded sample, server process)');
+    assert.deepEqual(rows.slice(1).map((row) => row.label), ['Source', 'Observed', 'RSS peak', 'CPU time, process lifetime',
+        'CPU share, sample interval', 'Duty overruns', 'Direct message to first model call']);
+    assert.deepEqual(values(rows), {
+        Source: source, Observed: rows[2].value, 'RSS peak': '700.00 MiB', 'CPU time, process lifetime': '412.50 seconds',
+        'CPU share, sample interval': '12.35 % over 600.00 seconds', 'Duty overruns': '{"reconcile":2}',
+        'Direct message to first model call': '4.57 seconds from acceptance · task turn-task',
+    });
+    // The local minute to read and, under it, the exact recorded stamp: a detailed technical fact stays whole.
+    assert.match(rows[2].value, /UTC[+-]\d/);
+    assert.equal(rows[2].exact, after.observed_at);
+    const text = JSON.stringify(rows);
+    assert.doesNotMatch(text, /better|worse|regress|improv|healthy|median|average|latency|response time|current/i);
+});
+
+test('a zero is a measurement and a missing one stays unobserved; a current RSS drops the peak word', () => {
+    const zero = { source_sha: 'a'.repeat(40), observed_at: '', rss_bytes: 0, rss_measure: 'current', cpu_seconds: 0,
+        cpu_percent: 0, cpu_interval_seconds: 0, duty_overruns: {}, direct_message_first_dispatch: { task_id: '', seconds: 0 } };
+    const missing = { source_sha: '', rss_bytes: null, rss_measure: 'unobserved', cpu_seconds: null, cpu_percent: null,
+        cpu_interval_seconds: null, duty_overruns: null, direct_message_first_dispatch: null };
+    const [before, after] = sides(afterUpdateRows({ before: zero, after: missing }));
+    assert.deepEqual(values(before), {
+        Source: 'a'.repeat(40), Observed: 'unknown time', RSS: '0.00 MiB', 'CPU time, process lifetime': '0.00 seconds',
+        'CPU share, sample interval': '0.00 % over 0.00 seconds', 'Duty overruns': '{}',
+        'Direct message to first model call': '0.00 seconds from acceptance',
+    });
+    assert.deepEqual(values(after), {
+        Source: 'unknown source', Observed: 'unknown time', RSS: 'unobserved', 'CPU time, process lifetime': 'unobserved',
+        'CPU share, sample interval': 'unobserved', 'Duty overruns': 'unobserved',
+        'Direct message to first model call': 'unobserved',
+    });
+    assert.ok([...before, ...after].every((row) => !row.exact));
+    // One measured half of the share still says which half is missing.
+    const half = sides(afterUpdateRows({ before: { ...missing, cpu_percent: 5 }, after: null }))[0];
+    assert.equal(values(half)['CPU share, sample interval'], '5.00 % over unobserved');
 });

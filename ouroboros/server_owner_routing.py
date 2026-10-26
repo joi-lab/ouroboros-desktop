@@ -18,8 +18,9 @@ from typing import Any, Dict, Optional
 
 from ouroboros.server_process import log
 from ouroboros.server_routing_context import (
-    _addressable_root_tasks,
+    RootSnapshot,
     _decision_turn_metadata,
+    addressable_roots,
     _project_id_for_registered_chat,
     _reserved_project_for_chat,
     _scoped_task_metadata,
@@ -96,6 +97,7 @@ def _route_project_chat_to_running_task(
     task_metadata: Any = None,
     image_data: Any = None,
     thread_of: str = "",
+    roots: Optional[RootSnapshot] = None,
 ) -> str:
     """Deliver ordinary room input to its sole live reader, under admission locks.
 
@@ -105,7 +107,7 @@ def _route_project_chat_to_running_task(
     answer or a press on a finished author's card (``thread_of``: that author)
     reads only a head that a late answer or press of the same author started,
     in a Project or Main, the earliest of several: one author's late input is
-    one thread. No other reader receives it.
+    one thread. No other reader receives it. ``roots``: the message's one root snapshot.
     """
     try:
         if not thread_of and not _project_id_for_registered_chat(ctx, chat_id):
@@ -113,8 +115,8 @@ def _route_project_chat_to_running_task(
     except Exception:
         return ""
     try:
-        steerable = [row for row in _addressable_root_tasks(ctx, chat_id) if row.get("room_reader")
-                     and (not thread_of or row.get("late_input_of") == thread_of)]
+        steerable = [row for row in (roots if roots is not None else addressable_roots(ctx)).rows(chat_id)
+                     if row.get("room_reader") and (not thread_of or row.get("late_input_of") == thread_of)]
         if thread_of:
             steerable = sorted(steerable, key=_start_order)[:1]
         # Exactly one candidate => unambiguous transport. Zero or many => a routing
@@ -593,6 +595,9 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
 
     late = task_metadata.get("late_answer")
     thread_of = (late_answer_ref(late) or late_press_ref(task_metadata.get("card_press")) or {}).get("task_id", "")
+    # ONE read of the addressable roots for this message: the room's reader, Main's
+    # manifest and the decision metadata all see the same projection.
+    roots = addressable_roots(ctx)
     if (project_id and not late) or thread_of:
         routed_to_task = _route_project_chat_to_running_task(
             ctx,
@@ -602,6 +607,7 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
             task_metadata=task_metadata,
             image_data=image_data,
             thread_of=thread_of,
+            roots=roots,
         )
         if routed_to_task:
             _record_routing_receipt(
@@ -627,7 +633,6 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
             )
             return
 
-    global_roots = _addressable_root_tasks(ctx, None)
     try:
         from ouroboros.projects_registry import list_projects
 
@@ -635,9 +640,10 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
     except Exception:
         log.warning("Unable to inspect Projects for owner routing", exc_info=True)
         has_projects = True
-    needs_decision_lane = bool(project_id) or has_projects or bool(global_roots)
+    # Unknown roots, like unknown Projects, go to the decision lane, which is told so.
+    needs_decision_lane = bool(project_id) or has_projects or bool(roots.rows()) or bool(roots.gap)
     if needs_decision_lane:
-        task_metadata = _decision_turn_metadata(ctx, chat_id, client_message_id, task_metadata)
+        task_metadata = _decision_turn_metadata(ctx, chat_id, client_message_id, task_metadata, roots)
 
     def _run_direct() -> None:
         # The alarm clock reads the direct-activity census itself; nothing pauses it here.

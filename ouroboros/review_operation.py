@@ -198,9 +198,9 @@ class ReviewOperation:
         self.control_state = ""
         self._drains = 0
         self._dispatched = False
-        # The owner paused the author while this operation's launched reviewers
-        # ran: the author took pending rows and parked (``review_custody``).
-        self.author_detached = False
+        # A background caller already left its author slot; a synchronous author
+        # can also detach later while its reviewers run (``review_custody``).
+        self.author_detached = bool(getattr(parent, "author_detached", False))
         self._control, self._checked_at = "", float("-inf")
         parent_task = parent.task if isinstance(parent.task, dict) else {}
         metadata = getattr(parent.tool_context, "task_metadata", None)
@@ -913,7 +913,8 @@ def _attach_only_run(root: Any, request: Any, slot: Any, operation_id: str, run_
         observed = final_attempt_facts(detail, run_id)
         routes = (invocation.get("request") or {}).get("harnesses") or []
         requested_route = str(routes[0]) if len(routes) == 1 else ""
-        usage = session_usage_facts(run_id, requested_route=requested_route, observed_attempt=observed, summary=summary)
+        usage = session_usage_facts(run_id, requested_route=requested_route, observed_attempt=observed,
+                                    summary=summary, attempt_execution=detail.get("attemptExecution"))
         if usage_ctx is not None:  # Observe terminal facts even if the output read below fails.
             observe_session_usage(lambda facts: emit_review_usage(
                 usage_ctx, model=str(facts.get("resolved_model") or ""), usage=facts,

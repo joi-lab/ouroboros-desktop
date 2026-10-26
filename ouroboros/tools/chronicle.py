@@ -55,8 +55,8 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tupl
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, row_lineage
-from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, correction_line,
-                                       draft_signer, source_time_span, verify_quotes)
+from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, capture,
+                                       correction_line, draft_signer, source_time_span, verify_quotes)
 from ouroboros.dialogue_provenance import memory_row_header, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
 from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
@@ -861,8 +861,9 @@ def _read_rooms(root: Path, store: ChronicleStore, start: int, limit: int) -> st
     from ouroboros import memory_view as mv
 
     spec = mv.ViewSpec("integrator", room_id=None)
-    rows, lineage = memory_inventory.open_rows_by_room(root), row_lineage(root)
-    rooms = mv._live_rooms(store, root, spec, mv._labeler(root), rows, mv._notes_by_room(store), lineage)
+    with capture(root):  # one state of the chronicle for every room's facts
+        rows, lineage = memory_inventory.open_rows_by_room(root), row_lineage(root)
+        rooms = mv._live_rooms(store, root, spec, mv._labeler(root), rows, mv._notes_by_room(store), lineage)
     body = "\n".join(mv._directory_room(room) for room in rooms)
     return _window(f"Live rooms: {len(rooms)}", body, start, limit,
                    lambda n: f"memory_read(room_id='*', start={n})")

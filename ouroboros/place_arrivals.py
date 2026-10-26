@@ -154,11 +154,27 @@ def _open_counts(root, place):
     return {int(r['room']): int(r['count']) for r in rows if r['room'] is not None}
 
 
-def room_index(root, place):
+def _room_details(latest):
+    """The room's words from its latest captured arrival; a missing title/name stays null."""
+    transport = dialogue_store.decode(latest['body']).get('transport') or {}
+    if not isinstance(transport, dict):
+        transport = {}
+    conversation = transport.get('conversation') or {}
+    if not isinstance(conversation, dict):
+        conversation = {}
+    label = conversation.get('title') or conversation.get('name')
+    return {'label': label if isinstance(label, str) else None, 'last_at': str(latest['ts'] or ''),
+            'conversation_id': str(transport.get('conversation_id') or ''),
+            'thread_id': str(transport.get('thread_id') or '')}
+
+
+def room_index(root, place, *, details=False):
+    """Polls (/api/state, consciousness) read index entries only. ``details`` is the owner's
+    rooms read: one more seek per room, its body decoded after the transaction closes."""
     if not _dialogue_indexes(root):
         return []
     counts = _open_counts(root, place)
-    rooms = []
+    rooms, latest = [], []
     # A loose index scan: one seek per captured room, independent of arrival
     # history size. A busy room with a million heard rows still takes one seek.
     with dialogue_store.transaction(root, write=False) as conn:
@@ -173,6 +189,12 @@ def room_index(root, place):
             last = int(row[0])
             rooms.append({'room_chat_id': last, 'unanswered_count': None if counts is None else counts.get(last, 0),
                           'address': f'chat:{last}'})
+            if details:
+                latest.append(conn.execute(f"SELECT body,ts FROM dialogue INDEXED BY dialogue_place_rooms WHERE {_ARRIVAL} "
+                                           f"AND {_PLACE}=? AND chat_id=? ORDER BY seq DESC LIMIT 1",
+                                           (place.place_id, last)).fetchone())
+    for room, row in zip(rooms, latest):
+        room.update(_room_details(row))
     return rooms
 
 

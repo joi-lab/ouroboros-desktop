@@ -196,6 +196,35 @@ def list_documents(root: Any, *, statuses: Optional[Iterable[str]] = None) -> Li
     return _decode(*fetched)
 
 
+def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional[int]) -> List[Dict[str, Any]]:
+    """Full documents only for the stable page and rows needing an effective overlay.
+
+    A stable row's status/ts cannot change in that overlay (``task_status`` owns
+    the writer's predicate). Its first N matches therefore suffice for a global
+    top N, even when every uncertain row sorts ahead of them. Those other rows
+    still run through the complete effective reader before filtering/limiting.
+    Read selection and bodies in one transaction; preserve task-id tie order.
+    Old schemas/NULLs fall back per row, without GET writes. Maintenance's
+    existing hot_facts job derives legacy NULLs under the body's write_seq CAS.
+    """
+    from ouroboros.store_hot_facts import LIST_VERSION
+
+    wanted = sorted(set(statuses))
+    if not wanted:
+        return []
+    with open_store(root, write=False) as txn:
+        if int(txn.meta("schema_version") or 1) < LIST_VERSION:
+            fetched = _fetch(txn)
+        else:
+            bound = "" if limit is None else " LIMIT ?"
+            params = (*wanted,) if limit is None else (*wanted, int(limit))
+            selected = ("SELECT task_id FROM tasks WHERE list_stable=1 "
+                        f"AND status IN ({','.join('?' * len(wanted))}) "
+                        f"ORDER BY ts DESC, task_id ASC{bound}")
+            fetched = _fetch(txn, f"t.list_stable IS NULL OR t.list_stable=0 OR t.task_id IN ({selected})", params)
+    return _decode(*fetched)
+
+
 def lineage_where(parent: str, root_id: str, *, direct_only: bool,
                   queue_members: Iterable[str] = ()) -> Tuple[str, Tuple[str, ...]]:
     """The ``find_child_tasks`` prefilter as SQL, starting from this parent's children. Anchors: the
@@ -294,8 +323,9 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        fetched = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
-    return {str(document.get("task_id")): document for document in _decode(*fetched)}
+        rows, handoffs = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
+    # Keyed by each row's stored id: a body that names another task never stands for that one.
+    return {str(record["task_id"]): document for record, document in zip(rows, _decode(rows, handoffs))}
 
 
 # A display read (``task_reads``: history cards; ``effective_task_result`` with
@@ -344,7 +374,10 @@ def _display_sql(column: str = "b.body") -> str:
                            f"ELSE {path(_KEEP)} END" for sub in kept)
         view = (f"json_replace({view}, CASE WHEN {is_object} THEN {path(key)} ELSE {path(key, _KEEP)} END, "
                 f"CASE WHEN {is_object} THEN json_remove({built}, {absent}) END)")
-    return view
+    # The old-review presenter needs affirmative answer evidence even when this view
+    # drops result. Project one bit from the same body; no extra read or stored field.
+    present = f"json_type({column}, '$.result') = 'text' AND json_extract({column}, '$.result') <> ''"
+    return f"json_set({view}, '$._result_text_present', json(CASE WHEN {present} THEN 'true' ELSE 'false' END))"
 
 
 def _card_sql(view: str) -> str:
@@ -396,6 +429,20 @@ def task_versions(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[int, st
             "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchone()
     return {task_id: (int(seq or 0), str(status or ""), bool(owes))
             for task_id, seq, status, owes in json.loads(record[0] or "[]")}
+
+
+def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
+    """Each stored task's ``(status, its own drive)`` from typed columns in ONE read, no body
+    decoded: the drive is its ``child_drive_root``, else ``headless_child_drive_root``, else
+    ``drive_root`` (``""`` for none). An id the store does not hold is absent from the answer."""
+    ids = sorted({str(task_id) for task_id in task_ids if str(task_id or "").strip()})
+    if not ids:
+        return {}
+    with open_store(root, write=False) as txn:
+        records = txn.conn.execute(
+            "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, drive_root) FROM tasks "
+            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchall()
+    return {str(record[0]): (str(record[1] or ""), str(record[2] or "")) for record in records}
 
 
 def task_ids(root: Any) -> List[str]:

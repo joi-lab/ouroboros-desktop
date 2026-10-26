@@ -149,11 +149,23 @@ def test_shared_window_labels_name_the_source_without_a_reader_perspective(sourc
 @pytest.mark.parametrize("source,label,other", [("provider_metadata", "server metadata", "local serving window"),
                                                ("local_health", "local serving window", "server metadata")])
 @pytest.mark.parametrize("disagrees", [False, True])
-def test_window_disagreement_names_the_observation_source(tmp_path, source, label, other, disagrees):
-    stamp = "2026-10-23T01:00:00Z"
+def test_window_disagreement_names_the_observation_source(tmp_path, monkeypatch, source, label, other, disagrees):
+    """The resolver ages the observation on the evidence clock (``ce.utc_now``), frozen here: a
+    contradiction is shown while it is at most a day old (the confirmed-evidence TTL), not after."""
+    from datetime import datetime, timedelta, timezone
+
+    stamp, observed = "2026-10-23T01:00:00Z", datetime(2026, 10, 23, 1, tzinfo=timezone.utc)
     evidence = ce.CapabilityEvidence(250000 if disagrees else 400000, "asserted", "user_setting", "route",
         server_window=dict(tokens=400000, kind="total", source=source, observed_at=stamp))
-    projection = window_projection(resolve_window(evidence, 4096, root=tmp_path))
+
+    def projected(age_sec):
+        monkeypatch.setattr(ce, "utc_now", lambda: observed + timedelta(seconds=age_sec))
+        return window_projection(resolve_window(evidence, 4096, root=tmp_path))
+
+    projection = projected(3600)
     assert (f"{label} says 400,000 total (2026-10-23 01:00)" in projection["text"]) is disagrees
     assert f"{other} says" not in projection["text"]
     assert bool(projection["contradiction"]) is disagrees
+    assert bool(projected(86400)["contradiction"]) is disagrees
+    expired = projected(86401)
+    assert expired["contradiction"] is None and f"{label} says" not in expired["text"]

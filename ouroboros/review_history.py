@@ -80,6 +80,8 @@ def _author_decisions(drive_root: Any, record: dict, gaps: list) -> list:
 
 
 def _record_view(drive_root: Any, record: dict, seen: dict, gaps: list) -> dict:
+    from ouroboros.review_ledger import seat_text_source
+
     rid, task_id = record["record_id"], str(record.get("task_id") or "")
     brief = record.get("brief") or {}
     view = {"review_record_id": rid, "revision": record.get("revision"), "surface": record.get("surface"),
@@ -89,8 +91,8 @@ def _record_view(drive_root: Any, record: dict, seen: dict, gaps: list) -> dict:
             "critical": [], "advisory": [], "reviewers": [],
             "author_decisions": _author_decisions(drive_root, record, gaps)}
     for row in record.get("rows") or []:
-        sources = [ref for ref in row.get("source_refs") or [] if ref.get("role") == "response"]
-        response = next((ref for ref in sources if ref.get("status") == "retained"), sources[-1] if sources else None)
+        # The seat's answer, else its failure or pending note; the source's role says which.
+        response = seat_text_source(row)
         seat = {k: copy.deepcopy(row[k]) for k in ("seat_id", "parts", "status", "answers", "requested", "effective") if k in row}
         if response:
             seat["response"] = _source_text(drive_root, task_id, response, seen, gaps)

@@ -464,22 +464,38 @@ def read_settings_bytes_verified(settings_path: Path) -> bytes | None:
     return raw
 
 
-def read_settings_json_verified(settings_path: Path):
+def read_settings_json_verified(settings_path: Path, *, behind_writer: bool = False):
     """Decode the verified snapshot; under a pin a decode failure is typed.
 
     Returns the parsed JSON value (any type) or ``None`` for an absent or —
     without a pin — unreadable/undecodable file. One helper so the two
-    config.py read paths cannot drift apart in their pin semantics.
+    config.py read paths cannot drift apart in their pin semantics. Every
+    writer replaces the document whole, except ``save_settings``' fallback for a
+    filesystem that cannot rename, which truncates and writes in place under the
+    settings lock: a prefix of one JSON object never decodes, so a lock-free read
+    (``behind_writer``) that cannot decode reads once more behind that lock. So does
+    one that cannot open a present file (Windows: an open meeting a writer's replace).
     """
     raw_bytes = read_settings_bytes_verified(settings_path)
     if raw_bytes is None:
-        return None
+        return _read_behind_the_writer(settings_path) if behind_writer and settings_path.exists() else None
     try:
         return json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         if expected_settings_sha256():
             raise SettingsIntegrityError("settings snapshot is unreadable") from exc
-        return None
+        return _read_behind_the_writer(settings_path) if behind_writer else None
+
+
+def _read_behind_the_writer(settings_path: Path):
+    """The same read once more, behind the lock a writer holds until its bytes are complete."""
+    from ouroboros import config
+
+    fd = config._acquire_settings_lock()
+    try:
+        return read_settings_json_verified(settings_path)
+    finally:
+        config._release_settings_lock(fd)
 
 
 def verify_settings_integrity(settings_path: Path) -> str | None:

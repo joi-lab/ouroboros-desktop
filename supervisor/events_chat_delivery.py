@@ -144,6 +144,12 @@ def _delivery_key(root: Any, event: dict) -> tuple:
     return str(pathlib.Path(root).resolve()) if root else "", str(event.get("delivery_id") or "")
 
 
+def _remembered_delivery(event: dict) -> Any:
+    did, token = str(event.get("delivery_id") or ""), str(event.get("terminal_projection_token") or "")
+    identity = f"{did}:{token}" if token else did
+    return next((facts for key, facts in tuple(_DELIVERED_MESSAGE_IDS) if key == identity), None)
+
+
 def _defer_delivery(ctx: Any, event: dict) -> None:
     from ouroboros.dialogue_retry import request_drain
     from supervisor.terminal_delivery import register_pending_delivery
@@ -179,6 +185,9 @@ def replay_deferred_deliveries(root: Any, rows: list, *, event_queue: Any = None
         key = _delivery_key(root, row)
         if not row.get("delivery_deferred") and key not in hinted:
             continue
+        with _DELIVERY_LOCK:
+            if key in _ACTIVE_DELIVERIES:
+                continue  # direct continuations hold physical ownership without bus membership
         if row.get("transport_failed") and row.get("terminal_projection_token"):
             row["delivery_deferred"] = False  # canonical Main retains its own transport retry clock
             with _DELIVERY_LOCK:
@@ -187,10 +196,14 @@ def replay_deferred_deliveries(root: Any, rows: list, *, event_queue: Any = None
         row["delivery_deferred"] = True  # also excludes the hint from ordinary aged queue replay
         if delivery_outstanding(event_queue, key[1]) is not False:
             continue
-        if row.get("transport_failed"):
-            if not td._replay_due(row):
+        # Positive send evidence only needs receipt repair, even at the cap. Busy
+        # pre-send storage has spent nothing; every recorded entry (including an
+        # interrupted/unknown outcome) keeps the same backoff and transport bound.
+        if not row.get("terminal_projection_token") and not row.get("emitted") and _remembered_delivery(row) is None:
+            attempts = td._dispatch_attempts(row)
+            if attempts is None or ((attempts or row.get("transport_failed")) and not td._replay_due(row)):
                 continue
-            if td._replay_attempts(row) >= td._PENDING_MAX_REPLAYS:
+            if attempts >= td._PENDING_MAX_REPLAYS:
                 td._retire_exhausted(root, [row])
                 continue
         if _handle_send_message({**row, "type": "send_message", "_delivery_replay": True}, ctx):
@@ -327,6 +340,8 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
                     _defer_delivery(ctx, {**evt, "emitted": emitted})
                     return False
                 return True
+            if evt.get("_delivery_replay") and not pending and not evt.get("terminal_projection_token"):
+                return  # a withdrawn/exhausted stale queue copy cannot recreate debt
         if delivery_id and not evt.get("is_progress"):
             from supervisor.terminal_delivery import TERMINAL_MESSAGE_ID
 
@@ -345,7 +360,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
             if not main_delivery_current(ctx.DRIVE_ROOT, str(evt.get("task_id") or ""), publication_token):
                 return
         memory_id = f"{delivery_id}:{publication_token}" if publication_token else delivery_id
-        remembered = next((facts for identity, facts in _DELIVERED_MESSAGE_IDS if identity == memory_id), None)
+        remembered = _remembered_delivery(evt)
         if delivery_id and remembered is not None:
             log.debug("send_message suppressed as duplicate (delivery_id=%s)", delivery_id)
             # This copy is suppressed because the FIRST one was sent, so record
@@ -490,7 +505,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
             progress_meta = dict(progress_meta or {})
             progress_meta["delivery_id"] = delivery_id
         with timed_phase("sender", timing=evt.get("_finalization_timing") or {}):
-            ctx.send_with_budget(
+            sent = ctx.send_with_budget(
                 chat_id,
                 str(evt.get("text") or ""),
                 log_text=(str(log_text) if isinstance(log_text, str) else None),
@@ -503,7 +518,11 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
                 role=str(evt.get("role") or ""),
                 system_type=system_type,
                 **({"require_write": True} if delivery_id else {}),
+                **({"replay_delivery_id": delivery_id}
+                   if delivery_id and evt.get("_delivery_replay") and not publication_token else {}),
             )
+            if sent is False:
+                return False  # replay was no longer owed/allowed; no send or receipt
         # Register only after send; a failed first copy must not suppress retry.
         if delivery_id:
             emitted = {
@@ -526,9 +545,6 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
 
         failed_transport = isinstance(e, MessageTransportError)
         _defer_delivery(ctx, {**evt, "transport_failed": failed_transport})
-        if failed_transport and evt.get("_delivery_replay") and not evt.get("terminal_projection_token"):
-            from supervisor.terminal_delivery import _bump_replay_attempts
-            _bump_replay_attempts(ctx.DRIVE_ROOT, [str(evt.get("delivery_id") or "")])
         ctx.append_jsonl(
             ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
             {

@@ -539,7 +539,7 @@ def test_auto_attach_skips_a_result_that_declared_failure(tmp_path, monkeypatch)
     attached, stamps = [], []
     import ouroboros.tools.vision as vision
     monkeypatch.setattr(vision, "attach_local_image_to_context",
-                        lambda ctx, path, *, stamp=None: stamps.append(stamp) or attached.append(path) or (True, "ok"))
+                        lambda ctx, path, *, stamp=None, observation=None: stamps.append(stamp) or attached.append(path) or (True, "ok"))
     tools = SimpleNamespace(_ctx=SimpleNamespace(messages=[], drive_root=str(tmp_path)))
     body = _json.dumps({"ok": False, "error": "boom", "auto_attach_image": "/x/shot.png"})
     # The adapter types the self-reported failure; the guard reads that code.
