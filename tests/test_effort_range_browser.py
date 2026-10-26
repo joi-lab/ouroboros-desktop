@@ -114,6 +114,22 @@ def _panel(page, selector: str = CONTROL) -> str:
     return "#" + page.get_attribute(f"{selector} .chat-capsule-head", "aria-controls")
 
 
+def _at_rest(page, selector: str = CONTROL) -> None:
+    """The capsule's row has settled: the capsule's box is the same on three frames in a row (the row's fit runs in a
+    frame after its first layout, and the names may give way then)."""
+    page.evaluate("""sel => new Promise((resolve) => {
+        const el = document.querySelector(sel);
+        let last = '', same = 0;
+        const tick = () => {
+            const r = el.getBoundingClientRect(), now = [r.left, r.top, r.width].join();
+            same = now === last ? same + 1 : 0;
+            last = now;
+            if (same >= 3) resolve(true); else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    })""", selector)
+
+
 def _settled(page, selector: str = CONTROL) -> None:
     """The capsule's panel is open and its entrance has played."""
     _wait(page, "el.dataset.open === 'true'", selector)
@@ -211,6 +227,7 @@ def test_desk_press_opens_a_float_panel_and_escape_outside_or_the_capsule_closes
         browser, page = _launch(pw, engine, viewport={"width": 1280, "height": 900})
         try:
             _open_chat(page, url, width=1280)
+            _at_rest(page)
             closed = _facts(page)
             assert closed["open"] == "false" and closed["expanded"] == "false" and closed["panel"] is None, closed
             # A labelled capsule of the other capsules' height on their row: ring, Effort and the recommended
@@ -277,6 +294,7 @@ def test_phone_press_opens_a_bottom_sheet_that_a_swipe_down_closes(direct_server
         browser, page = _launch(pw, engine, viewport={"width": width, "height": 800}, is_mobile=True, has_touch=True)
         try:
             _open_chat(page, url, width=width, height=800)
+            _at_rest(page)
             closed = _facts(page)
             assert abs(closed["subHeight"] - closed["sendHeight"]) <= 1, closed
             assert abs(closed["height"] - closed["sendHeight"]) <= 1, "the round button keeps the capsules' height"
@@ -324,6 +342,7 @@ def test_project_pane_panel_stays_in_its_column_and_keeps_its_own_value(direct_s
             page.click('.nav-project-row[data-project-id="pane"]')
             page.wait_for_selector("#project-panel:not([hidden])", timeout=30_000)
             page.wait_for_function(f"() => document.querySelector('{pane}')?.dataset.known === 'true'", timeout=30_000)
+            _at_rest(page, pane)
             main, closed = _facts(page), _facts(page, pane)
             assert (main["min"], main["rec"], main["max"]) == (closed["min"], closed["rec"], closed["max"]), (main, closed)
             width = page.locator("#project-panel").bounding_box()["width"]
@@ -448,6 +467,7 @@ def test_a_320_px_phone_sheet_shares_the_strip_evenly(direct_server_with_data, e
         browser, page = _launch(pw, engine, viewport={"width": 320, "height": 640}, is_mobile=True, has_touch=True)
         try:
             _open_chat(page, url, width=320, height=640)
+            _at_rest(page)
             closed = _facts(page)
             page.tap(HEAD)
             _settled(page)
