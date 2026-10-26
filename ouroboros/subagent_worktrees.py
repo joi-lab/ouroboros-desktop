@@ -719,12 +719,15 @@ def snapshot_commit(source: Path, *, message: str, parent: str = "",
         def held(rel: str) -> bool:  # the folder's files, or an entry standing where the folder belongs
             return bool(prefix) and (rel == prefix.rstrip("/") or rel.startswith(prefix)) and rel not in held_keep
 
-        rows = [item.partition(b"\t") for item in _git_env(source, "ls-files", "-s", "-z", env=env).stdout.split(b"\0")]
-        modes = {raw.decode("utf-8", errors="surrogateescape"): meta[:6] for meta, _, raw in rows if raw}
-        for rel, mode in modes.items():
+        modes: Dict[str, set] = {}  # every stage's mode: a conflict may name a gitlink in any of them
+        for item in _git_env(source, "ls-files", "-s", "-z", env=env).stdout.split(b"\0"):
+            meta, _, raw = item.partition(b"\t")
+            if raw:
+                modes.setdefault(raw.decode("utf-8", errors="surrogateescape"), set()).add(meta[:6])
+        for rel, stages in modes.items():
             if rel in absent:
                 continue
-            if parent and mode == b"160000" and (reason := _gitlink_held(source / rel)):
+            if parent and b"160000" in stages and (reason := _gitlink_held(source / rel)):
                 # A result holds a gitlink, never what a checked-out submodule or a staged repository keeps.
                 excluded.append({"path": rel, "reason": reason})
             if held(rel):

@@ -291,6 +291,39 @@ def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path
         custody._CUSTODY.clear()
 
 
+def test_a_submodule_in_a_type_conflict_still_keeps_the_checkout(tmp_path, monkeypatch):
+    """An unresolved index can hold a gitlink in one stage and a file in another (``merge -s resolve`` of a
+    submodule against a file): any stage naming a gitlink makes its filled folder unsaved."""
+    from ouroboros import subagent_worktrees as sw
+
+    target, ctx, handle, copy = _with_submodule(tmp_path, monkeypatch)
+    lib = copy / "deps" / "lib"
+    _git(copy, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", "deps/lib")
+    (lib / "lib.txt").write_text("our library change\n", encoding="utf-8")
+    _git(lib, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "our library")
+    _git(copy, "add", "deps/lib")
+    _git(copy, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "our pointer")
+    theirs_env = sw._host_env(GIT_INDEX_FILE=str(tmp_path / "theirs.index"), **sw._SNAPSHOT_IDENTITY)
+    sw._git_env(copy, "read-tree", handle.baseline_sha, env=theirs_env)
+    blob = sw._git_env(copy, "hash-object", "-w", "--stdin", env=theirs_env,
+                       input_bytes=b"a regular file in its place\n").stdout.decode().strip()
+    sw._git_env(copy, "update-index", "--add", "--cacheinfo", f"100644,{blob},deps/lib", env=theirs_env)
+    tree = sw._git_env(copy, "write-tree", env=theirs_env).stdout.decode().strip()
+    theirs = sw._git_env(copy, "commit-tree", tree, "-p", handle.baseline_sha, "-m", "a file",
+                         env=theirs_env).stdout.decode().strip()
+    merged = _git(copy, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-commit", "--no-ff",
+                  "-s", "resolve", theirs, check=False)
+    assert merged.returncode != 0 and "100644" in _git(copy, "ls-files", "-s", "deps/lib").stdout
+    (lib / "unique.txt").write_text("work only this checkout holds\n", encoding="utf-8")
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        capture = _capture_terminal_patch(ctx, entry)
+        assert capture["unsaved_paths"] == ["deps/lib"] and "checkout_released" not in capture, capture
+        assert (lib / "unique.txt").read_text(encoding="utf-8") == "work only this checkout holds\n"
+    finally:
+        custody._CUSTODY.clear()
+
+
 def test_a_released_executable_applies_on_a_repository_that_ignores_file_modes(tmp_path, monkeypatch):
     """Git for Windows writes ``core.fileMode=false``: the recorded entries seed the drift proof, so
     the mode B held is kept and an unmoved target takes the saved patch once B is collected."""
