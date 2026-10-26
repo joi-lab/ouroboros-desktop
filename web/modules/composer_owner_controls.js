@@ -100,7 +100,7 @@ function effortHeadMarkup() {
 
 function effortStripMarkup() {
     const segments = EFFORT_OPTIONS.map((option) =>
-        `<span class="chat-effort-seg" data-effort-seg="${option.value}"><span class="chat-effort-seg-text">${option.label}</span></span>`).join('');
+        `<span class="chat-effort-seg" data-effort-seg="${option.value}"><span class="chat-effort-seg-text" data-i18n-skip>${option.label}</span></span>`).join('');
     return '<div class="chat-effort-band" data-effort-band aria-hidden="true"></div>'
         + '<div class="chat-effort-handle chat-effort-rec" data-handle="rec" role="slider" tabindex="-1" aria-label="Primary effort"></div>'
         + segments
@@ -137,6 +137,9 @@ export function createEffortRangeControl({
     strip.innerHTML = effortStripMarkup();
     const band = strip.querySelector('[data-effort-band]');
     const segs = Array.from(strip.querySelectorAll('.chat-effort-seg'));
+    // Each level's word is the capsule's own (the catalog seam), written before the marks are measured: the overlay
+    // would translate the words only once the panel joins the document, after the marks landed.
+    const words = Array.from(strip.querySelectorAll('.chat-effort-seg-text'));
     const handles = { min: strip.querySelector('.chat-effort-min'), rec: strip.querySelector('.chat-effort-rec'), max: strip.querySelector('.chat-effort-max') };
     // The line for the chosen range; the widest such line sizes its cell, so a choice never changes the panel's height.
     const widest = OWNER_TIERS.map(effortText).reduce((a, b) => (b.length > a.length ? b : a), '');
@@ -191,6 +194,7 @@ export function createEffortRangeControl({
     /* --- rendering: every mark sits on whole levels, a drag included (the pill always covers
        the word it names independently of the helper brackets) --- */
     function render() {
+        OWNER_TIERS.forEach((tier, i) => { const word = effortText(tier); if (words[i].textContent !== word) words[i].textContent = word; });
         const s = snapRange(state.view || state.shown);
         const dir = scaleDir();
         const e = edges(dir);

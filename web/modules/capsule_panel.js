@@ -131,7 +131,8 @@ export function createCapsulePanel({
         panel.style.transformOrigin = `${Math.round(at.left + at.width / 2 - left)}px 100%`;
     }
 
-    // A layout change (opening, a resize) lands the strip's marks where they stand; only a choice moves them.
+    // A layout change (opening, a resize) lands the strip's marks where they stand, once the panel has its width; only a
+    // choice moves them.
     function settle(update) {
         panel.dataset.settling = 'true';
         update();
@@ -157,7 +158,7 @@ export function createCapsulePanel({
             doc.body.append(scrim);
         }
         doc.body.append(panel);
-        settle(() => { repaint(true); place(); });
+        settle(() => { place(); repaint(true); });
         if (animated()) {
             const easing = ease();
             const frames = sheet ? [{ transform: 'translateY(100%)' }, { transform: 'none' }]
@@ -258,7 +259,7 @@ export function createCapsulePanel({
     const onResize = () => {
         if (!open) return;
         if ((panel.dataset.place === 'sheet') !== phone()) close({ instant: true });
-        else settle(() => { repaint(true); place(); });
+        else settle(() => { place(); repaint(true); });
     };
 
     head.addEventListener('click', onHeadClick);
