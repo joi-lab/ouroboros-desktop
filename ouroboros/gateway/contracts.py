@@ -868,8 +868,8 @@ class SettingsSaveResponse(TypedDict, total=False):
     warnings: list[str]
     ignored_keys: Dict[str, str]
     # True when the save landed while an agent task was already STARTED: that
-    # task keeps its start-time config (snapshot boundary); changes apply from
-    # the next task. Queued-but-unstarted tasks re-read settings at start.
+    # task keeps its start-time reviewers, subagents, context and effort; models,
+    # accounts and keys reach work that follows them at its next call.
     agent_task_running: bool
     connection_references: list[Dict[str, str]]  # rows naming a connection that cannot serve them (they refuse)
 

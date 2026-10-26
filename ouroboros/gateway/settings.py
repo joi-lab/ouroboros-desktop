@@ -233,15 +233,20 @@ def _effect_buckets(all_changed: list) -> tuple:
     """Split changed keys into the honest effect buckets for the save response.
 
     Every key that reaches here applies at SOME point, so both buckets are
-    truthful claims (#285). A key a release retired cannot reach here at all:
+    truthful claims (#285). Models, accounts and keys are read live
+    (``route_choice``): work that follows them uses them at its next call, so they
+    count as immediate. A key a release retired cannot reach here at all:
     the merge only walks SETTINGS_DEFAULTS, and load_settings strips retired
     keys off disk — the RC auditor is what tells an upgrading install its
     stored value is gone (scripts/rc_audit.py "retired-setting").
     """
-    immediate_changed = [k for k in all_changed if k in _IMMEDIATE_KEYS]
+    from ouroboros.route_choice import ROUTE_SETTING_KEYS
+
+    live = _IMMEDIATE_KEYS | ROUTE_SETTING_KEYS
+    immediate_changed = [k for k in all_changed if k in live]
     next_task_changed = [
         k for k in all_changed
-        if k not in _IMMEDIATE_KEYS and k not in _RESTART_REQUIRED_KEYS and k != "OUROBOROS_RUNTIME_MODE"
+        if k not in live and k not in _RESTART_REQUIRED_KEYS and k != "OUROBOROS_RUNTIME_MODE"
     ]
     return immediate_changed, next_task_changed
 
@@ -1343,11 +1348,10 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
                 _owner_write_settings(settings_to_save)
                 os.environ["GITHUB_REPO"] = resolved_slug
         immediate_changed, next_task_changed = _effect_buckets(all_changed)
-        from ouroboros.route_choice import ROUTE_SETTING_KEYS
         # Owner decision (2026-08-05): the task-start snapshot boundary STAYS for reviewers, subagents, context and
         # effort, said loudly so "Saved" never reads as "applied to the task you are watching". Models, accounts and
-        # keys read live (route_choice): work following a role moves on its next call, so they draw no warning.
-        agent_task_running = bool(set(next_task_changed) - ROUTE_SETTING_KEYS) and started_before_save
+        # keys read live (route_choice), so they are immediate and draw no warning.
+        agent_task_running = bool(next_task_changed) and started_before_save
         if agent_task_running:
             warnings.append(
                 "An agent task is running right now: it keeps the reviewers, subagents, context and "
