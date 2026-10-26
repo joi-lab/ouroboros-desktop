@@ -24,27 +24,17 @@ class TurnLawBreach(AssertionError):
 # units of history added). Measured 26.10 on the integrated tree in its steady state (tests/_turn_shapes.py).
 TURN_GAPS: Dict[Tuple[str, str], Tuple[str, Dict[str, int]]] = {
     ("L1", "T:room"): (
-        "A project room's turn, k=1 -> k=30: its capture reads the whole chronicle index, one statement per "
-        "table, the stored tail facts of every room included (chronicle_store.capture: json_chars +4.0 MB, "
-        "vm_steps +93,200), and the story readers parse every record they filter from it, the live rooms' pages "
-        "included (memory_inventory.story_counts, memory_view._story_pages, room_records, room_facts, "
-        "folded_members: json_loads +841, json_chars +3.2 MB). No remover in this update: a capture that reads "
-        "what its view shows (its rooms' records, their open rows, counts kept per room) is lane A's to design.",
-        {"json_loads": 843, "json_chars": 7172359, "vm_steps": 93840}),
-    ("L3", "T:main:broad"): (
-        "40 live rooms with story and 10 running roots (k=1): the turn's capture stores the facts of the 200 "
-        "rows the step added, one INSERT execution each (memory_inventory._read_tail -> ChronicleStore."
-        "extend_tail: statements +200; the routing pre-pass reads the running roots' pause fences in one "
-        "statement, server_routing_context.addressable_roots). No remover in this update: the tail facts "
-        "stored in one statement per chunk, as M4 reads a page (lane A).",
-        {"statements": 216}),
-    ("L4", "T:main:rows"): (
-        "650 open rows over Main and 40 rooms (k=1): the turn's capture stores the facts of the rows appended "
-        "since the last capture, one INSERT execution per row (memory_inventory._read_tail -> ChronicleStore."
-        "extend_tail, executemany: statements +450 beyond the 200 of the turn before), each a SQLite step that "
-        "releases the GIL; the dialogue's page reads stay inside B9's allowance (begins +3). No remover in this "
-        "update: the tail facts stored in one statement per chunk (json_each), as M4 reads a page (lane A).",
-        {"statements": 468}),
+        "A project room's turn, k=1 -> k=30: a project room's direct turn integrates (BIBLE P1: the whole horizon "
+        "stays resident in a root task), so its view holds every room's story and a line per live room. Its one "
+        "capture reads every room's records and sealed sets and the stored facts of every row after the frontier: "
+        "a room's open rows are its members' rows outside its sealed set, and membership is applied at read "
+        "(chronicle_store.capture: json_chars +4.0 MB, vm_steps +96,400, +3,200 of them the counts of acting pages "
+        "and parts read in SQL); the story reads every room's acting pages and parts whole (memory_view."
+        "_story_pages: +581 KB), the retold sections its parts fold whose units have no rows (memory_inventory."
+        "record_period: +56 KB) and the legacy pointers once (+56 KB). No remover in this update: narrowing a "
+        "project room's view to its own rooms is the owner's decision (P1); counting the other rooms' open rows "
+        "without reading their sealed rows needs membership kept with each stored row, which every binding moves.",
+        {"json_loads": 234, "json_chars": 4785404, "vm_steps": 97040}),
     ("L3", "T:main:archive"): (
         "40 archived knowledge notes and 40 old rescue snapshots (k=1, the turn after the one that met them): "
         "the knowledge shelf is listed for the index the mind is shown, which counts the archived notes "

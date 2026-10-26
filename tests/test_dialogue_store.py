@@ -13,7 +13,7 @@ import sqlite3
 
 import pytest
 
-from ouroboros import chat_chain, dialogue_import as di, dialogue_store as ds, store
+from ouroboros import chat_chain, dialogue_import as di, dialogue_positions as dp, dialogue_store as ds, store
 from ouroboros.utils import iter_jsonl_objects, jsonl_chain_handles, jsonl_generation_signature
 from tests._dialogue import chat_rows, lines, progress_rows, seed
 
@@ -94,6 +94,18 @@ def test_a_page_read_in_one_step_holds_the_rows_and_order_a_plain_select_returns
     for (keys, newest), expected in probes.items():
         assert ds.probe_rows(tmp_path, "chat", keys, before=every[-1].end, lower=seqs[4], limit=60,
                              newest_first=newest) == expected and expected
+    with ds.transaction(tmp_path, write=False) as conn:  # the legacy addresses and the counts, read row by row
+        hints = {}
+        for record in conn.execute("SELECT seq, gen, line FROM legacy_addresses ORDER BY seq, gen, line"):
+            hints.setdefault(record["seq"], (record["gen"], record["line"]))
+        pairs = sorted(set(hints.values()))[::3] + [("0" * 64, 1)]
+        candidates = {pair: _plain_rows(conn, "WHERE stream='chat' AND seq IN (SELECT seq FROM legacy_addresses "
+                                              "WHERE gen=? AND line=?) ORDER BY seq", pair) for pair in pairs}
+        ordinals = {record["seq"]: dp.Ordinals(int(record["ordinal"]), record["pos"])
+                    for record in conn.execute(f"{dp._ORDINALS} WHERE stream='chat'")}
+    assert len(hints) == 1_203 and ds.legacy_addresses(tmp_path, seqs + [seqs[-1] + 10**6]) == hints
+    assert ds.legacy_candidates_of(tmp_path, pairs) == candidates and candidates[pairs[0]] and not candidates[pairs[-1]]
+    assert dp.ordinals_of(tmp_path, "chat", seqs + [seqs[-1] + 10**6]) == ordinals and len(ordinals) == 1_206
 
 
 class _Stepped:
@@ -140,6 +152,14 @@ def test_a_page_of_rows_reaches_python_in_one_step_whatever_its_length(tmp_path,
     stepped.clear()
     assert len(ds.probe_rows(tmp_path, "chat", [("chat_id", 2), ("task_id", "t1")], limit=200)) == 200
     assert sum(stepped) == 3  # each column's coordinates, then the winners' page
+    stepped.clear()
+    hints = ds.legacy_addresses(tmp_path, [row.seq for row in every])
+    assert len(hints) == 1_203 and sum(stepped) == 3  # a step per 500 rows' addresses, not one per row
+    stepped.clear()
+    found = ds.legacy_candidates_of(tmp_path, hints.values())
+    assert sum(map(len, found.values())) == 1_203 and sum(stepped) == 5 + 3  # 250 addresses a step, then 500 rows
+    stepped.clear()
+    assert len(dp.ordinals_of(tmp_path, "chat", [row.seq for row in every])) == 1_203 and sum(stepped) == 3
 
 
 # ---- the writer seam ------------------------------------------------------------------------

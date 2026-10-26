@@ -373,19 +373,19 @@ def _fixes(store: ChronicleStore, record: Mapping[str, Any], fixes: Mapping[str,
             for member in members for fix in fixes.get(str(member), ())]
 
 
-def _story_pages(store: ChronicleStore, label: Callable[..., str],
-                 units: Mapping[str, memory_inventory.LegacyUnit]) -> List[Dict[str, Any]]:
-    """Every acting page and part not folded into a part, and every account my selection shows, all rooms, by the first
-    row of its own room then sequence; the records a shown account tells in its place are marked ``told_by``."""
+def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mapping[str, memory_inventory.LegacyUnit],
+                 room_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every acting page and part not folded into a part (``room_id``'s alone, when named), and every account my
+    selection shows, all rooms, by the first row of its own room then sequence; the records a shown account tells in
+    its place are marked ``told_by``."""
     fixes: Dict[str, List[Dict[str, Any]]] = {}
     for record in store.records(kinds=("correction", "decision")):
         if record["kind"] == "correction" or record.get("accepted") is False:
             fixes.setdefault(str(record.get("target_id") or ""), []).append(
                 {"kind": "correction" if record["kind"] == "correction" else "rejection", "id": record["id"],
                  "text": record.get("text"), "reason": record.get("reason")})
-    rooms = sorted({str(record["room_id"]) for record in store.records(kinds=("page", "part"))})
-    records = [record for room in rooms for record in store.room_records(room)
-               if record["kind"] in ("page", "part") and not record.get("folded_into")]
+    records = [record for record in store.room_records(room_id, kinds=("page", "part"))
+               if not record.get("folded_into")]
     from ouroboros.memory_sealing import capture_terminal_rows, terminal_links
     terminal_cache = capture_terminal_rows(store.data_root, records)
     keyed = [((entry.pop("first"), entry["sequence"]), entry) for entry in account_entries(
@@ -413,11 +413,11 @@ def _capture_story(store: ChronicleStore, root: pathlib.Path, label: Callable[..
     Every unfolded retold record keeps its current words, whatever its block: whole in the story until the
     floor turns its room into one line (F3) or a selected account tells it in its place (``told_by``).
     """
-    pointers = {pointer["node_id"]: pointer for pointer in store.legacy_pointer_rows()}
+    pointers = {pointer["node_id"]: pointer for pointer in memory_inventory.legacy_pointers(store)}
     units = memory_inventory.legacy_units(store, root)
     open_rooms = {unit.room_id for unit in units if not unit.folded}
     words = {record["id"]: str(record.get("current_text") or "") for room in sorted(open_rooms)
-             for record in store.room_records(room) if record["kind"] == "legacy"}
+             for record in store.room_records(room, kinds=("legacy",))}
     story, refusals = [], []
     for unit in units:
         if unit.folded:
@@ -588,17 +588,18 @@ def _lanes(root: pathlib.Path, entries: List[Entry], lineage: Mapping[str, Any])
 
 def _notes_by_room(store: ChronicleStore) -> Dict[str, List[Dict[str, Any]]]:
     """My notes no page has sealed yet (``note:<id>`` outside the room's sealed set), by room."""
-    rooms = sorted({str(record["room_id"]) for record in store.records(kinds=("note",))})
+    by_room: Dict[str, List[Dict[str, Any]]] = {}
+    for record in store.room_records(None, kinds=("note",)):
+        by_room.setdefault(str(record["room_id"]), []).append(record)
     notes: Dict[str, List[Dict[str, Any]]] = {}
-    for room in rooms:
+    for room in sorted(by_room):
         sealed = store.sealed_row_refs(room)
         kept = [{"id": record["id"], "date": _minute(record.get("ts")).split(" ")[0],
                  "task_id": str(record.get("author", {}).get("task_id") or ""),
                  "role": str(_mapping(_mapping(record.get("author")).get("focus")).get("role") or "mind"),
                  "origin": dict(_mapping(_mapping(record.get("author")).get("focus"))),
                  "text": str(record.get("current_text") or "")}
-                for record in store.room_records(room)
-                if record["kind"] == "note" and f"note:{record['id']}" not in sealed]
+                for record in by_room[room] if f"note:{record['id']}" not in sealed]
         if kept:
             notes[room] = kept
     return notes
@@ -640,15 +641,15 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
             # era) predate rooms and were Main's memory: whole and first for every focus that starts with the top
             # level of the life account (a child included); a nanny carries no life account and no story, so it
             # gets neither the text nor a pointer
-            retold[:0] = [record for record in store.room_records(LEGACY_ROOM_ID) if record["kind"] == "legacy"
-                          and _mapping(record.get("metadata")).get("legacy_type") not in ("gap", "cursor_gap")]
+            retold[:0] = [record for record in store.room_records(LEGACY_ROOM_ID, kinds=("legacy",))
+                          if _mapping(record.get("metadata")).get("legacy_type") not in ("gap", "cursor_gap")]
         facts["legacy"] = [{"id": record["id"], "text": str(record.get("current_text") or ""), "period": _legacy_period(
                                 {"covers": record.get("covers"), "range_text": _mapping(record.get("metadata")).get(
                                     "legacy_range_text")}, getattr(unit, "ts_span", None)),
                             "of": LEGACY_ROOM_LABEL if str(record.get("room_id")) == LEGACY_ROOM_ID else ""}
                            for record in retold if not getattr(unit := units.get(record["id"]), "folded", False)
                            and record["id"] not in whole]
-        own = {} if spec.story else {e["id"]: {**e, "part": None} for e in _story_pages(store, label, units)
+        own = {} if spec.story else {e["id"]: {**e, "part": None} for e in _story_pages(store, label, units, room)
                                       if e["room_id"] == room and e["kind"] != "account"}  # story order: the floor takes the oldest first
         facts["under_parts"] = [own.get(record["id"]) or {"id": record["id"], "kind": record["kind"], "part": record["folded_into"],
                                  "period": _period((p := memory_inventory.record_period(store, record, units)).span, p.note()), "text": str(record.get("current_text") or "")}
@@ -824,7 +825,11 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status=status, frontier={}, room=bare, owner_words=owner_words)
     try:
         store = ChronicleStore(root)
-        with capture(root) as derived:  # one state of the chronicle for every reader (activation may publish: before)
+        # One state of the chronicle for every reader (activation may publish: before), with the stored tail facts
+        # the view reads: every row for the live rooms' open rows, else the story's terminal rows.
+        tail = ("all" if spec.live_rooms != "none" else
+                "terminal" if spec.story or spec.room_id is not None and spec.room_page else "none")
+        with capture(root, tail=tail) as derived:
             frontier = legacy_frontier(store)
             story, story_status, refusals = _capture_story(store, root, label) if spec.story else ([], {}, [])
             room, live, marks = _capture_live(store, root, spec, label, story)
@@ -847,8 +852,8 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         return MemoryViewSnapshot(spec=spec, store_status={"state": "journal_unreadable",
                                                            "reason": f"{type(exc).__name__}: {exc}"},
                                   frontier={}, room=bare, owner_words=owner_words)
-    if (tail := (derived or {}).get("tail")) is not None and not tail.complete:
-        status = {**status, "tail_facts": "filling"}  # its open rows were read live: the stored tail is not complete
+    if any(not read.complete for read in ((derived or {}).get(key) for key in ("tail", "terminal_tail")) if read):
+        status = {**status, "tail_facts": "filling"}  # its rows were read live: the stored tail is not complete
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
                               story=tuple(story), room=room, live_rooms=tuple(live), marks=tuple(marks),

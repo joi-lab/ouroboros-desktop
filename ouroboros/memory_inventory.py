@@ -311,8 +311,9 @@ def terminal_rows(root: Any) -> List[Tuple[Dict[str, Any], Dict[str, Any], int, 
     frontier = _active_frontier(ChronicleStore(root))
     if frontier is None:
         return []
-    tail = capture_memo(root, "tail", lambda: _read_tail(root, frontier),  # a capture's whole tail, else these alone
-                        outside=lambda: _read_tail(root, frontier, terminal_only=True))
+    # A capture whose view reads every row reads the whole tail once for both readers; else these rows alone.
+    tail = (_tail(root, frontier) if capture_memo(root, "tail_scope", lambda: None) == "all" else
+            capture_memo(root, "terminal_tail", lambda: _read_tail(root, frontier, terminal_only=True)))
     return [(address, meta, pos, terminal) for pos, address, meta, terminal in tail.rows if terminal is not None]
 
 
@@ -508,6 +509,11 @@ def _retelling_chars(store: ChronicleStore, ids: set) -> Dict[str, int]:
     return known
 
 
+def legacy_pointers(store: ChronicleStore) -> List[Dict[str, Any]]:
+    """``ChronicleStore.legacy_pointer_rows``, read once per capture for its readers (shared: never changed)."""
+    return capture_memo(store.data_root, "legacy_pointers", store.legacy_pointer_rows)
+
+
 def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     """Every legacy record and journal gap, in the store's pointer order, with its folded verdict.
 
@@ -526,8 +532,9 @@ def legacy_units(store: ChronicleStore, root: Any) -> List[LegacyUnit]:
     if cached is not None and cached[0] == key and cached[2] is not None \
             and _lineage_answers(facts, cached[1]) == cached[2]:
         return list(cached[3])
-    with capture(root):  # every verdict reads one chronicle state: ``authority``'s, or a later one recounted next call
-        pointers = store.legacy_pointer_rows()
+    # Every verdict reads one chronicle state: ``authority``'s, or a later one recounted next call (no tail fact).
+    with capture(root, tail="none"):
+        pointers = legacy_pointers(store)
         refusals = fallback_refusals(store.scan_state())
         chars = _retelling_chars(store, {pointer["node_id"] for pointer in pointers}) if pointers else {}
         ranges = {pointer["node_id"]: (str(pointer["room_id"]), span) for pointer in pointers
@@ -597,7 +604,7 @@ def record_period(store: ChronicleStore, record: Mapping[str, Any], units: Mappi
             (ref.get("id") if isinstance(ref, Mapping) else ref) for ref in record.get("sources") or ()]
         get = records.get if records is not None else store.get
         members = [record_period(store, member, units, records=records) for member_id in ids or ()
-                   if (member := get(str(member_id))) is not None]
+                   if (member := _member(get, units, str(member_id))) is not None]
         if len(members) != len(ids or ()):
             members.append(Period(None, -1, "rows"))  # a source not in this chronicle: an incomplete period
         spans = [period.span for period in members if period.span]
@@ -620,6 +627,13 @@ def record_period(store: ChronicleStore, record: Mapping[str, Any], units: Mappi
                   stream[0] if isinstance(stream, list) and stream and type(stream[0]) is int else -1, "rows")
 
 
+def _member(get: Callable[[str], Any], units: Mapping[str, LegacyUnit], member_id: str) -> Any:
+    """A part's or account's member as ``record_period`` reads it: a retold record whose unit holds its rows
+    answers from the unit, its retelling not read; any other record is read."""
+    unit = units.get(member_id)
+    return {"id": member_id, "kind": "legacy"} if unit is not None and unit.ts_span else get(member_id)
+
+
 # --- the standing facts --------------------------------------------------------------------------
 
 def story_counts(store: ChronicleStore) -> Dict[str, Any]:
@@ -630,16 +644,13 @@ def story_counts(store: ChronicleStore) -> Dict[str, Any]:
     counted apart: on an installation without consciousness the helper writes them, and "none by me"
     alone would mislead.
     """
-    counts: Dict[str, Any] = {"pages_by_me": 0, "latest_by_me": "", "helper_pages": 0, "parts": 0}
-    for room in sorted({str(record["room_id"]) for record in store.records(kinds=("page", "part"))}):
-        for record in store.pages_of_room(room):
-            if record["kind"] == "part":
-                counts["parts"] += 1
-            elif (record.get("author") or {}).get("kind") == "mind":
-                counts["pages_by_me"] += 1
-                counts["latest_by_me"] = max(counts["latest_by_me"], str(record.get("ts") or "")[:10])
-            else:
-                counts["helper_pages"] += 1
+    counts: Dict[str, Any] = {"pages_by_me": 0, "latest_by_me": "", "helper_pages": 0, "parts": store.acting_parts()}
+    for page in store.acting_pages():  # counted in the index, no page read whole
+        if page["author_kind"] == "mind":
+            counts["pages_by_me"] += 1
+            counts["latest_by_me"] = max(counts["latest_by_me"], str(page["ts"] or "")[:10])
+        else:
+            counts["helper_pages"] += 1
     return counts
 
 
@@ -656,8 +667,8 @@ def room_facts(store: ChronicleStore, room: str, entries: List[Entry], lineage: 
     """
     spoken = [cls["author"].get("kind") for cls in (row_class(meta, pos=pos, **lineage) for _a, meta, pos in entries)
               if cls["lane"] == 1]
-    pages = [record for record in store.pages_of_room(room) if record["kind"] == "page"]
-    ends = [end for record in pages if (end := ((record.get("covers") or {}).get("ts_span") or {}).get("end"))]
+    pages = store.acting_pages(room)
+    ends = [page["covered_end"] for page in pages if page["covered_end"]]
     return {"rows": len(entries), "people": spoken.count("human"), "mine": spoken.count("ouroboros"),
             "task_facts": len(entries) - len(spoken),
             "chars": sum(int(meta.get("text_chars") or 0) for _address, meta, _pos in entries),
