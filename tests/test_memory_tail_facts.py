@@ -135,6 +135,27 @@ def test_outside_a_capture_the_terminal_links_read_only_the_stored_terminal_rows
     assert built == [16]  # the one stored terminal row, not the ten rows after the frontier
 
 
+def test_a_chunk_of_tail_facts_is_stored_in_one_statement(tmp_path, monkeypatch):
+    chronicle = ChronicleStore(tmp_path)
+    assert chronicle.publish([], scan_state={"probe": 1}).ok
+    rows = [[n, 100 + n, f"{n:064x}", ["gen", n] if n % 2 else None,
+             {"chat_id": 1, "text_chars": n, "source_keys": [[1, "", "t", "h"]]}, "" if n % 3 == 0 else None]
+            for n in range(500)]
+    traced, real = [], sqlite3.connect
+
+    def connect(*args, **kwargs):
+        db = real(*args, **kwargs)
+        db.set_trace_callback(traced.append)
+        return db
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    state = {"source": {"store": [1, 2], "frontier": 0}, "upper": 700, "anchor": [599, rows[-1][2]], "complete": True}
+    assert chronicle.extend_tail(None, rows, state, replace=True)
+    assert len([sql for sql in traced if "INTO tail_rows" in sql]) == 1  # 500 rows, one execution (one step)
+    monkeypatch.undo()
+    assert chronicle.tail_facts(state["source"]) == (state, rows)
+
+
 def test_a_tail_writer_holding_a_stale_state_stores_nothing(tmp_path):
     chronicle = ChronicleStore(tmp_path)
     assert chronicle.publish([], scan_state={"probe": 1}).ok

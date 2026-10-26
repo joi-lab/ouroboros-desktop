@@ -315,6 +315,10 @@ class _IndexLookups:
 
 
 _TAIL_SQL = "SELECT json_group_array(json_array(pos,seq,row_sha256,json(legacy),json(meta),terminal)) FROM tail_rows"
+# A chunk of tail rows in ONE statement (one step), as a page is read: [pos, seq, sha, legacy text, meta text, terminal].
+_TAIL_INSERT = ("INSERT OR IGNORE INTO tail_rows SELECT json_extract(value,'$[0]'), json_extract(value,'$[1]'), "
+                "json_extract(value,'$[2]'), json_extract(value,'$[3]'), json_extract(value,'$[4]'), "
+                "json_extract(value,'$[5]') FROM json_each(?)")
 # One state of the index: each table in ONE statement, one ``sqlite3_step`` (one GIL release) per table, not per row.
 _SNAPSHOT_SQL = ("SELECT json_group_array(json_array(sequence,id,kind,room,target,body)) FROM records",
                  "SELECT json_group_array(json_array(member_id,part_id)) FROM folded",
@@ -1250,9 +1254,10 @@ class ChronicleStore:
                     return False
                 if replace:
                     db.execute("DELETE FROM tail_rows")
-                db.executemany("INSERT OR IGNORE INTO tail_rows VALUES (?,?,?,?,?,?)",
-                               [(pos, seq, sha, None if legacy is None else _json(legacy), _json(meta), terminal)
-                                for pos, seq, sha, legacy, meta, terminal in rows])
+                chunk = [[pos, seq, sha, None if legacy is None else _json(legacy), _json(meta), terminal]
+                         for pos, seq, sha, legacy, meta, terminal in rows]
+                if chunk:
+                    db.execute(_TAIL_INSERT, (_json(chunk),))
                 self._set_state(db, "tail", state)
                 db.commit()
                 return True

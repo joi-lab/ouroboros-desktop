@@ -41,19 +41,10 @@ TURN_GAPS: Dict[Tuple[str, str], Tuple[str, Dict[str, int]]] = {
     ("L3", "T:main:broad"): (
         "40 live rooms with story and 10 running roots (k=1): the routing pre-pass reads each running root's "
         "pause fence in a store read of its own (server_routing_context.addressable_roots -> room_reader."
-        "is_reading -> owner_pause.read_fence -> store_hot_facts.controls: begins +10, statements +70), and the "
-        "turn's capture stores the facts of the 200 rows the step added, one INSERT execution each "
-        "(memory_inventory._read_tail -> ChronicleStore.extend_tail: begins +1, statements +200). No remover in "
-        "this update: the routing snapshot reading the fences once per message (lane B); the tail facts stored "
-        "in one statement per chunk, as M4 reads a page (lane A).",
-        {"begins": 13, "statements": 288}),
-    ("L4", "T:main:rows"): (
-        "650 open rows over Main and 40 rooms (k=1): the turn's capture stores the facts of the rows appended "
-        "since the last capture, one INSERT execution per row (memory_inventory._read_tail -> ChronicleStore."
-        "extend_tail, executemany: statements +450 beyond the 200 of the turn before), each a SQLite step that "
-        "releases the GIL; the dialogue's page reads stay inside B9's allowance (begins +3). No remover in this "
-        "update: the tail facts stored in one statement per chunk (json_each), as M4 reads a page (lane A).",
-        {"statements": 468}),
+        "is_reading -> owner_pause.read_fence -> store_hot_facts.controls: begins +10, statements +70; begins "
+        "+11, statements +86 in all, the turn's one tail write of the 200 added rows inside the allowance). No "
+        "remover in this update: the routing snapshot reading the fences once per message (lane B).",
+        {"begins": 13, "statements": 88}),
     ("L3", "T:main:archive"): (
         "40 archived knowledge notes and 40 old rescue snapshots (k=1, the turn after the one that met them): "
         "the knowledge shelf is listed for the index the mind is shown, which counts the archived notes "
