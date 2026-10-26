@@ -154,8 +154,8 @@ class _RecoveryLadderMixin:
         (``X-OpenRouter-Metadata``) lists the upstream attempts' statuses, never their text:
         a final status absent from them came from no upstream. Before any model output, one
         re-send with ``provider.allow_fallbacks=False`` (all other routing kept) makes an
-        upstream's own error the final one, for the classifier and size recovery, or its
-        answer this call's answer. Attempts name providers, not ``provider.only`` slugs.
+        upstream's own error the final one, for the classifier and size recovery, or returns
+        its answer as this call's answer. Attempts name providers, not ``provider.only`` slugs.
         """
         if str(target.get("provider") or "") != "openrouter":
             return None
@@ -188,16 +188,12 @@ class _RecoveryLadderMixin:
                     if isinstance(row, dict) and type(row.get("status")) is int}
         if not statuses or type(status) is not int or status in statuses:
             return None
-        extra = payload.get("extra_body")
-        routing = extra.get("provider") if isinstance(extra, dict) else None
-        if not isinstance(extra, (dict, type(None))) or not isinstance(routing, (dict, type(None))):
-            return None
-        if isinstance(routing, dict) and routing.get("allow_fallbacks") is False:
-            return None
+        extra = payload.get("extra_body", {})
+        routing = extra.get("provider", {}) if isinstance(extra, dict) else None
+        if not isinstance(routing, dict) or routing.get("allow_fallbacks") is False:
+            return None  # fallbacks already forbidden, or a carrier shape this rung does not rewrite
         retry_payload = copy.deepcopy(payload)
-        retry_extra = retry_payload["extra_body"] = retry_payload.get("extra_body") or {}
-        retry_routing = retry_extra["provider"] = retry_extra.get("provider") or {}
-        retry_routing["allow_fallbacks"] = False
+        retry_payload.setdefault("extra_body", {}).setdefault("provider", {})["allow_fallbacks"] = False
         log.warning(
             "OpenRouter final status %s is not among its upstream attempts' statuses %s; "
             "re-asking %s once without provider fallbacks",
