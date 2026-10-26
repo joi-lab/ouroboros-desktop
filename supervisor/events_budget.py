@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 from ouroboros._usage_rows import REVIEW_ATTRIBUTION_KEYS
 from ouroboros.contracts.record_contract import RECORD_CONTRACT_VERSION
 from ouroboros.event_usage import event_token_counts
-from ouroboros._usage_response import _normalized_input_token_usage
+from ouroboros._usage_response import _normalized_input_token_usage, provider_cost_value
 # Re-export the shared queue/money predicate and the historical hold key.
 from ouroboros.budget_pause import BUDGET_HOLD_KEY, budget_fence_selected  # noqa: F401
 from ouroboros.delegate_recovery import owner_restart_in_progress
@@ -82,14 +82,11 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
     ]
 
     raw_cost = usage.get("cost")
-    if raw_cost is None:
+    if raw_cost is None and not usage.get("cost_invalid"):
         raw_cost = evt.get("cost")
-    cost_known = raw_cost not in (None, "")
-    try:
-        resolved_cost = float(raw_cost) if cost_known else None
-    except (TypeError, ValueError):
-        resolved_cost = None
-        cost_known = False
+    resolved_cost = provider_cost_value(raw_cost)
+    cost_known = resolved_cost is not None
+    cost_invalid = not cost_known and bool(raw_cost is not None or usage.get("cost_invalid") or evt.get("cost_invalid"))
 
     # One compatibility-projection write per supervisor loop turn: the event only
     # marks the context dirty and the loop flushes it AFTER bridge intake
@@ -132,9 +129,12 @@ def _handle_llm_usage(evt: Dict[str, Any], ctx: Any) -> None:
         **{key: evt[key] for key in ("llm_call_id", "execution_id", "round_id", "round", "session_id") if key in evt},
         **({"session_id": usage["session_id"]} if "session_id" not in evt and usage.get("session_id") else {}),
         **{key: str(evt[key]) for key in REVIEW_ATTRIBUTION_KEYS if evt.get(key)},  # #807: the review wave/slot
-        "cost_estimated": bool(evt.get("cost_estimated", False)),
+        "cost_estimated": bool(evt.get("cost_estimated") or usage.get("cost_estimated")),
         "cost": resolved_cost,
         "cost_known": cost_known,
+        "cost_invalid": cost_invalid,
+        "cost_final": cost_known and not bool(evt.get("cost_estimated") or usage.get("cost_estimated"))
+                      and usage.get("cost_final", evt.get("cost_final", True)) is not False,
         **token_counts,
         **({"input_token_usage": input_split} if input_split is not None else {}),
         "prompt_cache_ttl": prompt_cache_ttl,

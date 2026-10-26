@@ -121,29 +121,11 @@ def _terminal_cost_lineage(task_id: str, task: dict, result: dict, evt: dict) ->
     from ouroboros.task_results import resolve_task_lineage
 
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    root_id = str(result.get("root_task_id") or task.get("root_task_id") or evt.get("root_task_id") or "")
-    parent_id = str(result.get("parent_task_id") or task.get("parent_task_id") or evt.get("parent_task_id") or "")
-    return resolve_task_lineage(
-        task_id,
-        metadata=metadata,
-        root_task_id=root_id,
-        parent_task_id=parent_id,
-        delegation_role=(
-            result.get("delegation_role")
-            or task.get("delegation_role")
-            or evt.get("delegation_role")
-        ),
-        original_task_id=(
-            result.get("original_task_id")
-            or task.get("original_task_id")
-            or evt.get("original_task_id")
-        ),
-        timeout_retry_from=(
-            result.get("timeout_retry_from")
-            or task.get("timeout_retry_from")
-            or evt.get("timeout_retry_from")
-        ),
-    )
+    fields = {key: result.get(key) or task.get(key) or evt.get(key) for key in (
+        "root_task_id", "parent_task_id", "delegation_role", "original_task_id", "timeout_retry_from",
+    )}
+    return resolve_task_lineage(task_id, metadata=metadata, **fields)
+
 
 
 def _authoritative_terminal_cost(
@@ -165,7 +147,7 @@ def _authoritative_terminal_cost(
         breakdown = None  # A split/copyback task keeps its canonical monetary authority.
     if canonical_only and breakdown is None:
         raise ValueError("Cost probe requires a prefetched canonical breakdown")
-    projection = reconstruct_task_cost(task_id, fields=True, drive_root=authority_root,
+    projection = reconstruct_task_cost(task_id, fields=True, drive_root=authority_root, custody_root=drive_root,
                                        **({"breakdown": breakdown} if breakdown is not None else {}))
     lineage = _terminal_cost_lineage(task_id, task, result, evt)
     is_root = bool(lineage["is_root_task"])
@@ -175,7 +157,7 @@ def _authoritative_terminal_cost(
 
             root_id = str(lineage["root_task_id"] or task_id)
             if breakdown is None:
-                subtree = usage_breakdown(authority_root, root_task_id=root_id)
+                subtree = usage_breakdown(authority_root, root_task_id=root_id, custody_root=drive_root, include_custody=True)
             else:
                 from ouroboros._usage_rows import _breakdown_bucket, _with_integrity
 
@@ -198,6 +180,7 @@ def _authoritative_terminal_cost(
                 # no reader could reconstruct.
                 "non_final_rows": int(subtree.get("non_final_rows") or 0),
                 "cost_presentation": build_cost_presentation(subtree, scope=COST_SCOPE_ROOT_TREE),
+                **({"cost_custody": subtree["cost_custody"]} if "cost_custody" in subtree else {}),
             })
         except Exception:
             log.error("Root subtree cost authority unavailable for %s", task_id, exc_info=True)
@@ -261,23 +244,35 @@ def _terminal_cost_probe(
     lineage = _terminal_cost_lineage(task_id, current, current, {})
     scopes = bool(lineage["is_root_task"]), str(lineage["root_task_id"])
     authority = pathlib.Path(current.get("budget_drive_root") or drive_root).resolve()
+    from ouroboros.delegate_custody_usage import cost_coverage, cost_snapshot, with_cost_coverage
+    custody = cost_snapshot(authority, task_id="" if scopes[0] else task_id,
+                            root_task_id=scopes[1] if scopes[0] else "", custody_root=drive_root)
     degraded = usage_store.integrity_degraded(authority)
     with usage_store.read(authority) as txn:
+        joined = cost_coverage(custody, txn, authority)
         breakdown = {"integrity_degraded": degraded,
-                     "by_task": {task_id: _with_integrity(txn.bucket("task", task_id).render_breakdown(), degraded)},
-                     "by_root": {scopes[1]: _with_integrity(txn.bucket("root", scopes[1]).render_breakdown(), degraded)}
+                     "by_task": {task_id: with_cost_coverage(
+                         _with_integrity(txn.bucket("task", task_id).render_breakdown(), degraded),
+                         joined, task_id=task_id)},
+                     "by_root": {scopes[1]: with_cost_coverage(
+                         _with_integrity(txn.bucket("root", scopes[1]).render_breakdown(), degraded),
+                         joined)}
                      if scopes[0] else {}}
     fields = _authoritative_terminal_cost(task_id, current, current, {}, authority,
                                           breakdown=breakdown, canonical_only=True)
     if fields.get("cost_accounting_status") != "available":
         return "unavailable", fields, scopes
-    return ("equal" if all(current.get(key) == value for key, value in fields.items()) else "differs"), fields, scopes
+    return ("equal" if all(current.get(key) == value for key, value in fields.items()
+                           if key != "cost_custody" or key in current) else "differs"), fields, scopes
 
 
 def _refresh_terminal_task_cost(
     drive_root: pathlib.Path, task_id: str, *, current: dict | None = None,
 ) -> bool:
-    """True when this owner's stored projection equals its addressed summaries.
+    """True once available coverage and money agree with the stored projection.
+
+    An absent optional coverage carrier alone is no monetary change. Unknown
+    coverage may be published, but cannot acknowledge cost-refresh debt.
 
     A caller can reuse its pass's result read. The field writer still merges
     with the latest row and rechecks terminal/post-task ownership.
@@ -287,8 +282,9 @@ def _refresh_terminal_task_cost(
     if current is None:
         current = load_task_result(drive_root, task_id, strict=True) or {}
     outcome, fields, _ = _terminal_cost_probe(pathlib.Path(drive_root), task_id, current)
+    coverage_available = (fields.get("cost_custody") or {}).get("status", "available") == "available"
     if outcome == "equal":
-        return True
+        return coverage_available
     if outcome != "differs":
         return False
 
@@ -315,7 +311,7 @@ def _refresh_terminal_task_cost(
         bridge = try_get_bridge()
         if bridge is not None:
             bridge.push_log(address_handler_push(drive_root, event))
-    return True
+    return coverage_available
 
 
 def _task_done_review_projection(
@@ -493,6 +489,7 @@ def _finish_task_done_dispatch(
                 "ledger_integrity_degraded": _cost_meta.get("ledger_integrity_degraded"),
                 # #498: the scoped carrier travels with the amount it explains.
                 "cost_presentation": _cost_meta.get("cost_presentation"),
+                "cost_custody": _cost_meta.get("cost_custody"),
                 "cost_accounting_error": _cost_meta.get("cost_accounting_error"),
                 "cost_accounting_status": str(
                     task_done_event.get("cost_accounting_status") or "unavailable"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from ouroboros.cost_projection import CostPresentation
+from ouroboros.delegate_custody_usage import CostCustody
 from ouroboros.gateway.reference_contracts import ChatReferenceFields
 from ouroboros.storage import (  # noqa: F401 -- public re-exports
     StorageCount, StorageCounting, StorageError, StoragePart, StoragePlace, StorageResponse, StorageRest,
@@ -245,6 +246,7 @@ class ChatOutbound(ChatReferenceFields):
     ledger_integrity_degraded: NotRequired[Optional[bool]]
     # Closed shape owned by the cost producer; null means ledger unavailable.
     cost_presentation: NotRequired[Optional[CostPresentation]]
+    cost_custody: NotRequired[Optional[CostCustody]]
     result: NotRequired[str]
     result_truncated: NotRequired[bool]  # P3: WS preview was capped; fetch full via task id
     trace_summary: NotRequired[str]
@@ -1107,6 +1109,7 @@ class TaskCostBreakdown(TypedDict):
     unknown_unmetered: int
     non_final_rows: int
     cost_final: bool
+    cost_custody: Optional[CostCustody]
     authority: Literal["physical_attempt_ledger"]
 
 

@@ -130,7 +130,7 @@ def retained_run_facts(root: Any, row: Any) -> dict:
         "accounting": {
         "settled": bool(row.settled), "ledger_recorded": bool(row.ledger_recorded),
         "cost_usd": row.cost_usd if row.spend_disclosed else None,
-        "cost_final": bool(row.spend_disclosed and not row.spend_estimated)},
+        "cost_final": bool(row.spend_disclosed and not row.spend_estimated and not row.cost_partial)},
         "patch": {"captured": bool(row.patch_captured),
                   "disposition": row.patch_disposed or "not_recorded",
                   "apply_pending": bool(row.patch_apply_pending)},

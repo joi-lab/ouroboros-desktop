@@ -377,7 +377,12 @@ def _reported_cost(summary: Dict[str, Any], *, attempt_execution: Any = None) ->
     fix was written to eliminate — so a run that really charged money settled honestly in
     the ledger and then told the reasoning path the work was free.
     """
-    spend, estimated = _delegate().custody.disclosed_spend(summary, attempt_execution=attempt_execution)
+    from ouroboros.delegate_custody_usage import disclosed_cost
+    cash = disclosed_cost(summary, attempt_execution=attempt_execution)
+    spend, estimated = cash["cost_usd"], cash["cost_estimated"]
+    if cash["cost_partial"] and spend is not None:
+        return {**cash, "note": "Tracked spend is a known subtotal; some attempts have no price. "
+                "The total cost is unknown, and the subtotal is not an upper bound."}
     if spend is None:
         return {
             "cost_usd": None,

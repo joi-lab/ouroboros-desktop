@@ -645,3 +645,16 @@ test('actor findings rows, omitted counts and the durable pointer ride the share
     assert.match(text, /Reviewer slot_3 full response: observability call c3/);
     assert.doesNotMatch(text, /Reviewer slot_3 finding:/);
 });
+
+
+test('delegated cost preserves a known subtotal independently of estimation', () => {
+    for (const estimated of [false, true]) {
+        const chip = executorChip({executor_route: 'codex', execution_evidence: {
+            delegated_runs_started: 1, delegated_runs_settled: 1,
+            subscription_cost_usd: 2, subscription_cost_estimated: estimated,
+            subscription_cost_partial: true, harness_models: [],
+        }});
+        assert.ok(chip.title.includes(`Tracked: ${estimated ? 'up to ' : ''}$2.00 (total unknown)`));
+        assert.doesNotMatch(chip.title, /undisclosed|upper bound/);
+    }
+});

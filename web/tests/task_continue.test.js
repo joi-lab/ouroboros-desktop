@@ -99,7 +99,7 @@ test('chat reaches the Continue action through the one settled-card seam', () =>
     const chat = readFileSync(new URL('../modules/chat.js', import.meta.url), 'utf8');
     assert.match(chat, /import \{ syncSettledItems \} from '\.\/settled_card\.js';/);
     const seam = readFileSync(new URL('../modules/settled_card.js', import.meta.url), 'utf8');
-    assert.match(seam, /syncContinueAction\(record, detail\)/);
+    assert.match(seam, /syncContinueAction\(record, detail, options\)/);
     assert.match(seam, /return syncResultFilesItem\(record, detail\)/);
 });
 
@@ -123,6 +123,23 @@ function settledRootCard(taskId, { isSubagent = false } = {}) {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test('a Continue read late, after its card was drawn, is written through the caller\'s viewport seam', async () => {
+    // An older page lands, then each unclean root's full detail arrives and adds its action row. Written outside the
+    // reading owner's transaction, every row above the passage pushed it down (WebKit has no native scroll anchoring).
+    const { prior } = installDom();
+    try {
+        const card = settledRootCard('late-root');
+        const seam = [];
+        const write = (fn) => { seam.push('open'); const result = fn(); seam.push('close'); return result; };
+        const read = async () => ({ status: 'cancelled', continuation_offer: { eligible: true, cause: 'snapshot_restore' } });
+        syncContinueAction(card, { type: 'task_done', status: 'cancelled' }, { read, write });
+        assert.deepEqual(seam, [], 'nothing is written before the detail arrives');
+        await flush();
+        assert.deepEqual(seam, ['open', 'close'], 'the late write is one transaction of the caller\'s seam');
+        assert.equal(card.root.querySelector('[data-continue-task]')?.textContent, 'Continue');
+    } finally { restoreDom(prior); }
+});
 
 test('a canonical hard-bound refusal remains one readable fact beside the existing actions', async () => {
     const { prior } = installDom();
@@ -363,7 +380,10 @@ test('chat replays settled rows through the one seam, not a card-opening detail 
     const chat = readFileSync(new URL('../modules/chat.js', import.meta.url), 'utf8');
     const summary = chat.slice(chat.indexOf('function appendTaskSummaryToLiveCard'),
         chat.indexOf('function renderLiveCardMeta'));
-    assert.match(summary, /syncSettledItems\(record, msg\);/);
+    assert.match(summary, /syncSettledItems\(record, msg, \{ write: withStableViewport \}\);/);
+    // A task detail can start the late Continue read (an unclean root): its write goes through the same seam.
+    const details = chat.slice(chat.indexOf('function noteTaskDetails'), chat.indexOf('function noteTaskDetails') + 300);
+    assert.match(details, /syncSettledItems\(record, detail, \{ write: withStableViewport \}\);/);
 });
 
 

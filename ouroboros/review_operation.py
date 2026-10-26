@@ -913,7 +913,8 @@ def _attach_only_run(root: Any, request: Any, slot: Any, operation_id: str, run_
         observed = final_attempt_facts(detail, run_id)
         routes = (invocation.get("request") or {}).get("harnesses") or []
         requested_route = str(routes[0]) if len(routes) == 1 else ""
-        usage = session_usage_facts(run_id, requested_route=requested_route, observed_attempt=observed, summary=summary)
+        usage = session_usage_facts(run_id, requested_route=requested_route, observed_attempt=observed,
+                                    summary=summary, attempt_execution=detail.get("attemptExecution"))
         if usage_ctx is not None:  # Observe terminal facts even if the output read below fails.
             observe_session_usage(lambda facts: emit_review_usage(
                 usage_ctx, model=str(facts.get("resolved_model") or ""), usage=facts,

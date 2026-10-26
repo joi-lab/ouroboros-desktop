@@ -425,14 +425,14 @@ def test_blob_exact_bytes_projection_limits_and_packed_resolver(ctx, monkeypatch
     assert seen[0][2]["raw_bytes"] and seen[0][2]["max_bytes"] > 0
 
 
-def test_money_defaults_snapshot_and_missing_packs_are_typed(ctx, monkeypatch):
+def test_money_defaults_direct_and_missing_packs_are_typed(ctx, monkeypatch):
     from ouroboros import query_data_sql, usage_store
     usage_store.migrate_from_journal(ctx.drive_root)
     requests = []
     monkeypatch.setattr(query_data_sql, "run_sql", lambda *a, **kw: requests.append(kw) or {"status": "ok", "data": 1})
-    for snapshot in (None, False):
+    for snapshot in (None, False, True):
         assert call(ctx, op="sql", db="money", query="SELECT 1", snapshot=snapshot)["status"] == "ok"
-    assert [request["snapshot"] for request in requests] == [True, False]
+    assert [request["snapshot"] for request in requests] == [False, False, True]
     no_packs = call(ctx, op="sql", db="packs", query="SELECT 1")
     assert no_packs["status"] == "unavailable" and no_packs["code"] == "no_packs"
     assert not (ctx.drive_root / "observability/packs").exists()
@@ -472,7 +472,8 @@ def test_pack_index_sql_recovers_from_sidecars(ctx, cache):
                 PRAGMA ignore_check_constraints=OFF;
             """)
             assert conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]
-    result = call(ctx, op="sql", db="packs", query="SELECT kind, size FROM members ORDER BY kind")
+    # Cold cache recovery is the subject, not a one-second completion SLA.
+    result = call(ctx, op="sql", db="packs", query="SELECT kind, size FROM members ORDER BY kind", timeout_sec=5)
     assert result["status"] == "ok", result
     assert result["data"]["rows"] == [["checkpoint", len(raw)], ["json", len(raw)]], result
     assert authority == {p: p.read_bytes() for p in authority}

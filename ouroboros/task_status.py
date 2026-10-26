@@ -470,7 +470,8 @@ def observe_cancellation_target(
 
             evidence = task_execution_evidence(drive_root, target)
             keys = ("delegated_runs_started", "delegated_runs_settled", "delegated_runs_succeeded",
-                    "delegated_runs_failed", "subscription_cost_usd", "subscription_cost_estimated")
+                    "delegated_runs_failed", "subscription_cost_usd", "subscription_cost_estimated",
+                    "subscription_cost_partial")
             observation["delegated_execution"] = ({"evidence_read_failed": True} if evidence.get("evidence_read_failed")
                                                    else {key: evidence[key] for key in keys if key in evidence})
         except Exception:

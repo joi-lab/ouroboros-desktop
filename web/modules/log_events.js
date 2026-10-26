@@ -241,7 +241,9 @@ export function executorChip(evt) {
     const approx = evidence.subscription_cost_estimated ? '~' : '';
     const costPart = (cost === null || cost === undefined)
         ? 'subscription spend undisclosed'
-        : `${approx}$${Number(cost).toFixed(2)} subscription`;
+        : evidence.subscription_cost_partial
+            ? `Tracked: ${approx ? 'up to ' : ''}$${Number(cost).toFixed(2)} (total unknown)`
+            : `${approx}$${Number(cost).toFixed(2)} subscription`;
     const runsPart = `${settled} run${settled === 1 ? '' : 's'}`;
     // Unverified work-order coverage is an honesty fact: those runs sit inside the
     // aggregate failed count, discounted from ok, so label and detail name them

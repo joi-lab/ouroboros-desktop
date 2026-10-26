@@ -117,9 +117,13 @@ export function historyNodeIsProtected(node, viewport, selection = globalThis.ge
     return historyNodeOnScreen(node, viewport);
 }
 
-/** A rendered node intersecting the feed's viewport (or a band of it); a collapsed one has no boxes. */
+/** A rendered node intersecting the feed's viewport (or a band of it); a collapsed one has no boxes. A row asleep
+ * (chat_row_sleep.js) shows nothing outside its own box, which stays laid out while what it holds is not: off the
+ * screen, it answers for everything in it without laying that out. */
 export function historyNodeOnScreen(node, viewport, bounds = viewport.getBoundingClientRect()) {
     if (!node?.isConnected) return false;
+    const row = node.closest?.('[data-laid]');
+    if (row && row !== node && !historyNodeOnScreen(row, viewport, bounds)) return false;
     const rect = node.getBoundingClientRect();
     return Boolean(node.getClientRects().length && rect.bottom > bounds.top && rect.top < bounds.bottom);
 }

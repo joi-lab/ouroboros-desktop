@@ -401,7 +401,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
         if op == "sql":
             if db not in {"current", "money", "packs"} or not isinstance(query, str) or not query.strip() or len(query) > 16384:
                 raise ValueError("sql requires db=current|money|packs and one query of at most 16384 characters")
-            use_snapshot = db == "money" if snapshot is None else snapshot
+            use_snapshot = False if snapshot is None else snapshot
             if db == "current" and not use_snapshot and timeout_sec > sql.CURRENT_HOLD_SEC:
                 raise ValueError(f"a direct db=current read stops at {sql.CURRENT_HOLD_SEC:g} s because task writes wait "
                                  "on it; use snapshot=true for a longer query")
@@ -528,9 +528,10 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
 def get_tools():
     return [ToolEntry("query_data", {"name": "query_data", "description": (
         "Read runtime facts, money, pack indexes, typed JSON/JSONL and verified blobs. No paths accepted. "
-        "Current SQL exposes tasks facts; use json/task_result for bodies. Money snapshots default on. "
+        "Current SQL exposes tasks facts; use json/task_result for bodies. SQL defaults to guarded direct reads. "
         f"Current-store reads hold the lock task writes wait on: at most {sql.CURRENT_HOLD_SEC:g} s; longer: snapshot=true. "
-        "One allocating SQL function's TIME is not bounded by interrupt (its memory is); the child has a deadline. "
+        "One SQL operation budget spans acquisition, optional snapshot copy/check and query; deadlines name the phase. "
+        "The supervised child bounds functions that outlast interrupt, with separate startup/cleanup allowance. "
         "save_as retains exact whole-record bytes in the calling task's artifact_store with path/sha256/size/source. "
         "Projections use sorted UTF-8 JSON; store documents and multi-ID bundles are flagged reconstructed. "
         "format=text saves one selected string exactly. Complete tool output is retained before any delivery cut. "
@@ -559,8 +560,9 @@ def get_tools():
                 "Output budget after select/filter/tail (canonical JSON counts); op=sql stops fetching rows at it "
                 f"(truncated=true) before select. The fixed {sql.MAX_BYTES >> 20} MiB input budget, shared by ids, "
                 "is separate and precedes select.")},
-            "snapshot": {"type": "boolean", "description": "SQL snapshot; default true for money, false otherwise."},
-            "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1},
+            "snapshot": {"type": "boolean", "default": False, "description": "SQL: opt in to a checked disposable snapshot; default false for every db. Copy/check share the operation budget."},
+            "timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1,
+                            "description": "SQL operation seconds across acquisition/copy/check/query, not per phase. Executor startup/cleanup is separately bounded."},
             "save_as": {"type": "string", "description": "One plain immutable artifact filename in the CALLING task."},
             "format": {"type": "string", "enum": ["json", "text"], "default": "json"},
             **RESULT_VIEW_PARAMS,

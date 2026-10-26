@@ -114,7 +114,7 @@ export function continueControlSuccessor(record) {
  * card that did not complete cleanly (a best-effort completion may be a
  * technical limit), the card reads the full detail once to learn the offer.
  */
-export function syncContinueAction(record, detail, { read = fetchTaskDetail } = {}) {
+export function syncContinueAction(record, detail, { read = fetchTaskDetail, write = (fn) => fn() } = {}) {
     if (!detail || typeof detail !== 'object') return false;
     if (!('continuation_offer' in detail)) {
         const status = String(detail.task_terminal_status || detail.status || '').toLowerCase();
@@ -126,7 +126,7 @@ export function syncContinueAction(record, detail, { read = fetchTaskDetail } = 
                     const offer = full?.continuation_offer;
                     if (!offer || typeof offer !== 'object' || Array.isArray(offer)) {
                         offerReads.delete(record);  // null is the production reader's failure result
-                    } else if (record.root?.isConnected) syncContinueAction(record, full, { read });
+                    } else if (record.root?.isConnected) write(() => syncContinueAction(record, full, { read, write }));
                 })
                 .catch(() => { offerReads.delete(record); });  // a later terminal row retries
         }

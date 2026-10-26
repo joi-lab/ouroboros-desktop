@@ -665,6 +665,7 @@ def _task_cost_fields(env: Any, task: Dict[str, Any]) -> Dict[str, Any]:
         task_cost_fields = reconstruct_task_cost(
             str(task.get("id") or ""), fields=True,
             drive_root=pathlib.Path(task.get("budget_drive_root") or env.drive_root),
+            custody_root=env.drive_root,
         )
         from ouroboros.cost_projection import with_task_cost_presentation
 
