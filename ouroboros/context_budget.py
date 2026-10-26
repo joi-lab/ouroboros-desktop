@@ -386,8 +386,6 @@ LIVE_IMAGE_BLOCKS_HIGH_WATER = 10
 SCRATCHPAD_SECTION_BUDGET_CHARS = 90_000
 # Context-section soft budget for the mind's world map (warn-only; `update_world` notices above it).
 WORLD_SECTION_BUDGET_CHARS = 16_000
-# Health-invariant bloat warning ("extract durable insights to knowledge").
-SCRATCHPAD_BLOAT_WARN_CHARS = 50_000
 # Block-storage consolidation trigger (consolidator compresses oldest blocks).
 SCRATCHPAD_CONSOLIDATION_THRESHOLD_CHARS = 30_000
 # Source-side content cap for Memory.append_scratchpad_block (ibl-2b09abdadd25).

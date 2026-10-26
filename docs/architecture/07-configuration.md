@@ -88,7 +88,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MODEL_CONSCIOUSNESS | "" | Background-consciousness model (empty inherits) |
 | OUROBOROS_MODEL_FALLBACKS | openai/gpt-5.6-luna | Cross-model fallback chain (`fallback_cooldown.py`); blank = none |
 | OUROBOROS_SERVED_MODEL_REDOS | 2 | Redos of a round another model answered, each a new operation (clamped 0-5) |
-| OUROBOROS_MODEL_MAX_CONCURRENCY | 3 | Concurrent physical calls of one model on one provider route (credential, endpoint), shared by every process of the installation with a fair queue; routes the managed Claudexor engine serves are left to the engine (`model_concurrency.py`) |
+| OUROBOROS_MODEL_MAX_CONCURRENCY | 3 | Concurrent physical calls of one model on one provider route (credential, endpoint), shared by every process of the installation with a fair queue, a turn the owner awaits first; routes the managed Claudexor engine serves are left to the engine (`model_concurrency.py`) |
 | OUROBOROS_MODEL_SLOT_MAX_WAIT_SEC | 180 | Concurrency-slot wait bound |
 | OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming operation ceiling |
 | OUROBOROS_PROJECT_NAMING_ASYNC_TIMEOUT_SEC | 8 | Inline naming bound when a card becomes a project (`gateway/projects.py`) |

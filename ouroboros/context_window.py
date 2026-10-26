@@ -132,7 +132,7 @@ def resolve_window(evidence, reserve: int, *, root=None, bound: bool = True,
     from ouroboros import capability_evidence as ce
 
     fp = observation_scope(evidence) if observation_fp is None else observation_fp
-    rows = ((ce._load(root or ce.canonical_evidence_root()).get("main_windows", {}).get(fp) or {})
+    rows = ((ce._read(root or ce.canonical_evidence_root()).get("main_windows", {}).get(fp) or {})
             .get("observations", [])) if bound and fp else []
     accepted = max((row.get("accepted", 0) for row in rows), default=0)
     accepted_at = next((row["ts"] for row in rows if accepted and row.get("accepted") == accepted), "")

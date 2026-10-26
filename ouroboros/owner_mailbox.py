@@ -908,15 +908,15 @@ def mailbox_drain_ended(task_drive: pathlib.Path, task_id: str) -> bool:
     A worker may stay RUNNING to finish paid post-work after its answer settled
     (TZ-2 D15). Its mailbox is then only cleaned up, never read again, so owner
     mail and quiz answers must not be labelled delivered into it — the routing
-    guard and the quiz ingress both ask this one fact. The actor's drive is read,
-    not the canonical row: split-root copyback can lag the settlement. Mail that
-    lands after the drain ended is ``MAIL_RETAINED_UNREAD`` (``mail_write_receipt``):
-    the task's result keeps it as unread mail.
+    guard and the quiz ingress both ask this one fact: the typed status column of
+    the actor's drive, never its body (split-root copyback can lag the settlement
+    in the canonical row). Mail that lands after the drain ended is
+    ``MAIL_RETAINED_UNREAD`` (``mail_write_receipt``): the result keeps it unread.
     """
-    from ouroboros.task_results import load_task_result
     from ouroboros.task_status import SETTLED_STATUSES
+    from ouroboros.task_store import task_drive_status
 
-    return str((load_task_result(task_drive, task_id) or {}).get("status") or "") in SETTLED_STATUSES
+    return task_drive_status(task_drive, [task_id]).get(str(task_id), ("", ""))[0] in SETTLED_STATUSES
 
 
 # Receipt vocabulary for a message written into a task's mailbox. A write proves only

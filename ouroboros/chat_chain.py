@@ -62,14 +62,15 @@ def _row_chat_id(row: Dict[str, Any]) -> int:
         return 1  # The legacy missing-address convention of chat_history and room evidence.
 
 
-def row_address(row: Dict[str, Any], *, gen: Optional[str] = None, line: Optional[int] = None) -> Dict[str, Any]:
+def row_address(row: Dict[str, Any], *, gen: Optional[str] = None, line: Optional[int] = None,
+                sha: Optional[str] = None) -> Dict[str, Any]:
     hint = {key: str(row[key]) for key in _HINT_FIELDS if row.get(key)}
     if gen:
         hint["gen"] = gen
     if line:
         hint["line"] = int(line)
     return {"kind": "chat_row", "chat_id": _row_chat_id(row), "ts": str(row.get("ts") or ""),
-            "row_sha256": source_row_id(row), "hint": hint}
+            "row_sha256": source_row_id(row) if sha is None else sha, "hint": hint}
 
 
 def format_address(address: Dict[str, Any]) -> str:
@@ -98,13 +99,15 @@ def _normalized(address: Any) -> Dict[str, Any]:
 
 def stored_address(root: Any, entry: ds.Row) -> Dict[str, Any]:
     """Content identity, with an imported physical hint or a new SQL coordinate."""
-    return _stored_address(entry, ds.legacy_address(root, entry.seq) if entry.stream == "chat" else None)
+    return address_at(entry.row, entry.seq, ds.legacy_address(root, entry.seq) if entry.stream == "chat" else None)
 
 
-def _stored_address(entry: ds.Row, legacy: Optional[Tuple[str, int]]) -> Dict[str, Any]:
-    address = row_address(entry.row, gen=legacy[0], line=legacy[1]) if legacy else row_address(entry.row)
+def address_at(row: Dict[str, Any], seq: int, legacy: Any, *, sha: Optional[str] = None) -> Dict[str, Any]:
+    """The stored address of the row at ``seq``: its legacy ``(gen, line)`` hint, else the coordinate. ``row`` may
+    be the row's ``memory_inventory.row_meta`` (it keeps every field an address reads) with its known ``sha``."""
+    address = row_address(row, gen=legacy[0], line=legacy[1], sha=sha) if legacy else row_address(row, sha=sha)
     if legacy is None:
-        address["hint"]["seq"] = entry.seq
+        address["hint"]["seq"] = seq
     return address
 
 
@@ -250,7 +253,14 @@ def generation_cursor(root: Any, meta: Dict[str, Any]) -> Tuple[int, bool]:
 
 def _addressed(root: Any, entries: Iterable[ds.Row], keep: Optional[Callable[[ds.Row], bool]] = None,
                ) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
-    """Each row ``keep`` takes (every one without it), outside A2A, with its stored address and stream
+    """``(address, row, pos)`` of each row ``_paged`` keeps."""
+    for entry, legacy, pos in _paged(root, entries, keep):
+        yield address_at(entry.row, entry.seq, legacy), entry.row, pos
+
+
+def _paged(root: Any, entries: Iterable[ds.Row], keep: Optional[Callable[[ds.Row], bool]] = None,
+           ) -> Iterator[Tuple[ds.Row, Optional[Tuple[str, int]], int]]:
+    """Each row ``keep`` takes (every one without it), outside A2A, with its legacy hint and stream
     position, looked up a page at a time: the ordinals and the legacy hints of a page's rows in one read
     each, never one per row (every room's open rows come through here, and Main's view reads them each
     turn). A page is ``_ADDRESS_PAGE`` source rows examined, kept or not, so a filtered reader that stops
@@ -263,18 +273,18 @@ def _addressed(root: Any, entries: Iterable[ds.Row], keep: Optional[Callable[[ds
         except StopIteration:
             break
         except Exception:
-            yield from _addressed_page(root, page)
+            yield from _page(root, page)
             raise
         examined += 1
         if not is_a2a_chat_id(entry.row.get("chat_id", 1)) and (keep is None or keep(entry)):
             page.append(entry)
         if examined == _ADDRESS_PAGE:
-            yield from _addressed_page(root, page)
+            yield from _page(root, page)
             page, examined = [], 0
-    yield from _addressed_page(root, page)
+    yield from _page(root, page)
 
 
-def _addressed_page(root: Any, page: list) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
+def _page(root: Any, page: list) -> Iterator[Tuple[ds.Row, Optional[Tuple[str, int]], int]]:
     if not page:
         return
     legacy = ds.legacy_addresses(root, [entry.seq for entry in page if entry.stream == "chat"])
@@ -286,7 +296,7 @@ def _addressed_page(root: Any, page: list) -> Iterator[Tuple[Dict[str, Any], Dic
         ordinals = None  # a unit's counts are unsettled (``dp._uncovered``): the rows before it still answer, one by one
     for entry in page:
         ordinal = ordinals.get(entry.seq) if ordinals is not None else dp.ordinal_at(root, "chat", entry.seq)
-        yield _stored_address(entry, legacy.get(entry.seq)), entry.row, ordinal.pos
+        yield entry, legacy.get(entry.seq), ordinal.pos
 
 
 def iter_rows(root: Any, *, from_addr: Any = None, lower: int = 0,
@@ -297,6 +307,22 @@ def iter_rows(root: Any, *, from_addr: Any = None, lower: int = 0,
     upper = ds.stream_end(root, "chat") if upper is None else upper
     ds.require_imported(root, "chat", lower=lower, upper=upper)
     return _addressed(root, ds.iter_rows(root, "chat", lower=lower, upper=upper))
+
+
+def iter_stream(root: Any, *, lower: int, upper: int) -> Iterator[Tuple[ds.Row, Optional[Tuple[str, int]], int]]:
+    """``iter_rows`` keeping each row's stored coordinate: ``(entry, legacy hint, pos)`` for ``address_at``."""
+    ds.require_imported(root, "chat", lower=lower, upper=upper)
+    return _paged(root, ds.iter_rows(root, "chat", lower=lower, upper=upper))
+
+
+_REACH = ("WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+          "SELECT task_id FROM tasks JOIN reach ON parent_task_id=reach.id UNION "
+          "SELECT task_id FROM tasks JOIN reach ON root_task_id=reach.id) SELECT json_group_array(id) FROM reach")
+
+
+def _reached(conn: Any, tasks: Iterable[str]) -> set:
+    """The tasks and every task under them (by parent or root), read in ONE step: each step releases the GIL."""
+    return {str(task) for task in json.loads(conn.execute(_REACH, (json.dumps(sorted(tasks)),)).fetchone()[0] or "[]")}
 
 
 def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
@@ -323,11 +349,7 @@ def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
                  if int(binding.get("project_chat_id") or 0) == chat}
         if tasks and store_path(root).exists():
             with open_store(root, write=False) as txn:
-                tasks.update(str(row[0]) for row in txn.conn.execute(
-                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                    "SELECT task_id FROM tasks JOIN reach ON parent_task_id=reach.id UNION "
-                    "SELECT task_id FROM tasks JOIN reach ON root_task_id=reach.id) SELECT id FROM reach",
-                    (json.dumps(sorted(tasks)),)))
+                tasks.update(_reached(txn.conn, tasks))
         keys.extend((field, tid) for tid in sorted(tasks) for field in _LINEAGE_FIELDS)
         for ref in refs:
             if ref.get("client_message_id"):

@@ -133,7 +133,7 @@ ouroboros/ — agent core and shared runtime (§6)
   task_pacing.py — threshold facts, shared round-money reading, finalization reserve, `CostCeiling` and main-loop wire options (§6 Budget tracking)
   vision_routing.py, vision_image_limits.py, image_preparation.py — owner-mode image routing for Main, explicit VLM/caption sends, route limits and byte preparation (§6 Vision and local image evidence)
   fallback_cooldown.py — per-process 429-aware cooldown for the `OUROBOROS_MODEL_FALLBACKS` chain; advisory
-  model_concurrency.py — per-(model, use_local) semaphore (`OUROBOROS_MODEL_MAX_CONCURRENCY`), per-process only: one task's loop, children and pings cannot exhaust a model's rate limit
+  model_concurrency.py — the installation's fair queue of physical calls per model route (`OUROBOROS_MODEL_MAX_CONCURRENCY`), §7
   project_naming.py — admission names, bounded Light naming with fallback, card conversion and lazy turn naming (§7)
   ui_translation.py — one translation worker, accounted Light batches and free-text language resolution (`language_needs_model`; §7)
   ui_language.py, i18n_memory.py — the interface-language fact and one translation memory per language, `state/i18n/<tag>.json`: owner > imported > generated (§7)
@@ -225,7 +225,7 @@ ouroboros/ — agent core and shared runtime (§6)
   main_context_authority.py — Main's authority view and helpers' idempotent predecessor briefs (§6)
   client_surface.py — bounded client-surface normalizer; identity excludes viewport/narrow_layout (§4 WebSocket protocol)
   context_fit.py, context_budget.py — immutable Max/Low/Nano views, typed reclaim deficit, transcript cache seal, no routing/retry authority; budget vocabulary and typed reclaim SSOT, `estimate_message_chars` (§6 Context fitting)
-  context_mode_compat.py — `load_settings()` normalizes/persists `OUROBOROS_CONTEXT_MODE`/`OUROBOROS_CONTEXT_MODE_AUTO_LOW` together (§7 Default settings)
+  context_mode_compat.py — reads normalize, boot persists `OUROBOROS_CONTEXT_MODE`/`OUROBOROS_CONTEXT_MODE_AUTO_LOW` together (§7 Default settings)
   memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses (§6)
   memory_floor.py — physical memory-view floor: overflow becomes address lines, people's words last (§6 Context fitting)
   capability_evidence.py, response_limits.py, density_probe.py — sourced capability, token-density and maximum-response evidence (`data/state/capability_evidence.json`; windows size sends and grant no review authority); the bounded cold-start review-density probe, re-exported by capability_evidence (§6 Prompt size, density and windows)
@@ -644,13 +644,14 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   │   ├── queue_snapshot.json    ← PENDING/RUNNING recovery projection, `worker_pool_disabled_reason` (§5)
 │   │   ├── current.sqlite         ← the current-facts authority; `.exported-<UTC>` retired copies
 │   │   ├── usage.sqlite           ← the monetary authority (docs/USAGE_STORE.md)
-│   │   ├── usage_attempts.jsonl   ← imported journal; historical audit and older-seed input
+│   │   ├── usage_attempts.jsonl   ← imported journal; audit and older-seed input
 │   │   ├── usage_attempts.quarantine.jsonl ← the journal's proven-corrupt rows
 │   │   ├── usage_import_watermark.json ← import watermark
 │   │   ├── storage_measurement.json ← last two counts; derived, never deletion authority
 │   │   ├── request_wire_compatibility.json ← exact-route wire evidence
 │   │   ├── capability_evidence.json ← sourced model-capability evidence
-│   │   ├── extra-ca-bundle/<digest>.pem ← content-addressed CA bundle every first-party HTTP client verifies against
+│   │   ├── openrouter_models.json ← the OpenRouter catalogue every process adopts
+│   │   ├── extra-ca-bundle/<digest>.pem ← content-addressed CA bundle all first-party HTTP clients verify
 │   │   ├── process_ledger.jsonl   ← process-custody ledger (Runtime topology)
 │   │   ├── installation_scope.json ← scope marker
 │   │   ├── task_scopes/ ← task scope records
@@ -661,32 +662,32 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   │   ├── owned_processes.json   ← ownership set with pending stops (§9)
 │   │   ├── server.lock            ← server-lifetime DATA admission; never unlinked
 │   │   ├── server_port            ← active HTTP port for launcher/browser handoff
-│   │   ├── server_port.bindings.json ← informational endpoint snapshot, never a grant or custody ledger
+│   │   ├── server_port.bindings.json ← endpoint snapshot, never a grant or custody ledger
 │   │   ├── server_process.json    ← launcher-owned server identity for relaunch cleanup
 │   │   ├── advisory_review.json   ← commit-review state (attempts, obligations, readiness debts)
 │   │   ├── code_intel/<repo_key>/inventory.json ← code-inventory facts; no source cache
 │   │   ├── evolution_metrics_cache.json ← version history cache
 │   │   ├── evolution_campaign.json ← campaign objective, progress, budget
 │   │   ├── evolution_checkpoints.jsonl ← per-cycle checkpoints
-│   │   ├── post_task_evolution_request.json ← one-shot promotion signal for the supervisor idle tick
+│   │   ├── post_task_evolution_request.json ← one-shot promotion signal for the idle tick
 │   │   ├── post_task_evolution_counter.json ← per-drive every_n counter
 │   │   ├── scheduled_tasks.json   ← cron/one-shot schedules and `kind:"notify"` notes (§5)
-│   │   ├── claudexor_rotation_provisioning.json ← last rotation-reconcile receipt
-│   │   ├── subagent_last_delegation.json ← dated helper observations; never dispatch authority
+│   │   ├── claudexor_rotation_provisioning.json ← last rotation receipt
+│   │   ├── subagent_last_delegation.json ← dated helper observations, not dispatch authority
 │   │   ├── update_letter.json     ← update letter with `last_good`
 │   │   ├── projects.json          ← Project registry; tombstones are durable
-│   │   ├── projects.json.committed ← commit witness: beside it a missing registry is unavailable, not empty
+│   │   ├── projects.json.committed ← commit witness: with it a missing registry is unavailable, not empty
 │   │   ├── project_task_bindings.json ← root↔Project bindings with typed origin
 │   │   ├── ui_preferences.json    ← owner-local layout prefs and seen-revision ACKs
 │   │   ├── i18n/<tag>.json        ← translation memory per language, beside `<tag>.pending.json`
 │   │   ├── cancel_intents.json    ← projection of active cancel intents
 │   │   ├── terminal_deliveries.json ← delivery dedupe, byte receipts, pending outbox
 │   │   ├── extension_companions.json ← live companion processes
-│   │   ├── extension_reconcile/   ← worker-written markers for the server pickup task
+│   │   ├── extension_reconcile/   ← worker-written markers for the server pickup
 │   │   ├── review_continuations/  ← blocked-review continuations (+ corrupt/, archived/)
-│   │   ├── review_migrations/     ← `<ts>-slots-to-pool.json` per review-pool migration; the rollback source, never deleted
+│   │   ├── review_migrations/     ← `<ts>-slots-to-pool.json` per review-pool migration; rollback source, kept
 │   │   ├── workspace_executor_processes/ ← executor cleanup records
-│   │   ├── headless_tasks/<task_id>/data ← forked/empty child drives; per-call manifests promote at terminal
+│   │   ├── headless_tasks/<task_id>/data ← forked/empty child drives; manifests promote at terminal
 │   │   ├── custody_staging/       ← unserved copies prepared by a drive settlement
 │   │   ├── custody_trash/         ← fully custodied drives awaiting deletion
 │   │   ├── betterleaks/           ← scanner runtime, created only by the explicit installer

@@ -21,8 +21,10 @@ What is counted, per tag:
 - ``open`` (and per category): ``io.open``/``builtins.open``/``Path.open``; ``os_open`` for
   raw ``os.open``; ``read_bytes`` (and per category): bytes delivered by files opened for
   reading through those doors (``os.read``/``os.pread`` on a counted descriptor included; ``os.pread``
-  exists only on POSIX);
+  exists only on POSIX); ``lock_acquired``: a lock file created by an exclusive ``os.open`` (every
+  lock tier takes its name so), one per acquisition however contended, since a refused create raises;
 - ``json_loads`` and ``json_chars``: every ``json.loads``/``json.load`` and its input length;
+  ``rows_decoded``: the stored dialogue row bodies among them (``ROW_DECODER``);
 - ``popen`` (argv[0] names kept in ``popen_names``) and ``thread_start`` (thread names).
 
 ``callers`` attributes counter amounts and SQL statements to reader stacks, including
@@ -74,6 +76,7 @@ CATEGORIES = (("archive/", "archive"), ("state/headless_tasks/", "headless"),
               ("observability/packs/", "packs"))
 HISTORY = tuple(name for _prefix, name in CATEGORIES)
 EXECUTION = "execution"  # the delegated execution roots (outside the data root)
+ROW_DECODER = ("ouroboros.dialogue_store", "decode")  # (module, function) that decodes one stored row body
 _POOL_TARGETS = {("concurrent.futures.thread", "_worker")}
 _POOL_CLASSES = ("WorkerThread", "_WorkerThread")
 _DIGITS = re.compile(r"[-_]?\d+$")
@@ -341,6 +344,8 @@ def _w_os_open(path, flags, *args, **kwargs):
         category = meter.category(path)
         meter.add("os_open", path=path, category=category)
         meter._fd_category[fd] = category
+        if category == "lock" and flags & os.O_EXCL:
+            meter.add("lock_acquired")
     return fd
 
 
@@ -434,6 +439,9 @@ def _w_json_loads(s, *args, **kwargs):
             meter.add("json_chars", len(s))
         except TypeError:
             pass
+        frame = sys._getframe(1)
+        if (frame.f_globals.get("__name__"), frame.f_code.co_name) == ROW_DECODER:
+            meter.add("rows_decoded")
     return _ORIG["json.loads"](s, *args, **kwargs)
 
 
