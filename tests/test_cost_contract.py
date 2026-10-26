@@ -41,12 +41,14 @@ shapes of the 22.10 class in counted numbers (tests/_scale_root.py).
 ``B10`` is the owner's turn: one message as the supervisor loop handles it and the production direct turn it
 starts, counted up to the turn's first model request, where the driver refuses the call and the turn ends. The
 history it must not reread (tests/_turn_shapes.py) is the old memory folded by parts, the archived dialogue sealed
-by pages and rooms sealed after the frontier. L1: a project room's turn does the same work at k=1 and k=30; L2:
+by pages and rooms sealed after the frontier, met in the steady state a long-lived install keeps (the tail facts
+stored, the OpenRouter catalogue recorded). L1: a project room's turn does the same work at k=1 and k=30; L2:
 Main's turns make the same round trips and decode the same rows (their payload is free: Main shows its story);
 L3/L4 (k=1): after 40 live rooms and 10 running roots, 650 open rows, or 40 archived knowledge notes and old
-rescue snapshots, only the dialogue's page reads may grow, by B9's allowance per page; L5: each turn reaches its
-request and nothing it does reaches the network; L6: the request carries the newest open row. A breach in today's
-code is a ``TURN_GAPS`` row: a strict xfail with its numbers, its remover and a ceiling its growth may not pass.
+rescue snapshots, only the dialogue's page reads may grow, by B9's allowance per page (their statements by the
+lease's per transaction); L5: each turn reaches its request and nothing it does reaches the network; L6: the
+request carries the newest open row. A breach in today's code is a ``TURN_GAPS`` row (tests/_turn_law.py): a
+strict xfail with its numbers, its remover or why it has none, and a ceiling its growth may not pass.
 The first turn's census of the host's processes is the host's, not the history's: tests/test_cost_host.py.
 """
 

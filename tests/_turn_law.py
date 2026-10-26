@@ -1,9 +1,9 @@
 """The turn law's gap table and the function that holds a law to it (tests/test_cost_contract.py B10,
 tests/test_cost_host.py).
 
-A breach in today's code is a ``TURN_GAPS`` row: its cause with today's numbers and the commits that remove it,
-and the counters it excuses, each up to today's growth. The law's test is then a strict xfail (``turn_gap``) that
-flips (XPASS) the moment the removers land, and the row is deleted; a counter the row does not name, or growth
+A breach in today's code is a ``TURN_GAPS`` row: its cause with today's numbers and its remover, or why it has
+none, and the counters it excuses, each up to today's growth. The law's test is then a strict xfail (``turn_gap``)
+that flips (XPASS) the moment its cause is gone, and the row is deleted; a counter the row does not name, or growth
 past a ceiling, fails for real, so the marker cannot hide a new regression.
 """
 
@@ -19,64 +19,49 @@ class TurnLawBreach(AssertionError):
     """A turn law broken where a ``TURN_GAPS`` row excuses it. Any other failure is a real one."""
 
 
-_STORY = ("a chronicle _index call per room with story and reader (memory_view._fixes, memory_inventory."
-          "record_period, story_counts, memory_view._story_pages), each a lock file, a replay of the index, a "
-          "connection and about 13 statements")
-_REMOVERS = ("Removers: lane A H1 (chronicle reads take no lock and replay nothing while current), M2 (one chronicle "
-             "snapshot per capture, scoped to the view's rooms), M3 (the rows after the frontier keep their facts "
-             "beside the chronicle); lane B C6 (the archive listing kept until the log rotates)")
-# (law, tag) -> (the cause: today's numbers and the commits that remove it; the counters it excuses, each with the
-# growth it may not pass meanwhile: measured at k=30 for the history laws, scaled by the units of history added).
+# (law, tag) -> (the cause: today's numbers, its readers and its remover, or why it has none; the counters it
+# excuses, each with the growth it may not pass meanwhile: measured at k=30 for the history laws, scaled by the
+# units of history added). Measured 26.10 on the integrated tree in its steady state (tests/_turn_shapes.py).
 TURN_GAPS: Dict[Tuple[str, str], Tuple[str, Dict[str, int]]] = {
     ("L1", "T:room"): (
-        f"A project room's turn, k=1 -> k=30 (26.10): {_STORY}, 29 more rooms (connect, lock_acquired, open:root "
-        "+116, statements +2,830); every dialogue row after the frontier decoded, sealed or not (rows_decoded 206 -> "
-        "5,078) with its position and legacy lookups (vm_steps +371,200); other rooms' story records read four "
-        "times (json_chars +3.7 MB); the log archive listed and its three newest segments reread for a task with no "
-        f"rows of its own (dir_entries:archive +609, read_bytes:archive +97 KB). {_REMOVERS}; lane B C7 (an archive "
-        "holding none of a task's rows is not parsed again for it).",
-        {"connect": 118, "connect:root": 118, "lock_acquired": 118, "open:root": 118, "statements": 2832,
-         "begins": 29, "commits": 29, "json_loads": 6044, "json_chars": 3683487, "rows_decoded": 4874,
-         "stat:root": 1417, "stat:outside": 3598, "dir_entries:archive": 611, "read_bytes:archive": 101293,
-         "vm_steps": 372040}),
+        "A project room's turn, k=1 -> k=30: its capture reads the whole chronicle index, one statement per "
+        "table, the stored tail facts of every room included (chronicle_store.capture: json_chars +4.0 MB, "
+        "vm_steps +93,200), and the story readers parse every record they filter from it, the live rooms' pages "
+        "included (memory_inventory.story_counts, memory_view._story_pages, room_records, room_facts, "
+        "folded_members: json_loads +841, json_chars +3.2 MB). No remover in this update: a capture that reads "
+        "what its view shows (its rooms' records, their open rows, counts kept per room) is lane A's to design.",
+        {"json_loads": 843, "json_chars": 7172359, "vm_steps": 93840}),
     ("L2", "T:main"): (
-        f"The process's first owner turn, k=1 -> k=30 (26.10): {_STORY}, plus memory_inventory._sealed per room on "
-        "a cold process (connect, lock_acquired, os_open +145, open +146, statements +3,272); rows decoded 326 -> "
-        f"6,996 (begins +27); the log archive listed (dir_entries +609). {_REMOVERS}.",
-        {"connect": 147, "lock_acquired": 147, "os_open": 147, "open": 148, "statements": 3274, "begins": 29,
-         "dir_entries": 611, "rows_decoded": 6672}),
-    ("L2", "T:mainw"): (
-        f"Main's next turn, k=1 -> k=30 (26.10): {_STORY} (connect, lock_acquired, os_open +116, open +117, "
-        f"statements +2,779); rows decoded 303 -> 6,973 (begins +27); the log archive listed (dir_entries +609). "
-        f"{_REMOVERS}.",
-        {"connect": 118, "lock_acquired": 118, "os_open": 118, "open": 119, "statements": 2781, "begins": 29,
-         "dir_entries": 611, "rows_decoded": 6672}),
-    ("L2", "T:main:foreign"): (
-        f"Main's turn after a row and a page elsewhere and a completed task, k=1 -> k=30 (26.10): {_STORY}, plus "
-        "memory_inventory._sealed per room again (its memo is keyed on the chronicle file, which the page moved): "
-        "connect, lock_acquired, os_open +145, open +146, statements +3,330; rows decoded 312 -> 6,982 (begins "
-        f"+27); the log archive listed (dir_entries +609). {_REMOVERS}.",
-        {"connect": 147, "lock_acquired": 147, "os_open": 147, "open": 148, "statements": 3332, "begins": 29,
-         "dir_entries": 611, "rows_decoded": 6672}),
+        "The process's first owner turn, k=1 -> k=30: Memory.read_task_recent lists archive/ for each rotated "
+        "log the turn reads, events and tools, to find their three newest segments (jsonl_tail.archive_segments: "
+        "dir_entries +406, 203 entries each at k=30); jsonl_tail.remembered_listing keeps each listing until that "
+        "log rotates, so the turns after it list nothing. No remover in this update: the listing is the archive's "
+        "only index of segment names (the boot could take it off the turn, as it observes the catalogue).",
+        {"dir_entries": 408}),
     ("L3", "T:main:broad"): (
-        "40 live rooms with story and 10 running roots (k=1, 26.10): connect, lock_acquired, open and os_open +252, "
-        "statements +5,738, begins +150 (allowance 8). Six chronicle _index calls per added room, each a lock file, a "
-        "replay of the index and a connection (_sealed, room_facts, story_counts, _story_pages, _notes_by_room "
-        "twice); about nine whole-document reads per running root (server_routing_context._add and its genexpr, "
-        "owner_mailbox.mailbox_drain_ended, queue_timeouts._task_drive_for_task: +7.7 MB). Removers: lane A H1 and "
-        "M2 (one chronicle snapshot per capture); lane B C4 (one routing snapshot per message, status by column).",
-        {"connect": 254, "lock_acquired": 254, "open": 254, "os_open": 254, "begins": 152, "statements": 5740}),
+        "40 live rooms with story and 10 running roots (k=1): the routing pre-pass reads each running root's "
+        "pause fence in a store read of its own (server_routing_context.addressable_roots -> room_reader."
+        "is_reading -> owner_pause.read_fence -> store_hot_facts.controls: begins +10, statements +70), and the "
+        "turn's capture stores the facts of the 200 rows the step added, one INSERT execution each "
+        "(memory_inventory._read_tail -> ChronicleStore.extend_tail: begins +1, statements +200). No remover in "
+        "this update: the routing snapshot reading the fences once per message (lane B); the tail facts stored "
+        "in one statement per chunk, as M4 reads a page (lane A).",
+        {"begins": 13, "statements": 288}),
+    ("L4", "T:main:rows"): (
+        "650 open rows over Main and 40 rooms (k=1): the turn's capture stores the facts of the rows appended "
+        "since the last capture, one INSERT execution per row (memory_inventory._read_tail -> ChronicleStore."
+        "extend_tail, executemany: statements +450 beyond the 200 of the turn before), each a SQLite step that "
+        "releases the GIL; the dialogue's page reads stay inside B9's allowance (begins +3). No remover in this "
+        "update: the tail facts stored in one statement per chunk (json_each), as M4 reads a page (lane A).",
+        {"statements": 468}),
     ("L3", "T:main:archive"): (
         "40 archived knowledge notes and 40 old rescue snapshots (k=1, the turn after the one that met them): "
-        "open +40 (knowledge._navigation_descriptor rereads every note body each turn) and dir_entries +123 (the "
-        "knowledge shelf's rglob 80, the health block's rescue listing 40). No remover in this update: lane B C8 "
-        "parses a note once per file identity (the opens go), the shelf listing and the rescue scan stay.",
-        {"open": 42, "dir_entries": 125}),
-    ("L5", "T:main"): (
-        "A process's first owner turn looks openrouter.ai up twice before its first request "
-        "(llm_capability_policy fetches the OpenRouter catalogue on the first capability read; 5 s timeout on a "
-        "live install, refused here). Remover: lane B C10 (the catalogue recorded and prefetched at boot).",
-        {"network_refused": 2}),
+        "the knowledge shelf is listed for the index the mind is shown, which counts the archived notes "
+        "(knowledge.inventory_knowledge: dir_entries +80, scandir +2), and the health block lists the rescue "
+        "folder (context_health._collect_log_analysis_checks: dir_entries +40, listdir +1); no note body is "
+        "read again (knowledge._navigation_row). NEVER: both listings are what the turn shows (the shelf's "
+        "index; the rescue scan, kept by decision); the row stays so that any other work per item fails.",
+        {"dir_entries": 122, "scandir": 4, "listdir": 3}),
     ("host", "census"): (
         "check_stray_server_processes spawns one ps per listed process: 2 children for one, 25 for 24 (26.10); a "
         "process's first owner turn on the owner's Mac paid 373 to 632. Remover: razzant/ouroboros#2025 (one ps "
