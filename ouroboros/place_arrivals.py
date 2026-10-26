@@ -87,6 +87,7 @@ def record_heard(root, task, event, reason, *, captured_task_id=None):
                 raise ValueError('Place attention requires its captured event')
             facts = json.loads(row['dispatch_input'] or '{}')
             facts.setdefault('place_attention', {'decision': 'heard', 'reason': reason,
+                             'facts': list(event.facts or ()),
                              'delivery_reporting_version': event.delivery_reporting_version})
             conn.execute("UPDATE dialogue SET dispatch_input=? WHERE stream='chat' AND seq=?",
                          (json.dumps(facts), row['seq']))

@@ -28,6 +28,13 @@ def record_facts(entry):
     delivery = transport.get('delivery') or {}
     if isinstance(delivery, dict) and delivery.get('state') in {'authored', 'accepted', 'delivered', 'failed', 'uncertain'}:
         facts['delivery_state'] = delivery['state']
+    for key in ('identity', 'sends_as', 'sends_as_owner'):
+        if (value := transport.get(key)) is not None:
+            facts[key] = value
+    if kind == 'place_notice':
+        for key in ('held_text', 'held', 'checked'):
+            if (value := entry.get(key)) is not None:
+                facts[key] = value
     return facts
 
 
@@ -66,6 +73,8 @@ def annotate_place_history(messages, entries, root, reads):
             attention = heard.get(entry.get('history_position', {}).get('offset'), {})
             if attention.get('decision') == 'heard':
                 facts['attention'] = {'decision': 'heard', 'reason': str(attention.get('reason') or '')}
+                if attention.get('facts') is not None:
+                    facts['facts'] = attention['facts']
             elif entry.get('type') == 'place_arrival' and entry.get('task_id'):
                 try:
                     task = reads.load(root, entry['task_id']) or {}
