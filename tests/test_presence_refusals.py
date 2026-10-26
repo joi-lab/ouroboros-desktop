@@ -330,7 +330,10 @@ def test_only_positive_first_round_not_started_proves_retry_eligibility():
         assert not presence_retry_proof(task, changed_usage, trace, changed_ctx)
 
 
-def test_terminal_pipeline_stamps_no_effect_certificate_only_on_typed_proof(tmp_path):
+@pytest.mark.parametrize("open_debt", [False, True], ids=["no-custody", "open-custody-debt"])
+def test_terminal_pipeline_stamps_no_effect_certificate_only_on_typed_proof(tmp_path, open_debt):
+    """An open own delegated run is a debt beside the no-resend cause (#1583): the reason the
+    Host guard and the retry proof read stays ``resource_refusal_no_resend``."""
     from ouroboros import agent_task_pipeline
     from tests.test_presence_runner import _admission as admitted, _event as incoming
     from ouroboros.presence_runner import _build_task
@@ -339,6 +342,12 @@ def test_terminal_pipeline_stamps_no_effect_certificate_only_on_typed_proof(tmp_
     admission = admitted()
     task = _build_task(admission, event, drive_root=tmp_path, staged_files=())
     task["_skip_post_task_synthesis"] = True
+    if open_debt:
+        from ouroboros import delegate_custody_current as current, store
+
+        with store.open_store(task.get("budget_drive_root") or tmp_path, write=True) as txn:
+            txn.put_custody("leaf", {"run_id": "leaf", "task_id": task["id"], "source": "delegated_subagent"},
+                            state=current.HELD)
     reset = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     usage = {"execution_status": "infra_failed", "reason_code": "resource_refusal_no_resend",
              "resource_refusal": {"temporary": True, "reset_at": reset},
@@ -351,6 +360,7 @@ def test_terminal_pipeline_stamps_no_effect_certificate_only_on_typed_proof(tmp_
     row = load_task_result(tmp_path, task["id"])
     assert row["reason_code"] == "resource_refusal_no_resend"
     assert row["metadata"]["presence_retry_proof"]["kind"] == "first_round_engine_not_started"
+    assert row.get("delegated_runs_unreconciled", []) == (["leaf"] if open_debt else [])
 
 
 def test_producer_records_only_terminal_engine_not_started_as_no_effect(tmp_path):

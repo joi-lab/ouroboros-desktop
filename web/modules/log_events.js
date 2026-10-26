@@ -442,18 +442,31 @@ export function terminalDeliveryClause(delivery) {
 // The cause lookup the shared acceptance presenter receives: no second path reads the table.
 const causePhraseLookup = (key) => (TASK_CAUSE_PHRASES[String(key || '')] ? taskReasonPhrase(key) : '');
 
-// Custody heals at its writer without rewriting reason_code. Only a nonempty delegated_runs_unreconciled list
-// states debt beside the execution cause; absence proves no reconciliation. Live task_done carries it too
-// (_custody_debt_event_fields). Twin: _custody_debt_reason; other codes pass unchanged.
+// The debt is the record's current delegated_runs_unreconciled list, never its reason (#1583): only a nonempty
+// list states debt beside the cause; absence proves no reconciliation. Live task_done carries it too
+// (_custody_debt_event_fields); an older row's custody stamp is read beneath, from its typed execution reason.
+// Twin: _custody_debt_reason; other codes pass unchanged.
 const CUSTODY_DEBT_REASON = 'delegated_custody_unreconciled';
 
 function custodyDebtReason(record) {
     const raw = String(record?.reason_code || '');
+    const typed = String(record?.outcome_axes?.execution?.reason_code || '');  // a stamp read back names no cause
     const debt = record?.delegated_runs_unreconciled;
     return [
-        raw === CUSTODY_DEBT_REASON ? String(record?.outcome_axes?.execution?.reason_code || '') : raw,
+        raw === CUSTODY_DEBT_REASON ? (typed === CUSTODY_DEBT_REASON ? '' : typed) : raw,
         Array.isArray(debt) && debt.length ? CUSTODY_DEBT_REASON : '',
     ];
+}
+
+// The headline's objective warning: a nonempty current debt list warns, and an older row's custody warning
+// stops counting once that list is known empty; other warnings, and one beside an absent list, keep the word.
+// Twin: outcomes.objective_warned.
+function objectiveWarned(record) {
+    const objective = record?.outcome_axes?.objective || {};
+    const debt = record?.delegated_runs_unreconciled;
+    if (Array.isArray(debt) && debt.length) return true;
+    if (!Array.isArray(debt) || objective.warning !== CUSTODY_DEBT_REASON) return Boolean(objective.warning);
+    return (Array.isArray(objective.warnings) ? objective.warnings : []).some((code) => code && code !== CUSTODY_DEBT_REASON);
 }
 
 // outcome_axes.execution.plan_review picks its sentence by lookup, never by its spelling; absent classes keep fallback.
@@ -512,8 +525,9 @@ export function taskReasonDetail(evt, codes = []) {
     const objective = record.outcome_axes?.objective;
     const completion = record.task_completion ?? record.outcome_axes?.execution?.task_completion;
     const [storedReason, custody] = custodyDebtReason(record);
-    const reason = ['', 'final_message'].includes(storedReason)
-        ? String(record.outcome_axes?.execution?.reason_code || storedReason) : storedReason;
+    const typedReason = String(record.outcome_axes?.execution?.reason_code || '');
+    const reason = ['', 'final_message'].includes(storedReason) && typedReason !== CUSTODY_DEBT_REASON
+        ? (typedReason || storedReason) : storedReason;
     const origin = record.cancel_origin;
     const held = severity === 'error' && String(objective?.source || '').startsWith('plan_review_');
     const reviewCause = !taskStoppedWithSummary(evt) && decision?.status
@@ -629,7 +643,7 @@ export function taskOutcomeSeverity(evt) {
         || ['degraded', 'best_effort'].includes(execution)
         || ['degraded', 'best_effort'].includes(objective)
         || (review === 'degraded' && !authorFinished)
-        || Boolean(record.outcome_axes?.objective?.warning)
+        || objectiveWarned(record)
     ) {
         return 'warn';
     }

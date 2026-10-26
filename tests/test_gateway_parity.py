@@ -455,13 +455,15 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     )
     assert _notrequired_fields(ActiveChatActivity) == {
         "model_waits", "model_activity", "task_attempt", "turn_phase", "required_question", "required_question_unavailable", "project_admission_hold", "pause_cause", "owner_wait",
-        "status", "outcome_axes", "reason_code", "cancel_origin", "root_phase_checkpoint", "timeout_retry_from", "original_task_id",
+        "status", "outcome_axes", "reason_code", "cancel_origin", "delegated_runs_unreconciled", "root_phase_checkpoint",
+        "timeout_retry_from", "original_task_id",
         "finishing_reviews", "late_work", "can_resume", "cancelable",
         "last_line", "last_line_at", "tool_calls", "detached", "project_name",
     }, "ActiveChatActivity adds optional outcome/retry/review evidence without changing required activity facts"
     activity_fields = get_type_hints(ActiveChatActivity, include_extras=True)
     question_keys = {"required_question", "required_question_unavailable", "project_admission_hold", "pause_cause", "owner_wait"}
-    question_keys |= {"status", "outcome_axes", "reason_code", "cancel_origin", "root_phase_checkpoint", "timeout_retry_from", "original_task_id"}
+    question_keys |= {"status", "outcome_axes", "reason_code", "cancel_origin", "delegated_runs_unreconciled", "root_phase_checkpoint",
+                      "timeout_retry_from", "original_task_id"}
     question_keys |= {"finishing_reviews", "late_work", "can_resume", "cancelable"}
     question_keys |= {"last_line", "last_line_at", "tool_calls", "detached", "project_name"}
     assert {key: value for key, value in activity_fields.items() if key not in question_keys} == get_type_hints(ActiveDirectTurn, include_extras=True), (
@@ -482,6 +484,7 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for field in ("outcome_axes", "cancel_origin", "root_phase_checkpoint", "late_work"):
         assert activity_schema["properties"].pop(field)["type"] == "object"
     assert activity_schema["properties"].pop("finishing_reviews")["type"] == "boolean"
+    assert activity_schema["properties"].pop("delegated_runs_unreconciled") == {"type": "array", "items": {"type": "string"}}
     for field, kind in {"last_line": "string", "last_line_at": "string", "tool_calls": "integer",
                         "detached": "boolean", "project_name": "string"}.items():
         assert activity_schema["properties"].pop(field)["type"] == kind
