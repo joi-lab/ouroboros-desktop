@@ -126,12 +126,11 @@ def test_with_no_record_an_install_pays_one_get_and_a_pooled_worker_none(catalog
     assert len(gets) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "With no record and no network a turn's probe tries the catalogue twice: for the window "
-    "(LLMClient.openrouter_context_length) and then for the output limit (response_limits.resolve_response_limit "
-    "fetches whenever its record is absent), each up to the 5 s timeout; both failures are then held for "
-    "_FAILED_TTL_SEC (10 min). No remover in this update (lane B: one failed observation answers both readers)."))
 def test_with_no_record_and_no_network_a_turn_tries_the_catalogue_once(catalogue, monkeypatch):
+    """With no record and no network the window reader's failed read (``openrouter_context_length``) answers the
+    output limit's reader too (``resolve_response_limit``), each of which would wait out the 5 s timeout; the
+    failures held for ``_FAILED_TTL_SEC`` spare the next turn and a pooled worker another read. The output limit
+    names the failed read that answered it, never a maximum the catalogue was seen to omit."""
     import requests
 
     client, gets, record = catalogue
@@ -142,8 +141,9 @@ def test_with_no_record_and_no_network_a_turn_tries_the_catalogue_once(catalogue
 
     monkeypatch.setattr(requests, "get", unreachable)
     root = record.parent.parent
-    for _turn in range(2):
-        _turn_probe(root)
+    limits = [_turn_probe(root).response_limit for _turn in range(2)]
     _another_process(client)  # a pooled worker within the failure window
-    _turn_probe(root)
+    limits.append(_turn_probe(root).response_limit)
     assert len(gets) == 1 and not record.exists()
+    assert {(limit["status"], limit["source"]) for limit in limits} == {
+        ("unprobeable", "openrouter metadata: metadata read failed")}

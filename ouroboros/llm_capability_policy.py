@@ -122,15 +122,25 @@ class _CapabilityPolicyMixin:
     # OpenRouter-reported context window per model id (provider_metadata evidence).
     _CONTEXT_LENGTH_CACHE: Dict[str, int] = {}
     _CONTEXT_LENGTH_OBSERVED_AT: str = ""
+    # When this process's last /models read failed: for the failed-evidence TTL that one failure
+    # answers every reader (the window, the output limit, every route) instead of another read.
+    _CAPABILITIES_FAILED_AT: str = ""
 
     _REJECTED_PARAMS_CACHE: Dict[str, Set[str]] = {}
 
     @classmethod
     def _fetch_openrouter_capabilities(cls) -> None:
         """Populate the catalogue caches from OpenRouter /models; a clean answer is recorded for
-        every process (``state/openrouter_models.json``)."""
+        every process (``state/openrouter_models.json``). A read that failed within the
+        failed-evidence TTL answers instead: one attempt per process, not one per reader."""
+        from ouroboros.capability_evidence import _FAILED_TTL_SEC, _age_seconds
+        from ouroboros.utils import utc_now_iso
+
+        if cls._CAPABILITIES_FAILED_AT and _age_seconds(cls._CAPABILITIES_FAILED_AT) <= _FAILED_TTL_SEC:
+            return
         cls._SUPPORTED_PARAMS_FETCHED = True
         cls._CAPABILITIES_FETCH_OK = False  # set True only on a clean 200 + parse
+        cls._CAPABILITIES_FAILED_AT = utc_now_iso()  # cleared by a clean answer
         try:
             import requests
             # 5s, not 15s: this fetch sits on the synchronous capability-probe path
@@ -166,7 +176,6 @@ class _CapabilityPolicyMixin:
                 cl = m.get("context_length")
                 if mid and isinstance(cl, (int, float)) and cl > 0:
                     context_lengths[mid] = recorded.setdefault(mid, {})["context_length"] = int(cl)
-            from ouroboros.utils import utc_now_iso
             cls._CONTEXT_LENGTH_CACHE, cls._CONTEXT_LENGTH_OBSERVED_AT = context_lengths, utc_now_iso()
             # Image input is a fact about this exact route: one parser, stored
             # under the OpenRouter route scope with this response's time, so any
@@ -175,7 +184,7 @@ class _CapabilityPolicyMixin:
 
             record_catalog_image_input("openrouter", "https://openrouter.ai/api/v1", rows,
                                        source="OpenRouter /models")
-            cls._CAPABILITIES_FETCH_OK = True  # reached the provider and parsed it
+            cls._CAPABILITIES_FETCH_OK, cls._CAPABILITIES_FAILED_AT = True, ""  # reached the provider, parsed it
         except Exception:
             log.debug("Failed to fetch OpenRouter model capabilities", exc_info=True)
             return

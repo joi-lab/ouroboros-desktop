@@ -161,8 +161,11 @@ def resolve_response_limit(drive_root, *, provider, model, base_url="", options=
             elif provider == "openrouter":
                 from ouroboros.llm import LLMClient
                 # The process window cache answers a listed model without reading; an absent or
-                # expired output record needs the catalog itself, observed now (one bounded GET).
+                # expired output record needs the catalog itself, observed now (one bounded GET),
+                # unless the process's read of it just failed: that failure answers this reader too.
                 LLMClient._fetch_openrouter_capabilities()
+                if LLMClient.metadata_fetch_attempted_and_failed():
+                    read = "metadata read failed"
             elif provider == "claudexor":
                 ev = _claudexor_metadata_evidence(model, base_url, None, options, evidence_root=drive_root)
                 if ev.account_fingerprint:
