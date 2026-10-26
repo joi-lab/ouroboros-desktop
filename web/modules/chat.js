@@ -585,7 +585,7 @@ export function createChatInstance({
             missing: observeMissingManagedTask, summary: appendTaskSummaryToLiveCard,
             collapse: (record) => (explicitCardExpansion.delete(record.groupId), record.root.dataset.expanded === '1'
                 && setLiveCardExpanded(record, false)) } });
-    const episodes = createTaskEpisodes({ records: liveCardRecords, reanchor: reanchorTaskCard,
+    const episodes = createTaskEpisodes({ records: liveCardRecords, reanchor: reanchorTaskCard, renamed: portals.relabel,
         activity: (record) => currentActivity(record), follow: portals.follow,
         expand: (record) => { setLiveCardExpanded(record, true); hydrateCardReviews(record.groupId); } });
     const rowMenu = createChatRowMenu({ feed: messagesDiv, replies, cardOf: (id) => liveCardRecords.get(id),
@@ -817,7 +817,7 @@ export function createChatInstance({
     // Write only on change: a rewrite would destroy a selection being copied.
     function syncCardHeadline(record) {
         const title = cardTitle(record), line = record.collapsedActivity;
-        if (record.titleEl.textContent !== title) record.titleEl.textContent = title;
+        if (record.titleEl.textContent !== title) { record.titleEl.textContent = title; portals.relabel(record); }
         renderCollapsedActivity(record, projectCollapsedActivity({ isSubagent: record.isSubagent, suggestedName: title, headline: line, body: line }));
     }
 

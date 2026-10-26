@@ -564,24 +564,25 @@ html[data-layout="stack"] .resize-handle { display: none; }
 }
 .chat-bubble-voice > .chat-quiz-project .chat-live-project-name { font-weight: 600; }
 
-/* The footer: a work portal (work_portal.js) closes with the strip across the card's full width, under the work's
-   own controls. The card clips its corners, so the ring is the inset variant; a long name takes two lines. */
+/* The footer form: a work portal (work_portal.js) leads its one action row with the capsule, its controls at the
+   row's end (owner 26.10, B). It takes that row's 28px control height and the meta size, as a question's voice line
+   does; a finger keeps the touch minimum through `.ui-hit-area`, and a long name ellipsizes before a control gives
+   way. With no control beside it (a settled work) it stays at the row's start. */
 .chat-live-bound-pointer {
-    width: 100%;
-    min-height: var(--touch-target-min);
-    padding: var(--space-2) var(--space-4);
-    border-radius: 0;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    min-height: calc(var(--space-5) + var(--space-1));
+    margin-inline-end: auto;
+    padding: 0 var(--space-3);
+    gap: 6px;
+    border-radius: var(--pill-radius);
+    box-shadow: var(--elev-rest);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
 }
-.chat-live-bound-pointer:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: -2px; }
-.chat-live-bound-pointer .chat-live-project-name {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    white-space: normal;
-    overflow-wrap: anywhere;
-}
-.chat-live-bound-pointer .chat-live-project-status { margin-inline-start: auto; }
+.chat-live-bound-pointer:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; }
+.chat-live-bound-pointer .chat-live-project-name { font-weight: 600; }
 /* === design-system:migrated-end === */
 
 /* === design-system:migrated-begin (chat: Project completion mirror) === */
@@ -2251,8 +2252,8 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 }
 
 /* The portal (work_portal.js): the same card in Main, collapsed for good, while its work lives in a
-   Project room. Chip + quiet fact, title, one narration line (two at most), the foot (meta + its
-   controls) and the Project reference footer. The room holds the timeline, reviews and children,
+   Project room. Chip + quiet fact, title, one narration line (two at most), the foot (the meta line,
+   then one action row led by the Project reference). The room holds the timeline, reviews and children,
    so they never render here, and the card has no disclosure. */
 .chat-live-card[data-portal="1"] > .chat-live-timeline,
 .chat-live-card[data-portal="1"] > [data-live-reviews-host],
@@ -2541,8 +2542,8 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 /* The card's foot: the meta line (tool calls · cost · updated) at full width, then ONE action row. Controls
    never sit on the meta/timestamp band. The row leads with the quiet Reviews count (under the metadata, DESIGN
    "Reviews inside task cards") and ends right-aligned with the commands over the work: [Turn into project]
-   [Resume] [Stop…]; Reply is the row menu's (DESIGN "Replies"). Same structure at every width; the Project
-   reference footer stays below. */
+   [Resume] [Stop…]; Reply is the row menu's (DESIGN "Replies"). A work portal's row leads with its Project
+   reference instead. Same structure at every width. */
 .chat-live-foot {
     display: flex;
     flex-direction: column;
@@ -2572,9 +2573,14 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 /* Shown once it holds something. Written without :empty inside :has(): WebKit does not re-match that when a control
    is added to the actions row later (a Continue offered after a reload stayed unpainted in Safari). */
-.chat-live-foot-end:not(:has(> .chat-live-review-summary:not([hidden]), > .chat-live-actions > *)) {
+.chat-live-foot-end:not(:has(> .chat-live-review-summary:not([hidden]), > .chat-live-actions > *, > .chat-live-bound-pointer)) {
     display: none;
 }
+
+/* A row led by the Project reference stays one line at every width: its controls keep their size and the capsule's
+   name gives way first. */
+.chat-live-foot-end:has(> .chat-live-bound-pointer) { flex-wrap: nowrap; }
+.chat-live-foot-end > .chat-live-bound-pointer ~ .chat-live-actions { flex-shrink: 0; }
 
 /* Episodes of one work (Continue): one meta line each under the title, never a chip column. */
 .chat-live-episodes {
@@ -10543,9 +10549,12 @@ body.keyboard-open .project-panel {
 }
 :root[data-theme] .chat-live-summary-button { padding: 16px 20px 12px; }
 :root[data-theme] .chat-live-actions { padding: 0 20px 16px; gap: var(--space-2); }
-/* The work card's foot (meta line, its one action row) and its Project footer share the card's insets. */
-:root[data-theme] :is(.chat-live-foot, .chat-live-bound-pointer) { padding-inline: 20px; }
+/* The work card's foot (meta line, its one action row) shares the card's insets. */
+:root[data-theme] .chat-live-foot { padding-inline: 20px; }
 :root[data-theme] .chat-live-foot-end > .chat-live-actions { padding: 0; }
+/* A work portal is compact (owner 26.10, B): its meta line follows the summary at the summary's own gap. */
+:root[data-theme] .chat-live-card[data-portal="1"] > .chat-live-summary-button { padding-bottom: var(--space-2); }
+:root[data-theme] .chat-live-card[data-portal="1"] > .chat-live-foot { padding-top: 0; }
 :root[data-theme] .chat-live-phase { border-color: transparent; }
 
 /* Objects and trays. A card on the room is an object: the object surface on the rest shadow with the object radius.

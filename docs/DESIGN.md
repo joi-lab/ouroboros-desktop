@@ -930,14 +930,14 @@ this Project" came to be drawn six ways. The rule is therefore about intents.
   glyph, the Project's name, `↗`) and by nothing else, wherever content points
   at it. `project_reference.js` builds it and alone raises `ouro:open-project`;
   a caller chooses a layout (`inline`, `bar`, `footer`), never a label or a
-  class. It names the Project wherever its row carries the name, even beside
-  same-named work; a Project never named, and the owner's routed message (whose
-  caption names the destination), read `Project`, never an id. It claims no
+  class. It names the Project wherever its row carries the name; a Project never
+  named, one beside a same-named title, and the owner's routed message (whose
+  caption names the destination) read `Project`, never an id. It claims no
   activity (the work card's chip does). Its accessible name says in words what
   the glyph and the arrow say in pixels (`Open project <name>`); nothing depends
   on hover.
-- **Two forms, one recipe.** The reference is the full-width strip that closes a
-  work card bound to a Project (the body stays the work's), and a capsule
+- **Two forms, one recipe.** The reference is a capsule: it leads a Project-bound
+  work card's action row at that row's 28px height and meta size, and sits
   everywhere else: under a mirrored answer or a System lifecycle row (in the
   shared `createSystemMessageActions` row, token spacing, wrapping, focus-ring
   clearance), at the end of the owner's routed message's one receipt line
@@ -949,7 +949,7 @@ this Project" came to be drawn six ways. The rule is therefore about intents.
   border, ring or hairline, and no width that depends on where it sits. Inside the dark
   Ouroboros voice its fill is that voice's capsule step and its ink a lighter Project ink, so the
   name stays readable at rest, hover and press. Long
-  names: two lines in the strip, ellipsis in the capsule, never smaller type;
+  names ellipsize before a portal row's controls shrink, never into smaller type;
   accessible names stay whole.
 - A **command** is a button: it changes or confirms something, or goes to a
   place that is not such a reference (`Load older messages`, `Open widgets`).
@@ -1582,8 +1582,8 @@ request's place, whoever moved it (Turn into project, the mind's move, a
 binding); a Project start or transfer row only says where it went, never a
 second entry. The card is the work's portal: status chip and quiet fact, title,
 one latest line (two lines, cut on a word), the meta line (tool calls · money ·
-updated), one action row `[Reply] [Resume] [Stop…]` with one primary, and the
-Project reference as its full-width footer. Timeline, Reviews and children live
+updated), one action row: the Project reference, then `[Reply] [Resume] [Stop…]`
+with one primary (owner 26.10, B). Timeline, Reviews and children live
 in the room; the summary is reading content, not a disclosure. The room's census
 row supplies the present (its last line, tool calls, `in background` for
 detached work); a missing fact leaves the card as it was, never a guessed line
@@ -2804,7 +2804,7 @@ card, a Files row, a navigation row, a Project reference). An object that carrie
 reading content or several actions is a container: its body is text and never a
 target, and only its own controls react — a message, a question, a Working card
 whose "Details" is its one disclosure, a work card bound to a Project whose
-footer strip is its door. Hover never tints part of an object, and hover paint
+capsule is its door. Hover never tints part of an object, and hover paint
 applies only where a pointer can hover (`@media (hover: hover)`).
 
 **Touch and containment.** Under a coarse pointer every target is at least 44 px
