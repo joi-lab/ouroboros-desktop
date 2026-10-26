@@ -694,7 +694,7 @@ def test_settings_save_warns_when_an_agent_task_is_running(isolated_settings, mo
     assert any("keeps the reviewers, subagents, context and effort it started with" in w for w in warnings), warnings
     assert any("next task" in w for w in warnings), warnings
     # A route key alone (models, accounts, keys) reaches running work on its next call: no such warning.
-    resp_route = client.post("/api/settings", json={"OUROBOROS_MODEL_CONTEXT_WINDOWS": {"main": 123000}})
+    resp_route = client.post("/api/settings", json={"OUROBOROS_MODEL_ACCOUNTS": {"main": "account-two"}})
     assert resp_route.status_code == 200, resp_route.text
     assert "agent_task_running" not in resp_route.json()
     assert not any("it started with" in w for w in resp_route.json().get("warnings") or [])
@@ -707,7 +707,7 @@ def test_settings_save_warns_when_an_agent_task_is_running(isolated_settings, mo
     data2 = resp2.json()
     assert "agent_task_running" not in data2
     assert not any("An agent task is running" in w for w in (data2.get("warnings") or []))
-    quiet = client.post("/api/settings", json={"OUROBOROS_MODEL_CONTEXT_WINDOWS": {"main": 124000}})
+    quiet = client.post("/api/settings", json={"OUROBOROS_MODEL_ACCOUNTS": {"main": "account-three"}})
     assert not any("chose its own model" in w for w in quiet.json().get("warnings") or [])
 
 

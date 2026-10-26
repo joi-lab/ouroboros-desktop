@@ -235,14 +235,16 @@ def _effect_buckets(all_changed: list) -> tuple:
     Every key that reaches here applies at SOME point, so both buckets are
     truthful claims (#285). Models, accounts and keys are read live
     (``route_choice``): work that follows them uses them at its next call, so they
-    count as immediate. A key a release retired cannot reach here at all:
+    count as immediate; a context window waits for a task's next context plan. A key a release retired cannot reach here at all:
     the merge only walks SETTINGS_DEFAULTS, and load_settings strips retired
     keys off disk — the RC auditor is what tells an upgrading install its
     stored value is gone (scripts/rc_audit.py "retired-setting").
     """
+    from ouroboros.model_slots import MODEL_CONTEXT_WINDOWS_KEY
     from ouroboros.route_choice import ROUTE_SETTING_KEYS
 
-    live = _IMMEDIATE_KEYS | ROUTE_SETTING_KEYS
+    # A window is read when a task's context plan is built: at its start or when its route moves.
+    live = _IMMEDIATE_KEYS | (ROUTE_SETTING_KEYS - {MODEL_CONTEXT_WINDOWS_KEY})
     immediate_changed = [k for k in all_changed if k in live]
     next_task_changed = [
         k for k in all_changed
