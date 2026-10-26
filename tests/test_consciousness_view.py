@@ -464,6 +464,24 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path,
     assert labelled["cause"] == "focus" and labelled["place_label"] == "Inbox"
 
 
+def test_own_clock_text_survives_an_unreadable_room(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from ouroboros import place_arrivals, store
+    place = places.connect_place(tmp_path, connector="bridge", provider="chat", account_id="account")
+    from tests.test_place_arrivals import seed_identity_arrival
+    seed_identity_arrival(tmp_path, place, {"sends_as": {"id": "writer", "label": "Mailbox", "kind": "user"}})
+    brief = view.place_views(tmp_path, {})
+    assert "writes as Mailbox" in view.places_text(tmp_path, brief)
+
+    @contextmanager
+    def busy(*args, **kwargs):
+        raise store.StoreBusy("held")
+        yield  # pragma: no cover
+    monkeypatch.setattr(place_arrivals.dialogue_store, "transaction", busy)
+    text = view.places_text(tmp_path, brief)
+    assert place.label in text and "writes as" not in text
+
+
 @pytest.mark.parametrize("kind,owner,clause", [("user", True, "writes as Mailbox (your human's own account)"),
     ("user", False, "writes as Mailbox"), ("bot", False, "as Ouroboros (bot Mailbox)"), ("bot", True, "as Ouroboros (bot Mailbox)"), (None, False, "")])
 def test_own_clock_reads_captured_identity_without_changing_brief_view(tmp_path, kind, owner, clause):

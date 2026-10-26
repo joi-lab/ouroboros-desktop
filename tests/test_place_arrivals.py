@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ouroboros import dialogue_store, place_arrivals, presence_runner as runner
+from ouroboros import dialogue_store, place_arrivals, presence_runner as runner, store
 from tests.test_place_focus import focus as focus
 
 
@@ -136,6 +136,23 @@ def test_recent_identity_without_arrivals_is_none(focus):
     assert place_arrivals.recent_identity(root, place.place_id) is None
     seed_identity_arrival(root, replace(place, place_id="another-place"), {})
     assert place_arrivals.recent_identity(root, place.place_id) is None
+
+
+@pytest.mark.parametrize("failure", [store.StoreBusy("held"), store.StoreLost("damaged"), OSError("gone")])
+def test_recent_identity_is_unknown_when_the_room_cannot_be_read(focus, monkeypatch, caplog, failure):
+    from contextlib import contextmanager
+    root, place, _, _ = focus
+    seed_identity_arrival(root, place, {"sends_as": {"id": "writer", "label": "Writer", "kind": "user"}})
+    assert place_arrivals.recent_identity(root, place.place_id)["sends_as"]["id"] == "writer"
+
+    @contextmanager
+    def failing(*args, **kwargs):
+        raise failure
+        yield  # pragma: no cover
+    monkeypatch.setattr(place_arrivals.dialogue_store, "transaction", failing)
+    with caplog.at_level("WARNING"):
+        assert place_arrivals.recent_identity(root, place.place_id) is None
+    assert "Captured identity unavailable" in caplog.text
 
 
 def test_recent_identity_bounds_indexed_read_and_validates_after_transaction(focus, monkeypatch):
