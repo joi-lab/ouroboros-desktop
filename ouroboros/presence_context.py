@@ -368,6 +368,7 @@ def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int) -> di
     if event.actor.get("is_bot") is True:
         facts = (*facts, "from_bot")
     actor = str(event.actor.get("platform_actor_id") or event.actor.get("id") or "")
+    owner_address = is_owner_account(place, actor, event.account_id)
     identity = deepcopy(event.identity)
     sending = (identity or {}).get("sends_as") or {}
     allowance = dict(admission.allowance or {})
@@ -380,7 +381,8 @@ def focus_metadata(admission: Any, event: Any, task_id: str, chat_id: int) -> di
                   "room_chat_id": chat_id, "event_identity": presence_event_identity(admission.binding_id, event),
                   "actor": {"platform_actor_id": actor,
                             "display_name": str(event.actor.get("display_name") or event.actor.get("username") or ""),
-                            "owner_confirmed": is_owner_account(place, actor, event.account_id) and event.actor.get("authenticated") is not False,
+                            "owner_address": owner_address,
+                            "owner_confirmed": owner_address and event.actor.get("authenticated") is not False,
                             **({"authenticated": event.actor["authenticated"]} if "authenticated" in event.actor else {}),
                             "is_bot": event.actor.get("is_bot") is True or "from_bot" in facts},
                   "matched_wakes": [w.fact for w in wake_matches(place, facts)],
@@ -423,7 +425,8 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
     place = presence.get("place") or {}
     event = presence.get("event") or {}
     focus = metadata.get("focus") or {}
-    actor = focus.get("actor") or {}
+    actor = dict(focus.get("actor") or {})
+    owner_address = actor.pop("owner_address", False)
     allowance = metadata.get("focus_allowance") or {}
     matched = set(focus.get("matched_wakes") or [])
     state = str(place.get("state") or "unknown")
@@ -445,7 +448,9 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
         "place_state": state + (". " + SILENT_DISCLOSURE if state == "silent" else ""),
         "notes": json.dumps(place.get("notes") or [], ensure_ascii=False),
         "wake_item": json.dumps([w for w in place.get("wakes", []) if w["fact"] in matched], ensure_ascii=False),
-        "actor_facts": json.dumps(actor, ensure_ascii=False) + ("; authenticated: no" if actor.get("authenticated") is False else ""),
+        "actor_facts": json.dumps(actor, ensure_ascii=False) + (
+            "; authenticated: no" + ("; your human's own address: yes (unverified)" if owner_address else "")
+            if actor.get("authenticated") is False else ""),
         "work_here": work or "No earlier work recorded here; recent_tasks reads current work.",
         "spent_line": json.dumps(allowance, ensure_ascii=False),
         "roots_line": json.dumps(metadata.get("focus_counted_roots", "unavailable; inspect current work"), ensure_ascii=False),

@@ -193,6 +193,26 @@ def test_call_facts_use_captured_identity_and_user_owner_match(published_tool, p
     assert guard.call_place_facts(ctx, "read_file", {}) == {}
 
 
+@pytest.mark.parametrize("root_source", ["drive_root", "budget_drive_root", "metadata"])
+def test_call_identity_uses_context_root_not_configured_root(published_tool, places, monkeypatch, root_source):
+    from tests.test_place_arrivals import seed_identity_arrival
+
+    rows, ctx = places
+    root, other_root = ctx.drive_root, ctx.drive_root / "other-installation"
+    for captured_root, label in [(root, "Call mailbox"), (other_root, "Other mailbox")]:
+        seed_identity_arrival(captured_root, rows[1], {"sends_as": {"id": "writer", "label": label, "kind": "user"}})
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", other_root)
+    if root_source != "drive_root":
+        ctx.drive_root = other_root
+        if root_source == "metadata":
+            ctx.task_metadata["budget_drive_root"] = root
+        else:
+            ctx.budget_drive_root = root
+    name, tool = published_tool("message", target="room", conversation="room")
+    facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
+    assert facts["sends_as"]["label"] == "Call mailbox"
+
+
 @pytest.mark.parametrize("kind", ["user", "bot", None])
 def test_safety_call_uses_focus_snapshot_only_for_its_target(published_tool, places, kind):
     from tests.test_place_arrivals import seed_identity_arrival

@@ -968,7 +968,9 @@ contributes:
 - The connector carries the service name in its place `label`; the technical skill id stays in details.
   Skills cards prefer the optional top-level, one-line `title`, then the place contribution's `label`, then `name`.
   Catalog entries may carry `title`; it is display text, never a new skill identity. Place, instance, account and
-  signal labels render verbatim as authored content, outside the host's translation overlay.
+  signal labels are authored content, outside the host's translation overlay. Sentence composition lowercases only
+  a label's first character, when it is upper-case, the second is lower-case, and the first word has no further
+  capitals; mixed-case words and acronyms such as `GitHub` and `PR` keep their spelling.
 
 The optional `settings` member names the connector's registered Settings section (for example
 `api.register_settings_section("connection", ...)`); it is a section id, not an embedded form or a new

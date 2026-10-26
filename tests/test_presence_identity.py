@@ -121,7 +121,6 @@ def test_place_readers_never_import_or_call_connector_dispatch(focus, monkeypatc
     monkeypatch.setattr("ouroboros.extension_registry_state.live_contribution_projection", lambda: [row])
     monkeypatch.setattr("ouroboros.extension_registry_state.list_routes", lambda: {row["source"]["url"]: {}})
     monkeypatch.setattr("ouroboros.skill_loader.discover_skills", lambda _root: [])
-    monkeypatch.setattr("ouroboros.config.DATA_DIR", root)
     calls = []
     def forbidden_dispatch(*args, **kwargs):
         calls.append((args, kwargs))
@@ -145,20 +144,25 @@ def test_place_readers_never_import_or_call_connector_dispatch(focus, monkeypatc
         facts = place_guard.call_place_facts(ctx, "place_reply", {"place_id": place.place_id})
         assert "sends_as" not in facts
     else:
-        assert place.place_id in consciousness_view.places_text(consciousness_view.place_views(root))
+        assert place.place_id in consciousness_view.places_text(root, consciousness_view.place_views(root))
     assert not calls
 
 
-@pytest.mark.parametrize("authenticated,owner", [(None, True), (True, True), (False, False)])
-def test_authentication_controls_safety_occasion_and_child_authority(focus, authenticated, owner):
+@pytest.mark.parametrize("authenticated", [None, True, False])
+@pytest.mark.parametrize("confirmed_account,address_matches", [("a", True), ("other", False), (None, False)])
+def test_authentication_controls_safety_occasion_and_child_authority(focus, authenticated, confirmed_account, address_matches):
     from ouroboros.presence_context import focus_metadata, frame_focus_content
     from ouroboros.consciousness_authority import consciousness_origin_metadata
     from ouroboros.safety import _build_check_prompt
     root, place, admission, event = focus
-    place = places.edit_place(root, place.place_id, "confirm_owner_account", author="owner", platform_actor_id="person")
+    if confirmed_account is not None:
+        place = places.edit_place(root, place.place_id, "confirm_owner_account", author="owner",
+                                  platform_actor_id="person", account_id=confirmed_account)
     if authenticated is not None:
         event = replace(event, actor={**event.actor, "authenticated": authenticated})
     metadata = focus_metadata(replace(admission, place=place), event, "focus", 1)
+    owner = address_matches and authenticated is not False
+    assert metadata["focus"]["actor"]["owner_address"] is address_matches
     assert metadata["focus"]["actor"]["owner_confirmed"] is owner
     child = consciousness_origin_metadata(metadata, started_root=True)
     assert child["work_kind"] == ("owner" if owner else "consciousness")
@@ -167,8 +171,11 @@ def test_authentication_controls_safety_occasion_and_child_authority(focus, auth
     assert ('"cause": "confirmed owner account"' in evidence) is owner
     assert ('"cause": "person in a place"' in evidence) is (not owner)
     task = task_for((root, place, replace(admission, place=place), event))
+    actor_before = deepcopy(task["metadata"]["focus"]["actor"])
     rendered = frame_focus_content(task, "hello")
     assert ("authenticated: no" in rendered) is (authenticated is False)
+    assert ("your human's own address: yes (unverified)" in rendered) is (address_matches and authenticated is False)
+    assert task["metadata"]["focus"]["actor"] == actor_before
 
 
 @pytest.mark.parametrize("kind,owner,expected", [

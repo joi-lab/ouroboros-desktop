@@ -52,7 +52,7 @@ def test_places_context_has_every_place_and_room_without_reading_history(monkeyp
     monkeypatch.setattr(places, "place_room_index", rooms, raising=False)
     rows = view.place_views(tmp_path)
     assert [row["unanswered"] for row in rows] == [3, None, 0]
-    text = view.places_text(rows)
+    text = view.places_text(tmp_path, rows)
     assert "Inbox [mail]: active; open turns: 3; chat_history(chat_id=-1); chat_history(chat_id=-2)" in text
     assert "Quiet room [quiet]: silent; open turns: 0; no captured room" in text
     assert "Paused room [paused]: paused; open turns: unknown" in text
@@ -60,7 +60,7 @@ def test_places_context_has_every_place_and_room_without_reading_history(monkeyp
     assert calls == [(tmp_path, place.place_id) for place in configured]
     for place in configured:
         places.edit_place(tmp_path, place.place_id, "disconnect", author="owner")
-    assert view.places_text(view.place_views(tmp_path)) == "none"
+    assert view.places_text(tmp_path, view.place_views(tmp_path)) == "none"
 
 
 def test_unavailable_index_does_not_claim_zero(monkeypatch, tmp_path):
@@ -70,16 +70,16 @@ def test_unavailable_index_does_not_claim_zero(monkeypatch, tmp_path):
         raise OSError("room index unavailable")
     monkeypatch.setattr(places, "place_room_index", unavailable)
     assert view.place_views(tmp_path)[0]["unanswered"] is None
-    assert "unknown" in view.places_text(view.place_views(tmp_path))
-    assert "unknown" in view.places_text(None)
+    assert "unknown" in view.places_text(tmp_path, view.place_views(tmp_path))
+    assert "unknown" in view.places_text(tmp_path, None)
 
 
-def test_prompt_carries_labels_counts_and_one_allowance():
+def test_prompt_carries_labels_counts_and_one_allowance(tmp_path):
     repo = pathlib.Path(__file__).resolve().parents[1]
     configured = [{"place_id": "mail", "label": "Inbox", "state": "active", "unanswered": 0, "rooms": []}]
     causes = view.cause_views([{"cause": "place:mail", "usd": 2.5, "unmetered_calls": 1}], configured)
     roots = view.root_views([{"task_id": "root", "title": "Study queue", "consciousness_cause": "started"}], configured)
-    text = render_wake_message(repo, reason="heartbeat", last_wake_at=0, now=0, level="act", disabled_tools=[],
+    text = render_wake_message(repo, drive_root=tmp_path, reason="heartbeat", last_wake_at=0, now=0, level="act", disabled_tools=[],
                                spent_usd=2.5, daily_usd=20, running=1, max_tasks=2, interval=900, events="nothing new",
                                spent_is_floor=True, spend_by_cause=causes, counted_roots=roots, places=configured)
     assert all("{" + placeholder + "}" not in text for placeholder in PLACEHOLDERS)
@@ -466,17 +466,16 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path,
 
 @pytest.mark.parametrize("kind,owner,clause", [("user", True, "writes as Mailbox (your human's own account)"),
     ("user", False, "writes as Mailbox"), ("bot", False, "as Ouroboros (bot Mailbox)"), ("bot", True, "as Ouroboros (bot Mailbox)"), (None, False, "")])
-def test_own_clock_reads_captured_identity_without_changing_brief_view(tmp_path, monkeypatch, kind, owner, clause):
+def test_own_clock_reads_captured_identity_without_changing_brief_view(tmp_path, kind, owner, clause):
     place = places.connect_place(tmp_path, connector="bridge", provider="chat", account_id="account")
     if owner:
         places.edit_place(tmp_path, place.place_id, "confirm_owner_account", author="owner", platform_actor_id="writer")
     from tests.test_place_arrivals import seed_identity_arrival
     if kind:
         seed_identity_arrival(tmp_path, place, {"sends_as": {"id": "writer", "label": "Mailbox", "kind": kind}})
-    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
     brief = view.place_views(tmp_path, {})
     assert "identity" not in brief[0]
-    text = view.places_text(brief)
+    text = view.places_text(tmp_path, brief)
     assert ("your human's own account" in text) is (owner and kind == "user")
     if clause:
         assert clause in text

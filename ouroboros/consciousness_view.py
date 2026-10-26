@@ -81,15 +81,14 @@ def place_views(drive_root, allowance=None) -> list[dict]:
     return [place_view(drive_root, place, allowance=allowance, brief=True) for place in load_places(drive_root)]
 
 
-def places_text(views) -> str:
-    from ouroboros.config import DATA_DIR
+def places_text(drive_root, views) -> str:
     from ouroboros.place_arrivals import recent_identity
     from ouroboros.places import OwnerAccount, owner_account_matches
     if views is None:
         return "unknown (place index unavailable)"
     lines = []
     for view in views:
-        identity = recent_identity(DATA_DIR, view["place_id"])
+        identity = recent_identity(drive_root, view["place_id"])
         sending = (identity or {}).get("sends_as") or {}
         owner = sending.get("kind") == "user" and owner_account_matches(
             (OwnerAccount(**a) for a in view.get("owner_accounts", [])), sending["id"], view.get("account_id", ""))
