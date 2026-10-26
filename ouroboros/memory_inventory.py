@@ -63,12 +63,15 @@ VIEW_TRACE_KEY = "memory_view"
 MAIN_ROOM = 1
 
 # The row fields the room and attribution readers consult (``project_dialogue.room_membership``,
-# ``dialogue_provenance.row_author``) plus the host facts of a task row. Texts and bulky
-# payloads (review projections, outcome axes, quiz cards) stay in the chain, read by address.
+# ``dialogue_provenance.row_author``) plus the host facts of a task row, its recorded finality and
+# authority included. Texts and bulky payloads (review projections, outcome axes, quiz cards) stay
+# in the chain, read by address. Facts stored before a field joined this list keep their old form
+# (the stored prefix is never rewritten for it): a reader shows such a field as unknown.
 _META_FIELDS = ("chat_id", "ts", "type", "direction", "task_id", "parent_task_id", "root_task_id",
                 "client_message_id", "subagent_task_id", "delegation_role", "subagent_role", "initiator",
                 "summary_kind", "sender_label", "username", "author", "source", "transport",
-                "status", "outcome", "outcome_phase", "reason_code", "result_ref", "presence", "presence_provenance")
+                "status", "outcome", "outcome_phase", "reason_code", "outcome_final", "outcome_authority",
+                "result_ref", "presence", "presence_provenance")
 _MEMBERSHIP_FIELDS = ("chat_id", "ts", "type", "task_id", "parent_task_id", "root_task_id", "source_keys")
 
 Entry = Tuple[Dict[str, Any], Dict[str, Any], int]

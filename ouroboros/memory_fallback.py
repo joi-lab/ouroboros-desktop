@@ -40,7 +40,8 @@ from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import row_lineage
 from ouroboros.chronicle_store import ChronicleStore, PublishResult, draft_signer, source_time_span
 from ouroboros.consolidator import LIGHT_ANSWER_CEILING_TOKENS
-from ouroboros.dialogue_provenance import memory_row_header, render_memory_row, render_row_text, row_class
+from ouroboros.dialogue_provenance import (memory_row_header, recorded_finality, render_memory_row, render_row_text,
+                                           row_class)
 from ouroboros.memory_inventory import OpenSegment, ShortageFact, shortage_from_trace
 from ouroboros.utils import extract_trailing_json_object, utc_now_iso
 
@@ -386,12 +387,17 @@ def _room_label(root: pathlib.Path, room: str) -> str:
 
 
 def _stamp_line(entry: Mapping[str, Any], lane_rows: int) -> str:
-    """One task as the host recorded it: status, outcome, phase and the source of the stamp."""
+    """One task as the host recorded it: status, outcome, phase, the finality and authority its source
+    recorded (a host facts stamp without one says unknown) and the source of the stamp."""
     facts = [f"status {entry.get('status') or 'not recorded'}"]
     for label, key in (("outcome", "outcome"), ("phase", "outcome_phase"), ("review", "review_verdict"),
                        ("reason", "reason_code"), ("objective", "objective_status")):
         if entry.get(key):
             facts.append(f"{label} {entry[key]}")
+    finality = recorded_finality(entry.get("outcome_final"), entry.get("outcome_authority"),
+                                 host_facts=entry.get("source") == "host_task_facts")
+    if finality:
+        facts.append(finality)
     facts.append(f"stamp from {entry.get('source') or 'nothing recorded'}")
     if lane_rows:
         facts.append(f"{lane_rows} host/child row{'' if lane_rows == 1 else 's'} here")
