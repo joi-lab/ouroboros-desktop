@@ -848,7 +848,7 @@ class TestVitalsFact:
         assert vitals["stalls, no end in window"] == ["duty custody since 19:30", "turn t9 started since 19:40"]
         assert vitals["busy_minute"] == "19:59: lag ≤0.4 s; holds dialog w12/0.4 s (message_bus:send:10); queue 5/0.3 s"
         assert vitals["runtime"].startswith("python ") and ", sqlite " in vitals["runtime"]
-        assert vitals["boot"] == "18:00 boot ouroboros@abcdef123456"
+        assert vitals["boot"] == "18:00 ouroboros@abcdef123456"
         assert vitals["note"] == "No verdict here, the weighing is mine; clocks UTC; rows: query_data(kind='supervisor_log', op='jsonl')"
         assert "last_update" not in vitals
         for word in ("WARNING", "CRITICAL", "% busy", "current\"", "threshold"):

@@ -619,8 +619,8 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
             fact["last_update"] = update
         boot = tail.get("boot")
         if isinstance(boot, dict):
-            fact["boot"] = (f"{_clock(boot.get('ts'), observed_at)} {boot.get('type')} "
-                            f"{boot.get('branch') or boot.get('git_branch')}@{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
+            fact["boot"] = (f"{_clock(boot.get('ts'), observed_at)} {boot.get('branch') or boot.get('git_branch')}@"
+                            f"{str(boot.get('sha') or boot.get('git_sha') or '')[:12]}")
         fact["note"] = VITALS_NOTE
     except Exception:  # a fact about the body never breaks the Runtime section
         log.debug("vitals fact unavailable", exc_info=True)
