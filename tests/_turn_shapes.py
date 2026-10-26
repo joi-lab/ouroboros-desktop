@@ -89,10 +89,7 @@ def _old_memory(root: pathlib.Path, k: int) -> int:
 def archive_history(root: pathlib.Path, n: int) -> Dict[str, Any]:
     """n knowledge notes the mind archived and n old restarts' rescue snapshots, as old as their dates: their files
     and the rescue folder carry an old time, the archive folder the time the last log rotation left it (the rescue
-    folder was there), and the step ends once the change times no ``utime`` sets back are settled for production's
-    file memos (``utils._RACY_NS``), as they are for notes archived long ago."""
-    from ouroboros import utils
-
+    folder was there)."""
     shelf, archive = root / "memory" / "knowledge", root / "archive"
     shelf.mkdir(parents=True, exist_ok=True)
     rotated, old = archive.stat(), time.time() - RESCUE_AGE_SEC
@@ -110,7 +107,6 @@ def archive_history(root: pathlib.Path, n: int) -> Dict[str, Any]:
             os.utime(path, (old, old))
     os.utime(archive / "rescue", (old, old))
     os.utime(archive, ns=(rotated.st_atime_ns, rotated.st_mtime_ns))
-    time.sleep(utils._RACY_NS / 1e9)
     return {"notes": n, "snapshots": n, "rows": 0}
 
 

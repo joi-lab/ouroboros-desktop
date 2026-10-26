@@ -479,8 +479,13 @@ def _measure_turns(meter: CostMeter, srv: Any, result: Dict[str, Any], root: pat
                    facts: Dict[str, Any]) -> None:
     """B10: the history (untagged) and the steady state a long-lived install keeps over it, then each turn up to
     its first model request; at k=1 also breadth, rows and archived history."""
+    from ouroboros import skill_identity, utils
     from tests import _turn_shapes as shapes
 
+    # A file read within a clock tick of its write is read again (``utils._RACY_NS``): bounded by time, not by the
+    # history, it would make two turns' counts depend on the milliseconds between them. B10 runs without that
+    # window; a file's identity (inode, size, nanosecond times) still names every write the turns meet here.
+    utils._RACY_NS = skill_identity._RACY_NS = 0
     ctx, k = _event_ctx(srv), int(facts.get("k") or 1)
 
     def activity() -> Dict[str, Any]:
