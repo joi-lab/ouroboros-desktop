@@ -78,6 +78,9 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     "DEEPSEEK_API_KEY": "",
     "ZAI_API_KEY": "",
     "ZAI_PLAN": "",
+    # More keys/endpoints per provider kind, one row each (provider_connections); a route names its row as
+    # kind@name::model. The flat keys above stay each kind's built-in connection.
+    "OUROBOROS_CONNECTIONS": [],
     "OUROBOROS_NETWORK_PASSWORD": "",
     "OUROBOROS_SERVER_HOST": "127.0.0.1",
     "OUROBOROS_HOST_SERVICE_PORT": 8767,
@@ -533,6 +536,9 @@ SETTINGS_KEYS_NOT_EXPORTED_TO_ENV = frozenset({
     # Structured list value: `str(value)` is a Python repr no reader parses back, and every consumer already reads
     # it from the settings dict (mcp_client.parse_servers, gateway.mcp), never from the environment.
     "MCP_SERVERS",
+    # The same for the API connection rows, whose keys would otherwise ride every child process's
+    # environment; routes read them from the settings view (provider_connections.settings_view).
+    "OUROBOROS_CONNECTIONS",
     # ENV IS THE AUTHORITY for the bind host, not settings. `ouroboros server --host 0.0.0.0` puts the choice in
     # the environment, and both consumers (server.main, server_control.restart_current_process) deliberately read
     # env BEFORE settings. Exporting this key stamped the settings value — usually the shipped 127.0.0.1 default,

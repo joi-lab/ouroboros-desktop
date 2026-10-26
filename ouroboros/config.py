@@ -662,7 +662,7 @@ def _coerce_setting_value(key: str, value):
     # Trim so whitespace-only config is not treated as a configured skills repo.
     if key == "OUROBOROS_SKILLS_REPO_PATH":
         return str(value or "").strip()
-    if key == "MCP_SERVERS":
+    if isinstance(default, list):  # MCP_SERVERS, OUROBOROS_CONNECTIONS: a list of row objects
         if isinstance(value, str):
             try:
                 value = json.loads(value)
