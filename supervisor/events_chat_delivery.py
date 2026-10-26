@@ -167,6 +167,9 @@ def replay_deferred_deliveries(root: Any, rows: list, *, event_queue: Any = None
     Bus membership protects queued originals. The handler's physical claim also
     protects direct continuations from duplicate handlers and concurrent sweeps.
     Volatile hints cover a busy registry write; durable deferred/sent facts survive restart.
+    Receipt repairs (a recorded or remembered send, or a superseded or given-up row's returned
+    one) never send and run first, so what one retires (a Stop receipt's superseded host notice)
+    is not resent by the same sweep.
     """
     from supervisor import message_bus, queue, workers, terminal_delivery as td
     from supervisor.event_observation import delivery_outstanding
@@ -181,7 +184,7 @@ def replay_deferred_deliveries(root: Any, rows: list, *, event_queue: Any = None
         _DEFERRED_DELIVERIES.difference_update(
             key for key in _DEFERRED_DELIVERIES - present if key[0] == str(pathlib.Path(root).resolve()))
         hinted = set(_DEFERRED_DELIVERIES)
-    for row in rows:
+    for row in sorted(rows, key=lambda row: not (row.get("emitted") or _remembered_delivery(row) is not None)):
         key = _delivery_key(root, row)
         if not row.get("delivery_deferred") and key not in hinted:
             continue
@@ -268,56 +271,65 @@ def _handle_send_message(evt: Dict[str, Any], ctx: Any) -> bool:
                 _ACTIVE_DELIVERIES.discard(key)
 
 
+def bundled_rows(evt: Dict[str, Any]) -> tuple:
+    """The answer without the facts it carries, and those facts as their own typed card rows.
+
+    Issue #1006: open delegated execution is a typed row OF the task's card, so it is split off
+    before the host notice and never carries the answer's phase: a custody row concludes or
+    relabels nothing. Wrap up's receipt (#1564) is a second such row under the Stop's own identity,
+    so whichever terminal message carries it, it lands once. The outbox owes these same rows for a
+    notice a Stop receipt replaced before any handler split it (``supervisor.terminal_supersession``).
+    """
+    answer = dict(evt)
+    custody = str(answer.pop("terminal_custody_notice", "") or "")
+    retained = answer.pop(RETAINED_WORK_FIELD, None)
+    retained = retained if isinstance(retained, dict) and retained.get("text") else {}
+    meta = evt.get("progress_meta") if isinstance(evt.get("progress_meta"), dict) else {}
+    # Derived from the ANSWER's id, so a re-split never grows a suffix. An
+    # answer that reaches this seam unregistered gets the same canonical
+    # identity its owed registration would mint; with no task to key it,
+    # the custody text stays on the joined host notice rather than
+    # minting a task-independent id the delivered registry would then
+    # suppress for every later task.
+    base_id = str(evt.get("delivery_id") or "")
+    if not base_id and str(evt.get("task_id") or ""):
+        from supervisor.terminal_delivery import delivery_id_for
+
+        base_id = delivery_id_for(str(evt.get("task_id")), str(evt.get("text") or ""))
+
+    def _row(text: str, row_id: str, **marks: Any) -> Dict[str, Any]:
+        row = {**answer, "text": text, "log_text": text, "role": "system", "system_type": "custody_notice"}
+        if row_id:
+            row.update(delivery_id=row_id, progress_meta={
+                **{key: value for key, value in meta.items() if key not in ("task_phase", "task_terminal_status")},
+                "card_row": "timeline", "card_row_id": row_id, **marks})
+        for key in ("terminal_host_notice", "terminal_origin", "_finalization_timing",
+                    "terminal_projection_token"):
+            row.pop(key, None)
+        return row
+
+    if not base_id:
+        # Nothing to key the custody row by: the fact still reaches the
+        # chat as its OWN typed row instead of riding a host-notice
+        # field no consumer reads, and it mints no task-independent
+        # delivery id the delivered registry would suppress for every
+        # later task.
+        answer.pop("terminal_host_notice", None)
+    rows = [_row(custody, base_id and base_id + ":custody_notice")] if custody else []
+    if retained:
+        # Typed as a terminal receipt: a transport that leaves card rows to
+        # its progress toggle still sends this one (Telegram).
+        rows.append(_row(str(retained["text"]), str(retained.get("id") or "")
+                         or (base_id and base_id + ":retained_work"), terminal_receipt="retained_work"))
+    return answer, rows
+
+
 def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
     try:
         if evt.get("terminal_custody_notice") or evt.get(RETAINED_WORK_FIELD):
             from supervisor.terminal_delivery import register_pending_delivery
 
-            # Issue #1006: open delegated execution is a typed row OF the task's
-            # card, so it is split off before the host notice and never carries
-            # the answer's phase — a custody row concludes or relabels nothing.
-            # Wrap up's receipt (#1564) is a second such row under the Stop's own
-            # identity, so whichever terminal message carries it, it lands once.
-            answer = dict(evt)
-            custody = str(answer.pop("terminal_custody_notice", "") or "")
-            retained = answer.pop(RETAINED_WORK_FIELD, None)
-            retained = retained if isinstance(retained, dict) and retained.get("text") else {}
-            meta = evt.get("progress_meta") if isinstance(evt.get("progress_meta"), dict) else {}
-            # Derived from the ANSWER's id, so a re-split never grows a suffix. An
-            # answer that reaches this seam unregistered gets the same canonical
-            # identity its owed registration would mint; with no task to key it,
-            # the custody text stays on the joined host notice rather than
-            # minting a task-independent id the delivered registry would then
-            # suppress for every later task.
-            base_id = str(evt.get("delivery_id") or "")
-            if not base_id and str(evt.get("task_id") or ""):
-                from supervisor.terminal_delivery import delivery_id_for
-
-                base_id = delivery_id_for(str(evt.get("task_id")), str(evt.get("text") or ""))
-            def _row(text: str, row_id: str, **marks: Any) -> Dict[str, Any]:
-                row = {**answer, "text": text, "log_text": text, "role": "system", "system_type": "custody_notice"}
-                if row_id:
-                    row.update(delivery_id=row_id, progress_meta={
-                        **{key: value for key, value in meta.items() if key not in ("task_phase", "task_terminal_status")},
-                        "card_row": "timeline", "card_row_id": row_id, **marks})
-                for key in ("terminal_host_notice", "terminal_origin", "_finalization_timing",
-                            "terminal_projection_token"):
-                    row.pop(key, None)
-                return row
-
-            if not base_id:
-                # Nothing to key the custody row by: the fact still reaches the
-                # chat as its OWN typed row instead of riding a host-notice
-                # field no consumer reads, and it mints no task-independent
-                # delivery id the delivered registry would suppress for every
-                # later task.
-                answer.pop("terminal_host_notice", None)
-            rows = [_row(custody, base_id and base_id + ":custody_notice")] if custody else []
-            if retained:
-                # Typed as a terminal receipt: a transport that leaves card rows to
-                # its progress toggle still sends this one (Telegram).
-                rows.append(_row(str(retained["text"]), str(retained.get("id") or "")
-                                 or (base_id and base_id + ":retained_work"), terminal_receipt="retained_work"))
+            answer, rows = bundled_rows(evt)
             # Owe the rows before the answer send clears its bundled outbox row.
             for row in rows:
                 if row.get("delivery_id"):
@@ -327,6 +339,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
                 _handle_send_message(row, ctx)
             return
         delivery_id = str(evt.get("delivery_id") or "")
+        pending: Dict[str, Any] = {}
         if delivery_id and getattr(ctx, "DRIVE_ROOT", None):
             from supervisor.terminal_delivery import pending_deliveries
 
@@ -374,6 +387,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
         if delivery_id:
             try:
                 from supervisor.terminal_delivery import already_delivered
+                from supervisor.terminal_supersession import superseded_by
 
                 if already_delivered(ctx.DRIVE_ROOT, delivery_id, task_id=str(evt.get("task_id") or ""),
                                      publication_token=publication_token or None):
@@ -382,6 +396,11 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
                         delivery_id,
                     )
                     _register_delivered(ctx, delivery_id, task_id=str(evt.get('task_id') or ''))
+                    return
+                # A buffered original of a host notice a delivered Stop receipt replaced (no longer owed)
+                # keeps its outbox bytes and is not sent; this process's own send of it was recorded above.
+                if not pending and not publication_token and superseded_by(ctx.DRIVE_ROOT, delivery_id):
+                    log.debug("send_message suppressed as superseded (delivery_id=%s)", delivery_id)
                     return
             except Exception:
                 # Fail open toward delivery — never lose an answer to a dedupe read.
