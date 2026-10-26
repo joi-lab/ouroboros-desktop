@@ -184,12 +184,24 @@ def _extract_sources_from_response(resp_obj: Any) -> List[Dict[str, str]]:
     return sources
 
 
-def _resolve_openai_client_settings() -> tuple[str, str | None, str, str]:
-    """Return credentials only for official OpenAI Responses web search."""
-    official_key = (runtime_setting("OPENAI_API_KEY", "") or "").strip()
-    legacy_base_url = (runtime_setting("OPENAI_BASE_URL", "") or "").strip()
+def _search_key(kind: str, connection: str = "") -> str:
+    """The key of the search leg's connection, read through the one resolver ('' when it cannot serve)."""
+    from ouroboros.llm_routing import resolve_target
+    from ouroboros.provider_models import connection_id
 
-    if official_key and not legacy_base_url:
+    try:
+        return str(resolve_target(f"{connection_id(kind, connection)}::search").get("api_key") or "").strip()
+    except Exception:
+        return ""
+
+
+def _resolve_openai_client_settings(connection: str = "") -> tuple[str, str | None, str, str]:
+    """Return credentials only for official OpenAI Responses web search: the built-in key
+    beside the legacy compatible base URL belongs to that endpoint, not to OpenAI."""
+    from ouroboros.provider_models import legacy_openai_base
+
+    official_key = _search_key("openai", connection)
+    if official_key and (connection or not legacy_openai_base()):
         return official_key, None, "openai", "openai"
     return "", None, "openai", "openai"
 
@@ -310,12 +322,13 @@ def _emit_simple_usage(
 
 
 def _web_search_openrouter(ctx: ToolContext, query: str, model: str = "", search_context_size: str = "",
-                           processing_preference: Optional[str] = None) -> str:
+                           processing_preference: Optional[str] = None, connection: str = "") -> str:
     if _web_search_deadline_exhausted(ctx):
         return _web_search_deadline_result()
-    api_key = str(runtime_setting("OPENROUTER_API_KEY") or "").strip()
+    api_key = _search_key("openrouter", connection)
     if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        raise RuntimeError(f"OpenRouter connection {connection} is not configured" if connection
+                           else "OPENROUTER_API_KEY is not configured")
     try:
         from ouroboros.llm import openrouter_web_search_server_tool
 
@@ -367,12 +380,13 @@ def _web_search_openrouter(ctx: ToolContext, query: str, model: str = "", search
 
 
 def _web_search_anthropic(ctx: ToolContext, query: str, model: str = "",
-                          processing_preference: Optional[str] = None) -> str:
+                          processing_preference: Optional[str] = None, connection: str = "") -> str:
     if _web_search_deadline_exhausted(ctx):
         return _web_search_deadline_result()
-    api_key = str(runtime_setting("ANTHROPIC_API_KEY") or "").strip()
+    api_key = _search_key("anthropic", connection)
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+        raise RuntimeError(f"Anthropic connection {connection} is not configured" if connection
+                           else "ANTHROPIC_API_KEY is not configured")
     try:
         import anthropic  # noqa: F401 — the SDK's own import failure precedes any attempt claim
         from ouroboros.llm import anthropic_web_search_server_tool
@@ -556,6 +570,7 @@ def _web_search_openai(
     _attempt: int = 0,
     _processing_preference: Optional[str] = None,
     _processing_submission: Optional[str] = None,
+    connection: str = "",
 ) -> str:
     from ouroboros.model_slots import resolve_processing_preference
 
@@ -566,7 +581,7 @@ def _web_search_openai(
         return json.dumps({"error": "; ".join(previous_errors or ["Official OpenAI search is unavailable"]),
                            "backend": "openai_responses", "ledger_attempt_ids": attempt_ids})
     attempt_ids = []
-    api_key, base_url, provider, api_key_type = _resolve_openai_client_settings()
+    api_key, base_url, provider, api_key_type = _resolve_openai_client_settings(*((connection,) if connection else ()))
     if not api_key:
         return _fallbacks()
     active_model = model or runtime_setting("OUROBOROS_WEBSEARCH_MODEL", DEFAULT_SEARCH_MODEL)
@@ -797,6 +812,7 @@ def _web_search_openai(
                 reasoning_effort=reasoning_effort, _attempt=1,
                 _processing_preference=preference,
                 _processing_submission="standard" if processing_refused else _processing_submission,
+                **({"connection": connection} if connection else {}),
             )
         return _fallbacks([f"OpenAI web search failed ({type(e).__name__}): {detail}"])
     # An empty completed result is a soft failure. Leave this backend's
@@ -825,14 +841,17 @@ def _web_search(ctx: ToolContext, query: str, model: str = "", search_context_si
                                   "web search failed; details in Logs")
         try:
             with capture_attempt_ids() as ids:
+                # The selection's named key travels with its leg; other legs use the built-in key.
+                named = {"connection": leg["connection"]} if leg.get("connection") else {}
                 if leg["source"] == "openai":
                     raw = _web_search_openai(ctx, query, model=leg["model"], search_context_size=search_context_size,
-                                             reasoning_effort=reasoning_effort, _processing_preference=preference)
+                                             reasoning_effort=reasoning_effort, _processing_preference=preference, **named)
                 elif leg["source"] == "openrouter":
                     raw = _web_search_openrouter(ctx, query, model=leg["model"], search_context_size=search_context_size,
-                                                 processing_preference=preference)
+                                                 processing_preference=preference, **named)
                 elif leg["source"] == "anthropic":
-                    raw = _web_search_anthropic(ctx, query, model="anthropic::" + leg["model"], processing_preference=preference)
+                    raw = _web_search_anthropic(ctx, query, model="anthropic::" + leg["model"], processing_preference=preference,
+                                                **named)
                 else:
                     raw = _web_search_ddgs(query)
             result = json.loads(raw)

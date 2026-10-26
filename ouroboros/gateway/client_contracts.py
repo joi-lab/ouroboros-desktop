@@ -471,12 +471,15 @@ class PlaceUpdateRequest(TypedDict, total=False):
 
 
 class SettingsSecretRequest(TypedDict, total=False):
-    """``POST /api/settings/secret``: exactly one selector, ``{key}``, ``{mcp_server_id}`` or
-    ``{mcp_server_id, header_name}``. Reads one stored secret on purpose; writes nothing."""
+    """``POST /api/settings/secret``: exactly one selector, ``{key}``, ``{mcp_server_id}``,
+    ``{mcp_server_id, header_name}`` or ``{connection, field}`` (an added API key ``kind@name`` and
+    one of its secret fields). Reads one stored secret on purpose; writes nothing."""
 
     key: str
     mcp_server_id: str
     header_name: str
+    connection: str
+    field: str
 
 
 class SettingsSecretResponse(TypedDict):

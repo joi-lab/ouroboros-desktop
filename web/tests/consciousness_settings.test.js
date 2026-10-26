@@ -343,7 +343,9 @@ test('Models: a Light change outside Cyber Pro saves; only the changed key goes 
         assert.equal((await apiClient.saveSettings(body)).status, 'saved');
         result = await saveSafetyOwnerChanges(draft, LOADED);
         assert.equal(checkerTabsText(draft), 'Models');
-        assert.deepEqual(checkerSaveEffect({ status: 'saved', no_changes: true }, draft), { status: 'saved', no_changes: false, next_task_changed: true });
+        // The checker's model is read live: it applies at the next check, not from the next task.
+        assert.deepEqual(checkerSaveEffect({ status: 'saved', no_changes: true }, draft), { status: 'saved', no_changes: false, immediate_changed: true });
+        assert.equal(checkerSaveEffect({ status: 'saved' }, { checker: { settings: { OUROBOROS_SUBAGENTS: '{}' } } }).next_task_changed, true);
     } finally { server.restore(); }
     const { OUROBOROS_MODEL_LIGHT: _light, ...rest } = collected();
     assert.deepEqual(server.calls.map(({ url, body }) => [url, body]), [

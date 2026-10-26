@@ -4,8 +4,8 @@
 import { apiClient, fetchJson } from './api_client.js';
 import { MODEL_CATALOG_TIMEOUT_MS, catalogReadNote, mergeModelCatalog } from './settings_catalog.js';
 import { accountRows, bindStatusSurface, claudexorStatus } from './claudexor_status_store.js';
-import { parseModelSource, composeModelSource, configuredApiProviders, indexProfilesByHarness,
-    profileOptionsFor, routeChoiceGroups, selectHtml, mintStableId, API_CHOICE_PREFIX,
+import { parseModelSource, composeModelSource, apiConnections, configuredApiProviders, indexProfilesByHarness,
+    profileOptionsFor, routeChoiceGroups, selectHtml, mintStableId, unavailableConnectionState, API_CHOICE_PREFIX,
     DEFAULT_API_PROVIDER } from './route_editor_primitives.js';
 import { PROCESSING_PREFERENCE_KEY, MODEL_PROCESSING_PREFERENCES_KEY, PROCESSING_CHOICES,
     processingSelectHtml, processingIntentLabel, processingCapabilityNote, catalogModelOptions } from './route_editor_primitives.js';
@@ -46,15 +46,16 @@ export function sourceFromChoice(choice) {
  * The Models source select. One vocabulary with Agents: the same groups, the
  * same order, the same configured-only API list; only the "Uses Main" entry and
  * the absent agent-session group are specific to a model role.
- * @param {{sources?: Array, providers?: Array<{id:string,label?:string}>, current?: string,
- *   catalogKnown?: boolean, accountsKnown?: boolean, providerProfiles?: object}} args
- *   `providers` is `configuredApiProviders()` output, `current` a stored row source.
+ * @param {{sources?: Array, providers?: Array<{id:string,label?:string}>, connections?: Array,
+ *   current?: string, catalogKnown?: boolean, accountsKnown?: boolean, providerProfiles?: object}} args
+ *   `providers` is `configuredApiProviders()` output, `connections` `apiConnections()` output,
+ *   `current` a stored row source.
  */
-export function modelSourceGroups({ sources = [], providers = [], current = '', inheritLabel = 'Uses Main',
+export function modelSourceGroups({ sources = [], providers = [], connections = [], current = '', inheritLabel = 'Uses Main',
     catalogKnown = false, accountsKnown = false, providerProfiles = {}, hasConfiguredAccounts = false } = {}) {
     return [
         ...(current === 'inherit' ? [{ options: [{ value: 'inherit', label: inheritLabel }] }] : []),
-        ...routeChoiceGroups({ modelSources: sources, providers, providerProfiles,
+        ...routeChoiceGroups({ modelSources: sources, providers, connections, providerProfiles,
             currentChoice: current === 'inherit' ? '' : sourceChoice(current),
             catalogKnown, accountsKnown, hasConfiguredAccounts, includeSessions: false }),
     ];
@@ -82,6 +83,7 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
     let settings = {};
     let providerProfiles = {};
     let apiProviders = [];
+    let connections = [];
     let catalog = { items: [], model_sources: [], read_state: 'not_read' };
     let loaded = false;
     let destroyed = false;
@@ -177,8 +179,16 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
     // A saved source whose key is gone stays selectable and labelled; discovery
     // only widens the list, it never rewrites the owner's assignment.
     function sourceGroupsFor(row, facts = {}) {
-        return modelSourceGroups({ sources: catalog.model_sources, providers: apiProviders,
+        return modelSourceGroups({ sources: catalog.model_sources, providers: apiProviders, connections,
             providerProfiles, current: row.source, inheritLabel: `Uses ${inheritName(row)}`, ...facts });
+    }
+    // A saved API source that cannot send says why under its row; the select keeps it chosen.
+    function keyNote(row) {
+        if (row.local || !row.model || row.source === 'inherit' || sourceId(row)
+            || apiProviders.some((provider) => provider.id === row.source)) return '';
+        return { off: 'This key is turned off in Accounts; nothing is sent through it.',
+            removed: 'This key was removed in Accounts; nothing is sent through it.',
+            'no key': 'This source has no key in Accounts.' }[unavailableConnectionState(row.source, connections)];
     }
     function itemsFor(row) {
         return sourceId(row) ? (catalogs.get(catalogKey(row))?.items || [])
@@ -306,7 +316,7 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             const own = Boolean(sourceId(row) && rowCatalog);
             const note = catalogReadNote(own ? rowCatalog : catalog, { compact: !own });
             status.textContent = row.local ? 'Uses the local runtime.'
-                : note || (!row.model ? (row.slot.slot === 'main' ? 'Choose a model to continue.' : `Uses ${inheritName(row)}.`)
+                : keyNote(row) || note || (!row.model ? (row.slot.slot === 'main' ? 'Choose a model to continue.' : `Uses ${inheritName(row)}.`)
                     : sourceId(row) ? (rowCatalog?.read_state === 'ok' && !rowCatalog.items.length
                         ? 'No models were listed for this source. Your selection is kept.'
                         : 'Uses your subscription. No API key required.') : '');
@@ -478,6 +488,7 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             settings = { ...value }; slots = contract.modelSlots || slots;
             processingPreference = String(settings[PROCESSING_PREFERENCE_KEY] || ''); processingTouched = false;
             providerProfiles = contract.providerProfiles || providerProfiles;
+            connections = apiConnections(settings, providerProfiles);
             apiProviders = configuredApiProviders(settings, providerProfiles);
             rows = [];
             for (const slot of slots) {

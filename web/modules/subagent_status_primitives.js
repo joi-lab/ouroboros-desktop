@@ -34,11 +34,11 @@ export function rowIdentity(row, state = {}) {
     // mark. Never split the stored target here: only the model-sources catalog
     // maps an opaque source id to a harness.
     const fields = routeModelFields(row?.route, state.modelSources, {
-        providerProfiles: state.providerProfiles,
+        providerProfiles: state.providerProfiles, connections: state.connections,
     });
     const label = sourceIdentityLabel(row?.route, {
         modelSources: state.modelSources,
-        providerProfiles: state.providerProfiles,
+        providerProfiles: state.providerProfiles, connections: state.connections,
         harnesses: [{
             id: fields.harness,
             display_name: familyLabel(fields.harness, state.snapshot, { catalogKnown: state.catalogKnown }),
@@ -194,7 +194,7 @@ export function rowStatus(row, state) {
         // "API model" alone left two rows on different providers reading
         // identically (owner decision 4A).
         const fields = routeModelFields(row.route, state.modelSources, {
-            providerProfiles: state.providerProfiles,
+            providerProfiles: state.providerProfiles, connections: state.connections,
         });
         return {
             label: 'Checked at start', tone: 'neutral', reason: '',
