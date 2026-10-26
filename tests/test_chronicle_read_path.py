@@ -115,6 +115,27 @@ def test_a_writer_meeting_a_lock_free_reader_waits_its_own_bound_and_is_told_bus
     assert chronicle.extend_tail(expected, [], {"complete": False}, wait_sec=0) is True
 
 
+def test_a_busy_index_is_contention_never_a_corrupt_file_to_delete(tmp_path):
+    """Another connection holding the index's write lock makes the publisher's schema step busy: a typed
+    ``TimeoutError``, and the index file stays; only a file that does not decode is deleted and rebuilt."""
+    import sqlite3
+
+    chronicle = ChronicleStore(tmp_path)
+    kept = _note(chronicle, "kept")
+    inode = chronicle.index_path.stat().st_ino
+    holder = sqlite3.connect(chronicle.index_path, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        with pytest.raises(TimeoutError, match="busy"):
+            with chronicle._publishing(wait_sec=0):
+                pass
+        assert chronicle.index_path.stat().st_ino == inode
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert chronicle.get(kept["id"])["text"] == "kept"
+
+
 _JSON_ARROW = re.compile(r"->>?\s*'\$")  # SQLite's JSON operators: 3.38+, above the 3.24 floor (store.py)
 
 

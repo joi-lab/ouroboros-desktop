@@ -511,7 +511,7 @@ class ChronicleStore:
             # Counted like every store connection: a raw read of this file never closes a descriptor under the
             # snapshot (POSIX drops this process's locks on any close; ``store._borrow``).
             db = store.counted_connect(f"{self.index_path.absolute().as_uri()}?mode=ro", self.index_path, uri=True)
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):  # an index removed meanwhile is the locked path's to rebuild
             return None
         try:
             db.execute("BEGIN")  # the version, the offset and every read after them: one snapshot

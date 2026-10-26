@@ -408,8 +408,8 @@ _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqli
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
 VITALS_READER = "query_data(kind='supervisor_log', op='jsonl')"  # the minimal working call: the kind requires op='jsonl'
 VITALS_NOTE = f"No verdict here, the weighing is mine; clocks UTC; rows: {VITALS_READER}"
-WAL_GATE = ("WAL needs a SQLite with the WAL-reset fix (3.51.3+, 3.50.7+, 3.44.6+), enforced kernel locks"
-            " and a local filesystem; an Update keeps this interpreter")
+WAL_GATE = ("WAL needs a SQLite with the WAL-reset fix (3.51.3+, or 3.50.7+ / 3.44.6+ within those series),"
+            " enforced kernel locks and a local filesystem; an Update keeps this interpreter")
 
 
 def _clock(stamp: Any, today: Any) -> str:
@@ -579,17 +579,17 @@ def _last_update(root: pathlib.Path) -> str:
 
 
 def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """The body's own dated facts beside ``storage``, one line each: the last owner turns from this
-    serving process's receipt ring (wait, slowest phase, dispatch basis when unobserved, own
-    transactions; the top frame of a stall episode whose end row is still in the tail), stall onsets
-    whose end was not observed in the journal's bounded tail (never «current»), the last busy minute
-    (counts and summed seconds per store and side, the longest hold's site, never a percentage), the
-    runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a rollback journal),
-    the retained update's before/after, the boot row, and a note that names the journal's reader.
-    ``observed_at`` is the fact's own instant (the clocks' day); it is written only when it differs
-    from ``captured_at``, the Runtime JSON's ``context_captured_at`` beside it (a stale snapshot), so
-    the same instant is not printed twice. Every absent source omits its key; a pooled worker says its
-    owner-turn part is unknown. Never raises."""
+    """The body's own dated facts beside ``storage``, one line each: the last owner turns from this serving
+    process's receipt ring, or in a pooled worker from the journal's tail (wait, slowest phase, dispatch
+    basis when unobserved, own transactions; the top frame of a stall episode whose end row is still in
+    the tail), stall onsets whose end was not observed in the journal's bounded tail (never «current»),
+    the last busy minute (counts and summed seconds per store and side, the longest hold's site, never a
+    percentage), the runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a
+    rollback journal), the retained update's before/after, the boot row, and a note that names the
+    journal's reader. ``observed_at`` is the fact's own instant (the clocks' day); it is written only
+    when it differs from ``captured_at``, the Runtime JSON's ``context_captured_at`` beside it (a stale
+    snapshot), so the same instant is not printed twice. Every absent source omits its key. Never
+    raises."""
     import os
 
     root = pathlib.Path(data_root)
