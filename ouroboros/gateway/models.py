@@ -620,10 +620,15 @@ _PROVIDER_TEST_KNOWN_IDS: frozenset[str] = frozenset({
 
 def _provider_test_model(provider_id: str, settings: dict, connection: str = "") -> str:
     """One deterministic runtime/default model of the kind, without catalog I/O, spelled
-    on the connection under test (``connection`` '' = the built-in one)."""
-    native = next((route.model.strip() for key in ACTIVE_MODEL_SETTING_KEYS
-                   for route in map(parse_model_route, str(settings.get(key, "") or "").split(","))
-                   if route.kind == provider_id and route.valid and route.model.strip()), "")
+    on the connection under test (``connection`` '' = the built-in one). A route on that
+    connection wins; a fixed provider serves the same ids on every key, while another
+    compatible connection is another server with its own models (catalog discovery)."""
+    routes = [route for key in ACTIVE_MODEL_SETTING_KEYS
+              for route in map(parse_model_route, str(settings.get(key, "") or "").split(","))
+              if route.kind == provider_id and route.valid and route.model.strip()]
+    own = [route for route in routes if route.connection == connection]
+    shared = [] if provider_id == "openai-compatible" else routes
+    native = next((route.model.strip() for route in own or shared), "")
     if not native:
         default = (OPENROUTER_DEFAULTS if provider_id == "openrouter" else DIRECT_PROVIDER_DEFAULTS.get(provider_id) or {})
         native = parse_model_route(str(default.get("main") or "").strip()).model.strip()
