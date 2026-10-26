@@ -159,16 +159,17 @@ class ProviderPolicyRefusal(RuntimeError):
 
 
 class ConnectionUnavailable(ProviderPolicyRefusal):
-    """A route names a connection that cannot serve it: unknown name, a disabled row or built-in,
-    a kind that is not the row's, or an invalid spelling (``reason``). Raised by the resolver before
-    any dispatch ($0); the configured fallback walk runs, then the task's model-wait card opens
-    (``model_wait.model_wait_reason``). Never a fall-through to another connection."""
+    """The route names an API connection that cannot serve it: ``missing`` (no such
+    row, or it lacks its credential/endpoint), ``disabled``, ``kind_mismatch`` (the
+    name belongs to another kind) or ``invalid`` (a malformed spelling). Raised while
+    the target is resolved, so nothing is dispatched ($0); never re-sent on another
+    connection's key (``provider_connections.connection_values``)."""
 
-    code = "connection_unavailable"
-
-    def __init__(self, reason: str, *, model: str = "", connection: str = "") -> None:
-        self.reason, self.model, self.connection = str(reason or "missing"), str(model or ""), str(connection or "")
-        super().__init__(f"connection {self.connection or 'default'} is {self.reason} for {self.model or 'this route'}")
+    def __init__(self, connection: str, reason: str) -> None:
+        self.code = "connection_unavailable"
+        self.connection, self.reason = connection, reason
+        super().__init__(f"connection_unavailable: {connection or 'this route'} is {reason.replace('_', ' ')}; "
+                         "it is not sent on another connection's key")
 
 
 def _is_provider_policy_refusal(exc: BaseException) -> bool:

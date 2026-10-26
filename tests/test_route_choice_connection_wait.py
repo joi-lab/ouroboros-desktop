@@ -39,7 +39,7 @@ class _RouteLLM:
         model = kwargs["model"]
         self.sent.append(model)
         if model in self.gone:
-            raise ConnectionUnavailable("disabled", model=model, connection="credits")
+            raise ConnectionUnavailable("openrouter@credits", "disabled")
         return {"role": "assistant", "content": f"answer from {model}"}, {"prompt_tokens": 1, "completion_tokens": 1}
 
 
