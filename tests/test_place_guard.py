@@ -193,6 +193,20 @@ def test_call_facts_use_captured_identity_and_user_owner_match(published_tool, p
     assert guard.call_place_facts(ctx, "read_file", {}) == {}
 
 
+def test_call_facts_pick_the_named_accounts_identity_out_of_the_places_window(published_tool, places):
+    """The call site hands its account to the captured read: a connector-wide place answers for the account named."""
+    from tests.test_place_arrivals import seed_identity_arrival
+    rows, ctx = places
+    mine = {"sends_as": {"id": "mine", "label": "Mine", "kind": "user"}}
+    other = {"sends_as": {"id": "other", "label": "Other", "kind": "user"}}
+    seed_identity_arrival(ctx.drive_root, rows[1], mine, ts="2026-10-26T12:00:00Z", account_id="A")
+    seed_identity_arrival(ctx.drive_root, rows[1], other, ts="2026-10-26T12:00:01Z", account_id="B")
+    name, tool = published_tool("message", target=["room", "account_id"], conversation="room")
+    for account, expected in (("A", mine), ("B", other)):
+        facts = guard.call_place_facts(ctx, name, {"room": "C2", "account_id": account}, ext_tool=tool)
+        assert facts["sends_as"] == expected["sends_as"], account
+
+
 @pytest.mark.parametrize("root_source", ["drive_root", "budget_drive_root", "metadata"])
 def test_call_identity_uses_context_root_not_configured_root(published_tool, places, monkeypatch, root_source):
     from tests.test_place_arrivals import seed_identity_arrival

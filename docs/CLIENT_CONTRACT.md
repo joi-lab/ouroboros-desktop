@@ -543,7 +543,8 @@ matching `owner_accounts` in the place's account scope, and `can_confirm` only f
 sender. The existing confirm writer takes `platform_actor_id = identity.sends_as.id`; no new writer or
 stored Place field is introduced. The server never dispatches a connector route for a place view, a
 focus, a Safety check or an own wake. Focus identity is the event's snapshot; other Safety targets and
-own-wake text read the first valid identity among the place's newest 50 captured arrivals (of the call's account, when it names one). Brief views
+own-wake text read the first valid identity among the place's newest 50 captured arrivals (of the
+call's account, when it names one). Brief views
 for status/launch remain unchanged.
 
 The browser's Place identity twins live in `web/modules/place_contract_types.js`, re-exported by
