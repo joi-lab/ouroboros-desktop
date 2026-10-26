@@ -491,6 +491,10 @@ class Memory:
                 exclude_a2a=True,
                 predicate=matches,
             )
+            # "From latest" is by time: an imported earlier message, stored after newer rows, pages at its send time,
+            # and its room's live rows read as the room does whichever of them the filters kept.
+            from ouroboros.dialogue_provenance import in_reading_order, rooms_read_by_time
+            entries = in_reading_order(entries, rooms_read_by_time(self.drive_root, entries))
 
             current_snapshot = _chat_history_snapshot_id(coverage, filters, search)
             requested_snapshot = str(snapshot or "").strip().lower()

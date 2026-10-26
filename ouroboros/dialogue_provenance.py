@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping, Tuple
+from typing import Any, Callable, Collection, Iterable, Literal, Mapping, Tuple
 
 from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, WEB_UI_CHAT_ID
 
@@ -261,6 +261,39 @@ def row_provenance(row: Mapping[str, Any]) -> Literal["place", "other"]:
     ) else "other"
 
 
+def rooms_read_by_time(root: Any, rows: Iterable[Mapping[str, Any]]) -> set[int]:
+    """The rooms of ``rows`` that read by time: those holding an imported earlier message. A fact of the
+    room, as its endpoint reads it (``place_arrivals.history_import_rooms``), whichever rows were selected."""
+    from ouroboros import dialogue_store
+    from ouroboros.place_arrivals import history_import_rooms
+
+    return history_import_rooms(root, {dialogue_store.facts(row)["chat_id"] for row in rows})
+
+
+def in_reading_order(items: Iterable[Any], timed: Collection[int],
+                     row: Callable[[Any], Mapping[str, Any]] = _mapping) -> list[Any]:
+    """``items`` (append order) as their rooms read them. The rows of a room in ``timed``
+    (``rooms_read_by_time``), imported or live, all take that room's reading order
+    (``place_arrivals.reading_key``: send time, order, position), as ``gateway.history_chronology`` reads
+    the room, though a filter or a sealed page left none of its imports among ``items``; the items of
+    every other room keep their append order and their own addresses. The rooms' sequences interleave by
+    the same key, each keeping its own order."""
+    import heapq
+
+    from ouroboros import dialogue_store
+    from ouroboros.place_arrivals import reading_key
+
+    items = list(items)
+    rooms = [dialogue_store.facts(row(item))["chat_id"] for item in items]
+    timed = set(timed) & set(rooms)
+    if not timed:
+        return items
+    keys = [reading_key(row(item), index) for index, item in enumerate(items)]
+    streams = [[index for index, room in enumerate(rooms) if room not in timed]]
+    streams += [sorted((index for index, room in enumerate(rooms) if room == chat), key=keys.__getitem__) for chat in timed]
+    return [items[index] for index in heapq.merge(*streams, key=keys.__getitem__)]
+
+
 def place_row_facts(row: Mapping[str, Any]) -> dict[str, Any]:
     """Host room/event facts, including the delivery envelope used by older receipts."""
     transport = _mapping(row.get("transport"))
@@ -342,6 +375,10 @@ def dialogue_provenance(entry: Mapping[str, Any]) -> str:
     source = str(entry.get("source") or "").strip()
     if source and not facts:
         facts.append(f"source={source}")
+    imported = _mapping(entry.get("historical_import"))  # ``presence_history``: an earlier message, not an arrival
+    if imported:
+        facts.append("history=imported earlier message" + (
+            ", sent from the connected account itself" if imported.get("authorship") == "platform_account" else ""))
     delivery = _mapping(transport.get("delivery"))
     state = _text(delivery.get("state"))
     if state:

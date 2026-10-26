@@ -1121,6 +1121,14 @@ def _active_lifecycle_row(row_matches_thread) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _reading_order(entries) -> Callable[[dict], str]:
+    """The rows' sort key on a page: ``ts``, except for the rows a room holding imports read by its reading
+    key (``history_chronology``), which sort by its time, so no projection reorders what that reader ordered
+    (an equal key keeps the reader's order: these sorts are stable)."""
+    reading = {entry["history_id"]: entry["_chrono_key"][0] for entry in entries or () if "_chrono_key" in entry}
+    return lambda m: reading.get(m.get("history_id"), m.get("ts", "")) if reading else m.get("ts", "")
+
+
 def _apply_window_quotas(
     data_dir: pathlib.Path,
     thread_id: int,
@@ -1129,8 +1137,10 @@ def _apply_window_quotas(
     n_human: int,
     n_progress: int,
     result_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+    order: Optional[Callable[[dict], str]] = None,
 ) -> tuple[list, Dict[str, Dict[str, Any]], bool, bool, bool, str, set]:
-    """Quota slicing, origin fallback, and the lineage floor/cap (perf2 P3).
+    """Quota slicing, origin fallback, and the lineage floor/cap (perf2 P3). ``order``: the rows'
+    sort key, ``ts`` unless the room reads by its reading key (``_reading_order``).
 
     Returns ``(messages, result_cache, human_rows_dropped, lineage_truncated,
     review_overlays_truncated, floor, anchored_children)`` for annotation and
@@ -1139,6 +1149,7 @@ def _apply_window_quotas(
     """
     from ouroboros.gateway.task_model_wait import history_wait_overlay
 
+    order = order or (lambda m: m.get("ts", ""))
     combined, model_wait_rows, model_wait_truncated = history_wait_overlay(combined, n_progress)
     # Separate quotas protect conversation from telemetry bursts; recent child
     # lineage survives on top so the client can rebuild its cards. Older lineage
@@ -1191,9 +1202,9 @@ def _apply_window_quotas(
             m for m in combined
             if not m.get("is_progress") and not _is_folded_review(m)
         ),
-        key=lambda m: m.get("ts", ""),
+        key=order,
     )
-    progress = sorted((m for m in combined if m.get("is_progress")), key=lambda m: m.get("ts", ""))
+    progress = sorted((m for m in combined if m.get("is_progress")), key=order)
     human_tail = human[-n_human:] if n_human > 0 else []
     # The human slice also drops System rows uncounted by the in/out reader;
     # any drop therefore marks quota truncation, independent of direction.
@@ -1205,7 +1216,7 @@ def _apply_window_quotas(
             synthesized = _origin_fallback_rows(data_dir, thread_id, list(human_tail))
             if synthesized:
                 human_tail = sorted(
-                    human_tail + synthesized, key=lambda m: m.get("ts", "")
+                    human_tail + synthesized, key=order
                 )
         except Exception:
             log.debug("Project origin fallback synthesis failed", exc_info=True)
@@ -1336,7 +1347,7 @@ def _apply_window_quotas(
     progress_tail = lineage + other_tail + review_references
     messages = sorted(
         human_tail + folded_reviews + progress_tail + model_wait_rows,
-        key=lambda m: m.get("ts", ""),
+        key=order,
     )
     return (
         messages, result_cache, human_rows_dropped, lineage_truncated,
@@ -1433,6 +1444,7 @@ def _assemble_history_response(
                                room_lens(data_dir, thread_id, project_chat_ids, project_source_refs, bindings_by_task),
                                notes, rooms.warm, around, (row_matches_thread, _stored_chat_id), row_target)
     selections, before, recent = page["selections"], page["before"], page["recent"]
+    order = _reading_order(selections["chat"][0])
     n_human, n_progress = page["quotas"]["human"], page["quotas"]["progress"]
     historical_terminals: Dict[str, dict] = {}
     replay_evidence: list = []
@@ -1463,14 +1475,14 @@ def _assemble_history_response(
     if recent:  # arrival is named above, before the tail and the annotation
         (messages, result_cache, human_rows_dropped, lineage_truncated, review_overlays_truncated, floor,
          anchored_children) = _apply_window_quotas(
-            data_dir, thread_id, project_chat_ids, combined, n_human, n_progress, result_cache)
+            data_dir, thread_id, project_chat_ids, combined, n_human, n_progress, result_cache, order)
         for source in ("chat", "progress"):
             before[source] = deferred_before(source, selections[source][0], candidates, messages, before[source])
     else:
         # Physical selection already bounded this page. A page-local lineage
         # floor would permanently remove children whose parent is on another
         # page; the keyed replay joins that topology without granting liveness.
-        messages = sorted(combined, key=lambda row: row.get("ts", ""))
+        messages = sorted(combined, key=order)
         floor, anchored_children = "", set()
         human_rows_dropped = lineage_truncated = review_overlays_truncated = False
 

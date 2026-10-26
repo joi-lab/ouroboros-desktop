@@ -7,9 +7,11 @@ import { sendsAsHtml, signalLabels, heardFactWord } from './consciousness_words.
 
 export const INDEX_NOTE = 'The list finds conversations with saved incoming Place events. Older records and conversations where it only wrote may not be listed.';
 const LOCAL_NOTE = 'Only records saved by Ouroboros are shown. Some events may never have reached it. Attention and delivery appear only when recorded; a saved reply alone does not confirm delivery.';
-const timeText = (value) => {
+// Imported history spans years: a time outside the current year names its year.
+const timeText = (value, now = new Date()) => {
     const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return Number.isFinite(date.getTime()) ? date.toLocaleString([], { ...(date.getFullYear() !== now.getFullYear()
+        ? { year: 'numeric' } : {}), month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 };
 
 export function windowIssues(page) {
@@ -24,14 +26,15 @@ export function windowIssues(page) {
     return { importing, unavailable, bounded, unknown, retry: importing || unavailable || bounded || unknown };
 }
 
-/** Each returned range owns its uncertainty. A normal older page is not a gap. */
+/** Each returned range owns its uncertainty. A normal older page is not a gap. The pages read what
+ * was saved when the newest of them was read: their start is that record's, never later imports'. */
 export function capturedWindowNote(page) {
     const issues = windowIssues(page);
     return [issues.importing ? 'Older records are still being imported.' : '',
         issues.unavailable ? 'Some records in this returned range are unavailable.' : '',
         issues.bounded ? 'This returned range was limited.' : '',
         issues.unknown ? 'Coverage was not fully reported for this returned range.' : '',
-        !issues.retry ? (page.has_more ? 'Earlier saved records are available.' : 'Start of the available saved record. The service may hold earlier messages.') : '',
+        !issues.retry ? (page.has_more ? 'Earlier saved records are available.' : 'Start of the record saved when this was read. Refresh history to include anything saved since. The service may hold earlier messages.') : '',
     ].filter(Boolean).join(' ');
 }
 
@@ -73,6 +76,14 @@ export function placeHistoryState(place) {
         active: 'Active now: it hears, wakes, speaks and acts here.' }[place.state] || 'The current Place state is unavailable.';
 }
 
+/** A row's shown time: the provider send time its arrival recorded, else when it was saved. The title keeps
+ * both; an import's saved time is its receipt, since its `ts` is the send time. */
+export function shownTime(row) {
+    const facts = row.place_history || {};
+    const saved = facts.historical_import?.received_at || row.ts || '';
+    return facts.sent_at ? { at: facts.sent_at, title: `Sent ${facts.sent_at} · saved ${saved}` } : { at: row.ts || '', title: row.ts || '' };
+}
+
 function updateHeardLabels(host, place) {
     const labels = { ...signalLabels(place.facts), ...place.labels };
     for (const node of host.querySelectorAll('[data-heard-fact]')) {
@@ -91,8 +102,9 @@ function messageNode(row, markdown, place) {
     const sender = facts.sends_as && sendsAsHtml({ ...facts.sends_as, owner: facts.sends_as_owner });
     const article = document.createElement('article'); article.className = `place-convo-row is-${voice}`;
     const meta = document.createElement('div'); meta.className = 'place-convo-meta';
+    const time = shownTime(row);
     meta.innerHTML = `<span class="place-convo-who"${row.role === 'user' ? ' data-i18n-authored' : ''}>${escapeHtml(historySpeaker(row))}</span>${voice === 'owner' ? '<span>(you)</span>' : ''}
-        <time data-i18n-authored datetime="${escapeHtml(row.ts || '')}" title="${escapeHtml(row.ts || '')}">${escapeHtml(timeText(row.ts))}</time>
+        <time data-i18n-authored datetime="${escapeHtml(time.at)}" title="${escapeHtml(time.title)}">${escapeHtml(timeText(time.at))}</time>
         ${historyFactWords(row).map((fact) => `<span class="place-convo-fact">${escapeHtml(fact)}</span>`).join('')}${heard}${sender ? `<span class="place-convo-fact">${sender}</span>` : ''}`;
     updateHeardLabels(meta, place);
     const text = document.createElement('div'); text.className = 'chat-markdown place-convo-text'; text.dataset.i18nAuthored = '';
@@ -125,7 +137,8 @@ export function mountPlaceHistory(host, place, room, { onBack, readHistory = api
         <div data-history-coverage></div>
         <p class="place-sheet-status ui-status" data-history-status role="status" data-i18n-authored></p>
         <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-history-retry hidden>Try again</button>
-        <button type="button" class="btn btn-default btn-sm" data-history-older hidden>Load older</button></div>
+        <button type="button" class="btn btn-default btn-sm" data-history-older hidden>Load older</button>
+        <button type="button" class="btn btn-default btn-sm" data-history-refresh>Refresh history</button></div>
         <div class="place-convo-rows" data-history-messages></div>
         <p class="place-sheet-note">Reading sends nothing, marks nothing read and starts no work.</p>
     </section>`;
@@ -150,39 +163,65 @@ export function mountPlaceHistory(host, place, room, { onBack, readHistory = api
         find('[data-history-older]').hidden = pages[0]?.page.has_more !== true;
         find('[data-history-status]').textContent = find('[data-history-messages]').childElementCount ? '' : 'No stored messages in these returned ranges.';
     };
+    // `replacing`: a loaded range's index, or a newest page that replaces every range once it arrives:
+    // 'chain' (Refresh history) or 'changed' (the shown chain's view changed).
     async function loadPage(askedCursor = null, replacing = null) {
         if (closed || busy) return;
         controller?.abort(); controller = new AbortController(); const version = ++generation;
+        const focused = host.contains(document.activeElement) ? document.activeElement : null;
         busy = true; retry = null; find('[data-history-retry]').hidden = true;
         find('[data-history-status]').textContent = 'Reading captured history…';
         find('[data-history-status]').dataset.tone = 'muted';
-        find('[data-history-older]').disabled = true;
+        find('[data-history-older]').disabled = true; find('[data-history-refresh]').disabled = true;
+        let cursor = askedCursor, target = replacing;
         try {
-            const page = await readHistory({ chatId: room.room_chat_id, cursor: askedCursor, signal: controller.signal });
+            let page;
+            try {
+                page = await readHistory({ chatId: room.room_chat_id, cursor, signal: controller.signal });
+            } catch (error) {
+                // A changed view (such as the room's first imported history) refuses every cursor of the shown
+                // chain, so the newest page is read afresh; the shown ranges stay until it arrives.
+                if (cursor === null || error?.body?.reason_code !== 'history_view_changed' || closed || version !== generation) throw error;
+                cursor = null; target = 'changed';
+                page = await readHistory({ chatId: room.room_chat_id, cursor, signal: controller.signal });
+            }
             if (closed || version !== generation) return;
             if (!Array.isArray(page?.messages) || page.messages.some((row) => typeof row?.text !== 'string')
-                || (page.has_more === true && (typeof page.next_cursor !== 'string' || !page.next_cursor || page.next_cursor === askedCursor))) {
+                || (page.has_more === true && (typeof page.next_cursor !== 'string' || !page.next_cursor || page.next_cursor === cursor))) {
                 throw new Error('Captured history page is invalid; no page was skipped.');
             }
             const scroller = host.closest('[data-place-body]') || host;
             const beforeHeight = scroller.scrollHeight, beforeTop = scroller.scrollTop;
             const hadRows = pages.length > 0;
-            const saved = { page, askedCursor: page.page_cursor || askedCursor };
-            if (replacing !== null) pages[replacing] = saved; else pages.unshift(saved);
+            const saved = { page, askedCursor: page.page_cursor || cursor };
+            if (target === 'chain' || target === 'changed') pages.splice(0, pages.length, saved);
+            else if (target !== null) pages[target] = saved; else pages.unshift(saved);
             paint();
-            if (hadRows && replacing === null) scroller.scrollTop = beforeTop + scroller.scrollHeight - beforeHeight;
+            if (target === 'changed') find('[data-history-status]').textContent = 'Saved history changed, so it was read again from the newest messages.';
+            if (hadRows && target === null) scroller.scrollTop = beforeTop + scroller.scrollHeight - beforeHeight;
         } catch (error) {
             if (closed || version !== generation) return;
             find('[data-history-status]').textContent = error?.message || String(error);
             find('[data-history-status]').dataset.tone = 'error';
-            retry = () => loadPage(askedCursor, replacing); find('[data-history-retry]').hidden = false;
+            retry = () => loadPage(cursor, target); find('[data-history-retry]').hidden = false;
         } finally {
-            if (!closed && version === generation) { busy = false; find('[data-history-older]').disabled = false; }
+            if (!closed && version === generation) {
+                busy = false; find('[data-history-older]').disabled = false; find('[data-history-refresh]').disabled = false;
+                // A control disabled while it read, or gone with its range, dropped the focus: give it back
+                // within the reader, never to the page. Focus moved elsewhere meanwhile stays there.
+                const active = document.activeElement;
+                if (focused && (!active || active === document.body || (host.contains(active) && active.hidden))) {
+                    const older = find('[data-history-older]');
+                    (focused.isConnected && !focused.hidden ? focused : older.hidden ? find('[data-history-refresh]') : older)
+                        .focus({ preventScroll: true });
+                }
+            }
         }
     }
     const click = (event) => {
         if (event.target.closest('[data-history-back]')) { onBack(); return; }
         if (event.target.closest('[data-history-retry]')) { void retry?.(); return; }
+        if (event.target.closest('[data-history-refresh]')) { void loadPage(null, 'chain'); return; }
         const range = event.target.closest('[data-history-range]');
         if (range) { const index = Number(range.dataset.historyRange); void loadPage(pages[index].askedCursor, index); return; }
         if (event.target.closest('[data-history-older]')) void loadPage(pages[0]?.page.next_cursor);

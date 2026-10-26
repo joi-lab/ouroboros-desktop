@@ -150,6 +150,13 @@
  */
 
 /**
+ * An earlier message its connector imported: platform authorship and Host receipt time; `ts` is its send time.
+ * @typedef {Object} PlaceHistoryImport
+ * @property {'participant'|'platform_account'} authorship
+ * @property {string} received_at
+ */
+
+/**
  * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
  * @typedef {Object} PlaceHistoryFacts
  * @property {'message'|'notice'|'delivery'} kind
@@ -163,4 +170,6 @@
  * @property {boolean=} held
  * @property {boolean=} checked
  * @property {PlaceIdentity=} identity
+ * @property {PlaceHistoryImport=} historical_import  // never owner confirmation or attention
+ * @property {string=} sent_at  // the provider send time its arrival recorded; absent: unknown, never inferred
  */

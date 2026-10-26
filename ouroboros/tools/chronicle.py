@@ -68,6 +68,7 @@ from ouroboros.utils import utc_now_iso
 
 _LINEAGE = ("task_id", "parent_task_id", "root_task_id")
 _ORDER = "older to newer"
+_ROW_ORDER = "stored order"  # chat rows by address (``_read_rows``), whatever order their room reads in
 
 # --- shared --------------------------------------------------------------------------------------
 
@@ -675,6 +676,9 @@ def _read_records(root: Path, room: str, after_seq: int, limit: int) -> str:
 
 
 def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit: int) -> str:
+    """One room's chat rows by address in stored order: from/to and ``next: from=`` bound stored positions
+    (``chat_chain.iter_room_rows``). A room holding imported earlier messages reads by send time in its
+    view and ``chat_history``; here they stand where they were stored, and every page names the order."""
     try:
         int(room)
     except ValueError as exc:
@@ -702,8 +706,8 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
 
     def continuation(k: int, done: bool) -> str:
         if done:
-            return f"complete: no further rows ({_ORDER})"
-        return f"next: from={chat_chain.format_address(kept[k][0])} (same room and filters; {_ORDER})"
+            return f"complete: no further rows ({_ROW_ORDER})"
+        return f"next: from={chat_chain.format_address(kept[k][0])} (same room and filters; {_ROW_ORDER})"
 
     text, shown = _fit(head, texts, exhausted, continuation, limit)
     if shown or not kept:
@@ -711,12 +715,12 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
     address, row, _pos = kept[0]  # one row larger than a page: its words by character window
     header, words = lines[0][0], render_row_text(row)
     after = continuation(1, exhausted and len(kept) == 1)
-    resume = f"next: from={chat_chain.format_address(address)} start={len(words)} (same room and filters; {_ORDER})"
+    resume = f"next: from={chat_chain.format_address(address)} start={len(words)} (same room and filters; {_ROW_ORDER})"
     marker = f"(chars {len(words)}–{len(words)} of {len(words)}) "
     room_left = max(limit - len(head) - max(len(resume), len(after)) - len(header) - len(marker) - 3, 0)
     begin = min(offset, len(words))
     end = min(begin + room_left, len(words))
-    cont = (f"next: from={chat_chain.format_address(address)} start={end} (same room and filters; {_ORDER})"
+    cont = (f"next: from={chat_chain.format_address(address)} start={end} (same room and filters; {_ROW_ORDER})"
             if end < len(words) else after)
     return f"{head}\n{cont}\n{header} (chars {begin}–{end} of {len(words)}) {words[begin:end]}"
 
@@ -1064,7 +1068,7 @@ def chronicle_tools() -> List[ToolEntry]:
         "node_id": {"type": "string", "description": "One record: as it acts now, its host stamp, coverage, original text, corrections and decisions."},
         "room_id": {**room, "description": room["description"] + " '*' lists every live room as one directory line (label, period, counts, reader); 'candidates' lists the helper drafts awaiting my decision."},
         "after_seq": {"type": "integer", "minimum": 0, "description": "Room records and active marks after this sequence (the previous page's next_after_seq)."},
-        "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period."},
+        "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period, in stored order (the order from/to and next: from= follow). A room holding imported earlier messages reads by send time in its view and chat_history; here each stands where it was stored."},
         "from": address, "to": address,
         "task_id": {"type": "string", "description": "rows: only rows of this task (its own, parent or root lineage)."},
         "period": {"type": "object", "additionalProperties": False, "description": "rows: inclusive ISO-8601 bounds.",
@@ -1103,7 +1107,7 @@ def chronicle_tools() -> List[ToolEntry]:
             write, ["kind"]), _chronicle_write),
         ToolEntry("memory_read", schema(
             "memory_read",
-            "Read memory by address, as text: a room's records and active marks (first line: room and head), one record with its stamp and corrections (node_id; an account also names each source's version, what changed in it since, and the accounts a record informs; revision= reads a record as of one revision), a room's chat rows verbatim (rows=true with from/to, task_id or period), or a retained source (source_ref). Every page fits one tool result and its second line names the continuation (next_after_seq, next: from=…, or next_start), older to newer. Choose the depth yourself.",
+            "Read memory by address, as text: a room's records and active marks (first line: room and head), one record with its stamp and corrections (node_id; an account also names each source's version, what changed in it since, and the accounts a record informs; revision= reads a record as of one revision), a room's chat rows verbatim (rows=true with from/to, task_id or period), or a retained source (source_ref). Every page fits one tool result and its second line names the continuation (next_after_seq, next: from=…, or next_start), older to newer; chat rows in stored order. Choose the depth yourself.",
             read, []), _memory_read),
         ToolEntry("memory_mark", schema(
             "memory_mark",
