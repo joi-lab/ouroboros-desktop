@@ -26,7 +26,7 @@ export function connectionRows(value) {
 
 /** An added key's stored name, derived once from its label: lower-case words joined by `-`, unique in its card. */
 export function connectionNameFor(label, taken = []) {
-    const base = String(label || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    const base = String(label || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
         .replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 32).replace(/-+$/, '') || 'key';
     const used = new Set(['default', ...taken]);
     if (!used.has(base)) return base;
