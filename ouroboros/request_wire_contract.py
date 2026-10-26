@@ -45,15 +45,12 @@ OPTIONAL_REQUEST_FIELDS = OPTIONAL_SAMPLING_FIELDS + (
     "output_config",
     "thinking",
     "parallel_tool_calls",
-    "stream", "stream_options",
-    "prompt_cache_key",
+    "stream", "stream_options", "prompt_cache_key",
 )
 NESTED_REASONING_FIELD = "extra_body.reasoning"
 NESTED_THINKING_FIELD = "extra_body.thinking"
 ANTHROPIC_REASONING_FIELDS = ("thinking", "output_config")
-# Prompt-cache hint carriers a server may refuse, narrowest first: the ``ttl`` of every
-# marker, the tool-level markers, every marker (``request_wire_receipts.cache_hint_holders``).
-CACHE_HINT_FIELDS = ("cache_control.ttl", "tools.cache_control", "cache_control")
+CACHE_HINT_FIELDS = ("cache_control.ttl", "tools.cache_control", "cache_control")  # narrowest first: cache_hint_holders
 DROP_FIELDS = frozenset((*OPTIONAL_REQUEST_FIELDS, NESTED_REASONING_FIELD, *CACHE_HINT_FIELDS))
 
 TOOL_DIALECTS = frozenset({

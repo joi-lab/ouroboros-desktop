@@ -169,6 +169,24 @@ def test_the_compatible_lane_sends_the_canonical_markers_and_the_governance_key(
     assert re.fullmatch(r"ouroboros-[0-9a-f]{32}", kwargs["prompt_cache_key"])
 
 
+def test_the_finalizer_owns_the_compatible_schema_marker_and_ttl(evidence_root):
+    """The builder leaves tools unmarked; the send-time finalizer marks the last schema
+    within the cap and stamps the owner's TTL, as on the other normalizing routes."""
+    client = LLMClient(api_key="unused")
+    review_pack = [{"role": "system", "content": [
+        {"type": "text", "text": "stable governance", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": "mutable evidence"}]}, {"role": "user", "content": "review this"}]
+    kwargs = client._build_remote_kwargs(_target(), review_pack, "high", 512, "auto", None,
+                                         copy.deepcopy(TOOLS), skip_capability_fetch=True)
+    assert all("cache_control" not in tool for tool in kwargs["tools"])
+    assert client._normalize_payload_cache_ttl(_target(), kwargs) == "1h"
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in kwargs["tools"][0]
+    assert [block.get("cache_control") for block in kwargs["messages"][0]["content"]] == [
+        {"type": "ephemeral", "ttl": "1h"}, None]
+    assert kwargs["messages"][1]["content"] == "review this"  # an unsealed prompt keeps its shape
+
+
 @pytest.mark.parametrize("setting,expected,report", [
     ("5m", {"type": "ephemeral", "ttl": "5m"}, "5m"),
     ("default", {"type": "ephemeral"}, "default"),
