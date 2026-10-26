@@ -659,8 +659,9 @@ def build(root: Any, k: int) -> Dict[str, Any]:
     (root / "state").mkdir(parents=True, exist_ok=True)
     state.init(root, 100.0)
     state.init_state()  # a first boot's state, before any history exists
-    (root / "settings.json").write_text(json.dumps({"TOTAL_BUDGET": 100, "OUROBOROS_MAX_WORKERS": 2}),
-                                        encoding="utf-8")
+    # No fallback model: the turn law (B10) ends a turn at its first model request, which the driver refuses.
+    (root / "settings.json").write_text(json.dumps({"TOTAL_BUDGET": 100, "OUROBOROS_MAX_WORKERS": 2,
+                                                    "OUROBOROS_MODEL_FALLBACKS": []}), encoding="utf-8")
     facts: Dict[str, Any] = {"k": k}
     steps: Dict[str, float] = {}
     facts["consciousness_roots"] = _consciousness_journal(root, k)  # before the first money write opens the store

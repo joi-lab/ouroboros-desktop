@@ -48,7 +48,9 @@
  * @property {Array<ProjectEntry>} projects  // active/deleting sidebar projection
  * @property {Array<number>} project_chat_ids  // complete (uncapped) project chat_ids — WS fan-out isolation SSOT (v6.32.0)
  * @property {?number=} main_visible_revision  // Main's room revision (its standalone messages, as a Project's visible_revision counts); null while unreadable
- * @property {Object<string, {project_id: string, chat_id: number, origin_bound?: boolean}>} task_bindings  // bound task -> its project: suppress the stray "turn into project" button (v6.33.0 P2) + render a pointer that opens the project panel (v6.33.0 F4). origin_bound marks a task the host included because its OWNER MESSAGE already has a project (#902), so one message cannot keep a second convertible card
+ * @property {?Object<string, {project_id: string, chat_id: number, origin_bound?: boolean}>} task_bindings  // null only when task_bindings_unchanged; bound task -> its project: suppress the stray "turn into project" button (v6.33.0 P2) + render a pointer that opens the project panel (v6.33.0 F4). origin_bound marks a task the host included because its OWNER MESSAGE already has a project (#902), so one message cannot keep a second convertible card
+ * @property {string} task_bindings_revision  // opaque revision of task_bindings; '' after a failed read (never held)
+ * @property {boolean} task_bindings_unchanged  // the request's bindings_since names this revision: keep the held map
  * @property {ActiveDirectTurn[]=} active_direct_turns  // active direct/ephemeral chat turns snapshot
  * @property {boolean=} active_chat_activities_complete
  * @property {ActiveChatActivity[]=} active_chat_activities  // combined snapshot: direct/ephemeral turns + root managed queue tasks
@@ -120,6 +122,7 @@
  * @typedef {Object} ProviderTestRequest
  * @property {string} provider_id
  * @property {Object<string, string>=} overrides
+ * @property {string=} connection
  */
 /**
  * @typedef {Object} ProviderTestResponse
@@ -160,6 +163,7 @@
  * @property {AvailableSubagentsSettingsMeta=} available_subagents
  * @property {SettingsPolicyState=} policy_state
  * @property {{restart_required:boolean,restart_keys:string[],restart_source_unknown_keys:string[],unknown_keys:string[],local_model:Object,summary:string}=} restart_state Component application and source uncertainty.
+ * @property {{kind:string,name:string,label:string,builtin:boolean,enabled:boolean,configured:boolean,source:string,id:string,display:string}[]=} connections Every API connection as the picker shows it.
  */
 /**
  * @typedef {Object} SettingsPolicyState
@@ -857,7 +861,6 @@
  * @property {string} branch
  * @property {string} sha
  */
-
 /**
  * `POST /api/settings` success; `restart_keys` apply only after a restart.
  * @typedef {Object} SettingsSaveResponse
@@ -871,15 +874,14 @@
  * @property {string[]=} warnings
  * @property {Object<string, string>=} ignored_keys
  * @property {boolean=} agent_task_running
+ * @property {Object[]=} connection_references Rows naming a connection that cannot serve them: {setting, entry?, route, connection, reason}.
  */
-
 /**
  * @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode
  * @property {boolean} restart_required
  */
-
 /**
  * @typedef {Object} OwnerAutoGrantResponse
  * @property {boolean} ok

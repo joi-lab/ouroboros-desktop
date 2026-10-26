@@ -109,12 +109,16 @@ def route_observation_scope(route, settings) -> str:
     import hashlib
     import json
     from ouroboros.capability_evidence import route_fingerprint
+    from ouroboros.llm_attempt import ConnectionUnavailable
     from ouroboros.response_limits import dispatch_target
 
     if route["provider"] == "claudexor":
         return route_fingerprint(provider=route["provider"], model=route["model"],
             base_url=route["base_url"], options=route["options"]) if route["options"].get("account_fingerprint") else ""
-    target = dict(route, keyless=True) if route["use_local"] else dispatch_target(route["model"], settings)
+    try:
+        target = dict(route, keyless=True) if route["use_local"] else dispatch_target(route["model"], settings)
+    except ConnectionUnavailable:
+        return ""  # a refused connection sends nothing, so it has no observations to scope
     credentials = {key: target.get(key, "") for key in ("api_key", "user", "password", "scope")}
     if not any(credentials.values()) and not target.get("keyless"):
         return ""
@@ -128,7 +132,7 @@ def resolve_window(evidence, reserve: int, *, root=None, bound: bool = True,
     from ouroboros import capability_evidence as ce
 
     fp = observation_scope(evidence) if observation_fp is None else observation_fp
-    rows = ((ce._load(root or ce.canonical_evidence_root()).get("main_windows", {}).get(fp) or {})
+    rows = ((ce._read(root or ce.canonical_evidence_root()).get("main_windows", {}).get(fp) or {})
             .get("observations", [])) if bound and fp else []
     accepted = max((row.get("accepted", 0) for row in rows), default=0)
     accepted_at = next((row["ts"] for row in rows if accepted and row.get("accepted") == accepted), "")

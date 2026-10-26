@@ -260,6 +260,8 @@ def ordered_candidates(root: pathlib.Path, packable: List[str], *, rows: Optiona
         except (TypeError, ValueError):
             return 0
 
+    if not packable:  # nothing to order: no sidecar is read
+        return []
     newest_pack = max((timestamp(sidecar.get("created_at")) for _, sidecar in packs.list_sidecars(root)), default=0)
     recent, backfill = [], []
     for task in packable:
@@ -358,7 +360,9 @@ def run_pass(root: pathlib.Path, *, sweep=None, since: Optional[int] = None, owe
             report["swept"] += 1
     candidates = ordered_candidates(root, packable, rows=rows)
     report["candidates"] = len(candidates)
-    listing = packs.list_sidecars(root)
+    # A pass from a position reads each candidate's own sidecars by name (``published_generations``); a whole
+    # census (no position: the first run, a repair) shares one listing of them all.
+    listing = packs.list_sidecars(root) if since is None and candidates else None
     if candidates:
         sweep.collect_keep(keep_rows(root))
     for task, raw in candidates:

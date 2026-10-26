@@ -43,6 +43,7 @@ from ouroboros.deadline_utils import parse_deadline_ts, utc_now
 from ouroboros.utils import (
     atomic_write_json,
     is_credential_header_name,
+    json_snapshot,
     read_json_dict,
     utc_now_iso,
 )
@@ -300,6 +301,12 @@ def _load(drive_root: Any) -> Dict[str, Any]:
     }
 
 
+def _read(drive_root: Any) -> Dict[str, Any]:
+    """The store as readers share it: one parse per file identity (``json_snapshot``), never
+    mutated; a writer's ``_load`` takes its own fresh copy under ``_STORE_LOCK``."""
+    return json_snapshot(_store_path(drive_root)) or {}
+
+
 def _save(drive_root: Any, data: Dict[str, Any]) -> bool:
     path = _store_path(drive_root)
     try:
@@ -409,7 +416,7 @@ def get_effort_ceiling(drive_root: Any, fingerprint: str) -> str:
     if not fp:
         return ""
     try:
-        entry = _load(drive_root).get("effort_ceilings", {}).get(fp)
+        entry = _read(drive_root).get("effort_ceilings", {}).get(fp)
         return str((entry or {}).get("ceiling") or "").strip().lower()
     except Exception:
         return ""
@@ -464,7 +471,7 @@ def get_effort_floor(drive_root: Any, fingerprint: str) -> str:
     if not fp:
         return ""
     try:
-        entry = _load(drive_root).get("effort_floors", {}).get(fp) or {}
+        entry = _read(drive_root).get("effort_floors", {}).get(fp) or {}
         if _age_seconds(str(entry.get("observed_at") or "")) >= _EFFORT_FLOORS_TTL_SEC:
             return ""
         return str(entry.get("floor") or "").strip().lower()
@@ -519,7 +526,7 @@ def get_rejected_params(drive_root: Any, fingerprint: str) -> Set[str]:
     if not fp:
         return set()
     try:
-        entry = _load(drive_root).get("rejected_params", {}).get(fp) or {}
+        entry = _read(drive_root).get("rejected_params", {}).get(fp) or {}
         if _age_seconds(str(entry.get("observed_at") or "")) >= _REJECTED_PARAMS_TTL_SEC:
             return set()
         return {str(p) for p in (entry.get("params") or []) if str(p or "").strip()}
@@ -702,7 +709,7 @@ def get_token_density(drive_root: Any, fingerprint: str) -> float:
     if not fp:
         return 0.0
     try:
-        pairs = (_load(drive_root).get("token_density", {}).get(fp) or {}).get("pairs") or []
+        pairs = (_read(drive_root).get("token_density", {}).get(fp) or {}).get("pairs") or []
         return max([
             _density_of(pair.get("prompt_chars"), pair.get("prompt_tokens"))
             for pair in pairs
@@ -757,7 +764,7 @@ def resolve_main_token_density(
     within a factor of two. A small helper cannot calibrate a large conversation.
     """
     try:
-        store = _load(drive_root).get("token_density", {}) or {}
+        store = _read(drive_root).get("token_density", {}) or {}
         route = str(route_fp or "").strip()
 
         def comparable(item):
@@ -776,7 +783,8 @@ def resolve_main_token_density(
     except Exception:
         pass
     # Empirical tokenizer classes (audit D8), never a per-model window table.
-    native = str(model_id).lower().removeprefix("claudexor::")
+    from ouroboros.provider_models import parse_model_route
+    native = parse_model_route(str(model_id).lower()).model
     return (4 / 2.7 if "claude" in native else 1.0), "cold_estimate"
 
 
@@ -796,7 +804,7 @@ def resolve_review_token_density(drive_root: Any, model_id: str) -> Tuple[float,
     1.81 sized gpt-5.6-terra, measured 0.87-0.96, at 1.90 and cut its scope cap
     from 575,757 to 499,627 of a 1,050,000-token window)."""
     try:
-        store = _load(drive_root).get("token_density", {}) or {}
+        store = _read(drive_root).get("token_density", {}) or {}
         exact = _fresh_density_pairs(store, _normalized_density_model(model_id))
         if exact:
             return max(item[1] for item in exact) * MEASURED_DENSITY_SAFETY_FACTOR, "measured"
@@ -867,7 +875,7 @@ def retired_owner_ack(record: Any) -> bool:
 
 
 def list_owner_acks(drive_root: Any) -> List[Dict[str, Any]]:
-    return [{**row, "retired": retired_owner_ack(row)} for row in _load(drive_root).get("owner_acks", {}).values()]
+    return [{**row, "retired": retired_owner_ack(row)} for row in _read(drive_root).get("owner_acks", {}).values()]
 
 
 def revoke_owner_ack(drive_root: Any, route_fp: str) -> bool:
@@ -967,15 +975,14 @@ def _openai_compatible_metadata_window(
 
     ``api_key`` may be passed by callers that already hold the key in scope (e.g.
     the settings-save gate, which has the not-yet-persisted value in ``current``).
-    When omitted the function falls back to the already-saved settings on disk."""
+    When omitted it is the key of the connection ``model`` names (``_route_api_key``)."""
     if not allow_fetch or not str(base_url or "").strip() or not str(model or "").strip():
         return 0
     try:
         import httpx
 
         if api_key is None:
-            from ouroboros.config import runtime_settings
-            api_key = str((runtime_settings() or {}).get("OPENAI_COMPATIBLE_API_KEY") or "")
+            api_key = _route_api_key(model)
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         from ouroboros.net_transport import verify_kwargs
         resp = httpx.get(str(base_url).rstrip("/") + "/models", headers=headers, timeout=5.0, **verify_kwargs())
@@ -985,9 +992,10 @@ def _openai_compatible_metadata_window(
         if provider == "openai-compatible":  # MiniMax /models carries no modality field
             from ouroboros.vision_routing import record_catalog_image_input
             record_catalog_image_input(provider, base_url, items, source="the OpenAI-compatible gateway's /models")
-        # The saved model is normally provider-prefixed (e.g. ``openai-compatible::llama-3``)
+        # The saved model is normally route-prefixed (e.g. ``openai-compatible::llama-3``)
         # while /models lists the BARE id — match either spelling.
-        wanted = {str(model), str(model).split("::", 1)[-1]}
+        from ouroboros.provider_models import parse_model_route
+        wanted = {str(model), parse_model_route(model).model}
         matched = [item for item in (items or []) if isinstance(item, dict)
                    and str(item.get("id") or item.get("name") or "") in wanted]
         from ouroboros.response_limits import positive_limit, record_metadata_limit
@@ -1007,6 +1015,16 @@ def _openai_compatible_metadata_window(
         return 0
 
 
+def _route_api_key(model: str) -> str:
+    """The key of the connection ``model`` names, from the one resolver: never another
+    connection's (a default key sent to a named endpoint), '' when the route cannot serve."""
+    try:
+        from ouroboros.llm_routing import resolve_target
+        return str(resolve_target(model).get("api_key") or "")
+    except Exception:
+        return ""
+
+
 def _provider_metadata_window(
     provider: str, model: str, base_url: str, allow_fetch: bool, api_key: Optional[str] = None
 ) -> Tuple[int, str]:
@@ -1016,18 +1034,14 @@ def _provider_metadata_window(
     if "openrouter" in p or (not p and "/" in str(model or "")):
         try:
             from ouroboros.llm import LLMClient
-            window = LLMClient.openrouter_context_length(model, allow_fetch=allow_fetch)
+            from ouroboros.provider_models import parse_model_route
+            # The catalog lists native ids; a route spelling (``openrouter[@name]::``) names the same model.
+            window = LLMClient.openrouter_context_length(parse_model_route(model).model, allow_fetch=allow_fetch)
             return int(window or 0), LLMClient._CONTEXT_LENGTH_OBSERVED_AT
         except Exception:
             return 0, ""
     # CW6: OpenAI-compatible /models probe (vLLM/Ollama/...) before falling to unprobeable.
     if p in {"openai-compatible", "minimax"}:
-        if p == "minimax" and api_key is None:
-            try:
-                from ouroboros.config import runtime_settings
-                api_key = str((runtime_settings() or {}).get("MINIMAX_API_KEY") or "")
-            except Exception:
-                api_key = ""
         window = _openai_compatible_metadata_window(model, base_url, allow_fetch, api_key=api_key, provider=p)
         return window, utc_now_iso() if window else ""
     # GigaChat's /models (aget_models) lists model ids but does NOT publish a per-model
@@ -1083,7 +1097,7 @@ def _probe_window(
     call. Remote routes use fresh cache -> provider metadata -> unprobeable.
     Network probing is skipped when allow_fetch=False (hot-path callers)."""
     fp = route_fingerprint(provider=provider, base_url=base_url, model=model, headers=headers, options=options)
-    data = _load(drive_root)
+    data = _read(drive_root)
     account_options = options if isinstance(options, dict) else {}
     subscription = provider == "claudexor" and not use_local
     account_bound = all(account_options.get(key) for key in (
@@ -1178,7 +1192,7 @@ def probe(drive_root: Any, **route) -> CapabilityEvidence:
     if is_known(evidence, require_fresh=True):
         evidence.server_window = dict(tokens=evidence.window_tokens, kind=evidence.window_kind,
                                       source=evidence.source, observed_at=evidence.ts)
-    ack = _load(drive_root).get("owner_acks", {}).get(evidence.route_fp)
+    ack = _read(drive_root).get("owner_acks", {}).get(evidence.route_fp)
     options = {**(route.get("options") or {}), **{key: getattr(evidence, key) for key in (
         "source_id", "credential_profile_id", "account_fingerprint") if getattr(evidence, key)}}
     bound = route["provider"] != "claudexor" or all(options.get(key) for key in (

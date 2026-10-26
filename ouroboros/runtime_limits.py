@@ -452,9 +452,9 @@ def get_search_code_wall_sec() -> float:
 def get_finalization_grace_sec(settings: Optional[dict] = None) -> int:
     """Grace window in seconds: env, else the ``settings`` argument, else the
     shipped default — the ``_clamped_number_setting`` shape. Deliberately NO
-    ``load_settings()`` fallback: a READ must never persist settings, and that
-    call runs the context-mode compatibility migration, which can WRITE a
-    normalized file under read-only observers (``task_pacing._reserve_sec``)."""
+    ``load_settings()`` fallback: the caller's document or the environment
+    answers, so a read-only observer (``task_pacing._reserve_sec``) reads no
+    settings file."""
     raw = runtime_setting("OUROBOROS_FINALIZATION_GRACE_SEC")
     if raw is None and isinstance(settings, dict):
         raw = settings.get("OUROBOROS_FINALIZATION_GRACE_SEC")

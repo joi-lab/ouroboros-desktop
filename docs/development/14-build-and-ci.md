@@ -35,9 +35,9 @@ CI runs the default suite in two passes, each owned by `scripts/run_tests.py` be
 
 ### The local battery entry point
 
-`python scripts/run_tests.py` (`make test`) always runs the full Node and default Python battery; pytest arguments select focused work. `--selected [--base REF]` uses the commit selector (default base `HEAD`), prints tier/rule/module count and runs both marker passes with paths. `--extra-test PATH` or `--full-tests` widens it with `--test-reason`. Missing required Node is red `NOT_RUN`. No hermetic proof is minted.
+`python scripts/run_tests.py` (`make test`) always runs the full Node and default Python battery; pytest arguments select focused work. `--selected [--base REF]` uses the commit selector (default base `HEAD`), prints tier/rule/module count and runs both marker passes on them. `--extra-test PATH` or `--full-tests` widens it with `--test-reason`. Missing required Node is red `NOT_RUN`. No hermetic proof is minted.
 
-Full default overlaps bounded `--serial-shards` groups; `--sequential` restores the gate split. Recheck overlap-only failures sequentially. `--evidence-dir DIR` gives each pass its own explicit `--ci-evidence-dir`; selected runs add `selection.json` and full inventory JSONL. Never export evidence via `PYTEST_ADDOPTS`: nested pytest could overwrite its parent's results. The CLI's `safe_test` (below) keeps `OUROBOROS_PREFLIGHT_REQUIRE_*`.
+Full default overlaps duration-sized `--serial-shards` groups; `--sequential` restores the gate split; recheck overlap-only failures with it. `--evidence-dir DIR` gives each pass its own explicit `--ci-evidence-dir`; selected runs add `selection.json` and full inventory JSONL. Never export evidence via `PYTEST_ADDOPTS`: nested pytest could overwrite its parent's results. The CLI's `safe_test` (below) keeps `OUROBOROS_PREFLIGHT_REQUIRE_*`.
 
 ### Safe local verification and dirty browser candidates
 

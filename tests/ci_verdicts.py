@@ -20,6 +20,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import zlib
 
 PHASES = frozenset({"setup", "call", "teardown"})
 # scripts/ci_retry.py: retry round k of a pass runs in <pass>/retry-<k>.
@@ -28,6 +29,13 @@ VERDICTS = frozenset({"green", "flaky", "accepted", "red"})
 SYSTEMS = frozenset({"linux", "darwin", "windows"})
 # The run's weight table (`collect_durations`); the lane plugins read it at collection.
 DURATIONS_ENV = "OUROBOROS_CI_DURATIONS"
+# The xdist group of a serial test in run_tests.py's one-run battery (`serial_group`).
+SERIAL_GROUP = re.compile(r"serial[0-9]+")
+
+
+def serial_group(path: str, shards: int) -> str:
+    """The serial group a test FILE runs in when tests/conftest.py pins ``shards`` of them: a stable hash, no seed."""
+    return f"serial{zlib.crc32(path.encode('utf-8')) % shards}"
 
 
 def write_json(path: Path, value) -> None:
@@ -117,14 +125,16 @@ def durations_table() -> tuple[dict | None, str]:
     def milliseconds(value):
         return isinstance(value, dict) and all(isinstance(key, str) and type(count) is int and count >= 0
                                                for key, count in value.items())
+
+    def per_system(value):
+        return isinstance(value, dict) and all(milliseconds(files) for files in value.values())
     try:
         table = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         return None, f"the durations table is unreadable ({type(error).__name__})"
     source = table.get("source") if isinstance(table, dict) else None
     if not (isinstance(source, dict) and table.get("format") == 1 and isinstance(source.get("run_id"), str)
-            and source["run_id"] and isinstance(table.get("platforms"), dict)
-            and all(milliseconds(files) for files in table["platforms"].values())
+            and source["run_id"] and per_system(table.get("platforms")) and per_system(table.get("serial", {}))
             and milliseconds(table.get("ui_nodes", {}))):
         return None, "the durations table has another shape"
     return table, ""
@@ -175,14 +185,17 @@ def collect_durations(root: Path, *, run_id: str, sha: str) -> dict:
     """One run's weight table for the shards of later runs (tests/default_lane.py, tests/browser_lane.py).
 
     Integer milliseconds, keys sorted: per test FILE and system, the setup, call and
-    teardown time of every report of the default lanes' passes (`platforms`); per node,
-    the same for the UI lane (`ui_nodes`). A pass is a projection carrying a
-    `default_parallel`, `default_serial` or `ui_browser` block, or an unsharded `parallel`
-    or `serial` pass directory without one: the caller decides which artifacts lie under
-    root. Retry rounds, collections without reports, projections of an unknown system
-    and subtest reports (their time lies within their test's call) are left out. Of one
-    pass (system, lane, shard) the highest run attempt counts, then the larger
-    projection, then the first path, so a projection downloaded twice counts once.
+    teardown time of every report of the default lanes' passes (`platforms`) and the part
+    of it the serial tests took (`serial`, scripts/run_tests.py sizes its serial groups
+    by it); per node, the same for the UI lane (`ui_nodes`). A pass is a projection
+    carrying a `default_parallel`, `default_serial` or `ui_browser` block, or an
+    unsharded `parallel`, `serial` or `overlapped` pass directory without one (the last is
+    run_tests.py's one-run battery, whose serial tests carry a `@serial<N>` group): the
+    caller decides which artifacts lie under root. Retry rounds, collections without
+    reports, projections of an unknown system and subtest reports (their time lies within
+    their test's call) are left out. Of one pass (system, lane, shard) the highest run
+    attempt counts, then the larger projection, then the first path, so a projection
+    downloaded twice counts once.
     """
     chosen = {}
     for directory, dirs, files in os.walk(root):
@@ -194,7 +207,7 @@ def collect_durations(root: Path, *, run_id: str, sha: str) -> dict:
             continue
         lane = next((key for key in ("default_parallel", "default_serial", "ui_browser")
                      if isinstance(data.get(key), dict)), None)
-        if lane is None and Path(directory).name not in ("parallel", "serial"):
+        if lane is None and Path(directory).name not in ("parallel", "serial", "overlapped"):
             continue
         identity = data.get("github") if isinstance(data.get("github"), dict) else {}
         attempt = identity.get("run_attempt")
@@ -202,7 +215,7 @@ def collect_durations(root: Path, *, run_id: str, sha: str) -> dict:
         key = (system_of(data), lane or Path(directory).name, str(data[lane].get("shard")) if lane else "")
         if key not in chosen or rank > chosen[key][0]:
             chosen[key] = (rank, data)
-    files, nodes = {}, {}
+    files, serial, nodes = {}, {}, {}
     for (name, lane, _), (_, data) in chosen.items():
         for row in data["reports"]:
             seconds = row.get("duration_seconds")
@@ -210,14 +223,18 @@ def collect_durations(root: Path, *, run_id: str, sha: str) -> dict:
                 seconds = 0
             if lane == "ui_browser":
                 nodes[row["nodeid"]] = nodes.get(row["nodeid"], 0) + max(seconds, 0)
-            else:
-                totals = files.setdefault(name, {})
-                path = row["nodeid"].split("::", 1)[0]
+                continue
+            path = row["nodeid"].split("::", 1)[0]
+            parts = [files] + ([serial] if lane in ("default_serial", "serial") or (
+                lane == "overlapped" and SERIAL_GROUP.fullmatch(row["nodeid"].rpartition("@")[2])) else [])
+            for part in parts:
+                totals = part.setdefault(name, {})
                 totals[path] = totals.get(path, 0) + max(seconds, 0)
 
     def milliseconds(totals):
         return {key: round(totals[key] * 1000) for key in sorted(totals)}
     return {"format": 1, "platforms": {name: milliseconds(files[name]) for name in sorted(files)},
+            "serial": {name: milliseconds(serial[name]) for name in sorted(serial)},
             "source": {"run_id": run_id, "sha": sha}, "ui_nodes": milliseconds(nodes)}
 
 

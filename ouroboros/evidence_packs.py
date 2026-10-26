@@ -941,8 +941,10 @@ def loose_members(root: Any, task_id: str, *, missing: Optional[list] = None) ->
 
 
 def published_generations(root: Any, task_id: str, listing: Optional[list] = None) -> List[Dict[str, Any]]:
-    """This task's published sidecars, oldest generation first (``listing``: one shared ``list_sidecars``)."""
-    found = [sidecar for _, sidecar in (list_sidecars(root) if listing is None else listing) if sidecar["task_id"] == str(task_id)]
+    """This task's published sidecars, oldest generation first: those its names spell (``_task_sidecar_names``),
+    or of one shared ``listing``; a homonym's (``a.2`` generation 1 beside ``a``) is told by its own ``task_id``."""
+    found = [sidecar for _, sidecar in (list_sidecars(root, names=_task_sidecar_names(root, task_id))
+                                        if listing is None else listing) if sidecar["task_id"] == str(task_id)]
     return sorted(found, key=lambda sidecar: int(sidecar["generation"]))
 
 

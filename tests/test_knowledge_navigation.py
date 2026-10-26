@@ -118,3 +118,72 @@ def test_navigation_keeps_native_parser_gaps_visible_for_titled_archived_notes(t
     assert note.state == "active" and note.parse_error
     text = store.knowledge_index_view(address)
     assert "**topic**" in text and "source metadata unavailable" in text
+
+
+def _navigation_parses(monkeypatch) -> list:
+    seen, real = [], store.parse_markdown_navigation
+    monkeypatch.setattr(store, "parse_markdown_navigation", lambda raw, path: seen.append(path) or real(raw, path))
+    return seen
+
+
+def _shelf(tmp_path, notes):
+    address = store.resolve_knowledge_address(tmp_path, "topic")
+    address.shelf.mkdir(parents=True, exist_ok=True)
+    for topic, text in notes.items():
+        (address.shelf / f"{topic}.md").write_text(text, encoding="utf-8")
+    return address
+
+
+def test_a_notes_navigation_is_parsed_once_per_content(tmp_path, monkeypatch):
+    from ouroboros import utils
+
+    monkeypatch.setattr(utils, "_RACY_NS", 0)  # trust notes as written (the clock-tick rule has its own case)
+    address = _shelf(tmp_path, {"alpha": "---\nsummary: First\n---\n# Alpha\n", "beta": "# Beta\nBody.\n"})
+    parses = _navigation_parses(monkeypatch)
+    first = store.knowledge_index_view(address)
+    assert len(parses) == 2 and "First" in first
+
+    assert store.knowledge_index_view(address) == first and len(parses) == 2
+    alpha = store.resolve_knowledge_address(tmp_path, "alpha")
+    assert store.write_knowledge_note(alpha, "---\nsummary: Second\n---\n# Alpha\n",
+                                      expected_revision=store.read_knowledge_note(alpha).revision).ok  # a rename
+    assert "Second" in store.knowledge_index_view(address) and len(parses) == 3  # the writer's index read it
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX change time; Windows compares the bytes' digest")
+def test_an_in_place_edit_that_restores_size_and_mtime_is_parsed_again(tmp_path, monkeypatch):
+    import os
+
+    from ouroboros import utils
+
+    monkeypatch.setattr(utils, "_RACY_NS", 0)
+    address = _shelf(tmp_path, {"alpha": "---\nsummary: Before\n---\n# Alpha\n"})
+    assert "Before" in store.knowledge_index_view(address)
+    path, before = address.shelf / "alpha.md", (address.shelf / "alpha.md").stat()
+    path.write_text("---\nsummary: Behind\n---\n# Alpha\n", encoding="utf-8")  # same size, same inode
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert "Behind" in store.knowledge_index_view(address)
+
+
+def test_a_note_changed_within_a_clock_tick_is_never_kept(tmp_path, monkeypatch):
+    from ouroboros import utils
+
+    monkeypatch.setattr(utils, "file_identity", lambda st: (st.st_dev, st.st_ino, st.st_size))  # a clock that did not move
+    address = _shelf(tmp_path, {"alpha": "---\nsummary: Before\n---\n# Alpha\n"})
+    assert "Before" in store.knowledge_index_view(address)
+    (address.shelf / "alpha.md").write_text("---\nsummary: Behind\n---\n# Alpha\n", encoding="utf-8")
+
+    assert "Behind" in store.knowledge_index_view(address)
+
+
+def test_a_deleted_note_leaves_the_index_and_the_memo(tmp_path, monkeypatch):
+    from ouroboros import utils
+
+    monkeypatch.setattr(utils, "_RACY_NS", 0)
+    address = _shelf(tmp_path, {"alpha": "# Alpha\n", "beta": "# Beta\n"})
+    assert "**beta**" in store.knowledge_index_view(address)
+    (address.shelf / "beta.md").unlink()
+
+    assert "**beta**" not in store.knowledge_index_view(address)
+    assert {held.topic for held in store._NAVIGATION if held.shelf == address.shelf} == {"alpha"}
