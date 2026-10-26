@@ -136,6 +136,35 @@ def test_a_busy_index_is_contention_never_a_corrupt_file_to_delete(tmp_path):
     assert chronicle.get(kept["id"])["text"] == "kept"
 
 
+def test_the_index_is_locked_before_the_authority_append_so_a_durable_write_never_reports_busy(tmp_path, monkeypatch):
+    """A lock-free reader that began between the trial and the journal append could hold the index past the
+    publisher's wait, and a write already durable in ``records.jsonl`` was reported busy (a retry wrote it twice). The
+    publisher takes the index's write lock before it appends: a reader begun then waits for the commit, and a busy
+    index refuses before anything is appended."""
+    import sqlite3
+
+    chronicle = ChronicleStore(tmp_path)
+    _note(chronicle, "first")
+    seen, real_append = [], chronicle_store.append_jsonl
+
+    def append_while_a_reader_begins(path, *args, **kwargs):
+        reader = sqlite3.connect(f"{chronicle.index_path.absolute().as_uri()}?mode=ro", uri=True, timeout=0)
+        try:
+            reader.execute("BEGIN")
+            reader.execute("SELECT COUNT(*) FROM records").fetchone()
+            seen.append("read")
+        except sqlite3.OperationalError as exc:
+            seen.append("locked" if "locked" in str(exc) else str(exc))
+        finally:
+            reader.close()
+        return real_append(path, *args, **kwargs)
+
+    monkeypatch.setattr(chronicle_store, "append_jsonl", append_while_a_reader_begins)
+    result = chronicle.write_note(room_id="r", task_id="t1", text="second", author=MIND)
+    assert result.ok and result.reason == "saved" and seen == ["locked"]
+    assert [record["text"] for record in chronicle.room_records("r")] == ["first", "second"]
+
+
 _JSON_ARROW = re.compile(r"->>?\s*'\$")  # SQLite's JSON operators: 3.38+, above the 3.24 floor (store.py)
 
 

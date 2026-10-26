@@ -853,6 +853,8 @@ class ChronicleStore:
         last = prepared[-1] if prepared else None
         if not new and not changed:
             return PublishResult(True, "unchanged", self._get(db, last["id"]) if last else None)
+        if not db.in_transaction:  # lock-free readers drain BEFORE the authority append: busy refuses here, not after it
+            db.execute("BEGIN EXCLUSIVE")
         refusal = pre() if pre is not None and new else None
         if refusal is None:
             refusal = self._trial(db, new, quotes_verified)
