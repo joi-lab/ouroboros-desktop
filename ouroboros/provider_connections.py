@@ -24,8 +24,6 @@ from ouroboros.settings_integrity import runtime_setting
 
 Reader = Callable[..., Any]  # read(flat_setting_key, default) -> the raw saved value
 _ROW_META = ("kind", "name", "label", "enabled")
-# Row fields that hold a credential in some kind (``mask`` treats them as secret even on a junk row).
-SECRET_ROW_FIELDS = frozenset(field for spec in PROVIDER_KINDS.values() for field, _flat, secret in spec.fields if secret)
 
 
 def connection_rows(raw: Any) -> tuple[dict, ...]:

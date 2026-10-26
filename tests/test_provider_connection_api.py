@@ -137,6 +137,10 @@ def test_the_catalog_lists_the_same_model_once_per_connection(monkeypatch):
     assert items["anthropic/claude-opus-5.5"]["provider"] == "Anthropic"  # built-in items are unchanged
     assert sorted(seen) == sorted([("openrouter", "builtin-key"), ("openrouter", BYOK["api_key"]),
                                    ("openai-compatible", "", "https://vllm.example/v1")])  # its own /models
+    from ouroboros.gateway.management_contracts import ModelCatalogResponse
+    from ouroboros.gateway.schema import validate_ingress
+
+    assert not validate_ingress(payload, ModelCatalogResponse)  # the published shape carries named items
 
 
 def _provider_test(payload):
