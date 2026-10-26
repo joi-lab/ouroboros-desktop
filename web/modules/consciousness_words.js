@@ -1,9 +1,17 @@
 import { tr, fmt } from './i18n.js';
 import { taskPresentation } from './log_events.js';
 import { taskCostMeta } from './chat_activity.js';
+import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 
 /** The relay and wake note lead: the author's whole text; the surface alone fits its first words. */
 export const noteLeadText = (text) => String(text ?? '').trim();
+
+/** The same account stamp on wake and delivery rows; account names remain authored. */
+export function sendsAsHtml(sender) {
+    if (!sender?.label) return '';
+    return sender.owner ? escapeHtml(tr('places.identity.as_you', 'as you'))
+        : fmt('as {label}', { label: `<span data-i18n-authored>${escapeHtml(sender.label)}</span>` });
+}
 
 // The owner's words for consciousness, places and safety (owner's final names, 21.10), in one place.
 // Stored values never change: only these words do, so a relabel is one line here. Pure data and pure

@@ -147,6 +147,7 @@ test('notes invite a letter without saving the placeholder and disclose each kno
         const notes = host.querySelector('[data-place-section="notes"]');
         const field = notes.querySelector('textarea');
         assert.equal(field.getAttribute('placeholder'), questions);
+        assert.equal(field.getAttribute('rows'), '6', 'the empty letter has room to show its questions');
         assert.equal(field.textContent, '');
         assert.ok(field.hasAttribute('data-i18n-authored'));
         assert.ok(notes.textContent.includes(`${sentence} Silent and Paused are locks; words are not.`));
@@ -155,6 +156,7 @@ test('notes invite a letter without saving the placeholder and disclose each kno
     }
     host.innerHTML = placeSheetBodyHtml(slack, { drafts: { note: 'My own words' } });
     assert.equal(host.querySelector('textarea').textContent, 'My own words');
+    assert.equal(host.querySelector('textarea').getAttribute('rows'), '2', 'existing notes keep the compact editor');
     assert.equal(placeChangeFor('add-note', slack, { drafts: {} }), null);
     assert.match(host.textContent, /the Safety Supervisor treats yours as your instructions/);
     assert.doesNotMatch(host.textContent, /Silent and Paused are locks/);

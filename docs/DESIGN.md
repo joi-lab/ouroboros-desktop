@@ -1834,78 +1834,83 @@ owns the item.
 
 ### Dashboard › Consciousness
 
-The headline says the server's current state, independently of the recent rows.
-“Due; waiting for current work” preserves a due clock without promising a new
-turn while work is still live. Recent wakes names its coverage: “wakes that
-reached a model call in the last 48 h”. An empty window and an unavailable read
-differ: “No wakes in the last 48 h.” versus an authored warning retaining earlier
-rows. Neither describes whether consciousness is switched on.
+The headline reports server state independently of recent wakes.
+“Due; waiting for current work” promises no turn yet. Coverage is “wakes that
+reached a model call in the last 48 h”: “No wakes in the last 48 h.” means empty;
+unavailable reads retain rows with an authored warning. Neither means Off.
 
-A Recent wakes row shows time, Own time with the house mark or an authored place
-label, phase and known duration, and cost at the edge, using the card's words.
-The authored summary wraps whole. Without it, the note's first words show in meta
-ink on one CSS-ellipsized line; with neither, known counts occupy that line.
-The owner chose this fallback on 25 Oct 2026. The whole note and counts are one
-“more” away; stored words are never clipped, repaired or replaced with a preview.
+Rows show time, Own time with its house mark or a place label, phase,
+duration and edge cost, in card words. Accounts add “as {label}”
+beside the place, or “as you” for the owner; absent identity adds nothing.
+Summaries wrap whole; otherwise the note leads in meta ink on one
+CSS-ellipsized line, then counts if neither exists. Native “more” opens
+“Its own note” with the chat Markdown renderer/enhancer, counts, checks and task
+door. Text is never clipped or rewritten; notes wrap on phones, wide Markdown
+scrolls in its own wrapper.
 
-Native “more” discloses “Its own note” through the chat Markdown renderer
-and enhancer, counts, checks and the task door. The whole note wraps on a
-phone; wide Markdown owns its own horizontal scroller. Working, Waiting, Queued,
-Paused and State unknown remain distinct. “Done · no message” requires a silent
-finish with no accepted owner message and no host notice. A held step is not
-chosen silence; a released output is not proof of delivery. Checks name what
-they checked; only warned, held and sent-despite facts get amber chips. “not checked”
-does not say whether a read was exempt or the Safety Supervisor was off, and
-the row never claims that every call was checked.
+Working, Waiting, Queued, Paused and State unknown stay distinct. “Done · no message”
+requires a silent finish without an accepted owner message or host notice. Holds
+are not chosen silence; release proves no delivery. Checks name their subject;
+only warned, held and sent-despite facts get amber chips. “not checked” explains
+no exemption or Supervisor state; rows never claim every call was checked.
 
-Money keeps the card's scope and uncertainty: confirmed zero is `$0.00`, an
-unavailable amount is “spend unknown”, and a known part retains “Tracked:” and
-any “up to” qualification. Open accounting keeps “so far”; it is no final total.
-The allowance says “Some calls have no price” and “next check at”, never promises
-that the check will permit more work. Visible and accessible words agree.
+Money retains card scope: `$0.00`, “spend unknown”, “Tracked:” and “up to” remain
+distinct; open accounting says “so far”. The allowance's “Some calls have no price”
+and “next check at” promise no admission. Visible and accessible words agree.
 
-“Open in Main ↗” opens the existing card by its task and chat identity through
-the around-history reader. A focus row's door opens its captured conversation
-in the place sheet, where Back returns to the place; a room no place owns
-disables the door and says so. Refresh preserves an
-open row's actual nodes, disclosure, focus, selection and reading position;
-changed content and order wait until it closes. Host words use `tr`/`fmt`;
-summaries, notes and place labels stay under `data-i18n-authored`.
+“Open in Main ↗” locates the card by task/chat through around-history. A focus door
+opens its captured conversation in the place sheet; Back returns to the place.
+An unowned room disables the door and explains why. Refresh keeps open nodes,
+disclosure, focus, selection and position until closure. Host words use `tr`/`fmt`; summaries, notes and names
+stay under `data-i18n-authored`.
 
 #### Places and Connect
 
-A new place starts Silent in the Connect write; it can still wake to read and think, while writes through the connector’s declared tools and delivery queue are held.
-Connect says: “It starts Silent: it hears and thinks there and sends nothing
-until you make it Active.” The place sheet retains the Silent disclosure about
-scripts, browser actions and unintegrated code. Repeat Connect keeps the saved
-state and choices; Paused keeps the connection without admitting a new focus.
+Connect writes Silent atomically: “It starts Silent: it hears and thinks there and
+sends nothing until you make it Active.” Declared connector writes/delivery are
+held; the sheet retains the scripts/browser/unintegrated-code disclosure. Repeat
+Connect preserves choices. Paused keeps the connection without new foci.
 
-The connector carries the service name and monochrome service mark; the technical
-skill id stays in details. The sheet's title is the service and saved instance
-label, with its state beside it. Readiness is separate: “Connector on”, “Off in
-Skills”, “Review required”, “Connector not running” or “Connector unavailable”.
-The connector's own status supplies setup facts; neither Active nor a service
-mark proves readiness. Service, instance and account names, connector status
-and declared signal labels are authored content.
+Connectors supply service names/monochrome marks; technical ids stay in details.
+Titles join service, instance and state. Readiness says: “Connector on”, “Off in Skills”, “Review required”, “Connector not
+running” or “Connector unavailable”. Connector status supplies setup facts;
+Active and service marks prove no readiness. Names, status and declared labels
+are authored content.
 
-“Where” offers instances from the connector's declared status list. An absent
-list offers no instance chooser; known choices keep their labels and exact
-identities; a known empty list says “None offered yet” with its settings door;
-an unreadable list says “Could not read the connector’s list” with “Try again”.
-“Whole account” remains an explicit separate action in each state; a missing
-account on an instance never becomes that choice. Existing identities say
-“Connected · Open”. Connected services stay listed as “Connected · N places ·
-Connect another”; adding a narrower place does not relabel a broad one.
+“Where” uses declared instances and exact identities: absent list, no chooser;
+empty, “None offered yet” with settings; unreadable, “Could not read the connector’s
+list” with “Try again”. “Whole account” is always separate; missing instance accounts
+never imply it. Existing identities say “Connected · Open”; connected services
+retain “Connected · N places · Connect another”. Narrower places never relabel broad ones.
 
-“What calls it here” lists supported kinds, with the connector's suggestions
-selected at Connect and author chips on saved choices. It says “A checked kind
-calls it here at once, when <Service> reports it.” Core kinds use shared words;
-declared signals use their connector's labels and settings. “also wakes on bot
-messages” is itself a wake reason as well as permission to hear bots. Other
-captured events remain observations for the own wake; the mind decides what to
-read, so the sheet must not promise exhaustive reading. A revision conflict
-says “Changed elsewhere; your text is kept”; it keeps the draft for a deliberate
-save against refreshed facts.
+##### Place sheet
+
+“Your accounts here” leads with declared identity: “It writes here as {label}
+· reads as {labels}”. When allowed, unconfirmed user accounts offer “This is
+my account” via “This is me”. Confirmed senders read “It
+writes here as you ({label})”; account-list Remove revokes it.
+Bots read “It writes here as the Ouroboros bot ({label})”, without that action.
+Undeclared identity adds nothing; a reader-only identity names only its readers.
+
+Empty notes ask: “Who am I here? What may I do?
+What calls me at once? What matters here? What must I never do? What do you want to
+see afterwards?” These are hints, never saved words. Below the notes, Full says
+“Ouroboros reads your words every time; the Safety Supervisor reads them before
+actions.” Light says “before some actions”; Off says “the Safety Supervisor is off.”
+Each ends “Silent and Paused are locks; words are not.” Absent Safety keeps the old
+explanation. Notes retain authorship.
+
+“What calls it here” shows supported kinds, connector suggestions at Connect and
+author chips on saved choices: “A checked kind calls it here at once, when <Service>
+reports it.” Declared labels override core words, lowercase only in sentences;
+otherwise core words stay. Signals use connector labels/settings. Bot messages are
+a wake reason and permission to hear bots. Other events are own-wake observations,
+the mind chooses what to read. Conflicts retain drafts: “Changed
+elsewhere; your text is kept”. Saving again uses fresh facts.
+
+Outgoing reader rows say “as {label}” or “as you”. Heard facts accompany
+the reason: core words, connector labels for signals. Whole held replies follow
+the System line, authored and labelled “held, unchecked”. Missing fields add nothing.
 
 ### Voice controls
 

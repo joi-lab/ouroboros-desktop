@@ -65,7 +65,7 @@
  * @property {Object<string,string>|null} reply_destination
  * @property {PlaceIcon} icon
  * @property {PlaceReadiness} readiness
- * @property {PlaceIdentity=} identity
+ * @property {(PlaceIdentity|null)=} identity
  * @property {boolean=} can_confirm
  * @property {'off'|'light'|'full'=} safety_mode
  * @property {Object<string,string>=} labels
@@ -133,4 +133,27 @@
  * @property {string} place_id
  * @property {Array<PlaceRoomSummary>} rooms
  * @property {PlaceRoomsCoverage} coverage
+ */
+
+/**
+ * Retained attention only; no exact wake match is inferred.
+ * @typedef {Object} PlaceHistoryAttention
+ * @property {'heard'|'focus_started'} decision
+ * @property {string=} reason
+ */
+
+/**
+ * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
+ * @typedef {Object} PlaceHistoryFacts
+ * @property {'message'|'notice'|'delivery'} kind
+ * @property {('authored'|'accepted'|'delivered'|'failed'|'uncertain')=} delivery_state
+ * @property {PlaceHistoryAttention=} attention
+ * @property {boolean=} owner_confirmed  // current stored account confirmation
+ * @property {Array<string>=} facts
+ * @property {PlaceIdentityAccount=} sends_as
+ * @property {boolean=} sends_as_owner
+ * @property {string=} held_text
+ * @property {boolean=} held
+ * @property {boolean=} checked
+ * @property {PlaceIdentity=} identity
  */

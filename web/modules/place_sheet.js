@@ -75,7 +75,7 @@ function identityHtml(place) {
     if (!writes && !reads) return '';
     const confirm = sender?.kind === 'user' && !sender.owner && place.canConfirm;
     return `<div class="harness-account-row place-account">
-        <div class="harness-account-main">${[writes, reads].filter(Boolean).join(' · ')}</div>
+        <div class="harness-account-main"><span>${[writes, reads].filter(Boolean).join(' · ')}</span></div>
         ${confirm ? `<div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(sender.id)}" data-actor-label="${escapeHtml(sender.label)}">${escapeHtml(tr('places.account.confirm_identity', 'This is my account'))}</button></div>` : ''}
     </div>`;
 }
@@ -119,7 +119,7 @@ function notesHtml(place, ui) {
         </li>`).join('');
     return `${honesty ? '' : '<p class="place-sheet-note">It reads them at every wake here; the Safety Supervisor treats yours as your instructions.</p>'}
         ${items ? `<ul class="place-note-list">${items}</ul>` : ''}
-        <label class="ui-field">${tr('places.note.new', 'New note')}<textarea class="ui-control consciousness-owner-words" rows="2" data-place-draft="note" data-i18n-authored spellcheck="false" placeholder="${escapeHtml(placeholder)}">${escapeHtml(ui.drafts.note || '')}</textarea></label>
+        <label class="ui-field">${tr('places.note.new', 'New note')}<textarea class="ui-control consciousness-owner-words" rows="${place.notes.length ? 2 : 6}" data-place-draft="note" data-i18n-authored spellcheck="false" placeholder="${escapeHtml(placeholder)}">${escapeHtml(ui.drafts.note || '')}</textarea></label>
         <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="add-note">Add note</button></div>
         ${honesty ? `<p class="place-sheet-note">${escapeHtml(honesty)}</p>` : ''}`;
 }
