@@ -66,8 +66,9 @@ function wakesHtml(place, ui) {
 }
 
 function identityHtml(place, ui) {
-    const withOwner = (entry) => ({ ...entry,
-        owner: entry.kind === 'user' && place.ownerAccounts.some((account) => account.actorId === entry.id) });
+    // The same account-scoped match as the server's owner_account_matches: a confirmation for another account is not this one.
+    const withOwner = (entry) => ({ ...entry, owner: entry.kind === 'user' && place.ownerAccounts.some((account) =>
+        account.actorId === entry.id && (!account.accountId || account.accountId === place.accountId)) });
     const sender = ui.identity?.sends_as && withOwner(ui.identity.sends_as);
     const authored = (label) => `<span data-i18n-authored>${escapeHtml(label)}</span>`;
     const readers = listWords((ui.identity?.reads_as || []).map(withOwner).map((entry) => authored(entry.label)));

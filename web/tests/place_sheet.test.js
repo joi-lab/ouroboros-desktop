@@ -146,6 +146,21 @@ test('status GET supplies the four identity states; a confirmed bot never become
     assert.equal(calls.filter((url) => url === statusUrl).length, 5);
 });
 
+test('a confirmation scoped to another account is not this sender; the same or no scope is', async (t) => {
+    const { document, routes } = statusSheetDom(t);
+    routes.set(statusUrl, jsonResponse(identityPayload({ sends_as: sendingAccount })));
+    const base = FIXTURE.places.places[0];
+    for (const [scope, owner] of [['someone-elses-mailbox', false], [base.account_id, true], [undefined, true]]) {
+        const place = identityPlace({ owner_accounts: [...base.owner_accounts,
+            { platform_actor_id: sendingAccount.id, label: sendingAccount.label, ...(scope === undefined ? {} : { account_id: scope }) }] });
+        const sheet = openPlaceSheet(place); await settled();
+        const accounts = document.body.querySelector('[data-place-section="accounts"]');
+        assert.equal(/It writes here as you/.test(accounts.textContent), owner, `scope ${scope}`);
+        assert.equal(accounts.querySelectorAll('[data-place-act="confirm"]').length, owner ? 0 : 1, `scope ${scope}`);
+        sheet.close();
+    }
+});
+
 test('pending or failed status and malformed identities add no account row', async (t) => {
     const { document, routes } = statusSheetDom(t);
     let resolve;
