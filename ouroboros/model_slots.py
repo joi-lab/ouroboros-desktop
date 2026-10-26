@@ -398,11 +398,13 @@ def parse_fallback_chain() -> list[str]:
     """Parse the raw ordered cross-model fallback chain — SSOT for every consumer
     (resilience walk, pricing categorization, credentialed-model resolution).
 
-    Reads OUROBOROS_MODEL_FALLBACKS as the settings document reads now (``route_choice``), so a saved
-    blank is "no cross-model fallback" and an unauthored slot its proposal; the retired singular
-    ``OUROBOROS_MODEL_FALLBACK`` reaches a document through ``migrate_legacy_slot_keys`` only. No dedup,
-    no active-model drop, and NO SETTINGS_DEFAULTS injection."""
-    raw = str(runtime_setting("OUROBOROS_MODEL_FALLBACKS", "") or "").strip()
+    Reads OUROBOROS_MODEL_FALLBACKS as the settings document reads now (``route_choice``): a saved
+    blank is "no cross-model fallback" and an unauthored slot its proposal. Only a process with no
+    document, where the key is absent (never projected), reads the legacy singular
+    OUROBOROS_MODEL_FALLBACK (env-only back-compat, never a settings value). No dedup, no active-model
+    drop, and NO SETTINGS_DEFAULTS injection."""
+    modern = runtime_setting("OUROBOROS_MODEL_FALLBACKS")
+    raw = str((runtime_setting("OUROBOROS_MODEL_FALLBACK", "") if modern is None else modern) or "").strip()
     return [m.strip() for m in _parse_model_list(raw) if str(m or "").strip()]
 
 

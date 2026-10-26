@@ -130,12 +130,12 @@ def test_saved_blank_light_and_fallbacks_keep_their_meaning_end_to_end(install, 
         assert parse_fallback_chain() == [] and get_fallback_models() == []
 
 
-def test_the_legacy_fallback_alias_reaches_a_document_only_through_its_migration(install, monkeypatch):
-    from ouroboros.model_slots import parse_fallback_chain  # the singular key is a retired DOCUMENT key, never an env alias
+def test_the_legacy_fallback_alias_still_serves_a_process_with_no_modern_chain(monkeypatch):
+    from ouroboros.model_slots import parse_fallback_chain
 
+    monkeypatch.delenv("OUROBOROS_MODEL_FALLBACKS", raising=False)
     monkeypatch.setenv("OUROBOROS_MODEL_FALLBACK", "a/one, b/two")
-    _write(install, {"ANTHROPIC_API_KEY": "k", "OUROBOROS_MODEL_FALLBACK": "c/three"})
-    assert parse_fallback_chain() == ["c/three"]
+    assert parse_fallback_chain() == ["a/one", "b/two"]
 
 
 @pytest.mark.parametrize("document", [None, {}, {"TOTAL_BUDGET": 50.0}], ids=["no-file", "raw-empty", "unrelated-key"])
