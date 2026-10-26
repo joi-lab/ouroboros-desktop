@@ -190,3 +190,15 @@ def test_provider_test_refuses_a_malformed_connection_request(monkeypatch, paylo
     monkeypatch.setattr(LLMClient, "probe_provider_readiness", lambda *a, **k: pytest.fail("must not probe"))
     status, body = _provider_test(payload)
     assert status == 400 and fragment in body["error"]
+
+
+def test_review_model_warning_reads_a_named_route_by_its_native_id(monkeypatch):
+    from ouroboros.gateway import settings as gateway_settings
+
+    monkeypatch.setattr(LLMClient, "openrouter_context_length", classmethod(lambda cls, *_a, **_k: 0))
+    monkeypatch.setattr(LLMClient, "_CAPABILITIES_FETCH_OK", True)
+    monkeypatch.setattr(LLMClient, "_CONTEXT_LENGTH_CACHE", {"anthropic/claude-opus-5.5": 1000000})
+    assert gateway_settings._unrecognised_review_models(
+        ["openrouter@byok::anthropic/claude-opus-5.5", "openrouter::anthropic/claude-opus-5.5"]) == []
+    assert gateway_settings._unrecognised_review_models(["openrouter@byok::anthropic/claude-opus-5"]) == [
+        "openrouter@byok::anthropic/claude-opus-5"]  # the twin: a truncated id is still named
