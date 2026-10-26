@@ -272,7 +272,7 @@ def _labelled_loader(loader, kind: str, name: str, display: str):
     async def load(client):
         items = await loader(client)
         if not name:
-            return [{**item, "provider_label": display} for item in items]
+            return items
         source = connection_id(kind, name)
         return [{**item, "provider_id": source, "provider": source, "provider_label": display, "source": display,
                  "value": f"{source}::{item['id']}", "label": f"{display} · {item['name']}"} for item in items]
@@ -768,7 +768,7 @@ async def api_provider_test(request: Request) -> JSONResponse:
     # A named connection is tested with its row's draft fields; the built-in one with flat keys.
     connection = str(body.get("connection") or "").strip()
     connection = "" if connection == BUILTIN_CONNECTION else connection
-    if connection and not parse_model_route(f"{provider_id}@{connection}::").connection:
+    if connection and not parse_model_route(f"{provider_id}@{connection}::").valid:
         return json_error("connection must be a name of 1-32 lowercase letters, digits, '-' or '_'", 400)
 
     overrides = body.get("overrides")

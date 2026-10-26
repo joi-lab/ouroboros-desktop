@@ -581,7 +581,7 @@ def _web_search_openai(
         return json.dumps({"error": "; ".join(previous_errors or ["Official OpenAI search is unavailable"]),
                            "backend": "openai_responses", "ledger_attempt_ids": attempt_ids})
     attempt_ids = []
-    api_key, base_url, provider, api_key_type = _resolve_openai_client_settings(connection)
+    api_key, base_url, provider, api_key_type = _resolve_openai_client_settings(*((connection,) if connection else ()))
     if not api_key:
         return _fallbacks()
     active_model = model or runtime_setting("OUROBOROS_WEBSEARCH_MODEL", DEFAULT_SEARCH_MODEL)
@@ -812,7 +812,7 @@ def _web_search_openai(
                 reasoning_effort=reasoning_effort, _attempt=1,
                 _processing_preference=preference,
                 _processing_submission="standard" if processing_refused else _processing_submission,
-                connection=connection,
+                **({"connection": connection} if connection else {}),
             )
         return _fallbacks([f"OpenAI web search failed ({type(e).__name__}): {detail}"])
     # An empty completed result is a soft failure. Leave this backend's
@@ -841,17 +841,17 @@ def _web_search(ctx: ToolContext, query: str, model: str = "", search_context_si
                                   "web search failed; details in Logs")
         try:
             with capture_attempt_ids() as ids:
-                connection = leg.get("connection", "")  # the selection's named key, else the built-in one
+                # The selection's named key travels with its leg; other legs use the built-in key.
+                named = {"connection": leg["connection"]} if leg.get("connection") else {}
                 if leg["source"] == "openai":
                     raw = _web_search_openai(ctx, query, model=leg["model"], search_context_size=search_context_size,
-                                             reasoning_effort=reasoning_effort, _processing_preference=preference,
-                                             connection=connection)
+                                             reasoning_effort=reasoning_effort, _processing_preference=preference, **named)
                 elif leg["source"] == "openrouter":
                     raw = _web_search_openrouter(ctx, query, model=leg["model"], search_context_size=search_context_size,
-                                                 processing_preference=preference, connection=connection)
+                                                 processing_preference=preference, **named)
                 elif leg["source"] == "anthropic":
                     raw = _web_search_anthropic(ctx, query, model="anthropic::" + leg["model"], processing_preference=preference,
-                                                connection=connection)
+                                                **named)
                 else:
                     raw = _web_search_ddgs(query)
             result = json.loads(raw)

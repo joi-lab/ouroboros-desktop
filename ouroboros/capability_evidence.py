@@ -1027,7 +1027,9 @@ def _provider_metadata_window(
     if "openrouter" in p or (not p and "/" in str(model or "")):
         try:
             from ouroboros.llm import LLMClient
-            window = LLMClient.openrouter_context_length(model, allow_fetch=allow_fetch)
+            from ouroboros.provider_models import parse_model_route
+            # The catalog lists native ids; a route spelling (``openrouter[@name]::``) names the same model.
+            window = LLMClient.openrouter_context_length(parse_model_route(model).model, allow_fetch=allow_fetch)
             return int(window or 0), LLMClient._CONTEXT_LENGTH_OBSERVED_AT
         except Exception:
             return 0, ""

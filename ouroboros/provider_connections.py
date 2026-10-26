@@ -228,7 +228,7 @@ def normalize_connections(raw: Any) -> tuple[list[dict], str]:
         spec = PROVIDER_KINDS.get(kind)
         if spec is None:
             return [], f"{where}: unknown kind {kind!r}; use one of {', '.join(PROVIDER_KINDS)}."
-        if not (name == BUILTIN_CONNECTION or parse_model_route(f"{kind}@{name}::").connection):
+        if not (name == BUILTIN_CONNECTION or parse_model_route(f"{kind}@{name}::").valid):
             return [], f"{where}: name must be 1-32 lowercase letters, digits, '-' or '_', starting with a letter or digit."
         if (kind, name) in seen:
             return [], f"{where}: {connection_id(kind, name)} is defined twice."

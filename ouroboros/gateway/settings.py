@@ -44,7 +44,7 @@ from ouroboros.onboarding_wizard import build_onboarding_html
 from ouroboros.platform_layer import is_container_env
 from ouroboros.provider_connections import connection_references, connections_meta, normalize_connections
 from ouroboros.provider_models import CONNECTIONS_KEY, normalize_builtin_choices
-from ouroboros.gateway.secret_rows import (  # noqa: F401 -- the MCP pair's historical import names
+from ouroboros.gateway.secret_rows import (
     ConnectionSecretIdentityAmbiguous, MCPSecretIdentityAmbiguous, mask_connections, rehydrate_connections,
     mask_mcp_servers as _mask_mcp_servers_payload, rehydrate_mcp_servers as _rehydrate_mcp_servers_payload,
 )
