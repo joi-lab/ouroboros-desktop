@@ -147,3 +147,28 @@ def test_with_no_record_and_no_network_a_turn_tries_the_catalogue_once(catalogue
     assert len(gets) == 1 and not record.exists()
     assert {(limit["status"], limit["source"]) for limit in limits} == {
         ("unprobeable", "openrouter metadata: metadata read failed")}
+
+
+def test_a_reader_overlapping_a_catalogue_read_in_flight_pays_its_own_get_not_a_failure(catalogue, monkeypatch):
+    """The boot's prefetch still waits for /models when a turn's probe asks: a read in flight is no failure yet, so the
+    probe observes the catalogue itself (one more GET) and keeps the window and the output limit it reads."""
+    import requests
+
+    client, gets, record = catalogue
+    answer, in_flight, release = requests.get, threading.Event(), threading.Event()
+
+    def the_first_waits(url, **kwargs):
+        if not in_flight.is_set():
+            in_flight.set()
+            assert release.wait(10)
+        return answer(url, **kwargs)
+
+    monkeypatch.setattr(requests, "get", the_first_waits)
+    boot = threading.Thread(target=client.prefetch_openrouter_catalog, daemon=True)
+    boot.start()
+    assert in_flight.wait(5)
+    probe = _turn_probe(record.parent.parent)
+    release.set()
+    boot.join(10)
+    assert probe.window_tokens == 200_000 and "failed" not in probe.response_limit["source"]
+    assert not client.metadata_fetch_attempted_and_failed() and len(gets) == 2

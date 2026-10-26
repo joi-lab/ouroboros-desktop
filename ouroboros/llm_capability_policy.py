@@ -132,15 +132,18 @@ class _CapabilityPolicyMixin:
     def _fetch_openrouter_capabilities(cls) -> None:
         """Populate the catalogue caches from OpenRouter /models; a clean answer is recorded for
         every process (``state/openrouter_models.json``). A read that failed within the
-        failed-evidence TTL answers instead: one attempt per process, not one per reader."""
+        failed-evidence TTL answers instead: one attempt per process, not one per reader. Only a
+        finished read sets these flags: a reader overlapping one in flight pays its own GET, never a failure."""
         from ouroboros.capability_evidence import _FAILED_TTL_SEC, _age_seconds
         from ouroboros.utils import utc_now_iso
 
         if cls._CAPABILITIES_FAILED_AT and _age_seconds(cls._CAPABILITIES_FAILED_AT) <= _FAILED_TTL_SEC:
             return
-        cls._SUPPORTED_PARAMS_FETCHED = True
-        cls._CAPABILITIES_FETCH_OK = False  # set True only on a clean 200 + parse
-        cls._CAPABILITIES_FAILED_AT = utc_now_iso()  # cleared by a clean answer
+
+        def failed() -> None:  # non-200 or transport: this failure answers every reader for the TTL
+            cls._SUPPORTED_PARAMS_FETCHED, cls._CAPABILITIES_FETCH_OK = True, False
+            cls._CAPABILITIES_FAILED_AT = utc_now_iso()
+
         try:
             import requests
             # 5s, not 15s: this fetch sits on the synchronous capability-probe path
@@ -157,6 +160,7 @@ class _CapabilityPolicyMixin:
                     "OpenRouter /models returned %d; supported_parameters cache empty",
                     resp.status_code,
                 )
+                failed()
                 return
             rows = resp.json().get("data", []) or []
             from ouroboros.response_limits import record_catalog_limits
@@ -184,9 +188,11 @@ class _CapabilityPolicyMixin:
 
             record_catalog_image_input("openrouter", "https://openrouter.ai/api/v1", rows,
                                        source="OpenRouter /models")
-            cls._CAPABILITIES_FETCH_OK, cls._CAPABILITIES_FAILED_AT = True, ""  # reached the provider, parsed it
+            cls._SUPPORTED_PARAMS_FETCHED = cls._CAPABILITIES_FETCH_OK = True  # reached the provider, parsed it
+            cls._CAPABILITIES_FAILED_AT = ""
         except Exception:
             log.debug("Failed to fetch OpenRouter model capabilities", exc_info=True)
+            failed()
             return
         try:  # the record is a cache of this answer: its loss costs another process one GET
             from ouroboros.capability_evidence import canonical_evidence_root
