@@ -83,3 +83,77 @@ def test_focus_source_retains_no_attention_facts(focus):
     with dialogue_store.transaction(root, write=False) as conn:
         row, = conn.execute("SELECT dispatch_input FROM dialogue WHERE stream='chat'").fetchall()
     assert set(json.loads(row["dispatch_input"])) == {"place_context_source_ref"}
+
+
+def seed_identity_arrival(root, place, identity, *, ts="2026-10-26T12:00:00Z", **fields):
+    """Stored arrival shape; identity may deliberately model a malformed historical value."""
+    from ouroboros.places import conversation_chat_id
+    from ouroboros.presence_bindings import conversation_key
+    key = conversation_key(place.provider, place.account_id, place.conversation_id, "")
+    transport = {"provider": place.provider, "account_id": place.account_id,
+                 "conversation_id": place.conversation_id, "thread_id": "", "conversation_key": key,
+                 "actor": {"platform_actor_id": "person"}, "conversation": {}, "message": {}}
+    if identity is not None:
+        transport["identity"] = identity
+    return dialogue_store.append(root, "chat", {
+        "ts": ts, "type": "place_arrival", "direction": "in", "chat_id": conversation_chat_id(key),
+        "place_id": place.place_id, "source": "presence:" + place.provider, "text": "Captured message",
+        "sender_session_id": "person", "sender_label": "Person", "transport": transport, **fields,
+    })
+
+
+def test_recent_identity_uses_newest_arrival_of_this_place(focus):
+    root, place, _, _ = focus
+    older = {"sends_as": {"id": "old", "label": "Old", "kind": "user"}}
+    newest = {"sends_as": {"id": "new", "label": "New", "kind": "bot"}}
+    seed_identity_arrival(root, place, newest, ts="2026-10-26T12:00:02Z")
+    seed_identity_arrival(root, place, older, ts="2026-10-26T12:00:01Z")
+    seed_identity_arrival(root, replace(place, place_id="another-place"), older, ts="2026-10-26T12:00:03Z")
+    seed_identity_arrival(root, place, older, ts="2026-10-26T12:00:04Z", type="presence_delivery", direction="out")
+    assert place_arrivals.recent_identity(root, place.place_id) == newest
+
+
+@pytest.mark.parametrize("bad", [None, [], "broken", {"sends_as": {"id": "missing-fields"}},
+                                  {"sends_as": {"id": "a", "label": "A", "kind": "user", "owner": True}}])
+def test_recent_identity_skips_malformed_or_absent_stored_identity(focus, bad):
+    root, place, _, _ = focus
+    good = {"sends_as": {"id": "writer", "label": "Writer", "kind": "user"}}
+    seed_identity_arrival(root, place, good, ts="2026-10-26T12:00:01Z")
+    seed_identity_arrival(root, place, bad, ts="2026-10-26T12:00:02Z")
+    assert place_arrivals.recent_identity(root, place.place_id) == good
+
+
+def test_recent_identity_empty_declaration_supersedes_older_identity(focus):
+    root, place, _, _ = focus
+    seed_identity_arrival(root, place, {"reads_as": [{"id": "reader", "label": "Reader", "kind": "user"}]},
+                          ts="2026-10-26T12:00:01Z")
+    seed_identity_arrival(root, place, {}, ts="2026-10-26T12:00:02Z")
+    assert place_arrivals.recent_identity(root, place.place_id) == {}
+
+
+def test_recent_identity_without_arrivals_is_none(focus):
+    root, place, _, _ = focus
+    assert place_arrivals.recent_identity(root, place.place_id) is None
+    seed_identity_arrival(root, replace(place, place_id="another-place"), {})
+    assert place_arrivals.recent_identity(root, place.place_id) is None
+
+
+def test_recent_identity_bounds_indexed_read_and_validates_after_transaction(focus, monkeypatch):
+    from ouroboros import places
+    from tests.place_history_scenario import watch_transactions
+    root, place, _, _ = focus
+    seed_identity_arrival(root, place, {"reads_as": []}, ts="2026-10-25T12:00:00Z")
+    for number in range(50):
+        seed_identity_arrival(root, place, None, ts=f"2026-10-26T12:00:{number:02d}Z")
+    watch = watch_transactions(monkeypatch)
+    validate, calls = places.validate_presence_identity, []
+    def after_transaction(value):
+        assert not watch.open
+        calls.append(value)
+        return validate(value)
+    monkeypatch.setattr(places, "validate_presence_identity", after_transaction)
+    assert place_arrivals.recent_identity(root, place.place_id) is None
+    assert len(calls) == 50
+    selects = [sql for sql in watch.statements if sql.startswith("SELECT body FROM dialogue")]
+    assert len(selects) == 1
+    assert "INDEXED BY dialogue_place_recent" in selects[0] and "LIMIT 50" in selects[0]

@@ -104,22 +104,3 @@ def test_invalid_facts_drop_only_invalid_contribution(patch):
     clean, errors = validate_contributions(manifest(
         [good, {**PLACE, "id": "invalid", **patch}], kind="extension", permissions=["presence"]))
     assert len(errors) == 1 and [row["id"] for row in clean] == ["place"]
-
-
-@pytest.mark.parametrize("identity", [{}, {"sends_as": {"id": "writer", "label": "Mail", "kind": "user"}},
-                                      {"reads_as": [{"id": "reader", "label": "Reader", "kind": "bot"}]}])
-def test_status_identity_is_detached_and_projected(identity):
-    clean, errors = validate_contributions(manifest([PLACE], kind="extension", permissions=["presence"]))
-    assert not errors
-    row, = project_contributions("connector", clean, "reviewed", status={"identity": identity})
-    assert row["identity"] == identity and row["identity"] is not identity
-    legacy, = project_contributions("connector", clean, "reviewed")
-    assert "identity" not in legacy
-
-
-@pytest.mark.parametrize("identity", [None, [], {"extra": True}, {"sends_as": {"id": "writer"}}])
-def test_invalid_status_identity_is_logged_and_dropped(identity, caplog):
-    clean, _ = validate_contributions(manifest([PLACE], kind="extension", permissions=["presence"]))
-    row, = project_contributions("connector", clean, "reviewed", status={"identity": identity})
-    assert "identity" not in row and row["label"] == PLACE["label"]
-    assert "Place identity dropped for connector" in caplog.text

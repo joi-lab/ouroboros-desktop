@@ -67,9 +67,11 @@ def annotate_place_history(messages, entries, root, reads):
                 except (PlaceError, OSError, ValueError, StoreError):
                     places[place_id] = None
             transport = entry.get('transport') or {}
+            actor = transport.get('actor') or {}
+            authenticated = actor.get('authenticated') if isinstance(actor, dict) else None
             if places.get(place_id) is not None:
-                facts['owner_confirmed'] = is_owner_account(places[place_id], str(entry.get('sender_session_id') or ''),
-                                                           str(transport.get('account_id') or ''))
+                facts['owner_confirmed'] = authenticated is not False and is_owner_account(
+                    places[place_id], str(entry.get('sender_session_id') or ''), str(transport.get('account_id') or ''))
             attention = heard.get(entry.get('history_position', {}).get('offset'), {})
             if attention.get('decision') == 'heard':
                 facts['attention'] = {'decision': 'heard', 'reason': str(attention.get('reason') or '')}

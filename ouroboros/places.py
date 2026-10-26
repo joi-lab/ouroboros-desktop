@@ -337,17 +337,6 @@ def owner_account_matches(owner_accounts: Iterable[OwnerAccount], platform_actor
                                for a in owner_accounts)
 
 
-def identity_with_owners(identity: dict | None, owner_accounts: Iterable[OwnerAccount], account_id: str) -> dict | None:
-    """Derive whose credential this is without changing the connector's declaration."""
-    if identity is None:
-        return None
-    accounts = tuple(owner_accounts)
-    def entry(item):
-        return {**item, "owner": owner_account_matches(accounts, item["id"], account_id)}
-    return {**({"sends_as": entry(identity["sends_as"])} if "sends_as" in identity else {}),
-            **({"reads_as": [entry(item) for item in identity["reads_as"]]} if "reads_as" in identity else {})}
-
-
 def note_identity(place_id: str, index: int, note: NoteEntry) -> str:
     return note.note_id or hashlib.sha256(f"{place_id}:{index}:{note.text}".encode()).hexdigest()[:24]
 

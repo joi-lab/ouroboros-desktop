@@ -414,8 +414,6 @@ class PlaceSummary(TypedDict):
     facts: NotRequired[List[Any]]
     source: NotRequired[Dict[str, Any]]
     settings: NotRequired[str]
-    identity: Optional[Dict[str, Any]]
-    can_confirm: bool
     safety_mode: Literal["off", "light", "full"]
     labels: Dict[str, str]
     rooms: Optional[List[Dict[str, Any]]]
