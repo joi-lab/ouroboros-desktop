@@ -69,6 +69,27 @@ def invoke(root, row, capsys, *flags):
     return code, json.loads(capsys.readouterr().out)["outcomes"][0]
 
 
+def test_a_row_is_fetched_with_the_saved_key_that_bought_it(tmp_path, monkeypatch):
+    """An added OpenRouter key's BYOK row reconciles on that key; a turned-off or unknown key is never chosen."""
+    from ouroboros import config
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"OPENROUTER_API_KEY": "synthetic-builtin-key", "OUROBOROS_CONNECTIONS": [
+        {"kind": "openrouter", "name": "credits", "api_key": "synthetic-added-key"},
+        {"kind": "openrouter", "name": "off", "api_key": "synthetic-off-key", "enabled": False}]}), encoding="utf-8")
+    monkeypatch.setattr(config, "SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(config, "load_settings", lambda: pytest.fail("no settings migrations in operator lookup"))
+
+    def bought_with(key):
+        binding = cost.binding_for_target({"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1",
+                                           "api_key": key})
+        return {"provider": "openrouter", "provider_receipt_binding": {**binding, "generation_id": "gen-1"}}
+
+    assert command._target_for(bought_with("synthetic-added-key"))["api_key"] == "synthetic-added-key"
+    assert command._target_for(bought_with("synthetic-builtin-key"))["api_key"] == "synthetic-builtin-key"
+    for unsent in ("synthetic-off-key", "synthetic-other-key"):  # the built-in answers and its GET refuses
+        assert command._target_for(bought_with(unsent))["api_key"] == "synthetic-builtin-key"
+
+
 def test_configured_target_reads_existing_key_without_settings_migration(tmp_path, monkeypatch):
     from ouroboros import config
     settings_path = tmp_path / "settings.json"

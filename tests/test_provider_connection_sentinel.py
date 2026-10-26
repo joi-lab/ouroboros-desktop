@@ -144,8 +144,8 @@ JUSTIFIED = {
     "ouroboros/settings_setup_contract.py": "onboarding writer: the wizard's fields are the built-in settings it saves",
     "supervisor/state.py": "OpenRouter ground-truth drift diagnostic of the built-in key; never a money owner",
     "scripts/run_external_review.py": "operator wrapper: provisions the built-in keys from the operator's own secrets",
-    "scripts/reconcile_openrouter_cost.py": "explicit reconciliation on the built-in key; a row bought on another key "
-                                            "refuses as credential_mismatch, nothing is sent",
+    "scripts/reconcile_openrouter_cost.py": "explicit reconciliation: the saved OpenRouter key whose fingerprint bought "
+                                            "the row, built-in or added; any other refuses as credential_mismatch, unsent",
     "scripts/qualify_linux_appimage.py": "packaging qualification: writes an endpoint into its own test settings",
 }
 
