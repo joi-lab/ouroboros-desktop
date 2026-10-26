@@ -698,6 +698,7 @@ def test_settings_save_warns_when_an_agent_task_is_running(isolated_settings, mo
     assert resp_route.status_code == 200, resp_route.text
     assert "agent_task_running" not in resp_route.json()
     assert not any("it started with" in w for w in resp_route.json().get("warnings") or [])
+    assert any("a task that chose its own model keeps it" in w for w in resp_route.json().get("warnings") or [])
 
     # No running task -> no warning noise.
     monkeypatch.setattr(settings_mod, "_has_started_agent_tasks", lambda: False)
@@ -706,6 +707,8 @@ def test_settings_save_warns_when_an_agent_task_is_running(isolated_settings, mo
     data2 = resp2.json()
     assert "agent_task_running" not in data2
     assert not any("An agent task is running" in w for w in (data2.get("warnings") or []))
+    quiet = client.post("/api/settings", json={"OUROBOROS_MODEL_CONTEXT_WINDOWS": {"main": 124000}})
+    assert not any("chose its own model" in w for w in quiet.json().get("warnings") or [])
 
 
 def test_started_predicate_is_read_only_and_never_constructs_the_agent(monkeypatch):

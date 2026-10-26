@@ -1357,6 +1357,9 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
                 "An agent task is running right now: it keeps the reviewers, subagents, context and "
                 "effort it started with; those apply from the next task."
             )
+        if started_before_save and set(immediate_changed) - _IMMEDIATE_KEYS:  # a model, account or key moved
+            warnings.append("Running work that follows a model setting moves at its next call; "
+                            "a task that chose its own model keeps it.")
         resp: Dict[str, Any] = {"status": "saved"}
         # A key with its own writer is skipped here, and the save says so instead of reading as applied.
         ignored = sorted(k for k in body if k in _ENDPOINT_WRITTEN_SETTINGS)
