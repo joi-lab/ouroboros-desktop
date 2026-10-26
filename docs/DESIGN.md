@@ -1850,7 +1850,7 @@ scrolls in its own wrapper.
 
 Working, Waiting, Queued, Paused and State unknown stay distinct. “Done · no message”
 requires a silent finish without an accepted owner message or host notice. Holds
-are not chosen silence; release proves no delivery. Checks name their subject;
+are not chosen silence; release is not delivery. Checks name their subject;
 only warned, held and sent-despite facts get amber chips. “not checked” explains
 no exemption or Supervisor state; rows never claim every call was checked.
 
