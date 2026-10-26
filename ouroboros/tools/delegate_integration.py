@@ -521,7 +521,8 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
                if isinstance(row, dict) and row.get("reason") in UNSAVED_REASONS] if not evidence_only(entry) else []
     checkout = ("the copy's checkout itself is released once the capture is saved" if not unsaved else
                 f"the copy's checkout is KEPT until then: {len(unsaved)} path(s) in it could not be saved in the "
-                f"result (Git repositories inside it, or folders Git could not open): {', '.join(unsaved[:8])}. "
+                f"result (Git repositories or checked-out submodules inside it, or folders Git could not open): "
+                f"{', '.join(unsaved[:8])}. "
                 "Copy what you need out of execution_root before you decide")
     block: Dict[str, Any] = {
         "status": status or "missing",

@@ -505,6 +505,21 @@ def test_a_remnant_of_an_interrupted_release_or_restore_is_checked_out_again_who
     assert git(source, "worktree", "list", "--porcelain").stdout.count(f"worktree {copy}") == 1
 
 
+def test_a_release_outside_its_root_deletes_nothing_and_never_marks_the_checkout(tmp_path):
+    source = make_source(tmp_path / "source")
+    data, copies = tmp_path / "data", tmp_path / "copies"
+    handle = provision(source, tmp_path)
+    copy = pathlib.Path(handle.path)
+    (copy / "a.txt").write_text("child edit\n", encoding="utf-8")
+    sw.capture_result_commit("snap1", tmp_path / "capture" / "workspace.patch", data_dir=data)
+
+    assert sw.release_snapshot_checkout("snap1", worktree_root=tmp_path / "elsewhere", data_dir=data) is False
+
+    assert copy.is_dir() and sw.checkout_whole(sw.find_execution_snapshot("snap1", data))
+    assert sw.release_snapshot_checkout("snap1", worktree_root=copies, data_dir=data) is True  # its own root
+    assert not copy.exists() and not sw.checkout_whole(sw.find_execution_snapshot("snap1", data))
+
+
 def test_removing_a_copy_drops_only_its_own_worktree_registration(tmp_path):
     """A global ``worktree prune`` would also drop the source's own missing worktree (one on an
     unplugged disk); a copy's removal names its one path."""

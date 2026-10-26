@@ -119,10 +119,12 @@ reviewer seat also gets candidate-derived environment facts
 (`workspace_preflight.session_environment_facts`), never an install; a read-only
 session gets neither a write place nor those facts. Full native access does not make the
 binding enforceable by itself; the locked apply check of the saved patch decides whether
-integration is safe, and a result whose copy ended as it started closes itself as
-`no_changes`. Excluded nested repositories remain outside the snapshot
+integration is safe, and a result that holds exactly the files its copy started from
+closes itself as `no_changes`. Excluded nested repositories remain outside the snapshot
 inventory, are named on the start receipt and disclosed as an untracked residual
-(an ignored clone is not inventoried, and a tracked submodule is not populated).
+(an ignored clone is not inventoried, and a tracked submodule is not populated). What a
+result cannot hold (a Git repository or a submodule the run checked out inside its copy, a
+folder Git cannot open) is named, and the writer's checkout stays until apply or reject.
 
 A child or reviewer without write authority but with configured
 `workspace_write`/`full` access is an evidence-only investigation: the same

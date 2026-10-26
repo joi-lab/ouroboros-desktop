@@ -222,6 +222,91 @@ def test_a_folder_git_cannot_open_is_named_and_keeps_the_checkout(tmp_path, monk
     assert (private / "answer.txt").read_text(encoding="utf-8") == "unique work\n"
 
 
+def _with_submodule(tmp_path, monkeypatch):
+    """A target whose index holds the submodule ``deps/lib``; its copy starts with the folder empty."""
+    from ouroboros.subagent_worktrees import provision_execution_snapshot
+    from tests.test_delegated_run_isolation import _nanny_ctx, _seed_target
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    _git(lib, "init", "-q")
+    (lib / "lib.txt").write_text("library\n", encoding="utf-8")
+    _git(lib, "add", "lib.txt")
+    _git(lib, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "lib")
+    target = _seed_target(tmp_path)
+    _git(target, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "deps/lib")
+    ctx = _nanny_ctx(tmp_path, target, monkeypatch)
+    handle = provision_execution_snapshot(target_root=target, task_id="t-nanny", snapshot_id="snapS")
+    custody._CUSTODY.clear()
+    copy = pathlib.Path(handle.path)
+    assert (copy / "deps" / "lib").is_dir() and not any((copy / "deps" / "lib").iterdir())
+    return target, ctx, handle, copy
+
+
+@pytest.mark.parametrize("work", ["uncommitted_edit", "committed_inside", "staged_clone", "left_empty"])
+def test_what_a_submodule_or_staged_repository_holds_keeps_the_checkout(tmp_path, monkeypatch, work):
+    """A gitlink in the result is only a pointer: a submodule the run checked out, or a repository it
+    cloned and staged, keeps the checkout until apply or reject. An untouched empty gitlink does not."""
+    target, ctx, handle, copy = _with_submodule(tmp_path, monkeypatch)
+    lib = copy / "deps" / "lib"
+    if work in ("uncommitted_edit", "committed_inside"):
+        _git(copy, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q", "deps/lib")
+        (lib / "lib.txt").write_text("the run's library fix\n", encoding="utf-8")
+        if work == "committed_inside":
+            _git(lib, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix")
+    elif work == "staged_clone":
+        _git(copy, "clone", "-q", str(tmp_path / "lib"), "vendor/dep")
+        (copy / "vendor" / "dep" / "lib.txt").write_text("the run's vendored fix\n", encoding="utf-8")
+        _git(copy, "add", "vendor/dep")  # Git stages a repository as a gitlink, never its files
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        capture = _capture_terminal_patch(ctx, entry)
+        if work == "left_empty":
+            assert capture["disposition"] == entry.patch_disposed == custody.NO_CHANGES, capture
+            assert "unsaved_paths" not in capture and not copy.exists()
+            return
+        held = "vendor/dep" if work == "staged_clone" else "deps/lib"
+        assert capture["unsaved_paths"] == [held] and "KEPT" in capture["note"], capture
+        assert "disposition" not in capture and "checkout_released" not in capture and entry.patch_disposed == ""
+        assert copy.is_dir() and find_execution_snapshot(handle.snapshot_id) is not None
+    finally:
+        custody._CUSTODY.clear()
+
+
+def test_a_released_executable_applies_on_a_repository_that_ignores_file_modes(tmp_path, monkeypatch):
+    """Git for Windows writes ``core.fileMode=false``: the recorded entries seed the drift proof, so
+    the mode B held is kept and an unmoved target takes the saved patch once B is collected."""
+    from ouroboros import subagent_worktrees as sw
+    from ouroboros.subagent_worktrees import provision_execution_snapshot
+    from tests.test_delegated_run_isolation import _nanny_ctx, _seed_target
+
+    target = _seed_target(tmp_path)
+    script = target / "run.sh"
+    script.write_text("echo one\n", encoding="utf-8")
+    script.chmod(0o755)
+    _git(target, "add", "run.sh")
+    _git(target, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "an executable")
+    _git(target, "config", "core.fileMode", "false")
+    ctx = _nanny_ctx(tmp_path, target, monkeypatch)
+    handle = provision_execution_snapshot(target_root=target, task_id="t-nanny", snapshot_id="snapM")
+    custody._CUSTODY.clear()
+    (pathlib.Path(handle.path) / "run.sh").write_text("echo two\n", encoding="utf-8")
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        assert _capture_terminal_patch(ctx, entry)["checkout_released"] is True
+        record = find_execution_snapshot(handle.snapshot_id)
+        sw._unpin_snapshot(target, record)
+        sw._update_record(handle.path, lambda row: {**{key: value for key, value in row.items() if key not in (
+            "baseline_ref", "result_ref", "result_sha", "result_tree")}, "pins_released": "now"}, op="test")
+        _git(target, "gc", "-q", "--prune=now")
+        assert _git(target, "cat-file", "-e", handle.baseline_sha, check=False).returncode != 0
+        out = _integrate_delegated_patch(ctx, entry.run_id, "apply", "")
+        assert "✅ Integrated" in out, out
+        assert script.read_text(encoding="utf-8") == "echo two\n"
+    finally:
+        custody._CUSTODY.clear()
+
+
 @pytest.mark.parametrize("moved", [False, True], ids=["unchanged_target", "moved_target"])
 def test_once_the_owner_released_the_pins_and_git_collected_b_an_apply_still_proves_drift(released, moved):
     """Storage → Free drops a finished writer's pins; the saved patch stays and applies as a plain

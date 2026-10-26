@@ -463,11 +463,14 @@ def _baseline_drifted_paths(
 
 def _recorded_baseline_drift(target: pathlib.Path, env: Dict[str, str], payload: bytes, touched: List[str],
                              entries: Dict[str, str]) -> tuple[List[str], str]:
-    """The drift proof against recorded baseline entries, into an empty scratch index."""
+    """The drift proof against recorded baseline entries. The scratch index is seeded with them first, as
+    ``read-tree`` of B would be, so ``core.fileMode=false`` or ``core.symlinks=false`` keep B's modes."""
+    seed = "".join(f"{entries[path]}\t{path}\0" for path in touched if path in entries)
     current: Dict[str, str] = {}
-    for args in (["update-index", "-z", "--add", "--remove", "--stdin"], ["ls-files", "--stage", "-z"]):
-        proc = subprocess.run(["git", *args], cwd=str(target), capture_output=True, env=env,
-                              input=payload if args[0] == "update-index" else None)
+    for args, data in ((["update-index", "-z", "--index-info"], seed.encode("utf-8", "surrogateescape")),
+                       (["update-index", "-z", "--add", "--remove", "--stdin"], payload),
+                       (["ls-files", "--stage", "-z"], None)):
+        proc = subprocess.run(["git", *args], cwd=str(target), capture_output=True, env=env, input=data)
         if proc.returncode != 0:
             return [], f"{args[0]} failed: {(proc.stderr or b'').decode('utf-8', errors='replace').strip()[:300]}"
     for line in proc.stdout.split(b"\0"):

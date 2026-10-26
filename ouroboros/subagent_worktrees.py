@@ -345,9 +345,8 @@ class GitFailed(subprocess.CalledProcessError):
         return f"git {verb} exited {self.returncode}" + (f": {tail}" if tail else "")
 
 
-# Repository-location variables inherited from the HOST process would silently redirect a
-# command at another repository or index (observed with a leaked GIT_DIR: `git init`
-# "reinitialized" a foreign directory), so no git call here inherits them.
+# Host repository-location variables would redirect a command at another repository or index (a leaked
+# GIT_DIR made `git init` "reinitialize" a foreign directory), so no git call here inherits them.
 _LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                   "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR")
 
@@ -390,8 +389,7 @@ def _git_quiet(repo_dir: Path, *args: str) -> None:
 
 
 def _forget_checkout(repo_dir: Path, wt_path: Path) -> None:
-    """Drop the registration of ONE checkout whose folder is gone. A global ``worktree
-    prune`` would also drop the source's own missing worktrees (one on an unplugged disk)."""
+    """Drop ONE gone checkout's registration (a global prune drops the source's own missing worktrees too)."""
     if not Path(wt_path).exists():
         _git_quiet(repo_dir, "worktree", "remove", "--force", "--force", str(wt_path))
 
@@ -633,6 +631,15 @@ def _git_env(repo_dir: Path, *args: str, env: Dict[str, str],
     return proc
 
 
+def _occupied(folder: Path) -> bool:
+    """A real folder that holds anything (a gitlink's folder is empty in a fresh copy)."""
+    try:
+        with os.scandir(folder) as entries:
+            return not folder.is_symlink() and next(entries, None) is not None
+    except OSError:
+        return False
+
+
 def _nul_paths(raw: bytes) -> List[str]:
     return list(dict.fromkeys(p for p in raw.decode("utf-8", errors="surrogateescape").split("\0") if p))
 
@@ -643,7 +650,7 @@ def _nul_input(paths: List[str]) -> bytes:
 
 _UNLISTABLE = re.compile(r"warning: could not open directory '(.*)': ")
 # What a capture names but cannot hold: the copy is kept for recovery until disposition.
-UNSAVED_REASONS = frozenset({"nested_repository", "unlistable_directory"})
+UNSAVED_REASONS = frozenset({"nested_repository", "populated_submodule", "unlistable_directory"})
 _SNAPSHOT_IDENTITY = {"GIT_AUTHOR_NAME": "Ouroboros", "GIT_AUTHOR_EMAIL": "ouroboros@localhost",
                       "GIT_COMMITTER_NAME": "Ouroboros", "GIT_COMMITTER_EMAIL": "ouroboros@localhost"}
 
@@ -709,9 +716,17 @@ def snapshot_commit(source: Path, *, message: str, parent: str = "",
         def held(rel: str) -> bool:  # the folder's files, or an entry standing where the folder belongs
             return bool(prefix) and (rel == prefix.rstrip("/") or rel.startswith(prefix)) and rel not in held_keep
 
-        for rel in _nul_paths(_git_env(source, "ls-files", "-z", env=env).stdout):
+        modes: Dict[str, bytes] = {}
+        for item in _git_env(source, "ls-files", "-s", "-z", env=env).stdout.split(b"\0"):
+            meta, _, raw = item.partition(b"\t")
+            if raw:
+                modes.setdefault(raw.decode("utf-8", errors="surrogateescape"), meta[:6])
+        for rel, mode in modes.items():
             if rel in absent:
                 continue
+            if parent and mode == b"160000" and _occupied(source / rel):
+                # A result holds a gitlink, never what a checked-out submodule or a staged repository keeps.
+                excluded.append({"path": rel, "reason": "populated_submodule"})
             if held(rel):
                 dropped.append(rel)
             elif is_wal_index(source / rel):
@@ -918,20 +933,20 @@ def capture_result_commit(snapshot_id: str, patch_path: Path, *, held_out: str =
 
 def release_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] = None,
                               data_dir: Optional[Any] = None) -> bool:
-    """Remove a captured run's worktree but keep its record and pins: its result
-    lives on as the saved patch plus commit C, and a continuation recreates the
-    checkout at C. The record says ``checkout_released`` BEFORE the files go, so a
-    remnant of an interrupted removal is never taken for a whole checkout. True
-    when no checkout remains."""
+    """Remove a captured run's worktree, keeping its record and pins (the result is the saved patch and C;
+    a continuation recreates the checkout). The record says ``checkout_released`` BEFORE the files go,
+    so a remnant is never taken for a whole checkout. True when no checkout remains."""
     row = find_execution_snapshot(snapshot_id, data_dir)
     if row is None or row.get("standalone"):
         return False
     root = _resolve_root(worktree_root)
     wt_path = Path(str(row.get("path") or ""))
     with _record_lock(wt_path, data_dir, op="release_checkout", task_id=str(row.get("task_id") or "")):
+        if wt_path.exists() and not _deletable(wt_path, root):
+            return False  # not under this root: the checkout stays whole and unmarked
         current = _record_at(wt_path, data_dir, op="release_checkout") or row
         _put_record({**current, "checkout_released": current.get("checkout_released") or utc_now_iso()}, data_dir)
-        if _deletable(wt_path, root) and wt_path.exists():
+        if wt_path.exists():
             _force_rmtree(wt_path)
         if wt_path.exists():
             _mark_removal_failed(row, data_dir)
@@ -941,20 +956,16 @@ def release_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] 
 
 
 def checkout_whole(row: Dict[str, Any]) -> bool:
-    """A copy's checkout is there and was never released (a remnant of a release or of
-    an interrupted restore is not)."""
+    """The checkout is there and was never released (a remnant of a release or restore is not whole)."""
     return Path(str(row.get("path") or "")).exists() and not row.get("checkout_released")
 
 
 def recreate_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] = None,
                                data_dir: Optional[Any] = None) -> Dict[str, Any]:
-    """Check a released copy out again for a continuation: the files and the index of
-    its result commit C with HEAD at B, so the continuation's own capture measures the
-    whole run from B (a file C holds stays tracked, even one Git ignores) and a moved
-    HEAD still means the run committed. A remnant of an interrupted release or restore
-    is removed first; the mark clears only once the checkout is whole. A record
-    without a captured result refuses: a checkout is released only after its result
-    was saved, so a missing one without C is lost work, never silently B."""
+    """Check a released copy out again for a continuation: files and index of its result C, HEAD at B, so
+    the next capture measures the whole run from B (a file C holds stays tracked, ignored or not) and a
+    moved HEAD still means the run committed. A remnant is removed first; the mark clears once whole.
+    Without a captured result it refuses: a checkout goes only after its result was saved."""
     row = find_execution_snapshot(snapshot_id, data_dir)
     if row is None:
         raise FileNotFoundError(f"no private copy record for snapshot {snapshot_id}")
@@ -978,14 +989,9 @@ def recreate_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any]
 
 
 def isolated_git_env() -> Dict[str, str]:
-    """A git environment no host or child configuration can shape.
-
-    Parent-side git over a payload snapshot must never consult the system or
-    the user's global config (external diff drivers, textconv, excludes,
-    hooks templates): `GIT_CONFIG_NOSYSTEM` plus a `/dev/null` global leave
-    only command-line `-c` overrides and the repo-local config — which the
-    payload paths reset to a known-good baseline before trusting.
-    """
+    """A git environment no host or child configuration can shape: parent-side git over a payload
+    snapshot never consults the system or global config (diff drivers, textconv, excludes, hook
+    templates), only `-c` overrides and the repo-local config, which payload paths reset first."""
     return _host_env(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
 
 

@@ -222,8 +222,8 @@ def execution_binding_text(execution_root: str, authority_root: str,
         "and patch change you make — goes only under it, by relative paths or absolute paths under it. "
         + ("This copy is a linked worktree of the author's repository: its branches, tags, stash and Git config "
            "are the author's, so create no branch or tag, do not stash and change no Git config. Files Git "
-           "ignores here, and Git repositories you create inside the copy, are not part of what is captured: "
-           "`git add -f` an ignored file you must deliver. " if evidence_root is None else "")
+           "ignores here, and what Git repositories or submodules inside the copy hold, are not part of what is "
+           "captured: `git add -f` an ignored file you must deliver. " if evidence_root is None else "")
         + disposable_state_instruction(evidence, granted=granted_scratch) + " The stable authority/project root "
         f"{authority or '(unknown)'} is a read-only identity/reference until the "
         "parent explicitly integrates the captured result. Do not write, patch, "
