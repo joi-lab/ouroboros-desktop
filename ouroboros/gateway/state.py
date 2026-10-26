@@ -390,8 +390,8 @@ def _task_activity_facts(drive_root: Any, task_id: str) -> dict:
     # have open post-task work. Carry the same canonical axes as history/detail.
     from ouroboros.outcomes import normalize_outcome_axes
 
-    display = {key: data[key] for key in ("status", "reason_code", "timeout_retry_from", "original_task_id")
-               if key in data}
+    display = {key: data[key] for key in ("status", "reason_code", "timeout_retry_from", "original_task_id",
+                                          "delegated_runs_unreconciled") if key in data}
     if isinstance(data.get("model_waits"), dict):
         display["model_waits"] = data["model_waits"]
     if data.get("status") or data.get("outcome_axes"):

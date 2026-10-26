@@ -528,6 +528,8 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
 def get_tools():
     return [ToolEntry("query_data", {"name": "query_data", "description": (
         "Read runtime facts, money, pack indexes, typed JSON/JSONL and verified blobs. No paths accepted. "
+        "db, query, max_rows, snapshot and timeout_sec are op=sql only: omit them otherwise (another op refuses "
+        "any snapshot and other non-default values); op=jsonl bounds rows with tail. "
         "Current SQL exposes tasks facts; use json/task_result for bodies. SQL defaults to guarded direct reads. "
         f"Current-store reads hold the lock task writes wait on: at most {sql.CURRENT_HOLD_SEC:g} s; longer: snapshot=true. "
         "One SQL operation budget spans acquisition, optional snapshot copy/check and query; deadlines name the phase. "
@@ -540,7 +542,8 @@ def get_tools():
         "Results name their data plane; the owner's default queue files and blob fallback need the caller's existing read of each file."),
         "parameters": {"type": "object", "required": ["op"], "properties": {
             "op": {"enum": ["sql", "json", "jsonl", "blob"], "type": "string"},
-            "db": {"enum": ["current", "money", "packs"], "type": "string", "default": "current"},
+            "db": {"enum": ["current", "money", "packs"], "type": "string", "default": "current",
+                   "description": "op=sql only; another op accepts only the default current, as if omitted."},
             "query": {"type": "string", "maxLength": 16384, "description": "One read-only SQL statement; BLOB cells return {hex:...}."},
             "kind": {"type": "string", "enum": ["task_result", *_FILES]},
             "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 32,
@@ -555,7 +558,9 @@ def get_tools():
                        "properties": {"field": {"type": "string"}, "op": {"type": "string", "enum": ["eq", "contains"]}, "value": {}}},
             "tail": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 100,
                      "description": "JSONL: last matching rows; 0 reads from start. An 8 MiB scan window shared by ids (256 MiB for knowledge_history) reports scan_truncated."},
-            "max_rows": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
+            "max_rows": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100, "description": (
+                "op=sql only: rows returned before truncated=true. Another op accepts only the default 100, "
+                "as if omitted; op=jsonl bounds rows with tail.")},
             "max_bytes": {"type": "integer", "minimum": 256, "maximum": sql.MAX_BYTES, "default": 65536, "description": (
                 "Output budget after select/filter/tail (canonical JSON counts); op=sql stops fetching rows at it "
                 f"(truncated=true) before select. The fixed {sql.MAX_BYTES >> 20} MiB input budget, shared by ids, "

@@ -267,7 +267,7 @@ def _real_loop_resumes(host, monkeypatch, task, round_idx):  # noqa: F811
     monkeypatch.setattr(loop, "_load_working_recovery", lambda *a, **k: pytest.fail("working source read"))
     monkeypatch.setattr(loop, "_dispatch_round_model", lambda call, *a, **k: (
         seen.extend(call.messages) or ({"role": "assistant", "content": "continued", "tool_calls": []}, 0.0)))
-    kwargs = _loop_kwargs(host.root, registry, [])
+    kwargs = _loop_kwargs(host.root, registry, [], llm=SimpleNamespace(default_model=lambda: "m"))  # the pause checkpoint ran on Main
     kwargs["task_id"] = "held"
     result, _usage, _trace = loop.run_llm_loop(**kwargs)
     assert result == "continued"

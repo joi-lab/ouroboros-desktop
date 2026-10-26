@@ -181,7 +181,7 @@ HOST_ROW_CLASSES = {
     "project_started": ("main_lifecycle", 1),
     "promotion_notice": ("runtime_state", 4),
     "reminder": ("signed_words", 1),
-    "restart_notice": ("runtime_state", 7),
+    "restart_notice": ("runtime_state", 8),  # includes the saved-for-Restart input acknowledgement
     "rollback_notice": ("runtime_state", 1),
     "retired_settings_notice": ("runtime_state", 2),
     "review_pool_migration_notice": ("runtime_state", 1),
@@ -199,7 +199,7 @@ HOST_ROW_CLASSES = {
     "supervisor_failure": ("no_mind", 1),
     "task_admission_notice": ("not_started", 3),
     "task_error": ("no_mind", 1),
-    "task_not_started": ("not_started", 3),
+    "task_not_started": ("not_started", 5),  # also the two worker_chat_lane Restart-intake refusals
     "task_pause_notice": ("card_row", 1),
     "task_reaper_notice": ("card_row", 4),
     "task_scheduled": ("card_row", 1),

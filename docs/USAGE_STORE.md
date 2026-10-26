@@ -351,7 +351,14 @@ an embedded client's constructor need a matching caller-supplied target to the
 receipt producer; the source command resolves the configured OpenRouter route.
 
 Received prices, zero included, outrank absent token counters and error shape.
-`_usage_response.provider_cost_value` validates incoming cash; malformed prices
+A price is what the reply consumed, whichever wallet paid
+(`_usage_response.consumed_cost_value`, shared by the ledger, the loop lane and
+this receipt): a reply whose own usage says `is_byok` is true ran on the caller's
+provider key, so its `upstream_inference_cost` (the provider-billed share) adds
+to the gateway charge and the row carries `cost_basis` `byok_gateway_plus_upstream`;
+without a valid upstream figure it is unknown, never $0. Every other reply keeps
+its charge (OpenRouter repeats it in that field), and settled history is not
+rewritten. `_usage_response.provider_cost_value` validates incoming cash; malformed prices
 stay unknown despite available tariffs. The host-derived `cost_invalid` fact
 survives settlement, loop and Safety telemetry. Valid alternate evidence wins;
 absent/null prices permit nonfinal token estimates, never image text tariffs.

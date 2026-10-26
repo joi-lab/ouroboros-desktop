@@ -24,7 +24,6 @@ from ouroboros.task_results import (
     load_task_result,
     write_task_result,
 )
-from ouroboros.utils import utc_now_iso
 from ouroboros.store import StoreError, acquisition_budget
 
 log = logging.getLogger(__name__)
@@ -94,7 +93,7 @@ def restore_terminalization_retry(
     except (TypeError, ValueError, OverflowError):
         restored["_attempt"] = 1
     restored["_queue_seq"] = queue_seq_counter_ref["value"]
-    restored.setdefault("queued_at", utc_now_iso())
+    restored.setdefault("queued_at", None)  # the saved queue time, or unknown: never this restore (#1805)
     pending.append(restored)
     sort_pending()
     return restored
