@@ -1360,6 +1360,7 @@ ws.on('open', () => {
     markProjectActivityUnknown();
     refreshProjectsNav(true); // the in-flight read predates the socket: one coalesced post-open read
     pendingBootRead().then(refreshDictionary); // every open, the first too: a frame sent before this subscription was missed (behind the boot read, whose older answer must not land last)
+    loadVersion(); // a page the reload decision keeps may now face a core of another version
 });
 ws.on('close', () => {
     activitySocketDisconnected = true;

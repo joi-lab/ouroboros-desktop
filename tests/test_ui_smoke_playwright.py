@@ -373,7 +373,7 @@ def direct_server_with_data(tmp_path):
                 "candidate_sentinel": candidate.sentinel_bytes,
                 "candidate_version": candidate.version_text,
                 # Seed only while stopped: live ticks overwrite snapshots.
-                "stop_server": stop_server, "start_server": start_server,
+                "stop_server": stop_server, "start_server": start_server, "candidate": candidate,
             }
         finally:
             stop_server()

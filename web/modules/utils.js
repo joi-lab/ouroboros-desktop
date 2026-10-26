@@ -1,6 +1,6 @@
 /** Shared frontend utilities. */
 
-import { apiFetch } from './api_client.js';
+import { apiClient } from './api_client.js';
 import { currentLanguage, fmt, isEnglish, tr } from './i18n.js';
 export { fetchJson } from './api_client.js';
 
@@ -652,12 +652,24 @@ export function formatDualVersion(data) {
     return `app ${appVersion} | rt ${runtimeVersion}`;
 }
 
+const versionField = (value) => (typeof value === 'string' ? value.trim() : '');
+let versionRead = 0;
+
+/**
+ * The sidebar's runtime version and About's app/runtime pair, from one `/api/health` read. app.js
+ * reads at startup and on every socket open, because a kept page outlives the core that served it.
+ * The newest read started owns both labels: an older answer is dropped even when the newer read
+ * fails, and a failed, refused or versionless answer leaves the text they already show.
+ */
 export async function loadVersion() {
-    try {
-        const resp = await apiFetch('/api/health');
-        const data = await resp.json();
-        const { runtimeVersion } = extractVersions(data);
-        const navVer = document.getElementById('nav-version');
-        if (navVer) navVer.textContent = `v${runtimeVersion}`;
-    } catch {}
+    const read = ++versionRead;
+    let data = null;
+    try { data = await apiClient.health(); } catch { /* keep the labels */ }
+    const runtime = versionField(data?.runtime_version) || versionField(data?.version);
+    if (read !== versionRead || !runtime) return;
+    const versions = { runtime_version: runtime, app_version: versionField(data.app_version) };
+    const nav = document.getElementById('nav-version');
+    if (nav) nav.textContent = `v${runtime}`;
+    const about = document.getElementById('about-version');
+    if (about) about.textContent = formatDualVersion(versions);
 }

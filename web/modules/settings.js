@@ -24,7 +24,7 @@ import { openConfirmDialog } from './confirm_dialog.js';
 import { confirmAndSendRestart } from './chat_activity.js';
 import { PROVIDER_TEST_INPUTS, SECRET_KEYS, bindSecretInputs, bindSettingsTabs, renderSettingsPage } from './settings_ui.js';
 import { showToast } from './toast.js';
-import { escapeHtmlAttr as escapeHtml, formatDualVersion } from './utils.js';
+import { escapeHtmlAttr as escapeHtml } from './utils.js';
 import { apiClient, apiFetch, cleanExtensionRoute, extensionRoutePath } from './api_client.js';
 import { claudexorStatus } from './claudexor_status_store.js';
 import { createModelRolesEditor } from './model_roles.js';
@@ -520,14 +520,6 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
     bindAutostartControl(page); // host OS entry applied on click, never in the draft; self-disposing
     const disposeLocalModel = bindLocalModelControls({ state,
         onApplication: (local) => syncRestartState({ ...restartState, local_model: local }) });
-    // Best-effort About version from /api/health.
-    apiFetch('/api/health')
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((d) => {
-            const verEl = document.getElementById('about-version');
-            if (verEl) verEl.textContent = formatDualVersion(d);
-        })
-        .catch(() => { /* about version is best-effort */ });
     let currentSettings = {};
     let searchSelectionEdited = false;
     let extensionRefreshPending = false;

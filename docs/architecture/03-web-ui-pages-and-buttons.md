@@ -4,7 +4,7 @@ One build-free SPA serves desktop, browser, Docker, Telegram, phone and Linux fa
 
 ### SPA shape and host bridges
 
-The SPA is inspectable vanilla JavaScript (`web/index.html`, CSS, `web/modules/*`). `web/app.js` owns page/Project/mobile navigation; modules own presentation/disposers (DEVELOPMENT "UI resources carry a disposer"). Linux fallback is presentational; the owner's browser is outside process custody (§1). Rooms share one WebSocket; REST recovers durable truth (§4).
+`web/app.js` owns SPA page/Project/mobile navigation; modules own presentation/disposers (DEVELOPMENT "UI resources carry a disposer"). Linux fallback is presentational; owner browsers are outside process custody (§1). Rooms share one WebSocket; REST recovers durable truth (§4). `utils.loadVersion` reads sidebar/About versions from health at startup/socket open because retained pages outlive cores.
 
 `MainApi` (`window.pywebview.api`, `launcher.py`) natively confirms runtime mode, reviewed-skill auto-grant and skill key grants; `launcher_background.DesktopApi` provides `panic_stop`, `request_attention`/`notify_owner`, `shell_info`, `request_native_notifications`, `show_native_notification` via `desktop_notifications.py`, `set_native_appearance` and `set_interface_size`. File/URL helpers: `download_file_to_downloads`, `open_file_with_default_app`, `open_external_url`, `save_bytes_to_downloads`. Loopback files need the server's own host/port and `/api/files/download`, `/api/extensions/...` or `/api/tasks/...`. `ui_helpers.js` detects each method for older shells (§2), falls back to file helpers or copy-link/toast and intercepts framed onboarding links (`OnboardingHostApi`). The Telegram proxy's `X-Ouroboros-Telegram-MiniApp: 1` has `server_web.make_index_page` include the Telegram SDK: presentation, not authentication.
 
@@ -25,12 +25,12 @@ Iframes inherit no host tokens or stored choice; `render.appearance` declares th
 - `status_mark.js` ← every status mark; `row_menu_gesture.js` ← a Project row menu's long press (DESIGN §10).
 - `scroll_fade.js` ← `bindScrollFade`: edge attributes from hidden content.
 - `api_client.js` / `api_types.js` / `model_route_types.js` / `decision_types.js` ← browser API calls with typed errors; mirrors of browser-facing contract shapes.
-- `ui_primitives.js` ← the one safe-field renderer, collector, tone/status and attribute-escape source; `ui_helpers.js` and `utils.js` re-export it, so author pages need no second renderer.
+- `ui_primitives.js` ← shared safe-field renderer/collector, tone/status and attribute escaping; `ui_helpers.js`/`utils.js` re-export it, the author kit serves it directly.
 - `ui_helpers.js` ← row/badge helpers, keyboard menu lock, System/routing action rows (`createSystemMessageActions`).
 - `desktop_shell.js` ← Settings' desktop facts from `shell_info()` (else `/api/health`'s stamped `app_version`): missing persistence or app entry, installed bundle apart from loaded source.
 - `interface_size.js` ← Interface size's one setter, also `ouroInterfaceSize` for the macOS View menu: the app's `set_interface_size`, a touch screen's viewport (`theme.js` `ouroViewportScale`), else browser zoom.
 - `skill_card_renderer.js`, `skill_presentation.js` ← skill cards and the words every Skills surface shares.
-- `client_surface.js` ← the send-time surface snapshot (raw observables, no device taxonomy) spread into each chat frame.
+- `client_surface.js` ← send-time raw observables in each chat frame, no device taxonomy.
 - `chat_markdown.js` ← marked+DOMPurify, chat URLs, KaTeX, lazy Mermaid, bounded charts, unloaded images (DESIGN §5; vendors: `web/vendor/VENDOR-MANIFEST.md`).
 - `document_reader.js` ← chat text (`DOCUMENT_READER_MAX_BYTES`) and chat images; reads/loads use `DOCUMENT_READER_TIMEOUT_MS` (DESIGN "Document reading").
 - `log_events.js` ← event classification and the one factual task-presentation projection for Chat and Logs: task truth maps only to `Working` / `Done` / `Done with warnings` / `Failed` / `Stopped`; it owns no actions, incidents or notifications, and compact headlines never expose raw reason codes. Task-to-task delivery appears in the receiving timeline (`task_message_injected`), delivery or refusal in the sending one (`task_message_routed`).
