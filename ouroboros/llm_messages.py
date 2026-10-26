@@ -215,7 +215,8 @@ class _MessageShapingMixin:
         sealed = allow_message_cache_control and any(isinstance(m.get("cache_control"), dict) for m in cleaned)
         for msg in cleaned:
             for key in ("acceptance_observation", "_acceptance_observation", "review_feedback",
-                        STABLE_PREFIX_BLOCKS_KEY, TOOL_RESULT_RECORD_KEY, REVIEW_HISTORY_MESSAGE_KEY, REVIEW_CONTEXT_INDEX_KEY):
+                        STABLE_PREFIX_BLOCKS_KEY, TOOL_RESULT_RECORD_KEY, REVIEW_HISTORY_MESSAGE_KEY, REVIEW_CONTEXT_INDEX_KEY,
+                        "_review_image_id"):
                 msg.pop(key, None)
             msg.pop("nativeContinuation", None)
             boundary = msg.pop("cache_control", None)
@@ -262,7 +263,7 @@ class _MessageShapingMixin:
                         else:
                             block.pop("cache_control", None)
                         # Known host metadata never leaves the send copy.
-                        for key in ("_caption", "_source_path", "_original_image_url", "_context_capsule"):
+                        for key in ("_caption", "_source_path", "_source_sha256", "_review_image_id", "_original_image_url", "_context_capsule"):
                             block.pop(key, None)
         return cleaned
 

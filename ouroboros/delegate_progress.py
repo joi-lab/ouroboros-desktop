@@ -279,7 +279,7 @@ class WindowObservations:
 # maxSeconds horizon, this absolute ceiling), and releases it when the wait
 # returns. The ceiling exceeds the delegate_wait ToolEntry timeout (2100s, which
 # DELEGATE_WAIT_CEILING_SEC equals) by +300 headroom so a full window plus its
-# own teardown can never be idle-killed mid-hold.
+# own teardown never draws silence attention mid-hold.
 DELEGATE_WAIT_LEASE_GRACE_SEC = 120
 EXTERNAL_WAIT_LEASE_CEILING_SEC = DELEGATE_WAIT_CEILING_SEC + 300
 

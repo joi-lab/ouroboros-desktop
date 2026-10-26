@@ -1,14 +1,17 @@
 """Quiet terminal facts survive the browser history boundary and result retention."""
 import json
+from pathlib import Path
 
 import pytest
 
-from ouroboros import dialogue_store
+from ouroboros import consciousness_view, dialogue_store, usage_accounting
 from ouroboros.gateway.history import _assemble_history_response, _copy_task_summary_metadata
 from ouroboros.projects_registry import bind_task_to_project, create_project
 from ouroboros.task_results import write_task_result
 from ouroboros.task_store import delete_document
 from ouroboros.terminal_projection import _project_row
+from tests._store_shared import seed_result
+from tests._wake_summary_shared import seed_wake
 
 
 @pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")],
@@ -57,3 +60,53 @@ def test_non_summary_rows_do_not_acquire_terminal_flags():
     projected = {}
     _copy_task_summary_metadata(projected, {"type": "message", "wake_silent": True, "quiet_effective": True})
     assert projected == {}
+
+
+@pytest.mark.parametrize("silent,notice", [(True, ""), (True, "A tool failed."), (False, "")])
+def test_stored_wake_and_history_share_phase_and_quiet_facts(tmp_path, silent, notice):
+    fixture = Path(__file__).parent / "fixtures" / "wake_document_214a31b6.json"
+    document = json.loads(fixture.read_text(encoding="utf-8"))
+    document.update(wake_silent=silent, terminal_host_notice=notice)
+    task_id = document["task_id"]
+    stored = seed_result(tmp_path, task_id, document)
+    usage_accounting.record_unmetered_external_dispatch(
+        task_id, drive_root=tmp_path, task_id=task_id, root_task_id=task_id, category="consciousness")
+    terminal = _project_row(task_id, stored, {}, {"chat_id": stored["chat_id"]})
+    dialogue_store.append(tmp_path, "chat", terminal)
+    history = json.loads(_assemble_history_response(tmp_path, stored["chat_id"], 50, 200))
+    summary = next(row["historical_terminal"] for row in history["messages"] if "historical_terminal" in row)
+    wake, = consciousness_view.recent_wakes(tmp_path, [])
+    assert wake["quiet"] is (silent and not bool(notice))
+    assert wake["quiet"] == summary["quiet_effective"]
+    assert wake["phase"] == summary["phase"] == "done"
+    assert wake["ended_at"] == terminal["terminal_time"]["occurred_at"]
+    assert wake["note"] == document["result"]
+
+
+@pytest.mark.parametrize("retained", [True, False])
+@pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
+@pytest.mark.parametrize("owner_sent", [True, False])
+def test_wake_words_and_quiet_truth_survive_terminal_only_history(tmp_path, retained, summary, owner_sent):
+    fields = {"owner_message_sent": owner_sent}
+    if summary:
+        fields.update(wake_summary=summary, suggested_name=summary)
+    stored = seed_wake(tmp_path, **fields)
+    tid = stored["task_id"]
+    terminal = _project_row(tid, stored, {}, {"chat_id": 1})
+    dialogue_store.append(tmp_path, "chat", terminal)
+    if not retained:
+        assert delete_document(tmp_path, tid)
+    rows = json.loads(_assemble_history_response(tmp_path, 1, 50, 200))["messages"]
+    projected = next(row for row in rows if row.get("system_type") == "task_summary" and "wake_silent" in row)
+    assert projected["quiet_effective"] is (not owner_sent)
+    assert projected.get("wake_summary", "") == summary
+    assert projected["suggested_name"] == stored["suggested_name"]
+    assert stored["result"] not in json.dumps(rows, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("kind", ["task_summary", "message"])
+def test_terminal_copy_carries_both_authored_title_fields_only_on_summaries(kind):
+    words = {"suggested_name": "Title", "wake_summary": "The mind's line."}
+    projected = {}
+    _copy_task_summary_metadata(projected, {"type": kind, **words})
+    assert {key: projected[key] for key in words if key in projected} == (words if kind == "task_summary" else {})

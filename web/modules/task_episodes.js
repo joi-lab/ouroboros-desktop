@@ -116,7 +116,8 @@ export function createTaskEpisodes({ records, reanchor, activity, follow = () =>
 
     // Rehome the ORIGINAL content nodes, not snapshots of their DOM or lifecycle. Their physical
     // record/controller still receives late files, reviews and history. Old controls stay in its
-    // hidden shell; only the current card offers work controls.
+    // hidden shell; only the current card offers work controls. The original Reviews door
+    // is a reading control and follows its original host/controller into the disclosure.
     function disclose(record, chain) {
         const host = record.episodeHistoryEl;
         if (!host) return;
@@ -143,7 +144,7 @@ export function createTaskEpisodes({ records, reanchor, activity, follow = () =>
             const codes = disclosure.querySelector('.chat-episode-codes');
             codes.textContent = reasonCodesNote(facts.codes);
             codes.hidden = !codes.textContent;
-            for (const content of [previous.timelineEl, previous.reviewsHostEl, previous.subagentsEl]) {
+            for (const content of [previous.timelineEl, previous.reviewSummaryEl, previous.reviewsHostEl, previous.subagentsEl]) {
                 if (content && content.parentNode !== disclosure) disclosure.appendChild(content);
             }
             const position = host.children[index] || null;

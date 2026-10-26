@@ -1,8 +1,8 @@
-"""#1729 / #1730: an idle-timeout retry keeps the owner's Pause, its Resume and its saved work.
+"""#1729 / #1730: residual timeout-retry consumers retain Pause, Resume and saved work.
 
 The real producers run: API admission and assignment, saved work, the owner Pause through the
 agent handler (``enter_owner_pause``/``request_pause``), the Resume grant, the real loop's
-consumption, the idle-timeout rail (grace, then the reap decision), the reaper
+consumption, a synthetic legacy job (no current producer; the reap queue is memory-only), the reaper
 (``reap_timed_out_task``: kill confirmation, the dead attempt's durable pause, ``_enqueue_retry``),
 assignment (``_claim_worker_launch``/``launch_admission``) and the actual worker loader or a real
 tool-registry launch. Doubled: OS processes (a kill marks the double dead), model calls and the
@@ -56,6 +56,7 @@ from tests.test_project_hold_recovery import worker
 from tests.test_resume_handover import _DeadProcess as _HandoverProcess
 from tests.test_swarm_host_admission import host  # noqa: F401
 from tests.worker_pool_support import affirm_ready
+from tests._silence_reaper_support import _tick_until_reap_decision
 
 pytestmark = pytest.mark.serial
 
@@ -98,19 +99,6 @@ def reaper(host, monkeypatch):  # noqa: F811
         return jobs
 
     return SimpleNamespace(arm=arm, jobs=jobs)
-
-
-def _tick_until_reap_decision(clock, jobs, task_id="held"):  # noqa: F811
-    """The supervisor's own order (server.py): the idle rail's grace, then its reap decision."""
-    idle = max(float(queue.get_task_idle_timeout_sec()), float(queue.get_per_call_timeout_ceiling_sec()) + 120.0)
-    clock[0] += idle + 1
-    queue.enforce_task_timeouts()
-    assert workers.RUNNING[task_id].get("finalization_requested_at"), "the idle rail opens its grace first"
-    workers.assign_tasks()
-    clock[0] += float(queue.FINALIZATION_GRACE_SEC) + 1
-    queue.enforce_task_timeouts()
-    assert task_id not in workers.RUNNING, "the reap decision withdrew RUNNING"
-    return jobs.get_nowait(), idle
 
 
 def _reap(clock, reaper, task_id="held"):  # noqa: F811

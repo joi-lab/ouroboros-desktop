@@ -100,7 +100,26 @@ def _prepare_self_change(ctx: ToolContext, resume: str = "", in_place: bool = Fa
     )
 
 
+def _restart_receipt_failure(ctx: ToolContext, receipt: dict, text: str) -> str:
+    """Keep an unknown ACK distinct from a known refusal, with the same request identity."""
+    refused = receipt.get("status") in {"refused", "released"}
+    return _publish_tool_result(ctx, ToolResult(
+        status="blocked" if refused else "unavailable",
+        code="LEGACY_BLOCKED" if refused else "LEGACY_UNAVAILABLE", text=text,
+        meta={"request_id": receipt["request_id"], "restart_status": receipt["status"],
+              **({"refusal": receipt["refusal"]} if receipt.get("refusal") else {})},
+    ))
+
+
 def _request_restart(ctx: ToolContext, reason: str, adopt_commit: str = "") -> str:
+    from ouroboros.tools.control_events import request_restart_intent
+
+    prior = getattr(ctx, "pending_restart_request", None)
+    if prior and (prior["task_id"], prior["task_attempt"]) == (str(ctx.task_id or ""), int(getattr(ctx, "task_attempt", None) or 1)):
+        receipt = request_restart_intent(ctx, prior["reason"])
+        return ("Restart requested. The previously acknowledged request is unchanged." if receipt.get("status") in {"accepted", "ready"}
+                else _restart_receipt_failure(ctx, receipt,
+                    f"RESTART_{receipt['status'].upper()}: request {prior['request_id']}; no new request sent."))
     block_reason = _evolution_restart_block_reason(ctx)
     if block_reason:
         return f"⚠️ RESTART_BLOCKED: in evolution mode, {block_reason}."
@@ -171,6 +190,12 @@ def _request_restart(ctx: ToolContext, reason: str, adopt_commit: str = "") -> s
                 f"be persisted ({exc})."
             )
     ctx.pending_restart_reason = restart_reason
+    receipt = request_restart_intent(ctx, restart_reason, evolution=is_evolution)
+    if receipt.get("status") not in {"accepted", "ready"}:
+        return _restart_receipt_failure(ctx, receipt,
+                f"RESTART_{receipt['status'].upper()}: request {receipt['request_id']}. "
+                "Host acceptance is not confirmed; do not claim that new work is held. "
+                "Calling again checks this same request.")
     ctx.last_push_succeeded = False
     ctx.last_reviewed_commit_sha = ""
     # The reason is the caller's own text, kept exact for the restart binding: quoted after the host's facts,
@@ -201,7 +226,8 @@ def self_change_tool_entries() -> list:
         ToolEntry("request_restart", {
             "name": "request_restart",
             "description": (
-                "Ask supervisor to restart runtime after a reviewed local commit or a non-evolution clean no-op; "
+                "Ask supervisor to restart runtime after this task finalizes; confirmed acceptance holds new "
+                "independent work, including Main, for Restart. An unconfirmed reply proves no acceptance. "
                 "evolution requires its exact active commit receipt. A restart alone adopts nothing: pass "
                 "adopt_commit (the exact reviewed commit of your body candidate) to adopt it locally at this "
                 "restart, after the running generation's readers have stopped."),
@@ -449,7 +475,9 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
             if origin is not None:
                 if reply_to_relay is not None:
                     raise ContactRequestInvalid("omit reply_to_relay; Presence Main contact uses its host-bound source")
-                return send_main_message(ctx, text, origin, request_id)
+                receipt = send_main_message(ctx, text, origin, request_id)
+                ctx._owner_message_sent = True
+                return receipt
         except ContactRequestConflict as exc:
             return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(
                 f"OWNER_CONTACT_REQUEST_CONFLICT: {exc}. The original message is unchanged. "
@@ -909,19 +937,24 @@ def _effort_switch(ctx: ToolContext, requested: str) -> tuple[str, str]:
 def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
                  answer_sha256: str | None = None, rationale: str = "",
                  acceptance_subject: dict | None = None, pending_review: str | None = None,
-                 silent: bool = False, swarm_comparison: str | None = None) -> str:
+                 silent: bool = False, swarm_comparison: str | None = None, summary: str = "") -> str:
     """Stage an author act; an own-clock or focused wake, or a schedule-born root, may choose silence."""
+    from ouroboros.consciousness_authority import is_focus_wake, is_own_clock_wake
+
+    metadata = getattr(ctx, "task_metadata", None) or {}
+    wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
+    summary = " ".join(str(summary or "").split())
+    if summary and not wake:
+        return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+            text="ERROR: COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn"))
     allow_empty = False
     if silent:
         if action != "finish":
             return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
                 text="ERROR: COMPLETION_ARGUMENT: silent requires action=finish"))
-        from ouroboros.consciousness_authority import is_focus_wake, is_own_clock_wake
         from ouroboros.dialogue_provenance import presence_caller_binding
         from ouroboros.task_results import resolve_ctx_lineage
 
-        metadata = getattr(ctx, "task_metadata", None) or {}
-        wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
         occurrence = metadata.get("schedule_occurrence")
         scheduled_root = (isinstance(occurrence, dict)
                           and str(occurrence.get("schedule_id") or "").strip()
@@ -938,7 +971,7 @@ def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
     return stage_completion_request(ctx, {
         "action": action, "answer": answer, "answer_sha256": answer_sha256,
         "rationale": rationale, "acceptance_subject": acceptance_subject,
-        "pending_review": pending_review, "wake_silent": bool(silent) or None,
+        "pending_review": pending_review, "wake_silent": bool(silent) or None, "wake_summary": summary or None,
         "swarm_comparison": swarm_comparison,
     }, allow_empty=allow_empty)
 

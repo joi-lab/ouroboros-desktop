@@ -3,6 +3,7 @@
  * No fetch, pager, message cache or timer lives here.
  */
 import { DRAG } from './drawer_drag.js';  // a touch's axis is decided by the drawer's own rule
+import { batch } from './layout_batch.js';  // reads the write defers run after it, before the place is restored
 
 // A width that moves again within MOVE_FRAMES frames keeps moving (a drag, a live window resize); one that then
 // holds WIDTH_HELD_FRAMES frames (about 200ms at 60Hz) has stopped: a drag paused that long is laid out once.
@@ -104,7 +105,7 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
             if (!alive()) return false;
             if (mutationDepth) return write();
             if (intent || !visible()) {
-                const result = write(); afterWrite();
+                const result = batch(write, afterWrite); afterWrite();
                 if (remoteContent && result && !state.stick) activity();
                 return result;
             }
@@ -113,7 +114,8 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
             const height = feed.scrollHeight, top = feed.scrollTop;
             mutationDepth++;
             let result;
-            try { result = write(); afterWrite(); return result; }
+            // The write's deferred reads (layout_batch.js) run once its rows have settled, before the place is restored.
+            try { result = batch(write, afterWrite); afterWrite(); return result; }
             finally {
                 mutationDepth--;
                 if (visible()) {

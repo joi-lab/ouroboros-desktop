@@ -68,6 +68,7 @@ import pytest
 
 from tests._cost_driver import ACTIVITIES
 from tests._cost_meter import EXECUTION, HISTORY, VM_STEP, CostMeter, tagged
+from tests._scale_root import worktree_root
 from tests._turn_law import hold_turn_law, readers_of, turn_gap
 
 pytestmark = pytest.mark.scale
@@ -128,8 +129,10 @@ def measure(base: pathlib.Path, k: int) -> Dict[str, Any]:
     root, repo = home / "data", home / "repo"
     root.mkdir(parents=True)
     repo.mkdir()
+    # The delegated copies live under the worktree root the build and the boot both name (tests/_scale_root.py).
     env = {**os.environ, "OUROBOROS_DATA_DIR": str(root), "OUROBOROS_SETTINGS_PATH": str(root / "settings.json"),
-           "OUROBOROS_REPO_DIR": str(repo), "OUROBOROS_HOST_SERVICE_PORT": "0"}
+           "OUROBOROS_REPO_DIR": str(repo), "OUROBOROS_HOST_SERVICE_PORT": "0",
+           "OUROBOROS_SUBAGENT_WORKTREE_ROOT": str(worktree_root(root))}
     facts_path, spec_path, out_path = home / "facts.json", home / "spec.json", home / "measured.json"
     _child("tests._scale_root", [str(root), str(k), str(facts_path)], env, home / "build.log")
     facts = json.loads(facts_path.read_text(encoding="utf-8"))

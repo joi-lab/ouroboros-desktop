@@ -272,12 +272,16 @@ def test_a_root_continue_reads_its_old_nanny_childs_answer_after_drive_cleanup(g
 
     stored = load_task_result(geo.canonical, NANNY)["delegate_terminal_reconciliation"]["terminal_runs"]
     stored_receipt = next(row for row in stored if row["run_id"] == "run-1")
-    assert public_receipt["staged_output"] == stored_receipt["staged_output"]
+    stored_source = stored_receipt["staged_output"]
+    assert public_receipt["staged_output"] == {
+        **stored_source, "read": stored_source["source_read"], "direct_read": stored_source["read"]}
     assert public_receipt["staged_output"]["sha256"] == source["sha256"]
     assert public_receipt["staged_output"]["task_id"] == NANNY
     assert '"run_dir": "/engine/runs/run-1"' in listed, "the read tool shows the engine's own locator"
-    sized = json.loads(_execute(continuation, "get_task_result", task_id=NANNY,
-                                delegated_output_sha256=source["sha256"]).text)["delegated_output_source"]
+    first_reader = public_receipt["staged_output"]["read"]
+    assert first_reader == public_receipt["staged_output"]["source_read"]
+    sized = json.loads(_execute(continuation, first_reader["tool"],
+                                **first_reader["arguments"]).text)["delegated_output_source"]
     full = canonical_file.read_bytes().decode("utf-8")
     assert sized["reason"] == "source_range_required" and sized["status"] == "available"
     assert sized["complete_chars"] == len(full)
@@ -406,6 +410,14 @@ def test_a_retry_reader_stages_into_its_own_store_and_the_starter_receipt_names_
     assert staged["read"]["arguments"]["root"] == "artifact_store"
     assert pathlib.Path(staged["read"]["arguments"]["path"]) == pathlib.Path(artifact["path"])
     assert record_terminal_reconciliation(data, "retry-a", audit)
+
+    summary = json.loads(call(ctx, "get_task_result", task_id="retry-a", view="summary").text)
+    facts = summary["delegated_custody"]
+    runs = [*facts.get("terminal_runs", []), *facts.get("predecessor_terminal_runs", [])]
+    public = next(row["staged_output"] for row in runs if row["run_id"] == held.run_id)
+    assert public["read"] == public["source_read"]
+    assert public["read"]["arguments"]["task_id"] == "retry-a"
+    assert public["direct_read"] == staged["read"]
 
     page = json.loads(call(ctx, "get_task_result", task_id="retry-a", delegated_output_sha256=artifact["sha256"],
                            source_start_char=0, source_end_char=40).text)["delegated_output_source"]

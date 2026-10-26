@@ -131,6 +131,7 @@ _PENDING_FIELDS = (
     'subagent_availability', 'child_drive_root', 'budget_drive_root', 'task_constraint',
     'predecessor_authority_source', 'metadata', 'origin_message_ref', 'origin_message_text',
     'image_source_ref', 'image_mime', 'image_caption',
+    'attachment_manifest', 'attachment_images', 'attachments',
     '_attempt', 'review_reason', 'review_source_task_id', '_budget_pause',
     'budget_resumed_at', '_terminalization_retry', '_cancel_intent_authority_hold', '_owner_wait_resume',
     '_budget_pause_resume', '_budget_pause_hold', '_resume_selection', '_continuation_prepared', '_admission_owner_token',
@@ -205,10 +206,17 @@ def persist_queue_snapshot(reason: str = "") -> bool:
             task = meta.get("task") if isinstance(meta, dict) else {}
             started = float(meta.get("started_at") or 0.0) if isinstance(meta, dict) else 0.0
             paused_sec = float(meta.get("budget_paused_sec") or 0.0) if isinstance(meta, dict) else 0.0
+            # Only a dated silence episode is a diagnostic's source authority (#1376):
+            # its fact, and while it stays open the progress that revokes it before
+            # the recovery lane writes the result. Ordinary progress rotates nothing.
+            silence = copy.deepcopy(meta.get("silence_attention")) if isinstance(meta, dict) else None
             running_rows.append({
                 "id": task_id, "type": task.get("type"), "priority": task.get("priority"),
                 "attempt": meta.get("attempt"), "worker_id": meta.get("worker_id"),
                 "owner_wait": meta.get("owner_wait"), "started_at": started,
+                **({"silence_attention": silence} if silence else {}),
+                **({"last_progress_at": meta.get("last_progress_at")}
+                   if silence and silence.get("state") == "pending_attention" else {}),
                 "model_wait_quota_clock": meta.get("model_wait_quota_clock"),
                 "sleep_parked_at": meta.get("sleep_parked_at"),
                 "budget_paused_sec": paused_sec,
@@ -227,6 +235,9 @@ def persist_queue_snapshot(reason: str = "") -> bool:
             "budget_root_fences": budget_root_fences,
             "pending": pending_rows, "running": running_rows,
         }
+        from ouroboros.server_restart import _AGENT_RESTART_REPLY, agent_restart_snapshot
+
+        payload.update(restart_intent=agent_restart_snapshot(), restart_reply=dict(_AGENT_RESTART_REPLY))
         from ouroboros.budget_pause import BUDGET_HOLD_KEY
 
         fenced = {str(row.get("root_task_id") or "") for row in budget_root_fences}

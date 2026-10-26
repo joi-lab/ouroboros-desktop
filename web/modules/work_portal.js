@@ -83,12 +83,14 @@ export function reconcilePortalNotes(feed, scope = feed) {
     const notes = scope?.matches?.('.msg-routing-annotation') ? [scope]
         : [...(scope?.querySelectorAll?.('.msg-routing-annotation') || [])];
     let changed = false;
+    let portals = null;  // the works the feed shows as portals, read once when a note first asks
     for (const note of notes) {
         const [projectId, , taskId] = String(note.dataset.destinationKey || '').split('|');
         const represented = Boolean(projectId && taskId && !PASSED_ON.includes(note.dataset.annotationAction || '')
             && ['scheduled', 'delivered'].includes(note.dataset.annotationStatus)
-            && [...feed.querySelectorAll('.chat-live-card[data-portal="1"]')]
-                .some((card) => card.dataset.taskId === taskId && card.dataset.projectId === projectId));
+            && (portals ??= new Set([...feed.querySelectorAll('.chat-live-card[data-portal="1"]')]
+                .map((card) => JSON.stringify([card.dataset.taskId, card.dataset.projectId]))))
+                .has(JSON.stringify([taskId, projectId])));
         if (note.hidden !== represented) { note.hidden = represented; changed = true; }
         const actions = note.parentElement?.querySelector('.msg-routing-actions');
         if (actions && actions.hidden !== represented) { actions.hidden = represented; changed = true; }

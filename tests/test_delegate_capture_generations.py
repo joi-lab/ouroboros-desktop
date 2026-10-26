@@ -3,10 +3,13 @@
 Drive the real tick, keep its driver alive but parked, and join every submitted future.
 Count source stats, scandirs and copies, including worker work; a per-tick source lexists or
 witness walk would violate this law even if the saved summary were never decoded.
+
+A writer's checkout now goes once its capture and named evidence are saved, so every copy here
+is one that stays: a Git repository the run made inside it cannot be saved in the result, which
+keeps the checkout until apply or reject (and every later evidence generation on it).
 """
 from __future__ import annotations
 
-import json
 import errno
 import os
 import pathlib
@@ -26,9 +29,15 @@ from tests.test_recovered_capture import EVIDENCE, prepared
 
 
 def _prepared(root):
+    import subprocess
+
     material = root.with_name(root.name + "-material")
     material.mkdir()
-    return prepared(material, root, "ordinary")
+    entry, area, source = prepared(material, root, "ordinary")
+    kept = area / "vendor" / "kept"  # what the result cannot hold keeps this checkout
+    kept.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=kept, check=True, capture_output=True)
+    return entry, area, source
 
 
 def _captured(tmp_path, monkeypatch, *, partial=False):
@@ -63,54 +72,6 @@ def test_failed_generations_publish_receipts_without_unlisted_bytes(tmp_path, mo
     assert healed["status"] == "retained" and healed["files"] == receipt["files"]
     assert (pathlib.Path(healed["evidence_dir"]) / "files" / checking.EVIDENCE_DIRNAME / "result.bin").read_bytes() == EVIDENCE
     assert area.is_dir() and original.read_bytes() == original_bytes
-
-
-def test_clock_advanced_partial_is_quiet_but_changed_terminal_and_explicit_capture_work(
-        tmp_path, monkeypatch, driven_runtime):  # noqa: F811
-    runtime, clock, tick = driven_runtime
-    entry, area = _captured(tmp_path, monkeypatch, partial=True)
-    assert current.collection_pending(entry) and not collection_due(entry, generation=runtime.runtime_id)
-    copies, walks, probes, submissions = [], [], [], []
-    copy, scan, submit = shutil.copyfileobj, os.scandir, runtime.observers.submit
-    def counted_copy(*args, **kwargs):
-        copies.append(True)
-        return copy(*args, **kwargs)
-    def counted_scan(path):
-        if str(path).startswith(str(area)):
-            walks.append(str(path))
-        return scan(path)
-    def submitted(*args, **kwargs):
-        submissions.append(args)
-        return submit(*args, **kwargs)
-    def counted_probe(operation):
-        def probe(path, *args, **kwargs):
-            if str(path).startswith(str(area)):
-                probes.append(str(path))
-            return operation(path, *args, **kwargs)
-        return probe
-    monkeypatch.setattr(shutil, "copyfileobj", counted_copy)
-    monkeypatch.setattr(os, "scandir", counted_scan)
-    monkeypatch.setattr(os, "stat", counted_probe(os.stat))
-    monkeypatch.setattr(os, "lstat", counted_probe(os.lstat))
-    monkeypatch.setattr(runtime.observers, "submit", submitted)
-    for moment in (100, 10000):
-        clock[0] = moment
-        tick()
-    assert not submissions and not walks and not copies and not probes
-    first = body.saved_named_evidence(tmp_path, entry)[0]
-    first_bytes = first.read_bytes()
-    assert body.observe_run(tmp_path, entry, terminal(entry.run_id, "changed source", seq=8))
-    tick()
-    assert len(submissions) == 2 and walks and copies
-    assert first.read_bytes() == first_bytes
-    walks.clear(); copies.clear(); probes.clear(); submissions.clear()
-    runtime._collect(entry.run_id, recapture=True)
-    tick()
-    assert len(submissions) == 1 and walks and copies
-    walks.clear(); copies.clear(); probes.clear(); submissions.clear()
-    clock[0] += 10000
-    tick()
-    assert not submissions and not walks and not copies and not probes
 
 
 @pytest.mark.parametrize("destination", ["readonly", "hardlink", "symlink", "parent_symlink"])
@@ -155,24 +116,6 @@ def test_changed_evidence_never_writes_through_old_destinations(tmp_path, monkey
         assert named.run_named_evidence(tmp_path, entry) == latest
 
 
-def test_partial_investigation_reuses_its_receipt_and_changed_input_finishes(tmp_path, monkeypatch):
-    from tests.test_investigation_custody import _real_investigation
-    from ouroboros.tools.delegate_integration import capture_terminal_patch_for_drive
-
-    _, drive, entry, area, _ = _real_investigation(tmp_path, monkeypatch)
-    link = area / checking.EVIDENCE_DIRNAME / "unretained-link"
-    link.symlink_to(area / "tracked.txt")
-    first = capture_terminal_patch_for_drive(drive, entry)["named_evidence"]
-    assert first["status"] == "partial" and area.is_dir()
-    with monkeypatch.context() as patch:
-        patch.setattr(shutil, "copyfileobj", lambda *a, **k: pytest.fail("partial receipt copied again"))
-        assert capture_terminal_patch_for_drive(drive, entry)["named_evidence"] == first
-    link.unlink()
-    result = capture_terminal_patch_for_drive(drive, entry)
-    assert result["disposition"] == c.EVIDENCE_RETAINED and not area.exists()
-    assert json.loads((pathlib.Path(first["evidence_dir"]) / "summary.json").read_text(encoding="utf-8")) == first
-
-
 @pytest.mark.parametrize("damage", ["missing", "unreadable", "wrong_type", "bad_address"])
 def test_a_missing_or_unreadable_receipt_is_a_new_fact(tmp_path, monkeypatch, damage, driven_runtime):  # noqa: F811
     runtime, clock, tick = driven_runtime
@@ -197,24 +140,6 @@ def test_a_missing_or_unreadable_receipt_is_a_new_fact(tmp_path, monkeypatch, da
     assert body.saved_named_evidence(tmp_path, fresh)[1]["status"] == "retained"
     assert not collection_due(fresh, generation=runtime.runtime_id)
     assert area.is_dir() and not fresh.patch_disposed
-
-
-def test_plain_result_reads_do_not_request_recapture(tmp_path, monkeypatch, driven_runtime):  # noqa: F811
-    from ouroboros.tools.delegate_terminal_evidence import collect_and_deliver_terminal, retained_terminal_result
-    from ouroboros.tools.registry import ToolContext
-
-    runtime, _, tick = driven_runtime
-    entry, _ = _captured(tmp_path, monkeypatch, partial=True)
-    ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id=entry.task_id)
-    with monkeypatch.context() as patch:
-        patch.setattr(runtime, "_collect", lambda *a, **k: pytest.fail("reading is not an explicit recapture"))
-        for read in (lambda: retained_terminal_result(ctx, entry.run_id),
-                     lambda: collect_and_deliver_terminal(ctx, entry.run_id, terminal(entry.run_id), body._shape(entry), entry, None)):
-            assert read()["workspace_capture"]["named_evidence"]["status"] == "partial"
-    old = body.saved_named_evidence(tmp_path, entry)[0]
-    runtime._collect(entry.run_id, recapture=True)
-    tick()
-    assert body.saved_named_evidence(tmp_path, current.run(tmp_path, entry.run_id))[0] != old
 
 
 def test_transient_capture_retries_once_in_the_next_generation(tmp_path, monkeypatch):

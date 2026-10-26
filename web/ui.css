@@ -208,6 +208,14 @@
     --voice-owner: #103e7f;
     --voice-ouroboros: #76162b;
     --voice-ouroboros-card: #76162b;
+    /* A note between works (DESIGN "Replies"): the voice one quiet step back toward the room, its hover a step less;
+       the cards peeking below a stack's front card are that material flattened toward the room again, each level
+       more. Flat colours: the ledges carry the rest shadow, which an opacity would fade with them. Written as values
+       (the voice at 74 % / 84 % over the room; the note at 84 % / 66 %), since older WebKit has no color-mix(). */
+    --voice-ouroboros-note: #5b1424;
+    --voice-ouroboros-note-hover: #661527;
+    --relay-ledge-1: #4f1321;
+    --relay-ledge-2: #41121e;
     --tone-crimson: #d32d43;
     --tone-crimson-hover: #c32a3f;
     /* The crimson tone's ink: white on the solid crimson. Its hover deepens rather than lightens, and so does its
@@ -396,6 +404,13 @@
     --voice-owner: #e9eef9;
     --voice-ouroboros: #fdf2f4;
     --voice-ouroboros-card: #fff8f9;
+    /* The note between works: the work card's rose as a value under the note's own name (the card's token stays the
+       card's), hovering to the voice; on white a card behind lies in the front card's shadow, a deeper step of the
+       accent ladder, not a paler one. */
+    --voice-ouroboros-note: #fff8f9;
+    --voice-ouroboros-note-hover: var(--voice-ouroboros);
+    --relay-ledge-1: #faebec;  /* the accent at 10 % over white */
+    --relay-ledge-2: #f7e3e5;  /* the accent at 14 % over white */
     /* The crimson tone is the accent ladder's; its hover stops at 14 % so the ink keeps 4.5:1 on it. */
     --tone-crimson: var(--accent-10);
     --tone-crimson-hover: var(--accent-14);

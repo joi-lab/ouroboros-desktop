@@ -42,6 +42,7 @@ def test_a_mutating_child_runs_live_in_a_private_snapshot_not_the_shared_tree(tm
     # The snapshot genuinely carries the target's current state.
     assert (scope_root / "README.md").read_text(encoding="utf-8") == "seed\n"
     assert payload["access"] == "workspace_write" and payload["isolation"] == "live"
+    assert payload["workspace"] == "copy"  # the default place; workspace='in_place' is the explicit other one
 
 
 def test_a_read_only_child_uses_the_same_transport_with_a_narrower_profile(tmp_path, monkeypatch):
@@ -169,11 +170,14 @@ def test_the_model_has_no_argument_that_could_widen_the_profile():
     # ResolvedResourceBinding authorizer as ordinary writes (R1 item 9); `effort` is reasoning
     # depth inside the owner's effort range (a pin or a level in the model name keeps its own).
     # D2 exposes ask/plan/agent and explicit readiness override; the retained ceiling still governs.
+    # `workspace` (owner 25.10, Q2-A) names WHERE a Git writer works inside the task's own write root,
+    # a private copy (default) or that root in place; it is never a path and never wider access.
     assert properties == {
         "prompt", "subagent_id", "max_seconds", "retry_of", "continue_from", "continue_carrier", "root",
         "bucket", "skill_name", "directory_strategy", "scope_paths", "access", "effort", "mode",
-        "override_plan_readiness",
+        "override_plan_readiness", "workspace",
     }
+    assert entry.schema["parameters"]["properties"]["workspace"]["enum"] == ["copy", "in_place"]
     from ouroboros.settings_scales import EFFORT_SCALE
     assert entry.schema["parameters"]["properties"]["effort"]["enum"] == ["auto", *EFFORT_SCALE]
     assert entry.schema["parameters"]["properties"]["continue_carrier"]["enum"] == ["auto", "packet"]

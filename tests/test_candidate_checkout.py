@@ -350,6 +350,27 @@ def test_proof_bytes_removed_from_the_checkout_invalidate_success(source, tmp_pa
     assert not target.exists()
 
 
+def test_a_stopped_copy_takes_new_overlay_bytes_that_its_next_verification_binds(source, tmp_path):
+    (source / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (source / "web").mkdir()
+    (source / "web" / "index.html").write_bytes(b"<!doctype html>\n")
+    target = tmp_path / "checkout"
+    with candidate.candidate_checkout(source, target, origin_proof=True) as checkout:
+        restarted = checkout.version_text.replace("9.9.9+", "9.9.10+", 1)
+        checkout.hold()  # a server started from the copy may still read it
+        with pytest.raises(candidate.CandidateError, match="CANDIDATE_CUSTODY"):
+            checkout.rewrite(candidate.VERSION_PATH, f"{restarted}\n".encode())
+        checkout.release()
+        with pytest.raises(candidate.CandidateError, match="CANDIDATE_UNSUPPORTED"):
+            checkout.rewrite("edited", b"source bytes are not per-checkout\n")
+        checkout.rewrite(candidate.VERSION_PATH, f"{restarted}\n".encode())
+        assert checkout.version_text == restarted
+        assert (target / "VERSION").read_text(encoding="utf-8") == f"{restarted}\n"
+        candidate.verify_checkout(target, checkout)
+    assert (source / "VERSION").read_text(encoding="utf-8") == "9.9.9\n"
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("suffix", [".cmd", ".bat", ".exe", ".com"])
 def test_path_execute_bits_do_not_change_handle_identity(source, monkeypatch, suffix):
     real_lstat = Path.lstat

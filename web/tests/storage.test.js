@@ -216,7 +216,7 @@ test('the second card carries the tray whenever an answer exists, idle before an
     assert.match(never.tray, /Temporary space[\s\S]*Show what can go/);
     assert.equal(renderStorage(null).tray, '');
     const counted = renderStorage(response({ count: count() }), { now: NOW, tray: { checked: new Set(), dismissed: false } });
-    assert.match(counted.tray, /Copies the app already removes on its own/);
+    assert.match(counted.tray, /Copies and leftovers of finished work/);
     assert.doesNotMatch(counted.tray, AVOIDED);
 });
 

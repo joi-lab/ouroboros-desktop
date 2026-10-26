@@ -2,7 +2,7 @@
 
 Browser/CLI routes: `gateway/router.py`; Host Service: §12. Tests check this table in both directions. Shapes: `GET /api/contract`.
 
-`OUROBOROS_NETWORK_PASSWORD` gates non-loopback HTTP and WebSocket access; loopback bypasses it. Health, login/logout and GET/HEAD of the selected public `/auth/` assets stay reachable. A trusted proxy supplies client/TLS facts (`FORWARDED_ALLOW_IPS`; DEPLOYMENT). Browser sessions use an expiring HttpOnly HMAC cookie, `Secure` only under TLS. A pre-accept 4401 WebSocket close appears as a refused handshake (1006); an HTTP 401 confirms sign-out and opens `/auth/login?next=`, resending nothing. Without a password, remote access stays open by operator choice.
+`OUROBOROS_NETWORK_PASSWORD` gates non-loopback HTTP and WebSocket access; loopback bypasses it. Health, login/logout and GET/HEAD of the selected public `/auth/` assets stay reachable. A trusted proxy supplies client/TLS facts (`FORWARDED_ALLOW_IPS`; DEPLOYMENT). Browser sessions use an expiring HttpOnly HMAC cookie, `Secure` only under TLS. A pre-accept 4401 WebSocket close appears as a refused handshake (1006); an HTTP 401 confirms sign-out and opens `/auth/login?next=`, resending nothing. Without a password, remote access stays open by operator choice. The gate separately serves `GET/HEAD /api/widget-assets/{token}/{path}` using only the scoped lease (§3), even when a cookie is present; that token never authenticates other requests.
 
 `server_web.ServedUI` applies `OUROBOROS_UI_DIR` (§7) once per generation for `/`, `/static/*` and optional directory pages `onboarding.html` and `auth/index.html`. The same record reaches the outer auth gate, the builtin index's response-only owner marker and `StateResponse.served_ui` (source, not asset digest). Selected files are trusted and unrewritten; invalid main selection falls back with a reason. `/onboarding` and `/auth/login` choose whole selected or builtin pages; `?builtin=1` forces recovery, including through authentication. `/auth/*` publishes only the selected public login bundle; login/logout operations precede it. Missing assets never mix clients. Builtin `/onboarding/static/*` and the author kit remain independent. Topology, recovery and client-owned releases: CLIENT_CONTRACT §2–4.
 
@@ -23,7 +23,9 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | GET | `/api/extensions/{skill}/module/{entry:path}` | reviewed `.js`/`.mjs` from captured texts; `Access-Control-Allow-Origin: *` |
 | GET | `/api/extensions/{skill}/ui/{revision}/{path:path}` | captured page-module files of the live revision |
 | GET | `/api/widgets` | live UI tabs and pinned cards, passive; `Cache-Control: no-store` |
-| POST | `/api/widgets/fault` | a shown fault as one task-less `widget_fault` event, bounded |
+| POST | `/api/widgets/fault` | bounded widget fault |
+| POST | `/api/widgets/asset-leases` | parent opens one publication-bound read lease |
+| POST | `/api/widgets/asset-leases/{op}` | parent renews/revokes its lease |
 | GET | `/api/extensions/{skill}/settings_section` | |
 | ANY | `/api/extensions/{skill}/{rest:path}` | extension dispatch (§13) |
 | GET | `/api/skills/daemons` | |
@@ -71,6 +73,7 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | GET | `/api/onboarding` | |
 | GET | `/api/onboarding/bootstrap` | |
 | POST | `/api/onboarding/complete` | |
+| GET | `/api/onboarding/complete` | |
 | POST | `/api/onboarding/subagents/preview` | |
 | GET | `/api/settings` | |
 | POST | `/api/settings` | |
@@ -125,9 +128,12 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | POST | `/api/tasks` | |
 | GET | `/api/tasks` | |
 | GET | `/api/tasks/{task_id}` | |
+| GET | `/api/tasks/{task_id}/reviews` | paged; gaps |
+| GET | `/api/tasks/{task_id}/reviews/skill/{job_id}` | saved detail |
+| GET | `/api/tasks/{task_id}/reviews/{record_id}/{seat_id}` | saved source; no paths |
 | GET | `/api/tasks/{task_id}/events` | integer rank |
-| POST | `/api/tasks/{task_id}/events` | read-only v2 cursor (§3 History reads and the SSE v2 transport) |
-| GET | `/api/tasks/{task_id}/artifacts/{name}` | own stores: POSIX no-follow or Windows NT relative handles; admission facts precede child-store metadata reads; SVG: `sandbox` CSP, `nosniff` (`gateway/task_archive.py`) |
+| POST | `/api/tasks/{task_id}/events` | read-only v2 cursor (§3 history/SSE v2) |
+| GET | `/api/tasks/{task_id}/artifacts/{name}` | own stores: POSIX no-follow/Windows NT relative handles; admission before child-store metadata; SVG `sandbox` CSP + `nosniff` (`gateway/task_archive.py`) |
 | POST | `/api/tasks/{task_id}/cancel` | (§5 Stop policy and hurry) |
 | POST | `/api/tasks/{task_id}/hurry` | (§5 Stop policy and hurry) |
 | POST | `/api/tasks/{task_id}/pause` | (§6 Owner Pause of a whole tree) |

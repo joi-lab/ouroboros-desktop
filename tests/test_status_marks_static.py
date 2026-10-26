@@ -61,9 +61,7 @@ warning | web/style.css | .chat-composer-chip[data-tone="warn"] .chat-chip-dot |
 warning | web/style.css | .chat-delegated-final | color
 warning | web/style.css | .chat-delegated-problem | color
 warning | web/style.css | .chat-live-line.warn .chat-live-line-title | color
-warning | web/style.css | .chat-live-review-summary[data-warning="1"] | color
 warning | web/style.css | .chat-quiz-storage-note | color
-warning | web/style.css | .chat-review-attempt.warn | border-inline-start-color
 warning | web/style.css | .document-reader-notice | background, border-bottom, color
 warning | web/style.css | .harness-exhausted | background
 warning | web/style.css | .harness-exhausted .harness-account-meta | color

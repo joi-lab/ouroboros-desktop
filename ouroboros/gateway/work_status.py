@@ -277,6 +277,18 @@ def _outcome(row: Mapping[str, Any]) -> str:
     return str(lifecycle.get("status") or row.get("status") or "")
 
 
+def shown_outcome(row: Mapping[str, Any]) -> str:
+    """The settled word a work says beside ``Finalizing…``: its stored lifecycle, except a turn the owner
+    stopped, which reads ``cancelled`` wherever its card's status fold says Stopped (``outcome_phase``)."""
+    status = _outcome(row)
+    if status in {"completed", "failed"} and isinstance(row.get("cancel_origin"), dict):
+        from ouroboros.project_dialogue import outcome_phase
+
+        if outcome_phase({**row, "root_phase_checkpoint": {}}, {}) == "cancelled":
+            return "cancelled"
+    return status
+
+
 def mark_of(activity: str, confirmed: bool, *, live: bool = False, unknown: bool = False) -> str:
     """The shape a work or a room shows on every surface (docs/DESIGN.md "Status marks"): what the work does, never
     whose move it is (that is ``turn``). ``live`` (something actually executes) moves the mark whatever the word; an

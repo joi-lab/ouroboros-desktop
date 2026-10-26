@@ -96,19 +96,49 @@ export function preflightEvidenceText(preflight) {
     return lines.join('\n');
 }
 
-export function afterUpdateFactsText(facts) {
-    if (!facts) return '';
-    const number = (value, unit) => typeof value === 'number' ? `${value.toFixed(2)} ${unit}` : 'unobserved';
-    return ['before', 'after'].map((side) => {
-        const sample = facts[side];
-        if (!sample) return `${side}: unobserved.`;
-        const direct = sample.direct_message_first_dispatch;
-        return `${side} (${sample.source_sha || 'unknown source'}, ${sample.observed_at || 'unknown time'}; server process): `
-            + `RSS${sample.rss_measure === 'peak' ? ' peak' : ''} ${number(sample.rss_bytes == null ? null : sample.rss_bytes / 1048576, 'MiB')}; `
-            + `CPU ${number(sample.cpu_seconds, 'seconds')}, ${number(sample.cpu_percent, '%')} over ${number(sample.cpu_interval_seconds, 'seconds')}; `
-            + `duty overruns ${sample.duty_overruns == null ? 'unobserved' : JSON.stringify(sample.duty_overruns)}; `
-            + `direct message to first dispatch ${number(direct?.seconds, 'seconds')}${direct?.task_id ? ` (${direct.task_id})` : ''}.`;
-    }).join('\n');
+// The retained attempt's before/after samples as labelled rows of its Last attempt (owner 25.10: A). Only a number
+// is a measurement, so null stays "unobserved", never 0. Peak RSS keeps its word; lifetime CPU time and one
+// interval's share are separate rows; the dispatch time runs from acceptance to the first model call, not to an
+// answer. Each side is one recorded sample: history, never a verdict about the update.
+const measured = (value, unit) => (typeof value === 'number' ? `${value.toFixed(2)} ${unit}` : 'unobserved');
+
+function utcOffset(date) {
+    const minutes = -date.getTimezoneOffset();
+    const whole = Math.abs(minutes);
+    const rest = whole % 60;
+    return `UTC${minutes < 0 ? '-' : '+'}${Math.floor(whole / 60)}${rest ? `:${String(rest).padStart(2, '0')}` : ''}`;
+}
+
+function sampleRows(sample) {
+    if (!sample) return [{ label: 'Sample', value: 'unobserved' }];
+    const direct = sample.direct_message_first_dispatch;
+    const when = attemptTime(sample.observed_at);
+    const percent = measured(sample.cpu_percent, '%');
+    const interval = measured(sample.cpu_interval_seconds, 'seconds');
+    return [
+        { label: 'Source', value: sample.source_sha || 'unknown source' },
+        // The local minute to read, with the exact recorded stamp under it.
+        when ? { label: 'Observed', value: `${when} ${utcOffset(new Date(sample.observed_at))}`, exact: sample.observed_at }
+            : { label: 'Observed', value: sample.observed_at || 'unknown time' },
+        { label: `RSS${sample.rss_measure === 'peak' ? ' peak' : ''}`,
+            value: measured(typeof sample.rss_bytes === 'number' ? sample.rss_bytes / 1048576 : null, 'MiB') },
+        { label: 'CPU time, process lifetime', value: measured(sample.cpu_seconds, 'seconds') },
+        { label: 'CPU share, sample interval',
+            value: percent === 'unobserved' && interval === 'unobserved' ? 'unobserved' : `${percent} over ${interval}` },
+        { label: 'Duty overruns', value: sample.duty_overruns == null ? 'unobserved' : JSON.stringify(sample.duty_overruns) },
+        { label: 'Direct message to first model call', value: typeof direct?.seconds === 'number'
+            ? `${measured(direct.seconds, 'seconds')} from acceptance${direct.task_id ? ` · task ${direct.task_id}` : ''}`
+            : 'unobserved' },
+    ];
+}
+
+/** `after_update` as rows: each side's heading (`head`), then its `{label, value, exact?}` rows; [] without facts. */
+export function afterUpdateRows(facts) {
+    if (!facts) return [];
+    return [['before', 'Before the update'], ['after', 'After the update']].flatMap(([side, name]) => {
+        const sample = facts[side] || null;
+        return [{ head: sample ? `${name} (recorded sample, server process)` : name }, ...sampleRows(sample)];
+    });
 }
 
 // The executor's real stages (no percentages or timers): the panel headline, and the pill's shorter word.

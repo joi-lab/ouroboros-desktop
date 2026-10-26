@@ -685,6 +685,23 @@ def load_plan_record(root: Any, task_id: str) -> Dict[str, Any]:
     return validate_record(document.get(PLAN_RECORD_KEY))
 
 
+def read_reply_source(root: Any, task_id: str, ask_id: str, seat_id: str, *,
+                      role: str, part: str, sha256: str) -> bytes:
+    """Exact physical task/ask/seat reply; retry aliases never redirect a saved selection."""
+    from ouroboros.review_ledger import ReviewSourceChanged, read_source
+
+    record = load_plan_record(root, task_id)
+    sources = [p.get("reply_ref") for ask in record["asks"] if ask["ask_id"] == ask_id
+               for p in ask["participants"] if p["seat_id"] == seat_id]
+    if role != "response" or part or len(sources) != 1 or not isinstance(sources[0], dict):
+        raise ReviewSourceChanged("The selected saved plan reply is unavailable.")
+    source = sources[0]
+    ref = source.get("ref", source)
+    if not isinstance(ref, dict) or ref.get("sha256") != sha256 or source.get("status", "retained") != "retained":
+        raise ReviewSourceChanged("The selected saved plan reply changed or is unavailable.")
+    return read_source(root, task_id, source)
+
+
 def _size(record: Mapping[str, Any]) -> int:
     return len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
 

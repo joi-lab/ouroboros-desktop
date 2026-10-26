@@ -24,14 +24,13 @@ Use the real thing at its worst real length: <absolute paths to history exports,
 Real data is allowed and preferred; the only limit is side effects on the live API.
 
 DELIVERABLE
-One self-contained HTML file built from <absolute path>/skills/design_demo/assets/compare.html,
+One self-contained HTML file built from <absolute path>/skills/ui_design/assets/compare.html,
 frames inline ("</" written as "<\/" inside its JSON), opened alone at <W×H> in <engine>. Now plus <n> variants, one scene per decision,
 A recommended with its cost in one line, at most three questions on the page, "none of these" included.
 Not a README, a server, URL parameters, a manifest, a test count or contact sheets as the thing that is opened.
 
 READ FIRST (host-provided read-only references; reading them and the files they name is allowed)
 <absolute path>/skills/ui_design/SKILL.md
-<absolute path>/skills/design_demo/SKILL.md
 
 BEFORE YOU FINISH
 Copy the delivered file alone into an empty folder, open it at <W×H> in <engine>, switch every variant,
@@ -48,5 +47,6 @@ Notes for the parent:
 
 - The viewer paragraph comes first and is the acceptance criterion; everything after it is material.
 - Give one direction per parallel author; otherwise the variants converge. Tell each author which direction is theirs.
-- Give the critic the same file and the same viewer sentence that the owner will get.
+- Give the critic the same file the owner will get, in its clean view (key C) first: it says what it sees before it reads your
+  names, notes and the viewer sentence.
 - Keep the brief under a screen where you can; a nine-thousand-character brief about coverage is how an archive gets built.

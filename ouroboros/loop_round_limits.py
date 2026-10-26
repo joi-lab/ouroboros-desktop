@@ -244,15 +244,15 @@ def _drain_incoming_messages(
                 continue
             if kind == KIND_QUIZ_ANSWER:
                 from ouroboros.owner_quiz import late_answer_owner_text
-                answer = (entry.get("quiz_delivery") or {}).get("answer_snapshot")
+                delivery = entry.get("quiz_delivery") or {}
+                answer = delivery.get("answer_snapshot")
                 owner_words = late_answer_owner_text(answer) if isinstance(answer, dict) else dmsg
                 if isinstance(answer, dict):
                     from ouroboros.owner_relay import retain_owner_message
                     retain_owner_message(owner_ctx, (answer.get("delivery") or {}).get("answer_row"))
-                _loop()._record_owner_directive(
-                    owner_ctx, source="owner_quiz_answer", content=owner_words,
-                    msg_id=str(entry.get("msg_id") or ""),
-                )
+                _loop()._record_owner_directive(  # the delivered card's identity: its question stays findable
+                    owner_ctx, source="owner_quiz_answer", content=owner_words, msg_id=str(entry.get("msg_id") or ""),
+                    origin={"source_task_id": delivery.get("task_id"), "quiz_id": delivery.get("quiz_id")})
                 deliver_quiz_answer(
                     entry, task_id, event_queue,
                     lambda text: _loop()._append_or_merge_user_message(messages, text, slot=owner_ctx,
@@ -711,10 +711,21 @@ def _handle_provider_unavailable(
     if control_reason is None:
         owner_ctx = getattr(ctx.tools, "_ctx", None)
         control_reason = str(getattr(owner_ctx, "_transport_repeat_control_reason", "") or "")
-    return _loop()._provider_unavailable_result(
+    result = _loop()._provider_unavailable_result(
         ctx, error_kind=error_kind, wait_cause=wait_cause, waited_sec=waited_sec,
         interactive=interactive, control_reason=control_reason,
     )
+    from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN, owner_stop_origin
+
+    if control_reason == REASON_OWNER_STOPPED_DIRECT_TURN and result[1].get("reason_code") == "provider_unavailable":
+        # This accepted Stop ended the wait. Keep the provider failure/UNKNOWN
+        # facts, carrying the control beside them on the existing stop origin.
+        owner_ctx = getattr(ctx.tools, "_ctx", None)
+        root = getattr(owner_ctx, "budget_drive_root", None) or ctx.drive_root
+        origin = owner_stop_origin(root, ctx.task_id) if root else {}
+        if origin.get("stop_policy") == "immediate":
+            result[1]["cancel_origin"] = {**origin, "control_reason": control_reason}
+    return result
 
 
 def _loop_exit_after_exception(

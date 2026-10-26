@@ -189,7 +189,7 @@ def _handle_skill_install(ctx: ToolContext, id: str = "", reason: str = "", repl
         return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ERROR",
             text="⚠️ SKILL_INSTALL_REFUSED: " + _dump(exc.payload())))
     if result.get("needs_review"):
-        start_review(drive, result["name"], panel=panel, chosen_by="ouroboros")
+        start_review(drive, result["name"], panel=panel, chosen_by="ouroboros", ctx=ctx)
         result["next"] = ("The review runs now in the skill lifecycle lane; the skill turns on when it leaves no "
                           "blockers. list_skills(name=...) shows its state.")
     acceptance = result.get("acceptance") or {}
@@ -229,7 +229,7 @@ def _handle_skill_update(ctx: ToolContext, name: str = "", mode: str = "", diges
         return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ERROR",
             text="⚠️ SKILL_UPDATE_REFUSED: " + _dump(exc.payload())))
     if result.get("needs_review"):
-        start_review(drive, skill, panel=panel, chosen_by="ouroboros")
+        start_review(drive, skill, panel=panel, chosen_by="ouroboros", ctx=ctx)
     return _publish_tool_result(ctx, ToolResult(status="ok", code="OK", text=_dump(result)))
 
 

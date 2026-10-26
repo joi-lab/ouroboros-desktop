@@ -1,9 +1,9 @@
-"""Reviewer captures keep whole outputs; evidence-only investigations keep their bound.
+"""Reviewer captures keep whole outputs, and a full volume never loses one.
 
-A reviewer's copy is released only after its delta is retained, so a byte bound on
-reviewer evidence kept the larger copy instead of the smaller result. Investigations
-keep ``EVIDENCE_RETAIN_BYTES``. Real consumers run with a synthetic engine transport;
-files just over 64 MiB exercise the real bound, never a monkeypatched constant.
+A reviewer's copy is released only after its delta and named outputs are retained
+whole: no byte bound applies (the 64 MiB evidence bound is gone for every run), so a
+large output is saved, never the reason a larger copy stays. Real consumers run with
+a synthetic engine transport.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ import subprocess
 
 import pytest
 
-from ouroboros import delegate_custody as custody
 from ouroboros import review_checking as rc
 from tests._review_session_route_shared import (  # noqa: F401 - transport fixtures
     FakeGateway,
@@ -29,7 +28,7 @@ from tests.test_review_checking_completion import run_one_shot
 from tests.test_review_directory_capture import _run as run_directory, _source, _subject
 from tests.test_review_session_rights import writable_engine  # noqa: F401
 
-OVER_BOUND = rc.EVIDENCE_RETAIN_BYTES + (1 << 20)
+LARGE = 2 << 20  # well past a pipe buffer; a size no bound reaches
 
 
 def _write(path, size, *, seed=None):
@@ -53,7 +52,7 @@ def _sha(path):
     return digest.hexdigest()
 
 
-def test_reviewer_named_output_over_the_bound_is_retained_whole_before_release(
+def test_reviewer_large_named_output_is_retained_whole_before_release(
     author, tmp_path, writable_engine, monkeypatch,  # noqa: F811
 ):
     drive, written = tmp_path / "drive", {}
@@ -61,27 +60,27 @@ def test_reviewer_named_output_over_the_bound_is_retained_whole_before_release(
 
     def edit(area):
         (area / rc.EVIDENCE_DIRNAME).mkdir()
-        written["sha"] = _write(area / rc.EVIDENCE_DIRNAME / "trace.bin", OVER_BOUND)
+        written["sha"] = _write(area / rc.EVIDENCE_DIRNAME / "trace.bin", LARGE)
 
     receipt = run_one_shot(author, drive, source, monkeypatch, edit)["checking_evidence"]
     assert receipt["status"] == "retained" and receipt["gaps"] == [], {k: receipt.get(k) for k in ("status", "gaps")}
     [row] = [row for row in receipt["named_evidence"] if row["path"] == f"{rc.EVIDENCE_DIRNAME}/trace.bin"]
-    assert row["size"] == OVER_BOUND and row["sha256"] == written["sha"]
+    assert row["size"] == LARGE and row["sha256"] == written["sha"]
     assert _sha(Path(receipt["evidence_dir"]) / "files" / row["path"]) == written["sha"]
-    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area").exists()
+    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area.noindex").exists()
 
 
-def test_reviewer_binary_patch_over_the_bound_is_retained_and_reproduces_the_tree(
+def test_reviewer_large_binary_patch_is_retained_and_reproduces_the_tree(
     author, tmp_path, writable_engine, monkeypatch,  # noqa: F811
 ):
     drive = tmp_path / "drive"
     source = rc.freeze_checking_source(author, data_root=drive, subject=rc.SUBJECT_INDEX)
     receipt = run_one_shot(author, drive, source, monkeypatch,
-                           lambda area: _write(area / "fixture.bin", OVER_BOUND, seed=1609))["checking_evidence"]
+                           lambda area: _write(area / "fixture.bin", LARGE, seed=1609))["checking_evidence"]
     facts = {k: receipt.get(k) for k in ("status", "gaps", "patch_bytes", "patch_retained")}
     assert receipt["status"] == "retained" and receipt["patch_retained"], facts
-    assert receipt["patch_bytes"] > rc.EVIDENCE_RETAIN_BYTES and not receipt["gaps"]
-    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area").exists()
+    assert receipt["patch_bytes"] > LARGE and not receipt["gaps"]
+    assert not (rc.seat_dir(drive, "task-1", "op-1") / "area.noindex").exists()
     # The retained patch alone rebuilds the reviewer's tree over the frozen subject;
     # reads borrow the author's objects and writes stay in a scratch object store.
     objects = tmp_path / "apply-objects"
@@ -98,43 +97,24 @@ def test_reviewer_binary_patch_over_the_bound_is_retained_and_reproduces_the_tre
     assert git("write-tree") == receipt["after_tree"]
 
 
-def test_reviewer_ordinary_file_over_the_bound_is_retained_whole_before_release(
+def test_reviewer_large_ordinary_file_is_retained_whole_before_release(
     tmp_path, writable_engine, monkeypatch,  # noqa: F811
 ):
     root, drive, written = _subject(tmp_path, "skill_review"), tmp_path / "drive", {}  # a copied subject
 
     def edit(area):
         written["area"] = area
-        written["sha"] = _write(area / "dataset.bin", OVER_BOUND)
+        written["sha"] = _write(area / "dataset.bin", LARGE)
 
     actor = run_directory(root, drive, "skill_review", _source(root, drive, "skill_review"), monkeypatch, edit)
     assert actor["status"] == "ok", actor
     receipt = actor["usage"]["checking_evidence"]
     assert receipt["status"] == "retained" and receipt["gaps"] == [], {k: receipt.get(k) for k in ("status", "gaps")}
     [row] = [row for row in receipt["files"] if row["path"] == "dataset.bin"]
-    assert row["size"] == OVER_BOUND and row["sha256"] == written["sha"]
+    assert row["size"] == LARGE and row["sha256"] == written["sha"]
     assert _sha(Path(receipt["evidence_dir"]) / "files" / "dataset.bin") == written["sha"]
-    assert receipt["entries"]["dataset.bin"]["after"]["size"] == OVER_BOUND
+    assert receipt["entries"]["dataset.bin"]["after"]["size"] == LARGE
     assert not written["area"].exists() and not (root / "dataset.bin").exists()
-
-
-def test_investigation_named_output_keeps_the_64mib_bound(tmp_path, monkeypatch):
-    from tests.test_investigation_custody import _real_investigation
-    from ouroboros.tools.delegate_integration import capture_terminal_patch_for_drive
-
-    _target, drive, entry, copy, _handle = _real_investigation(tmp_path, monkeypatch)
-    assert rc.EVIDENCE_RETAIN_BYTES == 64 * 1024 * 1024
-    written = _write(copy / rc.EVIDENCE_DIRNAME / "trace.bin", OVER_BOUND)
-    try:
-        block = capture_terminal_patch_for_drive(drive, entry)
-        named = block["named_evidence"]
-        assert named["status"] == "partial", named
-        assert {(gap["path"], gap["reason"]) for gap in named["gaps"]} == {
-            (f"{rc.EVIDENCE_DIRNAME}/trace.bin", "evidence_budget_exceeded")}
-        assert "disposition" not in block and not entry.patch_disposed
-        assert _sha(copy / rc.EVIDENCE_DIRNAME / "trace.bin") == written  # the only bytes stay in the copy
-    finally:
-        custody._CUSTODY.clear()
 
 
 def _no_space(*_args, **_kwargs):
@@ -176,7 +156,7 @@ def test_reviewer_capture_out_of_space_keeps_copy_without_complete_receipt(
 
     receipt = run_one_shot(author, drive, source, monkeypatch, edit)["checking_evidence"]
     assert receipt["status"] == "capture_failed" and "No space left on device" in receipt["error"], receipt
-    area = rc.seat_dir(drive, "task-1", "op-1") / "area"
+    area = rc.seat_dir(drive, "task-1", "op-1") / "area.noindex"
     assert (area / "probe_test.py").read_bytes() == b"assert True\n"
     assert (area / rc.EVIDENCE_DIRNAME / "coverage.xml").read_bytes() == b"<coverage/>\n"
     saved = rc.seat_dir(drive, "task-1", "op-1") / "evidence" / "summary.json"

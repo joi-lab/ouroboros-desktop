@@ -1221,6 +1221,12 @@ def test_restart_drain_defers_then_completes_without_sleeping(tmp_path, monkeypa
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    # The drain path records its admission intent in the module-global
+    # _AGENT_RESTART; a leftover "ready" record from a sibling test makes
+    # agent_restart_pending() True and short-circuits the drain before it
+    # reaches the live-task check. Reset it so each drain test is isolated.
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     now = __import__("time").time()
     ctx = types.SimpleNamespace(
@@ -1255,6 +1261,8 @@ def test_restart_drain_no_live_tasks_restarts_immediately(tmp_path, monkeypatch)
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     ctx = types.SimpleNamespace(
         RUNNING={},
@@ -1283,6 +1291,8 @@ def test_restart_drain_uses_generic_queue_heartbeat_not_retired_planning_knob(
     performed = []
     monkeypatch.setattr(server, "_perform_supervisor_restart", lambda ctx, **kw: performed.append(True))
     server._pending_restart.clear()
+    from ouroboros import server_restart
+    monkeypatch.setattr(server_restart, "_AGENT_RESTART", {})
 
     ctx = types.SimpleNamespace(
         RUNNING={

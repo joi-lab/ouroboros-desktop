@@ -153,10 +153,10 @@ def _describe_bg(request: Request) -> Callable[[bool], dict[str, Any]] | None:
 
 
 async def api_consciousness(request: Request) -> JSONResponse:
-    """The Dashboard's consciousness panel: status, spend by cause, places and recent wakes (read-only)."""
+    """The Dashboard's read-only status, spend by cause, place labels and recent wakes."""
     describe = _state_attr(request, "describe_consciousness")
     if describe is None:
-        return JSONResponse({"status": "unavailable", "places": [], "recent_wakes": []}, status_code=503,
+        return JSONResponse({"status": "unavailable", "recent_wakes": []}, status_code=503,
                             headers={"Cache-Control": "no-store"})
     return JSONResponse(await asyncio.to_thread(describe), headers={"Cache-Control": "no-store"})
 
@@ -396,6 +396,8 @@ def _task_activity_facts(drive_root: Any, task_id: str) -> dict:
         display["model_waits"] = data["model_waits"]
     if data.get("status") or data.get("outcome_axes"):
         display["outcome_axes"] = normalize_outcome_axes(data)
+    if isinstance(data.get("cancel_origin"), dict):
+        display["cancel_origin"] = dict(data["cancel_origin"])  # the stop the status fold reads beside the axes
     if synthesis:
         display["root_phase_checkpoint"] = {"post_task_synthesis": synthesis}
     if _answer_stored(synthesis):

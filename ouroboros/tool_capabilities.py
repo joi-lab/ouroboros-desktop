@@ -142,6 +142,18 @@ LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     "list_available_tools", "list_image_models",
 })
 
+# A host-minted silence diagnostic (#1376, ``ouroboros/work_diagnostics.py``) reads
+# the observed work and may request the existing lifecycle controls on that one
+# source. It writes no product, delegates nothing and discovers no extension/MCP
+# tool; inherited ceilings still intersect this set at schema and dispatch.
+TASK_DIAGNOSTIC_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_file", "list_files", "search_code", "query_code", "query_data", "vcs_read",
+    "inspect_harness", "chat_history", "recent_tasks", "get_task_result", "peek_task",
+    "tree_read", "knowledge_read", "knowledge_list", "memory_read", "wait_task", "wait_tasks",
+    "await_messages", "forward_to_worker", "pause_task", "resume_task", "continue_task",
+    "finish_task", "list_available_tools", "switch_model",
+})
+
 ACTING_SUBAGENT_MODE: str = "acting_subagent"
 
 # Mutative ("acting") subagents may write inside their assigned write root
@@ -219,7 +231,7 @@ READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
     "search_code", "query_code", "query_data", "recent_tasks",
     "web_search", "chat_history",
     "vcs_read", "service_status", "service_logs",
-    "get_task_result", "list_projects", "memory_read",
+    "get_task_result", "list_projects", "memory_read", "search_ui_translations",
 })
 
 # Enqueue-only tools safe to emit in parallel within one tool-call round.
@@ -468,10 +480,10 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     "integrate_delegated_patch", "integrate_subagent_patch",
     # writes a local task artifact; Observe does not grant general file writes
     "generate_evolution_stats",
-    # the world beyond the repository: forms, skills, project notes
+    # the world beyond the repository: forms, skills, project notes, the owner's interface wording
     "browser_action", "submit_skill_to_hub", "toggle_skill", "skill_owner_action",
     "skill_install", "skill_update",
-    "journal_write", "workpad_write",
+    "journal_write", "workpad_write", "pin_ui_translation",
     "github_write", "pr_merge",
 })
 

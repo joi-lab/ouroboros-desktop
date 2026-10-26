@@ -1,7 +1,7 @@
 ---
 name: telegram
 description: Owner-only Telegram text bridge and Mini App gateway for the existing Ouroboros interface.
-version: 1.3.7
+version: 1.3.8
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -70,6 +70,8 @@ its whole tree: `$3.42` when final, `up to $3.42` while costs may still arrive,
 Version 1.3.6 sends Wrap up's saved-work receipt, which the host types as a terminal
 receipt, even with progress mirroring off; other card rows still follow that toggle.
 Version 1.3.7 sends no finish notification for a run that finished quietly.
+Version 1.3.8 paints the Mini App's connecting page in the interface's light or dark:
+the Mini App's saved Light or Dark, else Telegram's own, as the page that follows it does.
 
 Version 1.2.1 marks questions that wait for an owner answer and clears the
 waiting line after an answer submitted through Telegram.
