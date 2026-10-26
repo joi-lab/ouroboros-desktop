@@ -974,3 +974,21 @@ def test_a_settings_read_takes_no_lock_and_reads_a_torn_document_again_behind_it
     isolated_settings.write_bytes(complete[:-1])  # undecodable for good (a hand edit)
     assert cfg.load_settings()["TOTAL_BUDGET"] == cfg.SETTINGS_DEFAULTS["TOTAL_BUDGET"]
     assert taken == ["broken"]
+
+    # Windows: an open that meets a writer's replace is refused (a sharing violation): read again behind its lock.
+    isolated_settings.write_bytes(complete)
+    taken.clear()
+    opened, real_open = [], pathlib.Path.open
+
+    def refused_once(path, *args, **kwargs):
+        if path == isolated_settings and not opened:
+            opened.append(1)
+            raise PermissionError(13, "The process cannot access the file")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "open", refused_once)
+    monkeypatch.setattr(cfg, "_acquire_settings_lock", lambda timeout=2.0: taken.append("replacing") or None)
+    assert cfg.load_settings()["TOTAL_BUDGET"] == 33.0 and taken == ["replacing"]
+    isolated_settings.unlink()  # an absent document is no writer's: defaults, no lock
+    taken.clear()
+    assert cfg.load_settings()["TOTAL_BUDGET"] == cfg.SETTINGS_DEFAULTS["TOTAL_BUDGET"] and taken == []
