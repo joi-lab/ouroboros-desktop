@@ -401,7 +401,7 @@ def test_runtime_fact_lists_retained_candidates_for_a_deliberate_resume(scene):
     for index in range(3):
         body_candidate.prepare(make_ctx(scene.serving, scene.data, f"extra-{index}"))
     limited = body_candidate.context_fact("root-consumer", limit=2)
-    assert len(limited) == 3 and limited[-1] == {"omitted": 2, "source": "state/subagent_worktrees.json (kind=body_candidate rows)"}
+    assert len(limited) == 3 and limited[-1] == {"omitted": 2, "source": "state/private_copies/*.json (kind=body_candidate records)"}
 
     from ouroboros.context import build_runtime_section
 
@@ -710,16 +710,18 @@ def test_a_later_boot_abandons_a_candidate_commit_its_candidate_no_longer_holds(
     assert body_adoption.read(scene.data) == {} and git(scene.serving, "rev-parse", "HEAD") == scene.serving_head
 
 
-@pytest.mark.parametrize("unknown", ["registry_unreadable", "git_unanswered"])
+@pytest.mark.parametrize("unknown", ["record_unreadable", "git_unanswered"])
 def test_an_unreadable_candidate_never_proves_its_commit_lost(tmp_path, monkeypatch, unknown):
-    """An unreadable registry or a Git read that does not answer keeps the transaction open for
-    this generation; the next boot that can read the candidate finds the commit still held."""
+    """An unreadable candidate record or a Git read that does not answer keeps the transaction open
+    for this generation; the next boot that can read the candidate finds the commit still held."""
     import subprocess
 
+    from ouroboros import subagent_worktrees
+
     scene = _crash_recovered_cycle(tmp_path, monkeypatch, "evo-unknown")
-    registry = scene.data / "state" / "subagent_worktrees.json"
+    registry = subagent_worktrees._record_file(scene.candidate, scene.data)  # the candidate's own record
     original_registry, original_run = registry.read_text(encoding="utf-8"), subprocess.run
-    if unknown == "registry_unreadable":
+    if unknown == "record_unreadable":
         registry.write_text("{", encoding="utf-8")
     else:
         def run(cmd, *args, **kwargs):

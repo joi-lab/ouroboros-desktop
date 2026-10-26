@@ -925,23 +925,24 @@ def test_snapshot_root_under_runtime_data_refuses_provisioning(tmp_path):
 
 
 def test_registry_save_failure_leaves_no_orphan_snapshot_dir(tmp_path, monkeypatch):
-    """Gate fix 7: a registry-write failure removes the snapshot directory —
-    an unregistered directory would be invisible to disposal/retention."""
+    """Gate fix 7: a failed record write removes the snapshot directory —
+    an unrecorded directory would be invisible to disposal/retention."""
     import ouroboros.subagent_worktrees as worktrees
 
     data = tmp_path / "data"
     skill = _seed_skill(data)
 
     def _boom(*_a, **_k):
-        raise OSError("registry disk full")
+        raise OSError("record disk full")
 
-    monkeypatch.setattr(worktrees, "_save_registry", _boom)
-    with pytest.raises(OSError, match="registry disk full"):
+    monkeypatch.setattr(worktrees, "_put_record", _boom)
+    with pytest.raises(OSError, match="record disk full"):
         provision_payload_snapshot(
             target_root=skill, task_id="t1", snapshot_id="snapReg",
             worktree_root=tmp_path / "snaps", data_dir=data)
     leftovers = [*(tmp_path / "snaps").glob("dlgp_*"), *(tmp_path / "snaps").glob(f"{COPIES}/dlgp_*")]
     assert leftovers == [], leftovers
+    assert worktrees.find_execution_snapshot("snapReg", data_dir=data) is None
 
 
 def test_first_wins_is_keyed_on_the_first_shape_carrying_row(tmp_path):

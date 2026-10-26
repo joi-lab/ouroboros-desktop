@@ -2,12 +2,14 @@
 
 Work product stays in the private copy; disposable process state goes outside every Git
 working tree, where safe_test's own guard accepts it; named evidence goes to the copy's
-``.review-evidence/``, which the host retains before any disposition releases the copy and
-keeps out of the product patch (#2070). Read-only access is unchanged.
+``.review-evidence/``, which the host retains whole and keeps out of the product patch (#2070)
+before the copy's checkout is released (once the capture is saved). Links and other entries
+retention cannot copy are recorded gaps; they never hold the copy. Read-only access is unchanged.
 """
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -202,6 +204,46 @@ def test_candidate_evidence_is_retained_out_of_the_patch_before_either_dispositi
         custody._CUSTODY.clear()
 
 
+@pytest.mark.parametrize("ending", ["retained_later", "copy_gone"])
+@pytest.mark.parametrize("decision", ["apply", "reject"])
+def test_unretained_evidence_of_a_kept_copy_withholds_the_disposition(tmp_path, monkeypatch, decision, ending):
+    """A copy that stays (a Git repository inside it cannot be saved in the result) whose named evidence
+    failed to retain is the last copy of that evidence: apply and reject refuse, record nothing and apply
+    nothing. Once retention works the same call disposes; a copy that is already gone holds nothing."""
+    import errno
+
+    from ouroboros import delegate_named_evidence as named
+    from ouroboros.tools.delegate import _capture_terminal_patch
+    from ouroboros.tools.subagent_integration import _integrate_delegated_patch
+
+    target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch)
+    expected = _write_evidence(copy)
+    (copy / "feature.py").write_text("VALUE = 3\n", encoding="utf-8")
+    (copy / "vendor" / "kept").mkdir(parents=True)
+    _git(copy / "vendor" / "kept", "init", "-q")
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        with monkeypatch.context() as busy:
+            busy.setattr(named, "retain_files", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.EBUSY, "in use")))
+            capture = _capture_terminal_patch(ctx, entry)
+            assert capture["named_evidence"]["status"] == "capture_failed" and copy.is_dir(), capture
+            out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
+        assert out.startswith("⚠️ INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED"), out
+        assert entry.patch_disposed == "" and not (target / "feature.py").exists() and copy.is_dir()
+        if ending == "copy_gone":
+            shutil.rmtree(copy)  # lost outside the host: the saved failure is the last copy of nothing
+        else:  # the refusal's remedy: the evidence changes (here: rewritten), so it is retained afresh
+            notes = copy / ".review-evidence" / "notes.txt"
+            os.utime(notes, ns=(notes.stat().st_atime_ns, notes.stat().st_mtime_ns + 1_000_000_000))
+        out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
+        assert ("✅ Integrated" if decision == "apply" else "🚫 Rejected") in out, out
+        assert (target / "feature.py").exists() is (decision == "apply") and not copy.exists()
+        if ending == "retained_later":
+            assert _retained(_latest(ctx, entry)) == expected
+    finally:
+        custody._CUSTODY.clear()
+
+
 def _saved(capture):
     return json.loads((pathlib.Path(capture["named_evidence"]["evidence_dir"]) / "summary.json").read_text(
         encoding="utf-8"))
@@ -222,11 +264,10 @@ def _symlink_or_skip(link, target, *, directory=False):
 
 
 @pytest.mark.parametrize("decision", ["apply", "reject"])
-def test_a_retention_gap_withholds_the_disposition_until_nothing_unretained_is_left(tmp_path, monkeypatch, decision):
-    """No disposition may release the last copy of named evidence: a gap refuses it, so the copy stays
-    settled and undisposed, the state custody's existing keep-set (``open_snapshot_ids``) holds after
-    the task ends too. The refusal's own remedy, removing what is not evidence, then lets the same call
-    dispose and release: an old gap never holds a surviving copy forever."""
+def test_a_misshaped_evidence_root_is_a_recorded_gap_and_never_product(tmp_path, monkeypatch, decision):
+    """A file where the evidence folder belongs is nothing retention can copy: a recorded gap, which
+    no longer withholds the disposition or keeps the copy, and the evidence path never rides the
+    product patch either (only the product change next to it applies)."""
     from ouroboros.tools.delegate import _capture_terminal_patch
     from ouroboros.tools.subagent_integration import _integrate_delegated_patch
 
@@ -237,30 +278,25 @@ def test_a_retention_gap_withholds_the_disposition_until_nothing_unretained_is_l
     try:
         capture = _capture_terminal_patch(ctx, entry)
         gaps = [{"path": ".review-evidence", "reason": "evidence_root_not_directory"}]
-        assert capture["named_evidence"]["status"] == "partial" and capture["named_evidence"]["gaps"] == gaps
-        out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
-        assert out.startswith("⚠️ INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED"), out
-        assert "(partial: .review-evidence)" in out and "No disposition was recorded" in out
-        assert entry.patch_disposed == "" and not (target / "feature.py").exists()  # nothing applied
-        assert find_execution_snapshot("snapE") is not None and (copy / ".review-evidence").is_file()
-        (copy / ".review-evidence").unlink()  # remove what is not evidence
+        assert capture["named_evidence"]["status"] == "retained" and capture["named_evidence"]["gaps"] == gaps
+        assert capture["checkout_released"] is True and not copy.exists()
+        patch = pathlib.Path(capture["patch_artifact"]).read_text(encoding="utf-8")
+        assert "feature.py" in patch and ".review-evidence" not in patch
         out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
         assert ("✅ Integrated" if decision == "apply" else "🚫 Rejected") in out, out
-        assert (target / "feature.py").exists() is (decision == "apply") and not copy.exists()
-        # The old receipt remains exact; the changed input publishes a new receipt before release.
+        assert "INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED" not in out
+        assert (target / "feature.py").exists() is (decision == "apply")
+        assert not (target / ".review-evidence").exists() and find_execution_snapshot("snapE") is None
         assert _saved(capture) == capture["named_evidence"]
-        latest = _latest(ctx, entry)["named_evidence"]
-        assert latest["status"] == "retained" and latest["gaps"] == [] and latest["files"] == []
-        assert latest["evidence_dir"] != capture["named_evidence"]["evidence_dir"]
     finally:
         custody._CUSTODY.clear()
 
 
-@pytest.mark.parametrize("removed", ["link", "folder", "linked_folder"])
-def test_removing_unretainable_evidence_releases_the_copy_and_keeps_what_was_retained(tmp_path, monkeypatch, removed):
-    """Retention never follows a link, so a link is a gap. Removing that entry, the whole folder, or the
-    linked folder itself leaves nothing unretained in the surviving copy: the same reject disposes, and
-    files retained before stay listed, readable and byte-exact (never the link's target)."""
+@pytest.mark.parametrize("linked", ["entry", "folder"])
+def test_unretainable_links_are_recorded_and_never_hold_the_copy(tmp_path, monkeypatch, linked):
+    """Retention never follows a link, so a link is a recorded gap; it no longer keeps the copy or
+    withholds the disposition. Files retained beside it stay listed, readable and byte-exact (never
+    the link's target), and neither the link nor its target reaches the target tree."""
     from ouroboros.tools.delegate import _capture_terminal_patch
     from ouroboros.tools.subagent_integration import _integrate_delegated_patch
 
@@ -268,66 +304,37 @@ def test_removing_unretainable_evidence_releases_the_copy_and_keeps_what_was_ret
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "elsewhere.log").write_text("not this copy's\n", encoding="utf-8")
-    if removed == "linked_folder":
+    if linked == "folder":
         _symlink_or_skip(copy / ".review-evidence", outside, directory=True)
         expected, gap = {}, ".review-evidence"
     else:
         expected, gap = _write_evidence(copy), ".review-evidence/link.log"
         _symlink_or_skip(copy / gap, outside / "elsewhere.log")
+    (copy / "feature.py").write_text("VALUE = 6\n", encoding="utf-8")
     entry = _isolated_entry(ctx, target, handle)
     try:
         capture = _capture_terminal_patch(ctx, entry)
-        gaps = [{"path": gap, "reason": "evidence_symlink"}]
-        assert capture["named_evidence"]["status"] == "partial" and capture["named_evidence"]["gaps"] == gaps
-        assert _retained(capture) == expected
-        out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
-        assert out.startswith("⚠️ INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED") and gap in out, out
-        if removed == "folder":
-            shutil.rmtree(copy / ".review-evidence")
-        else:
-            (copy / gap).unlink()  # the link itself, never its target
-        out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
-        assert "🚫 Rejected" in out and not copy.exists(), out
+        assert capture["named_evidence"]["status"] == "retained", capture
+        assert capture["named_evidence"]["gaps"] == [{"path": gap, "reason": "evidence_symlink"}]
+        assert _retained(capture) == expected and capture["checkout_released"] is True and not copy.exists()
+        assert ".review-evidence" not in pathlib.Path(capture["patch_artifact"]).read_text(encoding="utf-8")
+        out = _integrate_delegated_patch(ctx, "run-1", "apply", "checked")
+        assert "✅ Integrated" in out and "INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED" not in out, out
+        assert (target / "feature.py").exists() and not os.path.lexists(target / ".review-evidence")
         assert _saved(capture) == capture["named_evidence"] and _retained(capture) == expected
-        latest = _latest(ctx, entry)
-        assert latest["named_evidence"]["status"] == "retained" and latest["named_evidence"]["gaps"] == []
-        assert _retained(latest) == (expected if removed == "link" else {})
-        assert latest["named_evidence"]["evidence_dir"] != capture["named_evidence"]["evidence_dir"]
-        assert (outside / "elsewhere.log").exists()
-    finally:
-        custody._CUSTODY.clear()
-
-
-def test_a_gone_copy_is_not_held_by_its_last_evidence_record(tmp_path, monkeypatch):
-    """A copy that no longer exists is the last copy of nothing: its partial record stays exactly as
-    written, and the disposition proceeds instead of refusing forever."""
-    from ouroboros.tools.delegate import _capture_terminal_patch
-    from ouroboros.tools.subagent_integration import _integrate_delegated_patch
-
-    target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch)
-    (copy / ".review-evidence").write_text("a file where the folder belongs\n", encoding="utf-8")
-    entry = _isolated_entry(ctx, target, handle)
-    try:
-        capture = _capture_terminal_patch(ctx, entry)
-        assert capture["named_evidence"]["status"] == "partial"
-        record = pathlib.Path(capture["named_evidence"]["evidence_dir"]) / "summary.json"
-        written = record.read_bytes()
-        shutil.rmtree(copy)  # lost outside the host, unlike a removal inside a surviving copy
-        out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
-        assert "🚫 Rejected" in out and "INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED" not in out, out
-        assert record.read_bytes() == written
+        assert (outside / "elsewhere.log").read_text(encoding="utf-8") == "not this copy's\n"
     finally:
         custody._CUSTODY.clear()
 
 
 def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monkeypatch):
-    """A candidate's named evidence is retained whole, as a reviewer seat's: past the 64 MiB an
-    investigation is bounded by, byte-exact and copied as a stream, so a full verification run never
-    refuses its disposition for size, and no file is read into memory or into any answer."""
+    """Named evidence is retained whole (no size bound anywhere now): past the 64 MiB investigations
+    were once bounded by, byte-exact and copied as a stream, so a full verification run never refuses
+    its disposition for size, no file is read into memory or into any answer, and none of it is
+    hashed into the target's object database (it stays out of the result commit)."""
     import hashlib
     import tracemalloc
 
-    from ouroboros import review_checking
     from ouroboros.tools.delegate import _capture_terminal_patch
     from ouroboros.tools.subagent_integration import _integrate_delegated_patch
 
@@ -336,11 +343,12 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
     big.parent.mkdir(parents=True)
     chunk, digest = (b"x" * 1023 + b"\n") * 1024, hashlib.sha256()  # one MiB of result lines
     with big.open("wb") as stream:
-        for _ in range(review_checking.EVIDENCE_RETAIN_BYTES // len(chunk) + 1):
+        for _ in range(64 + 1):
             stream.write(chunk)
             digest.update(chunk)
     size = big.stat().st_size
-    assert size > review_checking.EVIDENCE_RETAIN_BYTES
+    assert size > 64 * 1024 * 1024
+    big_blob = _git(target, "hash-object", str(big)).stdout.strip()  # computed, never written
     entry = _isolated_entry(ctx, target, handle)
     try:
         tracemalloc.start()
@@ -354,6 +362,7 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
         assert named["files"] == [{"path": ".review-evidence/run-1/results.jsonl", "size": size,
                                    "sha256": digest.hexdigest(), "mode": 0o644}]
         assert peak < 16 * 1024 * 1024, peak  # streamed: the file never sat in memory whole
+        assert _git(target, "cat-file", "-e", f"{big_blob}^{{blob}}", check=False).returncode != 0
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
         assert "🚫 Rejected" in out and not copy.exists() and len(out) < 4096, out[:400]
         kept = pathlib.Path(named["evidence_dir"]) / "files" / ".review-evidence" / "run-1" / "results.jsonl"
@@ -365,8 +374,8 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
 @pytest.mark.parametrize("recorded", ["staged", "committed"])
 def test_new_evidence_staged_or_committed_in_the_copy_never_reaches_the_target(tmp_path, monkeypatch, recorded):
     """``git add -A``, or a local commit (disclosed as head_moved), makes new evidence tracked in the copy
-    but never in the recorded baseline: it stays out of the patch and is retained beside it, while the
-    product change next to it applies."""
+    but never in the recorded baseline: it stays out of the result commit and the patch and is retained
+    beside it, while the product change next to it applies."""
     from ouroboros.tools.delegate import _capture_terminal_patch
     from ouroboros.tools.subagent_integration import _integrate_delegated_patch
 
@@ -381,9 +390,10 @@ def test_new_evidence_staged_or_committed_in_the_copy_never_reaches_the_target(t
         capture = _capture_terminal_patch(ctx, entry)
         assert capture["status"] == "ready_with_changes", capture
         manifest = json.loads(pathlib.Path(capture["manifest_artifact"]).read_text(encoding="utf-8"))
-        assert {row["path"]: row["reason"] for row in manifest["tracked_excluded"]
+        assert {row["path"]: row["reason"] for row in manifest["untracked_excluded"]
                 if row["path"] in expected} == dict.fromkeys(expected, NAMED_EVIDENCE_EXCLUSION)
-        assert "feature.py" in manifest["tracked_changed"] and not set(expected) & set(manifest["tracked_changed"])
+        included = manifest["tracked_changed"] + manifest["untracked_included"]
+        assert "feature.py" in manifest["untracked_included"] and not set(expected) & set(included)
         patch = pathlib.Path(capture["patch_artifact"]).read_text(encoding="utf-8")
         assert "feature.py" in patch and ".review-evidence" not in patch
         assert ("head_moved" in capture) is (recorded == "committed")
@@ -397,34 +407,9 @@ def test_new_evidence_staged_or_committed_in_the_copy_never_reaches_the_target(t
         custody._CUSTODY.clear()
 
 
-def test_evidence_written_after_a_retained_summary_is_retained_before_release(tmp_path, monkeypatch):
-    """A retained summary stands only for the bytes it saw. A continued session writing into the same
-    copy (modelled at the retention owner on one capture, not through continue_from) gets its new and
-    rewritten evidence retained before the disposition releases the copy."""
-    from ouroboros.tools.delegate import _capture_terminal_patch
-    from ouroboros.tools.subagent_integration import _integrate_delegated_patch
-
-    target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch)
-    expected = _write_evidence(copy)
-    (copy / "feature.py").write_text("VALUE = 4\n", encoding="utf-8")
-    entry = _isolated_entry(ctx, target, handle)
-    try:
-        capture = _capture_terminal_patch(ctx, entry)
-        assert capture["named_evidence"]["status"] == "retained" and capture["named_evidence"]["witness"]
-        original = dict(expected)
-        (copy / ".review-evidence" / "later.log").write_bytes(b"written after the first retention\r\n")
-        (copy / ".review-evidence" / "notes.txt").write_bytes(b"rewritten later\n")
-        expected.update({".review-evidence/later.log": b"written after the first retention\r\n",
-                         ".review-evidence/notes.txt": b"rewritten later\n"})
-        out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
-        assert "🚫 Rejected" in out and not copy.exists(), out
-        assert _retained(_latest(ctx, entry)) == expected
-        assert _retained(capture) == original and _saved(capture) == capture["named_evidence"]
-    finally:
-        custody._CUSTODY.clear()
-
-
 def test_a_verification_only_run_releases_after_its_evidence_is_retained(tmp_path, monkeypatch):
+    """Evidence is not a product change, but a run that retained evidence did something: its empty
+    product result does not close itself; the checkout goes at capture and the owner decides."""
     from ouroboros.tools.delegate import _capture_terminal_patch
     from ouroboros.tools.subagent_integration import _integrate_delegated_patch
 
@@ -434,9 +419,11 @@ def test_a_verification_only_run_releases_after_its_evidence_is_retained(tmp_pat
     try:
         capture = _capture_terminal_patch(ctx, entry)
         assert capture["status"] == "ready_no_changes", capture  # evidence is not a product change
+        assert "disposition" not in capture and not entry.patch_disposed  # retained files: no self-close
+        assert capture["checkout_released"] is True and not copy.exists()
         out = _integrate_delegated_patch(ctx, "run-1", "apply", "")
-        assert "no captured file changes" in out and "the snapshot is released" in out, out
-        assert not copy.exists() and _retained(capture) == expected
+        assert "no captured file changes" in out and "its private copy is released" in out, out
+        assert entry.patch_disposed == "applied" and _retained(capture) == expected
     finally:
         custody._CUSTODY.clear()
 
@@ -460,7 +447,7 @@ def test_tracked_files_under_the_evidence_folder_stay_in_the_product_patch(tmp_p
         assert ".review-evidence/keep.txt" in manifest["tracked_changed"]
         assert ".review-evidence/new.log" not in manifest["tracked_changed"]
         excluded = {"path": ".review-evidence/new.log", "reason": NAMED_EVIDENCE_EXCLUSION}
-        assert excluded in manifest["tracked_excluded" if staged else "untracked_excluded"]
+        assert excluded in manifest["untracked_excluded"]  # staged or not: held out of the result commit
         patch = pathlib.Path(capture["patch_artifact"]).read_text(encoding="utf-8")
         assert "edited" in patch and "session log" not in patch
         assert _retained(capture) == {".review-evidence/new.log": b"session log\r\n"}
@@ -517,7 +504,7 @@ def test_baseline_evidence_symlinks_are_product_and_do_not_block_unrelated_work(
 
 
 def test_a_baseline_root_link_is_never_walked_for_evidence_or_its_witness(tmp_path, monkeypatch):
-    from ouroboros import review_checking as rc
+    from ouroboros import delegate_named_evidence as named
 
     area, outside = tmp_path / "area", tmp_path / "outside"
     area.mkdir()
@@ -527,12 +514,14 @@ def test_a_baseline_root_link_is_never_walked_for_evidence_or_its_witness(tmp_pa
     def forbidden(*_args, **_kwargs):
         raise AssertionError("an evidence root symlink must not be walked")
 
-    monkeypatch.setattr(rc.os, "walk", forbidden)
+    monkeypatch.setattr(named.os, "walk", forbidden)
     gaps = []
-    assert rc.named_evidence_witness(area)
-    assert rc.retain_named_evidence(area, tmp_path / "kept", [100], gaps,
-                                     product_paths={".review-evidence"}) == []
+    assert named.named_evidence_witness(area)
+    assert named.retain_named_evidence(area, tmp_path / "kept", gaps, product_paths={".review-evidence"}) == []
     assert gaps == [] and not (tmp_path / "kept").exists()
+    # The same root, not the baseline's: a recorded gap, still never walked.
+    assert named.retain_named_evidence(area, tmp_path / "kept", gaps) == []
+    assert gaps == [{"path": ".review-evidence", "reason": "evidence_symlink"}] and not (tmp_path / "kept").exists()
 
 
 def test_a_run_that_named_no_evidence_records_empty_retention(tmp_path, monkeypatch):

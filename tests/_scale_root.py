@@ -27,11 +27,17 @@ stays constant: a registered project is a current fact (every ``/api/state`` lis
 project that never had a row already sends a boot through the whole growing archive.
 
 The duties' own shapes (the 22.10 class, counted from the owner's snapshot, never census-sized):
-CURRENT and constant, two held investigations and one held candidate whose named evidence under
-their private Git checkouts (``<home>/exec/<run>/.review-evidence``, outside the data root) was
-retained ``partial`` — a read-only Git object and a symlinked entry (the gap) — plus one checkout
-with no custody yet (``COMPANION_RUN``: the driver's positive companion starts it) and
-``PENDING_INVOCATIONS`` start requests whose bodies live in observability blobs; history per unit
+CURRENT and constant, three held candidates whose captures await their owner's apply or reject,
+each a private copy (a linked worktree under ``<home>/worktrees/exec``, outside the data root, of a
+fixture source under ``<home>/sources``) whose named evidence — a read-only Git object, a log and a
+symlinked entry (the recorded gap) — was retained: two copies whose records date from before the
+one-primitive update keep their checkouts until disposition (the rest law guards real checkouts),
+one current copy's checkout went once its capture was saved (its result lives as the patch and
+the pinned commits). An evidence-only investigation no longer stays held: it is disposed at its
+capture, so its shape is the closed history below. Plus one copy with no custody yet
+(``COMPANION_RUN``, whose owner task has no record, so no GC may take it: the driver's positive
+companion starts it) and ``PENDING_INVOCATIONS`` start requests whose bodies live in observability
+blobs; history per unit
 of ``k``: ``CLOSED_RUNS_PER_K`` closed runs that once held such evidence, ``ABSENT_OWNERS_PER_K``
 usage owners whose task row is gone (``result_absent``), ``PACKED_PER_K`` settled tasks whose
 evidence the real packer packed (sidecars, pack index), ``PLAN_ASKS_PER_K`` ended tasks with a
@@ -41,7 +47,10 @@ store imports once) while the allowance's own last-24-hours window stays CURRENT
 and the subagent metrics cursor is ABSENT while the event chain holds every unit's suffix.
 
 Run in its own interpreter with ``OUROBOROS_DATA_DIR`` set to the root (the writers that use
-the process data root then write there): ``python -m tests._scale_root ROOT K OUT.json``.
+the process data root then write there): ``python -m tests._scale_root ROOT K OUT.json``. The
+build names ``<home>/worktrees`` the process's worktree root, as the measured boot must too; the
+meter's execution root is the copies' own folder inside it, so resolving the configured root on a
+pass is no walk of a checkout.
 """
 
 from __future__ import annotations
@@ -65,8 +74,8 @@ ROWS_PER_SEGMENT = 150
 # A registered project is a current fact (the sidebar lists it on every /api/state), so their
 # number stays constant; one never-active project already sends a boot through the archive.
 NEVER_ACTIVE_PROJECTS = 1
-HELD_RUNS = (("cur-inv-a", "investigation"), ("cur-inv-b", "investigation"), ("cur-cand-a", "candidate"))
-COMPANION_RUN = "cur-inv-late"  # its checkout exists; no custody row until the driver's companion starts it
+HELD_RUNS = (("cur-legacy-a", "legacy"), ("cur-legacy-b", "legacy"), ("cur-cand-a", "candidate"))
+COMPANION_RUN = "cur-inv-late"  # its copy exists; no custody row until the driver's companion starts it
 PENDING_INVOCATIONS = 2
 CLOSED_RUNS_PER_K = 2
 ABSENT_OWNERS_PER_K = 5
@@ -383,32 +392,44 @@ def _git(area: pathlib.Path, *args: str) -> str:
     return done.stdout.strip()
 
 
+def worktree_root(root: pathlib.Path) -> pathlib.Path:
+    """The configured worktree root: beside the data root, as an install's is."""
+    return pathlib.Path(root).resolve().parent / "worktrees"
+
+
 def execution_root(root: pathlib.Path) -> pathlib.Path:
-    """Where the delegated checkouts live: beside the data root, as an install's worktrees are."""
-    return pathlib.Path(root).resolve().parent / "exec"
+    """Where the delegated copies live, inside the configured worktree root."""
+    return worktree_root(root) / "exec"
 
 
-def checkout(exec_root: pathlib.Path, name: str) -> Tuple[pathlib.Path, str]:
-    """A private Git checkout whose declared evidence folder holds a read-only Git object (copied as
-    Git writes them, 0444), a log, and a symlinked entry — the gap that keeps its retention ``partial``."""
+def checkout(exec_root: pathlib.Path, name: str, *, legacy: bool = False) -> Tuple[pathlib.Path, str]:
+    """A private copy of a fixture source (``snap-<name>``, owned by ``<name>-task``) whose declared
+    evidence folder holds a read-only Git object (copied as Git writes them, 0444), a log, and a
+    symlinked entry (a recorded gap). ``legacy``: its record carries ``file_baseline``, as a copy made
+    before the one-primitive update does, so its checkout stays until disposition."""
+    from ouroboros import subagent_worktrees as worktrees
     from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME
 
-    area = exec_root / name
-    area.mkdir(parents=True)
-    _git(area, "init", "-q")
-    (area / "README.md").write_text("fixture checkout\n", encoding="utf-8")
-    _git(area, "add", "README.md")
-    _git(area, "commit", "-q", "-m", "baseline")
-    sha = _git(area, "rev-parse", "HEAD")
+    source = exec_root.parent.parent / "sources" / name  # beside the worktree root, never inside it
+    source.mkdir(parents=True)
+    _git(source, "init", "-q")
+    (source / "README.md").write_text("fixture checkout\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "commit", "-q", "-m", "baseline")
+    handle = worktrees.provision_execution_snapshot(target_root=source, task_id=f"{name}-task",
+                                                    snapshot_id="snap-" + name, worktree_root=exec_root)
+    if legacy:
+        worktrees._update_record(handle.path, lambda row: {**row, "file_baseline": {}}, op="scale_root")
+    area = pathlib.Path(handle.path)
     evidence = area / EVIDENCE_DIRNAME
-    loose = next(path for path in (area / ".git" / "objects").glob("??/*") if path.is_file())
+    loose = next(path for path in (source / ".git" / "objects").glob("??/*") if path.is_file())
     kept = evidence / "objects" / loose.parent.name / loose.name
     kept.parent.mkdir(parents=True)
     shutil.copy2(loose, kept)
     os.chmod(kept, 0o444)
     (evidence / "check.log").write_text("ran the checks\n" * 50, encoding="utf-8")
     os.symlink(os.path.join("..", "README.md"), evidence / "linked-readme")
-    return area, sha
+    return area, handle.baseline_sha
 
 
 def terminal_detail(run_id: str) -> dict:
@@ -419,26 +440,30 @@ def terminal_detail(run_id: str) -> dict:
 
 
 def held_run(root: pathlib.Path, run_id: str, kind: str, area: pathlib.Path, sha: str) -> Dict[str, Any]:
-    """One terminal run the previous generation collected: output retained, money settled, patch
-    captured, named evidence retained ``partial`` (the symlink gap), so it stays HELD undisposed."""
+    """One terminal candidate the previous generation collected: output retained, money settled, patch
+    captured, named evidence retained (the symlink a recorded gap), undisposed, so it stays HELD until its
+    owner applies or rejects it. A legacy copy keeps its checkout; a current one is released."""
     from ouroboros import delegate_custody as custody
     from ouroboros import delegate_custody_current as current
     from ouroboros.delegate_collection import collect_terminal
-    from ouroboros.delegate_registration_policy import INVESTIGATION_AUTHORITY
+    from ouroboros.subagent_worktrees import find_execution_snapshot
 
     entry = custody.RunCustody(
         run_id=run_id, task_id=f"{run_id}-task", root_task_id=f"{run_id}-task", invocation_id="inv-" + run_id,
         route_id="test", model="test", access="readonly", mode="ask", ledger_root=str(root),
-        snapshot_id="snap-" + run_id, execution_root=str(area), baseline_sha=sha, target_root=str(area),
-        authority_source=INVESTIGATION_AUTHORITY if kind == "investigation" else "preflight_head")
+        snapshot_id="snap-" + run_id, execution_root=str(area), baseline_sha=sha,
+        target_root=str(find_execution_snapshot("snap-" + run_id)["target_root"]), authority_source="preflight_head")
     if not custody.record_started(root, entry):
         raise RuntimeError(f"custody of {run_id} did not land")
     collected = collect_terminal(root, run_id, detail=terminal_detail(run_id))
     row = current.run(root, run_id)
-    named = (collected.get("workspace_capture") or {}).get("named_evidence") or {}
+    capture = collected.get("workspace_capture") or {}
+    named = capture.get("named_evidence") or {}
+    released = kind != "legacy"
     if not (row.terminal_source and row.settled and row.output_complete and row.patch_captured
-            and not row.patch_disposed and named.get("status") == "partial"):
-        raise RuntimeError(f"{run_id} is not a held run with partial evidence: {collected}")
+            and not row.patch_disposed and named.get("status") == "retained" and named.get("gaps")
+            and bool(capture.get("checkout_released")) is released and area.exists() is not released):
+        raise RuntimeError(f"{run_id} is not a held {kind} candidate: {collected}")
     return {"run_id": run_id, "task_id": entry.task_id, "kind": kind, "area": str(area), "baseline_sha": sha}
 
 
@@ -478,13 +503,16 @@ def _delegated(root: pathlib.Path, k: int) -> Dict[str, Any]:
     from ouroboros import delegate_custody as custody
     from ouroboros import store
 
+    from ouroboros.delegate_registration_policy import INVESTIGATION_AUTHORITY
+
     exec_root = execution_root(root)
+    os.environ["OUROBOROS_SUBAGENT_WORKTREE_ROOT"] = str(worktree_root(root))  # copies release only inside it
     held = []
     for run_id, kind in HELD_RUNS:
         _settled_task(root, f"{run_id}-task")
-        held.append(held_run(root, run_id, kind, *checkout(exec_root, run_id)))
+        held.append(held_run(root, run_id, kind, *checkout(exec_root, run_id, legacy=kind == "legacy")))
+    # No task record for the companion's owner: an owner not proven over keeps its copy from every GC.
     area, sha = checkout(exec_root, COMPANION_RUN)
-    _settled_task(root, f"{COMPANION_RUN}-task")
     companion = {"run_id": COMPANION_RUN, "task_id": f"{COMPANION_RUN}-task", "area": str(area), "baseline_sha": sha}
     pending = []
     for index in range(PENDING_INVOCATIONS):
@@ -505,6 +533,7 @@ def _delegated(root: pathlib.Path, k: int) -> Dict[str, Any]:
                 run_id = f"run-closed-{unit}-{index}"
                 txn.put_custody(run_id, {**template, "run_id": run_id, "task_id": f"hist-settled-{unit}-{index}",
                                          "root_task_id": f"hist-settled-{unit}-{index}",
+                                         "authority_source": INVESTIGATION_AUTHORITY,
                                          "patch_disposed": custody.EVIDENCE_RETAINED}, state="closed")
                 count += 1
     return {"execution_root": str(exec_root), "held_runs": held, "companion": companion,

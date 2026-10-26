@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from typing import Any, Dict, Iterator, List, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.tools.tool_result import completed_local_read
@@ -409,7 +409,7 @@ def _stageable_paths(target: pathlib.Path, touched: List[str]) -> List[str]:
 
 
 def _baseline_drifted_paths(
-    target: pathlib.Path, baseline_sha: str, touched: List[str],
+    target: pathlib.Path, baseline_sha: str, touched: List[str], baseline_entries: Optional[Dict[str, str]] = None,
 ) -> tuple[List[str], str]:
     """Touched paths whose CURRENT target state differs from the run's baseline.
 
@@ -421,6 +421,11 @@ def _baseline_drifted_paths(
     the baseline itself was built with (identical filter/attribute treatment):
     seed a scratch index from the baseline tree, stage the current worktree state
     of exactly these paths into it, and ask git which entries now differ.
+
+    Once the owner released a result's pins and Git collected the baseline,
+    ``baseline_entries`` (the capture's recorded "mode blob" of each path B held)
+    make the same proof without B: the current entries staged into an empty
+    scratch index must equal them, and a path B lacked must still be absent.
 
     Returns ``(drifted_paths, error)``; a non-empty error means the comparison
     could not be made and the caller must refuse rather than apply blind.
@@ -442,6 +447,8 @@ def _baseline_drifted_paths(
                 args, cwd=str(target), capture_output=True, env=env,
                 input=payload if args[1] == "update-index" else None,
             )
+            if proc.returncode != 0 and args[1] == "read-tree" and baseline_entries is not None:
+                return _recorded_baseline_drift(target, env, payload, touched, baseline_entries)
             if proc.returncode != 0:
                 detail = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")
                 return [], f"{args[1]} failed: {detail.strip()[:300]}"
@@ -452,6 +459,26 @@ def _baseline_drifted_paths(
         return drifted, ""
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _recorded_baseline_drift(target: pathlib.Path, env: Dict[str, str], payload: bytes, touched: List[str],
+                             entries: Dict[str, str]) -> tuple[List[str], str]:
+    """The drift proof against recorded baseline entries. The scratch index is seeded with them first, as
+    ``read-tree`` of B would be, so ``core.fileMode=false`` or ``core.symlinks=false`` keep B's modes."""
+    seed = "".join(f"{entries[path]}\t{path}\0" for path in touched if path in entries)
+    current: Dict[str, str] = {}
+    for args, data in ((["update-index", "-z", "--index-info"], seed.encode("utf-8", "surrogateescape")),
+                       (["update-index", "-z", "--add", "--remove", "--stdin"], payload),
+                       (["ls-files", "--stage", "-z"], None)):
+        proc = subprocess.run(["git", *args], cwd=str(target), capture_output=True, env=env, input=data)
+        if proc.returncode != 0:
+            return [], f"{args[0]} failed: {(proc.stderr or b'').decode('utf-8', errors='replace').strip()[:300]}"
+    for line in proc.stdout.split(b"\0"):
+        meta, _, path = line.partition(b"\t")
+        if path:
+            mode, blob, _stage = meta.decode("ascii").split()
+            current[path.decode("utf-8", errors="surrogateescape")] = f"{mode} {blob}"
+    return sorted(path for path in touched if current.get(path) != entries.get(path)), ""
 
 
 def _target_is_system_repo(ctx: ToolContext) -> bool:

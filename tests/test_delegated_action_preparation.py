@@ -175,12 +175,17 @@ def test_a_prepared_capture_is_rejected_in_one_call_and_its_patch_retained(tmp_p
         custody._CUSTODY.clear()
 
 
-def test_a_prepared_capture_without_changes_disposes_in_one_call(tmp_path, monkeypatch):
-    _target, ctx, root, rid, _handle = _finished_unsettled(tmp_path, monkeypatch, edit=False)
+def test_a_prepared_capture_without_changes_closes_itself_in_one_call(tmp_path, monkeypatch):
+    """An empty result prepared by the call closes itself (no_changes): there is nothing to inspect,
+    apply or reject, so the call answers OK at once and the copy and its pins are gone."""
+    from ouroboros.subagent_worktrees import find_execution_snapshot
+
+    _target, ctx, root, rid, handle = _finished_unsettled(tmp_path, monkeypatch, edit=False)
     try:
         out = _integrate_delegated_patch(ctx, rid, "apply", "")
-        assert "no captured file changes" in out, out
-        assert current.run(root, rid).patch_disposed == "applied"
+        assert out.startswith("OK:") and "no_changes" in out and INSPECT not in out, out
+        assert current.run(root, rid).patch_disposed == custody.NO_CHANGES
+        assert find_execution_snapshot(handle.snapshot_id) is None and not pathlib.Path(handle.path).exists()
     finally:
         custody._CUSTODY.clear()
 

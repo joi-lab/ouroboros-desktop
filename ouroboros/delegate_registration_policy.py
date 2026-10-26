@@ -50,6 +50,8 @@ def review_owned_source(source: Any) -> bool:
 INVESTIGATION_AUTHORITY = "investigation"
 _NO_APPLY_AUTHORITY_SOURCES = frozenset({INVESTIGATION_AUTHORITY, "readonly"})
 INVESTIGATION_NOTE = "Evidence-only investigation: the captured changes are retained as evidence and never applied."
+NO_CHANGES_NOTE = ("No changes: the run's result holds exactly the files its copy started from (files Git ignores "
+                   "are never part of a result), so it closed itself; there is nothing to apply or reject.")
 
 
 def no_write_authority(root: str, *, investigation: bool) -> dict:
