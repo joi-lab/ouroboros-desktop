@@ -4,7 +4,8 @@ tests/_cost_driver.py lays them after the archive import, untagged, between the 
 (tests/test_cost_contract.py, B10). Every chat row goes in through ONE store transaction that runs the
 statements ``dialogue_store.append`` runs for each (tests/test_cost_meter.py holds the two to the same
 stored row) and every page in ONE publication (a part folds against its room's head, one publication per
-room), so a k=30 root takes seconds, not minutes.
+room), so a k=30 root takes seconds, not minutes. After the history the install is brought to its steady
+state (``steady_state``): what its maintenance child and its boot leave before an owner's turn.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ BREADTH = 40  # live rooms the breadth step adds at k=1, with a quarter as many 
 MORE_ROWS = 650  # open rows the rows step adds over the same rooms (B9's 650 -> 1,300, in the real turn)
 ARCHIVED = 40  # archived knowledge notes and old rescue snapshots the archive step adds at k=1
 RESCUE_AGE_SEC = 3 * 86_400.0  # an old restart's rescue snapshot: older than the health block's two hours
+CATALOGUE_WINDOW = 1_000_000  # tokens: more than any view measured here fills, so the fit keeps Max as before
 
 
 def _author(task_id: str) -> Dict[str, Any]:
@@ -54,9 +56,9 @@ def append_rows(root: pathlib.Path, rows: List[Dict[str, Any]]) -> List[str]:
     return [chat_chain.source_row_id(row) for row in rows]
 
 
-def _page(chat_id: int, ids: List[str], text: str) -> Dict[str, Any]:
-    room = str(chat_id)
-    return {"kind": "page", "room_id": room, "text": text, "author": _author(f"w{chat_id}"), "metadata": {},
+def _page(room: Any, ids: List[str], text: str) -> Dict[str, Any]:
+    room = str(room)
+    return {"kind": "page", "room_id": room, "text": text, "author": _author(f"w{room}"), "metadata": {},
             "covers": {"room_id": room, "rows": ids, "stream_span": [0, len(ids) - 1]}}
 
 
@@ -85,20 +87,30 @@ def _old_memory(root: pathlib.Path, k: int) -> int:
 
 
 def archive_history(root: pathlib.Path, n: int) -> Dict[str, Any]:
-    """n knowledge notes the mind archived and n old restarts' rescue snapshots: history no turn needs to list."""
-    shelf, rescue = root / "memory" / "knowledge", root / "archive" / "rescue"
+    """n knowledge notes the mind archived and n old restarts' rescue snapshots, as old as their dates: their files
+    and the rescue folder carry an old time, the archive folder the time the last log rotation left it (the rescue
+    folder was there), and the step ends once the change times no ``utime`` sets back are settled for production's
+    file memos (``utils._RACY_NS``), as they are for notes archived long ago."""
+    from ouroboros import utils
+
+    shelf, archive = root / "memory" / "knowledge", root / "archive"
     shelf.mkdir(parents=True, exist_ok=True)
-    old = time.time() - RESCUE_AGE_SEC
+    rotated, old = archive.stat(), time.time() - RESCUE_AGE_SEC
     for unit in range(n):
-        (shelf / f"campaign-{unit:03d}.md").write_text(
-            f"---\ntitle: Campaign {unit}\nsummary: what campaign {unit} learned\narchive:\n"
-            f"  at: '2025-01-02T00:00:00+00:00'\n  reason: superseded by the current notes\n---\n"
-            f"# Campaign {unit}\n\n" + "A finding of that campaign, kept for its history. " * 40, encoding="utf-8")
-        snapshot = rescue / f"20250101T{unit:06d}"
+        note = shelf / f"campaign-{unit:03d}.md"
+        note.write_text(f"---\ntitle: Campaign {unit}\nsummary: what campaign {unit} learned\narchive:\n"
+                        f"  at: '2025-01-02T00:00:00+00:00'\n  reason: superseded by the current notes\n---\n"
+                        f"# Campaign {unit}\n\n" + "A finding of that campaign, kept for its history. " * 40,
+                        encoding="utf-8")
+        snapshot = archive / "rescue" / f"20250101T{unit:06d}"
         snapshot.mkdir(parents=True)
         (snapshot / "rescue_meta.json").write_text(json.dumps({"reason": "restart", "files": 1}), encoding="utf-8")
         (snapshot / "changes.diff").write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n", encoding="utf-8")
-        os.utime(snapshot, (old, old))
+        for path in (note, snapshot / "rescue_meta.json", snapshot / "changes.diff", snapshot):
+            os.utime(path, (old, old))
+    os.utime(archive / "rescue", (old, old))
+    os.utime(archive, ns=(rotated.st_atime_ns, rotated.st_mtime_ns))
+    time.sleep(utils._RACY_NS / 1e9)
     return {"notes": n, "snapshots": n, "rows": 0}
 
 
@@ -106,11 +118,13 @@ def _rotated_logs(root: pathlib.Path) -> List[str]:
     """A live install's logs rotate (``supervisor.state.rotate_jsonl_log_if_needed``, at 800 KB), and a turn reads
     each live file's tail plus at most its three newest archives. Rotated here as the server rotates them, the live
     files the turns read hold the same rows at both sizes; what the build and the boot wrote, k-sized, is archived."""
+    from ouroboros.utils import append_jsonl, utc_now_iso
     from supervisor.state import rotate_jsonl_log_if_needed
 
     names = ["events", "tools", "supervisor"]
-    for name in names:
+    for name in names:  # the append that rotates a log lands in its new live file, which a reader then keys on
         rotate_jsonl_log_if_needed(root, f"{name}.jsonl", name, max_bytes=0)
+        append_jsonl(root / "logs" / f"{name}.jsonl", {"ts": utc_now_iso(), "type": "llm_round", "task_id": "cur-on"})
     return names
 
 
@@ -130,26 +144,25 @@ def _consume_closed_outputs(root: pathlib.Path, k: int) -> int:
 
 def turn_history(root: pathlib.Path, k: int) -> Dict[str, Any]:
     """History a turn must not reread, every row in ONE transaction and every page in ONE publication: the old
-    memory imported at activation, its k sections folded by parts; the root's archived dialogue sealed, one page
-    per room and day; k rooms whose rows came after the frontier, sealed; the closed runs' outputs consumed; the
-    logs rotated."""
-    from ouroboros import chat_chain
+    memory imported at activation, its k sections folded by parts; the root's archived dialogue and k rooms whose
+    rows came after the frontier, sealed by a page per day in every room a row is in (``rooms_of_row``: Main holds
+    the unbound rows of every chat outside Projects, the chat its own); the closed runs' outputs consumed; the logs
+    rotated."""
+    from ouroboros import chat_chain, memory_inventory
     from ouroboros.chronicle_store import ChronicleStore
 
     oldest = _old_memory(root, k)
     store = ChronicleStore(root)
     activation = store.ensure_activated(wait=True)
-    groups: Dict[tuple, List[str]] = {}
-    for _address, row, _pos in chat_chain.iter_rows(root):
-        if str(row.get("ts") or "").startswith("2025-"):
-            day = (int(row.get("chat_id") or 0), str(row["ts"])[:10])
-            groups.setdefault(day, []).append(chat_chain.source_row_id(row))
-    records = [_page(chat_id, ids, f"page of room {chat_id} on {day}")
-               for (chat_id, day), ids in sorted(groups.items())]
     fresh = {2000 + unit: _rows(2000 + unit, SEALED_ROWS, "sealed") for unit in range(k)}
-    ids = append_rows(root, [row for rows in fresh.values() for row in rows])
-    for index, chat_id in enumerate(fresh):
-        records.append(_page(chat_id, ids[index * SEALED_ROWS:(index + 1) * SEALED_ROWS], f"page of room {chat_id}"))
+    sealed = set(append_rows(root, [row for rows in fresh.values() for row in rows]))
+    facts, groups = memory_inventory.membership_facts(root), {}
+    for _address, row, _pos in chat_chain.iter_rows(root):
+        row_id, ts = chat_chain.source_row_id(row), str(row.get("ts") or "")
+        if ts.startswith("2025-") or row_id in sealed:
+            for room in memory_inventory.rooms_of_row(memory_inventory.row_meta(row), facts):
+                groups.setdefault((room, ts[:10]), []).append(row_id)
+    records = [_page(room, ids, f"page of room {room} on {day}") for (room, day), ids in sorted(groups.items())]
     published = store.publish(records)
     if not published.ok:
         raise RuntimeError(f"sealing pages: {published}")
@@ -162,6 +175,62 @@ def turn_history(root: pathlib.Path, k: int) -> Dict[str, Any]:
     return {"activation": activation.get("kind"), "legacy_rows": oldest, "sealed_pages": len(records),
             "folded_sections": len(fresh), "consumed_outputs": _consume_closed_outputs(root, k),
             "rotated_logs": _rotated_logs(root)}
+
+
+def steady_state(root: pathlib.Path) -> Dict[str, Any]:
+    """A long-lived install between the owner's turns: the maintenance child has run the jobs it owed since the
+    chronicle became active (``memory_tail`` stores the facts of the rows after the frontier, so a capture reads
+    them and only the rows appended since, not every row live), and the boot has observed the OpenRouter
+    catalogue (``boot_catalogue``). An install that does not reach it fails the driver: no law reads a fill."""
+    from ouroboros import maintenance
+    from ouroboros.chronicle_store import ChronicleStore
+
+    jobs: Dict[str, Any] = {}
+    for _attempt in range(3):
+        if not maintenance.due(root):
+            break
+        jobs.update(maintenance.run(root, should_stop=lambda: False)["jobs"])
+    tail, due = ChronicleStore(root).tail_state() or {}, maintenance.due(root)
+    if not tail.get("complete") or due:
+        raise RuntimeError(f"the install did not reach its steady state: tail {tail}, still due {due}, ran {jobs}")
+    return {"child_jobs": jobs, "catalogue": boot_catalogue()}
+
+
+def boot_catalogue() -> Dict[str, Any]:
+    """The boot's catalogue observation on an install with network, through production
+    (``LLMClient.prefetch_openrouter_catalog``): one clean ``/models`` answer, canned for the OpenRouter models
+    this install's settings name, fills the process's catalogue and its response limits and is recorded for every
+    process (``state/openrouter_models.json``)."""
+    import requests
+
+    from ouroboros.config import runtime_setting
+    from ouroboros.llm import LLMClient
+    from ouroboros.model_slots import MODEL_ROLE_SETTINGS
+    from ouroboros.settings_defaults import OPENROUTER_DEFAULTS
+
+    named = [runtime_setting(key, "") for key in MODEL_ROLE_SETTINGS.values()]
+    models = sorted({model for model in (*OPENROUTER_DEFAULTS.values(), *named)
+                     if isinstance(model, str) and "/" in model})
+    answer = {"data": [{"id": model, "context_length": CATALOGUE_WINDOW,
+                        "top_provider": {"max_completion_tokens": 32_000},
+                        "supported_parameters": ["max_tokens", "reasoning", "temperature", "tool_choice", "tools"]}
+                       for model in models]}
+
+    class Answer:
+        status_code = 200
+
+        @staticmethod
+        def json() -> Dict[str, Any]:
+            return answer
+
+    real, requests.get = requests.get, lambda _url, **_kwargs: Answer()
+    try:
+        LLMClient.prefetch_openrouter_catalog()
+    finally:
+        requests.get = real
+    if not LLMClient._CAPABILITIES_FETCH_OK:
+        raise RuntimeError("the boot's catalogue observation did not land")
+    return {"models": models}
 
 
 def foreign_activity(root: pathlib.Path) -> Dict[str, Any]:

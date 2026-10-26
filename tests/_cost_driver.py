@@ -62,7 +62,9 @@ Boundaries (tags in the output):
   ``T:main:broad`` after 40 more live rooms and 10 running roots, ``T:main:rows`` after 650
   more open rows over those rooms and ``T:main:archive`` after 40 archived knowledge notes and
   40 old rescue snapshots (the turn after ``T:main:archive:first``, which meets them first). The
-  history they must not reread is laid after the import, untagged (tests/_turn_shapes.py).
+  history they must not reread is laid after the import, untagged, and the install brought to the
+  steady state its maintenance child and its boot keep (the stored tail facts, the recorded OpenRouter
+  catalogue; tests/_turn_shapes.py).
 """
 
 from __future__ import annotations
@@ -475,8 +477,8 @@ def _boot_census(srv: Any, root: pathlib.Path) -> None:
 
 def _measure_turns(meter: CostMeter, srv: Any, result: Dict[str, Any], root: pathlib.Path,
                    facts: Dict[str, Any]) -> None:
-    """B10: the shapes (untagged), then each turn up to its first model request; at k=1 also breadth, rows and
-    archived history."""
+    """B10: the history (untagged) and the steady state a long-lived install keeps over it, then each turn up to
+    its first model request; at k=1 also breadth, rows and archived history."""
     from tests import _turn_shapes as shapes
 
     ctx, k = _event_ctx(srv), int(facts.get("k") or 1)
@@ -490,10 +492,10 @@ def _measure_turns(meter: CostMeter, srv: Any, result: Dict[str, Any], root: pat
         NEEDLES["T:main:rows"] = [grown["main_newest"]]
         return grown
 
-    shape_steps = {"history": lambda: shapes.turn_history(root, k), "activity": activity,
-                   "breadth": lambda: shapes.grow_breadth(root, shapes.BREADTH), "rows": rows,
+    shape_steps = {"history": lambda: shapes.turn_history(root, k), "steady": lambda: shapes.steady_state(root),
+                   "activity": activity, "breadth": lambda: shapes.grow_breadth(root, shapes.BREADTH), "rows": rows,
                    "archive": lambda: shapes.archive_history(root, shapes.ARCHIVED)}
-    plan = ["history", "census", ("T:main", 1), ("T:mainw", 1), "activity", ("T:main:foreign", 1),
+    plan = ["history", "steady", "census", ("T:main", 1), ("T:mainw", 1), "activity", ("T:main:foreign", 1),
             ("T:room", int(facts["late_chat_id"]))]
     if k == 1:  # the breadth, rows and archive axes need one size only
         plan += ["breadth", ("T:main:broad", 1), "rows", ("T:main:rows", 1),

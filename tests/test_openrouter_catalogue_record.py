@@ -98,3 +98,52 @@ def test_boot_observes_the_catalogue_off_the_startup_path(monkeypatch, settings,
     server_boot.start_background_services(settings, local_model=False, boot_managed_update=lambda: None,
                                           warm_daemon=live)
     assert observed.wait(5 if started else 0.2) is started
+
+
+def _turn_probe(root):
+    """What a turn's context fit asks of its route (``capability_evidence.probe``), fetching allowed as for every
+    task but a subagent's (``context_fit.build_context_fit_plan``, ``loop_model_call``)."""
+    from ouroboros.capability_evidence import probe
+
+    return probe(root, provider="openrouter", model="vendor/known", base_url="https://openrouter.ai/api/v1",
+                 allow_fetch=True)
+
+
+def test_with_no_record_an_install_pays_one_get_and_a_pooled_worker_none(catalogue):
+    """No record yet (a boot without an OpenRouter key, a new install): the first turn's probe observes the catalogue
+    once and records it; the serving process's next turn and a pooled worker's (another process: the stores shared,
+    no catalogue in memory) read what is held, its requests' parameters included."""
+    client, gets, record = catalogue
+    root = record.parent.parent
+    for _turn in range(2):
+        assert _turn_probe(root).window_tokens == 200_000
+    assert len(gets) == 1 and record.is_file()
+
+    _another_process(client)  # a pooled worker
+    assert _turn_probe(root).window_tokens == 200_000
+    assert client._get_supported_parameters("vendor/known") == {"max_tokens", "tools"}
+    assert client.openrouter_context_length("vendor/known", allow_fetch=True) == 200_000
+    assert len(gets) == 1
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "With no record and no network a turn's probe tries the catalogue twice: for the window "
+    "(LLMClient.openrouter_context_length) and then for the output limit (response_limits.resolve_response_limit "
+    "fetches whenever its record is absent), each up to the 5 s timeout; both failures are then held for "
+    "_FAILED_TTL_SEC (10 min). No remover in this update (lane B: one failed observation answers both readers)."))
+def test_with_no_record_and_no_network_a_turn_tries_the_catalogue_once(catalogue, monkeypatch):
+    import requests
+
+    client, gets, record = catalogue
+
+    def unreachable(url, **_kwargs):
+        gets.append(url)
+        raise requests.ConnectionError("no route to openrouter.ai")
+
+    monkeypatch.setattr(requests, "get", unreachable)
+    root = record.parent.parent
+    for _turn in range(2):
+        _turn_probe(root)
+    _another_process(client)  # a pooled worker within the failure window
+    _turn_probe(root)
+    assert len(gets) == 1 and not record.exists()
