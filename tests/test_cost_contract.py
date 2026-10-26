@@ -316,9 +316,10 @@ def test_b9_the_memory_reader_looks_rows_up_a_page_at_a_time(measured):
 # unit of history; bytes and decodes are payload, which Main's view shows by design (BIBLE P1: its own story).
 ROUND = ("connect", "begins", "statements", "lock_acquired", "open", "os_open", "popen", "thread_start", "scandir",
          "listdir", "dir_entries")
-# After live rooms or open rows are added only the dialogue's own page reads may grow, by B9's allowance per page
-# of rows the step added (no divisor): a lock, a connection, a file or a child per room, root or row is a breach.
-PAGED = ("begins", "statements")
+# After live rooms or open rows are added only the dialogue's own page reads may grow: read transactions by B9's
+# allowance per page of rows the step added (no divisor), their statements by the statements per transaction the
+# turn before made (the lease's, not a constant). A lock, a connection, a file or a child per room, root or row is
+# a breach.
 ROWS_PER_PAGE = 500  # the memory's chat reader reads rows a page at a time (``chat_chain``)
 MAIN_TURNS = ("T:main", "T:mainw", "T:main:foreign")
 BREADTH_TURNS = ("T:main:broad", "T:main:rows", "T:main:archive:first", "T:main:archive")  # the k=1 root only
@@ -366,13 +367,16 @@ def test_b10_main_s_turn_makes_the_same_round_trips_at_every_size(measured, tag)
 def test_b10_main_s_turn_reads_pages_not_rooms_roots_or_rows(measured, law, tag, before, step):
     """L3/L4 (k=1). After 40 live rooms with story and 10 running roots (L3), 650 open rows over those rooms (L4),
     or 40 archived knowledge notes and 40 old rescue snapshots (L3, the turn after the one that met them), only
-    the dialogue's own page reads may grow, by B9's allowance per page of rows the step added (one page more when
-    they cross a page edge); every other round trip stays within ``COUNT_JITTER``. Payload is free."""
+    the dialogue's own page reads may grow: read transactions by B9's allowance per page of rows the step added
+    (one page more when they cross a page edge), statements by as many transactions of the turn before's
+    statements per transaction; every other round trip stays within ``COUNT_JITTER``. Payload is free."""
     earlier, later = at_request(measured, before, K_SMALL), at_request(measured, tag, K_SMALL)
     rows = measured[K_SMALL]["turn_shapes"][step]["rows"]
     pages = -(-rows // ROWS_PER_PAGE) + bool(rows)
-    hold_turn_law(law, tag, _growth(earlier, later, ROUND),
-                  {key: COUNT_JITTER + (3 * pages if key in PAGED else 0) for key in ROUND}, readers_of(earlier, later))
+    begins = COUNT_JITTER + 3 * pages
+    per_begin = earlier["counts"].get("statements", 0) / max(1, earlier["counts"].get("begins", 0))
+    allowed = {**dict.fromkeys(ROUND, COUNT_JITTER), "begins": begins, "statements": math.ceil(per_begin * begins)}
+    hold_turn_law(law, tag, _growth(earlier, later, ROUND), allowed, readers_of(earlier, later))
 
 
 @pytest.mark.parametrize("tag", [pytest.param(tag, marks=turn_gap("L5", tag))
