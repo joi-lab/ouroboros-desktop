@@ -350,7 +350,8 @@ def _wait_chip(page, predicate, timeout=45000):
     return _chip(page)
 
 
-UNKNOWN_CHIP = "chip.getAttribute('aria-label').startsWith('Consciousness: State unknown')"
+# The chip says the host's own sentence for its state (consciousness_view.py).
+UNKNOWN_CHIP = "chip.getAttribute('aria-label').startsWith('Consciousness: The stored consciousness control is unknown')"
 
 
 def _evolution_pills(page):
@@ -729,13 +730,14 @@ def test_batch1_unknown_controls_and_tool_history_reach_the_real_spa(batch1_clon
                     _send(page, "/bg start")
                     wait_until(lambda: _api(server, "/api/state")["bg_consciousness_enabled"] is True, 60)
                     scenario["closed"] = True
-                    chip_on = _wait_chip(page, "chip.dataset.off === 'false' && !chip.getAttribute('aria-label').includes('State unknown')")
+                    chip_on = _wait_chip(page, "chip.dataset.off === 'false' && !chip.getAttribute('aria-label').includes('is unknown')")
                     assert chip_on["word"] != "Off" and "evolution campaign running" not in chip_on["label"], chip_on
                     page.screenshot(path=str(shots / "13-boot2-known-enabled-and-disabled.png"), animations="disabled")
                     _send(page, "/bg stop")
                     wait_until(lambda: _api(server, "/api/state")["bg_consciousness_enabled"] is False, 60)
                     chip_off = _wait_chip(page, "chip.dataset.off === 'true'")
-                    assert chip_off["word"] == "Off" and chip_off["label"] == "Consciousness: Off", chip_off
+                    assert chip_off["word"] == "Off", chip_off
+                    assert chip_off["label"] == "Consciousness: Background consciousness is off.", chip_off
                     pills2 = _evolution_pills(page)
                     page.screenshot(path=str(shots / "14-boot2-known-controls-evolution-panel.png"), animations="disabled")
                     passed("known_enabled_and_disabled_distinct", chip_on=chip_on, chip_off=chip_off, pills=pills2)
