@@ -854,6 +854,7 @@ class SettingsMeta(SettingsNetworkMeta, total=False):
     available_subagents: AvailableSubagentsSettingsMeta
     policy_state: SettingsPolicyState
     restart_state: Dict[str, Any]
+    connections: list[Dict[str, Any]]  # every API connection as the picker shows it (provider_connections.connections_meta)
 
 
 class SettingsSaveResponse(TypedDict, total=False):
@@ -870,6 +871,7 @@ class SettingsSaveResponse(TypedDict, total=False):
     # task keeps its start-time config (snapshot boundary); changes apply from
     # the next task. Queued-but-unstarted tasks re-read settings at start.
     agent_task_running: bool
+    connection_references: list[Dict[str, str]]  # rows naming a connection that cannot serve them (they refuse)
 
 
 class OwnerRuntimeModeResponse(TypedDict):
@@ -1030,7 +1032,8 @@ class OpenAICompatibleModelsResponse(TypedDict):
 
 class ProviderTestRequest(TypedDict):
     provider_id: str
-    overrides: NotRequired[Dict[str, str]]
+    overrides: NotRequired[Dict[str, str]]  # flat keys; with ``connection``, that row's field names
+    connection: NotRequired[str]  # a named connection of ``provider_id``; absent = the built-in one
 
 
 class ProviderTestResponse(TypedDict):

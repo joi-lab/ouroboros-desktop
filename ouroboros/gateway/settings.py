@@ -42,19 +42,13 @@ from ouroboros.gateway.owner_settings import (
 )
 from ouroboros.onboarding_wizard import build_onboarding_html
 from ouroboros.platform_layer import is_container_env
-from ouroboros.provider_models import (
-    MINIMAX_REGION_ENDPOINTS, ZAI_PLAN_ENDPOINTS, resolve_minimax_base_url, resolve_zai_base_url,
+from ouroboros.provider_connections import connection_references, connections_meta, normalize_connections
+from ouroboros.provider_models import CONNECTIONS_KEY, normalize_builtin_choices
+from ouroboros.gateway.secret_rows import (  # noqa: F401 -- the MCP pair's historical import names
+    ConnectionSecretIdentityAmbiguous, MCPSecretIdentityAmbiguous, mask_connections, rehydrate_connections,
+    mask_mcp_servers as _mask_mcp_servers_payload, rehydrate_mcp_servers as _rehydrate_mcp_servers_payload,
 )
-from ouroboros.secret_masking import (
-    MCP_RESPONSE_ONLY_FIELDS,
-    is_custom_secret_setting_key,
-    looks_masked_mcp_secret,
-    looks_masked_settings_secret,
-    mask_prefixed_secret,
-    mask_mcp_url,
-    rehydrate_mcp_url,
-    mask_settings_secret,
-)
+from ouroboros.secret_masking import is_custom_secret_setting_key, looks_masked_settings_secret, mask_settings_secret
 from ouroboros.server_runtime import (
     apply_runtime_provider_defaults, automatic_catalog, classify_runtime_provider_change, has_startup_ready_provider,
     repropose_unedited_catalog, repropose_unedited_slots, settings_read_catalog,
@@ -131,36 +125,6 @@ def _build_network_meta(bind_host: str, bind_port: int) -> dict:
         "recommended_url": recommended_url,
         "warning": warning,
     }
-
-
-def _mask_mcp_servers_payload(servers: Any) -> list:
-    from ouroboros.mcp_headers import mask_headers
-    if not isinstance(servers, list):
-        return []
-    try:
-        from ouroboros.mcp_client import canonical_server_id as _mcp_canonical_id
-    except Exception:
-        _mcp_canonical_id = lambda value: str(value or "").strip()  # type: ignore[assignment]
-    out = []
-    for entry in servers:
-        if not isinstance(entry, dict):
-            continue
-        clone = dict(entry)
-        if clone.get("id"):
-            clone["id"] = _mcp_canonical_id(clone.get("id"))
-        if "url" in clone:
-            clone["url"] = mask_mcp_url(clone["url"])
-        if "headers" in clone:
-            clone["headers"] = mask_headers(clone["headers"])
-        token = str(clone.get("auth_token") or "")
-        if token:
-            clone["auth_token"] = mask_prefixed_secret(token, visible_chars=8)
-            clone["auth_configured"] = True
-        else:
-            clone["auth_token"] = ""
-            clone["auth_configured"] = False
-        out.append(clone)
-    return out
 
 
 def _build_policy_state(settings: Dict[str, Any]) -> dict:
@@ -257,62 +221,6 @@ def _build_restart_state(settings: Dict[str, Any]) -> dict:
     return {"restart_required": bool(pending), "restart_keys": sorted(pending),
             "restart_source_unknown_keys": source_unknown, "unknown_keys": unknown,
             "local_model": local, "summary": summary.strip()}
-
-
-def _rehydrate_mcp_servers_payload(incoming: Any, current: Any) -> list:
-    """Restore masked MCP tokens/URLs/header values from the ONE saved server with the same identity.
-
-    Identity is the loader's (``id``, ``slug`` or ``name``). A masked value whose
-    identity has several saved or incoming claimants raises
-    ``MCPSecretIdentityAmbiguous`` before anything is written: an equal token
-    does not make two servers the same, so a credential never moves between them.
-    """
-    if not isinstance(incoming, list):
-        return []
-    from ouroboros.mcp_client import canonical_server_id, raw_server_id
-    from ouroboros.mcp_headers import holds_placeholder, restore_headers
-
-    current_by_id: Dict[str, list] = {}
-    for entry in current if isinstance(current, list) else []:
-        if raw_server_id(entry):
-            current_by_id.setdefault(raw_server_id(entry), []).append(entry)
-    incoming_ids = [raw_server_id(entry) for entry in incoming if isinstance(entry, dict)]
-    out = []
-    for entry in incoming:
-        if not isinstance(entry, dict):
-            continue
-        clone = {key: value for key, value in entry.items() if key not in MCP_RESPONSE_ONLY_FIELDS}
-        if clone.get("id"):
-            clone["id"] = canonical_server_id(clone.get("id"))
-        server_id = raw_server_id(clone)
-        token = str(clone.get("auth_token") or "")
-        masked = holds_placeholder(clone.get("headers")) or looks_masked_mcp_secret(token) or (
-            "url" in clone and rehydrate_mcp_url(clone["url"], "") != str(clone["url"] or ""))
-        matches = current_by_id.get(server_id, []) if server_id else []
-        if masked and (len(matches) > 1 or incoming_ids.count(server_id) > 1):
-            raise MCPSecretIdentityAmbiguous(server_id)
-        existing = matches[0] if len(matches) == 1 else {}
-        if "url" in clone:
-            clone["url"] = rehydrate_mcp_url(clone["url"], existing.get("url"))
-        if looks_masked_mcp_secret(token):
-            clone["auth_token"] = str(existing.get("auth_token") or "")
-        if "headers" in clone:
-            clone["headers"] = restore_headers(clone["headers"], existing, server_id=server_id)
-        out.append(clone)
-    return out
-
-
-class MCPSecretIdentityAmbiguous(ValueError):
-    """A masked MCP secret whose server identity is claimed more than once."""
-
-    code = "MCP_ID_AMBIGUOUS_SECRET"
-
-    def __init__(self, server_id: str) -> None:
-        super().__init__(
-            f"{self.code}: several MCP servers resolve to server id {server_id!r}, so its saved "
-            "credential cannot be matched to one of them. Give each server a distinct Server ID "
-            "(or re-enter its token/URL) and save again; nothing was saved."
-        )
 
 
 from ouroboros.settings_scales import (
@@ -583,19 +491,11 @@ def _active_main_route(
     active route at point-of-use (CW2) — a per-task ``switch_model`` / model override
     or a mid-loop local-route change — rather than only the settings-derived route."""
     from ouroboros import config as _config
-    from ouroboros.provider_models import provider_for_model
+    from ouroboros.provider_models import capability_base_url, provider_for_model
 
     model = str(model_override or settings.get("OUROBOROS_MODEL") or _config.SETTINGS_DEFAULTS.get("OUROBOROS_MODEL") or "").strip()
     provider = provider_for_model(model)
-    # The settings key a provider's base URL resolves through.
-    base_url_key = {"openai": "OPENAI_BASE_URL", "openai-compatible": "OPENAI_COMPATIBLE_BASE_URL",
-                    "cloudru": "CLOUDRU_FOUNDATION_MODELS_BASE_URL", "gigachat": "GIGACHAT_BASE_URL"}.get(provider)
-    if provider == "minimax":
-        base_url = resolve_minimax_base_url(settings.get("MINIMAX_REGION") or "")
-    elif provider == "zai":
-        base_url = resolve_zai_base_url(settings.get("ZAI_PLAN") or "")
-    else:
-        base_url = str(settings.get(base_url_key) or "") if base_url_key else ""
+    base_url = capability_base_url(model, settings)
     # CW7 (v6.34.0): honour the USE_LOCAL_MAIN routing setting — a local-routed main
     # lane must report provider='local' so the Max gate consults the local n_ctx
     # (Capability Evidence local-health) instead of the remote OUROBOROS_MODEL metadata.
@@ -933,6 +833,7 @@ async def api_settings_get(request: Request) -> JSONResponse:
         if safe.get(key):
             safe[key] = mask_settings_secret(key, safe[key])
     safe["MCP_SERVERS"] = _mask_mcp_servers_payload(safe.get("MCP_SERVERS") or [])
+    safe[CONNECTIONS_KEY] = mask_connections(safe.get(CONNECTIONS_KEY) or [])
     for key, value in list(safe.items()):
         if key in SECRET_SETTING_KEYS or key in _SETTINGS_DEFAULTS:
             continue
@@ -981,8 +882,9 @@ async def api_settings_get(request: Request) -> JSONResponse:
         "candidate": (
             configured_subagents_dict(subagents.config) if subagents.config is not None else None
         ),
-        "automatic": automatic_catalog(_owner_settings_document()),
+        "automatic": automatic_catalog(document := _owner_settings_document()),
     }
+    meta["connections"] = connections_meta(settings, document)
     safe["_meta"] = meta
     return JSONResponse(safe)
 
@@ -1310,6 +1212,14 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
                 return unsaved_error(str(exc), 409, code=exc.code)
             except ValueError as exc:
                 return unsaved_error(str(exc), 400, code="MCP_CONFIG_ERROR")
+        if CONNECTIONS_KEY in body:
+            rows, connections_error = normalize_connections(body.get(CONNECTIONS_KEY))
+            if connections_error:
+                return unsaved_error(connections_error, 400, code="connections_invalid")
+            try:
+                body[CONNECTIONS_KEY] = rehydrate_connections(rows, old_settings.get(CONNECTIONS_KEY))
+            except ConnectionSecretIdentityAmbiguous as exc:
+                return unsaved_error(str(exc), 409, code=exc.code)
         current = _merge_settings_payload(old_effective_settings, body)
         from ouroboros.runtime_mode_policy import runtime_mode_at_least
 
@@ -1318,14 +1228,9 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
         runtime_changed = runtime_authored and requested_runtime_mode != pending_runtime_mode
         if runtime_authored:
             pending_runtime_mode = requested_runtime_mode
-        minimax_region = str(current.get("MINIMAX_REGION") or "").strip().lower()
-        if minimax_region and minimax_region not in MINIMAX_REGION_ENDPOINTS:
-            return unsaved_error("MINIMAX_REGION must be global_en or cn_zh.", 400)
-        current["MINIMAX_REGION"] = minimax_region
-        zai_plan = str(current.get("ZAI_PLAN") or "").strip().lower()
-        if zai_plan and zai_plan not in ZAI_PLAN_ENDPOINTS:
-            return unsaved_error("ZAI_PLAN must be payg or coding.", 400)
-        current["ZAI_PLAN"] = zai_plan
+        choice_error = normalize_builtin_choices(current)
+        if choice_error:
+            return unsaved_error(choice_error, 400)
         # Generic settings saves operate on the current boot baseline. A pending
         # next-boot mode written by /api/owner/runtime-mode is preserved on disk
         # below, but never hot-applied to this process/env.
@@ -1479,6 +1384,8 @@ def _api_settings_post_locked(request: Request, body: Any) -> JSONResponse:
         warnings.extend(filter(None, [review_pool_save_warning(current)]))
         if warnings:
             resp["warnings"] = warnings
+        if references := connection_references(current):  # they keep their value and refuse until changed
+            resp["connection_references"] = references
         return JSONResponse(resp)
     except Exception as e:
         if boundary.committed:
