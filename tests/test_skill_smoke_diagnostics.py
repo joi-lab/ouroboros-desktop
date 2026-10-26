@@ -6,6 +6,7 @@ only an independent, substantive rebuttal can supply a second paid verdict.
 """
 
 import json
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -27,21 +28,26 @@ def _payload(data):
     return find_skill(data, NAME)
 
 
-def _wave(data, raw, *, status="clean", operation="settled", record_id="rl-current", rebuttal=""):
-    """Persist the same three carriers the consumer reads: source, ledger, paid stamp."""
+def _wave(data, raw, *, status="clean", operation="settled", record_id="rl-current", rebuttal="", **facts):
+    """Persist the same three carriers the consumer reads: source, ledger, paid stamp.
+
+    The ledger's own producer retains the seat's text under the role its state gives it: the
+    current ``response`` or ``failure``, or a historical ``pending`` note while it may still answer.
+    """
     skill = find_skill(data, NAME)
-    response = ledger.retain_text_source(
-        data, TASK, record_id=record_id, seat_id="critic", role="response", part="skill", text=raw)
-    assert response["status"] == "retained"
+    seat = {"seat_id": "critic", "parts": ["skill"], "observed_model": MODEL, "operation_state": operation,
+            "status": "pending" if operation in {"in_flight", "pending_dispatch"} else
+                      "error" if status == "pending" else "responded",
+            "source_refs": [], "raw_text": raw, **facts}
+    ledger._retain_seat_text(data, TASK, record_id, seat)
+    del seat["raw_text"]  # a written row names its retained source, never the text itself
     record = ledger.ReviewLedgerRecord(
         record_id=record_id, task_id=TASK, root_task_id=TASK, surface="skill", enforcement="blocking",
         subject={"skill": NAME, "tree_sha": skill.content_hash, "root": str(skill.skill_dir.resolve())},
         brief={"skill": {"group_id": f"task:{TASK}:{NAME}"}},
         fingerprints={"review_contract": "contract"},
         verdict={"aggregate": {"clean": "PASS", "pending": "QUORUM_FAILED", "blockers": "FAIL"}[status]},
-        rows=[{"seat_id": "critic", "observed_model": MODEL,
-               "status": "error" if status == "pending" else "responded",
-               "operation_state": operation, "source_refs": [response]}])
+        rows=[seat])
     ledger.write_record(data, record)
     update_state(data, lambda state: state.attempts.append(CommitAttemptRecord(
         ts="2026-10-22T00:00:00Z", commit_message="", status="reviewed", task_id=TASK,
@@ -57,14 +63,14 @@ def _save_review(data, *, status="clean", record_id="rl-current"):
         reviewer_models=[MODEL], raw_actor_records=[{"model_id": MODEL, "raw_text": "persisted judgment"}]))
 
 
-def _export(tmp_path, monkeypatch, data):
+def _export(tmp_path, monkeypatch, data, credential="unused-credential"):
     destination = tmp_path / "diagnostics"
     monkeypatch.setenv("OUROBOROS_TEST_EVIDENCE_ROOT", str(destination))
     review = data / "state" / "skills" / NAME / "review.json"
     evidence = {"task_id": TASK, "original_hash": find_skill(data, NAME).content_hash,
                 "review_history": author.load_review_waves(data, NAME),
                 "review": json.loads(review.read_text(encoding="utf-8")) if review.exists() else None}
-    assert not author.persist_author_evidence(tmp_path / "author", evidence, "unused-credential")
+    assert not author.persist_author_evidence(tmp_path / "author", evidence, credential)
     [path] = destination.glob("skill-smoke-author/*/author-evidence.json")
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -84,7 +90,9 @@ def test_smoke_diagnostics_show_current_quorum_failure(tmp_path, monkeypatch, pr
     diagnostic = _export(tmp_path, monkeypatch, data)
     [wave] = diagnostic["review_history"]
     assert wave["status"] == "pending" and wave["content_hash"] == skill.content_hash
-    assert wave["raw_actor_records"][0]["raw_text"] == raw
+    [actor] = wave["raw_actor_records"]
+    assert actor["raw_text"] == raw  # the failed seat's own note, which the ledger keeps as role=failure
+    assert actor["raw_text_source"] == {"role": "failure", "current": True, "status": "retained"}
     assert (review.read_bytes() if review.exists() else None) == before
     with pytest.raises(AssertionError, match="pending/unknown review stays red"):
         author.assert_review_evidence(data, NAME, skill.content_hash, TASK, MODEL)
@@ -99,8 +107,88 @@ def test_smoke_diagnostics_keep_successful_review_actors(tmp_path, monkeypatch):
     diagnostic = _export(tmp_path, monkeypatch, data)
     assert diagnostic["review"]["reviewer_models"] == [MODEL]
     assert diagnostic["review"]["raw_actor_records"] == [{"model_id": MODEL, "raw_text": "persisted judgment"}]
-    assert diagnostic["review_history"][0]["raw_actor_records"][0]["raw_text"] == raw
+    [actor] = diagnostic["review_history"][0]["raw_actor_records"]
+    assert actor["raw_text"] == raw
+    assert actor["raw_text_source"] == {"role": "response", "current": True, "status": "retained"}
     assert author.assert_review_evidence(data, NAME, skill.content_hash, TASK, MODEL)["status"] == "clean"
+
+
+def _source_path(data, ref):
+    from ouroboros.artifacts import task_artifact_dir_path
+
+    return task_artifact_dir_path(data, ref["task_id"], create=False).joinpath(*ref["ref"]["path"].split("/"))
+
+
+@pytest.mark.parametrize("case", [
+    "failure", "pending", "late_answer", "silent", "empty", "missing", "corrupt", "unretained"])
+def test_smoke_export_names_each_seats_saved_text_and_its_source(tmp_path, monkeypatch, case):
+    """#1541: each seat exports the text the ledger selects for it (its answer, else its failure note, else a
+    historical pending note that is never its answer) with typed source and failure facts, or says why there
+    is none. The export is redacted, outlives the run's data and rewrites no record; the pending wave stays red."""
+    from ouroboros import artifacts
+
+    data = tmp_path / "data"
+    skill = _payload(data)
+    note = "403 Inference is blocked on this account for key synthetic-key"
+    facts = {} if case in {"pending", "late_answer"} else {
+        "failure_code": "provider_refused", "http_status": 403, "reported_cause": "Inference is blocked"}
+
+    def store_down(*_args, **_kwargs):
+        raise OSError("store down")
+
+    with monkeypatch.context() as patch:
+        if case == "unretained":  # the artifact store refused the bytes when the row was written
+            patch.setattr(artifacts, "store_actor_source_bytes", store_down)
+        record = _wave(data, {"silent": "", "empty": "", "late_answer": "still answering"}.get(case, note),
+                       status="pending", operation="in_flight" if case in {"pending", "late_answer"} else "settled",
+                       **facts)
+    [seat] = record.rows
+    if case in {"late_answer", "empty"}:
+        if case == "late_answer":  # the collected late reply settles the seat as the ledger does
+            prior = json.loads(json.dumps(seat))
+            seat.update(source_refs=[], status="responded", operation_state="late_settled", raw_text=note)
+            ledger._retain_seat_text(data, TASK, record.record_id, seat)
+            del seat["raw_text"]
+            seat.update(ledger._settled_sources(prior, seat))
+        else:
+            seat["source_refs"].append(ledger.retain_text_source(
+                data, TASK, record_id=record.record_id, seat_id="critic", role="failure", part="skill", text=""))
+        record.revision += 1
+        ledger.write_record(data, record)
+    elif case in {"missing", "corrupt"}:
+        source = _source_path(data, seat["source_refs"][0])
+        source.unlink() if case == "missing" else source.write_bytes(b"tampered")
+    path = ledger.record_path(data, record.record_id)
+    before = path.read_bytes()
+
+    _export(tmp_path, monkeypatch, data, credential="synthetic-key")
+    assert path.read_bytes() == before, "exporting never rewrites the ledger record"
+    with pytest.raises(AssertionError, match="pending/unknown review stays red"):
+        author.assert_review_evidence(data, NAME, skill.content_hash, TASK, MODEL)
+    shutil.rmtree(data)  # the run's private tree is gone; its exported diagnostic still says everything
+    [exported] = (tmp_path / "diagnostics").glob("skill-smoke-author/*/author-evidence.json")
+    assert "synthetic-key" not in exported.read_text(encoding="utf-8")
+
+    [actor] = json.loads(exported.read_text(encoding="utf-8"))["review_history"][0]["raw_actor_records"]
+    text, source = actor["raw_text"], actor["raw_text_source"]
+    if case in {"failure", "pending", "late_answer"}:
+        assert text.startswith("403 Inference is blocked on this account for key ")
+        assert source == {"role": {"failure": "failure", "pending": "pending", "late_answer": "response"}[case],
+                          "current": case != "pending", "status": "retained"}
+    else:
+        assert text == ""
+        status = {"silent": "absent", "empty": "empty"}.get(case, "unreadable")
+        assert source["status"] == status and ("error" in source) is (status == "unreadable")
+    assert {key: actor.get(key) for key in facts} == facts
+
+
+def test_an_answered_seat_without_its_saved_response_is_evidence_loss(tmp_path):
+    data = tmp_path / "data"
+    _payload(data)
+    record = _wave(data, "complete successful review")
+    _source_path(data, record.rows[0]["source_refs"][0]).unlink()
+    with pytest.raises(ValueError, match="reviewer response source unavailable: FileNotFoundError"):
+        author.load_review_waves(data, NAME)
 
 
 @pytest.mark.parametrize("case,error", [

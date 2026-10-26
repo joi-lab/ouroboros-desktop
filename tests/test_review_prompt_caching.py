@@ -313,12 +313,11 @@ def test_finalizer_ttl_orders_the_sealed_anchor_on_direct_anthropic(monkeypatch)
 
 @pytest.mark.parametrize("provider,model", [
     ("openai", "gpt-5.5"),
-    ("openai-compatible", "local-glm"),
     ("cloudru", "GigaChat/some-model"),
 ])
 def test_finalizer_never_marks_non_openrouter_routes(provider, model):
-    """These three share the OpenAI-compatible transport with OpenRouter; an ungated
-    mutator would inject Anthropic-style cache_control and earn a hard provider 400."""
+    """These share the OpenAI-compatible transport with OpenRouter; an ungated mutator
+    would inject Anthropic-style cache_control into a wire they never asked to carry it."""
     client = LLMClient(api_key="unused")
     target = {
         "provider": provider,

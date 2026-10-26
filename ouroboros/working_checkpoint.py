@@ -144,10 +144,13 @@ def _write(ctx: Any, limit_ctx: Any, boundary: str, *, model_call: Any = None) -
         {key: value for key, value in usage.items() if key not in _TRANSIENT_USAGE},
         int(limit_ctx.round_idx), list(limit_ctx.tool_schemas or []), set(limit_ctx.owner_msg_seen or ()))
     if model_call is not None:  # a provisional alternative can checkpoint before route adoption
+        from ouroboros.route_choice import after_fallback
+
         state["messages"] = model_call.messages
         state["route"].update(active_model=model_call.active_model, active_model_override=model_call.active_model,
                               active_use_local=model_call.active_use_local, active_use_local_override=model_call.active_use_local,
-                              active_context_mode=model_call.active_context_mode, active_role_override=model_call.model_role)
+                              active_context_mode=model_call.active_context_mode, active_role_override=model_call.model_role,
+                              route_choice=after_fallback(ctx, not str(model_call.model_role or "").startswith("fallback:")))
         state["context_model_role"] = model_call.model_role or state["context_model_role"]
     if boundary == RESUMED:  # written before the rebind: the plan is still the new worker's
         state["context_model_role"] = limit_ctx.context_model_role

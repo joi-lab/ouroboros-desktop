@@ -227,44 +227,44 @@ class _MessageShapingMixin:
             # Unsealed caller prompts and marker-free lanes retain their shape.
             if sealed and msg.get("role") == "user" and isinstance(msg.get("content"), str) and msg["content"].strip():
                 msg["content"] = [{"type": "text", "text": msg["content"]}]
-            if allow_message_cache_control and isinstance(boundary, dict) and msg.get("role") in {"user", "tool"}:
+            role = msg.get("role")
+            if isinstance(msg.get("content"), list) and ((role == "tool" and flatten_tool_content_blocks) or (
+                role != "user" and flatten_non_user_content_blocks
+            )):
+                # String-only roles: text blocks fold into one string, so host
+                # metadata and block markers never reach the wire either; a row's
+                # seal mark renders after the fold (only that row becomes one block).
+                msg["content"] = "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in msg["content"]
+                )
+            if allow_message_cache_control and isinstance(boundary, dict) and role in {"user", "tool"}:
                 msg["content"] = cls._content_with_cache_boundary(msg.get("content"), boundary)
             content = msg.get("content")
             if not isinstance(content, list):
                 continue
-            role = msg.get("role")
-            if (role == "tool" and flatten_tool_content_blocks) or (
-                role != "user" and flatten_non_user_content_blocks
-            ):
-                # String-only roles: text blocks fold into one string, so host
-                # metadata and cache markers never reach the wire either.
-                msg["content"] = "".join(
-                    block.get("text", "") if isinstance(block, dict) else str(block)
-                    for block in content
-                )
-            else:
-                for block in content:
-                    if isinstance(block, dict):
-                        # Strict providers reject cache markers on empty text.
-                        empty_text = (
-                            block.get("type") == "text"
-                            and not str(block.get("text") or "").strip()
+            for block in content:
+                if isinstance(block, dict):
+                    # Strict providers reject cache markers on empty text.
+                    empty_text = (
+                        block.get("type") == "text"
+                        and not str(block.get("text") or "").strip()
+                    )
+                    if (allow_message_cache_control
+                            and isinstance(block.get("cache_control"), dict)
+                            and not empty_text):
+                        # Keep TTL only where the route documents it.
+                        ttl = str(block["cache_control"].get("ttl") or "")
+                        block["cache_control"] = (
+                            {"type": "ephemeral", "ttl": ttl}
+                            if allow_cache_ttl and ttl in _VALID_CACHE_TTLS
+                            else {"type": "ephemeral"}
                         )
-                        if (allow_message_cache_control
-                                and isinstance(block.get("cache_control"), dict)
-                                and not empty_text):
-                            # Keep TTL only where the route documents it.
-                            ttl = str(block["cache_control"].get("ttl") or "")
-                            block["cache_control"] = (
-                                {"type": "ephemeral", "ttl": ttl}
-                                if allow_cache_ttl and ttl in _VALID_CACHE_TTLS
-                                else {"type": "ephemeral"}
-                            )
-                        else:
-                            block.pop("cache_control", None)
-                        # Known host metadata never leaves the send copy.
-                        for key in ("_caption", "_source_path", "_source_sha256", "_review_image_id", "_original_image_url", "_context_capsule"):
-                            block.pop(key, None)
+                    else:
+                        block.pop("cache_control", None)
+                    # Known host metadata never leaves the send copy.
+                    for key in ("_caption", "_source_path", "_source_sha256", "_review_image_id", "_original_image_url", "_context_capsule"):
+                        block.pop(key, None)
         return cleaned
 
     # Provider-private reasoning blocks are valid only on their producing family.

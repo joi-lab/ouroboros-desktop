@@ -12,7 +12,7 @@ from tests.test_agent_restart_intent import enqueue, evolution_completion, runti
 pytestmark = pytest.mark.serial
 
 
-def prepare(runtime, monkeypatch):
+def prepare(runtime, monkeypatch):  # noqa: F811
     from ouroboros.utils import append_jsonl
     from supervisor import events
 
@@ -31,7 +31,7 @@ def prepare(runtime, monkeypatch):
 
 @pytest.mark.parametrize("fault", ["lock", "write", "write_refused", "write_then_error", "unreadable", "missing"])
 @pytest.mark.parametrize("status", ["completed", "failed"])
-def test_terminal_consumer_retries_same_decision_after_early_failure(runtime, monkeypatch, fault, status):
+def test_terminal_consumer_retries_same_decision_after_early_failure(runtime, monkeypatch, fault, status):  # noqa: F811
     from supervisor import evolution_lifecycle as evolution
 
     intent, tx, finish, queued, delivered, requested = prepare(runtime, monkeypatch)
@@ -84,7 +84,7 @@ def test_terminal_consumer_retries_same_decision_after_early_failure(runtime, mo
 
 @pytest.mark.parametrize("status", ["failed", "timeout", "interrupted", "cancelled"])
 @pytest.mark.parametrize("control", ["none", "owner_stop", "panic"])
-def test_committed_failed_cycle_keeps_lifecycle_restart_decision(runtime, monkeypatch, status, control):
+def test_committed_failed_cycle_keeps_lifecycle_restart_decision(runtime, monkeypatch, status, control):  # noqa: F811
     from ouroboros.server_liveness import drain_worker_events
     from ouroboros.task_results import load_task_result, write_task_result
     from supervisor import evolution_lifecycle as evolution
@@ -130,7 +130,7 @@ def test_committed_failed_cycle_keeps_lifecycle_restart_decision(runtime, monkey
 
 
 @pytest.mark.parametrize("rejection", ["campaign_not_active", "transaction_missing", "transaction_mismatch"])
-def test_known_terminal_rejection_releases_only_exact_intent(runtime, monkeypatch, rejection):
+def test_known_terminal_rejection_releases_only_exact_intent(runtime, monkeypatch, rejection):  # noqa: F811
     from supervisor import evolution_lifecycle as evolution
 
     intent, tx, finish, queued, delivered, requested = prepare(runtime, monkeypatch)

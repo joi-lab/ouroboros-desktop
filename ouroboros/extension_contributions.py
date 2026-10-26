@@ -124,5 +124,17 @@ def project_contributions(skill: str, entries: list[dict], revision: str, label:
         render = row["render"]
         render["url"] = (prefix + f"ui/{quote(revision, safe='')}/" + quote(render.pop("entry"), safe="/")
                          if render["kind"] == "host" else "")
-        rows.append(row)
+        rows.append(project_place_status(row) if row.get("provides") == "place" else row)
     return rows
+
+
+def project_place_status(row: dict) -> dict:
+    """Expose the manifest's labels without executing its status source."""
+    return {**row, "labels": {fact["id"]: fact["label"] for fact in row.get("facts", []) if isinstance(fact, dict)}}
+
+
+def live_place_declarations() -> list[dict]:
+    """Read published manifest facts without dispatching any connector route."""
+    from ouroboros.extension_registry_state import live_contribution_projection
+
+    return [project_place_status(row) for row in live_contribution_projection() if row.get("provides") == "place"]

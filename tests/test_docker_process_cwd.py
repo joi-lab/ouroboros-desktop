@@ -340,7 +340,7 @@ def test_a_relative_output_resolved_outside_backend_mounts_is_refused_before_lau
             return json.dumps({"id": "physical-id", "running": True, "network": "host",
                                "mounts": [{"Type": "bind", "Source": str(active),
                                            "Destination": "/workspace/project"}]})
-        assert argv[-1] == "/workspace/project/sub/../../out.txt"
+        assert argv[-2:] == ["/workspace/project/sub/../../out.txt", "prospective"]
         return "/workspace/out.txt\0"
     monkeypatch.setattr("ouroboros.workspace_executor_paths._docker_output_probe", probe)
     launched = []

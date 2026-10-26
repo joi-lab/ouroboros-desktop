@@ -78,6 +78,7 @@ def test_declared_fact_reaches_real_host_focus_without_text_classification(focus
     payload = asdict(event)
     payload.pop("delivery_reporting_version")
     payload.pop("continuation_version")
+    payload.pop("identity")
     payload.update(facts=[fact], text="Ordinary neutral words")
     body = {"event": payload, "staged_files": [], "continuation_version": 1, "delivery_reporting_version": 1}
     response = client.post("/presence/turn", json=body)

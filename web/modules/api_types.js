@@ -1,4 +1,4 @@
-/** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`; the interface-language envelopes (`UiI18n*`) sit in ./ui_i18n_types.js, the model-route previews in ./model_route_types.js, the Dashboard storage envelopes (`Storage*`) in ./storage_types.js, the Dashboard Evolution history (`Evolution*`) in ./evolution_types.js, the MCP import preview in ./mcp_import_types.js, the replaceable-client envelopes (`ServedUiState`, setup bootstrap, `/api/contract`, chat history rows, journey request bodies) in ./client_contract_types.js, the product-management envelopes (skills, marketplaces, accounts, local model, MCP, update status) in ./management_contract_types.js, the owner-decision ingress in ./decision_types.js. */
+/** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`; the interface-language envelopes (`UiI18n*`) sit in ./ui_i18n_types.js, the model-route previews in ./model_route_types.js, the Dashboard storage envelopes (`Storage*`) in ./storage_types.js, the Dashboard Evolution history (`Evolution*`) in ./evolution_types.js, the MCP import preview in ./mcp_import_types.js, the replaceable-client envelopes (`ServedUiState`, setup bootstrap, `/api/contract`, chat history rows, journey request bodies) in ./client_contract_types.js, the product-management envelopes (skills, marketplaces, accounts, local model, MCP, update status) in ./management_contract_types.js, the owner-decision ingress in ./decision_types.js, the managed-update preflight, apply and frame envelopes in ./update_types.js. */
 /**
  * @typedef {Object} CostPresentation
  * @property {'own'|'root_tree'} scope
@@ -122,6 +122,7 @@
  * @typedef {Object} ProviderTestRequest
  * @property {string} provider_id
  * @property {Object<string, string>=} overrides
+ * @property {string=} connection
  */
 /**
  * @typedef {Object} ProviderTestResponse
@@ -162,6 +163,7 @@
  * @property {AvailableSubagentsSettingsMeta=} available_subagents
  * @property {SettingsPolicyState=} policy_state
  * @property {{restart_required:boolean,restart_keys:string[],restart_source_unknown_keys:string[],unknown_keys:string[],local_model:Object,summary:string}=} restart_state Component application and source uncertainty.
+ * @property {{kind:string,name:string,label:string,builtin:boolean,enabled:boolean,configured:boolean,source:string,id:string,display:string}[]=} connections Every API connection as the picker shows it.
  */
 /**
  * @typedef {Object} SettingsPolicyState
@@ -860,7 +862,6 @@
  * @property {string} branch
  * @property {string} sha
  */
-
 /**
  * `POST /api/settings` success; `restart_keys` apply only after a restart.
  * @typedef {Object} SettingsSaveResponse
@@ -874,15 +875,14 @@
  * @property {string[]=} warnings
  * @property {Object<string, string>=} ignored_keys
  * @property {boolean=} agent_task_running
+ * @property {Object[]=} connection_references Rows naming a connection that cannot serve them: {setting, entry?, route, connection, reason}.
  */
-
 /**
  * @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode
  * @property {boolean} restart_required
  */
-
 /**
  * @typedef {Object} OwnerAutoGrantResponse
  * @property {boolean} ok
@@ -1483,94 +1483,15 @@
  * @property {'unavailable'|'off'|'on'|'other_copy'|'disabled_by_os'} state
  * @property {string=} reason
  */
-/**
- * @typedef {Object} UpdateMergePlan
- * @property {boolean=} available
- * @property {boolean=} auto_mergeable
- * @property {'clean'|'conflicting'|'current'|'unavailable'|'unknown'=} kind
- * @property {string=} error
- * @property {string=} remote
- * @property {string=} remote_branch
- * @property {string=} target_ref
- * @property {string=} update_channel
- * @property {string=} current_branch
- * @property {string=} base_sha
- * @property {string=} target_sha
- * @property {number=} local_dirty_count
- * @property {string=} local_snapshot
- * @property {string=} merge_commit
- * @property {string[]=} code_conflict_paths
- * @property {string[]=} doc_conflict_paths
- * @property {string[]=} hot_code_paths
- * @property {'auto_merge'|'assisted'=} recommended_strategy
- */
-
-/**
- * @typedef {Object} UpdatePreflightRequest
- */
-
-/**
- * @typedef {Object} UpdatePreflightResponse
- * @property {UpdateMergePlan} merge_plan
- * @property {Object=} effects
- * @property {?Object=} letter
- * @property {?Object=} qualification
- */
-
-/**
- * @typedef {Object} UpdateApplyRequest
- * @property {'auto_merge'|'assisted'|'manual'|'replace'} strategy
- * @property {string=} expected_base_sha
- * @property {string=} expected_target_sha
- * @property {boolean=} confirm_recovery
- */
-
-/**
- * @typedef {Object} UpdateApplySuccessResponse
- * @property {'ok'|'restart_required'|'assisted_started'|'manual'} status
- * @property {boolean=} restarting
- * @property {'auto_merge'|'assisted'|'manual'|'replace'=} strategy
- * @property {string=} task_id
- * @property {UpdateMergePlan=} merge_plan
- * @property {string=} error
- * @property {string=} keep_branch
- */
-
-/**
- * @typedef {Object} UpdateApplyErrorResponse
- * @property {string} error
- * @property {'not_applied'|'rolled_back'=} outcome
- * @property {Object=} index_lock
- * @property {string=} reason
- * @property {boolean=} abandoned
- * @property {Object=} status Preparation observations, not the success discriminator.
- * @property {Object=} update_intent
- * @property {Object=} rescue
- * @property {string=} keep_branch
- * @property {string[]=} blockers
- * @property {boolean=} rolled_back
- * @property {string=} rollback
- * @property {boolean=} restart_required
- * @property {UpdateMergePlan=} merge_plan
- * @property {Object=} smoke
- * @property {string=} stash_note Stash-first prologue disclosure: how stashed local work was unwound.
- * @property {?number=} estimated_wave_usd Wave-floor admission estimate (worst-case review-pack caps).
- * @property {?number=} remaining_usd Remaining model budget the floor compared against.
- */
-
+/** @typedef {import('./update_types.js').UpdateMergePlan} UpdateMergePlan */
+/** @typedef {import('./update_types.js').UpdatePreflightRequest} UpdatePreflightRequest */
+/** @typedef {import('./update_types.js').UpdatePreflightResponse} UpdatePreflightResponse */
+/** @typedef {import('./update_types.js').UpdateApplyRequest} UpdateApplyRequest */
+/** @typedef {import('./update_types.js').UpdateApplySuccessResponse} UpdateApplySuccessResponse */
+/** @typedef {import('./update_types.js').UpdateApplyErrorResponse} UpdateApplyErrorResponse */
 /** @typedef {import('./management_contract_types.js').UpdateProgress} UpdateProgress */
-
-/**
- * @typedef {Object} UpdateProgressChangedOutbound
- * @property {'update_progress_changed'} type
- */
-
-/**
- * @typedef {Object} UpdateStatusReadyOutbound
- * @property {'update_status_ready'} type
- * @property {boolean} available
- * @property {?boolean} check_ok
- */
+/** @typedef {import('./update_types.js').UpdateProgressChangedOutbound} UpdateProgressChangedOutbound */
+/** @typedef {import('./update_types.js').UpdateStatusReadyOutbound} UpdateStatusReadyOutbound */
 
 /**
  * LLM-written update letter in `/api/update/status` and `/api/update/check`.
