@@ -1025,11 +1025,16 @@ membership matching, stores no new Place field, and does not match message text.
 `from_bot` selected, and `from_bot` itself is an OR wake reason, not merely a gate requiring another selected match.
 
 ```yaml
-facts: [mention, {id: signal.words, label: "Words you chose appear"}]
+facts: [mention, {id: signal.words, label: "Words you chose appear (connector setting)"}]
 wakes: [mention, signal.words]
 ```
 
-This illustrates the supported declaration shape; it does not claim that a connector ships this signal.
+A name or alias the owner wants to be called by is a connector signal: declare
+`{id: signal.words, label: "Words you chose appear (connector setting)"}` with a `words` setting
+(one entry per line), match whole words case-insensitively in the connector, and report the fact on
+the event. Core stores the owner's choice as a wake item and matches membership only. The reference
+implementation is [email-presence 0.7.0](https://github.com/razzant/OuroborosHub/tree/main/skills/email-presence);
+[telegram-bot 0.6.3](https://github.com/razzant/OuroborosHub/tree/main/skills/telegram-bot) is the second (lane F1T, in flight).
 
 A place connector reports observations; the host decides attention. While running and
 authenticated, report every supported event within the connected place's granted
