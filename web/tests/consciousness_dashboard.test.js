@@ -8,7 +8,7 @@ import {
     countedRootsText, dashboardPlaceRowHtml, factsLineParts, headlineView, initConsciousnessDashboard, liveWake,
     paintWakeRows, placesCardHtml, summaryHtml, wakeRowHtml, wakesCardHtml,
 } from '../modules/consciousness_dashboard.js';
-import { noteLeadText, wakeCostText } from '../modules/consciousness_words.js';
+import { noteLeadText, wakeCheckText, wakeCostText } from '../modules/consciousness_words.js';
 import { applyPayload, setMissTransport } from '../modules/i18n.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
@@ -392,4 +392,71 @@ test('a served panel failure keeps the painted rows and says so; only a 404 read
     await controller.refresh();
     assert.match(mount.querySelector('[data-cx-wakes]').innerHTML, /does not report its recent wakes yet/, 'a server without the panel');
     assert.equal(mount.querySelector('[data-cx-status]').textContent, '');
+});
+
+test('a second press during the door\'s Places re-read is ignored; a failed re-read leaves the door alone', async (t) => {
+    const cleanups = [];
+    const { mount } = setup({ after: cleanup => cleanups.push(cleanup) });
+    let controller;
+    t.after(() => { controller?.destroy(); cleanups.forEach(cleanup => cleanup()); });
+    Object.defineProperty(NodeStub.prototype, 'content', { configurable: true, get() { return this; } });
+    t.after(() => { delete NodeStub.prototype.content; });
+    NodeStub.prototype.getBoundingClientRect = () => ({ top: 0 });
+    t.after(() => { delete NodeStub.prototype.getBoundingClientRect; });
+    const slack = { ...normalizePlacesResponse(FIXTURE.places).places[0], rooms: [{ chatId: 1099511627777 }] };
+    const snapshot = { ...full(), recentWakes: [
+        { ...wake('214a31b6'), taskId: 'focus-late', cause: 'focus', chatId: 1099511627778, placeLabel: 'Slack' },
+        { ...wake('214a31b6'), taskId: 'focus-lost', cause: 'focus', chatId: 1099511627779, placeLabel: 'Slack' }] };
+    const opened = [];
+    let reads = 0, settle = null, fail = false;
+    controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
+        read: async () => snapshot,
+        readPlacesFn: () => {
+            reads += 1;
+            if (reads === 1) return Promise.resolve({ places: [slack], connectors: [], migrationProblems: [] });
+            if (fail) return Promise.reject(new Error('HTTP 503'));
+            return new Promise((resolve) => { settle = resolve; });
+        },
+        openSheet: (place, options) => opened.push([place.id, options.openRoomChatId]) });
+    await controller.refresh();
+    const [late, lost] = mount.querySelectorAll('[data-cx-open-room]');
+    const first = mount.fire('click', { target: late });
+    await new Promise((resolve) => setImmediate(resolve));
+    await mount.fire('click', { target: late });
+    assert.equal(reads, 2, 'the second press starts no third read');
+    settle({ places: [{ ...slack, rooms: [...slack.rooms, { chatId: 1099511627778 }] }], connectors: [], migrationProblems: [] });
+    await first;
+    assert.deepEqual(opened, [[slack.id, 1099511627778]], 'one sheet for two presses');
+    assert.equal(late.disabled, false);
+    fail = true;
+    await mount.fire('click', { target: lost });
+    assert.equal(opened.length, 1);
+    assert.equal(lost.disabled, false, 'a failed re-read is not absence: the door stays');
+    assert.match(mount.querySelector('[data-cx-places]').innerHTML, /HTTP 503/, 'the Places card names the failed read');
+});
+
+test('a first read that fails names the error without claiming earlier values', async (t) => {
+    const cleanups = [];
+    const { mount } = setup({ after: cleanup => cleanups.push(cleanup) });
+    let controller;
+    t.after(() => { controller?.destroy(); cleanups.forEach(cleanup => cleanup()); });
+    controller = initConsciousnessDashboard({ mount, state: { activePage: 'chat' },
+        read: async () => { throw Object.assign(new Error('HTTP 500'), { status: 500 }); },
+        readFallback: async () => fromState(),
+        readPlacesFn: async () => normalizePlacesResponse(FIXTURE.places) });
+    await controller.refresh();
+    const status = mount.querySelector('[data-cx-status]').textContent;
+    assert.match(status, /Could not read consciousness: HTTP 500/);
+    assert.doesNotMatch(status, /Earlier values are shown/);
+    assert.match(mount.querySelector('[data-cx-wakes]').innerHTML, /Recent wakes could not be read: HTTP 500/);
+});
+
+test('Safety chips name what they checked in sentence case, keeping raw tool ids as they are', () => {
+    assert.equal(wakeCheckText({ chip: 'warned', tool: 'place_reply' }), 'Safety Supervisor warned about the reply');
+    assert.equal(wakeCheckText({ chip: 'sent_despite', tool: 'place_reply' }), 'The reply sent despite the check');
+    assert.equal(wakeCheckText({ chip: 'held', tool: 'send_user_message' }), 'Safety Supervisor held the message');
+    assert.equal(wakeCheckText({ chip: 'sent_despite', tool: 'slack_send' }), 'slack_send sent despite the check');
+    assert.equal(wakeCheckText({ chip: 'not_checked', tool: 'update_memory' }), 'Not checked (update_memory)');
+    assert.equal(wakeCheckText({ chip: 'not_checked', tool: '' }), 'Not checked');
+    assert.equal(wakeCheckText({ chip: 'unknown', tool: 'x' }), '');
 });
