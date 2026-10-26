@@ -322,12 +322,13 @@ class _OpenAICompatibleLaneMixin:
             provider_body = extra_body.setdefault("provider", {})
             if isinstance(provider_body, dict):
                 provider_body["allow_fallbacks"] = False
-        # Owner-configured OpenRouter provider routing (resilience/repro). Gap-merge:
+        # Owner-configured OpenRouter provider routing (resilience/repro): the global
+        # setting with this connection's own ``provider_routing`` merged over it. Gap-merge:
         # NEVER override the anthropic require_parameters pin or the (sealed-artifact)
         # reasoning-continuity allow_fallbacks=False pin set above. Affects same-model
         # provider routing only — it never changes the MODEL, so the P3 reviewer context
         # floor is untouched.
-        _or_provider = _resolve_or_provider()
+        _or_provider = _resolve_or_provider(target.get("provider_routing"))
         if _or_provider:
             provider_body = extra_body.setdefault("provider", {})
             if isinstance(provider_body, dict):
