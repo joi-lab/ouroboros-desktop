@@ -1364,9 +1364,15 @@ class ArtifactOracle:
         from ouroboros.task_store import task_facts
         return list(task_facts(self.data_root, where="parent_task_id=?", params=(str(parent_task_id),)))
 
+    def copy_records(self) -> list:
+        """Every private copy's record (``state/private_copies/<name>.json``, one file per copy)."""
+        folder = self.data_root / "state" / "private_copies"
+        return [self._json(f"state/private_copies/{path.name}") for path in sorted(folder.glob("*.json"))
+                if not path.name.startswith(".")]
+
     def body_candidate(self, task_id: str = "") -> dict:
         """One authoring candidate; callbacks before submit returns may omit its owner."""
-        rows = [row for row in self._json("state/subagent_worktrees.json").get("worktrees", [])
+        rows = [row for row in self.copy_records()
                 if row.get("kind") == "body_candidate" and (not task_id or row.get("task_id") == task_id)]
         assert len(rows) == 1, rows
         return rows[0]

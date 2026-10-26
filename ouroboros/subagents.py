@@ -835,6 +835,8 @@ SUBAGENT_INTENT_FIELDS: tuple[str, ...] = (
     # policy-overridden between admission and dispatch.
     "required_model_lane",
     "requested_executor",
+    # A writer's explicit placement (``schedule_subagent(workspace="in_place")``, owner 25.10 Q2-A).
+    "workspace",
 )
 
 

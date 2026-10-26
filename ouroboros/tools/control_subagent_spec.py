@@ -102,6 +102,10 @@ def schedule_subagent_properties() -> Dict[str, Any]:
             "type": "string", "enum": ["direct", "copy"],
             "description": "Agent-session ordinary folders: direct (default/omitted) works there; copy uses a separate scope_paths copy and returns changes for application. Choose for the task/owner preference. Acting children only; non-acting children omit this and scope_paths (direct without scope also means omitted). Native/API children use shared files, never copy.",
         },
+        "workspace": {
+            "type": "string", "enum": ["copy", "in_place"],
+            "description": "Agent-session Git writers (an acting write_surface): copy (default) gives the harness a private copy whose diff the parent applies or rejects; in_place lets it work directly in the child's own write root, for example a self_worktree copy that is already private: its edits land at once, nothing is captured for apply or reject, undo is through git, and two in-place writers in one folder mix their edits.",
+        },
         "scope_paths": {
             "type": "array", "items": {"type": "string"},
             "description": "Agent-session ordinary folders: relative inputs for copy (nonempty required), or direct capture footprint including future outputs. ['.'] selects the whole folder. Acting children only, like directory_strategy. Native children declare outputs on file/process tools.",
@@ -244,6 +248,16 @@ def _validated_schedule_fields(params: Dict[str, Any], *, ctx: Any = None) -> tu
     if directory_options.get("directory_strategy") == "copy" and not directory_options.get("scope_paths"):
         return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): copy requires scope_paths; use ['.'] to select the whole folder."
     from ouroboros.delegate_directory import DIRECTORY_OPTIONS_NEED_WRITE, default_shaped_directory_options
+
+    if params.get("workspace") not in (None, "copy", "in_place"):
+        return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): workspace must be copy or in_place."
+    if params.get("workspace") == "in_place":  # the documented default geometry is no folder request, as at delegate_start
+        if str(params.get("write_surface") or "").strip().lower() not in {"self_worktree", "external_workspace", "genesis"} \
+                or not default_shaped_directory_options(directory_options.get("directory_strategy"),
+                                                        directory_options.get("scope_paths")):
+            return {}, ("⚠️ TOOL_ARG_ERROR (schedule_subagent): workspace='in_place' needs an acting Git write_surface "
+                        "and no directory options.")
+        directory_options["workspace"] = "in_place"
 
     # Folder geometry is a WRITE-side request: a read-only child reads the selected
     # folder as it is, and the host's pre-start refuses geometry it can never serve —

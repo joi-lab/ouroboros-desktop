@@ -16,7 +16,7 @@ import { fmt } from './i18n.js';
 import { showToast } from './toast.js';
 import { escapeHtmlAttr, escapeHtmlText } from './utils.js';
 import { DOTS, durationLabel, formatBytes, isSize, number, plural, signedBytes as signed, whenLabel } from './storage_format.js';
-import { confirmCopy, doneSentences, groupsOf, notStarted, trayHtml, trayState } from './storage_free.js';
+import { confirmCopy, doneSentences, groupsOf, notStarted, startsChecked, trayHtml, trayState } from './storage_free.js';
 
 export { durationLabel, formatBytes, whenLabel };
 
@@ -356,8 +356,9 @@ export function initStorage({ state, mount } = {}) {
     // screen reader hears phase changes and not the figures the progress line repaints every second.
     const live = page.querySelector('[data-storage-live]');
     const panel = page.querySelector('[data-storage-panel]');
-    // The owner's checklist: a new preview starts with every group checked, a group listed later too; the
-    // choices hold until the next preview. Cancel hides the list without asking the server anything.
+    // The owner's checklist: a new preview starts with every group checked except those holding saved work,
+    // a group listed later too; the choices hold until the next preview. Cancel hides the list without asking
+    // the server anything.
     const ui = { checked: new Set(), known: new Set(), checkedFor: null, dismissed: false };
     // The measure node is never replaced, and a running count marks it aria-disabled rather than disabled,
     // so keyboard focus stays on it through a count and every repaint.
@@ -385,7 +386,7 @@ export function initStorage({ state, mount } = {}) {
         for (const group of groupsOf(free)) {
             if (ui.known.has(group.id)) continue;
             ui.known.add(group.id);
-            ui.checked.add(group.id);
+            if (startsChecked(group)) ui.checked.add(group.id);
         }
         const view = renderStorage(response, { pending: measuring, readFailed, tray: ui });
         patch(regions.summary, view.summary, painted);

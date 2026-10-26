@@ -1126,6 +1126,7 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
         if str(options.get("retry_of") or "").strip() and (
             selected_id or selected_snapshot is not None or access is not None
             or options.get("mode") is not None or options.get("override_plan_readiness") is not None
+            or options.get("workspace") is not None
         ):
             raise SubagentSelectionError(
                 "retry_selector_conflict",
@@ -1191,7 +1192,7 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
             _initial_bootstrap=bool(options.pop("_initial_bootstrap", False)),
             **{key: options.pop(key) for key in (
                 "directory_strategy", "scope_paths", "continue_from", "continue_carrier", "mode",
-                "override_plan_readiness", "_plan_answers") if key in options},
+                "override_plan_readiness", "_plan_answers", "workspace") if key in options},
         )
         # Every configured-session start lands here — the host's pre-start
         # (charter, owner 2026-08-28/29) and any model-issued retry/replacement
@@ -1339,7 +1340,7 @@ def delegate_start_entry(ctx: Any, prompt: str = "", _resolved_binding: Any = No
             "_coordination_context": str(prompt or ""),
             # The dispatch's effort decision reaches the first physical start unchanged.
             "effort_fact": dict(bootstrap.get("effort_fact") or {}),
-            **{key: bootstrap[key] for key in ("directory_strategy", "scope_paths")
+            **{key: bootstrap[key] for key in ("directory_strategy", "scope_paths", "workspace")
                if key in bootstrap},
         })
         if _resolved_binding is not None:
