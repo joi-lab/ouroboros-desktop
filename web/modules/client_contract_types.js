@@ -576,6 +576,7 @@
  * @property {string=} cost_accounting_error
  * @property {boolean=} cost_final
  * @property {boolean=} cost_with_children_partial
+ * @property {?CostCustody=} cost_custody
  * @property {?number=} unknown_unmetered
  * @property {?number=} non_final_rows
  * @property {?number=} reserved_usd

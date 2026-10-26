@@ -1126,9 +1126,9 @@ export function createChatInstance({
 
     // Refresh files/history; retain lifecycle.
     function noteTaskDetails(record, detail) {
+        const files = syncSettledItems(record, detail, { write: withStableViewport });
         const words = record && detail && 'wake_summary' in detail && record.wakeSummary !== detail.wake_summary;
         if (words) record.wakeSummary = detail.wake_summary;
-        const files = syncSettledItems(record, detail, { write: withStableViewport });
         const history = syncHistoryRetentionItem(record, detail);
         const candidate = syncCandidateRemainderItem(record, detail);
         const chain = episodes.note(record, detail);

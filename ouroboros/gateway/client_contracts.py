@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ouroboros.delegate_custody_usage import CostCustody
 from ouroboros.cost_projection import CostPresentation
 
 try:  # Python 3.11+
@@ -344,6 +345,7 @@ class RecentWake(TypedDict):
     cost_accounting_error: NotRequired[str]
     cost_final: NotRequired[bool]
     cost_with_children_partial: NotRequired[bool]
+    cost_custody: NotRequired[Optional[CostCustody]]
     unknown_unmetered: NotRequired[Optional[int]]
     non_final_rows: NotRequired[Optional[int]]
     reserved_usd: NotRequired[Optional[float]]
