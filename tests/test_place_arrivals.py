@@ -85,12 +85,13 @@ def test_focus_source_retains_no_attention_facts(focus):
     assert set(json.loads(row["dispatch_input"])) == {"place_context_source_ref"}
 
 
-def seed_identity_arrival(root, place, identity, *, ts="2026-10-26T12:00:00Z", **fields):
-    """Stored arrival shape; identity may deliberately model a malformed historical value."""
+def seed_identity_arrival(root, place, identity, *, ts="2026-10-26T12:00:00Z", account_id=None, **fields):
+    """Stored arrival shape; identity may deliberately model a malformed historical value; account_id = another
+    account of a connector-wide place."""
     from ouroboros.places import conversation_chat_id
     from ouroboros.presence_bindings import conversation_key
-    key = conversation_key(place.provider, place.account_id, place.conversation_id, "")
-    transport = {"provider": place.provider, "account_id": place.account_id,
+    key = conversation_key(place.provider, account_id or place.account_id, place.conversation_id, "")
+    transport = {"provider": place.provider, "account_id": account_id or place.account_id,
                  "conversation_id": place.conversation_id, "thread_id": "", "conversation_key": key,
                  "actor": {"platform_actor_id": "person"}, "conversation": {}, "message": {}}
     if identity is not None:
@@ -139,6 +140,26 @@ def test_recent_identity_without_arrivals_is_none(focus):
     assert place_arrivals.recent_identity(root, place.place_id) is None
 
 
+def test_recent_identity_of_a_named_account_stays_inside_the_places_window(focus, monkeypatch):
+    """A named account is picked out of the place's newest 50 arrivals, never read further back."""
+    from tests.place_history_scenario import watch_transactions
+    root, place, _, _ = focus
+    mine = {"sends_as": {"id": "mine", "label": "Mine", "kind": "user"}}
+    other = {"sends_as": {"id": "other", "label": "Other", "kind": "user"}}
+    seed_identity_arrival(root, place, mine, ts="2026-10-26T12:00:00Z", account_id="account")
+    seed_identity_arrival(root, place, other, ts="2026-10-26T12:00:01Z", account_id="elsewhere")
+    assert place_arrivals.recent_identity(root, place.place_id, "account") == mine
+    assert place_arrivals.recent_identity(root, place.place_id, "elsewhere") == other
+    assert place_arrivals.recent_identity(root, place.place_id) == other
+    assert place_arrivals.recent_identity(root, place.place_id, "nobody") is None
+    for number in range(50):  # the other account fills the window: the quiet account's declaration is behind it
+        seed_identity_arrival(root, place, other, ts=f"2026-10-26T13:00:{number:02d}Z", account_id="elsewhere")
+    watch = watch_transactions(monkeypatch)
+    assert place_arrivals.recent_identity(root, place.place_id, "account") is None
+    selects = [sql for sql in watch.statements if "json_extract(body,'$.transport.identity')" in sql]
+    assert len(selects) == 1 and "LIMIT 50" in selects[0] and "account_id')=?" not in selects[0]
+
+
 @pytest.mark.parametrize("failure", [store.StoreBusy("held"), store.StoreLost("damaged"), OSError("gone")])
 def test_recent_identity_is_unknown_when_the_room_cannot_be_read(focus, monkeypatch, caplog, failure):
     from contextlib import contextmanager
@@ -172,6 +193,6 @@ def test_recent_identity_bounds_indexed_read_and_validates_after_transaction(foc
     monkeypatch.setattr(places, "validate_presence_identity", after_transaction)
     assert place_arrivals.recent_identity(root, place.place_id) is None
     assert len(calls) == 50
-    selects = [sql for sql in watch.statements if sql.startswith("SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity') FROM dialogue")]
+    selects = [sql for sql in watch.statements if sql.startswith("SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity'), json_extract(body,'$.transport.account_id') FROM dialogue")]
     assert len(selects) == 1
     assert "INDEXED BY dialogue_place_recent" in selects[0] and "LIMIT 50" in selects[0]

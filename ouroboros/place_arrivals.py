@@ -213,26 +213,27 @@ def activity(root, place):
 
 
 def recent_identity(root, place_id, account_id=""):
-    """First valid credential declaration in the newest 50 captured arrivals of the place (of one account when the
-    call names it); None when nothing was declared or the room cannot be read."""
+    """First valid credential declaration among the place's newest 50 captured arrivals (of one account when the call
+    names it); None when nothing was declared there or the room cannot be read."""
     import logging
     from ouroboros.places import validate_presence_identity
 
-    scope = " AND json_extract(body,'$.transport.account_id')=?" if account_id else ""
     try:
         if not _dialogue_indexes(root):
             return None
         with dialogue_store.transaction(root, write=False) as conn:
-            rows = conn.execute(f"SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity') "
-                                f"FROM dialogue INDEXED BY dialogue_place_recent WHERE {_ARRIVAL} AND {_PLACE}=?{scope} "
-                                f"ORDER BY ts DESC LIMIT 50", (place_id, account_id) if account_id else (place_id,)).fetchall()
+            # The window is the place's newest 50 arrivals whoever wrote them; a named account is picked out of it
+            # after the transaction, so the read never walks further back for a quiet account.
+            rows = conn.execute(f"SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity'), "
+                                f"json_extract(body,'$.transport.account_id') FROM dialogue INDEXED BY dialogue_place_recent "
+                                f"WHERE {_ARRIVAL} AND {_PLACE}=? ORDER BY ts DESC LIMIT 50", (place_id,)).fetchall()
     except (store.StoreError, OSError) as exc:
         # A supplementary fact: an own wake or a Safety check goes on without it rather than failing on the store.
         logging.getLogger(__name__).warning("Captured identity unavailable for %s: %s", place_id, exc)
         return None
-    for kind, declared in rows:
+    for kind, declared, account in rows:
         # json_extract hands back a stored string unquoted and a number natively: only a stored object is a declaration.
-        if kind != 'object':
+        if kind != 'object' or (account_id and account != account_id):
             continue
         try:
             return validate_presence_identity(json.loads(declared))
