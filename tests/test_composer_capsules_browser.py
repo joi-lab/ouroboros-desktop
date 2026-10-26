@@ -485,17 +485,17 @@ SUBAGENTS_PANEL = """() => {
 STATE_READS = re.compile(r"/api/state(\?|$)")
 
 
-def _state_with(page, facts: dict) -> None:
+def _state_with(page, facts: dict) -> dict:
     """The server's state reads with the room's subagents facts held by the test, so Settings-off needs no Settings
-    write; a saved mode lands in `facts`, so every state read after a save answers it."""
-    page.unroute(STATE_READS)
-    page.unroute("**/api/owner/subagents-mode")
+    write. Routed once: a save and the test change `facts` in place, and every later read answers them (routing again
+    over a read in flight would answer it twice)."""
     page.route(STATE_READS, lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
 
     def save(route):
         facts["subagents_mode"] = route.request.post_data_json["mode"]
         route.fulfill(json={"ok": True, "project_id": "", "subagents_mode": facts["subagents_mode"]})
     page.route("**/api/owner/subagents-mode", save)
+    return facts
 
 
 @pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 390)])
@@ -513,7 +513,7 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
         browser, page = _launch(pw, engine, **context)
         press = page.tap if phone else page.click
         try:
-            _state_with(page, {"subagents_mode": "auto", "subagents_availability": "available"})
+            held = _state_with(page, {"subagents_mode": "auto", "subagents_availability": "available"})
             _open_chat(page, url, width=width, height=860, theme="light")
             # Each value's line stands in one cell: choosing another never changes the panel's height.
             for kind, sel, values, endpoint in (
@@ -539,7 +539,7 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
                 assert len(set(lines)) == len(values), ("each value says its own line", kind, lines)
                 page.keyboard.press("Escape")
             # Settings turns subagents off: Off with a lock, Auto and Swarm disabled, the reason and Open Settings.
-            _state_with(page, {"subagents_mode": "swarm", "subagents_availability": "disabled"})
+            held.update(subagents_mode="swarm", subagents_availability="disabled")
             page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'dark'); } catch (e) {}")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{SUBAGENTS}')?.dataset.locked === 'true'", timeout=30_000)
@@ -567,6 +567,7 @@ def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct
             assert page.locator(SUBAGENTS).get_attribute("data-open") == "false"
         finally:
             _record(tmp_path, f"capsules-heights-settings-off-{engine}-{width}", seen)
+            page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
             browser.close()
 
 
