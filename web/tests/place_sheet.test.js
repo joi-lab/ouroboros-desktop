@@ -6,10 +6,12 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 import { normalizePlace, normalizePlacesResponse } from '../modules/consciousness_api.js';
-import { SILENT_CARD, WAKE_FACT_WORDS } from '../modules/consciousness_words.js';
+import { SILENT_CARD, WAKE_FACT_WORDS, placeStatusText } from '../modules/consciousness_words.js';
 import { placeChangeFor, placeSheetBodyHtml, placeSheetMetaText, openPlaceSheet } from '../modules/place_sheet.js';
+import { applyPayload, setMissTransport } from '../modules/i18n.js';
 
 import { setup, NodeStub } from './dashboard_dom_fixture.js';
+import { installCardDom } from './helpers/card_dom.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
 const { places } = normalizePlacesResponse(FIXTURE.places);
@@ -74,6 +76,122 @@ const input = async (body, key, value) => {
     await body.fire('input', { target });
 };
 const click = (body, selector) => body.fire('click', { target: body.querySelector(selector) });
+
+const sendingAccount = { id: 'mailbox-id', label: 'mail@example.test', kind: 'user', owner: false };
+const identityPlace = (fields = {}) => normalizePlace({ ...FIXTURE.places.places[0], can_confirm: true,
+    identity: { sends_as: sendingAccount, reads_as: [{ ...sendingAccount, id: 'reader-id', label: 'Reader account' }] }, ...fields });
+
+test('the account identity row precedes confirmations and distinguishes user, owner, bot and undeclared', (t) => {
+    const dom = installCardDom(); t.after(() => dom.restore());
+    const document = dom.doc;
+    const host = document.createElement('div');
+    for (const [sender, sentence, confirm] of [
+        [sendingAccount, 'It writes here as mail@example.test', true],
+        [{ ...sendingAccount, owner: true }, 'It writes here as you (mail@example.test)', false],
+        [{ ...sendingAccount, kind: 'bot' }, 'It writes here as the Ouroboros bot (mail@example.test)', false],
+    ]) {
+        host.innerHTML = placeSheetBodyHtml(identityPlace({ identity: { sends_as: sender, reads_as: [{ ...sender, label: 'Reader account' }] } }));
+        const accounts = host.querySelector('[data-place-section="accounts"]');
+        assert.ok(accounts.textContent.includes(`${sentence} · reads as Reader account`));
+        assert.equal(accounts.querySelectorAll('[data-place-act="confirm"]').length, Number(confirm));
+        assert.ok(accounts.textContent.indexOf(sentence) < accounts.textContent.indexOf('@anton.r'));
+        assert.equal(accounts.querySelector('[data-i18n-authored]').textContent, sender.label);
+        assert.equal(accounts.querySelector('mail'), null);
+        assert.ok(accounts.querySelector('[data-place-act="revoke"]'), 'the existing confirmed list keeps its revoke');
+    }
+    for (const can_confirm of [false, undefined]) {
+        const html = placeSheetBodyHtml(identityPlace({ can_confirm }));
+        assert.doesNotMatch(html, /This is my account/);
+        assert.match(html, /It writes here as/);
+    }
+    const escaped = placeSheetBodyHtml(identityPlace({ identity: { sends_as: { ...sendingAccount, label: '<img>& account' } } }));
+    assert.match(escaped, /data-i18n-authored>&lt;img&gt;&amp; account<\/span>/);
+    assert.match(escaped, /data-actor-label="&lt;img&gt;&amp; account"/);
+    const old = placeSheetBodyHtml(slack);
+    assert.doesNotMatch(old, /It writes here as|reads as|This is my account/);
+    assert.match(old, /data-place-act="revoke"/);
+    assert.doesNotMatch(placeSheetBodyHtml(identityPlace(), { removed: true }), /It writes here as|This is my account/);
+    assert.match(placeSheetBodyHtml(identityPlace({ identity: { reads_as: [sendingAccount] } })), /It reads here as/);
+    assert.doesNotMatch(placeSheetBodyHtml(identityPlace({ identity: {} })), /It reads here as|It writes here as/);
+});
+
+test('This is my account uses the existing confirm writer with the sending id, label and revision', async (t) => {
+    const { document } = sheetDom(t);
+    const place = identityPlace(); const writes = [];
+    const sheet = openPlaceSheet(place, { update: async (id, change) => {
+        writes.push({ id, change });
+        return identityPlace({ revision: 5, identity: { sends_as: { ...sendingAccount, owner: true } },
+            owner_accounts: [{ platform_actor_id: sendingAccount.id, label: sendingAccount.label }] });
+    } });
+    t.after(() => sheet.close());
+    const body = document.body.querySelector('[data-place-body]');
+    assert.deepEqual(writes, [], 'opening does not confirm');
+    await click(body, '[data-place-act="confirm"]');
+    assert.deepEqual(writes, [{ id: place.id, change: { confirm_owner_account: {
+        platform_actor_id: sendingAccount.id, label: sendingAccount.label }, expected_revision: place.revision } }]);
+    assert.equal(sheet.place.identity.sends_as.owner, true);
+    assert.match(placeSheetBodyHtml(sheet.place), /It writes here as you \(<span data-i18n-authored>mail@example.test<\/span>\)/);
+    assert.equal(body.querySelector('[data-place-act="confirm"]'), null);
+    assert.equal(body.querySelector('[data-place-act="revoke"]').dataset.actor, sendingAccount.id);
+});
+
+test('notes invite a letter without saving the placeholder and disclose each known Safety level', (t) => {
+    const { document } = sheetDom(t); const host = document.createElement('div');
+    const questions = 'Who am I here? What may I do? What calls me at once? What matters here? What must I never do? What do you want to see afterwards?';
+    for (const [safety_mode, sentence] of [
+        ['full', 'Ouroboros reads your words every time; the Safety Supervisor reads them before actions.'],
+        ['light', 'Ouroboros reads your words every time; the Safety Supervisor reads them before some actions.'],
+        ['off', 'Ouroboros reads your words every time; the Safety Supervisor is off.'],
+    ]) {
+        host.innerHTML = placeSheetBodyHtml(identityPlace({ safety_mode, notes: [] }));
+        const notes = host.querySelector('[data-place-section="notes"]');
+        const field = notes.querySelector('textarea');
+        assert.equal(field.getAttribute('placeholder'), questions);
+        assert.equal(field.getAttribute('rows'), '6', 'the empty letter has room to show its questions');
+        assert.equal(field.textContent, '');
+        assert.ok(field.hasAttribute('data-i18n-authored'));
+        assert.ok(notes.textContent.includes(`${sentence} Silent and Paused are locks; words are not.`));
+        assert.ok(notes.textContent.indexOf(sentence) > notes.textContent.indexOf('Add note'));
+        assert.doesNotMatch(notes.textContent, /treats yours as your instructions/);
+    }
+    host.innerHTML = placeSheetBodyHtml(slack, { drafts: { note: 'My own words' } });
+    assert.equal(host.querySelector('textarea').textContent, 'My own words');
+    assert.equal(host.querySelector('textarea').getAttribute('rows'), '2', 'existing notes keep the compact editor');
+    assert.equal(placeChangeFor('add-note', slack, { drafts: {} }), null);
+    assert.match(host.textContent, /the Safety Supervisor treats yours as your instructions/);
+    assert.doesNotMatch(host.textContent, /Silent and Paused are locks/);
+});
+
+test('declared core labels keep their checkbox spelling and lowercase only in wake sentences', () => {
+    const place = identityPlace({ facts: ['direct_message'], labels: { direct_message: 'Mail addressed to you' },
+        wakes: [{ fact: 'direct_message', author: 'connector' }] });
+    assert.match(placeSheetBodyHtml(place), /data-i18n-authored>Mail addressed to you</);
+    assert.equal(placeStatusText(place), 'active · wakes for mail addressed to you · 2 open turns');
+    const fallback = { ...place, labels: null };
+    assert.match(placeSheetBodyHtml(fallback), /<span>Direct messages<\/span>/);
+    assert.equal(placeStatusText(fallback), 'active · wakes for direct messages · 2 open turns');
+    const declared = { ...fallback, facts: [{ id: 'direct_message', label: 'Mail addressed to you' }] };
+    assert.equal(placeStatusText(declared), placeStatusText(place));
+});
+
+test('identity and notes host strings use catalog entries while account labels and notes stay authored', (t) => {
+    setMissTransport(() => Promise.resolve(null));
+    applyPayload({ language: 'ru', english: false, entries: {
+        'It writes here as {label}': { text: 'Пишет как {label}' }, 'reads as {labels}': { text: 'читает как {labels}' },
+        'code:places.account.confirm_identity': { text: 'Это мой аккаунт' },
+        'code:places.notes.questions': { text: 'Кто я здесь? Что мне можно?' },
+        'code:places.notes.safety.off': { text: 'Уроборос читает; проверка выключена.' },
+        'code:places.notes.locks': { text: 'Слова не являются замками.' },
+    } });
+    t.after(() => applyPayload({ language: '', english: true, entries: {} }));
+    const html = placeSheetBodyHtml(identityPlace({ safety_mode: 'off' }));
+    assert.match(html, /Пишет как <span data-i18n-authored>mail@example.test<\/span>/);
+    assert.match(html, /читает как <span data-i18n-authored>Reader account<\/span>/);
+    assert.match(html, /Это мой аккаунт/);
+    assert.match(html, /placeholder="Кто я здесь\? Что мне можно\?"/);
+    assert.match(html, /Уроборос читает; проверка выключена\. Слова не являются замками\./);
+    assert.match(html, /data-i18n-authored>Отвечай коротко и по делу\./);
+});
 
 for (const removed of [false, true]) test(`a 409 ${removed ? 'disconnect' : 'changed record'} repaints and retains every owner draft`, async (t) => {
     const { document, routes } = sheetDom(t);

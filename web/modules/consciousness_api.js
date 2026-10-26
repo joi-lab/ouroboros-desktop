@@ -60,6 +60,10 @@ export function normalizePlace(raw) {
         workingFolder: text(place.working_folder),
         model: text(place.model),
         readiness: placeReadiness(place.readiness),
+        identity: object(place.identity),
+        canConfirm: place.can_confirm === true,
+        safetyMode: text(place.safety_mode),
+        labels: object(place.labels),
         facts: Array.isArray(place.facts) ? place.facts : null,
         source: object(place.source),
         settings: text(place.settings),
@@ -112,6 +116,7 @@ export function normalizeWake(raw) {
     return {
         taskId: text(wake.task_id), chatId: count(wake.chat_id), cause: text(wake.cause),
         placeLabel: text(wake.place_label), conversation: text(wake.conversation),
+        as: object(wake.as),
         startedAt: text(wake.started_at), endedAt: text(wake.ended_at), firstReplyAt: text(wake.first_reply_at),
         live: wake.live === true, phase: text(wake.phase), quiet: wake.quiet === true,
         saidOwner: typeof wake.said_owner === 'boolean' ? wake.said_owner : null,

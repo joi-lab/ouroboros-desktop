@@ -316,22 +316,6 @@
  */
 
 /**
- * Retained attention only; no exact wake match is inferred.
- * @typedef {Object} PlaceHistoryAttention
- * @property {'heard'|'focus_started'} decision
- * @property {string=} reason
- */
-
-/**
- * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
- * @typedef {Object} PlaceHistoryFacts
- * @property {'message'|'notice'|'delivery'} kind
- * @property {('authored'|'accepted'|'delivered'|'failed'|'uncertain')=} delivery_state
- * @property {PlaceHistoryAttention=} attention
- * @property {boolean=} owner_confirmed  // current stored account confirmation
- */
-
-/**
  * One `GET /api/chat/history` row (live frames call `text` `content`). A row may also carry the
  * task-progress and outcome fields of a live `chat` frame (`ChatOutbound`). Replay-evidence rows
  * (`quiz_answer`, `quiz_closed`, `task_evidence`, or `summary_kind` + `historical_terminal`) are never shown.
@@ -552,6 +536,7 @@
  * `GET /api/consciousness` recent_wakes: ledger-selected facts, never authored by the view.
  * CostPresentation is the task card's existing carrier (api_types.js).
  * @typedef {Object} RecentWake
+ * @property {{label: string, owner: boolean}=} as
  * @property {string} task_id
  * @property {?number} chat_id
  * @property {'own'|'focus'} cause
@@ -595,6 +580,10 @@
 /** @typedef {import('./place_contract_types.js').PlaceIcon} PlaceIcon */
 /** @typedef {import('./place_contract_types.js').PlaceReadiness} PlaceReadiness */
 /** @typedef {import('./place_contract_types.js').PlaceSummary} PlaceSummary */
+/** @typedef {import('./place_contract_types.js').PlaceIdentityAccount} PlaceIdentityAccount */
+/** @typedef {import('./place_contract_types.js').PlaceIdentity} PlaceIdentity */
+/** @typedef {import('./place_contract_types.js').PlaceHistoryAttention} PlaceHistoryAttention */
+/** @typedef {import('./place_contract_types.js').PlaceHistoryFacts} PlaceHistoryFacts */
 /** @typedef {import('./place_contract_types.js').PlaceDisconnectRequest} PlaceDisconnectRequest */
 /** @typedef {import('./place_contract_types.js').PlaceOwnerAccountRequest} PlaceOwnerAccountRequest */
 /** @typedef {import('./place_contract_types.js').PlaceRoomSummary} PlaceRoomSummary */

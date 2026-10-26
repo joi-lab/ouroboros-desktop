@@ -10,7 +10,7 @@ import { bindModelChoosers, modelChooserHtml, updateModelChooser } from './model
 import { disconnectPlace, normalizePlace, PLACES_CHANGED_EVENT, readPlaceConnector, readPlaceRooms, updatePlace } from './consciousness_api.js';
 import { mountPlaceHistory, placeRoomsHtml } from './place_history.js';
 import {
-    PLACE_STATES, SILENT_CARD, WAKE_FACT_WORDS, accountIdText, authorWord, capitalized, placeStateOf, placeStateWord, wakeFactWord,
+    PLACE_STATES, SILENT_CARD, WAKE_FACT_WORDS, accountIdText, authorWord, capitalized, listWords, placeStateOf, placeStateWord, signalLabels, wakeFactWord,
 } from './consciousness_words.js';
 
 /** Ask the Skills page for one installed skill's card, or Browse filtered to connectors. */
@@ -44,14 +44,15 @@ function stateHtml(place, ui) {
 }
 
 function wakesHtml(place, ui) {
+    const labels = { ...signalLabels(place.facts), ...place.labels };
     const vocabulary = place.facts ?? Object.keys(WAKE_FACT_WORDS).filter((fact) => fact !== 'legacy_addressed'
         || place.wakes.some((item) => item.fact === fact));
     const items = vocabulary.map((item) => {
         const fact = typeof item === 'string' ? item : item?.id;
         if (!fact) return '';
         const chosen = place.wakes.find((wake) => wake.fact === fact);
-        const authored = typeof item === 'object';
-        const label = authored ? item.label : capitalized(wakeFactWord(fact));
+        const authored = Boolean(labels[fact]);
+        const label = authored ? labels[fact] : capitalized(wakeFactWord(fact));
         return `<li class="place-wake-item"><label class="place-wake-toggle ui-hit-area"><input class="ui-checkbox" type="checkbox" data-place-act="${chosen ? 'remove-wake' : 'add-wake'}" data-fact="${escapeHtml(fact)}"${chosen ? ' checked' : ''}>
             <span${authored ? ' data-i18n-authored' : ''}>${escapeHtml(label)}</span></label>${chosen ? chipHtml(tr(`places.author.${chosen.author}`, authorWord(chosen.author)), 'neutral') : ''}</li>`;
     }).join('');
@@ -64,7 +65,23 @@ function wakesHtml(place, ui) {
         <p class="place-sheet-note">${tr('places.wake.honesty', 'Everything else here it sees at its next own wake and decides what to read.')}</p>`;
 }
 
+function identityHtml(place) {
+    const sender = place.identity?.sends_as;
+    const authored = (label) => `<span data-i18n-authored>${escapeHtml(label)}</span>`;
+    const readers = listWords((place.identity?.reads_as || []).map((entry) => authored(entry.label)));
+    const writes = sender ? fmt(sender.kind === 'bot' ? 'It writes here as the Ouroboros bot ({label})'
+        : sender.owner ? 'It writes here as you ({label})' : 'It writes here as {label}', { label: authored(sender.label) }) : '';
+    const reads = readers ? fmt(writes ? 'reads as {labels}' : 'It reads here as {labels}', { labels: readers }) : '';
+    if (!writes && !reads) return '';
+    const confirm = sender?.kind === 'user' && !sender.owner && place.canConfirm;
+    return `<div class="harness-account-row place-account">
+        <div class="harness-account-main"><span>${[writes, reads].filter(Boolean).join(' · ')}</span></div>
+        ${confirm ? `<div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(sender.id)}" data-actor-label="${escapeHtml(sender.label)}">${escapeHtml(tr('places.account.confirm_identity', 'This is my account'))}</button></div>` : ''}
+    </div>`;
+}
+
 function accountsHtml(place, ui) {
+    const identity = identityHtml(place);
     const rows = place.ownerAccounts.map((account) => `<div class="harness-account-row place-account">
             <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
             <div class="harness-account-meta">${escapeHtml([tr('places.account.you', 'you'), account.confirmedAt ? fmt('confirmed on {date}', { date: shortDate(account.confirmedAt) }) : tr('places.account.confirmed', 'confirmed')].join(' · '))}${account.label && account.label !== account.actorId ? ` · <span data-i18n-authored>${escapeHtml(account.actorId)}</span>` : ''}</div>
@@ -83,20 +100,28 @@ function accountsHtml(place, ui) {
             <label class="ui-field">${tr('places.account.name', 'Name (optional)')}<input class="ui-control" data-place-draft="actorLabel" data-i18n-authored value="${escapeHtml(ui.drafts.actorLabel || '')}" spellcheck="false" autocomplete="off"></label>
             <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm-typed">This is me</button><button type="button" class="btn btn-ghost btn-sm" data-place-act="cancel-add">Cancel</button></div>
         </div>` : '<div class="place-sheet-actions"><button type="button" class="btn btn-ghost btn-sm" data-place-act="add-mine">Add mine</button></div>';
-    return `${rows || candidates ? `<div class="place-accounts">${rows}${candidates}</div>` : ''}${form}
+    return `${identity || rows || candidates ? `<div class="place-accounts">${identity}${rows}${candidates}</div>` : ''}${form}
         <p class="place-sheet-note">Anyone else here, whatever name they use, is talked to like anyone; their requests are theirs, not yours.</p>`;
 }
 
 function notesHtml(place, ui) {
+    const safety = {
+        full: 'Ouroboros reads your words every time; the Safety Supervisor reads them before actions.',
+        light: 'Ouroboros reads your words every time; the Safety Supervisor reads them before some actions.',
+        off: 'Ouroboros reads your words every time; the Safety Supervisor is off.',
+    }[place.safetyMode];
+    const honesty = safety ? `${tr(`places.notes.safety.${place.safetyMode}`, safety)} ${tr('places.notes.locks', 'Silent and Paused are locks; words are not.')}` : '';
+    const placeholder = tr('places.notes.questions', 'Who am I here? What may I do? What calls me at once? What matters here? What must I never do? What do you want to see afterwards?');
     const items = place.notes.map((note) => `<li class="place-note${OWNER_VOICE.has(note.author) ? ' is-owner' : ''}">
             <p data-i18n-authored>${escapeHtml(note.text)}</p>
             <div class="place-note-foot">${chipHtml(authorWord(note.author), 'neutral')}${note.id
                 ? `<button type="button" class="btn btn-ghost btn-sm" data-place-act="remove-note" data-note="${escapeHtml(note.id)}">Remove</button>` : ''}</div>
         </li>`).join('');
-    return `<p class="place-sheet-note">It reads them at every wake here; the Safety Supervisor treats yours as your instructions.</p>
+    return `${honesty ? '' : '<p class="place-sheet-note">It reads them at every wake here; the Safety Supervisor treats yours as your instructions.</p>'}
         ${items ? `<ul class="place-note-list">${items}</ul>` : ''}
-        <label class="ui-field">${tr('places.note.new', 'New note')}<textarea class="ui-control consciousness-owner-words" rows="2" data-place-draft="note" data-i18n-authored spellcheck="false">${escapeHtml(ui.drafts.note || '')}</textarea></label>
-        <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="add-note">Add note</button></div>`;
+        <label class="ui-field">${tr('places.note.new', 'New note')}<textarea class="ui-control consciousness-owner-words" rows="${place.notes.length ? 2 : 6}" data-place-draft="note" data-i18n-authored spellcheck="false" placeholder="${escapeHtml(placeholder)}">${escapeHtml(ui.drafts.note || '')}</textarea></label>
+        <div class="place-sheet-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="add-note">Add note</button></div>
+        ${honesty ? `<p class="place-sheet-note">${escapeHtml(honesty)}</p>` : ''}`;
 }
 
 function folderHtml(place, ui) {
@@ -140,7 +165,7 @@ function footHtml(place, ui) {
 /** The sheet's body for one normalized place and the sheet's own UI state (drafts, busy, statuses). */
 export function placeSheetBodyHtml(place, ui = {}) {
     const view = { drafts: {}, status: {}, ...ui };
-    if (view.removed) place = { ...place, notes: [], ownerAccounts: [], accountCandidates: [] };
+    if (view.removed) place = { ...place, identity: null, notes: [], ownerAccounts: [], accountCandidates: [] };
     return [
         view.conflict || view.removed || view.readiness || place.readiness ? section('readiness', '',
             (view.conflict ? statusLine({ text: tr('places.conflict', 'Changed elsewhere; your text is kept.'), tone: 'warn' }) : '')

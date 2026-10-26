@@ -25,6 +25,22 @@
  */
 
 /**
+ * The connector's declared account; owner is derived on the owner-facing Place view.
+ * @typedef {Object} PlaceIdentityAccount
+ * @property {string} id
+ * @property {string} label
+ * @property {'user'|'bot'} kind
+ * @property {boolean=} owner
+ */
+
+/**
+ * Optional accounts used to write and read; absent means undeclared.
+ * @typedef {Object} PlaceIdentity
+ * @property {PlaceIdentityAccount=} sends_as
+ * @property {Array<PlaceIdentityAccount>=} reads_as
+ */
+
+/**
  * One projection for list, write/conflict responses and the model's place map.
  * @typedef {Object} PlaceSummary
  * @property {string} place_id
@@ -49,6 +65,10 @@
  * @property {Object<string,string>|null} reply_destination
  * @property {PlaceIcon} icon
  * @property {PlaceReadiness} readiness
+ * @property {(PlaceIdentity|null)=} identity
+ * @property {boolean=} can_confirm
+ * @property {'off'|'light'|'full'=} safety_mode
+ * @property {Object<string,string>=} labels
  * @property {Array<string>} wake_suggestions
  * @property {Array<*>=} facts
  * @property {Object<string,*>=} source
@@ -113,4 +133,27 @@
  * @property {string} place_id
  * @property {Array<PlaceRoomSummary>} rooms
  * @property {PlaceRoomsCoverage} coverage
+ */
+
+/**
+ * Retained attention only; no exact wake match is inferred.
+ * @typedef {Object} PlaceHistoryAttention
+ * @property {'heard'|'focus_started'} decision
+ * @property {string=} reason
+ */
+
+/**
+ * A retained room message, delivery receipt or Place notice. Absent facts stay unknown.
+ * @typedef {Object} PlaceHistoryFacts
+ * @property {'message'|'notice'|'delivery'} kind
+ * @property {('authored'|'accepted'|'delivered'|'failed'|'uncertain')=} delivery_state
+ * @property {PlaceHistoryAttention=} attention
+ * @property {boolean=} owner_confirmed  // current stored account confirmation
+ * @property {Array<string>=} facts
+ * @property {PlaceIdentityAccount=} sends_as
+ * @property {boolean=} sends_as_owner
+ * @property {string=} held_text
+ * @property {boolean=} held
+ * @property {boolean=} checked
+ * @property {PlaceIdentity=} identity
  */
