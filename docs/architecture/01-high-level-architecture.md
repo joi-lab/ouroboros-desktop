@@ -285,9 +285,9 @@ ouroboros/ — agent core and shared runtime (§6)
   review_session_usage.py, review_thread_continuity.py — delegated-session usage attribution; thread continuity
   commit_admission.py — Release/syntax admission and bound test proof (§6)
   reviewer_slot_config.py — The one review-pool builder, `review_pool_slots`, over enabled `review_eligible` catalog rows (§7 Review pool)
-  review_pool_migration.py, review_pool_receipts.py — the review-lane → review-pool migration at the settings read seam and its durable receipts (`state/review_migrations/`, the rollback source) (§11.4)
+  review_pool_migration.py, review_pool_receipts.py — review-lane → review-pool migration at the settings read seam and its durable receipts (`state/review_migrations/`, the rollback source) (§11.4)
   review_run_isolation.py — contributor review isolation before `config`: private data root, pinned host settings and panel, cumulative cap, attach-only engine (§6 Delegated subagents; Monetary authority and projections)
-  review_state.py — Durable commit-review state (`state/advisory_review.json`; old advisory rows are read-only history); re-exports review_state_model.py, review_state_records.py, review_state_custody.py
+  review_state.py — Durable commit-review state (`state/advisory_review.json`; old advisory rows: read-only history); re-exports review_state_model.py, review_state_records.py, review_state_custody.py
   review_records.py, review_doctrine.py, review_verdict.py, review_projection.py, review_evidence_sections.py — panel records, verdict reducers, redacted projections (stored task-acceptance records read tolerantly), evidence section helpers (§6 Result review; Review ledger record)
   review_ledger.py — Durable per-wave review records (`state/review_ledger/<record_id>.json`; §6 Review ledger record)
   review_body_fact.py — Own-body identity and the checklist layer it selects (§6 Change review on any root)
@@ -296,27 +296,27 @@ ouroboros/ — agent core and shared runtime (§6)
   reviewer_window.py — typed per-route window resolution and reserves, used only for sizing; an unknown route keeps a disclosed assumption (§6 Prompt size, density and windows)
   triad_review.py — shared review primitives: JSON-array extraction, per-actor records, quorum/degraded accounting; `REVIEW_JSON_ARRAY_CONTRACT` (clean is exactly `[]`); `review_output_shape(surface)` is the one form fact
   onboarding_wizard.py, subscription_install_presets.py — Shared desktop/web onboarding bootstrap and validation; pure sibling install compilers from one draft and one discovery snapshot, all-or-nothing (§2)
-  settings_setup_contract.py — SSOT for the setup contract, derived bootstrap state, payload validation and the `TOTAL_BUDGET` resolver `resolve_total_budget_usd`
+  settings_setup_contract.py — SSOT for the setup contract, derived bootstrap state, payload validation and `TOTAL_BUDGET` resolver `resolve_total_budget_usd`
   owner_relay.py — `tell_task` relays: held owner quotes, one atomic mailbox row, the room's `relay_entry`, return addresses (§6 Owner routing verbs)
-  owner_mailbox.py — per-task user message mailbox: revocation-aware drain, proven-empty peek, the closed provenance set
-  peer_roster.py — host-listed roots from queue_snapshot/direct_roots, hidden included, with their recorded waits; admits source-bound inline Presence mailboxes for `forward_to_worker` (§12; §6 Owner routing verbs)
-  launcher_bootstrap.py, runtime_venv.py, launcher_onboarding.py — Bootstrap/sync, source-shell handoff and compatibility probe, native host and body interpreter; the desktop launcher's onboarding: the gateway /onboarding page (§2)
+  owner_mailbox.py — per-task user message mailbox: revocation-aware drain, proven-empty peek, closed provenance set
+  peer_roster.py — host-listed roots from queue_snapshot/direct_roots, hidden included, with recorded waits; admits source-bound inline Presence mailboxes for `forward_to_worker` (§12; §6 Owner routing verbs)
+  launcher_bootstrap.py, runtime_venv.py, launcher_onboarding.py — Bootstrap/sync, source-shell handoff and compatibility probe, native host and body interpreter; desktop onboarding on the gateway /onboarding page (§2)
   launcher_server_reaper.py — Startup stray-server discovery; recorded-owner close/Panic cleanup (§9)
-  launcher_readiness.py — The launcher's `/api/health` probe (§2 Boot order)
+  launcher_readiness.py — Launcher `/api/health` probe (§2 Boot order)
   launcher_windows_runtime.py — Windows runtime; pre-import legacy GUI handoff (§2)
   launcher_background.py — Desktop close/quit, consent, second-launch activation (§9); `DesktopApi` supplies `MainApi` alerts, shell facts and Panic (§3)
   panic_source.py, platform_peer.py — Diagnostic Panic source (§9)
-  launcher_appearance.py, launcher_window_chrome.py, launcher_page_zoom.py — Windows caption tint; macOS per-document title bar, appearance; page zoom (§3)
+  launcher_appearance.py, launcher_window_chrome.py, launcher_page_zoom.py, standalone_page.py — Windows caption tint; macOS per-document title bar, appearance; page zoom; theme.js/ui.css inlined into pages before assets (§3)
   launcher_tray.py, launcher_tray_macos.py — Windows notification-area icon; macOS menu-bar item, Dock reopen, quit marking (§9)
   desktop_media.py — GTK display probe and own-loopback audio permission grant; other shells keep native prompts
-  desktop_notifications.py — Desktop system notifications, one adapter per platform; submitted/unknown/typed refusal, click token back to the page (§3; DESIGN §9)
+  desktop_notifications.py — System notifications, one adapter per platform; submitted/unknown/typed refusal, click token back to the page (§3; DESIGN §9)
   desktop_autostart.py, windows_autostart.py — Host sign-in adapter table: Windows registry, macOS LaunchAgent, Linux systemd/XDG state (Runtime topology below)
   plan_intention_ledger.py — An ask's `intention` review-ledger record; never a verdict
-  plan_record.py — The per-task plan record (schema 3): revisions, asks, typed replies, folds, legacy import (§6 Plan construction and review)
+  plan_record.py — Per-task plan record (schema 3): revisions, asks, typed replies, folds, legacy import (§6 Plan construction and review)
   provider_models.py — Model-ID helpers; `ACTIVE_MODEL_SETTING_KEYS` / `LEGACY_MODEL_SETTING_KEYS` keeps Heavy out of live route selection
   runtime_mode_policy.py — Protected-path policy (§6 Safety and runtime mode)
   schedule_contract.py — Schedule id, 5-field cron and IANA timezone validation SSOT
-  post_task_evolution.py — The worker's durable promotion signal for the supervisor idle tick (§6 Background consciousness and Evolution)
+  post_task_evolution.py — Worker's durable promotion signal for the supervisor idle tick (§6 Background consciousness and Evolution)
   repo_remotes.py — Role-based remotes: `managed` is the read/update-only official source, `origin` the personal target from the GitHub token
   review_evidence.py — Same-execution commit-review evidence (§6 Commit review evidence) and the durable commit/advisory review record of a task or checkout; execution facts are visibility only
   review_status_projection.py — Commit-review status projection over `review_state` records; re-exported by review_evidence.py
