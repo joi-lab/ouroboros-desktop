@@ -437,13 +437,15 @@
  */
 
 /**
- * `coverage` v1: delivered stored bytes per stream; a span is `{from, to, chain, gaps}` or null.
- * Byte delivery, never chronology or proof of the conversation's start.
+ * `coverage` v1: delivered coordinates per stream; a span is `{from, to, chain, gaps}` or null. Stored
+ * order counts bytes under chain `dialog`; a room with imported history counts chat rows in time order under
+ * `dialog-chrono-<end>` (`-at-<position>` around a row) and adds `keys` (CLIENT_CONTRACT §5). Never proof of
+ * the conversation's start.
  * @typedef {Object} ChatHistoryCoverage
  * @property {number} v
  * @property {string} view
  * @property {Object.<string,number>} upper
- * @property {Object.<string,?{from: number, to: number, chain: string, gaps: string[]}>} spans
+ * @property {Object.<string,?{from: number, to: number, chain: string, gaps: string[], keys: ({from: ?Array, to: ?Array, frozen: number}|undefined)}>} spans
  */
 
 /**
@@ -591,6 +593,7 @@
 /** @typedef {import('./place_contract_types.js').PlaceIdentity} PlaceIdentity */
 /** @typedef {import('./place_contract_types.js').PlaceStatusPayload} PlaceStatusPayload */
 /** @typedef {import('./place_contract_types.js').PlaceHistoryAttention} PlaceHistoryAttention */
+/** @typedef {import('./place_contract_types.js').PlaceHistoryImport} PlaceHistoryImport */
 /** @typedef {import('./place_contract_types.js').PlaceHistoryFacts} PlaceHistoryFacts */
 /** @typedef {import('./place_contract_types.js').PlaceDisconnectRequest} PlaceDisconnectRequest */
 /** @typedef {import('./place_contract_types.js').PlaceOwnerAccountRequest} PlaceOwnerAccountRequest */

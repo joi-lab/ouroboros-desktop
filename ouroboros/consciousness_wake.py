@@ -260,7 +260,8 @@ def _row_kind(row: Dict[str, Any]) -> str:
     Human input is classified by what its producer stamped, never by
     ``direction`` alone: A2A traffic is machine traffic, a Presence
     correspondent is not the owner, an Ouroboros-initiated Presence row is not
-    a human, and a late card answer is carried by its ``quiz_answer`` row.
+    a human, a late card answer is carried by its ``quiz_answer`` row, and an
+    imported earlier message (``presence_history``) is counted, never listed as new.
     """
     from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
 
@@ -274,6 +275,8 @@ def _row_kind(row: Dict[str, Any]) -> str:
         return ""
     if str(row.get("client_message_id") or "").startswith("quiz_late_answer:"):
         return ""
+    if isinstance(row.get("historical_import"), dict):
+        return "history_import"  # an earlier message a connector recorded as history, not an arrival
     if str(row.get("source") or "").startswith("presence:"):
         actor = (row.get("transport") or {}).get("actor") if isinstance(row.get("transport"), dict) else None
         if isinstance(actor, dict) and actor.get("kind") == "proactive_initiation":
@@ -294,7 +297,11 @@ _KIND_WORDS = {  # (one, many)
     "outstanding_card": ("outstanding card", "outstanding cards"),
     "memory_change": ("memory change", "memory changes"),
     "presence_observation": ("retained Presence observation", "retained Presence observations"),
+    "history_import": ("imported earlier Presence message (counted, not listed: room history, not an arrival)",
+                       "imported earlier Presence messages (counted, not listed: room history, not arrivals)"),
 }
+# Kinds the wake counts without listing: their content is the room itself.
+_COUNTED_ONLY = frozenset({"direct_turn", "history_import"})
 
 
 def _presence_failure(result: Dict[str, Any]) -> bool:
@@ -316,6 +323,8 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     if kind in {"owner_message", "correspondent_message"}:
         return (f"- {_KIND_WORDS[kind][0]} in {rooms.label(row)}, {when}: "
                 f"\"{_clip_preview(row.get('text'), 240)}\"")
+    if kind == "history_import":
+        return f"- imported earlier message in {rooms.label(row)}, sent {when}"
     if kind == "card_answer":
         block = row.get("quiz") if isinstance(row.get("quiz"), dict) else {}
         return _answered_card_line(task_id, str(block.get("quiz_id") or "?"), block, now=now)
@@ -525,7 +534,7 @@ class WakeObservation:
                 elif offset is None and kind != "memory_change" and not unannounced:
                     unannounced = True
                     lines.append("Recorded in task results with no chat row in this window (by their own stamps):")
-                if kind != "direct_turn":
+                if kind not in _COUNTED_ONLY:
                     lines.append(line)
         elif self.gaps or (self.window.get("memory") or {}).get("basis") == "initial_baseline":
             lines.append(f"Observation coverage: {self._coverage()}")

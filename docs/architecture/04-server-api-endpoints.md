@@ -200,6 +200,7 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | GET | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/place` | current place state for an authenticated connector |
 | POST | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/turn` | capture before attention |
 | POST | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/delivery` | |
+| POST | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/history` | |
 | GET | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/work/{work_ref}` | |
 | POST | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/presence/work/{work_ref}` | retains transport queue observations |
 | POST | `127.0.0.1:${OUROBOROS_HOST_SERVICE_PORT:-8767}/ui/ws-message` | |

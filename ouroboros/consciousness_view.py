@@ -1,5 +1,6 @@
 """Read-only consciousness facts from places, current roots and durable results."""
 
+import contextlib
 import json
 import time
 from typing import Any
@@ -7,6 +8,20 @@ from typing import Any
 from ouroboros.usage_origin import cause_label
 
 RECENT_WAKE_LIMIT = 50
+
+
+@contextlib.contextmanager
+def _reading(store_name: str):
+    """Name the store of a ``StoreBusy`` leaving this read on the same exception, so its
+    reason, cause and rollback facts travel unchanged; an inner read's name stands.
+    Helpers both stores share raise identical messages, so only the reader knows the store."""
+    from ouroboros.store import StoreBusy
+
+    try:
+        yield
+    except StoreBusy as exc:
+        exc.store_name = getattr(exc, "store_name", "") or store_name
+        raise
 
 
 def _clock_of(iso_value: Any) -> str:
@@ -141,19 +156,20 @@ def first_reply_at(drive_root, task_id: str) -> str | None:
     from ouroboros.deadline_utils import parse_deadline_ts
 
     first = None
-    for stored in dialogue_store.iter_probes(drive_root, "chat", [("task_id", task_id)]):
-        row = stored.row
-        transport = row.get("transport") or {}
-        delivery = transport.get("delivery") or {}
-        receipt = row.get("type") == "presence_delivery" and delivery.get("state") in {"accepted", "delivered"}
-        released = (row.get("direction") == "out" and str(row.get("source") or "").startswith("presence:")
-                    and delivery.get("state") == "authored")
-        if row.get("task_id") != task_id or not (receipt or released):
-            continue
-        stamp = str(delivery.get("reported_at") or row.get("ts") or "")
-        instant = parse_deadline_ts(stamp)
-        if instant is not None and (first is None or instant < first[0]):
-            first = instant, stamp
+    with _reading("dialogue"):  # the lazy iterator reads at its first step and at every page
+        for stored in dialogue_store.iter_probes(drive_root, "chat", [("task_id", task_id)]):
+            row = stored.row
+            transport = row.get("transport") or {}
+            delivery = transport.get("delivery") or {}
+            receipt = row.get("type") == "presence_delivery" and delivery.get("state") in {"accepted", "delivered"}
+            released = (row.get("direction") == "out" and str(row.get("source") or "").startswith("presence:")
+                        and delivery.get("state") == "authored")
+            if row.get("task_id") != task_id or not (receipt or released):
+                continue
+            stamp = str(delivery.get("reported_at") or row.get("ts") or "")
+            instant = parse_deadline_ts(stamp)
+            if instant is not None and (first is None or instant < first[0]):
+                first = instant, stamp
     return first[1] if first else None
 
 
@@ -227,8 +243,9 @@ def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float 
         ids = wake_ids(drive_root, time.time() if now is None else now)
     if not ids:
         return []
-    documents = display_documents(drive_root, ids)
-    notes = _wake_notes(drive_root, ids)
+    with _reading("task"):
+        documents = display_documents(drive_root, ids)
+        notes = _wake_notes(drive_root, ids)
     rows = []
     for task_id in ids:
         if task_id not in documents:

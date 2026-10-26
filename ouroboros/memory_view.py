@@ -659,7 +659,7 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
             root).project_chat_ids:
         facts["origins"] = _origins(root, room, entries if spec.room_lanes else [])
     if spec.room_lanes and entries:
-        facts["since"] = _minute(entries[0][1].get("ts"))
+        facts["since"] = _minute(facts["facts"]["earliest"])  # the rows' first stored time, not the first row read
         facts["lane1"], facts["lane2"] = _lanes(root, entries, lineage)
     return facts
 

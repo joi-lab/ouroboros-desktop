@@ -768,10 +768,41 @@ def _hold_delivery_for_skill_action(
 
 
 class _ParsedObject(dict):
-    """A parsed JSON object that remembers which of its keys were duplicated."""
+    """A parsed JSON object that remembers which of its keys were duplicated, and whether one of its
+    own pairs, a repeated key's included, is the ``delivery_control`` key or an ``action`` of exactly
+    finish/stop (``control_pair``)."""
 
     duplicate_keys: set
     has_duplicate_keys: bool
+    control_pair: bool
+
+
+def _parse_pairs(raw: str) -> Tuple[Any, bool]:
+    """One linear JSON parse whose objects are ``_ParsedObject``: ``(payload, any key duplicated)``,
+    ``(None, False)`` when the body is not JSON."""
+
+    has_duplicate_keys = False
+
+    def _unique_object(pairs: List[Tuple[str, Any]]) -> "_ParsedObject":
+        nonlocal has_duplicate_keys
+        result = _ParsedObject()
+        result.duplicate_keys = set()
+        result.control_pair = False
+        for key, value in pairs:
+            if key in result:
+                result.duplicate_keys.add(key)
+                has_duplicate_keys = True
+            result[key] = value
+            result.control_pair = result.control_pair or key == "delivery_control" or (
+                key == "action" and value in ("finish", "stop"))
+        return result
+
+    try:
+        return json.loads(raw, object_pairs_hook=_unique_object), has_duplicate_keys
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+        # RecursionError: a degenerate deeply-nested blob (repetition-loop
+        # model output) must classify as not-a-control, not crash the round.
+        return None, False
 
 
 def _parse_delivery_control_object(
@@ -785,25 +816,7 @@ def _parse_delivery_control_object(
     forced armed malformed-body rule without widening history-gated parsing.
     """
 
-    has_duplicate_keys = False
-
-    def _unique_object(pairs: List[Tuple[str, Any]]) -> "_ParsedObject":
-        nonlocal has_duplicate_keys
-        result = _ParsedObject()
-        result.duplicate_keys = set()
-        for key, value in pairs:
-            if key in result:
-                result.duplicate_keys.add(key)
-                has_duplicate_keys = True
-            result[key] = value
-        return result
-
-    try:
-        payload = json.loads(raw, object_pairs_hook=_unique_object)
-    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
-        # RecursionError: a degenerate deeply-nested blob (repetition-loop
-        # model output) must classify as not-a-control, not crash the round.
-        return None, False
+    payload, has_duplicate_keys = _parse_pairs(raw)
     if not isinstance(payload, dict):
         return None, False
     payload.has_duplicate_keys = has_duplicate_keys
@@ -908,6 +921,15 @@ def _resolve_forced_delivery_control_body(
     return candidate.full_text if retained else "", retained, True, True, False
 
 
+def _array_wrapped_control(body: str) -> bool:
+    """Whether a whole-body JSON array holds a control envelope as a DIRECT element: an object one of
+    whose own pairs is the ``delivery_control`` key or an ``action`` of exactly finish/stop, so a
+    repeated key cannot hide the verb. Never unwrapped or executed; nested data, strings quoting an
+    envelope and other verbs stay ordinary JSON."""
+    payload = _parse_pairs(body)[0] if body.startswith("[") else None
+    return isinstance(payload, list) and any(getattr(item, "control_pair", False) for item in payload)
+
+
 def _parse_delivery_control_body(
     raw: str,
 ) -> Tuple[Optional[Dict[str, Any]], bool, bool]:
@@ -916,16 +938,20 @@ def _parse_delivery_control_body(
     Returns ``(parsed, duplicate_protocol_key, embedded)``. Normalization
     strips one whole-body markdown fence (shared with
     ``observability._is_delivery_control_payload``). ``embedded`` is True only
-    when the protocol object sits as a balanced trailing JSON object carrying
-    the ``delivery_control`` key at the very END of surrounding prose — a
-    protocol attempt mixed with text, never a valid control. A control object
-    quoted MID-prose is NOT matched and stays prose (disclosed residual)."""
+    when a protocol object sits in a container other than the one exact
+    object: a balanced trailing JSON object carrying the ``delivery_control``
+    key at the very END of surrounding prose, or a direct element of a
+    whole-body JSON array (``_array_wrapped_control``) — a protocol attempt,
+    never a valid control. A control object quoted MID-prose is NOT matched and
+    stays prose (disclosed residual)."""
     from ouroboros.observability import strip_protocol_fence
 
     body = strip_protocol_fence(raw)
     parsed, duplicate_protocol_key = _parse_delivery_control_object(body)
     if duplicate_protocol_key or isinstance(parsed, dict):
         return parsed, duplicate_protocol_key, False
+    if _array_wrapped_control(body):
+        return None, False, True
     # Trailing scan: ONE O(n) string-aware pass over the body (fenced and
     # double-fenced tails peeled, duplicate keys flagged, RecursionError
     # degraded, bounded line-anchor retries after an unbalanced prose brace

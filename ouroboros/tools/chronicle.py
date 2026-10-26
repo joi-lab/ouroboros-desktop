@@ -57,7 +57,7 @@ from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, row_lineage
 from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, capture,
                                        correction_line, draft_signer, source_time_span, verify_quotes)
-from ouroboros.dialogue_provenance import memory_row_header, render_row_text, row_author
+from ouroboros.dialogue_provenance import memory_row_header, recorded_finality, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
 from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
 from ouroboros.memory_view_account import source_change_lines
@@ -68,6 +68,7 @@ from ouroboros.utils import utc_now_iso
 
 _LINEAGE = ("task_id", "parent_task_id", "root_task_id")
 _ORDER = "older to newer"
+_ROW_ORDER = "stored order"  # chat rows by address (``_read_rows``), whatever order their room reads in
 
 # --- shared --------------------------------------------------------------------------------------
 
@@ -527,13 +528,22 @@ def _covers_summary(record: Dict[str, Any], period: Optional[memory_inventory.Pe
     return ""
 
 
+def _stamp_finality(entry: Dict[str, Any], before: str, after: str = "") -> str:
+    """The finality and authority one stamp entry copied from its source, framed for its reader (a host
+    facts entry without one is unknown); '' when the entry recorded neither."""
+    finality = recorded_finality(entry.get("outcome_final"), entry.get("outcome_authority"),
+                                 host_facts=entry.get("source") == "host_task_facts")
+    return f"{before}{finality}{after}" if finality else ""
+
+
 def _stamp_summary(stamp: Any) -> str:
-    """``stamp: <task_id>=<status>, …``: which covered task failed shows in the listing."""
+    """``stamp: <task_id>=<status> (<finality>), …``: which covered task failed, and which status is
+    not yet final, shows in the listing; the recorded status stays as it was stamped."""
     tasks = stamp.get("tasks") if isinstance(stamp, dict) else None
     if not isinstance(tasks, list) or not tasks:
         return ""
     return "stamp: " + ", ".join(f"{entry.get('task_id') or '?'}={entry.get('status') or 'unknown'}"
-                                 for entry in tasks if isinstance(entry, dict))
+                                 + _stamp_finality(entry, " (", ")") for entry in tasks if isinstance(entry, dict))
 
 
 def _target_label(target: Any) -> str:
@@ -666,6 +676,9 @@ def _read_records(root: Path, room: str, after_seq: int, limit: int) -> str:
 
 
 def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit: int) -> str:
+    """One room's chat rows by address in stored order: from/to and ``next: from=`` bound stored positions
+    (``chat_chain.iter_room_rows``). A room holding imported earlier messages reads by send time in its
+    view and ``chat_history``; here they stand where they were stored, and every page names the order."""
     try:
         int(room)
     except ValueError as exc:
@@ -693,8 +706,8 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
 
     def continuation(k: int, done: bool) -> str:
         if done:
-            return f"complete: no further rows ({_ORDER})"
-        return f"next: from={chat_chain.format_address(kept[k][0])} (same room and filters; {_ORDER})"
+            return f"complete: no further rows ({_ROW_ORDER})"
+        return f"next: from={chat_chain.format_address(kept[k][0])} (same room and filters; {_ROW_ORDER})"
 
     text, shown = _fit(head, texts, exhausted, continuation, limit)
     if shown or not kept:
@@ -702,12 +715,12 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
     address, row, _pos = kept[0]  # one row larger than a page: its words by character window
     header, words = lines[0][0], render_row_text(row)
     after = continuation(1, exhausted and len(kept) == 1)
-    resume = f"next: from={chat_chain.format_address(address)} start={len(words)} (same room and filters; {_ORDER})"
+    resume = f"next: from={chat_chain.format_address(address)} start={len(words)} (same room and filters; {_ROW_ORDER})"
     marker = f"(chars {len(words)}–{len(words)} of {len(words)}) "
     room_left = max(limit - len(head) - max(len(resume), len(after)) - len(header) - len(marker) - 3, 0)
     begin = min(offset, len(words))
     end = min(begin + room_left, len(words))
-    cont = (f"next: from={chat_chain.format_address(address)} start={end} (same room and filters; {_ORDER})"
+    cont = (f"next: from={chat_chain.format_address(address)} start={end} (same room and filters; {_ROW_ORDER})"
             if end < len(words) else after)
     return f"{head}\n{cont}\n{header} (chars {begin}–{end} of {len(words)}) {words[begin:end]}"
 
@@ -782,8 +795,9 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
                         f"to={_address_text(raw.get('last'))})")
     for entry in (record.get("host_stamp") or {}).get("tasks") or []:
         verdict = f"; verdict: {entry['review_verdict']}" if entry.get("review_verdict") else ""
+        finality = _stamp_finality(entry, "; ")
         sections.append(f"stamp {entry.get('task_id')}: status={entry.get('status')}; outcome={entry.get('outcome')}; "
-                        f"phase={entry.get('outcome_phase')}{verdict}; from {entry.get('source')}; "
+                        f"phase={entry.get('outcome_phase')}{verdict}{finality}; from {entry.get('source')}; "
                         f"result: get_task_result(task_id={entry.get('task_id')})")
     for quote in record.get("quotes") or []:
         sections.append(f"quote ({quote.get('speaker')}, {quote.get('address')}): {quote.get('text')}")
@@ -1054,7 +1068,7 @@ def chronicle_tools() -> List[ToolEntry]:
         "node_id": {"type": "string", "description": "One record: as it acts now, its host stamp, coverage, original text, corrections and decisions."},
         "room_id": {**room, "description": room["description"] + " '*' lists every live room as one directory line (label, period, counts, reader); 'candidates' lists the helper drafts awaiting my decision."},
         "after_seq": {"type": "integer", "minimum": 0, "description": "Room records and active marks after this sequence (the previous page's next_after_seq)."},
-        "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period."},
+        "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period, in stored order (the order from/to and next: from= follow). A room holding imported earlier messages reads by send time in its view and chat_history; here each stands where it was stored."},
         "from": address, "to": address,
         "task_id": {"type": "string", "description": "rows: only rows of this task (its own, parent or root lineage)."},
         "period": {"type": "object", "additionalProperties": False, "description": "rows: inclusive ISO-8601 bounds.",
@@ -1093,7 +1107,7 @@ def chronicle_tools() -> List[ToolEntry]:
             write, ["kind"]), _chronicle_write),
         ToolEntry("memory_read", schema(
             "memory_read",
-            "Read memory by address, as text: a room's records and active marks (first line: room and head), one record with its stamp and corrections (node_id; an account also names each source's version, what changed in it since, and the accounts a record informs; revision= reads a record as of one revision), a room's chat rows verbatim (rows=true with from/to, task_id or period), or a retained source (source_ref). Every page fits one tool result and its second line names the continuation (next_after_seq, next: from=…, or next_start), older to newer. Choose the depth yourself.",
+            "Read memory by address, as text: a room's records and active marks (first line: room and head), one record with its stamp and corrections (node_id; an account also names each source's version, what changed in it since, and the accounts a record informs; revision= reads a record as of one revision), a room's chat rows verbatim (rows=true with from/to, task_id or period), or a retained source (source_ref). Every page fits one tool result and its second line names the continuation (next_after_seq, next: from=…, or next_start), older to newer; chat rows in stored order. Choose the depth yourself.",
             read, []), _memory_read),
         ToolEntry("memory_mark", schema(
             "memory_mark",

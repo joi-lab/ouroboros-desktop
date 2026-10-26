@@ -347,7 +347,7 @@ def test_lane_two_is_one_host_line_per_root_task_with_typed_facts_by_address(tmp
                      f"get_task_result(task_id='root1'); {_addr(rows[2])}..{_addr(rows[7])}; "
                      f"late review evidence: {_addr(rows[7])}")
     assert by_task["root2"].startswith(f"[{_ts(18)}; host; task root2] host facts for root2: status=running; "
-                                       "result: get_task_result(task_id=root2); rows 1;")
+                                       "final=unknown; result: get_task_result(task_id=root2); rows 1;")
     assert "pres1" not in by_task  # place delivery facts belong only to their conversation
     _place, place_text = _view(tmp_path, {"id": "p", "chat_id": 777, "metadata": PRESENCE})
     assert f"delivery failed: {_addr(rows[15])}" in place_text

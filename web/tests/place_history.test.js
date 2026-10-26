@@ -5,7 +5,7 @@ import { installCardDom, TextNode } from './helpers/card_dom.js';
 import { applyPayload, createTranslator, setMissTransport } from '../modules/i18n.js';
 import { normalizePlace, readPlaceRooms } from '../modules/consciousness_api.js';
 import { wakesForText } from '../modules/consciousness_words.js';
-import { mountPlaceHistory, capturedWindowNote, historySpeaker, historyFactWords, placeRoomsHtml } from '../modules/place_history.js';
+import { mountPlaceHistory, capturedWindowNote, historySpeaker, historyFactWords, placeRoomsHtml, shownTime } from '../modules/place_history.js';
 import { openPlaceSheet } from '../modules/place_sheet.js';
 import { mountConnectorPlaces } from '../modules/connector_places.js';
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -332,4 +332,96 @@ test('translation preserves authored messages while chrome translates', async (t
     t.after(()=>{applyPayload({language:'',english:true,entries:{}});setMissTransport(null)});
     createTranslator({skipRoots:'[data-i18n-authored]',userContent:'',excludeSelector:''}).applyTo(f.doc.body);
     assert.equal(f.q('.chat-markdown').textContent,'Settings'); assert.equal(chrome.textContent,'Translated chrome'); reader.close();
+});
+
+const viewChanged = () => Object.assign(new Error('history_view_changed'), { status: 409, body: { reason_code: 'history_view_changed' } });
+const shownTexts = (f) => [...f.q('[data-history-messages]').children].map((node) => node.querySelector('.chat-markdown').textContent);
+
+test('a changed view rereads the newest page and replaces the shown ranges only once it arrives', async (t) => {
+    const f = fixture(t); const requests = []; const fresh = deferred(); let busyOnce = true;
+    const reader = mount(f, { readHistory: async ({ cursor }) => {
+        requests.push(cursor);
+        if (requests.length === 1) return page([row('live', 'newest live')], 'stored-order');
+        if (cursor === 'stored-order') throw viewChanged();  // the room's first import changed its view
+        if (busyOnce) { busyOnce = false; throw new Error('Saved history is busy.'); }
+        return fresh.promise;
+    } });
+    await tick();
+    f.q('[data-history-older]').click(); await tick(); await tick();
+    assert.deepEqual(requests, [null, 'stored-order', null], 'the refused cursor is never resent');
+    assert.equal(f.q('[data-history-status]').textContent, 'Saved history is busy.');
+    assert.deepEqual(shownTexts(f), ['newest live'], 'a failed fresh read keeps the shown ranges');
+    f.q('[data-history-retry]').focus(); f.q('[data-history-retry]').click(); await tick();
+    assert.deepEqual(requests, [null, 'stored-order', null, null], 'Try again rereads the newest page');
+    assert.deepEqual(shownTexts(f), ['newest live'], 'the shown ranges stay while the fresh read runs');
+    fresh.resolve(page([row('imported', 'earlier imported'), row('live', 'newest live')], 'time-order')); await tick();
+    assert.deepEqual(shownTexts(f), ['earlier imported', 'newest live']);
+    assert.equal(f.q('[data-history-status]').textContent, 'Saved history changed, so it was read again from the newest messages.');
+    assert.equal(f.q('[data-history-retry]').hidden, true);
+    assert.equal(f.doc.activeElement, f.q('[data-history-older]'), 'focus stays in the reader');
+    f.q('[data-history-older]').click(); await tick();
+    assert.equal(requests.at(-1), 'time-order'); reader.close();
+});
+
+test('a changed view met by Retry this range replaces the chain too; closing ignores the late fresh page', async (t) => {
+    const f = fixture(t); const requests = []; const fresh = deferred(); let signal;
+    const reader = mount(f, { readHistory: async ({ cursor, signal: aborted }) => {
+        requests.push(cursor);
+        if (requests.length === 1) return { ...page([row('live', 'newest live')], 'older'), page_cursor: 'same-page', window: { complete: false, truncated_by: ['chat_malformed_jsonl'] } };
+        if (cursor === 'same-page') throw viewChanged();
+        signal = aborted; return fresh.promise;
+    } });
+    await tick();
+    f.q('[data-history-range]').click(); await tick(); await tick();
+    assert.deepEqual(requests, [null, 'same-page', null]);
+    reader.close(); assert.equal(signal.aborted, true);
+    fresh.resolve(page([row('late', 'late answer')])); await tick();
+    assert.equal(f.q('.place-convo'), null);
+});
+
+test('a time outside the current year names its year, in rows and in the room list', async (t) => {
+    const year = new Date().getFullYear();
+    const f = fixture(t);
+    f.reply(() => page([{ ...row('then', 'two years ago'), ts: `${year - 2}-06-15T12:00:00Z` }, { ...row('now', 'this year'), ts: `${year}-06-15T12:00:00Z` }]));
+    const reader = mount(f); await tick();
+    const times = [...f.doc.body.querySelectorAll('time')].map((node) => node.textContent);
+    assert.match(times[0], new RegExp(String(year - 2)));
+    assert.doesNotMatch(times[1], new RegExp(String(year)));
+    assert.match(placeRoomsHtml({ rooms: [{ ...room, last_at: `${year - 1}-03-01T08:00:00Z` }], coverage }), new RegExp(String(year - 1)));
+    reader.close();
+});
+
+test('the start is the record saved when it was read; Refresh history reads the newest page again', async (t) => {
+    const f = fixture(t); const requests = [];
+    const reader = mount(f, { readHistory: async ({ cursor }) => {
+        requests.push(cursor);
+        if (requests.length === 1) return page([row('b', 'newest')], 'older');
+        if (cursor === 'older') return page([row('a', 'oldest as read')]);
+        return page([row('z', 'imported since'), row('b', 'newest')], 'after-import');
+    } });
+    await tick();
+    assert.equal(f.q('[data-history-refresh]').hidden, false);
+    f.q('[data-history-older]').click(); await tick();
+    assert.match(f.q('[data-history-coverage]').textContent.trim(), /^Start of the record saved when this was read\. Refresh history to include anything saved since\./);
+    f.q('[data-history-refresh]').click();
+    assert.equal(f.q('[data-history-refresh]').disabled, true, 'one read at a time');
+    await tick();
+    assert.deepEqual(requests, [null, 'older', null]);
+    assert.deepEqual(shownTexts(f), ['imported since', 'newest']);
+    assert.match(f.q('[data-history-coverage]').textContent, /Earlier saved records are available\./);
+    assert.equal(f.q('[data-history-refresh]').disabled, false); reader.close();
+});
+
+test('a row shows the send time its arrival recorded; the title keeps when it was actually saved', async (t) => {
+    const imported = { ...row('i', 'imported'), ts: '2024-03-01T10:00:00+00:00', place_history: { kind: 'message',
+        sent_at: '2024-03-01T10:00:00+00:00', historical_import: { authorship: 'participant', received_at: '2026-10-26T09:00:00+00:00' } } };
+    const late = { ...row('l', 'late live'), ts: '2026-10-26T09:05:00+00:00', place_history: { kind: 'message', sent_at: '2026-10-26T08:00:00+00:00' } };
+    const receipt = { ...row('r', 'receipt'), ts: '2026-10-26T09:06:00+00:00', place_history: { kind: 'delivery' } };
+    assert.deepEqual(shownTime(imported), { at: imported.ts, title: 'Sent 2024-03-01T10:00:00+00:00 · saved 2026-10-26T09:00:00+00:00' });
+    assert.deepEqual(shownTime(late), { at: '2026-10-26T08:00:00+00:00', title: 'Sent 2026-10-26T08:00:00+00:00 · saved 2026-10-26T09:05:00+00:00' });
+    assert.deepEqual(shownTime(receipt), { at: receipt.ts, title: receipt.ts }, 'no send time is invented');
+    const f = fixture(t); f.reply(() => page([imported, late, receipt])); const reader = mount(f); await tick();
+    const times = [...f.doc.body.querySelectorAll('time')];
+    assert.deepEqual(times.map((node) => node.getAttribute('datetime')), [imported.ts, '2026-10-26T08:00:00+00:00', receipt.ts]);
+    assert.match(times[0].textContent, /2024/); reader.close();
 });

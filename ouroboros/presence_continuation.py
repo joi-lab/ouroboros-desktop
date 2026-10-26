@@ -417,6 +417,12 @@ def _row_fact(binding: ReviewWaitBinding, row: Mapping[str, Any]) -> str:
     if row.get("type") == "presence_delivery":
         state = str(((row.get("transport") or {}).get("delivery") or {}).get("state") or "unknown")
         return f"- delivery {state} for {turn}: {text}"
+    imported = row.get("historical_import")
+    if isinstance(imported, dict):  # recorded since the yield, sent long before: room history, no turn's input
+        sender = row.get("sender_label") or row.get("sender_session_id") or "an unnamed participant"
+        own = " (the connected account itself)" if imported.get("authorship") == "platform_account" else ""
+        return (f"- earlier message imported as history, sent {row.get('ts') or 'at an unrecorded time'} "
+                f"by {sender}{own} (event {row.get('client_message_id')}; not a new arrival): {text}")
     if row.get("direction") == "in":
         sender = row.get("sender_label") or row.get("sender_session_id") or "an unnamed participant"
         return f"- message from {sender} (event {row.get('client_message_id')}, taken by {turn}): {text}"

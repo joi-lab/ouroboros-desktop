@@ -392,7 +392,7 @@ def test_rows_read_attributes_each_row_by_its_source_fields_as_text(tmp_path):
     assert lines[0] == "room 1; rows" and lines[1].startswith("complete: no further rows")
     assert lines[2].startswith(f"[{ts(1)}; Owner; {addr(rows[0])}] ") and "Beta" in lines[2]
     assert lines[3] == (f"[{ts(2)}; host; {addr(rows[1])}] host facts for taskA001: status=completed; outcome=Done; "
-                        "phase=done; result: get_task_result(task_id=taskA001)")
+                        "phase=done; final=unknown; result: get_task_result(task_id=taskA001)")
     assert lines[4].startswith(f"[{ts(3)}; child kid00001 of taskA001; ") and lines[4].endswith("child report")
     assert lines[5] == f"[{ts(4)}; Ouroboros; {addr(rows[3])}] my answer"
     assert "Ouroboros" not in "".join(lines[2:5])

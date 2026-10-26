@@ -2,6 +2,8 @@
 
 Source rows/addresses stay unchanged. Heard decisions live on their accepted
 dialogue rows; an admitted focus lives on its exact task. No wake match is inferred.
+An imported earlier message shows its import facts, never owner confirmation or attention.
+A row whose arrival recorded its provider send time shows it (``sent_at``); ``ts`` stays the row's own.
 """
 from __future__ import annotations
 
@@ -44,7 +46,8 @@ def annotate_place_history(messages, entries, root, reads):
     candidates = [(message, sources[message['history_id']]) for message in messages
                   if message.get('history_id') in sources and not message.get('is_progress')]
     arrivals = {entry['history_position']['offset']: entry for _, entry in candidates
-                if entry.get('type') == 'place_arrival' and entry.get('history_position', {}).get('source') == 'chat'}
+                if entry.get('type') == 'place_arrival' and entry.get('history_position', {}).get('source') == 'chat'
+                and not isinstance(entry.get('historical_import'), dict)}
     retained = []
     if arrivals:
         with dialogue_store.transaction(root, write=False) as conn:
@@ -59,7 +62,17 @@ def annotate_place_history(messages, entries, root, reads):
     places = {}
     for message, entry in candidates:
         facts = record_facts(entry)
-        if message['role'] == 'user':
+        block = entry.get('source_order')
+        if isinstance(block, dict) and isinstance(block.get('time'), str) and block['time']:
+            # The provider send time the arrival recorded (``source_order``); a row without one has none.
+            facts['sent_at'] = block['time']
+        imported = entry.get('historical_import')
+        if isinstance(imported, dict):
+            # An earlier message: its sender stays the platform person, with no owner-account
+            # claim and no attention decision, which history never had.
+            facts['historical_import'] = {'authorship': str(imported.get('authorship') or ''),
+                                          'received_at': str(imported.get('received_at') or '')}
+        elif message['role'] == 'user':
             place_id = entry.get('place_id')
             if place_id and place_id not in places:
                 try:

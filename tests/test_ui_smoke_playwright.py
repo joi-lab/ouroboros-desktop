@@ -16,7 +16,7 @@ import pytest
 
 from tests.candidate_checkout import (
     assert_served_candidate as _assert_served_candidate,
-    candidate_checkout, require_candidate_interpreter, verify_checkout,
+    case_checkout, require_candidate_interpreter, verify_checkout,
 )
 from ouroboros.test_environment import isolated_environment
 from ouroboros.test_evidence import diagnostic_directory
@@ -273,13 +273,10 @@ def _run_docker_ui_assertions(url: str) -> None:
 
 
 @pytest.fixture()
-def direct_server_with_data(tmp_path):
-    if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
-        pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1 to run browser UI smoke")
-    checkout = tmp_path / "repo"
-    # Static/VERSION sentinels prove each boot's origin.
-    with candidate_checkout(pathlib.Path(REPO_ROOT), checkout, origin_proof=True) as candidate, \
-            MockLLMServer() as llm:
+def direct_server_with_data(tmp_path, ui_candidate_checkout):
+    # The session's copy (tests/conftest.py) in this case's custody; its sentinels prove each boot's origin.
+    with case_checkout(pathlib.Path(REPO_ROOT), ui_candidate_checkout) as candidate, MockLLMServer() as llm:
+        checkout = candidate.path
         port = _free_port()
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True)

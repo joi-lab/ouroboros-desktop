@@ -84,6 +84,14 @@ class PlaceHistoryAttention(TypedDict, total=False):
     reason: str  # retained heard reason; no inferred matched wake
 
 
+class PlaceHistoryImport(TypedDict):
+    """An earlier message its connector imported: who sent it on the platform and when the Host
+    received it; the row's ``ts`` is the provider's send time."""
+
+    authorship: Literal['participant', 'platform_account']
+    received_at: str
+
+
 class PlaceHistoryFacts(TypedDict, total=False):
     """Retained room speech/notices only. Absence is unknown, never delivered or woken."""
 
@@ -98,6 +106,8 @@ class PlaceHistoryFacts(TypedDict, total=False):
     held_text: str  # hold notices: the whole reply the hold kept back
     held: bool
     checked: bool  # False on holds: the hold precedes the Safety check
+    historical_import: PlaceHistoryImport  # never owner confirmation or attention
+    sent_at: str  # the provider send time its arrival recorded (``source_order``); absent: unknown, never inferred
 
 
 class ChatHistoryMessage(TypedDict, total=False):
@@ -192,16 +202,20 @@ class ChatHistoryMessage(TypedDict, total=False):
 
 
 class ChatHistoryCoverage(TypedDict):
-    """``coverage`` v1: which stored coordinates this response delivered, per stream. A span is
+    """``coverage`` v1: which coordinates this response delivered, per stream. A span is
     ``{from, to, chain, gaps}``: the coordinate range ``[from, to)`` of the stream, the chain
-    witness (one constant: the store's coordinates are durable) and the gaps inside it (a line the
-    import could not store, a segment it could not import); null when the stream was not read.
-    Coverage is delivery, never chronology or proof of the conversation's start."""
+    witness and the gaps inside it (a line the import could not store, a segment it could not
+    import); null when the stream was not read. Stored order counts bytes under the one chain
+    ``dialog``. A room with imported history counts its chat rows in time order under
+    ``dialog-chrono-<end>`` (``-at-<position>`` around a row), and its span adds ``keys``
+    ``{from, to, frozen}``: the reading key ``[time, order, position]`` of the first frozen row above
+    each cut (null: the beginning or the present) and the frozen end (CLIENT_CONTRACT §5). Coverage
+    never proves the conversation's start."""
 
     v: int
     view: str
-    upper: Dict[str, int]  # per stream: the frozen end of this read
-    spans: Dict[str, Optional[Dict[str, Any]]]  # per stream: {from, to, chain, gaps} or null
+    upper: Dict[str, int]  # per stream: the end coordinate of this read's frozen rows
+    spans: Dict[str, Optional[Dict[str, Any]]]  # per stream: {from, to, chain, gaps, keys?} or null
 
 
 class ChatHistoryWindow(TypedDict, total=False):
@@ -257,6 +271,7 @@ class ChatHistoryResponse(TypedDict, total=False):
 
 
 __all__ = [
-    "ChatHistoryPosition", "PresenceContact", "PlaceHistoryAttention", "PlaceHistoryFacts", "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
+    "ChatHistoryPosition", "PresenceContact", "PlaceHistoryAttention", "PlaceHistoryImport", "PlaceHistoryFacts",
+    "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
     "ChatHistoryCoverage", "ChatHistoryWindow", "ChatHistoryAnchor", "ChatHistoryResponse",
 ]

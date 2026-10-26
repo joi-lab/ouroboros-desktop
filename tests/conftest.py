@@ -142,6 +142,23 @@ def provider_catalog_offline(monkeypatch):
         yield saved
 
 
+@pytest.fixture(scope="session")
+def ui_candidate_checkout(tmp_path_factory):
+    """One origin-proof copy of this checkout for the session's host UI cases.
+
+    `direct_server_with_data` enters `case_checkout` over it, so each case keeps its own custody,
+    data, ports and processes; copying, the final source check and proven-teardown retirement
+    stay `candidate_checkout`'s own (tests/candidate_checkout.py).
+    """
+    if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
+        pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1 to run browser UI smoke")
+    from tests.candidate_checkout import candidate_checkout
+
+    with candidate_checkout(pathlib.Path(__file__).resolve().parents[1],
+                            tmp_path_factory.mktemp("ui-candidate") / "repo", origin_proof=True) as owner:
+        yield owner
+
+
 @pytest.fixture
 def preflight_timeout_diagnostics(request, monkeypatch, tmp_path):
     """Observe the Windows nested-pytest timeout without changing its gate."""
@@ -149,6 +166,7 @@ def preflight_timeout_diagnostics(request, monkeypatch, tmp_path):
     import json
     from ouroboros import preflight_runner
     from ouroboros.platform_layer import collect_descendant_pids
+    from tests import stack_samples
 
     from ouroboros.test_evidence import diagnostic_directory
     trace_dir = diagnostic_directory(tmp_path / "preflight-diagnostics", "preflight-" + request.node.name)
@@ -161,9 +179,13 @@ def preflight_timeout_diagnostics(request, monkeypatch, tmp_path):
         def probe(temp_root):
             module = original_probe(temp_root)
             path = preflight_runner._probe_dir(temp_root) / (module + ".py")
+            # GIL-held stack samples (tests/stack_samples.py says what they cannot see), each
+            # process's in its own file beside its event log: one writer per file, whole lines.
+            shutil.copyfile(stack_samples.__file__, path.with_name(module + "_samples.py"))
             with path.open("a", encoding="utf-8") as stream:
                 stream.write(f'''
-import atexit, faulthandler, json, sys, time
+import atexit, json, sys, time
+from {module}_samples import start as _start_samples
 _trace = open({str(trace_dir)!r} + "/" + str(os.getpid()) + ".log", "a", encoding="utf-8")
 def _trace_event(event, **facts):
     _trace.write(json.dumps(dict(event=event, pid=os.getpid(), ppid=os.getppid(),
@@ -171,10 +193,12 @@ def _trace_event(event, **facts):
         monotonic=time.monotonic(), **facts)) + "\\n")
     _trace.flush()
 _trace_event("probe_import", stdout_fd=sys.stdout.fileno(), stderr_fd=sys.stderr.fileno())
-faulthandler.dump_traceback_later({dump_after!r}, repeat=True, file=_trace)
+_stop_samples = _start_samples({str(trace_dir)!r} + "/" + str(os.getpid()) + ".samples", {dump_after!r})
 def _trace_exit():
-    _trace_event("atexit")
-    faulthandler.cancel_dump_traceback_later()
+    try:
+        _trace_event("atexit")
+    finally:  # A failed event write still stops and joins the sampler.
+        _stop_samples()
 atexit.register(_trace_exit)
 def pytest_sessionstart(session):
     _trace_event("sessionstart")
@@ -215,7 +239,7 @@ def pytest_testnodedown(node, error):
         install()
     yield install
     if trace_dir.exists():
-        for path in sorted(trace_dir.glob("*.log")):
+        for path in sorted([*trace_dir.glob("*.log"), *trace_dir.glob("*.samples")]):
             print(f"\npreflight diagnostic {path.name}:\n{path.read_text(encoding='utf-8')}")
 
 _ORIGINAL_POPEN_INIT = subprocess.Popen.__init__
