@@ -158,6 +158,19 @@ class ProviderPolicyRefusal(RuntimeError):
     code = PROVIDER_POLICY_REFUSAL
 
 
+class ConnectionUnavailable(ProviderPolicyRefusal):
+    """A route names a connection that cannot serve it: unknown name, a disabled row or built-in,
+    a kind that is not the row's, or an invalid spelling (``reason``). Raised by the resolver before
+    any dispatch ($0); the configured fallback walk runs, then the task's model-wait card opens
+    (``model_wait.model_wait_reason``). Never a fall-through to another connection."""
+
+    code = "connection_unavailable"
+
+    def __init__(self, reason: str, *, model: str = "", connection: str = "") -> None:
+        self.reason, self.model, self.connection = str(reason or "missing"), str(model or ""), str(connection or "")
+        super().__init__(f"connection {self.connection or 'default'} is {self.reason} for {self.model or 'this route'}")
+
+
 def _is_provider_policy_refusal(exc: BaseException) -> bool:
     """Structural test: a typed refusal, by class or by the declared ``code``."""
     return isinstance(exc, ProviderPolicyRefusal) or (

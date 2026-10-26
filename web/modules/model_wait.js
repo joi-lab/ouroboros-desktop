@@ -27,7 +27,7 @@ export function modelWaitRoleLabel(role = '') {
 }
 
 /** Host wait reasons: `unavailable` is an engine-dated pool refusal, neither quota nor sign-in. */
-export const MODEL_WAIT_REASONS = ['quota', 'auth', 'auth_quota', 'unavailable'];
+export const MODEL_WAIT_REASONS = ['quota', 'auth', 'auth_quota', 'unavailable', 'connection_unavailable'];
 
 /** A late snapshot cannot rewind a row or reopen a resolved wait episode. */
 export function mergeModelWaits(previous = {}, incoming = {}) {
@@ -150,7 +150,8 @@ export function createModelWaitController({ getRecord, onDomWrite = (fn) => fn()
         const observesAccess = row.availability_observation !== 'unavailable';
         const timed = (quota || pool) && observesAccess;
         node.querySelector('[data-wait-role]').textContent = modelWaitRoleLabel(row.role);
-        node.querySelector('[data-wait-reason]').textContent = !observesAccess ? 'Waiting for provider access' : mixed ? 'Waiting for access'
+        node.querySelector('[data-wait-reason]').textContent = row.reason === 'connection_unavailable' ? 'Connection unavailable'
+            : !observesAccess ? 'Waiting for provider access' : mixed ? 'Waiting for access'
             : pool ? 'Waiting for an account' : row.reason === 'auth' ? 'Sign-in required' : 'Waiting for quota';
         // Amber only while the wait needs the owner (the host's revision-bound fact); a wait that goes on by itself is a
         // quiet tray with a neutral sentence (docs/DESIGN.md "Status marks").

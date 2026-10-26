@@ -90,6 +90,8 @@ def model_wait_reason(error: Exception) -> str:
     code = getattr(error, "code", "")
     if code in {"auth_required", "subscription_window_exhausted"}:
         return "auth" if code == "auth_required" else "quota"
+    if code == "connection_unavailable":  # the route's connection is gone or disabled: typed, $0, owner's call
+        return "connection_unavailable"
     problem = getattr(error, "problem", None)
     context = problem.get("context") if isinstance(problem, dict) else None
     if code == "credential_pool_exhausted" and isinstance(context, dict) and context.get("poolCause") == "mixed":
@@ -1234,7 +1236,7 @@ def model_waitable(function: Callable | None = None, *, client_parameter: str = 
             error.task_resource_wait_reason = classified
         reason = model_wait_reason(error)
         if not (context and not context.closed and values.get("model_role") and reason
-                and (classified or (isinstance(error, ClaudexorModelError)
+                and (classified or reason == "connection_unavailable" or (isinstance(error, ClaudexorModelError)
                                     and getattr(capture, "state", None) in {"released", "settled"}))):
             return False
         deferral = _deferral(values["model_role"])
