@@ -20,6 +20,26 @@ const amount = (value) => {
 };
 const placeReadiness = (value) => object(value) && text(value.text)
     ? { text: text(value.text), tone: text(value.tone) || 'muted' } : null;
+const placeLabels = (value) => object(value) && Object.values(value).every((label) => typeof label === 'string')
+    ? { ...value } : null;
+
+/** Status identities are credential facts; a malformed member invalidates the whole declaration. */
+function statusIdentity(value) {
+    const account = (entry) => object(entry) && Object.keys(entry).every((key) => ['id', 'label', 'kind'].includes(key))
+        && ['id', 'label'].every((key) => typeof entry[key] === 'string' && entry[key].trim() && entry[key].length <= 200)
+        && ['user', 'bot'].includes(entry.kind);
+    if (!object(value) || Object.keys(value).some((key) => !['sends_as', 'reads_as'].includes(key))
+        || (Object.hasOwn(value, 'sends_as') && !account(value.sends_as))
+        || (Object.hasOwn(value, 'reads_as') && (!Array.isArray(value.reads_as) || !value.reads_as.every(account)))) return null;
+    return value;
+}
+
+/** The connector's status payload, independent of the host's PlaceSummary. */
+export function normalizePlaceStatus(raw) {
+    const data = object(raw) || {};
+    return { readiness: typeof data.text === 'string' ? placeReadiness(data) : null,
+        identity: statusIdentity(data.identity), labels: placeLabels(data.labels) };
+}
 
 /** Preserve the host's sanitized icon spec, including the SVG discriminant. */
 export function normalizeIcon(raw) {
@@ -60,10 +80,8 @@ export function normalizePlace(raw) {
         workingFolder: text(place.working_folder),
         model: text(place.model),
         readiness: placeReadiness(place.readiness),
-        identity: object(place.identity),
-        canConfirm: place.can_confirm === true,
         safetyMode: text(place.safety_mode),
-        labels: object(place.labels),
+        labels: placeLabels(place.labels),
         facts: Array.isArray(place.facts) ? place.facts : null,
         source: object(place.source),
         settings: text(place.settings),
@@ -85,6 +103,7 @@ export function normalizeConnector(raw) {
         wakes: [...new Set(list(connector.wakes).map((item) => text(object(item) ? item.fact : item)).filter(Boolean))],
         connected: connector.connected === true,
         readiness: placeReadiness(connector.readiness),
+        labels: placeLabels(connector.labels),
         facts: Array.isArray(connector.facts) ? connector.facts : null,
         source: object(connector.source),
         settings: text(connector.settings),

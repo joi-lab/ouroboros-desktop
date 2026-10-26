@@ -4,7 +4,9 @@ import test from 'node:test';
 import { installCardDom, TextNode } from './helpers/card_dom.js';
 import { applyPayload, createTranslator, setMissTransport } from '../modules/i18n.js';
 import { normalizePlace, readPlaceRooms } from '../modules/consciousness_api.js';
+import { wakesForText } from '../modules/consciousness_words.js';
 import { mountPlaceHistory, capturedWindowNote, historySpeaker, historyFactWords, placeRoomsHtml } from '../modules/place_history.js';
+import { openPlaceSheet } from '../modules/place_sheet.js';
 import { mountConnectorPlaces } from '../modules/connector_places.js';
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
@@ -20,6 +22,8 @@ function fixture(t) {
     const dom = installCardDom(); const { doc, win } = dom;
     // Missing fixture DOM mechanics, not a replacement for production behavior.
     doc.defaultView = win; win.getComputedStyle = () => ({ visibility: 'visible' });
+    doc.getElementById = (id) => doc.body.querySelector(`[id="${id}"]`);
+    doc.addEventListener = win.addEventListener; doc.removeEventListener = win.removeEventListener;
     const create = doc.createElement;
     doc.createElement = (tag) => {
         const node = create(tag);
@@ -103,12 +107,85 @@ test('heard facts sit beside the reason with core words and authored signal labe
     await tick();
     const metas = [...f.doc.body.querySelectorAll('.place-convo-meta')];
     assert.deepEqual([...metas[0].querySelectorAll('.place-convo-fact')].map((node) => node.textContent),
-        ['Heard; no wake matched', 'direct messages', 'also wakes on bot messages', unsafeText]);
-    assert.equal(metas[0].querySelectorAll('.place-convo-fact[data-i18n-authored]').length, 1);
-    assert.ok(!metas[0].textContent.includes('Mail addressed to you'), 'reader core facts keep host words');
+        ['Heard; no wake matched', 'Mail addressed to you', 'from a bot', unsafeText]);
+    assert.equal(metas[0].querySelectorAll('.place-convo-fact[data-i18n-authored]').length, 2);
+    assert.ok(!metas[0].textContent.includes('direct messages'), 'declared core labels also name the reader fact');
     assert.deepEqual(metas.slice(1).map((meta) => meta.querySelectorAll('.place-convo-fact').length), [1, 1, 1]);
+    assert.ok(metas.slice(1).every((meta) => meta.querySelectorAll('[data-heard-fact]').length === 0));
     assert.match(metas[3].textContent, /Focus started/);
     assert.equal(f.q('img'), null);
+    reader.close();
+});
+
+for (const labels of [null, { any_message: 'Every saved arrival', direct_message: 'Mail addressed to you' }]) {
+    test(`heard messages show only specific facts (${labels ? 'declared labels' : 'core words'})`, async (t) => {
+        const f = fixture(t);
+        const rows = [['any_message', 'from_bot', 'direct_message'], [], ['any_message']].map((facts, i) => ({
+            ...row(`heard-${i}`), place_history: { kind: 'message', attention: { decision: 'heard', reason: 'no_wake_match' }, facts },
+        }));
+        const reader = mount(f, { readHistory: async () => page(rows) }, { ...place, labels }); await tick();
+        const metas = [...f.doc.body.querySelectorAll('.place-convo-meta')];
+        assert.deepEqual(metas.map((meta) => [...meta.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent)),
+            [['from a bot', labels?.direct_message || 'addressed to you'], [], []]);
+        assert.deepEqual([...metas[0].querySelectorAll('.place-convo-fact')].map((node) => node.textContent),
+            ['Heard; no wake matched', 'from a bot', labels?.direct_message || 'addressed to you']);
+        assert.equal(f.q('[data-heard-fact="direct_message"]').hasAttribute('data-i18n-authored'), Boolean(labels));
+        reader.close();
+    });
+}
+
+test('heard core facts describe one message while wake sentences keep their policy words', async (t) => {
+    const f = fixture(t);
+    const facts = ['direct_message', 'group_dm', 'mention', 'reply_to_me', 'my_thread', 'new_issue',
+        'new_pull_request', 'review_requested', 'assigned', 'any_message', 'from_bot', 'legacy_addressed'];
+    const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts } };
+    const reader = mount(f, { readHistory: async () => page([heard]) }); await tick();
+    assert.deepEqual([...f.doc.body.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent),
+        ['addressed to you', 'group message', 'mentions you', 'reply to you', 'your thread', 'new issue',
+            'new pull request', 'review requested', 'assigned to you', 'from a bot', 'addressed to you']);
+    assert.equal(wakesForText(facts.map((fact) => ({ fact }))),
+        'wakes for direct messages, group messages, mentions, replies, replies in its threads, new issues, new pull requests, review requests addressed to me, assignments addressed to me, every message and messages addressed to it · also wakes on bot messages');
+    reader.close();
+});
+
+for (const late of [false, true]) test(`the sheet reader merges status labels (${late ? 'after' : 'before'} opening) and keeps authored nodes`, async (t) => {
+    const f = fixture(t), status = deferred();
+    const current = normalizePlace({ ...rawPlace(), source: { url: '/api/extensions/telegram-user-session/status' },
+        facts: ['direct_message', 'from_bot', { id: 'signal.words', label: 'PR words' }], labels: { direct_message: 'Declared mail' } });
+    const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' },
+        facts: ['any_message', 'direct_message', 'from_bot', 'signal.words'] } };
+    f.reply(({ url }) => url === current.source.url ? status.promise : page([heard]));
+    const sheet = openPlaceSheet(current, { readRooms: async () => index() });
+    t.after(() => sheet.close());
+    const payload = { text: 'Ready', tone: 'ok', labels: { any_message: 'Every arrival', direct_message: unsafeText } };
+    if (!late) status.resolve(payload);
+    await tick();
+    f.q(`[data-place-room="${room.room_chat_id}"]`).click(); await tick();
+    const words = () => [...f.doc.body.querySelectorAll('[data-heard-fact]')].map((node) => node.textContent);
+    assert.deepEqual(words(), [late ? 'Declared mail' : unsafeText, 'from a bot', 'PR words']);
+    const message = f.q('.place-convo-text'), article = f.q('.place-convo-row');
+    if (late) { status.resolve(payload); await tick(); }
+    assert.deepEqual(words(), [unsafeText, 'from a bot', 'PR words']);
+    assert.equal(f.q('.place-convo-text'), message);
+    assert.equal(f.q('.place-convo-row'), article);
+    assert.ok(f.q('[data-heard-fact="direct_message"]').hasAttribute('data-i18n-authored'));
+    assert.equal(f.q('img'), null);
+    assert.deepEqual(sheet.place.labels, { direct_message: 'Declared mail' });
+    assert.equal(f.requests.filter(({ url }) => url === current.source.url).length, 1);
+});
+
+test('reader labels return to core words when absent without replacing the retained message', async (t) => {
+    const f = fixture(t);
+    const heard = { ...row('heard'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts: ['direct_message'] } };
+    const reader = mount(f, { readHistory: async () => page([heard]) }, { ...place, labels: { direct_message: 'Mail addressed to you' } });
+    await tick();
+    const fact = f.q('[data-heard-fact]'), message = f.q('.place-convo-text');
+    assert.equal(fact.textContent, 'Mail addressed to you');
+    assert.ok(fact.hasAttribute('data-i18n-authored'));
+    reader.updatePlace(place);
+    assert.equal(fact.textContent, 'addressed to you');
+    assert.equal(fact.hasAttribute('data-i18n-authored'), false);
+    assert.equal(f.q('.place-convo-text'), message);
     reader.close();
 });
 
@@ -136,19 +213,22 @@ test('new reader words translate while the sending account, signal and held word
     applyPayload({ language: 'fr', english: false, entries: {
         'as {label}': { text: 'comme {label}' }, 'code:places.identity.as_you': { text: 'comme vous' },
         'code:places.history.held_unchecked': { text: 'retenu, non vérifié' },
-        'code:places.wake.direct_message': { text: 'messages directs' }, Settings: { text: 'Réglages' },
+        'code:places.wake.direct_message': { text: 'messages directs' },
+        'code:places.heard.direct_message': { text: 'adressé à vous' },
+        'code:places.heard.from_bot': { text: 'd’un bot' }, Settings: { text: 'Réglages' },
     } });
     t.after(() => applyPayload({ language: '', english: true, entries: {} }));
     const reader = mount(f, { readHistory: async () => page([
         { ...row('out', 'Settings'), role: 'assistant', place_history: { kind: 'delivery', sends_as: { id: 'id', label: 'Settings', kind: 'user' }, sends_as_owner: false } },
-        { ...row('heard', 'Settings'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts: ['direct_message', 'signal.words'] } },
+        { ...row('heard', 'Settings'), place_history: { kind: 'message', attention: { decision: 'heard' }, facts: ['any_message', 'direct_message', 'from_bot', 'signal.words'] } },
         { ...row('held', 'System line'), role: 'system', place_history: { kind: 'notice', held_text: 'Settings', held: true, checked: false } },
     ]) }, { ...place, facts: [{ id: 'signal.words', label: 'Settings' }] });
     await tick();
     createTranslator({ skipRoots: '[data-i18n-authored]', userContent: '', excludeSelector: '' }).applyTo(f.doc.body);
     const rows = [...f.doc.body.querySelectorAll('.place-convo-row')];
     assert.match(rows[0].textContent, /comme Settings/);
-    assert.match(rows[1].textContent, /messages directsSettings/);
+    assert.deepEqual([...rows[1].querySelectorAll('[data-heard-fact]')].map((node) => node.textContent), ['adressé à vous', 'd’un bot', 'Settings']);
+    assert.equal(wakesForText([{ fact: 'direct_message' }]), 'wakes for messages directs');
     assert.match(rows[2].textContent, /retenu, non vérifiéSettings/);
     assert.ok(rows.every((node) => !node.textContent.includes('Réglages')));
     reader.close();

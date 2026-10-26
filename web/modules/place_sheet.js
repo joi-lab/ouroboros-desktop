@@ -7,7 +7,7 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { tr, fmt } from './i18n.js';
 import { fetchJson } from './api_client.js';
 import { bindModelChoosers, modelChooserHtml, updateModelChooser } from './model_chooser.js';
-import { disconnectPlace, normalizePlace, PLACES_CHANGED_EVENT, readPlaceConnector, readPlaceRooms, updatePlace } from './consciousness_api.js';
+import { disconnectPlace, normalizePlace, normalizePlaceStatus, PLACES_CHANGED_EVENT, readPlaceConnector, readPlaceRooms, updatePlace } from './consciousness_api.js';
 import { mountPlaceHistory, placeRoomsHtml } from './place_history.js';
 import {
     PLACE_STATES, SILENT_CARD, WAKE_FACT_WORDS, accountIdText, authorWord, capitalized, listWords, placeStateOf, placeStateWord, signalLabels, wakeFactWord,
@@ -44,7 +44,7 @@ function stateHtml(place, ui) {
 }
 
 function wakesHtml(place, ui) {
-    const labels = { ...signalLabels(place.facts), ...place.labels };
+    const labels = { ...signalLabels(place.facts), ...place.labels, ...ui.labels };
     const vocabulary = place.facts ?? Object.keys(WAKE_FACT_WORDS).filter((fact) => fact !== 'legacy_addressed'
         || place.wakes.some((item) => item.fact === fact));
     const items = vocabulary.map((item) => {
@@ -65,23 +65,25 @@ function wakesHtml(place, ui) {
         <p class="place-sheet-note">${tr('places.wake.honesty', 'Everything else here it sees at its next own wake and decides what to read.')}</p>`;
 }
 
-function identityHtml(place) {
-    const sender = place.identity?.sends_as;
+function identityHtml(place, ui) {
+    const withOwner = (entry) => ({ ...entry,
+        owner: entry.kind === 'user' && place.ownerAccounts.some((account) => account.actorId === entry.id) });
+    const sender = ui.identity?.sends_as && withOwner(ui.identity.sends_as);
     const authored = (label) => `<span data-i18n-authored>${escapeHtml(label)}</span>`;
-    const readers = listWords((place.identity?.reads_as || []).map((entry) => authored(entry.label)));
+    const readers = listWords((ui.identity?.reads_as || []).map(withOwner).map((entry) => authored(entry.label)));
     const writes = sender ? fmt(sender.kind === 'bot' ? 'It writes here as the Ouroboros bot ({label})'
         : sender.owner ? 'It writes here as you ({label})' : 'It writes here as {label}', { label: authored(sender.label) }) : '';
     const reads = readers ? fmt(writes ? 'reads as {labels}' : 'It reads here as {labels}', { labels: readers }) : '';
     if (!writes && !reads) return '';
-    const confirm = sender?.kind === 'user' && !sender.owner && place.canConfirm;
+    const canConfirm = sender?.kind === 'user' && !sender.owner;
     return `<div class="harness-account-row place-account">
         <div class="harness-account-main"><span>${[writes, reads].filter(Boolean).join(' · ')}</span></div>
-        ${confirm ? `<div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(sender.id)}" data-actor-label="${escapeHtml(sender.label)}">${escapeHtml(tr('places.account.confirm_identity', 'This is my account'))}</button></div>` : ''}
+        ${canConfirm ? `<div class="harness-account-actions"><button type="button" class="btn btn-default btn-sm" data-place-act="confirm" data-actor="${escapeHtml(sender.id)}" data-actor-label="${escapeHtml(sender.label)}">${escapeHtml(tr('places.account.confirm_identity', 'This is my account'))}</button></div>` : ''}
     </div>`;
 }
 
 function accountsHtml(place, ui) {
-    const identity = identityHtml(place);
+    const identity = ui.removed ? '' : identityHtml(place, ui);
     const rows = place.ownerAccounts.map((account) => `<div class="harness-account-row place-account">
             <div class="harness-account-main"><strong data-i18n-authored>${escapeHtml(account.label || account.actorId)}</strong></div>
             <div class="harness-account-meta">${escapeHtml([tr('places.account.you', 'you'), account.confirmedAt ? fmt('confirmed on {date}', { date: shortDate(account.confirmedAt) }) : tr('places.account.confirmed', 'confirmed')].join(' · '))}${account.label && account.label !== account.actorId ? ` · <span data-i18n-authored>${escapeHtml(account.actorId)}</span>` : ''}</div>
@@ -165,7 +167,7 @@ function footHtml(place, ui) {
 /** The sheet's body for one normalized place and the sheet's own UI state (drafts, busy, statuses). */
 export function placeSheetBodyHtml(place, ui = {}) {
     const view = { drafts: {}, status: {}, ...ui };
-    if (view.removed) place = { ...place, identity: null, notes: [], ownerAccounts: [], accountCandidates: [] };
+    if (view.removed) place = { ...place, notes: [], ownerAccounts: [], accountCandidates: [] };
     return [
         view.conflict || view.removed || view.readiness || place.readiness ? section('readiness', '',
             (view.conflict ? statusLine({ text: tr('places.conflict', 'Changed elsewhere; your text is kept.'), tone: 'warn' }) : '')
@@ -279,6 +281,7 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
     const editor = document.createElement('div'); editor.className = 'place-sheet-editor';
     const reader = document.createElement('div'); reader.hidden = true;
     body.append(editor, reader);
+    const readerPlace = () => ({ ...current, labels: { ...current.labels, ...ui.labels } });
 
     function backToPlace() {
         const id = selected?.room_chat_id;
@@ -292,7 +295,7 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
         if (ui.busy || sheet.closed || !current) return;
         editorScroll = body.scrollTop; selected = room;
         editor.hidden = true; reader.hidden = false;
-        history = mountPlaceHistory(reader, current, room, { onBack: backToPlace });
+        history = mountPlaceHistory(reader, readerPlace(), room, { onBack: backToPlace });
         paint(); body.scrollTop = 0;
         reader.querySelector('[data-history-back]')?.focus({ preventScroll: true });
     }
@@ -338,7 +341,7 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
             field?.focus({ preventScroll: true });
             if (selection) field?.setSelectionRange?.(...selection);
         }
-        if (current) history?.updatePlace(current);
+        if (current && history) history.updatePlace(readerPlace());
         const meta = dialog.querySelector('[data-place-meta]');
         if (meta) meta.innerHTML = `<span data-i18n-authored>${escapeHtml((current || place).label)}</span> · ${escapeHtml(ui.removed ? tr('places.disconnected.word', 'disconnected') : tr(`places.state.${current.state}`, placeStateWord(current.state)))}`;
         if (selected && meta) meta.innerHTML = `<span data-i18n-authored>${escapeHtml((current || place).label)}</span>`;
@@ -442,7 +445,10 @@ export function openPlaceSheet(place, { returnFocus = document.activeElement, on
     });
     paint();
     if (place.source) void readStatus(place, { signal: abort.signal }).then((data) => {
-        if (current?.source?.url === place.source.url && typeof data.text === 'string') ui.readiness = { text: data.text, tone: data.tone, authored: true };
+        if (sheet.closed || current?.source?.url !== place.source.url) return;
+        const status = normalizePlaceStatus(data);
+        ui.identity = status.identity; ui.labels = status.labels;
+        if (status.readiness) ui.readiness = { ...status.readiness, authored: true };
         paint();
     }).catch(() => { ui.status.state = { text: tr('places.status.unavailable', 'The connector status could not be read.'), tone: 'warn' }; paint(); });
     void loadRooms();
