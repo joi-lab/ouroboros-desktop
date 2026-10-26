@@ -209,3 +209,29 @@ def test_brief_view_reads_one_index_pass_and_keeps_words_when_the_store_is_busy(
     view = place_projection.place_view(tmp_path, place, allowance={}, brief=True)
     assert view["label"] == "Inbox" and view["notes"][0]["text"] == "Answer politely."
     assert view["rooms"] is None and view["unanswered"] is None and view["last_activity_at"] == ""
+
+
+@pytest.mark.parametrize("mode", ["off", "light", "full"])
+def test_status_identity_owner_confirmation_revocation_and_safety(client, connector, monkeypatch, mode):
+    from tests.test_presence_identity import IDENTITY
+    skill, _ = connector
+    monkeypatch.setattr("ouroboros.gateway.places_api.read_place_status", lambda *args: {"identity": IDENTITY})
+    monkeypatch.setattr("ouroboros.config.runtime_setting", lambda key, default='': mode if key == "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE" else default)
+    place = client.post("/api/places", json={"connector": skill.name, "account_id": "account"}).json()["place"]
+    assert place["identity"]["sends_as"]["owner"] is False and place["can_confirm"]
+    assert place["identity"]["reads_as"][0]["owner"] is False and place["safety_mode"] == mode
+    assert place["labels"] == {"signal.words": "Words you chose appear"}
+    path = "/api/places/" + place["place_id"]
+    confirmed = client.post(path, json={"confirm_owner_account": {"platform_actor_id": IDENTITY["sends_as"]["id"]}}).json()["place"]
+    assert confirmed["identity"]["sends_as"]["owner"] and not confirmed["can_confirm"]
+    response = client.get("/api/places").json()
+    assert response["places"][0]["identity"] == confirmed["identity"]
+    assert response["connectors"][0]["identity"] == IDENTITY
+    revoked = client.post(path, json={"revoke_owner_account": IDENTITY["sends_as"]["id"]}).json()["place"]
+    assert revoked["can_confirm"] and not revoked["identity"]["sends_as"]["owner"]
+    monkeypatch.setattr("ouroboros.gateway.places_api.read_place_status", lambda *args: {
+        "identity": {"sends_as": {**IDENTITY["sends_as"], "kind": "bot"}}})
+    assert not client.get("/api/places").json()["places"][0]["can_confirm"]
+    monkeypatch.setattr("ouroboros.gateway.places_api.read_place_status", lambda *args: {})
+    undeclared = client.get("/api/places").json()["places"][0]
+    assert undeclared["identity"] is None and not undeclared["can_confirm"]

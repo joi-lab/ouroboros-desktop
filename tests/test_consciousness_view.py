@@ -462,3 +462,38 @@ def test_durable_automatic_release_and_receipts_survive_result_updates(tmp_path,
     assert row["conversation"] == "chat:a:r" and row["chat_id"] == -7
     labelled, = view.recent_wakes(tmp_path, [{"place_id": "mail", "label": "Inbox"}])
     assert labelled["cause"] == "focus" and labelled["place_label"] == "Inbox"
+
+
+@pytest.mark.parametrize("kind,owner,clause", [("user", True, "writes as Mailbox (your human's own account)"),
+    ("user", False, "writes as Mailbox"), ("bot", False, "as Ouroboros (bot Mailbox)"), (None, False, "")])
+def test_own_clock_reads_current_identity_without_changing_brief_view(tmp_path, monkeypatch, kind, owner, clause):
+    place = places.connect_place(tmp_path, connector="bridge", provider="chat", account_id="account")
+    if owner:
+        places.edit_place(tmp_path, place.place_id, "confirm_owner_account", author="owner", platform_actor_id="writer")
+    declaration = {"skill": "bridge", "id": "mail"}
+    if kind:
+        declaration["identity"] = {"sends_as": {"id": "writer", "label": "Mailbox", "kind": kind}}
+    monkeypatch.setattr("ouroboros.extension_contributions.live_place_declarations", lambda *a, **kw: [declaration])
+    brief = view.place_views(tmp_path, {})
+    assert "identity" not in brief[0]
+    text = view.places_text(brief)
+    if clause:
+        assert clause in text
+    else:
+        assert "writes as" not in text and "as Ouroboros" not in text
+
+
+@pytest.mark.parametrize("cause,identity,owner", [("own_clock", True, True), ("focus", False, False),
+    ("focus", True, False), ("focus", True, True)])
+def test_recent_focus_as_comes_from_stored_metadata(tmp_path, wake, cause, identity, owner):
+    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    focus = {"place_id": "mail", "conversation_key": "mail:account:inbox:0"}
+    if identity:
+        focus.update(identity={"sends_as": {"id": "writer", "label": "At the event", "kind": "user"}}, identity_owner=owner)
+    document["metadata"].update(wake_cause=cause, focus=focus)
+    seed_result(tmp_path, document["task_id"], document)
+    row, = view.recent_wakes(tmp_path, [])
+    if cause == "focus" and identity:
+        assert row["as"] == {"label": "At the event", "owner": owner}
+    else:
+        assert "as" not in row

@@ -2,12 +2,44 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+from types import SimpleNamespace
+from urllib.parse import unquote
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from ouroboros.gateway._helpers import request_drive_root, run_sync_to_completion
 from ouroboros.places import AUTHOR_OWNER, PlaceError, edit_place, get_place, place_room_index
 from ouroboros.place_projection import connect_declared_place, place_view, places_view
 from ouroboros.store import StoreError
+
+
+def read_place_status(root, declaration: dict) -> dict:
+    """Use the same reviewed route dispatch as the sheet, from synchronous readers."""
+    from ouroboros.extension_registry_state import list_routes
+    from ouroboros.gateway.extensions import api_extension_dispatch
+
+    url = (declaration.get("source") or {}).get("url", "")
+    if not url or url not in list_routes():
+        return {}
+    skill = declaration["skill"]
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    request = Request({"type": "http", "method": "GET", "path": url, "query_string": b"", "headers": [],
+                       "path_params": {"skill": skill, "rest": unquote(url.split("/", 4)[-1])},
+                       "app": SimpleNamespace(state=SimpleNamespace(drive_root=root))}, receive=receive)
+    try:
+        response = asyncio.run(api_extension_dispatch(request))
+        if response.status_code != 200:
+            raise ValueError(f"status route returned {response.status_code}")
+        payload = json.loads(response.body)
+        if not isinstance(payload, dict):
+            raise ValueError("status route must return an object")
+        return payload
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Place status unavailable for %s: %s", skill, exc)
+        return {}
 
 
 def update_place(root, place_id: str, body: dict) -> dict:

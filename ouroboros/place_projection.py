@@ -9,11 +9,11 @@ log = logging.getLogger(__name__)
 
 
 def place_declarations(root) -> list[dict]:
-    from ouroboros.extension_registry_state import live_contribution_projection
+    from ouroboros.extension_contributions import live_place_declarations, project_place_status
     from ouroboros.skill_loader import discover_skills
     from ouroboros.extension_ui_validation import validate_contributions
     from ouroboros.icon_geometry import icon_spec
-    rows = [dict(row) for row in live_contribution_projection() if row.get("provides") == "place"]
+    rows = live_place_declarations(root)
     for row in rows:
         row["readiness"] = {"text": "Connector on", "tone": "ok"}
     published = {row["skill"] for row in rows}
@@ -37,8 +37,8 @@ def place_declarations(root) -> list[dict]:
                     log.warning("Place icon unavailable for %s", skill.name, exc_info=True)
             # An unloaded connector has no callable status route.
             row.pop("source", None)
-            rows.append({**row, "skill": skill.name, "readiness": readiness,
-                         "icon_spec": icon_spec(row.get("icon", ""), source)})
+            rows.append(project_place_status({**row, "skill": skill.name, "readiness": readiness,
+                         "icon_spec": icon_spec(row.get("icon", ""), source)}, {}))
     return rows
 
 
@@ -97,6 +97,12 @@ def place_view(root, place, *, declarations: list[dict] | None = None, allowance
                   destination=row.get("destination") or "vendor:" + place.provider,
                   icon=row.get("icon_spec") or {}, wake_suggestions=list(row.get("wakes") or []),
                   readiness=row.get("readiness") or {"text": "Connector unavailable", "tone": "warn"})
+    from ouroboros.places import identity_with_owners
+    from ouroboros.safety_config import get_safety_mode
+    identity = identity_with_owners(row.get("identity"), place.owner_accounts, place.account_id)
+    sending = (identity or {}).get("sends_as") or {}
+    result.update(identity=identity, can_confirm=sending.get("kind") == "user" and not sending["owner"],
+                  safety_mode=get_safety_mode("consciousness"), labels=row.get("labels") or {})
     result.update({key: row[key] for key in ("facts", "source", "settings") if key in row})
     result["account_candidates"] = account_candidates(root, place.place_id)
     return result
@@ -111,7 +117,7 @@ def places_view(root) -> dict:
             "connectors": [{"connector": r["skill"],
                             "label": r["label"], "icon": r.get("icon_spec") or {}, "destination": r["destination"],
                             "readiness": r.get("readiness") or {"text": "Connector unavailable", "tone": "warn"},
-                            **{key: r[key] for key in ("facts", "source", "settings") if key in r},
+                            **{key: r[key] for key in ("facts", "source", "settings", "identity", "labels") if key in r},
                             "wakes": r.get("wakes") or [], "connected": any(p.connector == r["skill"] for p in places)}
                            for r in declarations]}
 
