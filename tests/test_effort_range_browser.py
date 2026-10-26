@@ -145,12 +145,12 @@ def _segment_center(page, level: str, selector: str = CONTROL) -> tuple[float, f
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
 
-def _assert_strip_geometry(facts: dict) -> None:
+def _assert_strip_geometry(facts: dict, *, air: float = 1.5) -> None:
     """The pill covers its whole segment and its word with air on both sides; the band, the
     pill and the brackets share one vertical box, and the band's ends are the brackets."""
     pill, seg, word, band = facts["pill"], facts["seg"], facts["word"], facts["band"]
     assert abs(pill["left"] - seg["left"]) <= 0.6 and abs(pill["right"] - seg["right"]) <= 0.6, facts
-    assert pill["left"] <= word["left"] - 1.5 and pill["right"] >= word["right"] + 1.5, facts
+    assert pill["left"] <= word["left"] - air and pill["right"] >= word["right"] + air, facts
     for cap in (facts["minCap"], facts["maxCap"], pill):
         assert abs(cap["top"] - band["top"]) <= 0.6 and abs(cap["bottom"] - band["bottom"]) <= 0.6, facts
     assert abs(facts["minCap"]["left"] - band["left"]) <= 0.6 and abs(facts["maxCap"]["right"] - band["right"]) <= 0.6, facts
@@ -480,7 +480,8 @@ def test_a_320_px_phone_sheet_shares_the_strip_evenly(direct_server_with_data, e
             opened = _facts(page)
             _assert_row_still(opened, closed)
             _assert_in_its_panel(opened, phone=True, finger=False)
-            _assert_strip_geometry(opened)
+            # A word on two lines in a shared level (WebKit hyphenates "Medi-um") may come within a pixel of its pill.
+            _assert_strip_geometry(opened, air=0.5)
             widths = [seg["width"] for seg in opened["segs"]]
             assert max(widths) - min(widths) <= 1, ("the levels share it evenly", widths)
             assert opened["headWidth"] > 20, "the ring stays"
