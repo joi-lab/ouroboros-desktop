@@ -4857,11 +4857,11 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     pointer-events: none;
     transition: color 0.15s;
 }
-/* A phone's sheet: the strip reaches a little past the words on each side (its rounded ends read inset). A strip with
-   less room (a phone's sheet, a narrow Project pane) reads its levels a step smaller with less air, as the composer's
-   own strip did, so seven finger-wide levels still fit a 360 px phone; where seven fingers cannot fit (a 320 px phone)
-   the levels share the strip evenly and a long word takes two lines. */
-.capsule-panel[data-place="sheet"] .chat-effort-strip { margin-inline: calc(-1 * var(--space-1)); }
+/* A phone's sheet: the strip reaches past the words on each side (its rounded ends read inset). A strip with less room
+   (a phone's sheet, a narrow Project pane) reads its levels a step smaller with less air, as the composer's own strip
+   did, so seven finger-wide levels still fit a 360 px phone; where seven fingers cannot fit (a 320 px phone) the levels
+   share the strip evenly and a long word takes two lines. */
+.capsule-panel[data-place="sheet"] .chat-effort-strip { margin-inline: calc(-1 * var(--space-2)); }
 @container effort-strip (max-width: 359.98px) {
     .chat-effort-seg { font-size: var(--type-meta); padding-inline: var(--space-1); }
 }

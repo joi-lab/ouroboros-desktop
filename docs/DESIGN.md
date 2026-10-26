@@ -460,8 +460,9 @@ this chat; running helpers finish.» When Settings turns subagents off or they a
 `Off` with a lock; its panel shows the lock by the name, Auto and Swarm disabled, and the reason with `Open Settings`
 in place of the two lines; the room keeps its own value. Effort's seven levels carry a primary pill and two helper
 bounds; the primary may lie outside them, and the line says both («Primary X-High; helpers Medium–Max.»). A segment
-is its word with the same air a side and never narrower than a finger; where seven fingers do not fit (a 320 px phone)
-the levels share the strip evenly. The pill covers its segment; band, pill and brackets share one vertical inset. The
+is its word with the same air a side and never narrower than a finger; a strip with less room (a phone, a narrow
+Project pane) reads its levels a step smaller with less air, and where seven fingers do not fit (a 320 px phone) the
+levels share the strip evenly. The pill covers its segment; band, pill and brackets share one vertical inset. The
 primary and helper bounds never move each other; the brackets cannot cross. A level tap sets primary; each bracket has
 its own handle. A drag keeps its grab offset on whole levels. A stored `minimal` shows at Low until its handle moves.
 
