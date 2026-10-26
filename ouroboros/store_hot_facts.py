@@ -199,8 +199,8 @@ def _read_rows(txn, ids) -> dict:
         f"{columns}{cards} FROM tasks AS t{join} WHERE t.task_id IN (SELECT value FROM json_each(?))",
         (json.dumps(ids),)).fetchall()
     found = {row["task_id"]: dict(row) for row in records}
-    # Underived rows alone pay their old strict read, coherent with their sequence; a body that does not
-    # parse keeps that row's authority unknown (no Resume is offered from it).
+    # Underived rows alone pay their old strict read, coherent with their sequence; a body that is not
+    # this task's object keeps that row's authority unknown (no Resume is offered from it), not its store's.
     for tid, row in found.items():
         if not modern or any(row.get(name) is None for name in names):
             body = txn.body_text(tid)
@@ -208,11 +208,10 @@ def _read_rows(txn, ids) -> dict:
                 document = None if body is None else json.loads(body)
             except ValueError:
                 document = None
-            if document is None:
+            if not isinstance(document, dict) or str(document.get("task_id") or "") != tid:
                 row["control_valid"] = 0
                 continue
             row.update(task_columns(document))
-            row["control_valid"] &= int(str(document.get("task_id") or "") == tid)
     if set(ids) - found.keys():
         from ouroboros.store_import import OCCUPIED
         occupied = txn.meta(OCCUPIED) or {}

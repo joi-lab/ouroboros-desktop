@@ -59,11 +59,19 @@ def retain_swarm_basis(txn, document, *, current=None):
     Empty proven bases contribute nothing in either direction. Independent
     nonempty histories retain both sources as unavailable, never guessed sums.
     Reuse the pristine document held by update_task's write transaction; direct
-    upserts read their current body. No journal I/O or cross-write cache.
+    upserts read their current body, whose basis counts only while it decodes to
+    this task's object: a torn or foreign body is what the upsert replaces. No
+    journal I/O or cross-write cache.
     """
     if current is None:
-        record = txn.conn.execute("SELECT body FROM task_bodies WHERE task_id=?", (str(document["task_id"]),)).fetchone()
-        current = loads(record[0]) if record else {}
+        task_id = str(document["task_id"])
+        record = txn.conn.execute("SELECT body FROM task_bodies WHERE task_id=?", (task_id,)).fetchone()
+        try:
+            current = loads(record[0]) if record else {}
+        except ValueError:
+            current = {}
+        if not isinstance(current, dict) or str(current.get("task_id") or "") != task_id:
+            current = {}
     held, incoming = _state(current), _state(document)
     held_proof = held["witness"] if isinstance(held["witness"], dict) else {}
     incoming_proof = incoming["witness"] if isinstance(incoming["witness"], dict) else {}
