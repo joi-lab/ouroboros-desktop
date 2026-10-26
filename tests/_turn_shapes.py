@@ -177,7 +177,8 @@ def steady_state(root: pathlib.Path) -> Dict[str, Any]:
     """A long-lived install between the owner's turns: the maintenance child has run the jobs it owed since the
     chronicle became active (``memory_tail`` stores the facts of the rows after the frontier, so a capture reads
     them and only the rows appended since, not every row live), and the boot has observed the OpenRouter
-    catalogue (``boot_catalogue``). An install that does not reach it fails the driver: no law reads a fill."""
+    catalogue (``boot_catalogue``) and listed ``archive/`` for the logs a first owner turn reads
+    (``boot_listings``). An install that does not reach it fails the driver: no law reads a fill."""
     from ouroboros import maintenance
     from ouroboros.chronicle_store import ChronicleStore
 
@@ -189,7 +190,20 @@ def steady_state(root: pathlib.Path) -> Dict[str, Any]:
     tail, due = ChronicleStore(root).tail_state() or {}, maintenance.due(root)
     if not tail.get("complete") or due:
         raise RuntimeError(f"the install did not reach its steady state: tail {tail}, still due {due}, ran {jobs}")
-    return {"child_jobs": jobs, "catalogue": boot_catalogue()}
+    return {"child_jobs": jobs, "catalogue": boot_catalogue(), "listings": boot_listings(root)}
+
+
+def boot_listings(root: pathlib.Path) -> Dict[str, Any]:
+    """The boot's archive listing, through production (``server_boot.remember_log_listings``), its thread
+    finished, as it has long before an owner's first message: the turns read the tools and events archives
+    from the listing it remembers (``jsonl_tail.remembered_listing``)."""
+    from ouroboros import jsonl_tail, server_boot
+
+    server_boot.remember_log_listings(root).join()
+    remembered = sorted(prefix for _dev, _ino, prefix in jsonl_tail._LISTINGS)
+    if not {"events", "tools"} <= set(remembered):
+        raise RuntimeError(f"the boot's archive listing did not land: {remembered}")
+    return {"remembered": remembered}
 
 
 def boot_catalogue() -> Dict[str, Any]:

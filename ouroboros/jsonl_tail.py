@@ -163,30 +163,33 @@ def archive_segments(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optio
     return sorted(found, key=lambda p: p.name, reverse=True)
 
 
-_LISTINGS: Dict[tuple, tuple] = {}  # (archive dir, prefix) -> (key, newest-first segments): one per log in use
+# (archive/'s device and inode, prefix) -> (key, newest-first segment names): one per log in use
+_LISTINGS: Dict[tuple, tuple] = {}
 
 
 def remembered_listing(live: pathlib.Path) -> Callable[..., list]:
     """``archive_segments`` for LIVE's log (``list_archives``' signature), listed again only when it
     may have changed: its rotation, the one writer of its archive names, gives LIVE a new inode, and
     an entry added or removed moves ``archive/``'s mtime. A listing that met a gap, or a directory
-    changed within a clock tick (``utils._RACY_NS``), is never reused."""
+    changed within a clock tick (``utils._RACY_NS``), is never reused. The directory is known by its
+    identity, however a caller spells its path (the boot remembers it for the turns)."""
     def listing(archive_dir: pathlib.Path, archive_prefix: str, gaps: Optional[set] = None) -> list:
-        started = time.time_ns()
+        started, name, held = time.time_ns(), None, None
         try:
             live_stat, directory = os.stat(live), os.stat(archive_dir)
             key = (live_stat.st_dev, live_stat.st_ino, directory.st_mtime_ns)
+            name = (directory.st_dev, directory.st_ino, archive_prefix)
+            held = _LISTINGS.get(name)
         except OSError:
             key = None
-        name, found = (str(archive_dir), archive_prefix), set()
-        held = _LISTINGS.get(name)
         if key is not None and held is not None and held[0] == key:
-            return list(held[1])
+            return [pathlib.Path(archive_dir) / segment for segment in held[1]]
+        found: set = set()
         segments = archive_segments(archive_dir, archive_prefix, found)
         if gaps is not None:
             gaps.update(found)
         if key is not None and not found and key[2] < started - utils._RACY_NS:
-            _LISTINGS[name] = (key, tuple(segments))
+            _LISTINGS[name] = (key, tuple(segment.name for segment in segments))
         return segments
 
     return listing

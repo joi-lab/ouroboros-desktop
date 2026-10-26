@@ -124,3 +124,24 @@ def test_only_the_archives_a_read_can_consult_are_kept(logs, monkeypatch):
     kept = jsonl_tail._ARCHIVE_TASKS[str(memory.logs_path("events.jsonl"))]
     assert sorted(pathlib.Path(path).name for path in kept) == [
         "events_20261003T000000.jsonl", "events_20261004T000000.jsonl", "events_20261005T000000.jsonl"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a symlinked data root spelling; Windows needs a privilege for it")
+def test_the_boots_listing_spares_the_first_owner_turn_its_archive_listing(logs, monkeypatch):
+    """The boot lists archive/ once for the logs a turn's recent sections read (server_boot.remember_log_listings);
+    the process's first owner turn then lists nothing, whichever spelling of the data root each of them uses."""
+    from ouroboros import server_boot
+
+    monkeypatch.setattr(utils, "_RACY_NS", 0)
+    _write(logs / "logs" / "tools.jsonl", [{"task_id": "other", "tool": "read_file"}])
+    _write(logs / "archive" / "tools_20261001T000000.jsonl", [{"task_id": "other", "tool": "read_file"}])
+    from ouroboros import dialogue_store
+
+    dialogue_store.ensure(logs)  # an installed root: its dialogue imported, as the turns find it
+    alias = logs.parent / "data-alias"
+    alias.symlink_to(logs, target_is_directory=True)
+    server_boot.remember_log_listings(alias).join()  # the boot's listing, off its steps
+    listed = _listings(monkeypatch, logs)
+
+    sections = Memory(drive_root=logs).recent_activity_sections("fresh-task")
+    assert listed == [] and sections == []

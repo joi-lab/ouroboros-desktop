@@ -31,13 +31,6 @@ TURN_GAPS: Dict[Tuple[str, str], Tuple[str, Dict[str, int]]] = {
         "folded_members: json_loads +841, json_chars +3.2 MB). No remover in this update: a capture that reads "
         "what its view shows (its rooms' records, their open rows, counts kept per room) is lane A's to design.",
         {"json_loads": 843, "json_chars": 7172359, "vm_steps": 93840}),
-    ("L2", "T:main"): (
-        "The process's first owner turn, k=1 -> k=30: Memory.read_task_recent lists archive/ for each rotated "
-        "log the turn reads, events and tools, to find their three newest segments (jsonl_tail.archive_segments: "
-        "dir_entries +406, 203 entries each at k=30); jsonl_tail.remembered_listing keeps each listing until that "
-        "log rotates, so the turns after it list nothing. No remover in this update: the listing is the archive's "
-        "only index of segment names (the boot could take it off the turn, as it observes the catalogue).",
-        {"dir_entries": 408}),
     ("L3", "T:main:broad"): (
         "40 live rooms with story and 10 running roots (k=1): the turn's capture stores the facts of the 200 "
         "rows the step added, one INSERT execution each (memory_inventory._read_tail -> ChronicleStore."

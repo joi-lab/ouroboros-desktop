@@ -64,7 +64,7 @@ Boundaries (tags in the output):
   40 old rescue snapshots (the turn after ``T:main:archive:first``, which meets them first). The
   history they must not reread is laid after the import, untagged, and the install brought to the
   steady state its maintenance child and its boot keep (the stored tail facts, the recorded OpenRouter
-  catalogue; tests/_turn_shapes.py).
+  catalogue, the archive listing; tests/_turn_shapes.py).
 """
 
 from __future__ import annotations

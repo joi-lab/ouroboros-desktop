@@ -41,6 +41,18 @@ def reconcile_projects(root: pathlib.Path) -> None:
     reconcile(root)
 
 
+def remember_log_listings(root: pathlib.Path) -> threading.Thread:
+    """The archive listing a process's first owner turn would make for its task's recent tools and
+    events, made once off the turn, so that turn starts from it (``Memory.remember_log_listings``).
+    It grows with the archive, so a daemon thread makes it, off the steps readiness waits for, as the
+    catalogue is observed; a turn that comes first lists for itself."""
+    from ouroboros.memory import Memory
+
+    thread = threading.Thread(target=Memory(root).remember_log_listings, daemon=True, name="log-listings")
+    thread.start()
+    return thread
+
+
 def start_background_services(settings: dict, *, local_model: bool, boot_managed_update: Callable[[], Any],
                               warm_daemon: bool) -> None:
     """P2: finalize a pending managed merge update (post-boot smoke / boot-loop rollback) and run a

@@ -1230,6 +1230,7 @@ async def lifespan(app):
         ("usage_store", _usage_store),
         ("skills", lambda: live and server_boot.seed_skills(lifespan_drive_root, settings, provider_ready=startup_provider_ready)),
         ("projects", lambda: live and server_boot.reconcile_projects(lifespan_drive_root)),
+        ("log_listings", lambda: live and server_boot.remember_log_listings(lifespan_drive_root)),
         ("services", lambda: server_boot.start_background_services(
             settings, local_model=has_local, boot_managed_update=_boot_managed_update_tasks, warm_daemon=live)),
         ("host_service", lambda: server_boot.on_loop(_event_loop, server_boot.serve_host_service(lifespan_drive_root, boot))),
