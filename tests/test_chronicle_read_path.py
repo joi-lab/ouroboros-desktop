@@ -1,8 +1,12 @@
 """Chronicle reads: lock-free while the index is current, the publisher's locked catch-up otherwise."""
+import contextlib
 import json
+from types import SimpleNamespace
 
-from ouroboros import chronicle_store
-from ouroboros.chronicle_store import ChronicleStore
+import pytest
+
+from ouroboros import chronicle_store, memory_inventory
+from ouroboros.chronicle_store import ChronicleStore, source_time_span
 
 MIND = {"kind": "mind", "task_id": "t1", "focus": {"role": "root", "task_id": "t1"}}
 
@@ -73,6 +77,7 @@ def test_a_publication_between_two_reads_is_visible_to_the_second(tmp_path):
 
 LIGHT = {"kind": "helper", "route": "configured-light"}
 LEGACY = {"kind": "legacy_helper", "writer": "old_consolidator"}
+SOURCE = {"store": [7, 7], "frontier": 0}  # what the stored tail facts below were projected from
 
 
 def _page(store, *refs, at, author=MIND, **kwargs):
@@ -115,7 +120,28 @@ def _every_kind(store):
         stream.write('{"kind": "transaction", "records": [\n')  # a torn transaction: an addressed journal gap
     assert store.publish([], scan_state={"probe": {"k": 1}}).ok
     store.mark({"kind": "task", "task_id": "t1"}, "the room's newest record", MIND, room_id="r")  # not a head kind
+    _helper_parts(store)
+    rows = [[0, 0, "a" * 64, None, {"type": "x"}, None], [1, 5, "b" * 64, [3, 4], {"type": "task_summary"}, "done"],
+            [2, 9, "c" * 64, None, {"direction": "out"}, ""]]
+    assert store.extend_tail(None, rows, {"source": SOURCE, "upper": 10, "anchor": [9, "c" * 64], "complete": True})
     return nested
+
+
+def _helper_parts(store):
+    """Room s: dated pages, and a helper's part that acts, one the mind rejected and a candidate (``_status``)."""
+    pages = []
+    for n in range(3):
+        covers = {"rows": [f"s{n}"], "stream_span": [n, n], "ts_span": {"start": f"2026-09-0{n + 1}T00:00:00+00:00",
+                                                                       "end": f"2026-09-0{n + 1}T01:00:00+00:00"}}
+        page = store.publish_page(room_id="s", text=f"page of s over s{n}", author=LIGHT if n else MIND, covers=covers)
+        assert page.ok, page
+        pages.append(page.record["id"])
+    for n, metadata in ((0, {}), (1, {}), (2, {"candidate": True})):
+        part = store.publish_part(room_id="s", text=f"part over s{n}", member_ids=[pages[n]], author=LIGHT,
+                                  expected_sequence=store.room_head("s"), metadata=metadata)
+        assert part.ok, part
+        if n == 1:
+            assert store.decide(part.record["id"], False, MIND, "not this one").ok
 
 
 def _readers(store, nested):
@@ -127,7 +153,11 @@ def _readers(store, nested):
             store.folded_members(nested), store.sealed_row_refs("r"), store.sealed_row_refs("x"),
             store.legacy_pointer_rows(), store.active_marks(None), store.active_marks("r"),
             store.active_marks("r", include_global=False), store.active_marks("x"), store.scan_state(),
-            store.activation(), store.room_head("r"), store.room_head("s"), store.room_head("x"), store.journal_size())
+            store.activation(), store.room_head("r"), store.room_head("s"), store.room_head("x"), store.journal_size(),
+            store.room_records(None), store.room_records(None, kinds=("note",)),
+            store.room_records("r", kinds=("legacy",)), store.acting_pages(), store.acting_pages("s"),
+            store.acting_pages("x"), store.acting_parts(), store.tail_state(), store.tail_facts(SOURCE),
+            store.tail_facts(SOURCE, terminal_only=True), store.tail_facts({"store": [0], "frontier": 0}))
 
 
 def test_every_reader_inside_a_capture_answers_as_the_index_and_enters_it_once(tmp_path, monkeypatch):
@@ -141,6 +171,57 @@ def test_every_reader_inside_a_capture_answers_as_the_index_and_enters_it_once(t
         inside = _readers(store, nested)
     assert entered == [1]  # the capture's own read; its readers ask the snapshot
     assert inside == outside
+
+
+@pytest.mark.parametrize("scope, held, entered", [("terminal", [1, 2], 3), ("none", [], 4)])
+def test_a_capture_holds_the_tail_rows_its_view_reads_and_answers_every_reader_as_the_index(
+        tmp_path, monkeypatch, scope, held, entered):
+    store = ChronicleStore(tmp_path)
+    nested = _every_kind(store)
+    outside = _readers(store, nested)
+    assert outside[-3][1] and outside[-2][1] and outside[-1] is None  # the readers ask the stored tail facts
+    count, real = [], ChronicleStore._index
+    monkeypatch.setattr(ChronicleStore, "_index", lambda self: count.append(1) or real(self))
+    with chronicle_store.capture(tmp_path, tail=scope):
+        assert [row[0] for row in store._pinned().tail_rows] == held  # the rows its view reads, no more
+        inside = _readers(store, nested)
+    assert inside == outside and len(count) == entered  # each tail read it does not hold asks the index
+
+
+def _counts_from_bodies(store):
+    """The reference: every room's acting pages and parts read whole, as the counts were read before."""
+    counts = {"pages_by_me": 0, "latest_by_me": "", "helper_pages": 0, "parts": 0}
+    for room in sorted({str(record["room_id"]) for record in store.records(kinds=("page", "part"))}):
+        for record in store.pages_of_room(room):
+            if record["kind"] == "part":
+                counts["parts"] += 1
+            elif (record.get("author") or {}).get("kind") == "mind":
+                counts["pages_by_me"] += 1
+                counts["latest_by_me"] = max(counts["latest_by_me"], str(record.get("ts") or "")[:10])
+            else:
+                counts["helper_pages"] += 1
+    return counts
+
+
+def test_the_story_counts_and_a_room_s_pages_are_counted_in_the_index_without_reading_a_body(tmp_path, monkeypatch):
+    store = ChronicleStore(tmp_path)
+    _every_kind(store)
+    expected, rooms = _counts_from_bodies(store), {}
+    for room in ("r", "s", "x"):
+        pages = [record for record in store.pages_of_room(room) if record["kind"] == "page"]
+        ends = [end for record in pages if (end := (record["covers"].get("ts_span") or {}).get("end"))]
+        rooms[room] = (len(pages), str(source_time_span(ends).get("end") or "") if ends else "")
+    assert expected["helper_pages"] and expected["parts"] == 4 and rooms["s"] == (3, "2026-09-03T01:00:00+00:00")
+    parsed, real = [], json.loads
+    monkeypatch.setattr(chronicle_store, "json", SimpleNamespace(dumps=json.dumps,
+                                                                 loads=lambda text: parsed.append(text) or real(text)))
+    for held in (contextlib.nullcontext, lambda: chronicle_store.capture(tmp_path)):
+        with held():
+            parsed.clear()
+            assert memory_inventory.story_counts(store) == expected
+            assert {room: (facts["pages"], facts["last_covered"]) for room in rooms
+                    for facts in [memory_inventory.room_facts(store, room, [], {}, 0)]} == rooms
+        assert not [text for text in parsed if " over " in text]  # no page or part read whole
 
 
 def test_a_capture_reads_one_state_and_holds_no_read_transaction_while_its_readers_run(tmp_path):

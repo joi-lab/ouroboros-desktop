@@ -229,6 +229,39 @@ def test_after_the_index_is_lost_a_view_reads_live_until_the_job_refills_it(tmp_
     assert "memory_tail" not in maintenance.due(tmp_path)
 
 
+def test_each_focus_holds_in_its_one_capture_the_stored_rows_its_view_shows(tmp_path, monkeypatch):
+    """A view with live rooms holds every stored row (their open rows); one without them, the terminal rows its
+    pages link (presence, a child, a nanny's own room): the view it would read holding every row, with the
+    chronicle entered twice (activation and the capture), never again for a row the capture lacks."""
+    from ouroboros import chronicle_store, memory_view as mv
+
+    rooms = shared.world(tmp_path)
+    assert _fill(tmp_path)["state"] == "done"
+    writer = {"kind": "mind", "task_id": "t2", "focus": {"role": "root", "task_id": "t2"}}
+    sealed = next(address for address, _meta, pos in mi.open_room_rows(tmp_path, "1") if pos == 11)
+    page = ChronicleStore(tmp_path).publish_page(room_id="1", text="t2's page", author=writer,
+                                                 covers={"rows": [sealed["row_sha256"]], "stream_span": [11, 11]})
+    assert page.ok, page  # its writer's later terminal row (16) stands under it
+    held, init = [], chronicle_store._Snapshot.__init__
+    monkeypatch.setattr(chronicle_store._Snapshot, "__init__", lambda self, texts, scope: init(self, texts, scope)
+                        or held.append((scope, [row[0] for row in self.tail_rows])))
+    entered, index = [], ChronicleStore._index
+    monkeypatch.setattr(ChronicleStore, "_index", lambda self: entered.append(1) or index(self))
+    task, scoped = {"id": "turn0001", "chat_id": 1}, mv.capture
+    for role, room, scope in (("integrator", "1", "all"), ("presence", "1", "terminal"),
+                              ("child", str(rooms["alpha"]), "terminal"), ("nanny", "1", "terminal")):
+        spec = dataclasses.replace(mv.ROLE_DEFAULTS[role], room_id=room)
+        monkeypatch.setattr(mv, "capture", scoped)
+        held.clear()
+        entered.clear()
+        view = mv.capture_memory_view(tmp_path, task, spec)
+        assert held == [(scope, list(range(10, 20)) if scope == "all" else [16])] and len(entered) == 2, role
+        monkeypatch.setattr(mv, "capture", lambda root, tail: chronicle_store.capture(root, tail="all"))
+        assert mv.capture_memory_view(tmp_path, task, spec) == view, role
+        assert any(entry.get("terminal_links") for entry in [*view.story, *(view.room or {}).get("under_parts", ())]
+                   ) or not spec.story, role
+
+
 def test_a_place_arrival_whose_source_pointer_lands_after_it_was_stored_reads_as_live(tmp_path):
     from ouroboros.place_arrivals import SourceProjection
 

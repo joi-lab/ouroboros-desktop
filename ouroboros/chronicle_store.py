@@ -310,11 +310,34 @@ class _IndexLookups:
                                % ",".join("?" * len(HEAD_KINDS)), (str(room), *HEAD_KINDS)).fetchone()[0]
 
     def tail(self, terminal_only=False):
-        sql = _TAIL_SQL + (" WHERE terminal IS NOT NULL" if terminal_only else "")
+        sql = _TAIL_SQL + (_TERMINAL if terminal_only else "")
         return sorted(json.loads(self.db.execute(sql).fetchone()[0] or "[]"))
+
+    def acting_pages(self, room=None):
+        """``[sequence, room, id, author kind, ts, covered end]`` of the acting pages (one room's), in order."""
+        sql, args = (_ACTING_PAGES, ()) if room is None else (_ACTING_PAGES + " AND room=?", (str(room),))
+        return sorted(json.loads(self.db.execute(sql, args).fetchone()[0] or "[]"))
+
+    def acting_parts(self):
+        """``[id, author kind, metadata.candidate]`` of the parts that fold their members."""
+        return json.loads(self.db.execute(_ACTING_PARTS).fetchone()[0] or "[]")
+
+    def members_of(self, record_id):
+        """A part's member ids (its ``covers.member_ids``), read without its body; none for any other record."""
+        row = self.db.execute("SELECT json_extract(body,'$.covers.member_ids') FROM records WHERE id=? AND kind='part'",
+                              (str(record_id),)).fetchone()
+        return [str(member) for member in json.loads(row[0] or "[]")] if row else []
 
 
 _TAIL_SQL = "SELECT json_group_array(json_array(pos,seq,row_sha256,json(legacy),json(meta),terminal)) FROM tail_rows"
+_TERMINAL = " WHERE terminal IS NOT NULL"
+# The acting pages are those whose rows a seal holds (``page_rows``: a final page, a draft not rejected, an adopted
+# candidate); the parts that fold (``folded``) act unless ``_status`` names them a candidate. No body is read whole.
+_ACTING_PAGES = ("SELECT json_group_array(json_array(sequence,room,id,json_extract(body,'$.author.kind'),"
+                 "json_extract(body,'$.ts'),json_extract(body,'$.covers.ts_span.end'))) FROM records "
+                 "WHERE kind='page' AND EXISTS (SELECT 1 FROM page_rows WHERE page_id=records.id)")
+_ACTING_PARTS = ("SELECT json_group_array(json_array(id,json_extract(body,'$.author.kind'),"
+                 "body->'$.metadata.candidate')) FROM records WHERE id IN (SELECT part_id FROM folded)")
 # A chunk of tail rows in ONE statement (one step), as a page is read: [pos, seq, sha, legacy text, meta text, terminal].
 _TAIL_INSERT = ("INSERT OR IGNORE INTO tail_rows SELECT json_extract(value,'$[0]'), json_extract(value,'$[1]'), "
                 "json_extract(value,'$[2]'), json_extract(value,'$[3]'), json_extract(value,'$[4]'), "
@@ -324,16 +347,21 @@ _SNAPSHOT_SQL = ("SELECT json_group_array(json_array(sequence,id,kind,room,targe
                  "SELECT json_group_array(json_array(member_id,part_id)) FROM folded",
                  "SELECT json_group_array(json_array(room,row_ref)) FROM page_rows",
                  "SELECT json_group_array(json_array(sequence,room,scope,body)) FROM active_marks",
-                 "SELECT json_group_array(json_array(key,value)) FROM state", _TAIL_SQL)
+                 "SELECT json_group_array(json_array(key,value)) FROM state", _ACTING_PAGES, _ACTING_PARTS)
+_TAIL_SCOPES = {"all": (_TAIL_SQL,), "terminal": (_TAIL_SQL + _TERMINAL,), "none": ()}
 
 
 class _Snapshot:
     """``_IndexLookups`` answered from one state of the index (``_SNAPSHOT_SQL``, parsed after its read
     transaction closed): the same filters and order and no statement. Each record handed out is parsed
-    anew from its stored text, as the index returns it; ``memo`` holds facts one capture derives once."""
+    anew from its stored text, as the index returns it; ``memo`` holds facts one capture derives once.
+    Of the stored tail facts it holds what its view reads (``tail_scope``)."""
 
-    def __init__(self, texts):
-        records, folded, sealed, marks, state, tail = (json.loads(text or "[]") for text in texts)
+    def __init__(self, texts, tail_scope):
+        records, folded, sealed, marks, state, acting, self.parts, *tail = (json.loads(text or "[]") for text in texts)
+        self.acting, self.tail_scope, self.acting_by_room = sorted(acting), tail_scope, {}
+        for row in self.acting:
+            self.acting_by_room.setdefault(row[1], []).append(row)
         self.records = sorted(records)  # [sequence, id, kind, room, target, body] by sequence
         self.by_id = {row[1]: row for row in self.records}
         self.by_room: Dict[str, List[Any]] = {}
@@ -347,8 +375,8 @@ class _Snapshot:
             self.page_rows.setdefault(room, set()).add(ref)
         self.active = sorted(marks)
         self.values = dict(state)
-        self.tail_rows = sorted(tail)  # [pos, seq, row_sha256, legacy, meta, terminal] by position
-        self.memo: Dict[str, Any] = {}
+        self.tail_rows = sorted(tail[0]) if tail else []  # [pos, seq, row_sha256, legacy, meta, terminal] by position
+        self.memo: Dict[str, Any] = {"tail_scope": tail_scope}
 
     def get(self, record_id):
         row = self.by_id.get(str(record_id))
@@ -377,8 +405,22 @@ class _Snapshot:
     def head(self, room):
         return max((row[0] for row in self.by_room.get(str(room), ()) if row[2] in HEAD_KINDS), default=0)
 
+    def holds_tail(self, terminal_only):
+        return self.tail_scope == "all" or terminal_only and self.tail_scope == "terminal"
+
     def tail(self, terminal_only=False):
         return [list(row) for row in self.tail_rows if not terminal_only or row[5] is not None]
+
+    def acting_pages(self, room=None):
+        return [list(row) for row in (self.acting if room is None else self.acting_by_room.get(str(room), ()))]
+
+    def acting_parts(self):
+        return [list(row) for row in self.parts]
+
+    def members_of(self, record_id):
+        row = self.by_id.get(str(record_id))
+        covers = json.loads(row[5]).get("covers") if row and row[2] == "part" else None
+        return [str(member) for member in covers.get("member_ids") or ()] if isinstance(covers, dict) else []
 
 
 def _lookups(db):
@@ -389,21 +431,23 @@ _CAPTURE: ContextVar[Optional[Tuple[str, _Snapshot]]] = ContextVar("chronicle_ca
 
 
 @contextmanager
-def capture(data_root: Any):
+def capture(data_root: Any, *, tail: str = "all"):
     """One state of this installation's chronicle for every reader inside the block (one capture).
 
     The index is read once (``_SNAPSHOT_SQL`` in one read transaction, closed before any reader runs, so a
     publisher never waits on a capture) and pinned for the block; inside a capture of the same chronicle
-    this is that capture. It yields the facts its readers derive once (``capture_memo``); without a journal
-    nothing is pinned and it yields None. A publication inside the block is not seen by its readers.
+    this is that capture. Of the stored tail facts it reads what its view reads (``tail``: every row,
+    ``"terminal"`` rows or ``"none"``); a reader asking for more reads the index. It yields the facts its
+    readers derive once (``capture_memo``); without a journal nothing is pinned and it yields None. A
+    publication inside the block is not seen by its readers.
     """
     store = ChronicleStore(data_root)
     if (pinned := store._pinned()) is not None or not store.log_path.exists():
         yield None if pinned is None else pinned.memo
         return
     with store._index() as db:
-        texts = [db.execute(sql).fetchone()[0] for sql in _SNAPSHOT_SQL]
-    snapshot = _Snapshot(texts)
+        texts = [db.execute(sql).fetchone()[0] for sql in (*_SNAPSHOT_SQL, *_TAIL_SCOPES[tail])]
+    snapshot = _Snapshot(texts, tail)
     token = _CAPTURE.set((str(store.index_path), snapshot))
     try:
         yield snapshot.memo
@@ -411,13 +455,12 @@ def capture(data_root: Any):
         _CAPTURE.reset(token)
 
 
-def capture_memo(data_root: Any, key: str, compute: Callable[[], Any], *,
-                 outside: Optional[Callable[[], Any]] = None) -> Any:
+def capture_memo(data_root: Any, key: str, compute: Callable[[], Any]) -> Any:
     """``compute()`` once per capture of this chronicle, so its readers share one answer; outside a capture,
-    each call computes (``outside``, when given: a narrower answer for one reader)."""
+    each call computes."""
     snapshot = ChronicleStore(data_root)._pinned()
     if snapshot is None:
-        return (outside or compute)()
+        return compute()
     if key not in snapshot.memo:
         snapshot.memo[key] = compute()
     return snapshot.memo[key]
@@ -1233,7 +1276,8 @@ class ChronicleStore:
         terminal status: ``terminal_only``), when they were projected from ``source`` (``memory_inventory`` names
         the dialogue store and frontier, projects the rows and checks the state's ``anchor``); rows
         ``[pos, seq, row_sha256, legacy, meta, terminal]`` by position."""
-        with self._reading() as look:
+        snapshot = self._pinned()  # a capture that holds less of the tail than asked leaves it to the index
+        with self._reading(pinned=snapshot is not None and snapshot.holds_tail(terminal_only)) as look:
             state = look.state("tail")
             return ((state, look.tail(terminal_only)) if isinstance(state, dict) and state.get("source") == source
                     else None)
@@ -1267,9 +1311,9 @@ class ChronicleStore:
     # --- reads -------------------------------------------------------------------------------------
 
     @contextmanager
-    def _reading(self):
+    def _reading(self, *, pinned: bool = True):
         """A reader's lookups: the pinned capture's snapshot, else the index on its read path (``_index``)."""
-        snapshot = self._pinned()
+        snapshot = self._pinned() if pinned else None
         if snapshot is not None:
             yield snapshot
             return
@@ -1307,14 +1351,16 @@ class ChronicleStore:
             return [{**json.loads(body), "sequence": seq}
                     for seq, body in look.rows(room_id, tuple(kinds or ()), after_seq)]
 
-    def room_records(self, room_id: Any, *, after_seq: int = 0) -> List[Dict[str, Any]]:
-        """A room's pages, parts, accounts, notes, legacy sections and gaps, without rejected drafts.
+    def room_records(self, room_id: Any, *, after_seq: int = 0,
+                     kinds: Iterable[str] = STORY_KINDS) -> List[Dict[str, Any]]:
+        """A room's (``None``: every room's) pages, parts, accounts, notes, legacy sections and gaps (of ``kinds``),
+        without rejected drafts and candidates, in publication order.
 
         Each is interpreted (``_interpret``): ``current_text`` with the mind's corrections under
         the original, ``revision``, ``corrections``, ``status`` for pages and parts and ``folded_into``.
         """
         with self._reading() as look:
-            rows = [{**json.loads(body), "sequence": seq} for seq, body in look.rows(room_id, STORY_KINDS, after_seq)]
+            rows = [{**json.loads(body), "sequence": seq} for seq, body in look.rows(room_id, tuple(kinds), after_seq)]
             return [r for r in (self._interpret(look, row) for row in rows) if r.get("status") not in ("rejected", "candidate")]
 
     def pages_of_room(self, room_id: Any) -> List[Dict[str, Any]]:
@@ -1348,16 +1394,28 @@ class ChronicleStore:
                     for seq, body in look.rows(None, ("account",))]
 
     def folded_members(self, part_id: Any) -> List[str]:
-        """Every record under a part through nested parts: its own members first, then theirs."""
+        """Every record under a part through nested parts: its own members first, then theirs (no member read whole)."""
         with self._reading() as look:
             out, todo = [], [str(part_id)]
             while todo:
-                part = look.get(todo.pop(0)) or {}
-                covers = part.get("covers") if part.get("kind") == "part" and isinstance(part.get("covers"), dict) else {}
-                members = [str(member) for member in covers.get("member_ids") or ()]
+                members = look.members_of(todo.pop(0))
                 out += members
                 todo += members
             return out
+
+    def acting_pages(self, room_id: Any = None) -> List[Dict[str, Any]]:
+        """The acting pages (one room's), in publication order: those whose rows a seal holds, folded ones too,
+        with their author's kind, publication time and covered period's end, and no body read whole."""
+        with self._reading() as look:
+            return [{"room_id": room, "id": ident, "author_kind": kind, "ts": ts, "covered_end": end}
+                    for _seq, room, ident, kind, ts, end in look.acting_pages(room_id)]
+
+    def acting_parts(self) -> int:
+        """How many parts act (fold their members, and no pending candidate): every room's, folded ones too."""
+        with self._reading() as look:
+            return sum(self._status(look, {"id": ident, "kind": "part", "author": {"kind": kind},
+                                           "metadata": {"candidate": candidate}}) not in ("rejected", "candidate")
+                       for ident, kind, candidate in look.acting_parts())
 
     def sealed_row_refs(self, room_id: Any) -> set:
         """Row refs (``row_sha256`` and ``note:<id>``) the room's acting pages seal; the rest is open."""
