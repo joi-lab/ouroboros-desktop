@@ -159,6 +159,27 @@ def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
     assert "note (owner): Watch releases." in text
 
 
+@pytest.mark.parametrize("captured", [True, False])
+def test_wake_identity_uses_its_own_root_not_configured_root(clock, monkeypatch, captured):
+    from ouroboros import places
+    from tests.test_place_arrivals import seed_identity_arrival
+
+    other_root = clock.root / "other-installation"
+    for root, label in [(clock.root, "Wake mailbox"), (other_root, "Other mailbox")]:
+        place = places.connect_place(root, place_id="mail", connector="bridge", provider="mail", account_id="account")
+        if root == other_root or captured:
+            seed_identity_arrival(root, place, {"sends_as": {"id": "writer", "label": label, "kind": "user"}})
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", other_root)
+    clock.root.joinpath("repo/prompts/CONSCIOUSNESS.md").write_text("Places: {places}", encoding="utf-8")
+
+    assert clock.clock.tick(clock.clock.next_wake_at) == "launched"
+    launch = clock.launches[-1]
+    for text in (launch["text"], launch["task"]["text"]):
+        assert ("writes as Wake mailbox" in text) is captured
+        assert "Other mailbox" not in text
+        assert ("writes as" in text) is captured
+
+
 def test_boot_floor_never_wakes_in_the_first_second(clock):
     """An overdue persisted next_wake_at is pushed past now + floor; a later one is kept."""
     assert clock.clock.next_wake_at == T0 + FLOOR

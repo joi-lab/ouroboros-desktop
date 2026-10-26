@@ -17,7 +17,7 @@ from tests.test_extension_icons import PLACE, SVG, staged_icon
 def connector(tmp_path, monkeypatch):
     skill, staged = staged_icon(tmp_path, entries=[{
         **PLACE, "label": "GitHub", "destination": "vendor:GitHub", "wakes": ["mention", "signal.words"],
-        "facts": ["mention", {"id": "signal.words", "label": "Words you chose appear"}],
+        "facts": [{"id": "mention", "label": "Mentions you"}, {"id": "signal.words", "label": "Words you chose appear"}],
         "source": {"route": "status", "refresh_s": 60}, "settings": "connection",
     }])
     monkeypatch.setattr("ouroboros.skill_loader.discover_skills", lambda _root: [skill])
@@ -209,3 +209,23 @@ def test_brief_view_reads_one_index_pass_and_keeps_words_when_the_store_is_busy(
     view = place_projection.place_view(tmp_path, place, allowance={}, brief=True)
     assert view["label"] == "Inbox" and view["notes"][0]["text"] == "Answer politely."
     assert view["rooms"] is None and view["unanswered"] is None and view["last_activity_at"] == ""
+
+
+@pytest.mark.parametrize("mode", ["off", "light", "full"])
+def test_owner_views_keep_manifest_labels_safety_and_accounts_without_identity(client, connector, monkeypatch, mode):
+    skill, _ = connector
+    monkeypatch.setattr("ouroboros.config.runtime_setting", lambda key, default='': mode if key == "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE" else default)
+    place = client.post("/api/places", json={"connector": skill.name, "account_id": "account"}).json()["place"]
+    assert place["safety_mode"] == mode
+    assert place["labels"] == {"mention": "Mentions you", "signal.words": "Words you chose appear"}
+    assert "identity" not in place and "can_confirm" not in place
+    path = "/api/places/" + place["place_id"]
+    confirmed = client.post(path, json={"confirm_owner_account": {"platform_actor_id": "writer"}}).json()["place"]
+    assert confirmed["owner_accounts"][0]["platform_actor_id"] == "writer"
+    response = client.get("/api/places").json()
+    assert response["places"][0]["owner_accounts"] == confirmed["owner_accounts"]
+    assert response["connectors"][0]["labels"] == place["labels"]
+    for row in response["places"] + response["connectors"]:
+        assert "identity" not in row and "can_confirm" not in row
+    revoked = client.post(path, json={"revoke_owner_account": "writer"}).json()["place"]
+    assert revoked["owner_accounts"] == []

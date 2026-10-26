@@ -307,7 +307,7 @@ def test_new_host_payload_captures_before_attention(focus, monkeypatch, state, f
         assert len(rows) == 1 and rows[0].row["text"] == event.text
         calls.append(kw)
         return SimpleNamespace(outcome="message", text="Hello", task_id="focus", work_ref="")
-    body = {"event": {k: v for k, v in event.__dict__.items() if k not in {"delivery_reporting_version", "continuation_version"}}}
+    body = {"event": {k: v for k, v in event.__dict__.items() if k not in {"delivery_reporting_version", "continuation_version", "identity"}}}
     body["event"]["facts"] = facts
     with TestClient(host_service.create_host_service_app(root, presence_runner=run)) as client:
         response = client.post("/presence/turn", json=body)
@@ -345,7 +345,7 @@ def test_off_retry_keeps_unknown_attempt_custody(focus, monkeypatch):
         raise AssertionError("an unknown attempt must not generate again")
     def run(**kw):
         return run_presence_turn(repo_dir=root, drive_root=root, agent_factory=factory, **kw)
-    body = {"event": {k: v for k, v in event.__dict__.items() if k not in {"delivery_reporting_version", "continuation_version"}}}
+    body = {"event": {k: v for k, v in event.__dict__.items() if k not in {"delivery_reporting_version", "continuation_version", "identity"}}}
     with TestClient(host_service.create_host_service_app(root, presence_runner=run)) as client:
         response = client.post("/presence/turn", json=body)
     assert response.status_code == 409

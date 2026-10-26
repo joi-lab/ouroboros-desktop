@@ -386,7 +386,7 @@ def test_continue_carries_the_stored_model_role_never_the_resolved_route(tmp_pat
     assert load_task_result(tmp_path, successor)["metadata"].get("model_role", "") == carried
     # The dispatcher resolves the carried role against the CURRENT slot setting at start.
     slot = {MODEL_ROLE_SETTINGS["consciousness"]: "provider/current-slot-model"}
-    monkeypatch.setattr("ouroboros.agent_dispatch.runtime_setting", lambda key, default="": slot.get(key, default))
+    monkeypatch.setattr("ouroboros.route_choice.runtime_setting", lambda key, default="": slot.get(key, default))
     assert model_role_slot_override(row["metadata"]) == (("provider/current-slot-model", False) if carried else None)
 
 
