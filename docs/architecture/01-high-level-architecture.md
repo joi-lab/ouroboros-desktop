@@ -313,7 +313,7 @@ ouroboros/ — agent core and shared runtime (§6)
   desktop_autostart.py, windows_autostart.py — Host sign-in adapter table: Windows registry, macOS LaunchAgent, Linux systemd/XDG state (Runtime topology below)
   plan_intention_ledger.py — An ask's `intention` review-ledger record; never a verdict
   plan_record.py — Per-task plan record (schema 3): revisions, asks, typed replies, folds, legacy import (§6 Plan construction and review)
-  provider_models.py — Model-ID helpers; `ACTIVE_MODEL_SETTING_KEYS` / `LEGACY_MODEL_SETTING_KEYS` keeps Heavy out of live route selection
+  provider_models.py, provider_connections.py — Kind table, route grammar, connection rows (§7); model-ID helpers; `ACTIVE_MODEL_SETTING_KEYS` keeps Heavy out of route selection
   runtime_mode_policy.py — Protected-path policy (§6 Safety and runtime mode)
   schedule_contract.py — Schedule id, 5-field cron and IANA timezone validation SSOT
   post_task_evolution.py — Worker's durable promotion signal for the supervisor idle tick (§6 Background consciousness and Evolution)
@@ -422,12 +422,12 @@ ouroboros/ — agent core and shared runtime (§6)
     task_decision.py — The one `POST /api/decisions` ingress with family-parsed ids (`quiz:` here, `routing:` → routing_decision.py, `card:` → card_decision.py, `interaction:` reserved); writes `KIND_QUIZ_ANSWER` (owner_quiz.py; §11.1)
     cards.py, card_decision.py — `/api/cards/*` reads (apps as inert text) and pins; a press is recorded, then mailed as `KIND_CARD_INPUT` or sent as the owner's message
     task_model_wait.py — Shared model-wait decision effects over the existing mailbox, with live-owner/revision checks
-    routing_decision.py — Resolves a click on a persisted `needs_manual_target` card (no new ones are produced), recovers the original text, dispatches the internal steer/promote events, confirms through routing_wait receipts
+    routing_decision.py — Resolves a click on a persisted `needs_manual_target` card (none are produced): recovers the text, dispatches steer/promote, confirms via routing_wait receipts
     logs.py — Read-only runtime log tail; storage.py — Storage routes
     onboarding.py — `POST /api/onboarding/complete`, the one atomic onboarding write; a typed 503 persists nothing, except the unknown `settings_save_timeout` (order: §2)
     onboarding_host.py — Side-effect-free reads: the wizard page, its bootstrap JSON, one completion attempt
     owner_settings.py — Settings-lock-as-precondition and `CommitBoundary` (Gateway Boundary v1 below); owner_effort.py — the effort range
-    settings_secrets.py — Explicit single-secret Settings reads; passive Settings responses stay masked (§3 Settings and onboarding)
+    settings_secrets.py, secret_rows.py — Explicit single-secret reads; list-row secrets masked/rehydrated by row identity (§3)
     settings.py — /api/settings and /api/owner/*; `GET /api/review-pool` (`ReviewPoolResponse`); an unreadable catalog is a typed `config_error`, never a 500 (§7 Review pool)
     desktop_autostart.py — GET/POST /api/desktop/autostart and /api/desktop/background (§4)
     control.py — /api/reset, /api/command, /api/git/*, /api/update/*, /api/evolution-data
