@@ -426,6 +426,7 @@
  * @property {Object=} task_contract
  * @property {string=} reason_code
  * @property {Object=} cancel_origin The typed stop an owner-stopped turn's final carries (source, stop_policy).
+ * @property {string[]=} delegated_runs_unreconciled The row's current custody debt beside its cause (#1583).
  * @property {Object=} review_status
  * @property {Object=} review_projection
  *   Ledger additions: gaps[] ({record_id, review_gap}) names unavailable records;
