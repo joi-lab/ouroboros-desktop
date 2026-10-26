@@ -904,6 +904,8 @@ def test_every_settings_writer_routes_through_the_shared_prologue():
             "into authorship.",
         ("ouroboros/usage_journal.py", "legacy_snapshot"):
             "reads/hashes the settings file for the usage archive; its writes target the archive.",
+        ("ouroboros/query_data_sql.py", "run_sql"):
+            "forwards OUROBOROS_SETTINGS_PATH to its child; writes only the temporary SQL request, not settings.",
         ("ouroboros/review_run_isolation.py", "isolate_review_data"):
             "points the isolated review at the host settings (or the drive's unwritten default path) "
             "and hashes them for the integrity pin; its one write is the drive's isolation record "
