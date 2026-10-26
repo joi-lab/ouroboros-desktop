@@ -365,9 +365,11 @@ def test_rows_whose_only_task_identifier_is_subagent_task_id_are_found_by_the_ta
     with traced(monkeypatch) as counts:
         assert [row.seq for row in ds.probe_rows(tmp_path, "progress", [("subagent_task_id", "selected")])] == [alias.seq]
     details = plans(tmp_path, counts["statements"])
-    # The only scan allowed is over the probe's own value list (``json_each``), never the dialogue table.
+    # The only scans allowed are over the probe's own value list (``json_each``) and the coordinates it selected (a
+    # one-step page's subquery), never the dialogue table.
     assert any("dialogue_subagent" in detail for detail in details) and not any(
-        detail.startswith("SCAN") and "json_each" not in detail for detail in details), details
+        detail.startswith("SCAN") and "json_each" not in detail and not detail.startswith("SCAN (subquery")
+        for detail in details), details
 
 
 # ---- fact 5: room revision continuity ------------------------------------------------------------

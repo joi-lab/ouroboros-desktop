@@ -15,6 +15,7 @@ from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN, owner_stop_c
 from supervisor.queue import _request_finalization_grace as request_finalization_grace
 from tests.test_owner_stop_terminal_command import _press
 from tests.test_transport_death_retry import _LedgerLLM, _ledger, _loop_kwargs, _no_chain
+from tests._shared import saved_settings
 
 
 def _stop_during_unknown_wait(root, monkeypatch, button):
@@ -22,6 +23,7 @@ def _stop_during_unknown_wait(root, monkeypatch, button):
     write_task_result(root, "t-death", "running", chat_id=1, _is_direct_chat=True)
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     monkeypatch.delenv("USE_LOCAL_FALLBACK", raising=False)
+    saved_settings(monkeypatch, root, OUROBOROS_MODEL_FALLBACKS="")  # a saved blank: no chain
     monkeypatch.setattr(loop, "_run_cross_model_fallback_chain", _no_chain)
     llm = _LedgerLLM(root, lambda: httpx.ReadError("controlled post-dispatch failure"))
     kwargs = _loop_kwargs(root, llm, [])

@@ -3258,6 +3258,7 @@ def test_orphan_reconcile_does_not_use_a_stale_snapshot_as_death_proof(tmp_path,
 def test_request_restart_latches_reason_until_task_end(tmp_path, monkeypatch):
     from ouroboros.tools import control as control_module
     from ouroboros.tools import control_runtime
+    from tests.body_candidate_support import host_restart_ack
 
     from supervisor import evolution_lifecycle
 
@@ -3278,14 +3279,21 @@ def test_request_restart_latches_reason_until_task_end(tmp_path, monkeypatch):
         pending_restart_reason = None
         repo_dir = tmp_path
         drive_root = tmp_path
+        task_id = "restart-requester"  # one request per requester attempt
+        task_attempt = 1
 
         def drive_path(self, rel):
             return tmp_path / rel
 
     ctx = _Ctx()
+    sent = host_restart_ack(ctx, tmp_path)
     result = control_module._request_restart(ctx, "reload runtime")
 
     assert "Restart requested" in result
+    # Only the intent goes out now; the restart itself waits for this task's end.
+    [intent] = sent
+    assert (intent["type"], intent["phase"], intent["task_id"], intent["task_attempt"], intent["reason"]) == (
+        "restart_request", "intent", "restart-requester", 1, "reload runtime")
     assert ctx.pending_events == []
     assert ctx.pending_restart_reason == "reload runtime"
     assert written

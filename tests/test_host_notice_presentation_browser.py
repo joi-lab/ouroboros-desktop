@@ -103,6 +103,7 @@ def test_late_review_row_reads_in_words_and_downloads_its_record(direct_server_w
     from tests.ui_chat_viewport_smoke import (
         _CAPTURE_TEST_SOCKET, _OBSERVE_STATE_READS, _emit_ws_frame, _wait_socket_open_quiescent,
     )
+    from tests.ui_console_errors import PageErrors
 
     root = direct_server_with_data["data_dir"]
     url = direct_server_with_data["url"]
@@ -172,8 +173,7 @@ def test_late_review_row_reads_in_words_and_downloads_its_record(direct_server_w
             raise
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 900}, accept_downloads=True)
-            errors: list[str] = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
+            errors = PageErrors(page, engine)
             page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
             page.add_init_script(f"({_OBSERVE_STATE_READS})()")
             open_page(page)
@@ -295,7 +295,7 @@ def test_late_review_row_reads_in_words_and_downloads_its_record(direct_server_w
             cardless_replayed.screenshot(
                 path=str(evidence_dir / f"host-notice-cardless-replayed-{engine}.png"),
             )
-            assert not errors, errors
+            assert not errors.unexpected(), errors
         finally:
             browser.close()
 

@@ -581,10 +581,9 @@ def _write_precondition(expect_preset: bool, expect_safety_light: bool, read_fin
     """Re-prove eligibility INSIDE the settings lock, against the state this
     write is about to overwrite.
 
-    The re-read is ``load_settings_lock_held``: the settings lock is not
-    re-entrant, so the ordinary ``load_settings()`` would wait out its full 2s
-    timeout and then read anyway — two seconds added to every onboarding save
-    for a lock it already holds."""
+    The re-read is ``load_settings_lock_held``, the read for a holder of the
+    settings lock, which is not re-entrant: the lock-free ``load_settings()``
+    re-reads an undecodable document behind that lock, which this caller holds."""
     def _check() -> str:
         from ouroboros.config import SETTINGS_PATH, load_settings_lock_held
 
@@ -632,10 +631,10 @@ def _prepared_settings(
     from ouroboros.config import load_settings
     from ouroboros.onboarding_wizard import prepare_onboarding_settings
 
-    # Completion keeps the ordinary runtime loader (including its established
-    # one-shot compatibility migrations).  The read-only preview passes the
-    # existing pure owner-reader so merely rendering an unsaved draft can never
-    # persist unrelated compatibility state.
+    # Completion keeps the ordinary runtime loader (its one-shot compatibility
+    # migrations persisted just before, ``migrate=True``).  The read-only preview
+    # passes the existing pure owner-reader, which never applies them, so merely
+    # rendering an unsaved draft can never persist unrelated compatibility state.
     old_settings = dict(base_settings) if base_settings is not None else load_settings()
     error = roster_save_error(body.get(SUBAGENTS_SETTING), old_settings, body)  # twins: only a roster change is judged
     prepared, error = ({}, error) if error else prepare_onboarding_settings(body, old_settings)
@@ -862,7 +861,7 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
 
     # Complete startup migrations before capturing freshness; our own migration is not a concurrent edit.
     from ouroboros.config import load_settings
-    migration = await _run_settings_writer(lambda *_: load_settings(), request, None)
+    migration = await _run_settings_writer(lambda *_: load_settings(migrate=True), request, None)
     if isinstance(migration, JSONResponse):
         return migration
     # The fingerprint still precedes the deciding read: concurrent owner changes must refuse the save.

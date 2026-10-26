@@ -130,9 +130,10 @@ def test_provider_test_gateway_contract_shape_is_exact():
     request_hints = get_type_hints(ProviderTestRequest, include_extras=True)
     response_hints = get_type_hints(ProviderTestResponse, include_extras=True)
 
-    assert set(request_hints) == {"provider_id", "overrides"}
-    assert _notrequired_fields(ProviderTestRequest) == {"overrides"}
+    assert set(request_hints) == {"provider_id", "overrides", "connection"}
+    assert _notrequired_fields(ProviderTestRequest) == {"overrides", "connection"}
     assert request_hints["provider_id"] is str
+    assert get_args(request_hints["connection"]) == (str,)
     overrides_type = get_args(request_hints["overrides"])[0]
     assert get_origin(overrides_type) is dict
     assert get_args(overrides_type) == (str, str)
@@ -148,6 +149,7 @@ def test_provider_test_gateway_contract_shape_is_exact():
     assert _js_typedef_properties(text, "ProviderTestRequest") == {
         ("string", "provider_id"),
         ("Object<string, string>=", "overrides"),
+        ("string=", "connection"),
     }
     assert _js_typedef_properties(text, "ProviderTestResponse") == {
         ("boolean", "ok"),
@@ -237,10 +239,16 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for name in ("EvolutionRefresh", "EvolutionDataResponse"):
         assert f"import('./evolution_types.js').{name}" in text
     text += "\n" + (modules / "evolution_types.js").read_text(encoding="utf-8")
+    for name in ("UpdateMergePlan", "UpdatePreflightRequest", "UpdatePreflightResponse", "UpdateApplyRequest",
+                 "UpdateApplySuccessResponse", "UpdateApplyErrorResponse", "UpdateProgressChangedOutbound",
+                 "UpdateStatusReadyOutbound"):
+        assert f"import('./update_types.js').{name}" in text
+    text += "\n" + (modules / "update_types.js").read_text(encoding="utf-8")
     version = (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
     assert f"GATEWAY_CONTRACT_VERSION = '{version}'" in text
     settings_meta_fields = {
         "custom_secret_keys", "setup_contract", "available_subagents", "policy_state", "restart_state",
+        "connections",
     }
     assert settings_meta_fields <= set(SettingsMeta.__annotations__)
     assert _js_typedef_fields(text, "SettingsMeta") == settings_meta_fields
@@ -447,13 +455,15 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     )
     assert _notrequired_fields(ActiveChatActivity) == {
         "model_waits", "model_activity", "task_attempt", "turn_phase", "required_question", "required_question_unavailable", "project_admission_hold", "pause_cause", "owner_wait",
-        "status", "outcome_axes", "reason_code", "cancel_origin", "root_phase_checkpoint", "timeout_retry_from", "original_task_id",
+        "status", "outcome_axes", "reason_code", "cancel_origin", "delegated_runs_unreconciled", "root_phase_checkpoint",
+        "timeout_retry_from", "original_task_id",
         "finishing_reviews", "late_work", "can_resume", "cancelable",
         "last_line", "last_line_at", "tool_calls", "detached", "project_name",
     }, "ActiveChatActivity adds optional outcome/retry/review evidence without changing required activity facts"
     activity_fields = get_type_hints(ActiveChatActivity, include_extras=True)
     question_keys = {"required_question", "required_question_unavailable", "project_admission_hold", "pause_cause", "owner_wait"}
-    question_keys |= {"status", "outcome_axes", "reason_code", "cancel_origin", "root_phase_checkpoint", "timeout_retry_from", "original_task_id"}
+    question_keys |= {"status", "outcome_axes", "reason_code", "cancel_origin", "delegated_runs_unreconciled", "root_phase_checkpoint",
+                      "timeout_retry_from", "original_task_id"}
     question_keys |= {"finishing_reviews", "late_work", "can_resume", "cancelable"}
     question_keys |= {"last_line", "last_line_at", "tool_calls", "detached", "project_name"}
     assert {key: value for key, value in activity_fields.items() if key not in question_keys} == get_type_hints(ActiveDirectTurn, include_extras=True), (
@@ -474,6 +484,7 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for field in ("outcome_axes", "cancel_origin", "root_phase_checkpoint", "late_work"):
         assert activity_schema["properties"].pop(field)["type"] == "object"
     assert activity_schema["properties"].pop("finishing_reviews")["type"] == "boolean"
+    assert activity_schema["properties"].pop("delegated_runs_unreconciled") == {"type": "array", "items": {"type": "string"}}
     for field, kind in {"last_line": "string", "last_line_at": "string", "tool_calls": "integer",
                         "detached": "boolean", "project_name": "string"}.items():
         assert activity_schema["properties"].pop(field)["type"] == kind

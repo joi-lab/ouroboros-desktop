@@ -13,6 +13,7 @@ from threading import Thread
 import pytest
 
 from tests._work_projection_shared import with_work_fields
+from tests.ui_console_errors import PageErrors
 
 pytestmark = pytest.mark.ui_browser
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -118,8 +119,7 @@ def test_selected_counter_in_chat(tmp_path, engine):
             try:
                 for theme, width in (("light", 1280), ("dark", 1280), ("light", 390), ("dark", 390)):
                     page = browser.new_page(viewport={"width": width, "height": 844}, color_scheme=theme, device_scale_factor=2)
-                    errors = []
-                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    errors = PageErrors(page, engine)
                     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
                     url = f"http://127.0.0.1:{server.server_port}/fixture?theme={theme}"
                     page.goto(url)
@@ -175,7 +175,7 @@ def test_selected_counter_in_chat(tmp_path, engine):
                     page.evaluate("portal()")
                     expect(card).to_have_attribute("data-portal", "1")
                     assert meta.inner_text().count("31 tool calls") == 1
-                    assert errors == []
+                    assert errors.unexpected() == [], errors
                     page.close()
             finally:
                 browser.close()

@@ -761,7 +761,7 @@ def bind_wake_observation(drive_root: Any, task: Dict[str, Any], observation: Wa
     return accepted
 
 
-def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now: float, level: Any,
+def render_wake_message(repo_dir: Any, *, drive_root: Any, reason: str, last_wake_at: float, now: float, level: Any,
                         disabled_tools: List[str], spent_usd: Any, daily_usd: Any, running: int,
                         max_tasks: int, interval: int, events: str, spent_is_floor: bool = False,
                         spend_by_cause=None, counted_roots=None, places=None, previous_wake: str = "none") -> str:
@@ -783,7 +783,7 @@ def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now:
         "spent_usd": spent, "daily_usd": f"{float(daily_usd):.2f}",
         "running": str(int(running)), "max_tasks": str(int(max_tasks)), "interval": str(int(interval)),
         "spend_by_cause": spend_text(spend_by_cause), "counted_roots": roots_text(counted_roots),
-        "places": places_text(places),
+        "places": places_text(drive_root, places),
     }
     # One pass: a fact (a task title inside {events}) that happens to contain "{daily_usd}"
     # is never substituted again.

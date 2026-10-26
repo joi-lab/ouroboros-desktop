@@ -63,7 +63,6 @@ def test_old_applied_review_download_appears_when_its_reference_refreshes_the_ca
             card.locator("[data-live-review-summary]").click()
             card.locator("[data-review-group-toggle]").click()
             card.locator("[data-review-facts] > summary").click()
-            detail = card.locator("[data-review-attempt-detail]")
             unavailable = card.locator('.review-seat-meta')
             assert unavailable.inner_text() == 'full applied review unavailable'
             assert card.locator('[data-review-read-url]').count() == 0

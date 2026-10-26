@@ -431,6 +431,20 @@ def task_versions(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[int, st
             for task_id, seq, status, owes in json.loads(record[0] or "[]")}
 
 
+def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
+    """Each stored task's ``(status, its own drive)`` from typed columns in ONE read, no body
+    decoded: the drive is its ``child_drive_root``, else ``headless_child_drive_root``, else
+    ``drive_root`` (``""`` for none). An id the store does not hold is absent from the answer."""
+    ids = sorted({str(task_id) for task_id in task_ids if str(task_id or "").strip()})
+    if not ids:
+        return {}
+    with open_store(root, write=False) as txn:
+        records = txn.conn.execute(
+            "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, drive_root) FROM tasks "
+            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchall()
+    return {str(record[0]): (str(record[1] or ""), str(record[2] or "")) for record in records}
+
+
 def task_ids(root: Any) -> List[str]:
     with open_store(root, write=False) as txn:
         return txn.task_ids()

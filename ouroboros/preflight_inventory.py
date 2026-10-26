@@ -9,19 +9,45 @@ import uuid
 
 
 MODULE = "ouroboros_selection_inventory"
+SELECT = "--select-test"
 # Loaded explicitly by each controller; worker hooks forward their collection via
 # xdist. No candidate module imports or persisted selection manifest are needed.
+# A selected scope is ONE walk of tests/ that keeps the modules named by SELECT
+# before any is imported: pytest walks the tree once per module given as an
+# argument (30 modules, the same 848 nodes: 8.4-10.1 CPU-s per collecting process
+# that way, 4.6-5.0 from one walk).
 SOURCE = '''import json
 from pathlib import Path
 import pytest
 
 _path = Path(__RESULT_PATH__)
 _worker = False
+_selected = None
+_reached = set()
 
 def _emit(event, **fields):
     if not _worker:
         with _path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(dict(event=event, **fields)) + "\\n")
+
+def pytest_addoption(parser):
+    parser.addoption("__SELECT__", action="append", default=[], metavar="PATH",
+                     help="collect only these test modules, from one walk of the directories given")
+
+def _selection(config):
+    global _selected
+    if _selected is None:
+        _selected = frozenset(config.invocation_params.dir / path for path in config.getoption("select_test"))
+    return _selected
+
+def pytest_ignore_collect(collection_path, config):
+    selected = _selection(config)
+    if not selected or not (collection_path.name.startswith("test_") and collection_path.suffix == ".py"):
+        return None
+    if collection_path in selected:
+        _reached.add(collection_path)
+        return None
+    return True
 
 def pytest_configure(config):
     global _worker
@@ -29,6 +55,9 @@ def pytest_configure(config):
     _emit("start")
 
 def pytest_collection_finish(session):
+    missing = sorted(str(path) for path in _selection(session.config) - _reached)
+    if missing:
+        raise pytest.UsageError("selected test modules the collection never reached: " + ", ".join(missing))
     if not _worker and session.items:
         _emit("collection", ids=[item.nodeid for item in session.items])
 
@@ -48,9 +77,14 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def selection_passes(selection, *, probe_module="", temp_root=None, inventory_dir=None):
-    """Probe modules live in scratch; ``inventory_dir`` (default temp_root) keeps the full JSONL."""
+    """Probe modules live in scratch; ``inventory_dir`` (default temp_root) keeps the full JSONL.
+
+    The argv names every selected module (it is the workload a proof binds) and never
+    begins with ``tests/`` for a selected scope, so no reader takes it for the full one.
+    """
     from ouroboros import preflight_runner as pr
 
+    scope = ["tests/"] if selection.tier == "full" else [*(f"{SELECT}={path}" for path in selection.files), "tests/"]
     passes = []
     for spec in pr._preflight_pass_specs(probe_module=probe_module):
         module = MODULE
@@ -60,9 +94,10 @@ def selection_passes(selection, *, probe_module="", temp_root=None, inventory_di
             probe.mkdir(parents=True, exist_ok=True)
             result = Path(inventory_dir or temp_root) / f"inventory-{spec.label}.jsonl"
             result.write_text("", encoding="utf-8")
-            (probe / f"{module}.py").write_text(SOURCE.replace("__RESULT_PATH__", repr(str(result))), encoding="utf-8")
+            (probe / f"{module}.py").write_text(SOURCE.replace("__RESULT_PATH__", repr(str(result)))
+                                                .replace("__SELECT__", SELECT), encoding="utf-8")
         args = [arg for arg in spec.args if arg != "tests/"]
-        passes.append(pr._make_pass(spec.label, [*selection.targets, *args, "-p", module]))
+        passes.append(pr._make_pass(spec.label, [*scope, *args, "-p", module]))
     return passes
 
 

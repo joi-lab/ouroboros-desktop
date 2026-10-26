@@ -421,7 +421,10 @@ def enqueue_task(
         _att = t.get("_attempt")
         t.setdefault("_attempt", int(_att) if _att is not None else 1)
         t["_queue_seq"] = -seq if front else seq
-        t["queued_at"] = utc_now_iso()
+        if restoring_snapshot:  # restored work keeps its saved queue time; a lost one stays unknown (#1805)
+            t.setdefault("queued_at", None)
+        else:
+            t["queued_at"] = utc_now_iso()
         if admission_token:
             t["_admission_owner_token"] = admission_token
         from contextlib import nullcontext

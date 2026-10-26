@@ -17,6 +17,36 @@ const fromState = () => normalizeConsciousness(FIXTURE.state.bg_consciousness_st
 const wake = (id) => full().recentWakes.find((row) => row.taskId === id);
 const strip = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 
+test('focus account stamps cross normalization and preserve the wake anatomy and authored note lead', () => {
+    const raw = { ...FIXTURE.consciousness.recent_wakes.find((row) => row.task_id === '214a31b6'),
+        cause: 'focus', place_label: 'Mailbox', chat_id: 1099511627777 };
+    const before = wakeRowHtml(normalizeWake(raw));
+    for (const owner of [false, true]) {
+        const html = wakeRowHtml(normalizeWake({ ...raw, as: { label: '<Mail> & account', owner } }));
+        const stamp = owner ? 'as you' : 'as <span data-i18n-authored>&lt;Mail&gt; &amp; account</span>';
+        assert.ok(html.includes(`Mailbox</span> · ${stamp} · Done · no message`));
+        assert.equal(html.replace(` · ${stamp}`, ''), before, 'time, phase, duration, cost, note lead and disclosure are unchanged');
+        if (owner) assert.ok(!html.includes('&lt;Mail&gt;'));
+        else assert.ok(html.includes('data-i18n-authored>&lt;Mail&gt; &amp; account'));
+        assert.ok(html.includes('class="consciousness-wake-lead" data-i18n-authored'));
+        assert.ok(html.includes(raw.note));
+    }
+    assert.equal(wakeRowHtml(normalizeWake({ ...raw, as: null })), before);
+    assert.doesNotMatch(before, /as you|as <span/);
+});
+
+test('wake account words use translations without translating the authored label', (t) => {
+    setMissTransport(() => Promise.resolve(null));
+    applyPayload({ language: 'ru', english: false, entries: {
+        'as {label}': { text: 'как {label}' }, 'code:places.identity.as_you': { text: 'как вы' },
+    } });
+    t.after(() => applyPayload({ language: '', english: true, entries: {} }));
+    const row = wake('214a31b6');
+    assert.match(wakeRowHtml({ ...row, as: { label: 'Settings', owner: false } }), /как <span data-i18n-authored>Settings<\/span>/);
+    assert.match(wakeRowHtml({ ...row, as: { label: 'Settings', owner: true } }), /как вы/);
+    assert.doesNotMatch(wakeRowHtml(row), /как вы|как <span/);
+});
+
 test('server status alone owns the headline even with finished or active rows in the list', () => {
     assert.equal(headlineView(full()).text, FIXTURE.consciousness.detail);
     assert.match(headlineView(full()).text, /^Sleeping until/);

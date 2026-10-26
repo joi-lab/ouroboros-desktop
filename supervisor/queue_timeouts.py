@@ -82,14 +82,14 @@ def _task_deadline_ts(task: Dict[str, Any]) -> float:
 def _task_drive_for_task(task: Dict[str, Any], task_id: str) -> pathlib.Path:
     """Active drive of a running task (child drive for forked/workspace tasks,
     canonical otherwise) — where its mailbox and observability actually live.
-    Resolution mirrors forward_to_worker: task fields, then the result record."""
+    Resolution mirrors forward_to_worker: task fields, then the result's typed
+    drive columns (no body is decoded for one field)."""
     task = task if isinstance(task, dict) else {}
     child = str(task.get("child_drive_root") or task.get("drive_root") or "").strip()
     if not child:
         try:
-            from ouroboros.task_results import load_task_result
-            record = load_task_result(pathlib.Path(_queue().DRIVE_ROOT), str(task_id)) or {}
-            child = str(record.get("child_drive_root") or record.get("headless_child_drive_root") or record.get("drive_root") or "").strip()
+            from ouroboros.task_store import task_drive_status
+            child = task_drive_status(pathlib.Path(_queue().DRIVE_ROOT), [str(task_id)]).get(str(task_id), ("", ""))[1]
         except Exception:
             child = ""
     return pathlib.Path(child) if child else pathlib.Path(_queue().DRIVE_ROOT)

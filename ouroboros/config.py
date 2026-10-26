@@ -662,7 +662,7 @@ def _coerce_setting_value(key: str, value):
     # Trim so whitespace-only config is not treated as a configured skills repo.
     if key == "OUROBOROS_SKILLS_REPO_PATH":
         return str(value or "").strip()
-    if key == "MCP_SERVERS":
+    if isinstance(default, list):  # MCP_SERVERS, OUROBOROS_CONNECTIONS: a list of row objects
         if isinstance(value, str):
             try:
                 value = json.loads(value)
@@ -796,8 +796,9 @@ def serialize_settings(settings: dict) -> str:
     return json.dumps(settings, ensure_ascii=False, indent=2)
 
 
-def load_settings() -> dict:
-    fd = _acquire_settings_lock()
+def load_settings(*, migrate: bool = False) -> dict:
+    """A read takes no lock file and writes nothing; ``migrate`` (boot, onboarding) persists the compatibility upgrades."""
+    fd = _acquire_settings_lock() if migrate else None
     try:
         return load_settings_lock_held(_settings_lock_held=fd is not None)
     finally:
@@ -805,19 +806,15 @@ def load_settings() -> dict:
 
 
 def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
-    """The same read, for a caller that ALREADY holds the settings lock. The lock is not
-    re-entrant, so a nested ``load_settings()`` burns the full 2s timeout and then reads
-    anyway; a write-path precondition needs the effective settings as of NOW, so it reads here.
-
-    ``load_settings`` passes whether it actually acquired the best-effort read lock. Direct
-    callers are lock-owning write preconditions, so the default remains true. A raw context
-    compatibility migration is persisted only while that lock is held; the write contains
-    the raw mapping plus the normalized pair, never a defaults-merged settings document."""
+    """The same read, for a caller that ALREADY holds the (not re-entrant) settings lock: a write
+    precondition needs the effective settings as of NOW. Only under that lock (a writer, or a
+    ``load_settings(migrate=True)`` that acquired it) are the raw compatibility upgrades persisted: the
+    raw mapping plus the normalized pair, never a defaults-merged document; a lock-free read writes nothing."""
     from ouroboros.review_pool_migration import apply_at_read_seam, environment_overridable_keys
     from ouroboros.server_runtime import SAVED_MODEL_ROLE_KEYS, authored_model_slots, propose_unauthored_model_slots
     loaded: dict = {}
     try:
-        raw = _settings_integrity.read_settings_json_verified(SETTINGS_PATH)
+        raw = _settings_integrity.read_settings_json_verified(SETTINGS_PATH, behind_writer=not _settings_lock_held)
     except SettingsIntegrityError:
         raise
     except Exception:
@@ -847,7 +844,7 @@ def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
             continue
         if raw_env == "" and key not in OPTIONAL_BOUND_LEGACY:
             continue
-        if key in loaded and key not in env_wins and settings.get(key) not in {None, ""}:
+        if key in loaded and key not in env_wins and settings.get(key) not in (None, "", []):  # a list row setting too
             continue
         settings[key] = _coerce_setting_value(key, raw_env)
         env_authored.add(key)

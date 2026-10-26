@@ -525,14 +525,14 @@ def _assert_contributor_review_config(resolved_config: dict) -> None:
 
 def _configured_openrouter_models(resolved_config: dict) -> list[str]:
     """OpenRouter API rows that need the wrapper's provider-specific key probe."""
-    from ouroboros.provider_models import provider_for_model
+    from ouroboros.provider_models import parse_model_route
 
     models: list[str] = []
     for row in list(resolved_config.get("pool_slots") or []):
         route = row.get("route") or {}
-        model = str(route.get("target_id") or "")
-        if route.get("kind") == "api_chat" and provider_for_model(model) == "openrouter":
-            models.append(model.removeprefix("openrouter::"))
+        parsed = parse_model_route(str(route.get("target_id") or ""))
+        if route.get("kind") == "api_chat" and parsed.kind == "openrouter" and not parsed.connection:
+            models.append(parsed.model)  # the wrapper probes the built-in OpenRouter key only
     return list(dict.fromkeys(models))
 
 

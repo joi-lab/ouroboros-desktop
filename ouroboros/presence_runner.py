@@ -77,6 +77,7 @@ class PresenceTurnEvent:
     # (``presence_continuation``): 1 lets the transport take the initial envelope early.
     continuation_version: int = 0
     facts: tuple[str, ...] | None = None
+    identity: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -806,6 +807,8 @@ def _log_dialogue(
            if task["metadata"]["presence"].get("place_id") else {}),
         **{key: task[key] for key in ("attachment_manifest", "attachment_manifest_ref") if key in task},
     }
+    if direction == "in" and (identity := getattr(event, "identity", None)) is not None:
+        row["transport"]["identity"] = identity
     if direction == "in" and not task["metadata"].get("focus"):
         # Retain the transport's exact contextual observations before publishing their address.
         # They remain dated context of this event, never additional incoming speech or work.

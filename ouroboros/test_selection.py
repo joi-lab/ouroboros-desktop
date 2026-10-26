@@ -199,10 +199,6 @@ class TestSelection:
     full_tests: bool = False
     test_reason: str = ""
 
-    @property
-    def targets(self) -> tuple[str, ...]:
-        return ("tests/",) if self.tier == "full" else self.files
-
     def scope(self) -> dict:
         """The selection inputs a durable selected record binds beside its workload."""
         return {"base": self.base, "policy": self.policy, "changed": list(self.changed),

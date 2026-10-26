@@ -657,10 +657,9 @@ export function createChatInstance({
         const request = await stateSnapshots.gate(force);
         if (!request) return;
         try {
-            const resp = await apiFetch('/api/state', { cache: 'no-store' });
+            const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
             if (!resp.ok) throw new Error(`State read failed: HTTP ${resp.status}`);
-            const data = await resp.json();
-            stateSnapshots.apply(request, data);
+            stateSnapshots.apply(request, await resp.json());
         } catch {
             stateSnapshots.fail?.(request);
         }
