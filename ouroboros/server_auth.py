@@ -20,6 +20,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ouroboros.config import load_settings
+from ouroboros.standalone_page import themed_page
 
 if TYPE_CHECKING:
     from ouroboros.server_web import ServedUI
@@ -222,41 +223,56 @@ def _sanitize_next_url(value: str) -> str:
     return text
 
 
-def _login_page(next_url: str, error: str = "") -> str:
+# The form's own layout on the interface's tokens; each has a system-colour fallback (standalone_page).
+_LOGIN_CSS = """
+body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-primary, Canvas); color: var(--text-primary, CanvasText); font-family: var(--font-sans, system-ui); }
+.gate { box-sizing: border-box; width: min(360px, calc(100% - 32px)); padding: 24px; border-radius: var(--radius-object);
+  background: var(--surface-object); box-shadow: var(--elev-rest); }
+.gate h1 { margin: 0 0 8px; font-size: var(--type-page, 24px); font-weight: 600; line-height: var(--line-title); }
+.gate p { margin: 0 0 16px; color: var(--text-secondary); font-size: var(--type-body); line-height: var(--line-body); }
+.gate label { color: var(--text-primary); font-size: var(--type-body); }
+.gate .btn { width: 100%; margin-top: 16px; }
+.gate .gate-error { margin: 12px 0 0; color: var(--status-error-fg); }
+"""
+
+
+def _builtin_web_dir(served_ui: ServedUI | None) -> pathlib.Path:
+    """The builtin interface tree, whatever ``OUROBOROS_UI_DIR`` selects: the builtin form wears only its files."""
+    if served_ui is not None:
+        return served_ui.builtin_dir
+    from ouroboros.server_web import resolve_web_dir
+
+    return resolve_web_dir(pathlib.Path(__file__).resolve().parents[1])
+
+
+def _login_page(next_url: str, error: str = "", web_dir: pathlib.Path | None = None) -> str:
+    """The builtin form. It answers before any asset behind the gate may load, so it inlines the builtin
+    appearance owner and tokens: this browser's saved Light / Dark / System choice, else the device's."""
     safe_next = html.escape(_sanitize_next_url(next_url), quote=True)
-    error_html = (
-        f'<div style="margin-top:12px;color:#ef4444;font-size:14px">{error}</div>'
-        if error
-        else ""
-    )
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ouroboros Login</title>
-</head>
-<body style="margin:0;background:#0f0f11;color:#efeff2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;">
-  <form method="post" action="/auth/login" style="width:min(360px,calc(100% - 32px));padding:24px;border:1px solid rgba(255,255,255,0.08);border-radius:18px;background:rgba(255,255,255,0.04);box-shadow:0 24px 60px rgba(0,0,0,0.35);">
-    <h1 style="margin:0 0 8px;font-size:22px;">Ouroboros</h1>
-    <p style="margin:0 0 16px;color:rgba(255,255,255,0.65);line-height:1.5;">This server is exposed beyond localhost. Enter the network password to continue.</p>
-    <input type="hidden" name="next" value="{safe_next}">
-    <label for="password" style="display:block;margin-bottom:8px;font-size:14px;">Password</label>
-    <input id="password" name="password" type="password" autofocus required style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,255,255,0.12);background:#1a1b1c;color:#efeff2;">
-    <button type="submit" style="margin-top:16px;width:100%;padding:12px 14px;border:none;border-radius:12px;background:#d32d43;color:white;font-weight:600;cursor:pointer;">Unlock</button>
-    {error_html}
-  </form>
-</body>
-</html>"""
+    error_html = f'\n  <p class="gate-error" role="alert">{html.escape(error)}</p>' if error else ""
+    form = f"""<form class="gate" method="post" action="/auth/login">
+  <h1>Ouroboros</h1>
+  <p>This server is exposed beyond localhost. Enter the network password to continue.</p>
+  <input type="hidden" name="next" value="{safe_next}">
+  <div class="ui-field">
+    <label for="password">Password</label>
+    <input id="password" class="ui-control" name="password" type="password" autofocus required>
+  </div>
+  <button type="submit" class="btn btn-primary">Unlock</button>{error_html}
+</form>"""
+    return themed_page(web_dir or _builtin_web_dir(None), "Ouroboros Login", form, _LOGIN_CSS)
 
 
 async def _handle_login(scope: Scope, receive: Receive, send: Send, password: str,
                         served_ui: ServedUI | None = None) -> None:
     request = Request(scope, receive)
+    web_dir = _builtin_web_dir(served_ui)
     if request.method == "GET":
         page = (served_ui.custom_page("auth/index.html")
                 if served_ui is not None and request.query_params.get("builtin") != "1" else None)
-        response = HTMLResponse(page if page is not None else _login_page(request.query_params.get("next", "/")),
+        response = HTMLResponse(page if page is not None else _login_page(request.query_params.get("next", "/"),
+                                                                          web_dir=web_dir),
                                 headers=_NO_STORE)
         await response(scope, receive, send)
         return
@@ -282,7 +298,8 @@ async def _handle_login(scope: Scope, receive: Receive, send: Send, password: st
         if is_json:
             response = JSONResponse({"error": "Invalid password."}, status_code=401)
         else:
-            response = HTMLResponse(_login_page(next_url, "Invalid password."), status_code=401, headers=_NO_STORE)
+            response = HTMLResponse(_login_page(next_url, "Invalid password.", web_dir), status_code=401,
+                                    headers=_NO_STORE)
         await response(scope, receive, send)
         return
 
@@ -394,7 +411,8 @@ class NetworkAuthGate:
                 response = RedirectResponse("/auth/login?" + urlencode({"next": next_url}), status_code=303,
                                             headers=_NO_STORE)
             else:
-                response = HTMLResponse(_login_page(next_url), status_code=401, headers=_NO_STORE)
+                response = HTMLResponse(_login_page(next_url, web_dir=_builtin_web_dir(self.served_ui)),
+                                        status_code=401, headers=_NO_STORE)
         else:
             response = JSONResponse({"error": "Authentication required."}, status_code=401)
         await response(scope, receive, send)
