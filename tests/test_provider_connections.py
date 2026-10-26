@@ -200,12 +200,16 @@ def test_references_name_rows_whose_connection_cannot_serve():
     assert refs == [
         {"setting": "OUROBOROS_MODEL", "route": "openrouter@gone::x/y", "connection": "openrouter@gone",
          "reason": "missing"},
-        {"setting": "OUROBOROS_MODEL_FALLBACKS", "route": "anthropic@byok::claude", "connection": "anthropic@byok",
-         "reason": "kind_mismatch"},
+        {"setting": "OUROBOROS_MODEL_FALLBACKS", "entry": "2", "route": "anthropic@byok::claude",
+         "connection": "anthropic@byok", "reason": "kind_mismatch"},
         {"setting": "OUROBOROS_SUBAGENTS", "entry": "scout", "route": "openai@old::gpt", "connection": "openai@old",
          "reason": "missing"},
     ]
     assert connection_references(_settings(OUROBOROS_MODEL="openrouter@byok::x/y")) == []
+    # The Safety Supervisor names a route like any role (MODEL_ROLE_SETTINGS), so a stale key there is reported too.
+    assert connection_references(_settings([ROWS[0]], OUROBOROS_MODEL_SAFETY="openrouter@gone::x/y")) == [
+        {"setting": "OUROBOROS_MODEL_SAFETY", "route": "openrouter@gone::x/y", "connection": "openrouter@gone",
+         "reason": "missing"}]
 
 
 @pytest.mark.parametrize("raw,fragment", [

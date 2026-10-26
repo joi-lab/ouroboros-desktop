@@ -247,6 +247,20 @@ test('a new key takes a stored name from its label once; the setting and the sav
 
     const connections = apiConnections(SETTINGS);
     assert.equal(connectionReferencesText([], connections), '');
+    assert.equal(connectionReferencesText([
+        { setting: 'OUROBOROS_MODEL', route: 'openrouter@claude-credits::anthropic/claude-opus-5.5', connection: 'claude-credits', reason: 'missing' },
+        { setting: 'OUROBOROS_MODEL_FALLBACKS', entry: '2', route: 'openrouter@claude-credits::x', connection: 'claude-credits', reason: 'disabled' },
+        { setting: 'OUROBOROS_SUBAGENTS', entry: 'reviewer-1', route: 'openrouter@claude-credits::y', connection: 'claude-credits', reason: 'missing' },
+    ], connections).includes('Main ('), true);
+    assert.match(connectionReferencesText([
+        { setting: 'OUROBOROS_MODEL_FALLBACKS', entry: '2', route: 'openrouter@claude-credits::x', connection: 'claude-credits' },
+    ], connections), /Fallback 2 \(/);
+    assert.match(connectionReferencesText([
+        { setting: 'OUROBOROS_SUBAGENTS', entry: 'reviewer-1', route: 'openrouter@claude-credits::y', connection: 'claude-credits' },
+    ], connections), /Agents · reviewer-1 \(/);
+    assert.doesNotMatch(connectionReferencesText([
+        { setting: 'OUROBOROS_MODEL', route: 'openrouter@claude-credits::z', connection: 'claude-credits' },
+    ], connections), /OUROBOROS_MODEL/);
     assert.equal(connectionReferencesText([{ label: 'Main', connection: 'openrouter@claude-credits' }, 'Subagent 2'], connections),
         'Still naming a removed or disabled key, so they cannot send: Main (OpenRouter · Claude credits), Subagent 2');
 });

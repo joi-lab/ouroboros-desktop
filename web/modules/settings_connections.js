@@ -95,13 +95,26 @@ export function cacheHintsNote(entry) {
         ? ` since ${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}`;
 }
 
-/** The save receipt's roles and rows that still name a removed or disabled key; '' when none. */
+/** The save receipt's roles and rows that still name a removed or disabled key; '' when none.
+ * A role is named in the owner's words ("Main", "Fallback 2", "Agents · reviewer-1"), the key by its picker label. */
+const REFERENCE_ROLE_LABELS = Object.freeze({
+    OUROBOROS_MODEL: 'Main', OUROBOROS_MODEL_LIGHT: 'Light', OUROBOROS_MODEL_SAFETY: 'Safety Supervisor',
+    OUROBOROS_MODEL_VISION: 'Vision', OUROBOROS_MODEL_CONSCIOUSNESS: 'Consciousness',
+    OUROBOROS_MODEL_FALLBACKS: 'Fallback', OUROBOROS_MODEL_FALLBACK: 'Fallback', OUROBOROS_WEBSEARCH_MODEL: 'Web search',
+    OUROBOROS_MODEL_DEEP_SELF_REVIEW: 'Deep review', OUROBOROS_SUBAGENTS: 'Agents',
+});
+
 export function connectionReferencesText(references, connections = []) {
     const named = (Array.isArray(references) ? references : []).map((reference) => {
         if (typeof reference === 'string') return reference.trim();
         if (!reference || typeof reference !== 'object') return '';
-        const where = String(reference.label || reference.where || reference.role || reference.setting || '').trim();
-        const id = String(reference.connection || reference.id || reference.source || '').trim();
+        const setting = String(reference.setting || '').trim();
+        const role = String(reference.label || REFERENCE_ROLE_LABELS[setting] || setting).trim();
+        const entry = String(reference.entry || '').trim();
+        const where = !entry ? role : setting === 'OUROBOROS_SUBAGENTS' ? `${role} · ${entry}` : `${role} ${entry}`;
+        const route = String(reference.route || '').trim();
+        const { source } = route ? parseModelSource(route) : { source: '' };
+        const id = source && !source.startsWith('subscription:') ? source : String(reference.connection || '').trim();
         return [where, id ? `(${apiProviderLabel(id, {}, connections)})` : ''].filter(Boolean).join(' ');
     }).filter(Boolean);
     return named.length ? `Still naming a removed or disabled key, so they cannot send: ${named.join(', ')}` : '';

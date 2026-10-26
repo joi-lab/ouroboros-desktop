@@ -188,9 +188,15 @@ def connection_references(settings: Mapping[str, Any]) -> list[dict]:
     from ouroboros.llm_attempt import ConnectionUnavailable
     from ouroboros.configured_subagents import SUBAGENTS_SETTING
 
+    from ouroboros.model_slots import MODEL_ROLE_SETTINGS
+
     read, rows = settings_view(settings)
-    named = [(key, "", model.strip()) for key in MODEL_SETTING_KEYS + ("OUROBOROS_MODEL_DEEP_SELF_REVIEW",)
-             for model in str(settings.get(key) or "").split(",") if model.strip()]
+    named = []
+    for key in dict.fromkeys((*MODEL_ROLE_SETTINGS.values(), *MODEL_SETTING_KEYS)):
+        models = [model.strip() for model in str(settings.get(key) or "").split(",") if model.strip()]
+        # A chain entry is named by its 1-based position, so the receipt can say "Fallback 2".
+        named += [(key, str(index + 1) if len(models) > 1 or "FALLBACK" in key else "", model)
+                  for index, model in enumerate(models)]
     named += [(SUBAGENTS_SETTING, row_id, target) for row_id, target in _subagent_routes(settings.get(SUBAGENTS_SETTING))]
     out = []
     for setting, entry, model in named:
