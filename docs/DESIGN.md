@@ -448,7 +448,8 @@ leading edge on the capsule's and inside the composer's column (the object radiu
 on a phone a bottom sheet over a light scrim (the sheet radius on top, `--ease-sheet`, `--motion-open` in,
 `--motion-close` out). The row never moves: nothing steps aside, grows or wraps, and the open capsule keeps showing
 its value, taking only its hover fill. A panel holds the capsule's ring and name, its strip at a finger's size (every
-option at least 44 × 44 px), one line for the chosen value (as tall as the longest, so a choice never changes the
+option at least 44 × 44 px; a word too long for its option takes two lines, never smaller type), one line for the
+chosen value (as tall as the longest, so a choice never changes the
 panel's height) and one note on how a change applies. An outside press, Escape, the capsule again or, on a phone, the
 scrim or a swipe down closes it; a press on another capsule switches at once.
 

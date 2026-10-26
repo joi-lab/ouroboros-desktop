@@ -4803,6 +4803,15 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     transition: color 0.15s;
 }
 .chat-seg-text { display: block; }
+/* A long word (a translation on a narrow phone) takes two lines, hyphenated where its language allows, never smaller
+   type: an option keeps its finger's height either way. */
+.capsule-panel .chat-seg-text {
+    min-width: 0;
+    line-height: var(--line-title);
+    text-align: center;
+    hyphens: auto;
+    overflow-wrap: break-word;
+}
 .capsule-panel .chat-seg:focus-visible {
     outline: 2px solid var(--focus-accent-border);
     outline-offset: -2px;
@@ -4842,19 +4851,23 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 var(--space-1);
+    padding: 0 var(--space-2);
     color: var(--text-secondary);
     font-weight: 600;
     pointer-events: none;
     transition: color 0.15s;
 }
-/* A phone's sheet: the levels read a step smaller and the strip reaches a little past the words on each side (its
-   rounded ends read inset), so seven finger-wide levels fit a 360 px phone. Where seven fingers cannot fit (a 320 px
-   phone) the levels share the strip evenly. */
+/* A phone's sheet: the strip reaches a little past the words on each side (its rounded ends read inset). A strip with
+   less room (a phone's sheet, a narrow Project pane) reads its levels a step smaller, as the composer's own strip did,
+   so every word keeps its air beside a bracket; where seven fingers cannot fit (a 320 px phone) the levels share the
+   strip evenly and a long word takes two lines. */
 .capsule-panel[data-place="sheet"] .chat-effort-strip { margin-inline: calc(-1 * var(--space-1)); }
-.capsule-panel[data-place="sheet"] .chat-effort-seg { font-size: var(--type-meta); }
+@container effort-strip (max-width: 359.98px) {
+    .chat-effort-seg { font-size: var(--type-meta); }
+}
 @container effort-strip (max-width: 307.98px) {
-    .chat-effort-seg { flex-basis: 0; min-width: 0; }
+    .chat-effort-seg { flex-basis: 0; min-width: 0; padding-inline: var(--space-1); }
+    .chat-effort-seg-text { min-width: 0; line-height: var(--line-title); text-align: center; hyphens: auto; overflow-wrap: break-word; }
 }
 .chat-effort-seg[data-in="true"] {
     color: var(--text-primary);
