@@ -717,8 +717,6 @@ def _create_task_from_body(request: Request, body: Any) -> JSONResponse:
         "_admission_token": admission_token,
     }
     try:
-        from ouroboros.settings_integrity import record_subagents_admission
-        record_subagents_admission(task, drive_root)
         task = attach_task_contract(task)
     except Exception as exc:
         _cleanup_api_admission_attempt(drive_root, task_id, admission_token, child_drive)

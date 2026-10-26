@@ -73,6 +73,38 @@ def test_project_api_inactive_room_keeps_the_admission_owners_typed_refusal(host
     assert not host.pending
 
 
+@pytest.mark.parametrize("availability", ["available", "disabled", "unsaved"])
+@pytest.mark.parametrize("project_room", [False, True])
+@pytest.mark.parametrize("producer", ["api", "promotion"])
+def test_root_receipt_records_the_effective_admitted_room(host, monkeypatch, availability, project_room, producer):
+    from ouroboros import config
+    from ouroboros.composer_cognition import update_project_cognition
+    from ouroboros.project_dialogue import build_owner_message_ref
+    from supervisor.events_project_routing import _handle_promote_chat_to_task
+    from tests.test_subagents_mode_messages import mode_settings
+
+    values = mode_settings("off" if project_room else "swarm", availability)
+    monkeypatch.setattr(config, "load_settings", lambda: dict(values))
+    room = registry.create_project(host.root, "target") if project_room else {"id": "", "chat_id": 1}
+    if project_room:
+        update_project_cognition(host.root, room["id"], subagents_mode="swarm")
+    if producer == "api":
+        response = _create_task_from_body(request_for(host), {"task_id": "mode", "description": "Owner work",
+            "project_id": room["id"], "memory_mode": "empty",
+            "metadata": {"subagents_mode": "forged"}})
+        assert response.status_code == 200, response.body
+    else:
+        result = _handle_promote_chat_to_task({"task_id": "mode", "routing_token": "mode-token",
+            "objective": "Owner work", "project_id": room["id"], "chat_id": room["chat_id"],
+            "source_ref": build_owner_message_ref(chat_id=room["chat_id"], client_message_id="mode-origin",
+                ts="2026-10-27T00:00:00Z", text="Owner work"), "source_text": "Owner work"}, host.ctx)
+        assert result["status"] == "scheduled", result
+    [queued] = host.pending
+    stored = load_task_result(host.root, "mode", strict=True)
+    assert queued["metadata"]["subagents_mode"] == stored["metadata"]["subagents_mode"] == (
+        "swarm" if availability == "available" else "off")
+
+
 def test_queue_gateway_preserves_child_wait_and_recovery_without_root_census_inflation(host, tmp_path, monkeypatch):
     accepted(host, tmp_path, tid="sibling")
     child, original, unreadable = _uncertain_child(host, monkeypatch)

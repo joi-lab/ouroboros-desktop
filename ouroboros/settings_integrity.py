@@ -311,14 +311,26 @@ def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None 
     return read_cognition(scope[0], _actor_project(scope), settings=settings)["subagents_mode"]
 
 
-def record_subagents_admission(task: dict, drive_root: Path) -> None:
-    """A root's admission fact for telemetry, never a future-round authority."""
-    # A new root's accepted room is authoritative; its not-yet-running identity
-    # must not read the task store ahead of the ordinary pre-start storage wait.
-    lineage = {"id", "parent_task_id", "root_task_id"}
-    room = {key: value for key, value in task.items() if key not in lineage}
-    room["metadata"] = {key: value for key, value in (task.get("metadata") or {}).items() if key not in lineage}
-    task.setdefault("metadata", {})["subagents_mode"] = effective_subagents_mode(task=room, drive_root=drive_root)
+def record_subagents_admission(task: dict, drive_root: Path, *, settings: Mapping | None = None,
+                              project: Mapping | None = None) -> None:
+    """Root telemetry. Queue callers supply settings and the admitted row (None for Main), without more IO."""
+    if settings is not None:
+        from ouroboros.settings_scales import normalize_subagents_mode
+        from ouroboros.subagent_runtime import subagents_availability
+
+        cognition = project.get("cognition") if project is not None else None
+        mode = ((cognition if isinstance(cognition, Mapping) else {}).get("subagents_mode") if project is not None
+                else settings.get("OUROBOROS_SUBAGENTS_MODE"))
+        mode = "auto" if _actor_scope(task, drive_root)[1].get("autonomous") else normalize_subagents_mode(mode)
+        mode = mode if subagents_availability(settings) == "available" else "off"
+    else:
+        # Direct turns have no queue admission row. Resolve their accepted room,
+        # excluding unstarted lineage so the pre-start storage wait retains ownership.
+        lineage = {"id", "parent_task_id", "root_task_id"}
+        room = {key: value for key, value in task.items() if key not in lineage}
+        room["metadata"] = {key: value for key, value in (task.get("metadata") or {}).items() if key not in lineage}
+        mode = effective_subagents_mode(task=room, drive_root=drive_root)
+    task.setdefault("metadata", {})["subagents_mode"] = mode
 
 
 def room_subagents_mode_applies() -> bool:
