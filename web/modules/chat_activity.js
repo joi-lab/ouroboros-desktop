@@ -818,6 +818,7 @@ export function clearStickyCardState(record) {
     if (!record) return record;
     record.collapsedActivity = '';
     record.collapsedActivityLead = '';
+    record.causeHeld = false;  // an outcome's cause owns the line from then on; equal narration words never take it
     record.costMeta = null;
     // The executor chip is cycle state like the cost projection: a recycled
     // slot must not claim the previous cycle's delegated route as its own.

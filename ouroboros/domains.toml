@@ -120,6 +120,7 @@ D20 = "Presence"
 "ouroboros/launcher_readiness.py" = "D18"
 "ouroboros/launcher_window_chrome.py" = "D18"
 "ouroboros/launcher_page_zoom.py" = "D18"
+"ouroboros/standalone_page.py" = "D18"  # a page served before any asset: the builtin theme.js and ui.css inlined
 "ouroboros/desktop_notifications.py" = "D18"
 "ouroboros/desktop_media.py" = "D18"
 "ouroboros/desktop_autostart.py" = "D18"
@@ -341,6 +342,7 @@ D20 = "Presence"
 "ouroboros/gateway/work_projection.py" = "D11"  # server observations for the work projection
 "ouroboros/gateway/work_contracts.py" = "D11"
 "ouroboros/gateway/task_events.py" = "D11"
+"ouroboros/gateway/task_reviews.py" = "D11"
 "ouroboros/gateway/task_archive.py" = "D11"
 "ouroboros/gateway/task_hurry.py" = "D11"
 "ouroboros/gateway/task_pause.py" = "D11"
@@ -1091,6 +1093,7 @@ allowed = [
   "D11->D03",
   "D11->D04",
   "D11->D05",
+  "D11->D06",
   "D11->D07",
   "D11->D08",
   "D11->D09",
@@ -1239,7 +1242,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D11->D06",
   "D12->D01",
   "D12->D05",
   "D12->D06",
