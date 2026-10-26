@@ -2695,175 +2695,391 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 }
 
 
+/* Reviews A (owner 25.10, quiz answer A; DESIGN §5 "Reviews inside task cards"). The door is a quiet control
+   like the card's Details, its chevron turning when open; a closed check is one row with no fill and only the
+   opened check takes the one tray; a reviewer is two lines (who and their outcome, then one line of what they said
+   or why not) with Read into the document reader; one Record facts disclosure keeps the record. A state is the
+   shared status sentence (`.ui-status[data-tone]`) or, for live work, the moving status mark. Narrow cards follow
+   the card's own width (`livecard`), never the viewport. */
 .chat-live-review-summary {
-    color: var(--text-meta);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: 0 0 auto;
+    min-height: calc(var(--space-5) + var(--space-1));
+    margin: 0 calc(var(--space-2) * -1);
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--pill-radius);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
     font-size: var(--type-meta);
     line-height: var(--line-meta);
-    flex: 0 0 auto;
+    font-weight: 600;
     white-space: nowrap;
+    cursor: pointer;
+    transition: var(--motion-tone);
 }
 
-.chat-live-review-summary[data-warning="1"] {
-    color: var(--status-warn-fg);
-    white-space: normal;
-    overflow-wrap: anywhere;
-    max-width: 100%;
+/* The chevron of the card's Details, drawn here so the door's words stay one text. */
+.chat-live-review-summary::after {
+    content: "";
+    flex: none;
+    width: 1.15em;
+    height: 1.15em;
+    background: var(--text-secondary);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 7.5 10 12.5 15 7.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 7.5 10 12.5 15 7.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+    transition: transform 0.18s ease;
+}
+
+.chat-live-review-summary[aria-expanded="true"]::after { transform: rotate(180deg); }
+
+@media (hover: hover) {
+    .chat-live-review-summary:hover { background: var(--tone-quiet-hover); }
+}
+
+.chat-live-review-summary:active {
+    background: var(--tone-quiet-hover);
+    filter: var(--press);
+}
+
+.chat-live-review-summary:focus-visible {
+    outline: 2px solid var(--focus-accent-border);
+    outline-offset: 2px;
 }
 
 [data-live-reviews-host] > .chat-live-reviews {
+    display: block;
+    margin: 0 var(--space-2) var(--space-3);
+}
+
+[data-live-reviews-host] > .chat-live-reviews[data-expanded="0"]:not([data-review-hydrate-visible]) {
     display: none;
 }
 
-.chat-live-card[data-expanded="1"] > [data-live-reviews-host] > .chat-live-reviews {
-    display: block;
-    margin: 0 var(--space-4) var(--space-3);
-    border-top: 1px solid var(--divider);
+.review-checks {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--space-1) / 2);
 }
 
-.chat-review-section-toggle,
-.chat-review-group-toggle,
-.chat-review-detail-toggle {
+.review-check {
+    min-width: 0;
+    border-radius: var(--radius-inner);
+}
+
+.review-check[data-open="1"] {
+    margin: var(--space-1) 0 var(--space-2);
+    background: var(--surface-tray);
+}
+
+.review-check-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    gap: calc(var(--space-1) / 2) var(--space-3);
+    width: 100%;
+    padding: var(--space-2);
     border: 0;
+    border-radius: var(--radius-inner);
     background: transparent;
     color: inherit;
-    cursor: pointer;
     font: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: var(--motion-tone);
 }
 
-.chat-review-section-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    padding: var(--space-2) 0;
+@media (hover: hover) {
+    .review-check:not([data-open="1"]) > .review-check-head:hover { background: var(--tone-quiet-hover); }
+}
+
+.review-check-head:focus-visible {
+    outline: 2px solid var(--focus-accent-border);
+    outline-offset: 2px;
+}
+
+.review-check-subject {
+    display: -webkit-box;
+    min-width: 0;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     color: var(--text-primary);
     font-size: var(--type-body);
     line-height: var(--line-title);
     font-weight: 600;
-    text-align: left;
-}
-
-.chat-review-section-count,
-.chat-review-group-meta,
-.chat-review-attempt-meta {
-    color: var(--text-meta);
-    font-size: var(--type-meta);
-    line-height: var(--line-meta);
-    font-weight: 400;
-}
-
-.chat-review-groups,
-.chat-review-attempts {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-.chat-review-group {
-    border-radius: var(--radius);
-    background: var(--ui-card-bg-soft);
-}
-
-.chat-review-group-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    text-align: left;
-}
-
-.chat-review-group-main,
-.chat-review-attempt-main {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-1);
-    min-width: 0;
-    flex-wrap: wrap;
-}
-
-.chat-review-group-label,
-.chat-review-attempt-label {
-    color: var(--text-primary);
-    font-size: var(--type-body);
-    line-height: var(--line-body);
-}
-
-.chat-review-subject {
-    color: var(--text-meta);
-    font-size: var(--type-meta);
     overflow-wrap: anywhere;
 }
 
-.chat-review-execution {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-width: 0;
-    color: var(--text-meta);
-    font-size: var(--type-meta);
-    line-height: var(--line-meta);
-}
-
-.chat-review-execution-model {
-    min-width: 0;
-    overflow-wrap: anywhere;
-}
-
-.chat-review-attempts {
-    padding: 0 var(--space-2) var(--space-2);
-}
-
-.chat-review-attempt {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: var(--space-1) var(--space-2);
-    padding: var(--space-2);
-    border-inline-start: 2px solid var(--status-neutral-fg);
-    border-radius: var(--radius-sm);
-    background: var(--surface-control);
-}
-
-.chat-review-attempt.working { border-inline-start-color: var(--status-neutral-fg); }
-.chat-review-attempt.done { border-inline-start-color: var(--status-ok-fg); }
-.chat-review-attempt.warn { border-inline-start-color: var(--status-warn-fg); }
-.chat-review-attempt.error { border-inline-start-color: var(--status-error-fg); }
-.chat-review-attempt.superseded { opacity: 0.74; }
-
-.chat-review-detail-toggle {
-    color: var(--text-primary);
-    font-size: var(--type-meta);
-    line-height: var(--line-meta);
-    white-space: nowrap;
-}
-
-.chat-review-attempt-detail {
+.review-check-meta {
     grid-column: 1 / -1;
     color: var(--text-meta);
     font-size: var(--type-meta);
-    line-height: var(--line-body);
-    white-space: pre-wrap;
+    line-height: var(--line-meta);
     overflow-wrap: anywhere;
-    max-height: 60vh;
-    overflow-y: auto;
 }
 
-.chat-review-group-cost,
-.chat-review-initiator {
+.review-check-head > .review-chevron {
+    align-self: center;
+    color: var(--text-secondary);
+    transition: transform 0.18s ease;
+}
+
+.review-check[data-open="1"] > .review-check-head > .review-chevron { transform: rotate(180deg); }
+
+.review-check-body { padding: 0 var(--space-2) var(--space-3); }
+
+/* A status word's weight (DESIGN bible "Type"); live work keeps the moving dots' width beside its word. */
+.review-state {
+    flex: none;
+    white-space: nowrap;
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    font-weight: 500;
+}
+
+.review-state[data-tone="working"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-meta);
+}
+
+.review-seats,
+.review-attempt {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.review-seat { min-width: 0; }
+
+.review-seat-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: calc(var(--space-1) / 2) var(--space-2);
+    min-width: 0;
+}
+
+.review-seat-head > .review-state { margin-inline-start: auto; }
+
+.review-seat-head > .harness-identity {
+    align-self: center;
+    color: var(--text-secondary);
+    font-size: var(--type-meta);
+}
+
+.review-seat-name {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: var(--type-body);
+    line-height: var(--line-title);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.review-seat-note,
+.review-seat-role,
+.review-seat-meta,
+.review-ask-line,
+.review-check-line,
+.review-history,
+.review-hydrate,
+.chat-review-execution-model {
     color: var(--text-meta);
     font-size: var(--type-meta);
     line-height: var(--line-meta);
-    padding: var(--space-1) var(--space-2);
+    overflow-wrap: anywhere;
 }
 
-.chat-review-section-toggle:focus-visible,
-.chat-review-group-toggle:focus-visible,
-.chat-review-detail-toggle:focus-visible {
+.review-ask-line { margin: 0; }
+
+.review-seat-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+    margin-top: calc(var(--space-1) / 2);
+}
+
+.review-seat-meta { flex: none; white-space: nowrap; }
+
+.review-line {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: var(--type-body);
+    line-height: var(--line-body);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.review-line-wrap {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.review-line-quiet,
+.review-line-by { color: var(--text-meta); }
+
+.review-sev {
+    margin-inline-end: var(--space-1);
+    color: var(--text-meta);
+    font-size: var(--type-meta);
+    font-weight: 600;
+}
+
+.review-sev[data-tone="error"] { color: var(--status-error-fg); }
+
+.review-warning { margin: 0 0 var(--space-3); }
+
+/* Read: a quiet link-button (words and a chevron), the touch area extended by .ui-hit-area. */
+.review-read {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: calc(var(--space-1) / 2);
+    min-height: var(--space-5);
+    margin: 0 calc(var(--space-1) * -1);
+    padding: 0 var(--space-1);
+    border: 0;
+    border-radius: var(--pill-radius);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--motion-tone);
+}
+
+@media (hover: hover) {
+    .review-read:hover:not(:disabled) { background: var(--tone-quiet-hover); }
+}
+
+.review-read:active { filter: var(--press); }
+.review-read:disabled { color: var(--text-meta); cursor: default; }
+
+.review-read:focus-visible {
     outline: 2px solid var(--focus-accent-border);
     outline-offset: 2px;
+}
+
+.review-check-foot,
+.review-history,
+.review-hydrate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-4);
+}
+
+.review-check-foot {
+    margin-top: var(--space-3);
+    color: var(--text-meta);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+}
+
+.review-check-line { flex: 1 1 auto; min-width: 0; }
+.review-history { margin: var(--space-2) var(--space-2) 0; }
+.review-hydrate { margin: 0 var(--space-2) var(--space-2); }
+
+/* The second layer: the record as a labelled list at the meta size, behind one quiet disclosure; a long record
+   scrolls inside its own box, whose reading position an update keeps. */
+.review-facts { min-width: 0; }
+.review-facts[open] { flex-basis: 100%; }
+
+.review-facts-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--space-5);
+    border-radius: var(--pill-radius);
+    color: var(--text-secondary);
+    font-weight: 600;
+    list-style: none;
+    cursor: pointer;
+}
+
+.review-facts-summary::-webkit-details-marker { display: none; }
+.review-facts-summary > svg { transition: transform 0.18s ease; }
+.review-facts[open] > .review-facts-summary > svg { transform: rotate(90deg); }
+
+.review-facts-summary:focus-visible,
+.review-facts-body:focus-visible {
+    outline: 2px solid var(--focus-accent-border);
+    outline-offset: 2px;
+}
+
+.review-facts-body {
+    max-height: 40vh;
+    margin-top: var(--space-2);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: var(--radius-sm);
+}
+
+.review-facts-list {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+}
+
+.review-facts-list dt { color: var(--text-secondary); }
+
+.review-facts-list dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.review-facts-list dd.review-facts-note { grid-column: 1 / -1; }
+
+/* A narrow card (a phone, a narrow Project panel) keeps every word: a check's state moves under its subject and a
+   reviewer's line wraps to two lines before Read, as approved A draws it at 390. */
+@container livecard (max-width: 560px) {
+    .review-check-head { grid-template-columns: minmax(0, 1fr) auto; }
+    .review-check-head > .review-state { grid-column: 1; grid-row: 2; justify-self: start; }
+    .review-check-head > .review-chevron { grid-column: 2; grid-row: 1; }
+    .review-check-meta { grid-row: 3; }
+    .review-seat-head > .review-state { margin-inline-start: 0; }
+    .review-seat-line { flex-wrap: wrap; }
+
+    .review-line {
+        display: -webkit-box;
+        flex-basis: 100%;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-live-review-summary::after,
+    .review-check-head > .review-chevron,
+    .review-facts-summary > svg { transition: none; }
 }
 
 .chat-live-timeline {
@@ -2971,17 +3187,6 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
         margin-inline-start: auto;
     }
 
-    .chat-review-group-toggle {
-        flex-wrap: wrap;
-    }
-
-    .chat-review-attempt { grid-template-columns: minmax(0, 1fr); }
-
-    .chat-review-group-meta,
-    .chat-review-detail-toggle {
-        margin-inline-start: 0;
-    }
-
     /* Equal inline inset on both sides, paid once: a child sits --space-1 inside the thread line on the left
        and inside its root card's border on the right, so no child border meets the root's border. Deeper
        levels keep only their rail and frame; any wider per-level inset collapses a depth-10 child on a phone. */
@@ -3066,6 +3271,14 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 .chat-live-card.subagent .chat-live-activity {
     color: var(--text-secondary);
+}
+
+/* A child's report names its reader before its words: an inline label, semibold at the
+   row's own size and ink (DESIGN §5), like the timeline heading labels below.
+   Drawn from data-lead so the line's fit counts it. */
+.chat-live-activity[data-lead]:not(:empty)::before {
+    content: attr(data-lead) " · ";
+    font-weight: 600;
 }
 
 .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button .chat-live-title {
@@ -3200,6 +3413,8 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     line-height: inherit;
     margin: 0;
 }
+
+.chat-live-line-body[data-body-format="text"] { white-space: pre-wrap; }
 
 .chat-live-line-title strong,
 .chat-live-line-body strong {
@@ -8433,6 +8648,8 @@ body.keyboard-open .project-panel {
     margin-top: var(--space-3);
     padding-top: var(--space-3);
     border-top: 1px solid var(--divider);
+    container-type: inline-size;
+    container-name: updatesattempt;
 }
 .updates-attempt-headline {
     font-size: var(--type-body);
@@ -8448,17 +8665,68 @@ body.keyboard-open .project-panel {
     justify-content: space-between;
     gap: var(--space-2);
 }
+/* The attempt's facts and its after-update samples (owner 25.10: A): label in the disclosure's meta ink, value
+   primary (DESIGN section 2); the label column stops at 12rem, so a long label wraps instead of pushing values. */
 .updates-attempt-facts {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: fit-content(12rem) minmax(0, 1fr);
     gap: var(--space-1) var(--space-3);
     margin: var(--space-2) 0 0;
 }
-.updates-attempt-facts dd { margin: 0; }
+.updates-attempt-facts dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+/* A group heading inside the list (Before / After the update): the list's meta size and ink, semibold. */
+.updates-facts-head {
+    grid-column: 1 / -1;
+    color: var(--text-meta);
+    font-weight: 600;
+    margin-top: var(--space-2);
+}
+.updates-facts-head:first-child { margin-top: 0; }
+/* The exact recorded stamp, under its local time. */
+.updates-fact-raw {
+    display: block;
+    color: var(--text-meta);
+}
+/* Open, the list takes the whole row. Restore, the attempt's one button (the notice closes itself), keeps its side
+   on the row below: the end of a wide attempt, as approved A placed it. */
+.updates-attempt-details[open] { flex: 1 1 100%; }
+.updates-attempt-foot > .btn { margin-inline-start: auto; }
+:is(.updates-attempt-details, .updates-letter-details, .updates-recovery) summary:focus-visible {
+    outline: 2px solid var(--focus-accent-border);
+    outline-offset: 2px;
+}
 .updates-attempt-details summary {
     min-height: var(--touch-target-min);
     align-content: center;
     padding-block: var(--space-2);
+}
+/* The exact record under the rows, in the code face on a tray; wrapped, so neither it nor the card scrolls sideways. */
+.updates-raw { margin-top: var(--space-2); }
+.updates-raw-text {
+    margin: var(--space-1) 0 0;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-tray);
+    border-radius: var(--radius-inner);
+    color: var(--text-primary);
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 2;
+}
+/* A narrow attempt (a phone) stacks each label over its value, and Restore under the summary at its start, closed or
+   open; 34rem is what a 640px phone window leaves it. */
+@container updatesattempt (max-width: 34rem) {
+    .updates-attempt-facts { grid-template-columns: minmax(0, 1fr); }
+    .updates-attempt-facts dt { margin-top: var(--space-1); }
+    .updates-attempt-facts .updates-facts-head { margin-top: var(--space-3); }
+    .updates-attempt-details { flex-basis: 100%; }
+    .updates-attempt-foot > .btn { margin-inline-start: 0; }
 }
 .updates-meta {
     display: flex;

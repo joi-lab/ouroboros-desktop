@@ -63,11 +63,12 @@ from ouroboros.gateway.owner_settings import (
     unsaved_error,
 )
 from ouroboros.gateway._helpers import request_drive_root
+from ouroboros.gateway.onboarding_host import recorded_attempt
 from ouroboros.server_runtime import apply_runtime_provider_defaults, has_startup_ready_provider
 from ouroboros.skill_starter import after_onboarding, onboarding_skill_choices
 from ouroboros.settings_setup_contract import (
-    ONBOARDING_COMPLETED_KEY,
-    parse_subscription_intent,
+    ONBOARDING_ATTEMPT_KEY, ONBOARDING_COMPLETED_KEY,
+    parse_completion_attempt, parse_subscription_intent,
 )
 from ouroboros.subscription_install_presets import (
     PRESET_HARNESSES,
@@ -849,8 +850,9 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         body = None
-    if not isinstance(body, dict):
-        return unsaved_error("JSON body must be an object.", 400)
+    attempt_id, attempt_error = parse_completion_attempt(body)
+    if not isinstance(body, dict) or attempt_error:
+        return unsaved_error(attempt_error or "JSON body must be an object.", 400)
     from ouroboros.gateway.settings import ALLOW_EMPTY_REVIEW_POOL, REVIEW_LANES_KEY, review_pool_save_judgement, _run_settings_writer
 
     allow_empty_pool = body.get(ALLOW_EMPTY_REVIEW_POOL) is True
@@ -919,9 +921,9 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
     if current.get(SUBAGENTS_SETTING):
         current.pop(REVIEW_LANES_KEY, None)
 
-    # The durable completion fact rides in the SAME write, whatever the preset
-    # did: a completion that connected nothing must still close the window.
-    current[ONBOARDING_COMPLETED_KEY] = utc_now_iso()
+    # The durable completion fact, with the client's attempt id ("" for none), rides in the
+    # SAME write, whatever the preset did: a completion that connected nothing must still close the window.
+    current.update({ONBOARDING_COMPLETED_KEY: utc_now_iso(), ONBOARDING_ATTEMPT_KEY: attempt_id})
     pending_mode = normalize_runtime_mode(current.get("OUROBOROS_RUNTIME_MODE"))
     active_mode = get_runtime_mode()
     boundary = CommitBoundary()
@@ -988,7 +990,7 @@ async def api_onboarding_complete(request: Request) -> JSONResponse:
 
     # Lazy, in the direction ``_persist`` already imports (settings.py imports
     # nothing from this module).
-    return await _run_settings_writer(_complete_locked, request, body)
+    return await _run_settings_writer(recorded_attempt(attempt_id, boundary, _complete_locked), request, body)
 
 
 __all__ = [

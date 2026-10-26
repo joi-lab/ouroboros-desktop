@@ -317,7 +317,7 @@ def _copy_task_summary_metadata(rec: Dict[str, Any], entry: Dict[str, Any]) -> N
     if entry.get("type") != "task_summary":
         return
     rec.update({key: entry[key] for key in ("wake_silent", "quiet_effective") if type(entry.get(key)) is bool})
-    for key in ("model_execution", "review_projection", "history_retention", "terminal_time"):
+    for key in ("model_execution", "review_projection", "history_retention", "terminal_time", "cancel_origin"):
         if isinstance(entry.get(key), dict):
             rec[key] = dict(entry[key])
     if entry.get("suggested_name"):

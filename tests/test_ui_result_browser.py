@@ -336,15 +336,19 @@ def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypa
                     assert route.locator('.chat-live-line.done').count() == 1
                     accepted = page.locator('.chat-live-card[data-task-id="parent1"]')
                     accepted.locator('[data-live-phase]').filter(has_text="Done with warnings").wait_for()
-                    # The collapsed card shows only the quiet Reviews count; the section opens inside
-                    # the expanded card (DESIGN "Reviews inside task cards").
-                    accepted.locator('[data-live-review-summary]').filter(has_text="Reviews").wait_for()
-                    if accepted.get_attribute('data-expanded') != '1':
-                        accepted.locator('[data-live-disclosure]').click()
-                    accepted.locator('[data-review-section-toggle]').click()
+                    # The quiet Reviews door opens independently of Details; the review's
+                    # passed state never replaces the task's Done with warnings.
+                    door = accepted.locator('[data-live-review-summary]').filter(has_text="Reviews")
+                    door.wait_for()
+                    assert accepted.get_attribute('data-expanded') == '0'
+                    door.click()
+                    assert accepted.get_attribute('data-expanded') == '0'
                     accepted.get_by_text("Task acceptance", exact=True).wait_for()
                     accepted.locator('[data-review-group-toggle]').click()
-                    accepted.get_by_text("PASS", exact=True).first.wait_for()
+                    assert "passed" in accepted.locator('.review-check-head .review-state').inner_text()
+                    accepted.locator('[data-review-facts] > summary').click()
+                    assert "verdict=PASS" in accepted.locator('[data-review-attempt-detail]').inner_text()
+                    assert "Done with warnings" in accepted.locator('[data-live-phase]').inner_text()
                     page.screenshot(animations="disabled", path=str(screenshots / f"{live_engine}-result-history.png"), full_page=True)
                     with chat_connection(server) as ws:
                         message_id = uuid.uuid4().hex

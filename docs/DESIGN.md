@@ -572,9 +572,12 @@ Status, owner action, and urgent notification are separate product concepts:
 
 - **Status** states a fact about the affected object, never implying that the
   owner can or must act. Task status uses one factual word family, `Working`,
-  `Done`, `Done with warnings`, `Failed`, `Stopped`, which is also the host's
-  durable label vocabulary for its own task rows in Main and the Project thread
-  (`OUTCOME_PHASE_HEADLINE`), not only the browser's.
+  `Done`, `Done with warnings`, `Failed`, `Stopped`, shared by host task rows in
+  Main and the Project thread (`OUTCOME_PHASE_HEADLINE`). `Done` says the turn ended, not that its goal was
+  met. Stop now reads `Stopped` whatever it kept (answer and files stay shown);
+  a Wrap up reads `Done` over its final answer and `Stopped` without one; failed
+  file preservation beside Wrap up reads `Failed`; the cause names the button.
+  A record naming no button keeps its recorded word (owner 25.10, A).
 - **Owner action** exists only when the responsible domain exposes a current
   concrete continuation, such as Resume, Retry, Connect, Repair, Grant access,
   or Restart: a real adjacent control, which severity alone never manufactures.
@@ -735,6 +738,10 @@ Independent execution, artifact, verification or publication failures still appl
 Blocking corrections saved without fresh approval and an explicit unfinished stop
 remain unaccepted; show the retained work and reason through the existing five-word
 status family and details, without inventing reviewer PASS or a new status badge.
+An older task-acceptance fail that was only an explicit Advisory host declining a
+second panel over an unchanged answer, its verdict short of FAIL, reads `Done with
+warnings` with that sentence; the stored fail stays beside it, a published Main row
+keeps its words, and any other case stays `Failed` (owner 25.10, A).
 
 ### The tone primitive
 
@@ -1132,11 +1139,13 @@ preference when it opens and on every reconnect; there is no file watcher.
 - **A narrow chat column gives every bubble its full width.** A column of
   620px or less — a phone or a narrow Project panel alike — drops the
   wide-screen gutters; the column, not the viewport, decides.
-- **A task card's summary outranks its details.** The latest-activity line is
-  `--type-body`; collapsed timeline rows are a dense log at `--type-meta` in
-  `--text-secondary`; an expanded row returns to `--type-body` in
-  `--text-primary`. Details never render larger than the summary above them;
-  an inline label inside a row is semibold at the row's own size.
+- **Task summaries outrank Details.** Activity: `--type-body`; collapsed rows:
+  `--type-meta`/`--text-secondary`; expanded: `--type-body`/`--text-primary`.
+  Details never exceed summary size; inline labels stay semibold at row size.
+  Task-attributed uncommitted work: one short fact; exact paths and HEAD in Details.
+  Failed scans say unknown; zero adds no line. Done stays Done; no adoption/publication claim.
+  Owner 2026-10-25 17:22:09, quiz `3766b0a01ce14dec9a17adee2488bdcf`:
+  “A — короткий факт сразу, файлы в Details”.
 - **A nested child card is subordinate to its root.** Its compact identity row
   shows status, role and `Details`; a short task id disambiguates siblings. Its
   compact line names the executor with only its own model evidence (observed;
@@ -1149,7 +1158,9 @@ preference when it opens and on every reconnect; there is no file watcher.
   range. A frame without a level paints no chip; an older frame is never
   back-filled. A child keeps one useful activity line visible, a root up to
   three; empty activity reserves no band, and a duplicate title is not activity.
-  Full narration and Reviews expand independently. The root keeps primary title
+  Full narration and Reviews expand independently. A completed child's result is
+  its report: `Report to parent`, semibold at the row's size and ink, leads its
+  collapsed line and replaces `[RESULT]` over full text (owner 25.10, A). The root keeps primary title
   ink at weight 500, children secondary ink at 400. Nested frames preserve real
   ancestry; their opaque secondary surface avoids accumulating translucent white
   tints at greater depth.
@@ -1369,103 +1380,85 @@ the Available subagents roster, MCP servers, custom keys.
 
 ### Reviews inside task cards
 
-Real tasks and real subagents are cards. Reviews are a subsection of the
-exact real task that owns their presentation. Harness and neutral API marks
-identify the delivery channel alongside explicit execution evidence; they are
-not child-task cards and never prove execution by themselves.
+Reviews belong to their presenting task's or subagent's card (owner 25.10, quiz
+answer A: compact opinions under the card, full text in the reader). Harness and
+API marks identify delivery beside explicit execution evidence; neither marks nor
+reviews create child tasks or prove execution.
 
-- A collapsed task card, and a collapsed nested child card the same way, shows
-  only a quiet `Reviews N` count, optionally with an active count, at the start
-  of its one action row under the metadata line (its controls right-aligned on
-  that row): no aggregate pass/fail alert, no synthesized verdict, no review
-  dollars.
-- Expanding `Reviews` reveals one row per currently admitted review group
-  (`Skill review`, `Plan review`, `Review records`, or a read-only `Task
-  acceptance` group for a panel stored before the result review). Expanding a group
-  reveals its ordered attempt rows. Group state and verdict remain
-  domain-specific; one blocker never recolours the whole task card.
+- A collapsed parent or child card has a quiet `Reviews N` door with the Details
+  chevron, independent of Details: no alert, verdict or dollars. It opens flat
+  rows named for the reviewed subject (`Code review · goal`, `Plan · revision
+  n`), each with its state and a time · tally line; only an opened row takes the
+  tray. A reviewer is two lines: model (else the requested one, `requested · not
+  reported`), counted or adviser, outcome; then its critical finding (or that it
+  is only in the full answer), else a note, else the engine's own cause, with
+  Read. A narrow card (its own width) puts the state under the subject and wraps
+  reviewer lines to two.
+- Rows speak one table's words (`review_record_card.js`): `passed`, `rejected`,
+  `no verdict`, `not sent`, `verdict not recorded`; a reviewer `passed it` (with
+  notes), `rejected it`, `inconclusive`, `outcome unknown`, `awaiting`, `not
+  sent`, `unavailable`, `answered without a readable verdict`. Tokens and codes
+  (`QUORUM_FAILED`, `DEGRADED`) stay in Record facts and Logs. A state is the
+  status sentence in its tone; live work is the moving status mark. Owed seats
+  use the host's wait facts and `since` (local 24-hour clock, a date when
+  earlier; never inferred), not a second definition.
+- Read opens the selected saved answer in the document reader (Markdown, Source
+  exact; a failure note as plain text) and never regenerates a review or
+  switches sources after an update; limits, Download, timeout and focus follow
+  Document reading. An unavailable original is named so; normalized saved
+  skill/applied detail is labelled so, read through its task's review door.
+- One Record facts per row lists the record (label, value): identities, verdict
+  tokens, pool, strictness, reason, not-reached causes, costs (measured, zero,
+  subscription or unknown; wave totals over priced seats), failure codes,
+  requested and observed models apart; PASS may have findings. It scrolls in its
+  own box; the row's foot says the panel line. One unreadable record is a local
+  `could not be read` row beside readable neighbours (Logs print it too); older
+  records have a paged Read (`may be` when a rotated index cannot say); an older
+  count alone makes no row or door. A preflight stays one informational seat.
 - Start progress labels the frozen model/route/profile as requested; settlement
   reports that same slot's observed execution or says it was not reported. An API
   model sent in a request is not an independently observed provider label, and
   duplicate model slots remain distinct. No global last-run identity fills a gap.
-- Disclosure is user-owned. Review results, retries, failures, terminal task
-  state, reconnect, and lazy-detail loading update content in place but never
-  open or close the task, Reviews section, or group.
-- The Plan group is the plan record (nobody votes, so it carries no verdict
-  word): its line reads `N objections may hold` (an owner-marked reviewer's
-  objection, warning tone), `N open objections` (only added critics', warning
-  tone), `awaiting answers` (working tone while its task runs), `no open
-  objection` (done tone) or `not asked yet`; `objections not projected` in the
-  neutral tone when the detail lacks the host's fold, which the panel never
-  re-derives. The revision row shows the latest revision's goal, `done_when`
-  and earlier revisions' claims; each ask row reads `k of n answered` while
-  replies are owed and lists each participant (`added — never holds`,
-  `awaiting`, `not sent — <reason>`) and its objections (`(not adjudicated)`,
-  `(never holds)`). A record of the earlier schema keeps its wave rendering
-  below.
-- An earlier-schema plan wave whose reviewers may still answer reads as work in
-  progress only while its own task runs: the working tone,
-  `in progress · k of n answered` where the verdict token would sit, and each
-  awaited reviewer listed as awaiting, not unavailable, under no verdict word;
-  once the task has ended the same wave reads `no verdict · k of n answered` in
-  the neutral tone. A reviewer whose window expired is unresolved. A settled
-  wave whose reviewers were too few for a verdict reads
-  `no verdict · k of n answered · m unavailable` in the neutral tone: the
-  verdict word `DEGRADED` is the host's placeholder and never paints.
-- A task-acceptance panel stored before the result review whose reviewers may
-  still answer never reads as a bare verdict token. While its own task runs it is work in progress: the working
-  tone and `in progress · k of n answered`, or `PASS so far · k of n answered`
-  once the quorum is met; once the task has ended it reads
-  `no verdict · k of n answered` in the neutral tone, or
-  `PASS · k of n answered`, until a late settlement replaces it. A reviewer FAIL
-  keeps the error tone and reads `FAIL · k of n answered` in both.
-- On a plan wave and a stored acceptance panel alike, a slot neither answered nor
-  awaited (a settled failure, an expired window, lost custody, a refusal) adds
-  `· m unavailable` and keeps the warning tone beside the awaited slots; a
-  settled plan wave with no awaited slot reads its `no verdict` line in the
-  neutral tone (a stored acceptance panel with none reads the same line but keeps the
-  warning tone, its stored `DEGRADED` staying in the attempt detail), and each
-  unavailable plan reviewer row names the model and quotes the engine's reported
-  sentence when one exists, the failure code staying in the task detail and
-  Logs.
-- A plan wave the mind ordered weaker than the owner's effort setting says so in
-  its attempt detail as one keyed line naming each seat, the ordered effort and
-  the setting (`Reviewers ordered weaker than your setting: s1 low (setting
-  xhigh)`), at desktop and phone width alike; the verdict token is never
-  recoloured for it. A seat that did not answer a same-spec cycle adds `· did
-  not answer; its earlier finding is still listed` to its unavailable row (a
-  never-sent seat: `· not sent; its earlier finding is still listed`).
-- An awaited or unresolved reviewer row adds `· since HH:MM` in the viewer's
-  local 24-hour clock, prefixed with the short date when the wait began on an
-  earlier day, only where the host recorded the moment it sent that reviewer's
-  request; a time is never inferred.
-- A review record whose wave recorded the review pool says it in words at the
-  top of its attempt detail: one panel line (the strictness, who chose the
-  panel — Ouroboros, the host or you — `k of n ticked reviewers` and any
-  advisers, `not counted`), the reason given or `widened to every ticked
-  reviewer (Blocking)`, each seat not reached with its cause, and the wave
-  total over the priced seats, naming those on a subscription or of unknown
-  cost. Each reviewer line leads with `counted` or `adviser, not counted` and
-  its own cost (an amount, `subscription` or `cost unknown`, never $0 for a
-  gap). A seat still owed an answer reads `awaiting an answer`, never `not
-  reached`; a preflight record keeps its own one-row line. A record written
-  before these facts reads as it always did.
+- Disclosure is user-owned: results, retries, failures, task end, reconnect and
+  loading update in place, never opening or closing the task, Reviews or a row.
+  Keyed updates keep each row's nodes, so focus, an opened Record facts and its
+  reading position survive and a word beside a mark changes with it. A failed
+  read stays visible on the closed door; an unresolved local warning is one
+  sentence inside the opened row. Open rows state exact accounting only where
+  the domain proves it, else `Cost unavailable`; closed rows never show dollars.
+- The Plan group is the plan record (nobody votes, no verdict word): `N
+  objections may hold` (an owner-marked reviewer's, warning tone), `N open
+  objections` (added critics' only, warning), `awaiting answers` (working while
+  its task runs), `no open objection` (done) or `not asked yet`; `objections not
+  projected` (neutral) when the detail lacks the host's fold, which is never
+  re-derived. Facts keep the latest revision's goal, `done_when` and earlier
+  claims; each ask reads `k of n answered` and lists participants (`counts` or
+  `added — never holds`, `awaiting`, `not sent`) with their standing and
+  objections (`(not adjudicated)`, `(never holds)`, withdrawn).
+- An earlier-schema plan wave or stored acceptance panel whose reviewers may
+  still answer is work in progress only while its task runs (`in progress · k of
+  n answered`, or `passed so far` once the quorum is met; awaited reviewers are
+  awaiting, not unavailable); after the task it reads `no verdict · k of n
+  answered` (neutral), or `passed · …`. A reviewer FAIL reads `rejected · k of n
+  answered` in the error tone. A slot neither answered nor awaited (a settled
+  failure, expired window, lost custody, refusal) adds `· m unavailable` and the
+  warning tone; a settled wave without quorum reads its `no verdict` line in the
+  neutral tone (a stored panel keeps the warning tone): `DEGRADED` is the host's
+  placeholder and never paints. An expired window is unresolved; an unavailable
+  plan reviewer quotes the engine's sentence, the code in detail and Logs.
+- A plan wave ordered weaker than the owner's effort setting says so in one keyed
+  line per seat (`Reviewers ordered weaker than your setting: s1 low (setting
+  xhigh)`), never recolouring the verdict; a seat that did not answer a same-spec
+  cycle adds `· did not answer; its earlier finding is still listed` (never sent:
+  `· not sent; …`).
 - A panel that settled after its task ended stays one attempt row of its group,
-  labelled as settled after the task ended; its note (which verdict, which
-  revision, whether a reviewer's outcome is still unknown) is host-composed and
-  printed verbatim, leading the attempt detail.
-- Stable keyed rows are reconciled in place: a routine update preserves the
-  exact lazy-detail node, focused descendant and its reading position. Expanded
-  groups state exact aggregate accounting when projected, attempt detail exact
-  accounting when the domain can prove it, and otherwise each says
-  `Cost unavailable`; collapsed rows never show dollars.
+  labelled so; its host-composed note (which verdict, which revision, whether a
+  reviewer's outcome is still unknown) is printed verbatim first.
 - Harness marks are monochrome `currentColor` vectors with adjacent visible
-  text. They carry identity only, remain neutral across status states, and use a
-  generic text-preserving fallback for unknown harnesses; direct API is shown
-  neutrally as `API`.
-- Vector provenance: Claude, Cursor, and OpenCode paths come from Simple Icons;
-  Codex/OpenAI comes from SVGL. Product names and marks remain the property of
-  their owners.
+  text, identity only, neutral across states, with a generic text-preserving
+  fallback; direct API shows as `API`. Claude, Cursor and OpenCode paths come
+  from Simple Icons, Codex/OpenAI from SVGL; names and marks belong to their
+  owners.
 
 ### Quiz card
 

@@ -179,6 +179,7 @@
  * @property {boolean=} allow_empty_review_pool  // confirms saving agents that leave no review row
  * @property {string[]=} starter_skills  // catalog ids installed once after completion; absent: the default list
  * @property {Object<string, string>=} skill_source_trust  // {hub row id: trusted|review}; marks them confirmed
+ * @property {string=} attempt_id  // client-made per save; GET /api/onboarding/complete?attempt= reads it back
  */
 /**
  * POST /api/onboarding/subagents/preview accepts the same open provider/local draft and subscription
@@ -209,6 +210,7 @@
  * @property {boolean} restart_required
  * @property {OnboardingPresetProjection} preset
  */
+/** @typedef {import('./client_contract_types.js').OnboardingAttemptResponse} OnboardingAttemptResponse */
 /**
  * 500 AFTER settings landed: retry the named later step, never re-save (settings/onboarding writes).
  * @typedef {Object} SettingsPostCommitFailureResponse
@@ -421,8 +423,16 @@
  * @property {Object=} outcome_axes
  * @property {Object=} task_contract
  * @property {string=} reason_code
+ * @property {Object=} cancel_origin The typed stop an owner-stopped turn's final carries (source, stop_policy).
  * @property {Object=} review_status
  * @property {Object=} review_projection
+ *   Ledger additions: gaps[] ({record_id, review_gap}) names unavailable records;
+ *   review_records_omitted is 0|"1+"|"unknown" (archive uncertainty alone proves no review).
+ *   panels[] retains subject, goal, revision, review_wave_id and record_state.
+ *   actors[] separates requested_model from observed_model (empty means unobserved),
+ *   keeps failure_details as an object, and names current sources[] by
+ *   {role, part, status, sha256, size, chars}. Pending/displaced sources remain
+ *   historical in the record; existing exact selections remain readable.
  *   v6.74.0 additive keys: panels[].dialogue ({status, votes} — the reviewer-authored
  *   dialogue-status reduction), panels[].single_reviewer_no_diversity (boolean label),
  *   and actors[].dialogue_status ("continue_actionable"|"unreachable_here"|"stable_disagreement"|"").
@@ -933,12 +943,39 @@
  * @property {number} span
  * @property {number} grid_span
  * @property {string} revision
+ * @property {string=} generation  // live publication identity; changes on same-content reload too
  * @property {boolean=} pinned_card  // a kept living card (skill "_cards"); presses use the card: decision family
  */
 
 /**
  * @typedef {Object} WidgetsResponse
  * @property {WidgetTab[]} ui_tabs
+ */
+
+/**
+ * Parent-only controls for a finite widget file lease; the token is a read capability, not API auth.
+ * @typedef {Object} WidgetAssetLeaseRequest
+ * @property {string} skill
+ * @property {string} tab_id
+ * @property {string} generation
+ */
+
+/**
+ * @typedef {Object} WidgetAssetTokenRequest
+ * @property {string} token
+ */
+
+/**
+ * @typedef {Object} WidgetAssetLeaseResponse
+ * @property {string} token
+ * @property {string} base_url
+ * @property {number} expires_in
+ * @property {number} renew_after
+ */
+
+/**
+ * @typedef {Object} WidgetAssetRevokeResponse
+ * @property {boolean} ok
  */
 
 /**
@@ -1565,3 +1602,17 @@ export const GATEWAY_CONTRACT_VERSION = '7.8.1';
 
 /** @typedef {import('./management_contract_types.js').UiContribution} UiContribution */
 /** @typedef {import('./management_contract_types.js').UiContributionsResponse} UiContributionsResponse */
+
+/**
+ * @typedef {Object} TaskReviewHistoryResponse
+ * @property {string} task_id
+ * @property {Object} review_projection Compact panels plus local gaps, never a complete-history claim.
+ * @property {number|null} next_offset Explicit next ledger-history page, null only at its end.
+ * Saved review source URLs bind task/record/seat/role/part/SHA. Their text/plain
+ * body is the complete safe export; X-Review-Source-SHA256 identifies the saved
+ * original and X-Review-Export-SHA256 the delivered redacted bytes. Read and
+ * Download use one URL. Saved skill detail uses
+ * /api/tasks/{physical_owner_task_id}/reviews/skill/{job_or_record_id}?skill={name}&format=text,
+ * checked against recorded task/origin/presentation ownership. It exports the same
+ * safe normalized text as skill history; the existing /api/skills JSON contract stays.
+ */

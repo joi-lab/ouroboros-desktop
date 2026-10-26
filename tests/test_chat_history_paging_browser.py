@@ -510,9 +510,9 @@ def test_history_details_selection_replay_and_project_reopen(direct_server_with_
                     popup.value.close()
                     assert line.get_attribute("data-expanded") == "1", "nested link must not toggle its title owner"
 
-                    card.locator('[data-review-section-toggle]').click()
+                    card.locator('[data-live-review-summary]').click()
                     card.locator('[data-review-group-toggle]').click()
-                    card.locator('[data-review-attempt-toggle]').first.click()
+                    card.locator('[data-review-facts] > summary').first.click()
                     detail = card.locator('[data-review-attempt-detail]').first
                     assert "REVIEW_DETAIL_SENTINEL" in detail.inner_text()
                     page.evaluate("""({feed, lineKey}) => {
@@ -520,7 +520,7 @@ def test_history_details_selection_replay_and_project_reopen(direct_server_with_
                         const line = root.querySelector(`[data-live-line-key="${lineKey}"]`);
                         const card = line.closest('.chat-live-card');
                         const detail = card.querySelector('[data-review-attempt-detail]');
-                        const focus = card.querySelector('[data-review-attempt-toggle]');
+                        const focus = card.querySelector('[data-review-facts] > summary');
                         focus.focus({preventScroll:true});
                         root.scrollTop += detail.getBoundingClientRect().top - root.getBoundingClientRect().top - 80;
                         const range = document.createRange(); range.selectNodeContents(line.querySelector('.chat-live-line-title'));

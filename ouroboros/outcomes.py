@@ -747,6 +747,34 @@ def _merge_axis(default: Dict[str, Any], value: Any) -> Dict[str, Any]:
     return merged
 
 
+def _advisory_procedural_refusal(axes: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    """A stored task-acceptance FAIL that was only the Advisory host declining a second panel.
+
+    The record's own decision is ``identical_acceptance_refused`` under explicit
+    ``advisory`` enforcement over a verdict that was not FAIL (``degraded``), and
+    execution is ``ok`` with a nonempty retained answer, not a typed host notice.
+    Execution alone proves no answer. Under Advisory that refusal is a
+    warning, so ``normalize_outcome_axes`` reads the objective as ``best_effort``
+    with the stored status beside it; the review, its verdict and the decision
+    stay as recorded. Any other enforcement (missing included), reason, verdict
+    or execution keeps the stored fail. Twin: ``log_events.advisoryProceduralRefusal``.
+    """
+    objective, review, execution = (axes.get(key) if isinstance(axes.get(key), dict) else {}
+                                    for key in ("objective", "review", "execution"))
+    decision = review.get("acceptance_decision") if isinstance(review.get("acceptance_decision"), dict) else {}
+    signals = review.get("aggregate_signals") if isinstance(review.get("aggregate_signals"), list) else []
+    answer = result.get("result")
+    # Display views omit the body but carry this same existence fact from that row.
+    ready = (isinstance(answer, str) and bool(answer)) if "result" in result else result.get("_result_text_present") is True
+    return (ready
+            and str(result.get("terminal_origin") or "") in {"", "model_final"}
+            and execution.get("status") == EXECUTION_OK and objective.get("status") == OBJECTIVE_FAIL
+            and objective.get("source") == "task_acceptance_review"
+            and objective.get("reason") == decision.get("reason") == REASON_IDENTICAL_ACCEPTANCE_REFUSED
+            and decision.get("status") == ACCEPTANCE_FINALIZED_UNACCEPTED and decision.get("enforcement") == "advisory"
+            and review.get("status") == OBJECTIVE_DEGRADED and "FAIL" not in {str(s).upper() for s in signals})
+
+
 def normalize_outcome_axes(result: Dict[str, Any]) -> Dict[str, Any]:
     """Return canonical axes for new and historical task result records."""
 
@@ -814,6 +842,9 @@ def normalize_outcome_axes(result: Dict[str, Any]) -> Dict[str, Any]:
         normalized["lifecycle"]["status"] = str(result.get("status") or "")
     if explicit_artifact_status:
         normalized["artifacts"]["status"] = explicit_artifact_status
+    if _advisory_procedural_refusal(axes, result):
+        normalized["objective"] = {**normalized["objective"], "status": OBJECTIVE_BEST_EFFORT,
+                                   "ignored_status": OBJECTIVE_FAIL}
     objective = normalized.get("objective") if isinstance(normalized.get("objective"), dict) else {}
     objective_status = str(objective.get("status") or OBJECTIVE_NOT_EVALUATED)
     objective_source = str(objective.get("source") or "none")
@@ -1042,12 +1073,12 @@ def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[
         and usage_reason in BEST_EFFORT_REASON_CODES
         and bool(usage.get("_best_effort_extracted"))
         and text.strip()
-        and not text.lstrip().startswith(("⚠️", "❌"))
     ):
         # Forced finalization (deadline grace / budget / round limit) that
         # actually EXTRACTED a model answer: honest best-effort, not failure.
         # Deterministic structural gate: forced reason code + the loop's typed
-        # "model answer extracted" fact + non-empty non-error text. Host
+        # "model answer extracted" fact + non-empty text. A model may begin
+        # its answer with a warning or cross; typography is not provenance. Host
         # fallback strings (e.g. budget rejection notices) never set the
         # extraction fact and stay failed — no text-shape whitewashing.
         execution_status = EXECUTION_BEST_EFFORT

@@ -1,6 +1,16 @@
 /** Dependency-free JSDoc mirror of `ouroboros.gateway.client_contracts` — the replaceable-client envelopes
  *  `api_types.js` indexes: the served main interface, the setup bootstrap, the settings writers' refusal,
- *  the auth gate's JSON login and the `GET /api/contract` document. */
+ *  completion readback, the auth gate's JSON login and the `GET /api/contract` document. */
+/**
+ * One completion attempt read back: saved is true while the settings document holds its write, false when
+ * refused before writing, null when unconfirmed. Only `receipt` (its own success envelope) completes.
+ * @typedef {Object} OnboardingAttemptResponse
+ * @property {?boolean} saved
+ * @property {import('./api_types.js').OnboardingCompleteResponse=} receipt
+ * @property {string=} error
+ * @property {string=} code
+ * @property {string=} post_commit_failed
+ */
 /**
  * @typedef {Object} CommandInbound
  * @property {Object=} client_surface
@@ -211,7 +221,7 @@
  * @property {string} method
  * @property {string} path
  * @property {string[]} path_params
- * @property {'gate'|'public'} auth
+ * @property {'gate'|'public'|'asset_lease'} auth
  * @property {boolean} typed  // false: published without shapes (an explicit gap)
  * @property {string[]=} query
  * @property {string[]=} headers  // request headers the handler reads; a trailing "!" marks a required one

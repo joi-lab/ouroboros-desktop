@@ -321,7 +321,7 @@ def _task_done_review_projection(
     value = result.get("review_projection")
     if not isinstance(value, dict):
         value = event.get("review_projection")
-    return value if isinstance(value, dict) and value.get("panels") else {}
+    return value if isinstance(value, dict) and (value.get("panels") or value.get("gaps") or value.get("review_records_omitted")) else {}
 
 
 # Single-shot registry for the provider-death owner notification. The old gate

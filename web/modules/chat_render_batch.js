@@ -535,7 +535,7 @@ const CARD_HEADER = [
 ];
 
 // The feed's bounded, separately scrolling boxes: a card timeline, a fetched
-// full output, a Review attempt detail. Each clips what it holds.
+// full output, a Reviews group's Record facts. Each clips what it holds.
 const BOUNDED_BOX = '[data-live-timeline], .chat-live-line-body-full, [data-review-attempt-detail]';
 
 /** An explicit exact-line landing scrolls every clipping owner before the feed. */
@@ -549,7 +549,7 @@ export function revealTimelineNode(node, feed, clearance) {
 }
 
 // A node's own bounded reading box: an expanded line's fetched full output or
-// a Review attempt detail. The owner card timeline is found from the node.
+// a Reviews group's Record facts. The owner card timeline is found from the node.
 function innerBox(node) {
     if (node?.matches?.('[data-review-attempt-detail]')) return node;
     return node?.matches?.('.chat-live-line') ? node.querySelector?.(':scope > .chat-live-line-body-full') || null : null;
@@ -599,7 +599,6 @@ export function createTimelineAnchors({ messagesDiv, liveCardRecords }) {
                 '.chat-live-actions',
                 '.chat-live-line',
                 '[data-review-section]',
-                '[data-review-section-toggle]',
                 '[data-review-hydrate-status]',
                 '[data-review-group]',
                 '[data-review-attempt]',

@@ -280,9 +280,6 @@ def live_context_publishers(drive_root: pathlib.Path) -> Dict[str, Dict[str, Any
     path. A worker observes its loaded generation, not an atomic cross-process
     view. Standard unload removes the declaration.
     """
-    from dataclasses import replace
-    from ouroboros.skill_loader import load_enabled, load_review_state
-
     with _lock:
         published = [(name, bundle.loaded_skill, dict(bundle.context_snapshot), bundle.content_hash)
                      for name, bundle in _extensions.items()
@@ -290,14 +287,35 @@ def live_context_publishers(drive_root: pathlib.Path) -> Dict[str, Dict[str, Any
         peers = [bundle.loaded_skill for bundle in _extensions.values() if bundle.loaded_skill is not None]
     result = {}
     for name, skill, descriptor, revision in published:
-        current = replace(skill, enabled=load_enabled(drive_root, name), review=load_review_state(
-            drive_root, name, skill_type="extension", skill_dir=skill.skill_dir))
-        state = _apply_durable_extension_health(_apply_deps_block(_extension_runtime_state(
-            current, drive_root=drive_root, skills=peers), drive_root, current), drive_root, current)
+        state = _published_skill_readiness(skill, drive_root, peers)
         result[name] = {**descriptor, "revision": str(revision or ""),
                         "eligible": bool(state["desired_live"] and state["live_loaded"]),
                         "reason": state["reason"]}
     return result
+
+
+def _published_skill_readiness(skill, drive_root, peers):
+    """Refresh small authority controls against a captured identity, without rehashing payload bytes."""
+    from dataclasses import replace
+
+    from ouroboros.skill_loader import load_enabled, load_review_state
+
+    current = replace(skill, enabled=load_enabled(drive_root, skill.name), review=load_review_state(
+        drive_root, skill.name, skill_type="extension", skill_dir=skill.skill_dir))
+    return _apply_durable_extension_health(_apply_deps_block(_extension_runtime_state(
+        current, drive_root=drive_root, skills=peers), drive_root, current), drive_root, current)
+
+
+def widget_publication_ready(skill_name: str, generation: str, drive_root: pathlib.Path) -> bool:
+    """Leases use the same review, enablement, grants and health owner as live context publishers."""
+    with _lock:
+        bundle = _extensions.get(skill_name)
+        if bundle is None or bundle.generation_digest != generation or bundle.loaded_skill is None:
+            return False
+        skill = bundle.loaded_skill
+        peers = [item.loaded_skill for item in _extensions.values() if item.loaded_skill is not None]
+    state = _published_skill_readiness(skill, drive_root, peers)
+    return bool(state["desired_live"] and state["live_loaded"])
 
 
 def _revert_enabled_after_load_error(

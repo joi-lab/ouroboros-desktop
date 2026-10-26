@@ -327,8 +327,11 @@ class NetworkAuthGate:
     """Require a password for non-localhost access only when configured."""
 
     def __init__(self, app: ASGIApp, *, served_ui: ServedUI | None = None):
+        from ouroboros.gateway.widget_assets import WidgetAssetLeases
+
         self.app = app
         self.served_ui = served_ui
+        self.widget_assets = WidgetAssetLeases()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -336,8 +339,23 @@ class NetworkAuthGate:
             return
 
         password = get_configured_network_password()
+        from ouroboros.gateway.widget_assets import ASSET_PREFIX, widget_asset_response
+
+        epoch = hashlib.sha256(password.encode()).hexdigest()
+        self.widget_assets.password_changed(epoch)
+        scope["widget_asset_leases"] = self.widget_assets
+        scope["widget_asset_epoch"] = epoch
+        cookie = _cookie_value(scope, AUTH_COOKIE_NAME)
+        owner = cookie if cookie and _cookie_session_valid(cookie, password) else _candidate_password(scope) or "local"
+        scope["widget_asset_owner"] = hashlib.sha256(owner.encode()).hexdigest()
         active = bool(password) and not is_loopback_host(_scope_client_host(scope))
         path = scope.get("path", "") or "/"
+        if scope["type"] == "http" and path == "/api/widgets/asset-leases":
+            scope["widget_asset_admission"] = self.widget_assets.admit(scope["widget_asset_owner"])
+        if scope["type"] == "http" and path.startswith(ASSET_PREFIX):
+            response = await widget_asset_response(Request(scope, receive), self.widget_assets)
+            await response(scope, receive, send)
+            return
         if scope["type"] == "http" and path in {"/auth/login", "/auth/logout"}:
             # These names belong to the gate even when it is inactive: a selected
             # asset named login/logout must not become a different operation.
@@ -346,6 +364,7 @@ class NetworkAuthGate:
             elif path == "/auth/login":
                 await _handle_login(scope, receive, send, password, self.served_ui)
             else:
+                self.widget_assets.revoke_owner(scope["widget_asset_owner"])
                 await _handle_logout(scope, receive, send)
             return
 

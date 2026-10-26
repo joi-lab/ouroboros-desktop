@@ -1,5 +1,5 @@
 import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, joinMarkdownHeadings, plainCauseText, savedTerminalRowNote } from './utils.js';
-import { cancelCauseClauses } from './cancel_presentation.js';
+import { cancelCauseClauses, ownerStopEnding } from './cancel_presentation.js';
 import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
 import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow } from './task_checkpoints.js';
@@ -303,6 +303,13 @@ function subagentHeadline(sid = '', role = '', label = '', model = '', { full = 
 
 const SUBAGENT_CARD_LABEL = { scheduled: 'Working', running: 'Working', interrupted: 'Working' };
 
+// A completed child's result is its report, written for its parent: the label says so before the
+// card's preview and over the full text. Another ending's result may be host text: [RESULT] stays.
+export function childReportLabel(childStatus) {
+    return ['completed', 'completed_warn'].includes(String(childStatus || '').toLowerCase())
+        ? tr('subagent.report_to_parent', 'Report to parent') : '';
+}
+
 export function formatLogMoney(value) {
     return formatUsd4(value);
 }
@@ -398,14 +405,28 @@ export function taskSoftStopPending(record) {
     return taskCancelPending(record) && String(record?.stop_policy || '') === 'finalize_then_cancel';
 }
 
-// S3 (owner decision №8/Q3): an owner-requested finalization is a SUCCESSFUL
-// soft stop, not a warning — the owner asked for the summary and received the
-// best available result. The factual task headline remains "Done" while the
-// task details carry this owner-stop marker (spec §17).
+// A Wrap up's answer is a SUCCESSFUL soft stop, not a warning: the headline stays "Done"
+// while the details carry this marker; so does an older record, which names no button.
 export const OWNER_STOP_DETAIL_MARKER = "summary at the owner's request — best available result";
 
 export function taskStoppedWithSummary(evt) {
-    return String(evt?.reason_code || '') === 'owner_requested_finalization';
+    return ownerStopEnding(normalizeTaskTerminalRecord(evt))[1] === 'summary';
+}
+
+// Twin of outcomes._advisory_procedural_refusal: an old task-acceptance FAIL that was only the
+// Advisory host declining a second panel over a verdict that was not FAIL reads best_effort.
+function advisoryProceduralRefusal(record) {
+    const { objective, review, execution } = record?.outcome_axes || {};
+    const decision = review?.acceptance_decision;
+    const signals = Array.isArray(review?.aggregate_signals) ? review.aggregate_signals.map((s) => String(s).toUpperCase()) : [];
+    const ready = Object.hasOwn(record, 'result') ? typeof record.result === 'string' && Boolean(record.result)
+        : record._result_text_present === true;
+    return ready
+        && ['', 'model_final'].includes(record.terminal_origin ?? '')
+        && execution?.status === 'ok' && objective?.status === 'fail' && objective.source === 'task_acceptance_review'
+        && objective.reason === 'identical_acceptance_refused' && decision?.reason === objective.reason
+        && decision.status === 'finalized_unaccepted' && decision.enforcement === 'advisory'
+        && review.status === 'degraded' && !signals.includes('FAIL');
 }
 
 // The card's one sentence about a delivery the host could not confirm: an exhausted delivery names
@@ -497,7 +518,9 @@ export function taskReasonDetail(evt, codes = []) {
     const held = severity === 'error' && String(objective?.source || '').startsWith('plan_review_');
     const reviewCause = !taskStoppedWithSummary(evt) && decision?.status
         && (decision.status !== 'accepted' || Object.hasOwn(TASK_CAUSE_PHRASES, decisionCause))
-        && (['done', 'warn'].includes(severity) || explicitAuthorStop(decision)) ? decisionCause : '';
+        && (['done', 'warn'].includes(severity) || explicitAuthorStop(decision)
+            || (severity === 'error' && decision.status !== 'accepted' && !custody
+                && ['', 'final_message'].includes(reason))) ? decisionCause : '';
     const bypass = { budget_exhausted: 'acceptance_bypassed_budget_exhausted', round_limit: 'acceptance_bypassed_round_limit',
         finalization_grace: 'acceptance_bypassed_deadline', deadline_local: 'acceptance_bypassed_deadline',
         provider_unavailable: 'acceptance_bypassed_provider_unavailable', context_overflow: 'acceptance_bypassed_context_overflow',
@@ -505,7 +528,7 @@ export function taskReasonDetail(evt, codes = []) {
     let clause = '';
     if (reason === 'foreign_install_root' && record.reason_detail) clause = String(record.reason_detail);
     else if (taskStoppedWithSummary(evt)) clause = '';
-    else if (severity === "cancelled" && origin && typeof origin === "object"
+    else if ((severity === "cancelled" || ownerStopEnding(record)[1] === 'stop') && origin && typeof origin === "object"
         && !Array.isArray(origin) && Object.keys(origin).length) {
         clause = joinCauseClauses(cancelCauseClauses(origin, record));
     } else if (held) {
@@ -529,11 +552,16 @@ export function taskReasonDetail(evt, codes = []) {
     if (objective?.status === 'best_effort' && !clause && !objective.deferred_count && !taskStoppedWithSummary(evt)
         && ['', 'previous_revision_accepted'].includes(reviewCause)) warningClauses.push(taskReasonPhrase('partial_result'));
     const rationale = completion?.action === 'stop' ? plainCauseText(completion.rationale, 0) : authorStopRationale(decision);
-    const line = joinCauseClauses([clause, ...warningClauses, phrase(reviewCause), rationale,
+    const remainder = record.outcome_axes?.execution?.mutation_attribution?.uncommitted_remainder;
+    const count = remainder?.count;
+    const remainderClause = remainder?.state === 'unknown' ? 'Uncommitted files in the saved candidate could not be checked'
+        : remainder?.state === 'known' && Number.isInteger(count) && count > 0
+            ? `${count} uncommitted file${count === 1 ? '' : 's'} remain${count === 1 ? 's' : ''} in the saved candidate` : '';
+    const line = joinCauseClauses([clause, ...warningClauses, phrase(reviewCause), rationale, remainderClause,
         ...acceptanceIncidentClauses(decision, reason, causePhraseLookup),
         ...terminalLimitations(record, reason, held), custody ? taskReasonPhrase(custody) : '',
         terminalDeliveryClause(record.terminal_delivery)]);  // the host twin appends the delivery clause last too
-    return severity === 'cancelled' && line && !/[.!?…)\u2026]$/.test(line) ? `${line}.` : line;
+    return (severity === 'cancelled' || remainderClause) && line && !/[.!?…)\u2026]$/.test(line) ? `${line}.` : line;
 }
 
 // S3 (HQ1): the ONE shared projection of a typed owner_hurry event for the
@@ -571,15 +599,19 @@ export function taskOutcomeSeverity(evt) {
     if (lifecycle === 'cancelled' || lifecycle === 'cancel_requested') {
         return 'cancelled';
     }
+    const [command, ending] = ownerStopEnding(record);  // Stop now is Stopped whatever it kept
+    if (command === 'stop_now') return 'cancelled';
+    const unanswered = ending === 'stop';  // a Wrap up without an answer: its own failure is the stop
     const execution = String(record.outcome_axes?.execution?.status || '').toLowerCase();
-    const objective = String(record.outcome_axes?.objective?.status || '').toLowerCase();
+    const objective = advisoryProceduralRefusal(record) ? 'best_effort'
+        : String(record.outcome_axes?.objective?.status || '').toLowerCase();
     const review = String(record.outcome_axes?.review?.status || record.review_status?.status || '').toLowerCase();
     const authorFinished = objective === 'pass' && record.outcome_axes?.objective?.source === 'author_acceptance';
     const artifacts = String(record.outcome_axes?.artifacts?.status || record.artifact_bundle?.status || record.artifact_status || '').toLowerCase();
     const artifactStatus = String(record.artifact_bundle?.status || record.artifact_status || '').toLowerCase();
     if (
-        lifecycle === 'failed'
-        || ['failed', 'infra_failed'].includes(execution)
+        ((lifecycle === 'failed' || execution === 'failed') && !unanswered)
+        || execution === 'infra_failed'
         || objective === 'fail'
         || (review === 'fail' && !authorFinished)
         || ['failed', 'missing'].includes(artifacts)
@@ -587,8 +619,8 @@ export function taskOutcomeSeverity(evt) {
     ) {
         return 'error';
     }
-    // Owner-requested finalization is a best_effort SUCCESS (№8/Q3): the owner
-    // asked for the stop, so it must not read as "Finished with warnings".
+    if (unanswered) return 'cancelled';
+    // A Wrap up's answer is a best_effort SUCCESS, not "Done with warnings".
     if (taskStoppedWithSummary(evt)) {
         return 'done';
     }
@@ -1033,6 +1065,7 @@ function chatView({
     fullBody = '',
     fullHeadline = '',
     activityPreview,
+    activityLead = '',  // an inline label the collapsed activity line draws before its text
     visible = false,
     promote = false,
     terminal = false,
@@ -1055,6 +1088,7 @@ function chatView({
     // Explicit emptiness is part of the presentation contract: a review-only
     // frame has no activity and must not fall back to its disclosure body.
     if (activityPreview !== undefined) out.activityPreview = String(activityPreview || '');
+    if (activityLead) out.activityLead = activityLead;
     if (Array.isArray(meta) && meta.length) out.meta = meta.filter(Boolean);
     // P3 uniform contract: when the WS body was truncated server-side, carry a
     // fetch ref (a task id -> GET /api/tasks/{id}) so the bubble can load the
@@ -1209,14 +1243,6 @@ function summarizeChatLiveEventView(evt) {
                 parent_task_id: evt.parent_task_id, root_task_id: evt.root_task_id }) : '';
         const stopDetail = (evt.task_completion ?? evt.outcome_axes?.execution?.task_completion)?.action === 'stop' ? taskReasonDetail(evt) : '';
         const reasonDetail = cancelDetail || stopDetail || (evt.reason_code ? taskReasonPhrase(evt.reason_code) : '');
-        const detailParts = [
-            note.full,
-            resultText.full ? `[RESULT]\n${resultText.full}` : '',
-            traceText.full ? `[TRACE]\n${traceText.full}` : '',
-            errorText.full ? `[ERROR]\n${errorText.full}` : '',
-            reasonDetail,
-            !cancelDetail && stopDetail ? reasonCodesNote(taskReasonCodes(evt)) : '',
-        ].filter(Boolean);
         // Completed frames take label and phase from their authoritative outcome axes.
         const completionSeverity = rawEvent === 'completed' ? taskOutcomeSeverity(evt) : 'done';
         const event = rawEvent === 'completed'
@@ -1225,6 +1251,15 @@ function summarizeChatLiveEventView(evt) {
                     : completionSeverity === 'warn' ? 'completed_warn'
                         : 'completed')
             : rawEvent;
+        const report = resultText.full ? childReportLabel(event) : '';
+        const detailParts = [
+            note.full,
+            resultText.full ? `${report ? `## ${report}` : '[RESULT]'}\n${resultText.full}` : '',  // a timeline label line
+            traceText.full ? `[TRACE]\n${traceText.full}` : '',
+            errorText.full ? `[ERROR]\n${errorText.full}` : '',
+            reasonDetail,
+            !cancelDetail && stopDetail ? reasonCodesNote(taskReasonCodes(evt)) : '',
+        ].filter(Boolean);
         // Cancelled is distinct; rejected/interrupted remain notices rather than
         // red failures. Interrupted is retryable and therefore non-terminal.
         const phase = event === 'completed' ? 'done'
@@ -1261,6 +1296,7 @@ function summarizeChatLiveEventView(evt) {
             body: terminalCause || activity.preview || '',
             fullBody: detailParts.join('\n\n'),
             activityPreview: terminalCause || activity.preview || '',
+            activityLead: !terminalCause && activity === resultText ? report : '',
             visible: true,
             promote: promoted,
             human: promoted,

@@ -274,6 +274,8 @@ def terminal_result_fields(usage: Dict[str, Any], *, existing: Dict[str, Any] | 
     handovers = usage.get("authoring_handovers")
     if isinstance(handovers, list) and handovers:
         fields["authoring_handovers"] = handovers
+    if isinstance(usage.get("cancel_origin"), dict) and usage["cancel_origin"]:
+        fields["cancel_origin"] = dict(usage["cancel_origin"])  # the owner's typed stop (owner_stop_origin)
     return fields
 
 

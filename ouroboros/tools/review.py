@@ -1050,13 +1050,15 @@ def _dispatch_unified_review(ctx: ToolContext, commit_message: str, prepared: di
     quorum = verdict["quorum"]
     if verdict["aggregate"] in ("QUORUM_FAILED", "NOT_DISPATCHED"):  # a wave that sent nothing ($0) has no quorum
         ctx._last_review_block_reason = "review_quorum"
-        unavailable_str = ", ".join(failed_actors or errored_models or (sorted(  # each $0 refusal names its cause
-            {str(r.get("raw_text") or "") for r in triad_raw}) if verdict["aggregate"] == "NOT_DISPATCHED" else []))
+        from ouroboros.review_records import review_failure_summary
+
+        unavailable_str = "\n".join(review_failure_summary(row) for row in triad_raw
+                                    if row.get("status") != "responded") or ", ".join(errored_models)
         blocked_msg = (
             f"⚠️ REVIEW_BLOCKED: Only {quorum['responded']} of {quorum['assigned']} review "
             f"models responded successfully (minimum {quorum['required']} required). "
-            f"Unavailable/failed: {unavailable_str}.\n"
-            "Retry the commit — transient model failures usually resolve quickly."
+            f"Unavailable/failed:\n{unavailable_str}\n"
+            "No retry recommendation is inferred from these failures."
         )
         return _handle_review_block_or_warning(
             ctx, blocking_review, blocked_msg,

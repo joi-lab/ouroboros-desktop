@@ -131,7 +131,9 @@ def task_result_authority_projection(
             promotion=row.get("child_ref_promotion"))
         # Beside the recorded state, never inside it: every projection keeps this small field whole.
         authority.update({"plan_review_source_gap": gap} if gap else {})
-    return authority
+    from ouroboros.delegate_output import project_task_output_readers
+
+    return project_task_output_readers(authority)
 
 
 def valid_task_result_authority_source(source: Any, task_id: Any) -> bool:
@@ -148,6 +150,8 @@ def valid_task_result_authority_source(source: Any, task_id: Any) -> bool:
         and isinstance(arguments, dict)
         and str(arguments.get("task_id") or "") == selected_id
         and arguments.get("include_authority") is True
+        and arguments.get("authority_fields") is None
+        and arguments.get("source_only") is not True
     )
 
 

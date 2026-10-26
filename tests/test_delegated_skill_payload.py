@@ -1113,7 +1113,7 @@ def test_symlinked_git_dir_is_typed_capture_failure(tmp_path, monkeypatch):
 
 def test_schema_and_docs_split_git_staging_from_payload_live_apply():
     """Sol P2-3 pin: integrate_delegated_patch's schema and the deep-delegation
-    docs describe the Git lane as staged-into-active-root and the payload lane
+    docs describe the Git lane as staged-into-recorded-target and the payload lane
     as a live non-Git CAS apply — no universal 'staged' claim covers both."""
     from ouroboros.tools.subagent_integration import get_tools
 
@@ -1122,7 +1122,7 @@ def test_schema_and_docs_split_git_staging_from_payload_live_apply():
     assert "LIVE apply into the non-Git payload" in desc
     assert "nothing is staged into your active root" in desc
     decision = entry.schema["parameters"]["properties"]["decision"]["description"]
-    assert "STAGED into your active root" in decision
+    assert "STAGED into the recorded target" in decision
     assert "applied LIVE into the non-Git payload" in decision
     arch = architecture_text()
     for identifier in ("integrate_delegated_patch", "integrate_payload_patch",

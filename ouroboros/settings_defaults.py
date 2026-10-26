@@ -217,10 +217,12 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # REVIEW_POOL_MIGRATED_SETTING_KEYS) and migrate into this catalog on read.
     "OUROBOROS_SUBAGENTS": "",
     # INSTALL-TIME facts: the agent-preset generation this install received, and WHEN onboarding last completed
-    # (recorded on EVERY completion). Endpoint-authored and disk-only — see ENDPOINT_AUTHORED_SETTINGS.
+    # and by which client attempt (recorded on EVERY completion). Endpoint-authored and disk-only — see
+    # ENDPOINT_AUTHORED_SETTINGS.
     "OUROBOROS_SUBSCRIPTION_PRESET_VERSION": "",
     "OUROBOROS_SUBAGENT_PRESET_RECEIPT": "",
     "OUROBOROS_ONBOARDING_COMPLETED_AT": "",
+    "OUROBOROS_ONBOARDING_ATTEMPT_ID": "",
     # Pre-commit review enforcement: advisory | blocking
     "OUROBOROS_REVIEW_ENFORCEMENT": "advisory",
     # Auto-grant reviewed-skill requests by default; grants stay bound to the
@@ -512,7 +514,7 @@ _DISK_AUTHORED_SETTINGS = ("OUROBOROS_CONTEXT_MODE", "OUROBOROS_CONTEXT_MODE_AUT
 # ENDPOINT-AUTHORED, DISK-ONLY: install-time facts POST /api/onboarding/complete alone writes. The ratchets above are
 # disk-authored yet DO project once the file carries them; these never leave disk in EITHER direction — an env timestamp alone closed the onboarding window on a fresh install, and an env marker was then persisted by a save.
 ENDPOINT_AUTHORED_SETTINGS = frozenset({"OUROBOROS_SUBSCRIPTION_PRESET_VERSION", "OUROBOROS_SUBAGENT_PRESET_RECEIPT",
-                                        "OUROBOROS_ONBOARDING_COMPLETED_AT"})
+                                        "OUROBOROS_ONBOARDING_COMPLETED_AT", "OUROBOROS_ONBOARDING_ATTEMPT_ID"})
 # ENDPOINT-WRITTEN, PROJECTED: one endpoint owns the write (the generic save skips the key and names the writer in
 # `ignored_keys`, so a language change always creates the memory header, fires the hooks and broadcasts), yet the value
 # projects to the environment like any setting: a restart, the worker and the Telegram bridge read it (the disk-only set above lost it).

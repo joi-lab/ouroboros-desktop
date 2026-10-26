@@ -373,7 +373,10 @@ def _display_sql(column: str = "b.body") -> str:
                            f"ELSE {path(_KEEP)} END" for sub in kept)
         view = (f"json_replace({view}, CASE WHEN {is_object} THEN {path(key)} ELSE {path(key, _KEEP)} END, "
                 f"CASE WHEN {is_object} THEN json_remove({built}, {absent}) END)")
-    return view
+    # The old-review presenter needs affirmative answer evidence even when this view
+    # drops result. Project one bit from the same body; no extra read or stored field.
+    present = f"json_type({column}, '$.result') = 'text' AND json_extract({column}, '$.result') <> ''"
+    return f"json_set({view}, '$._result_text_present', json(CASE WHEN {present} THEN 'true' ELSE 'false' END))"
 
 
 def _card_sql(view: str) -> str:

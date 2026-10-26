@@ -237,9 +237,8 @@ def _answer_locators(drive_root: Any, row: Any) -> Dict[str, Any]:
     ``engine_locator`` is the engine's own run folder and primary-output metadata
     (never text; engine-owned and possibly reclaimed). ``staged_output`` is the
     retained full terminal payload: its exact ``task_source`` ref with the ACTUAL
-    staging task, completeness, the ``read_file`` address the existing lineage read
-    admits, and ``source_read``: the exact ``get_task_result`` call that reads it
-    from any drive, pinned to the PHYSICAL task publishing this receipt (the run's
+    staging task and completeness. ``read`` keeps the staging-file path;
+    ``source_read`` reads from any drive, pinned to the PHYSICAL task publishing this receipt (the run's
     owner, which a retry successor's staging task need not be). ``terminal_observation``
     is the engine read-back the body retained (#1564), with the same pinned reader:
     complete as an observation, never proof that the whole output was collected. A row

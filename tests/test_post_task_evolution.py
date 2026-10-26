@@ -108,6 +108,8 @@ def test_envelope_enable_parsing(monkeypatch):
 
 def test_v5_eligibility_and_canonical():
     assert pte._eligible({"type": "task"}) is True
+    # Failure is useful input to the opt-in chooser, not a success prerequisite.
+    assert pte._eligible({"type": "task", "status": "failed", "success": False}) is True
     assert pte._eligible({"type": "evolution"}) is False
     assert pte._eligible({"type": "deep_self_review"}) is False
     assert pte._eligible({"type": "task", "delegation_role": "subagent"}) is False

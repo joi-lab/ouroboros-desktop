@@ -63,17 +63,21 @@ def _open_review_checkpoint(card, *, open_card=True):
     if open_card:
         card.locator(":scope > [data-live-summary-button] [data-live-disclosure]").click()
     assert card.is_visible()
+    door = card.locator(":scope > [data-live-foot] [data-live-review-summary]")
+    door.wait_for(state="visible", timeout=5_000)
+    assert door.get_attribute("aria-expanded") == "false"
+    door.click()
+    assert door.get_attribute("aria-expanded") == "true"
     section = card.locator(":scope > [data-live-reviews-host] [data-review-section]")
     section.wait_for(state="visible", timeout=5_000)
-    assert section.get_attribute("data-expanded") == "0"
-    section.locator("[data-review-section-toggle]").click()
     assert section.get_attribute("data-expanded") == "1"
     group = section.locator("[data-review-group]").first
     assert group.locator("[data-review-group-toggle]").get_attribute("aria-expanded") == "false"
     group.locator("[data-review-group-toggle]").click()
-    attempt = group.locator("[data-review-attempt-toggle]").first
-    attempt.click()
-    assert attempt.get_attribute("aria-expanded") == "true"
+    facts = group.locator("[data-review-facts]")
+    assert facts.get_attribute("open") is None
+    facts.locator(":scope > summary").click()
+    assert facts.get_attribute("open") is not None
 
 
 def _free_port() -> int:
@@ -918,6 +922,7 @@ def test_ui_smoke_phase3_declarative_widgets_and_settings(direct_server_with_dat
                 )
                 section.wait_for(state="visible", timeout=30_000)
                 settings_form = section.locator('[data-extension-settings-form]')
+                settings_form.locator('[data-extension-settings-edit-anyway]').click()  # POST-only: values unknown (#1552)
                 settings_form.locator('select[name="mode"]').select_option("fast")
                 settings_form.locator('input[name="token"]').fill("discard-me")
                 save = settings_form.locator('button[type="submit"]')

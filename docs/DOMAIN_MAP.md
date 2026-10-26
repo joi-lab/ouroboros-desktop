@@ -18,17 +18,17 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D08 | Supervisor: queue, workers, events & runtime control | 73 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 40 | 0 |
-| D11 | Gateway, server & Web UI | 103 | 0 |
+| D11 | Gateway, server & Web UI | 104 | 0 |
 | D12 | Settings & configuration | 25 | 0 |
 | D13 | Safety, guards & runtime mode | 11 | 0 |
-| D14 | Skills & extensions | 69 | 0 |
+| D14 | Skills & extensions | 70 | 0 |
 | D15 | Memory, knowledge, consciousness & self-evolution | 33 | 0 |
 | D16 | Observability, usage accounting & cost | 24 | 0 |
 | D17 | Projects, workspaces & task results | 50 | 0 |
 | D18 | Launcher, packaging, platform & shared substrate | 35 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 19 | 0 |
-| **total** | | **892** | **0** |
+| **total** | | **895** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -818,6 +818,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/ui_preferences.py`
 - `ouroboros/gateway/update_contracts.py`
 - `ouroboros/gateway/update_progress.py`
+- `ouroboros/gateway/widget_assets.py`
 - `ouroboros/gateway/widgets.py`
 - `ouroboros/gateway/work_contracts.py`
 - `ouroboros/gateway/work_projection.py`
@@ -908,6 +909,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/extension_route_stream.py`
 - `ouroboros/extension_surface_names.py`
 - `ouroboros/extension_ui_validation.py`
+- `ouroboros/extension_widget_assets.py`
 - `ouroboros/gateway/contributions.py`
 - `ouroboros/icon_geometry.py`
 - `ouroboros/marketplace/__init__.py`

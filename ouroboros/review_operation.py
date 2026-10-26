@@ -198,9 +198,9 @@ class ReviewOperation:
         self.control_state = ""
         self._drains = 0
         self._dispatched = False
-        # The owner paused the author while this operation's launched reviewers
-        # ran: the author took pending rows and parked (``review_custody``).
-        self.author_detached = False
+        # A background caller already left its author slot; a synchronous author
+        # can also detach later while its reviewers run (``review_custody``).
+        self.author_detached = bool(getattr(parent, "author_detached", False))
         self._control, self._checked_at = "", float("-inf")
         parent_task = parent.task if isinstance(parent.task, dict) else {}
         metadata = getattr(parent.tool_context, "task_metadata", None)

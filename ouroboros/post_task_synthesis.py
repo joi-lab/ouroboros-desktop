@@ -280,7 +280,7 @@ def _compact_review_projection(llm_trace: Dict[str, Any], task: Dict[str, Any] |
 
         records, omitted = task_ledger_records(task or {}, drive_root)
         projection = compact_review_projection(llm_trace.get("review_runs") or [], records=records)
-        if records:
+        if records or omitted == "1+":
             projection["review_records_omitted"] = omitted
         return projection
     except Exception:
@@ -333,7 +333,7 @@ def _record_task_facts(env: Any, task: Dict[str, Any], usage: Dict[str, Any],
             "result_ref": {"kind": "task_result", "task_id": task_id, "reader": "get_task_result"},
             "files_rescued": files_rescued,
             **_summary_row_cost_fields(usage), **presence_provenance_fields(task),
-            **({"review_projection": review_projection} if review_projection.get("panels") else {}),
+            **({"review_projection": review_projection} if review_projection.get("panels") or review_projection.get("gaps") or review_projection.get("review_records_omitted") else {}),
         })
     except Exception:
         log.warning("Task facts row was not recorded for %s (non-critical)", task_id, exc_info=True)

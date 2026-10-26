@@ -274,7 +274,7 @@ def test_update_indicator_failure_closes_on_its_notice_and_success_stays_in_the_
             expect(page.locator("#updates-attempt-text")).to_have_text(
                 "Work was still finishing: Main conversation. This attempt stopped no running work. Try again when it finishes.")
             expect(page.locator("#btn-update-primary")).to_have_text("Update to 7.1.0")
-            page.locator("#updates-attempt-details summary").click()
+            page.locator("#updates-attempt-details > summary").click()
             expect(page.locator("#updates-attempt-facts")).to_contain_text("update_writer_fence_blocked")
             assert page.locator("#updates-attempt-dismiss").count() == 0, "the hide lives on the notice, never on another page"
             _sidebar(page, width)

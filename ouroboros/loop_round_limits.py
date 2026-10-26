@@ -711,10 +711,21 @@ def _handle_provider_unavailable(
     if control_reason is None:
         owner_ctx = getattr(ctx.tools, "_ctx", None)
         control_reason = str(getattr(owner_ctx, "_transport_repeat_control_reason", "") or "")
-    return _loop()._provider_unavailable_result(
+    result = _loop()._provider_unavailable_result(
         ctx, error_kind=error_kind, wait_cause=wait_cause, waited_sec=waited_sec,
         interactive=interactive, control_reason=control_reason,
     )
+    from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN, owner_stop_origin
+
+    if control_reason == REASON_OWNER_STOPPED_DIRECT_TURN and result[1].get("reason_code") == "provider_unavailable":
+        # This accepted Stop ended the wait. Keep the provider failure/UNKNOWN
+        # facts, carrying the control beside them on the existing stop origin.
+        owner_ctx = getattr(ctx.tools, "_ctx", None)
+        root = getattr(owner_ctx, "budget_drive_root", None) or ctx.drive_root
+        origin = owner_stop_origin(root, ctx.task_id) if root else {}
+        if origin.get("stop_policy") == "immediate":
+            result[1]["cancel_origin"] = {**origin, "control_reason": control_reason}
+    return result
 
 
 def _loop_exit_after_exception(

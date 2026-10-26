@@ -264,7 +264,12 @@ def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dic
         "status": row["status"], "outcome": outcome, "outcome_phase": phase, "outcome_final": True,
         "wake_silent": row.get("wake_silent") is True, "quiet_effective": quiet,
         "outcome_authority": "canonical_task_result_after_finalization",
+        # Memory stamps copy the recorded objective; readers interpret it using answer provenance.
         "outcome_axes": row.get("outcome_axes") or {}, "reason_code": str(row.get("reason_code") or ""),
+        "_result_text_present": (isinstance(row.get("result"), str) and bool(row["result"]))
+        if "result" in row else row.get("_result_text_present") is True,
+        "terminal_origin": str(row.get("terminal_origin") or ""),
+        **({"cancel_origin": dict(row["cancel_origin"])} if isinstance(row.get("cancel_origin"), dict) else {}),
         "result_ref": {"kind": "task_result", "task_id": tid, "reader": "get_task_result"}, "text": text,
         **({"reason_detail": verdict} if verdict else {}),
         "completion_notice": notice,

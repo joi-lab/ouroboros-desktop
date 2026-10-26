@@ -138,7 +138,12 @@ def test_a_receipt_committed_during_the_pass_keeps_the_unfinished_work_due(root,
     from ouroboros import headless, maintenance, maintenance_jobs
     from ouroboros.task_custody import task_custody_lock
 
-    refs, handle = _task(root, "finished", blobs=1)
+    # A real child drive needs memory export even without a workspace. A
+    # canonical workspace-free task legitimately skips this empty finalizer.
+    child = root / "child-drive"
+    _result(child, "finished")
+    task = {"id": "finished", "child_drive_root": str(child)}
+    refs, handle = _task(root, "finished", blobs=1, child_drive_root=str(child))
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     outcome, real_finalize, real_pack = {}, headless._finalize_task_artifacts_locked, packs.pack_task
 
@@ -149,7 +154,7 @@ def test_a_receipt_committed_during_the_pass_keeps_the_unfinished_work_due(root,
 
     def publisher():
         try:
-            outcome["publisher"] = headless.prepare_terminal_task_files(root, {"id": "finished"})
+            outcome["publisher"] = headless.prepare_terminal_task_files(root, task)
         finally:
             finished.set()
 
@@ -173,6 +178,7 @@ def test_a_receipt_committed_during_the_pass_keeps_the_unfinished_work_due(root,
         release.set()
         worker.join(30)
     assert not worker.is_alive() and outcome["publisher"]["error"] == "" and outcome["receipt_before_record"]
+    assert any(a["kind"] == "memory_export" for a in outcome["publisher"]["result"]["artifacts"])
     with store.open_store(root, write=False) as txn:
         assert txn.revision() > before + 1  # the receipt and the pass's own record
     assert packs.published_generations(root, "finished") and _loose(refs[0])  # packed; the unlink deferred

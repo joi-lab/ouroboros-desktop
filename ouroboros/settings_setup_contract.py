@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from ouroboros.config import SETTINGS_DEFAULTS, VALID_RUNTIME_MODES
@@ -278,6 +279,11 @@ SKIP_SUBSCRIPTION_PRESETS_FIELD = "skipSubscriptionPresets"
 # Absence of a working provider is a state an OLD install reaches too, so it
 # cannot be the latch on its own; this key is what closes the window for good.
 ONBOARDING_COMPLETED_KEY = "OUROBOROS_ONBOARDING_COMPLETED_AT"
+# Which completion attempt wrote that fact: the id the CLIENT made before sending, so it can
+# still ask about its own save when the answer is lost. The same write carries it.
+ONBOARDING_ATTEMPT_KEY = "OUROBOROS_ONBOARDING_ATTEMPT_ID"
+ATTEMPT_ID_FIELD = "attempt_id"
+_ATTEMPT_ID = re.compile(r"[A-Za-z0-9_-]{16,128}")
 
 _SUBSCRIPTION_FIELDS = _rows(("id", "payloadKey", "label", "note"), (
     ("subscriptions-connected", SUBSCRIPTIONS_CONNECTED_FIELD, "Agent subscription connected", "Set by the wizard when at least one agent account was signed in during onboarding. The server re-reads the live account state before applying anything."),
@@ -417,6 +423,17 @@ def parse_subscription_intent(data: dict) -> Tuple[bool, bool]:
         _truthy(data.get(SUBSCRIPTIONS_CONNECTED_FIELD)),
         _truthy(data.get(SKIP_SUBSCRIPTION_PRESETS_FIELD)),
     )
+
+
+def parse_completion_attempt(data: Any) -> Tuple[str, str]:
+    """``(attempt_id, error)`` from a completion payload: ``("", "")`` when the client
+    sent none (older clients complete as before), an error for a malformed one."""
+    raw = data.get(ATTEMPT_ID_FIELD) if isinstance(data, dict) else None
+    if raw in (None, ""):
+        return "", ""
+    if isinstance(raw, str) and _ATTEMPT_ID.fullmatch(raw):
+        return raw, ""
+    return "", "attempt_id must be 16-128 letters, digits, '-' or '_'."
 
 
 def build_initial_setup_state(settings: dict, host_mode: str = "desktop") -> dict:

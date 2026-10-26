@@ -30,6 +30,7 @@ import { mergeHistoricalTimelineItem, historyNodeIsProtected, historyRowIds, his
 import { apiClient, apiFetch, fetchTaskDetail, fetchTaskDetailStrict, isStoreMigrating } from './api_client.js';
 import { syncHistoryRetentionItem } from './history_retention.js';
 import {
+    childReportLabel,
     getLogTaskGroupId,
     isGroupedTaskEvent,
     isTerminalTaskDetail,
@@ -76,8 +77,6 @@ import {
     syncParkedPhase,
 } from './task_phase_chip.js';
 import {
-    loadSkillReviewDetail,
-    nestedSkillReviewRef,
     renderSkillReviewDisclosure,
     wireSkillReviewDisclosure,
 } from './skill_review_card.js';
@@ -155,6 +154,8 @@ import {
     applyHistoricalModelExecution,
     cardMetaKeys,
     renderCollapsedActivity,
+    syncCandidateRemainderItem,
+    readCandidateRemainder,
     renderLiveCardMeta as renderCardMeta,
     ensureLiveActionsEl,
     cardRowEvidenceRef,
@@ -403,7 +404,6 @@ export function createChatInstance({
     const markReviewAnchor = (r, on = false) => setReviewAnchor(r, on, setLiveCardPhase);
     const explicitCardExpansion = new Map();
     const reviewDisclosureByTask = new Map();
-    const skillReviewDetailStore = new Map();
     const reviewHydrator = createReviewHydrator({
         fetchDetail: fetchTaskDetailStrict,
         onSettled: () => !destroyed && reading.position(),
@@ -1117,8 +1117,9 @@ export function createChatInstance({
     function noteTaskDetails(record, detail) {
         const files = syncSettledItems(record, detail, { write: withStableViewport });
         const history = syncHistoryRetentionItem(record, detail);
+        const candidate = syncCandidateRemainderItem(record, detail);
         const chain = episodes.note(record, detail);
-        return Boolean((files || history) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
+        return Boolean((files || history || candidate) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
             || chain;
     }
 
@@ -1253,9 +1254,7 @@ export function createChatInstance({
             ? explicitCardExpansion.get(normalizedGroupId)
             : Boolean(options.isSubagent && nestedSubagentsExpanded);
         root.dataset.expanded = initialExpanded ? '1' : '0';
-        // The summary band is reading content (selectable, never a control); its one disclosure is the
-        // "Details" button, its notes count kept in the button's name (DESIGN §5 "A task card's summary
-        // outranks its details").
+        // Selectable summary; Reviews and Details have independent native controls.
         root.innerHTML = `
             <div class="chat-live-summary-button" data-live-summary-button>
                 <div class="chat-live-summary">
@@ -1279,16 +1278,16 @@ export function createChatInstance({
             <div class="chat-live-foot" data-live-foot>
                 <div class="chat-live-meta" data-live-meta></div>
                 <div class="chat-live-foot-end" data-live-foot-end>
-                    <div class="chat-live-review-summary" data-live-review-summary hidden></div>
+                    <button type="button" class="chat-live-review-summary ui-hit-area" data-live-review-summary aria-expanded="false" hidden></button>
                 </div>
             </div>
+            <div data-live-reviews-host></div>
             <div class="chat-live-details">
                 <div data-live-phase-detail hidden></div>
                 <dl class="chat-live-facts" data-live-facts hidden></dl>
                 <div data-live-cost-detail hidden></div>
             </div>
             <div class="chat-live-timeline" data-live-timeline id="${escapeHtmlAttr(timelineId)}"></div>
-            <div data-live-reviews-host></div>
             <div class="chat-live-episode-history" data-live-episode-history hidden></div>
         `;
         const record = {
@@ -1325,7 +1324,6 @@ export function createChatInstance({
         const reviewDisclosure = reviewDisclosureByTask.get(normalizedGroupId) || {
             sectionExpanded: false,
             expandedGroups: new Set(),
-            expandedAttempts: new Set(),
         };
         reviewDisclosureByTask.set(normalizedGroupId, reviewDisclosure);
         record.reviewController = createReviewPresentationController({
@@ -1333,15 +1331,7 @@ export function createChatInstance({
             summary: record.reviewSummaryEl,
             disclosure: reviewDisclosure,
             onHydrate: () => hydrateCardReviews(normalizedGroupId),
-            onLoadSkillDetail: (detail, detailOptions = {}) => loadSkillReviewDetail(
-                detail,
-                nestedSkillReviewRef(detail),
-                {
-                    store: skillReviewDetailStore,
-                    retry: detailOptions.retry === true,
-                    onDomWrite: withStableViewport,
-                },
-            ),
+            onRead: (file, trigger, event) => chatMedia.openReview(file, record.root, trigger, event),
             onDomWrite: withStableViewport,
         });
         // A native button: Enter and Space press it. A portal hides it (its room holds what it would open).
@@ -1592,24 +1582,33 @@ export function createChatInstance({
     // Beyond the 4000-char preview: fetch/cache on expansion, bounded scroll, render while expanded.
     async function fetchFullLineOutput(item, record) {
         item._fetchingFull = true;
+        item.fullReadError = '';
         let changed = false;
         try {
             const resp = await apiFetch(`/api/tasks/${encodeURIComponent(item.fullRef)}`, { cache: 'no-store' });
             const data = resp && typeof resp.json === 'function' ? await resp.json() : resp;
-            // Compose ALL available full fields — a subagent line can carry both a result AND a
-            // (separately truncated) trace_summary, so `result || trace_summary` would hide the
-            // full trace. Label each section when both are present.
+            // Keep result and trace: the preview can truncate either independently.
             const result = String((data && data.result) || '').trim();
             const trace = String((data && data.trace_summary) || '').trim();
+            const report = result && ['done', 'warn'].includes(taskOutcomeSeverity(data))
+                ? childReportLabel(data.status) : '';  // the label the capped body led with
             let full = '';
-            if (result && trace) full = `[RESULT]\n${result}\n\n[TRACE]\n${trace}`;
-            else full = result || trace;
+            if (result && trace) full = `${report ? `## ${report}` : '[RESULT]'}\n${result}\n\n[TRACE]\n${trace}`;
+            else full = report ? `## ${report}\n${result}` : result || trace;
+            if (item.fullField === 'candidate_remainder') {
+                full = readCandidateRemainder(item, data, resp?.ok !== false);
+                changed = true;
+            }
             if (full && item.fetchedFull !== full) {
                 item.fetchedFull = full;
                 changed = true;
             }
         } catch {
             // best-effort: leave the capped preview on failure
+            if (item.fullField === 'candidate_remainder') {
+                readCandidateRemainder(item, null, false);
+                changed = true;
+            }
         } finally {
             item._fetchingFull = false;
             if (changed && !destroyed && record.expandedLineKeys.has(item.lineKey)) {
@@ -1730,7 +1729,10 @@ export function createChatInstance({
             : (summary.human ? String(summary.activityPreview ?? activeHeadline ?? '')
                 : (summary.terminal && summary.activityPreview ? String(summary.activityPreview) : ''));
         const activityCandidate = previewSource.trim();
-        if (activityCandidate) record.collapsedActivity = boundActivityPreview(activityCandidate);
+        if (activityCandidate) {
+            record.collapsedActivity = boundActivityPreview(activityCandidate);
+            record.collapsedActivityLead = summary.activityLead || '';  // a child's "Report to parent"
+        }
         const activityText = projectCollapsedActivity({
             isSubagent: record.isSubagent,
             suggestedName: title,
@@ -3698,7 +3700,6 @@ export function createChatInstance({
             for (const id of liveCardRecords.keys()) disposeLiveCard(id);
             explicitCardExpansion.clear();
             reviewDisclosureByTask.clear();
-            skillReviewDetailStore.clear();
             reviewHydrator.clear();
             pendingSuggestedNames.clear();
             subagentChildParents.clear();

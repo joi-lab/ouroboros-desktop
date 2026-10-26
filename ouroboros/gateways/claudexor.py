@@ -210,6 +210,9 @@ def run_failure_error(run_id: str, run_state: str, failure: Any) -> ClaudexorUna
     exc = (_window_exhausted_refusal(code, message, failure.get("resetsAt"))
            or ClaudexorUnavailable(code or f"run_{run_state or 'unknown'}", message))
     exc.reported_cause = run_failure_cause(failure)
+    from ouroboros.observability import redact_projection
+
+    exc.failure_details = redact_projection(failure).value
     return exc
 
 

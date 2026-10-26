@@ -587,9 +587,11 @@ def test_wizard_keeps_a_typed_completion_refusal_visible_with_its_real_reason():
     source = (REPO / "web/modules/onboarding_wizard.js").read_text(encoding="utf-8")
 
     # The typed fields are read by ONE pure reader (node-tested branch by
-    # branch in web/tests/onboarding_agents_step.test.js); the wizard only has
-    # to carry them onto the Error it renders from.
-    assert "readCompletionAnswer({" in source
+    # branch in web/tests/onboarding_agents_step.test.js; the POST around it in
+    # onboarding_completion_attempt.test.js); the wizard only has to carry them
+    # onto the Error it renders from.
+    assert "await postCompletion(ONBOARDING_COMPLETE_ENDPOINT, payload)" in source
+    assert "return readCompletionAnswer({" in (REPO / "web/modules/onboarding_agents_step.js").read_text(encoding="utf-8")
     assert "Object.assign(error, answer.failure);" in source
     assert "completionFailureNotice(error)" in source
     assert "state.presetFailure = notice.canSkip" in source

@@ -287,9 +287,11 @@ def _foreign_work_line(root: Any, foreign: Dict[str, Dict[str, List[str]]]) -> s
         source = "retention unavailable; exact list: " + json.dumps(foreign, ensure_ascii=False, sort_keys=True)
     severity = "WARNING" if any(work["patches"] for work in foreign.values()) else "INFO"
     return (f"{severity}: OTHER TASKS' DELEGATED WORK — full owner/run list (unread results, undisposed patches, "
-            f"'yours' = matching active target): {source}. Only the owner acknowledges results and decides patches "
-            "while live; after it ends, a live top-level task may reject from any root or apply from the recorded "
-            "target or a fresh payload binding via integrate_delegated_patch.")
+            f"'yours' = matching target geometry, not write authority): {source}. Only the owner acknowledges "
+            "results and decides patches while live; after it ends, a live top-level task may reject from any "
+            "root or apply to the original target when location and current write rights permit "
+            "(payloads need a fresh binding) "
+            "via integrate_delegated_patch.")
 
 
 # One line per own settled run, bounded like ``terminal_custody_notice``.
@@ -536,7 +538,7 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
 
     try:
         from ouroboros.delegate_custody import undisposed_patches
-        from ouroboros.delegate_shared import orphan_apply_target_ok
+        from ouroboros.config import get_subagent_projects_root
 
         for run in undisposed_patches(custody_root, custody_state):
             # C1: a settled mutating run's work lives in its private snapshot (and its
@@ -566,8 +568,12 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
             owner = _foreign_owner(run, task_id)
             if owner:
                 foreign_work(owner)["patches"].append(str(run.run_id or "?"))
-                if active_root and orphan_apply_target_ok(run.target_root, active_root):
-                    foreign_work(owner)["yours"].append(str(run.run_id))
+                if active_root and str(run.target_root or "").strip():
+                    target = pathlib.Path(run.target_root).expanduser().resolve()
+                    active = pathlib.Path(active_root).expanduser().resolve()
+                    if target == active or (target.is_relative_to(active) and active.is_relative_to(
+                            pathlib.Path(get_subagent_projects_root()).expanduser().resolve())):
+                        foreign_work(owner)["yours"].append(str(run.run_id))
                 continue
             decide_clause = (
                 f"decide with integrate_delegated_patch(run_id='{run.run_id}', "

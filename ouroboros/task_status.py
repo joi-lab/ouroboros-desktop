@@ -21,7 +21,9 @@ from ouroboros.headless import (
     ARTIFACT_STATUS_FINALIZING,
     ARTIFACT_STATUS_MISSING,
     ARTIFACT_STATUS_PENDING,
-    ARTIFACT_STATUS_READY,
+    ARTIFACT_STATUS_READY as ARTIFACT_STATUS_READY,
+    ARTIFACT_TERMINAL_STATUSES,
+    task_requires_workspace_capture,
 )
 from ouroboros.outcomes import (
     EXECUTION_FAILED,
@@ -78,13 +80,6 @@ NONTERMINAL_STATUSES: frozenset[str] = frozenset({
     STATUS_INTERRUPTED,
 })
 SETTLED_STATUSES: frozenset[str] = FINAL_STATUSES
-ARTIFACT_TERMINAL_STATUSES: frozenset[str] = frozenset({
-    ARTIFACT_STATUS_READY,
-    ARTIFACT_STATUS_FAILED,
-    "ready_with_changes",
-    "ready_no_changes",
-    "missing",
-})
 ARTIFACT_NONTERMINAL_STATUSES: frozenset[str] = frozenset({
     ARTIFACT_STATUS_PENDING,
     ARTIFACT_STATUS_FINALIZING,
@@ -641,33 +636,13 @@ def _presence_attempt_lost(drive_root: pathlib.Path, result: Dict[str, Any],
     return attempt_ended(result, drive_root)
 
 
-def _inline_presence_turn(result: Dict[str, Any]) -> bool:
-    """A Presence turn's own row, run by its runner; a promoted or follow-up root that speaks
-    from the same ``metadata.presence`` carrier is ordinary managed work."""
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    owner = result.get("execution_owner") if isinstance(result.get("execution_owner"), dict) else {}
-    return isinstance(metadata.get("presence"), dict) and (
-        owner.get("kind") == "presence" or bool(result.get("_is_direct_chat")) or metadata.get("source") == "presence")
-
-
 def _normalize_workspace_artifact_status(result: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    if not (str(result.get("workspace_root") or "").strip() or str(metadata.get("workspace_root") or "").strip()):
-        return result
-    if _inline_presence_turn(result):
-        return result  # its runner has no workspace artifact finalization: its terminal is final
-    task_constraint = result.get("task_constraint") if isinstance(result.get("task_constraint"), dict) else {}
-    if not task_constraint and isinstance(metadata.get("task_constraint"), dict):
-        task_constraint = metadata.get("task_constraint") or {}
-    if (
-        str(result.get("delegation_role") or metadata.get("delegation_role") or "").strip() == "subagent"
-        and str(task_constraint.get("mode") or "").strip() == "local_readonly_subagent"
-    ):
+    if not task_requires_workspace_capture(result):
         return result
     status = str(result.get("status") or "").lower()
     if status not in FINAL_STATUSES:
         return result
-    artifact_status = str(result.get("artifact_status") or "").lower()
+    artifact_status = str(result.get("artifact_status") or "").strip().lower()
     if artifact_status in ARTIFACT_TERMINAL_STATUSES:
         return result
     if status == STATUS_CANCELLED:
@@ -716,16 +691,7 @@ def stored_list_order_is_final(result: Dict[str, Any]) -> bool:
 
 
 def _parent_workspace_artifact_lifecycle_fields(result: Dict[str, Any]) -> frozenset[str]:
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    if not (str(result.get("workspace_root") or "").strip() or str(metadata.get("workspace_root") or "").strip()):
-        return frozenset()
-    task_constraint = result.get("task_constraint") if isinstance(result.get("task_constraint"), dict) else {}
-    if not task_constraint and isinstance(metadata.get("task_constraint"), dict):
-        task_constraint = metadata.get("task_constraint") or {}
-    if (
-        str(result.get("delegation_role") or metadata.get("delegation_role") or "").strip() == "subagent"
-        and str(task_constraint.get("mode") or "").strip() == "local_readonly_subagent"
-    ):
+    if not task_requires_workspace_capture(result):
         return frozenset()
     artifact_status = str(result.get("artifact_status") or "").strip().lower()
     if artifact_status in ARTIFACT_TERMINAL_STATUSES or artifact_status in ARTIFACT_NONTERMINAL_STATUSES:

@@ -233,6 +233,11 @@ the last `X-Forwarded-For` entry that is not such a proxy:
 - A proxy on another machine must be listed in `FORWARDED_ALLOW_IPS`; otherwise
   the core treats the proxy itself as the client and does not see TLS, so the
   session cookie is not marked `Secure`.
+- Widget file-lease controls (`/api/widgets/asset-leases`) accept the page by
+  the browser's `Sec-Fetch-Site: same-origin`, so the proxy may rewrite `Host`
+  or terminate TLS. A browser that sends no Fetch Metadata is accepted only when
+  its `Origin` equals the scheme and host the core sees: pass `Host` through,
+  plus `X-Forwarded-Proto` from a proxy in `FORWARDED_ALLOW_IPS`.
 - Visitors who are not loopback need `OUROBOROS_FILE_BROWSER_DEFAULT` for Files;
   without it the path-addressed `/api/files/*` operations refuse them.
 

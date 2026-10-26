@@ -33,7 +33,7 @@ const RESIZING = ['class', 'hidden', 'open', 'style', 'src', 'data-deck-tucked',
 const RESTYLING = ['data-theme', 'data-layout', 'lang', 'dir'];
 const ROWS = '.chat-bubble, .chat-live-card';  // the rows that sleep; a history control or notice never does
 const NEAR = '100% 0px';  // within the feed's own height above and below its view
-const WINDOW_SIZED = '.chat-review-attempt-detail, .skill-review-full, .widget-json pre, .widget-chart-canvas';
+const WINDOW_SIZED = '.review-facts[open] > .review-facts-body, .skill-review-full, .widget-json pre, .widget-chart-canvas';
 
 // `onRestyle`: the room's reading owner places the passage again once a restyle (theme, layout, language, fonts) has
 // woken every row: rows far from the view change size at once, which WebKit's scroll anchoring does not absorb.

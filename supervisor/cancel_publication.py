@@ -112,8 +112,12 @@ def cancel_cause_clauses(
               else " ".join(strip_markdown(stated).split()))
     if len(reason) > CANCEL_REASON_MAX_CHARS:
         reason = reason[:CANCEL_REASON_MAX_CHARS - 1].rstrip() + "\u2026" + CANCEL_REASON_PREVIEW_NOTE
+    # Hardening a Wrap up keeps its original source but changes the effective button.
+    phrase_source = ({"immediate": "http_single", "finalize_then_cancel": "http_graceful"}
+                     .get(str(origin.get("stop_policy") or ""), source)
+                     if source in {"http_single", "http_cascade", "http_graceful"} else source)
     return [
-        CANCEL_SOURCE_PHRASES.get(source, source),
+        CANCEL_SOURCE_PHRASES.get(phrase_source, source),
         reason,
         "this task and its sub-tasks" if origin.get("scope") == "cascade" else "",
         relation,
@@ -277,7 +281,7 @@ def _intent_outcome_fields(intent: Dict[str, Any]) -> Dict[str, Any]:
     # Preserve the recorded cause after the active intent is removed. Actor
     # evidence is independent of requested_by, which also drives parent decisions.
     origin = {key: str(intent[key]) for key in (
-        "source", "requested_by", "scope", "reason", "requested_at", "request_id",
+        "source", "requested_by", "scope", "reason", "requested_at", "request_id", "stop_policy",
     ) if intent.get(key)}
     request_origin = (fields.get("cancel_observation") or {}).get("request_origin")
     if isinstance(request_origin, dict):

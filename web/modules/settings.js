@@ -251,25 +251,29 @@ function renderRequestedSkillSecrets(root, skills, settings) {
 // A declarative extension form must show what is STORED. Rendering the bare
 // schema and posting it overwrote real values with the schema's first option —
 // the bundled Telegram skill unbound its owner chat id that way. The host reads
-// the current values from the SAME route it posts to; a plugin with no GET
-// handler (404/405) keeps today's empty form, and any other outcome is an
-// unknown read whose Save must not overwrite what we could not see.
+// the current values from the SAME route it posts to. A route with no GET
+// handler (404/405) cannot say what is stored: its fields start locked behind a
+// warning until the owner chooses Edit anyway, knowing Save may replace values
+// nobody saw. Any other failed read keeps Save disabled with no way around it,
+// and a successful `{}` is a real empty document.
 const EXTENSION_VALUES_UNREADABLE = 'Current values could not be read; Save is disabled so it does not overwrite them. Use Reload Settings to retry.';
+const EXTENSION_VALUES_UNAVAILABLE = 'Current values are unavailable. These are defaults. Sending this form may change saved settings.';
+const EXTENSION_EDITING_UNREAD = 'You chose to edit without reading the saved values. Review every field before sending.';
 
 const extensionFormKey = (section, component, idx) =>
     `${section.key || `${section.skill}:${section.section_id}`}:${component.id || idx}`;
 
-/** Read one form's stored values from its own route. Exported for node tests. */
+/** Read one form's stored values from its own route: `read` is ok, unsupported or failed. Exported for node tests. */
 export async function readExtensionFormValues(skill, route) {
     try {
         const resp = await apiFetch(extensionRoutePath(skill, route));
-        if (resp.status === 404 || resp.status === 405) return { values: {}, blocked: false };
-        if (!resp.ok) return { values: {}, blocked: true };
+        if (resp.status === 404 || resp.status === 405) return { values: {}, read: 'unsupported' };
+        if (!resp.ok) return { values: {}, read: 'failed' };
         const data = await resp.json();
-        if (!data || typeof data !== 'object' || Array.isArray(data)) return { values: {}, blocked: true };
-        return { values: data, blocked: false };
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return { values: {}, read: 'failed' };
+        return { values: data, read: 'ok' };
     } catch {
-        return { values: {}, blocked: true };
+        return { values: {}, read: 'failed' };
     }
 }
 
@@ -312,19 +316,26 @@ export async function renderExtensionSettingsSections(root, sections, { isCurren
             }
             const formKey = extensionFormKey(section, component, idx);
             formSpecs.set(formKey, component);
-            const { values = {}, blocked = false } = hydrated.get(formKey) || {};
+            // Fieldless actions are never read, so they keep `ok`.
+            const { values = {}, read = 'ok' } = hydrated.get(formKey) || {};
             const disabled = Boolean(component.disabled);
+            const unread = read === 'unsupported' && !disabled;
+            const failed = read === 'failed';
             const fieldOptions = {
-                disabled,
+                disabled: disabled || unread,
                 fieldClass: 'form-field ui-field',
                 inlineClass: 'settings-extension-checkbox ui-field ui-field-inline',
                 helpClass: 'settings-inline-note ui-field-help',
             };
             return `
-                <form class="settings-extension-form" data-extension-settings-form data-extension-settings-key="${escapeHtml(formKey)}" data-skill="${escapeHtml(section.skill || '')}" data-route="${escapeHtml(rawRoute)}"${blocked ? ' data-extension-settings-blocked="1"' : ''}>
+                <form class="settings-extension-form" data-extension-settings-form data-extension-settings-key="${escapeHtml(formKey)}" data-skill="${escapeHtml(section.skill || '')}" data-route="${escapeHtml(rawRoute)}"${failed || unread ? ' data-extension-settings-blocked="1"' : ''}>
+                    ${unread ? `<div class="settings-inline-status" data-extension-settings-read data-tone="${normalizeTone('warn')}">${escapeHtml(EXTENSION_VALUES_UNAVAILABLE)}</div>` : ''}
                     <div class="form-grid two">${fields.map((field) => renderSafeField(field, values, fieldOptions)).join('')}</div>
-                    <button class="btn btn-primary btn-sm" type="submit"${disabled || blocked ? ' disabled' : ''}>${escapeHtml(component.submit_label || component.label || 'Save')}</button>
-                    <div class="settings-inline-status" data-extension-settings-status${blocked ? ` data-tone="${normalizeTone('warn')}"` : ''}>${blocked ? escapeHtml(EXTENSION_VALUES_UNREADABLE) : ''}</div>
+                    <div class="settings-extension-actions">
+                        <button class="btn btn-primary btn-sm" type="submit"${disabled || failed || unread ? ' disabled' : ''}>${escapeHtml(component.submit_label || component.label || 'Save')}</button>
+                        ${unread ? '<button class="btn btn-secondary btn-sm" type="button" data-extension-settings-edit-anyway>Edit anyway</button>' : ''}
+                    </div>
+                    <div class="settings-inline-status" data-extension-settings-status${failed ? ` data-tone="${normalizeTone('warn')}"` : ''}>${failed ? escapeHtml(EXTENSION_VALUES_UNREADABLE) : ''}</div>
                 </form>
             `;
         }
@@ -347,6 +358,19 @@ export async function renderExtensionSettingsSections(root, sections, { isCurren
         `;
     }).join('');
     host.querySelectorAll('[data-extension-settings-form]').forEach((form) => {
+        // The owner's explicit choice to send this form without its stored values: it unlocks
+        // the fields the schema does not disable, and Save sends every one of them as before.
+        form.querySelector('[data-extension-settings-edit-anyway]')?.addEventListener('click', (event) => {
+            const spec = formSpecs.get(form.dataset.extensionSettingsKey) || {};
+            for (const field of spec.fields || []) {
+                const input = field.disabled ? null : form.elements?.namedItem?.(String(field.name || ''));
+                if (input) input.disabled = false;
+            }
+            delete form.dataset.extensionSettingsBlocked;
+            form.querySelector('button[type="submit"]').disabled = false;
+            event.currentTarget.disabled = true;
+            setInlineStatus(form.querySelector('[data-extension-settings-read]'), EXTENSION_EDITING_UNREAD, 'warn');
+        });
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             const status = form.querySelector('[data-extension-settings-status]');

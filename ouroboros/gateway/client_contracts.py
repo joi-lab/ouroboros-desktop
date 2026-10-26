@@ -221,7 +221,7 @@ class ContractHttpEntry(TypedDict):
     method: str
     path: str  # Starlette template: {name} is one segment, {name:path} the rest of the path
     path_params: List[str]
-    auth: Literal["gate", "public"]  # gate: needs a session when the core enforces its network password
+    auth: Literal["gate", "public", "asset_lease"]  # asset_lease: scoped read capability, never a session
     typed: bool  # False: the route is published without shapes (an explicit gap, not an empty schema)
     query: NotRequired[List[str]]
     headers: NotRequired[List[str]]  # request headers the handler reads; a trailing "!" marks a required one
