@@ -223,15 +223,16 @@ def recent_identity(root, place_id, account_id=""):
         if not _dialogue_indexes(root):
             return None
         with dialogue_store.transaction(root, write=False) as conn:
-            rows = conn.execute(f"SELECT json_extract(body,'$.transport.identity') FROM dialogue INDEXED BY dialogue_place_recent "
-                                f"WHERE {_ARRIVAL} AND {_PLACE}=?{scope} ORDER BY ts DESC LIMIT 50",
-                                (place_id, account_id) if account_id else (place_id,)).fetchall()
+            rows = conn.execute(f"SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity') "
+                                f"FROM dialogue INDEXED BY dialogue_place_recent WHERE {_ARRIVAL} AND {_PLACE}=?{scope} "
+                                f"ORDER BY ts DESC LIMIT 50", (place_id, account_id) if account_id else (place_id,)).fetchall()
     except (store.StoreError, OSError) as exc:
         # A supplementary fact: an own wake or a Safety check goes on without it rather than failing on the store.
         logging.getLogger(__name__).warning("Captured identity unavailable for %s: %s", place_id, exc)
         return None
-    for (declared,) in rows:
-        if declared is None:
+    for kind, declared in rows:
+        # json_extract hands back a stored string unquoted and a number natively: only a stored object is a declaration.
+        if kind != 'object':
             continue
         try:
             return validate_presence_identity(json.loads(declared))

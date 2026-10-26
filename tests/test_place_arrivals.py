@@ -113,8 +113,9 @@ def test_recent_identity_uses_newest_arrival_of_this_place(focus):
     assert place_arrivals.recent_identity(root, place.place_id) == newest
 
 
-@pytest.mark.parametrize("bad", [None, [], "broken", {"sends_as": {"id": "missing-fields"}},
-                                  {"sends_as": {"id": "a", "label": "A", "kind": "user", "owner": True}}])
+@pytest.mark.parametrize("bad", [None, [], "broken", 1, True, 1.5, {"sends_as": {"id": "missing-fields"}},
+                                  {"sends_as": {"id": "a", "label": "A", "kind": "user", "owner": True}},
+                                  json.dumps({"sends_as": {"id": "string-not-object", "label": "S", "kind": "user"}})])
 def test_recent_identity_skips_malformed_or_absent_stored_identity(focus, bad):
     root, place, _, _ = focus
     good = {"sends_as": {"id": "writer", "label": "Writer", "kind": "user"}}
@@ -160,8 +161,8 @@ def test_recent_identity_bounds_indexed_read_and_validates_after_transaction(foc
     from tests.place_history_scenario import watch_transactions
     root, place, _, _ = focus
     seed_identity_arrival(root, place, {"reads_as": []}, ts="2026-10-25T12:00:00Z")
-    for number in range(50):  # declared but malformed: each row reaches the validator, none passes
-        seed_identity_arrival(root, place, [], ts=f"2026-10-26T12:00:{number:02d}Z")
+    for number in range(50):  # declared objects that fail validation: each row reaches the validator, none passes
+        seed_identity_arrival(root, place, {"sends_as": {"id": "missing-fields"}}, ts=f"2026-10-26T12:00:{number:02d}Z")
     watch = watch_transactions(monkeypatch)
     validate, calls = places.validate_presence_identity, []
     def after_transaction(value):
@@ -171,6 +172,6 @@ def test_recent_identity_bounds_indexed_read_and_validates_after_transaction(foc
     monkeypatch.setattr(places, "validate_presence_identity", after_transaction)
     assert place_arrivals.recent_identity(root, place.place_id) is None
     assert len(calls) == 50
-    selects = [sql for sql in watch.statements if sql.startswith("SELECT json_extract(body,'$.transport.identity') FROM dialogue")]
+    selects = [sql for sql in watch.statements if sql.startswith("SELECT json_type(body,'$.transport.identity'), json_extract(body,'$.transport.identity') FROM dialogue")]
     assert len(selects) == 1
     assert "INDEXED BY dialogue_place_recent" in selects[0] and "LIMIT 50" in selects[0]
