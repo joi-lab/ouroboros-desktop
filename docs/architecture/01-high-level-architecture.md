@@ -642,13 +642,14 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── queue_snapshot.json    ← PENDING/RUNNING recovery projection, `worker_pool_disabled_reason` (§5)
 │   │   ├── current.sqlite         ← the current-facts authority; `.exported-<UTC>` retired copies
 │   │   ├── usage.sqlite           ← the monetary authority (docs/USAGE_STORE.md)
-│   │   ├── usage_attempts.jsonl   ← imported journal; historical audit and older-seed input
+│   │   ├── usage_attempts.jsonl   ← imported journal; audit and older-seed input
 │   │   ├── usage_attempts.quarantine.jsonl ← the journal's proven-corrupt rows
 │   │   ├── usage_import_watermark.json ← import watermark
-│   │   ├── storage_measurement.json ← last two counts; derived, never deletion authority
+│   │   ├── storage_measurement.json ← last two counts; never deletion authority
 │   │   ├── request_wire_compatibility.json ← exact-route wire evidence
 │   │   ├── capability_evidence.json ← sourced model-capability evidence
-│   │   ├── extra-ca-bundle/<digest>.pem ← content-addressed CA bundle every first-party HTTP client verifies against
+│   │   ├── openrouter_models.json ← last clean OpenRouter catalogue read, shared by processes
+│   │   ├── extra-ca-bundle/<digest>.pem ← content-addressed CA bundle all first-party HTTP clients verify
 │   │   ├── process_ledger.jsonl   ← process-custody ledger (Runtime topology)
 │   │   ├── installation_scope.json ← scope marker
 │   │   ├── task_scopes/ ← task scope records
@@ -659,32 +660,32 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── owned_processes.json   ← ownership set with pending stops (§9)
 │   │   ├── server.lock            ← server-lifetime DATA admission; never unlinked
 │   │   ├── server_port            ← active HTTP port for launcher/browser handoff
-│   │   ├── server_port.bindings.json ← informational endpoint snapshot, never a grant or custody ledger
-│   │   ├── server_process.json    ← launcher-owned server identity for relaunch cleanup
+│   │   ├── server_port.bindings.json ← endpoint snapshot, never a grant or custody ledger
+│   │   ├── server_process.json    ← launcher-owned server identity for relaunch
 │   │   ├── advisory_review.json   ← commit-review state (attempts, obligations, readiness debts)
 │   │   ├── code_intel/<repo_key>/inventory.json ← code-inventory facts; no source cache
-│   │   ├── evolution_metrics_cache.json ← version history cache
+│   │   ├── evolution_metrics_cache.json ← version history
 │   │   ├── evolution_campaign.json ← campaign objective, progress, budget
 │   │   ├── evolution_checkpoints.jsonl ← per-cycle checkpoints
-│   │   ├── post_task_evolution_request.json ← one-shot promotion signal for the supervisor idle tick
+│   │   ├── post_task_evolution_request.json ← one-shot promotion signal for the idle tick
 │   │   ├── post_task_evolution_counter.json ← per-drive every_n counter
 │   │   ├── scheduled_tasks.json   ← cron/one-shot schedules and `kind:"notify"` notes (§5)
-│   │   ├── claudexor_rotation_provisioning.json ← last rotation-reconcile receipt
-│   │   ├── subagent_last_delegation.json ← dated helper observations; never dispatch authority
+│   │   ├── claudexor_rotation_provisioning.json ← last rotation receipt
+│   │   ├── subagent_last_delegation.json ← dated helper observations, not dispatch authority
 │   │   ├── update_letter.json     ← update letter with `last_good`
 │   │   ├── projects.json          ← Project registry; tombstones are durable
-│   │   ├── projects.json.committed ← commit witness: beside it a missing registry is unavailable, not empty
+│   │   ├── projects.json.committed ← commit witness: with it a missing registry is unavailable, not empty
 │   │   ├── project_task_bindings.json ← root↔Project bindings with typed origin
 │   │   ├── ui_preferences.json    ← owner-local layout prefs and seen-revision ACKs
 │   │   ├── i18n/<tag>.json        ← translation memory per language, beside `<tag>.pending.json`
 │   │   ├── cancel_intents.json    ← projection of active cancel intents
 │   │   ├── terminal_deliveries.json ← delivery dedupe, byte receipts, pending outbox
 │   │   ├── extension_companions.json ← live companion processes
-│   │   ├── extension_reconcile/   ← worker-written markers for the server pickup task
+│   │   ├── extension_reconcile/   ← worker-written markers for the server pickup
 │   │   ├── review_continuations/  ← blocked-review continuations (+ corrupt/, archived/)
-│   │   ├── review_migrations/     ← `<ts>-slots-to-pool.json` per review-pool migration; the rollback source, never deleted
+│   │   ├── review_migrations/     ← `<ts>-slots-to-pool.json` per review-pool migration; rollback source, kept
 │   │   ├── workspace_executor_processes/ ← executor cleanup records
-│   │   ├── headless_tasks/<task_id>/data ← forked/empty child drives; per-call manifests promote at terminal
+│   │   ├── headless_tasks/<task_id>/data ← forked/empty child drives; manifests promote at terminal
 │   │   ├── custody_staging/       ← unserved copies prepared by a drive settlement
 │   │   ├── custody_trash/         ← fully custodied drives awaiting deletion
 │   │   ├── betterleaks/           ← scanner runtime, created only by the explicit installer
