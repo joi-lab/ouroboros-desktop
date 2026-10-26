@@ -5,7 +5,8 @@ A reused worker mirrors every task's effective values into its own environment a
 from that mirror if the live view fell back to the environment. It never does: the view is the
 effective document over ``skill_environ`` (this tree's own mirrored values dropped by digest, an
 operator's own variable kept), memoised behind the document's stat; an unreadable document makes
-credential keys unavailable rather than stale. Every other setting keeps the task's entry snapshot.
+credential keys unavailable rather than stale. Every other setting keeps the task's entry snapshot, and
+so do the route keys of a process with no saved document at all (an env-configured one).
 """
 
 from __future__ import annotations
@@ -52,6 +53,24 @@ def test_reused_worker_cannot_resurrect_a_cleared_or_disabled_key(monkeypatch):
         assert "OPENROUTER_API_KEY" not in config.runtime_environ()  # a child (vision) gets no stale credential either
         assert config.runtime_settings()["OPENROUTER_API_KEY"] == ""
     assert os.environ["OPENROUTER_API_KEY"] == "router-old"  # the mirror itself is untouched: it is simply never read
+
+
+def test_without_a_saved_document_route_keys_read_as_every_other_key(monkeypatch):
+    """An operator-run process (a bench harness, an env-configured container) has nothing to resurrect:
+    its environment is the configuration, read as before, entry snapshot included."""
+    from ouroboros import route_choice
+
+    assert not config.SETTINGS_PATH.exists()
+    monkeypatch.setenv("OUROBOROS_MODEL", "openai::env-main")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.delenv("OUROBOROS_MODEL_FALLBACKS", raising=False)
+    assert route_choice.route_settings_view() is route_choice._ABSENT
+    assert config.runtime_setting("OUROBOROS_MODEL") == "openai::env-main" and config.runtime_setting("OPENAI_API_KEY") == "env-key"
+    assert config.runtime_setting("OUROBOROS_MODEL_FALLBACKS", "") == ""  # no proposal stands in for an absent chain
+    task = subagent_runtime.apply_task_start_settings()
+    with config.task_settings_scope(task):
+        monkeypatch.setenv("OUROBOROS_MODEL", "openai::later")
+        assert config.runtime_setting("OUROBOROS_MODEL") == "openai::env-main"  # the entry snapshot, as before
 
 
 def test_a_genuine_operator_variable_still_serves_the_built_in(monkeypatch):

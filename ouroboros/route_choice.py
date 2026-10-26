@@ -13,11 +13,13 @@ send. The read has ``skill_settings()`` semantics (the full effective loader ove
 unset; this process tree's own mirrored values never do, so a key the owner cleared cannot come
 back from a reused worker's environment), memoised behind the document's stat and the operator
 variables. A document that exists but cannot be read makes credential keys unavailable; nothing
-answers from stale env. Every other setting keeps the task's entry snapshot (context mode, effort,
-review settings, the subagent catalog, access).
+answers from stale env. A process with no saved document (an operator-run one) has nothing to
+resurrect and keeps reading its environment as every other key. Every other setting keeps the
+task's entry snapshot (context mode, effort, review settings, the subagent catalog, access).
 
-Choice. ``following(role)``: the acting route is the role's current binding, re-resolved at every
-new logical call through the existing switch handover; ``explicit(source)``: the task's own route
+Choice. ``following(role)``: the acting route is the role's current binding, re-read at every new
+logical call; a changed binding moves the route through the existing switch handover (an acting
+route that differs for another reason, a card's reprepare, is left alone); ``explicit(source)``: the task's own route
 (a configured row, a Presence turn, a task argument, ``switch_model``, a wait-card choice, an
 adopted fallback) stays until the mind returns to its primary. The choice rides the continuation
 ``route`` block; a checkpoint written without one is classified from what it did carry
@@ -98,12 +100,18 @@ def _project(effective: dict) -> dict:
     return {key: projected[key] for key in ROUTE_SETTING_KEYS if key in projected}
 
 
+_ABSENT: Tuple[dict, dict] = ({}, {})  # no saved document: the route keys read as every other key
+
+
 def route_settings_view() -> Optional[Tuple[dict, dict]]:
     """``(effective document, env-shaped projection)`` of the route keys as the document reads now.
 
-    ``None`` when a document exists but could not be read (the verified reader refused it, or it does not
-    decode): the failure is never memoised, so the next read tries again; integrity-pinned isolated runs
-    keep the verified reader the loader already uses."""
+    ``_ABSENT`` (nothing served) while no document is saved: an operator-run process (a bench harness, an
+    env-configured container) has nothing to resurrect, and its environment stays the configuration the
+    ordinary readers serve. ``None`` when a document exists but could not be read (the verified reader
+    refused it, or it does not decode): the failure is never memoised, so the next read tries again. The
+    read takes no lock and persists no compatibility migration (writers rename atomically); integrity-pinned
+    isolated runs keep the verified reader the loader already uses."""
     global _VIEW
     from ouroboros import config
     from ouroboros.server_runtime import apply_runtime_provider_defaults
@@ -111,6 +119,8 @@ def route_settings_view() -> Optional[Tuple[dict, dict]]:
 
     source = _read_source()
     stamp, signature = _document_stamp(), tuple(source.get(key) for key in _SIGNATURE_KEYS)
+    if stamp[1] is None:
+        return _ABSENT
     view = _VIEW
     if view is not None and view[0] == stamp and view[1] == signature:
         return view[2], view[3]
@@ -119,9 +129,10 @@ def route_settings_view() -> Optional[Tuple[dict, dict]]:
         if view is not None and view[0] == stamp and view[1] == signature:
             return view[2], view[3]
         try:
-            if stamp[1] is not None and not isinstance(read_settings_json_verified(config.SETTINGS_PATH), dict):
+            if not isinstance(read_settings_json_verified(config.SETTINGS_PATH), dict):
                 return None
-            effective, _changed, _keys = apply_runtime_provider_defaults(skill_settings())
+            effective, _changed, _keys = apply_runtime_provider_defaults(
+                skill_settings(lambda: config.load_settings_lock_held(_settings_lock_held=False)))
         except Exception:
             return None
         _VIEW = (stamp, signature, effective, _project(effective))
@@ -131,8 +142,11 @@ def route_settings_view() -> Optional[Tuple[dict, dict]]:
 def live_setting(key: str, default: Any = None) -> Tuple[bool, Any]:
     """``(served, value)`` of a route key for ``runtime_setting``: the live env-shaped value, ``default`` when
     the document leaves it unset or an unreadable document makes a credential key unavailable. ``served`` is
-    False only for a non-credential key of an unreadable document: the caller keeps its entry view."""
+    False without a saved document, and for a non-credential key of an unreadable one: the caller keeps its
+    entry view."""
     view = route_settings_view()
+    if view is _ABSENT:
+        return False, None
     if view is None:
         return (True, default) if key in ROUTE_CREDENTIAL_SETTING_KEYS else (False, None)
     return True, view[1].get(key, default)
@@ -141,6 +155,8 @@ def live_setting(key: str, default: Any = None) -> Tuple[bool, Any]:
 def live_environ_overlay(env: dict) -> None:
     """The exported route keys of a child environment (``runtime_environ``), live."""
     view = route_settings_view()
+    if view is _ABSENT:
+        return
     for key in _EXPORTED_ROUTE_KEYS:
         if view is None:
             if key in ROUTE_CREDENTIAL_SETTING_KEYS:
@@ -154,6 +170,8 @@ def live_environ_overlay(env: dict) -> None:
 def live_settings_overlay(settings: dict) -> None:
     """The route keys of a settings mapping (``runtime_settings``), live; values are private copies."""
     view = route_settings_view()
+    if view is _ABSENT:
+        return
     for key in ROUTE_SETTING_KEYS:
         if view is None:
             if key in ROUTE_CREDENTIAL_SETTING_KEYS:
@@ -259,10 +277,11 @@ def open_route(ctx: Any, llm: Any) -> Tuple[str, bool, dict]:
     """The route a turn opens on and its choice; a locality the task carries without a model still applies."""
     override = str(getattr(ctx, "task_model_override", "") or "").strip()
     local_override = getattr(ctx, "task_use_local_override", None)
+    ctx._route_binding = None  # the binding a following route last resolved to (``round_route``)
     if override:
         return override, bool(local_override), opening_choice(ctx)
     role = opening_role(ctx)
-    model, use_local = following_route(role, llm)
+    model, use_local = ctx._route_binding = following_route(role, llm)
     return model, bool(local_override) if local_override is not None else use_local, following(role)
 
 
@@ -293,11 +312,13 @@ def bind_task_route(ctx: Any, task_metadata: Mapping, *, presence: bool) -> None
 
 
 def round_route(ctx: Any, llm: Any, acting: Tuple[str, bool]) -> Optional[Tuple[str, bool]]:
-    """At a new logical call: the binding a following acting route moves to, or ``None``.
+    """At a new logical call: the binding a following route moves to, or ``None``.
 
-    A following primary is re-read too, so the primary stays a reference to its role
-    (``switch_model(primary="return")`` returns to the current one) and the configured-route walk
-    tries the current Main. A turn without a recorded choice keeps its route."""
+    A move is a changed binding (a Settings save), never an acting route that differs for another
+    reason (a card's reprepare, the task's own locality); the first round after a restore compares to
+    the acting route, which a following route ran on. A following primary is re-read too, so the primary
+    stays a reference to its role (``switch_model(primary="return")`` returns to the current one) and the
+    configured-route walk tries the current Main. A turn without a recorded choice keeps its route."""
     choice = getattr(ctx, "route_choice", None)
     if not isinstance(choice, dict):
         return None
@@ -308,8 +329,10 @@ def round_route(ctx: Any, llm: Any, acting: Tuple[str, bool]) -> Optional[Tuple[
     role = follows(choice)
     if not role:
         return None
-    current = following_route(role, llm)
-    return None if current == (str(acting[0] or ""), bool(acting[1])) else current
+    acting = (str(acting[0] or ""), bool(acting[1]))
+    bound = tuple(getattr(ctx, "_route_binding", None) or acting)
+    current = ctx._route_binding = following_route(role, llm)
+    return None if current in (acting, bound) else current
 
 
 def note_settings_change(ctx: Any, previous: str, current: str, role: str) -> None:

@@ -1098,6 +1098,7 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
     from ouroboros.route_choice import restored_choice
 
     ctx.route_choice = restored_choice(ctx, state)  # a saved choice, else the legacy classification (D5)
+    ctx._route_binding = None  # the first round compares to the restored acting route (route_choice.round_route)
     candidate = state.get("delivery_candidate")
     ctx._delivery_candidate = DeliveryCandidate(**{key: value for key, value in candidate.items()
         if key != "repair_attempted"}) if candidate else None

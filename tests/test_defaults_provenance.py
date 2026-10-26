@@ -131,9 +131,7 @@ def test_saved_blank_light_and_fallbacks_keep_their_meaning_end_to_end(install, 
 
 
 def test_the_legacy_fallback_alias_reaches_a_document_only_through_its_migration(install, monkeypatch):
-    """The singular ``OUROBOROS_MODEL_FALLBACK`` is a retired document key (``migrate_legacy_slot_keys``), never
-    an environment alias: the chain reads the settings document as it is now (``route_choice``)."""
-    from ouroboros.model_slots import parse_fallback_chain
+    from ouroboros.model_slots import parse_fallback_chain  # the singular key is a retired DOCUMENT key, never an env alias
 
     monkeypatch.setenv("OUROBOROS_MODEL_FALLBACK", "a/one, b/two")
     _write(install, {"ANTHROPIC_API_KEY": "k", "OUROBOROS_MODEL_FALLBACK": "c/three"})
