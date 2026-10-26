@@ -2,6 +2,8 @@
 
 The host retains complete immutable artifact bytes and ordinary run custody. It
 does not make a second execution copy, invent a Git baseline, or apply files itself.
+An explicit ``workspace="in_place"`` Git writer, which works in its starter's own
+folder and so has nothing to capture, is recognized and projected here too.
 """
 from __future__ import annotations
 
@@ -92,7 +94,8 @@ def started_receipt(payload, resource_ref, target_root, *, durable, investigatio
                            "(workspace='in_place'): its edits land there as it makes them. Nothing is captured for apply "
                            "or reject (integrate_delegated_patch refuses); undo through git. Do not edit the same files "
                            "meanwhile and do not start a second in-place writer in this folder: their edits would mix. "
-                           "Use delegate_wait for its result.")
+                           "When this folder is the Ouroboros body, its protected paths are not checked for this writer "
+                           "(the commit gate still checks them). Use delegate_wait for its result.")
         return
     direct = resource_ref.get("strategy") == "direct"
     payload.update(authority_target_root=target_root,

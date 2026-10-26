@@ -5,7 +5,7 @@ snapshot, a native acting child's task copy, an own-body candidate — is a
 linked ``git worktree`` under a root OUTSIDE ``repo/`` and ``data/``. A copy of
 the source's CURRENT files starts from a snapshot commit that git itself makes:
 a private index seeded from the source's real index stages the tracked files and
-every untracked file ``.gitignore`` does not hide, ``commit-tree`` records it and a
+every untracked file Git does not ignore, ``commit-tree`` records it and a
 ref under ``refs/ouroboros/delegated/`` pins it. ``git worktree add --detach
 --no-checkout`` plus ``reset --hard`` (no hooks) checks it out. A linked worktree
 shares the source's object database, so shallow and partial clones work, and a
@@ -34,6 +34,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -344,10 +345,23 @@ class GitFailed(subprocess.CalledProcessError):
         return f"git {verb} exited {self.returncode}" + (f": {tail}" if tail else "")
 
 
+# Repository-location variables inherited from the HOST process would silently redirect a
+# command at another repository or index (observed with a leaked GIT_DIR: `git init`
+# "reinitialized" a foreign directory), so no git call here inherits them.
+_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR")
+
+
+def _host_env(**extra: str) -> Dict[str, str]:
+    """The process environment minus repository-location variables, plus ``extra``."""
+    return {**{key: value for key, value in os.environ.items() if key not in _LOCATION_VARS}, **extra}
+
+
 def _git(repo_dir: Path, *args: str, check: bool = True,
          env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
     proc = subprocess.run(["git", *args], cwd=str(repo_dir), capture_output=True, text=True,
-                          encoding="utf-8", errors="surrogateescape", check=False, env=env)
+                          encoding="utf-8", errors="surrogateescape", check=False,
+                          env=_host_env() if env is None else env)
     if check and proc.returncode != 0:
         raise GitFailed(proc.returncode, proc.args, proc.stdout, proc.stderr)
     return proc
@@ -375,21 +389,23 @@ def _git_quiet(repo_dir: Path, *args: str) -> None:
         pass
 
 
+def _forget_checkout(repo_dir: Path, wt_path: Path) -> None:
+    """Drop the registration of ONE checkout whose folder is gone. A global ``worktree
+    prune`` would also drop the source's own missing worktrees (one on an unplugged disk)."""
+    if not Path(wt_path).exists():
+        _git_quiet(repo_dir, "worktree", "remove", "--force", "--force", str(wt_path))
+
+
 def _remove_paths(repo_dir: Path, wt_path: Path, branch: str, *, allowed_root: Optional[Any] = None) -> bool:
-    """Forget a deleted checkout's Git registration and branch.
-
-    The caller deletes the files first. A surviving directory returns False
-    without retrying deletion here, so its record and pin stay (``removal_failed``).
-
-    When ``allowed_root`` is given, refuse to touch any path that is empty or not
-    strictly inside it: a malformed record must never delete an arbitrary path.
-    """
+    """Forget a deleted checkout's Git registration and branch (the caller deleted its files; a
+    surviving directory returns False, so its record and pin stay: ``removal_failed``). With
+    ``allowed_root``, a path not strictly inside it is never touched: a record names no arbitrary path."""
     wt_path = Path(wt_path)
     if allowed_root is not None and not _deletable(wt_path, Path(allowed_root)):
         return True  # not ours to delete: the malformed record is forgotten, the path untouched
     if wt_path.exists():
         return False
-    _git_quiet(repo_dir, "worktree", "prune")
+    _forget_checkout(repo_dir, wt_path)
     if branch:
         _git_quiet(repo_dir, "branch", "-D", branch)
     return True
@@ -422,7 +438,7 @@ def _discard_snapshot_checkout(row: Dict[str, Any], *, root: Path, data_dir: Opt
         if _deletable(wt_path, root) and wt_path.exists():
             _force_rmtree(wt_path)
         repo = Path(str(row.get("git_dir") or row.get("target_root") or "."))
-        _git_quiet(repo, "worktree", "prune")
+        _forget_checkout(repo, wt_path)
         _unpin_snapshot(repo, row)
         _drop_record(wt_path, data_dir)
     except Exception:
@@ -573,7 +589,7 @@ class ExecutionSnapshotHandle:
     The snapshot is a detached ``git worktree`` of the AUTHORITY TARGET's
     repository, checked out at a snapshot commit B that git made from the
     target's real current files (tracked edits, staged changes and every
-    untracked file ``.gitignore`` does not hide). The run writes ONLY here;
+    untracked file Git does not ignore). The run writes ONLY here;
     its contribution is the diff from B to the captured result commit C, and
     the nanny applies or rejects that result into the target explicitly —
     never automatically. ``excluded_untracked`` names what git could not take
@@ -605,9 +621,7 @@ class ExecutionSnapshotHandle:
 
 
 def _git_env_index(index_path: Path) -> Dict[str, str]:
-    env = dict(os.environ)
-    env["GIT_INDEX_FILE"] = str(index_path)
-    return env
+    return _host_env(GIT_INDEX_FILE=str(index_path))
 
 
 def _git_env(repo_dir: Path, *args: str, env: Dict[str, str],
@@ -627,18 +641,21 @@ def _nul_input(paths: List[str]) -> bytes:
     return b"\0".join(p.encode("utf-8", errors="surrogateescape") for p in paths) + b"\0"
 
 
+_UNLISTABLE = re.compile(r"warning: could not open directory '(.*)': ")
+# What a capture names but cannot hold: the copy is kept for recovery until disposition.
+UNSAVED_REASONS = frozenset({"nested_repository", "unlistable_directory"})
 _SNAPSHOT_IDENTITY = {"GIT_AUTHOR_NAME": "Ouroboros", "GIT_AUTHOR_EMAIL": "ouroboros@localhost",
                       "GIT_COMMITTER_NAME": "Ouroboros", "GIT_COMMITTER_EMAIL": "ouroboros@localhost"}
 
 
-def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = "",
+def snapshot_commit(source: Path, *, message: str, parent: str = "",
                     held_out: str = "", held_keep: frozenset = frozenset(),
-                    ) -> Tuple[str, str, str, List[Dict[str, Any]], bytes]:
+                    ) -> Tuple[str, str, str, List[Dict[str, Any]]]:
     """Commit ``source``'s current files without touching its index, HEAD or files.
 
     A private index copied from the source's real index (its stat cache makes an
     unchanged file cost one ``lstat``) stages every tracked path and every
-    untracked file ``.gitignore`` does not hide. ``assume-unchanged`` is cleared,
+    untracked file Git does not ignore. ``assume-unchanged`` is cleared,
     and ``skip-worktree`` too for a path that is on disk, so neither hides an
     edit; an absent ``skip-worktree`` entry keeps its indexed blob (sparse
     checkouts stay correct). An untracked nested repository, a SQLite WAL index
@@ -647,15 +664,15 @@ def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = 
     ``held_out`` names a folder (a run's ``.review-evidence/``) whose files stay out
     of the commit unless listed in ``held_keep`` (what the baseline already holds):
     named evidence is retained beside the capture, never hashed into the source's
-    object database. Returns ``(commit, tree, head, excluded, manifest)``."""
+    object database. Returns ``(commit, tree, head, excluded)``."""
     from ouroboros.store import is_wal_index
 
     head_proc = _git(source, "rev-parse", "--verify", "HEAD", check=False)
     head = head_proc.stdout.strip() if head_proc.returncode == 0 else ""
     located = Path(_git(source, "rev-parse", "--git-path", "index").stdout.strip())
     real_index = located if located.is_absolute() else source / located
-    scratch.mkdir(parents=True, exist_ok=True)
-    index = scratch / f".snapshot-index-{os.getpid()}-{time.monotonic_ns()}"
+    private = Path(tempfile.mkdtemp(prefix="ouroboros-snapshot-index-"))  # never among the copies
+    index = private / "index"
     env = _git_env_index(index)
     excluded: List[Dict[str, Any]] = []
     try:
@@ -702,8 +719,12 @@ def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = 
                 dropped.append(rel)
             else:
                 stage.append(rel)
-        for rel in _nul_paths(_git_env(source, "ls-files", "-z", "--others", "--exclude-standard",
-                                       env=env).stdout):
+        listing = _git_env(source, "ls-files", "-z", "--others", "--exclude-standard",
+                           env={**env, "LC_ALL": "C", "LANGUAGE": "C"})
+        # Git lists past a folder it cannot open with exit 0 and only this warning (fixed locale).
+        excluded += [{"path": found.group(1).rstrip("/"), "reason": "unlistable_directory"} for found in
+                     map(_UNLISTABLE.match, listing.stderr.decode("utf-8", "surrogateescape").splitlines()) if found]
+        for rel in _nul_paths(listing.stdout):
             try:
                 mode = os.lstat(source / rel).st_mode
             except FileNotFoundError:
@@ -726,14 +747,12 @@ def snapshot_commit(source: Path, scratch: Path, *, message: str, parent: str = 
             _git_env(source, "update-index", "-z", "--add", "--remove", "--stdin", env=env,
                      input_bytes=_nul_input(stage))
         tree = _git_env(source, "write-tree", env=env).stdout.decode("utf-8").strip()
-        manifest = _git_env(source, "ls-tree", "-r", "-z", tree, env=dict(os.environ)).stdout
         base = parent or head
         commit = _git_env(source, "commit-tree", tree, *(["-p", base] if base else []), "-m", message,
-                          env={**os.environ, **_SNAPSHOT_IDENTITY}).stdout.decode("utf-8").strip()
+                          env=_host_env(**_SNAPSHOT_IDENTITY)).stdout.decode("utf-8").strip()
     finally:
-        with contextlib.suppress(OSError):
-            index.unlink()
-    return commit, tree, head, excluded, manifest
+        shutil.rmtree(private, ignore_errors=True)
+    return commit, tree, head, excluded
 
 
 def provision_execution_snapshot(
@@ -753,7 +772,7 @@ def _check_out(target: Path, wt_path: Path, commit: str, *, branch: str = "") ->
     the checkout git's own ``worktree add`` performs, without the target's hooks
     and without submodule recursion."""
     wt_path.parent.mkdir(parents=True, exist_ok=True)
-    _git_quiet(target, "worktree", "prune")
+    _forget_checkout(target, wt_path)  # a crashed earlier attempt's registration of this path
     if branch:
         _git(target, "worktree", "add", "--no-checkout", "--force", str(wt_path), branch)
     else:
@@ -806,8 +825,9 @@ def _provision_git_copy(
     # its admin dir and pin are replaced below.
     if _deletable(wt_path, root) and wt_path.exists():
         _force_rmtree(wt_path)
-    baseline_sha, tree_sha, target_head, excluded, manifest_raw = snapshot_commit(
-        target, root, message=f"ouroboros: delegated-run baseline {snap}")
+    baseline_sha, tree_sha, target_head, excluded = snapshot_commit(
+        target, message=f"ouroboros: delegated-run baseline {snap}")
+    manifest_raw = _git_env(target, "ls-tree", "-r", "-z", tree_sha, env=_host_env()).stdout
     if task_copy and target_head and tree_sha == _git(target, "rev-parse", f"{target_head}^{{tree}}").stdout.strip():
         baseline_sha = target_head
     source_index_clean = bool(target_head and _git(
@@ -874,9 +894,9 @@ def capture_result_commit(snapshot_id: str, patch_path: Path, *, held_out: str =
     keep: frozenset = frozenset()
     if held_out.strip("/"):
         keep = frozenset(_nul_paths(_git_env(clone, "ls-tree", "-r", "-z", "--name-only", baseline, "--",
-                                             held_out.strip("/"), env=dict(os.environ)).stdout))
-    commit, tree, head, excluded, _manifest = snapshot_commit(
-        clone, clone.parent, message=f"ouroboros: delegated-run result {snapshot_id}", parent=baseline,
+                                             held_out.strip("/"), env=_host_env()).stdout))
+    commit, tree, head, excluded = snapshot_commit(
+        clone, message=f"ouroboros: delegated-run result {snapshot_id}", parent=baseline,
         held_out=held_out, held_keep=keep)
     repo = Path(str(row.get("git_dir") or row.get("target_root") or clone))
     result_ref = f"{_RESULT_REF_PREFIX}{_safe_name(snapshot_id)}"
@@ -888,7 +908,7 @@ def capture_result_commit(snapshot_id: str, patch_path: Path, *, held_out: str =
     with open(patch_path, "wb") as sink:
         proc = subprocess.run(["git", "diff-tree", "-r", "-p", "--binary", "--full-index", "--no-renames",
                                "--no-ext-diff", "--no-textconv", "--no-color", baseline, commit],
-                              cwd=str(repo), stdout=sink, stderr=subprocess.PIPE, check=False)
+                              cwd=str(repo), stdout=sink, stderr=subprocess.PIPE, check=False, env=_host_env())
     if proc.returncode != 0:
         raise GitFailed(proc.returncode, proc.args, b"", proc.stderr)
     return {"result_sha": commit, "result_tree": tree, "head": head, "result_ref": result_ref,
@@ -900,44 +920,58 @@ def release_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] 
                               data_dir: Optional[Any] = None) -> bool:
     """Remove a captured run's worktree but keep its record and pins: its result
     lives on as the saved patch plus commit C, and a continuation recreates the
-    checkout at C. True when no checkout remains."""
+    checkout at C. The record says ``checkout_released`` BEFORE the files go, so a
+    remnant of an interrupted removal is never taken for a whole checkout. True
+    when no checkout remains."""
     row = find_execution_snapshot(snapshot_id, data_dir)
     if row is None or row.get("standalone"):
         return False
     root = _resolve_root(worktree_root)
     wt_path = Path(str(row.get("path") or ""))
     with _record_lock(wt_path, data_dir, op="release_checkout", task_id=str(row.get("task_id") or "")):
+        current = _record_at(wt_path, data_dir, op="release_checkout") or row
+        _put_record({**current, "checkout_released": current.get("checkout_released") or utc_now_iso()}, data_dir)
         if _deletable(wt_path, root) and wt_path.exists():
             _force_rmtree(wt_path)
         if wt_path.exists():
             _mark_removal_failed(row, data_dir)
             return False
-        _git_quiet(Path(str(row.get("git_dir") or row.get("target_root") or ".")), "worktree", "prune")
-        current = _record_at(wt_path, data_dir, op="release_checkout") or row
-        _put_record({**current, "checkout_released": utc_now_iso()}, data_dir)
+        _forget_checkout(Path(str(row.get("git_dir") or row.get("target_root") or ".")), wt_path)
     return True
 
 
-def recreate_snapshot_checkout(snapshot_id: str, *, data_dir: Optional[Any] = None) -> Dict[str, Any]:
-    """Check a released copy out again for a continuation: the files of its result
-    commit C with HEAD and index at B, so the continuation's own capture measures
-    the whole run from B and a moved HEAD still means the run committed. A record
-    without a captured result refuses: a checkout is released only after its
-    result was saved, so a missing one without C is lost work, never silently B."""
+def checkout_whole(row: Dict[str, Any]) -> bool:
+    """A copy's checkout is there and was never released (a remnant of a release or of
+    an interrupted restore is not)."""
+    return Path(str(row.get("path") or "")).exists() and not row.get("checkout_released")
+
+
+def recreate_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] = None,
+                               data_dir: Optional[Any] = None) -> Dict[str, Any]:
+    """Check a released copy out again for a continuation: the files and the index of
+    its result commit C with HEAD at B, so the continuation's own capture measures the
+    whole run from B (a file C holds stays tracked, even one Git ignores) and a moved
+    HEAD still means the run committed. A remnant of an interrupted release or restore
+    is removed first; the mark clears only once the checkout is whole. A record
+    without a captured result refuses: a checkout is released only after its result
+    was saved, so a missing one without C is lost work, never silently B."""
     row = find_execution_snapshot(snapshot_id, data_dir)
     if row is None:
         raise FileNotFoundError(f"no private copy record for snapshot {snapshot_id}")
-    wt_path = Path(str(row.get("path") or ""))
-    if wt_path.exists():
+    if checkout_whole(row):
         return row
+    wt_path = Path(str(row.get("path") or ""))
     result, baseline = str(row.get("result_sha") or ""), str(row.get("baseline_sha") or "")
     if not result or not baseline:
         raise FileNotFoundError(f"snapshot {snapshot_id} has no checkout and no captured result to restore")
     repo = Path(str(row.get("git_dir") or row.get("target_root") or "."))
     with _record_lock(wt_path, data_dir, op="recreate_checkout", task_id=str(row.get("task_id") or "")):
-        _check_out(repo, wt_path, result)
-        _git(wt_path, "reset", "--mixed", "--quiet", baseline)
         current = _record_at(wt_path, data_dir, op="recreate_checkout") or row
+        _put_record({**current, "checkout_released": current.get("checkout_released") or utc_now_iso()}, data_dir)
+        if _deletable(wt_path, _resolve_root(worktree_root)) and wt_path.exists():
+            _force_rmtree(wt_path)
+        _check_out(repo, wt_path, result)
+        _git(wt_path, "reset", "--soft", "--quiet", baseline)
         current = {key: value for key, value in current.items() if key != "checkout_released"}
         _put_record(current, data_dir)
     return current
@@ -952,18 +986,7 @@ def isolated_git_env() -> Dict[str, str]:
     only command-line `-c` overrides and the repo-local config — which the
     payload paths reset to a known-good baseline before trusting.
     """
-    env = dict(os.environ)
-    # Repository-location vars inherited from the HOST process would silently
-    # redirect every command here at another repo/index (observed with a leaked
-    # GIT_DIR: `git init` "reinitialized" a foreign directory).
-    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
-                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                "GIT_COMMON_DIR"):
-        env.pop(var, None)
-    env["GIT_CONFIG_NOSYSTEM"] = "1"
-    env["GIT_CONFIG_GLOBAL"] = os.devnull
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
+    return _host_env(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
 
 
 def payload_git_metadata_refusal(exec_root: Path) -> str:
@@ -1022,18 +1045,15 @@ class _RawBlobWriter:
         if self._errors is not None:
             self._errors.close()
 
-    def _failure(self, detail: bytes) -> subprocess.CalledProcessError:
+    def _failure(self, detail: bytes) -> GitFailed:
         if self._proc.poll() is None:
             self._proc.kill()
         self._errors.seek(0)
-        return subprocess.CalledProcessError(
-            self._proc.wait(), self._proc.args, detail, self._errors.read() or detail)
+        return GitFailed(self._proc.wait(), ["git", "fast-import"], detail, self._errors.read() or detail)
 
     def write(self, blob: bytes) -> str:
         """Store one blob; its object id."""
         if self._proc is None:
-            import tempfile
-
             self._errors = tempfile.TemporaryFile()
             self._proc = subprocess.Popen(
                 ["git", "-c", "core.bigFileThreshold=1m", "-c", "fastimport.unpackLimit=0",
@@ -1115,7 +1135,9 @@ def stage_raw_payload_inventory(
             lines.append(f"{mode} {sha} 0\t{rel}".encode("utf-8", errors="surrogateescape"))
         writer.finish()
     update = subprocess.run(["git", "update-index", "-z", "--index-info"], cwd=str(root), capture_output=True,
-                            env=env, input=b"\0".join(lines) + b"\0" if lines else b"", check=True)
+                            env=env, input=b"\0".join(lines) + b"\0" if lines else b"", check=False)
+    if update.returncode:
+        raise GitFailed(update.returncode, update.args, update.stdout, update.stderr)
     listed = set(_git_env(root, "ls-files", "--stage", "-z", env=env).stdout.split(b"\0"))
     unstaged = [line.partition(b"\t")[2] for line in lines if line not in listed]
     if unstaged:  # names at most five; Git's own stderr is carried as evidence, never parsed
@@ -1141,14 +1163,11 @@ def payload_capture_git_env(exec_root: Path, *, objects: Optional[Path] = None):
     by the child simply does not exist for this environment, and no
     child-controlled diff driver / filter / hook can execute in the parent.
     """
-    import tempfile
-
     resolved = Path(exec_root).resolve()
     control = Path(tempfile.mkdtemp(prefix="obo-payload-capture-"))
     try:
         env = isolated_git_env()
-        subprocess.run(["git", "init", "--template="], cwd=str(control),
-                       capture_output=True, check=True, env=env)
+        _git(control, "init", "--template=", env=env)
         alternates = control / ".git" / "objects" / "info" / "alternates"
         alternates.parent.mkdir(parents=True, exist_ok=True)
         # Byte-exact: text mode would emit CRLF on Windows -> git seeks "objects\r".
@@ -1376,7 +1395,7 @@ def remove_execution_snapshot(
             # directory just deleted; a Git snapshot also owns an admin dir and
             # pins in the TARGET repository.
             target = Path(str(entry.get("git_dir") or entry.get("target_root") or "."))
-            _git_quiet(target, "worktree", "prune")
+            _forget_checkout(target, wt_path)
             _unpin_snapshot(target, entry)
         _drop_record(wt_path, data_dir)
     worktree_removal.forget(entry)

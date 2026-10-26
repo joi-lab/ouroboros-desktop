@@ -272,6 +272,9 @@ def test_schedule_accepts_in_place_only_for_an_acting_git_surface(surface):
     base = {"objective": "Edit", "expected_output": "Files"}
     fields, error = _validated_schedule_fields({**base, "write_surface": surface, "workspace": "in_place"})
     assert not error and fields["workspace"] == "in_place"
+    fields, error = _validated_schedule_fields({**base, "write_surface": surface, "workspace": "in_place",
+                                                "directory_strategy": "direct", "scope_paths": []})
+    assert not error and fields["workspace"] == "in_place"  # naming the default geometry is no folder request
     fields, error = _validated_schedule_fields({**base, "write_surface": surface, "workspace": "copy"})
     assert not error and "workspace" not in fields  # the default is not a recorded choice
     for refused in ({"write_surface": "read_only", "workspace": "in_place"}, {"workspace": "in_place"},

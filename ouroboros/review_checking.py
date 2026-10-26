@@ -500,7 +500,7 @@ def _git_delta(area: pathlib.Path, source: Mapping[str, Any], evidence: pathlib.
                 if any(path.iterdir()):
                     # The frozen gitlink is retainable without trusting a
                     # nested repository's controls. Its populated worktree is
-                    # not in this patch: keep the copy and disclose that gap.
+                    # not in this patch: the receipt discloses that gap.
                     gaps.append({"path": relative, "reason": "nested_git_worktree_not_captured"})
             elif path.is_dir() and os.path.lexists(path / ".git"):
                 raise CheckingAreaUnavailable(f"cannot retain new nested Git checking output {relative}")

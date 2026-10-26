@@ -162,7 +162,7 @@ test('the confirm dialog carries the sum, the loss sentence and one detail row p
 
 test('groups that hold saved work start unchecked and are named as lost when checked', () => {
     assert.deepEqual(['work_folders', 'working_copies', 'review_evidence', 'review_checkouts', 'lost_copies', 'service_folders', 'result_pins']
-        .filter((id) => startsChecked({ id })), ['work_folders', 'working_copies', 'review_checkouts']);
+        .filter((id) => startsChecked({ id })), ['work_folders', 'working_copies']);
     const groups = [...both(), group('review_evidence', { count: 40, inside_wait: 0, in_use: 2, bytes: 43 * GB }),
         group('result_pins', { count: 3, inside_wait: 0, in_use: 0, bytes: 2e5 })];
     const ready = trayHtml(free('ready', { groups }), ui());

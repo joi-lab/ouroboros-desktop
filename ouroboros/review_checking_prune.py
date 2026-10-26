@@ -274,7 +274,7 @@ def retire_seat_home(data_root: Any, home: pathlib.Path, live: Callable[[str], A
     return ""
 
 
-def orphan_review_checkouts(data_root: Any, live: Callable[[str], Any]) -> list:
+def orphan_review_checkouts(data_root: Any, live: Callable[[str], Any], homes: Optional[list] = None) -> list:
     """For the owner's Storage -> Free: ``(checkout, verdict)`` per isolated review checkout, ``offer``
     when no task owns it (made before the marker, named by no recorded round) or the background pass
     would retire it now, else ``in_use`` or ``unreadable``. Pure, like ``finished_seat_homes``."""
@@ -286,7 +286,7 @@ def orphan_review_checkouts(data_root: Any, live: Callable[[str], Any]) -> list:
     except Exception:  # unknown custody: every checkout is shown, never offered
         return [(entry, "unreadable") for entry in entries]
     sources = set()
-    for home, verdict, _task in finished_seat_homes(data_root, live, lambda: False):
+    for home, verdict, _task in finished_seat_homes(data_root, live, lambda: False) if homes is None else homes:
         try:
             root = json.loads((home / "checking.json").read_text(encoding="utf-8")).get("source", {}).get("root")
         except (OSError, ValueError, AttributeError):

@@ -152,10 +152,10 @@ def test_a_same_size_edit_in_the_index_s_own_second_reaches_the_snapshot(tmp_pat
 
     with monkeypatch.context() as fresh:  # a copy with a fresh time: Git trusts the stat
         fresh.setattr(sw.shutil, "copy2", shutil.copyfile)
-        stale, *_ = sw.snapshot_commit(source, tmp_path / "scratch", message="fresh index time")
+        stale, *_ = sw.snapshot_commit(source, message="fresh index time")
     assert git(source, "show", f"{stale}:a.txt").stdout == "one\n"
 
-    snapshot, *_ = sw.snapshot_commit(source, tmp_path / "scratch", message="kept index time")
+    snapshot, *_ = sw.snapshot_commit(source, message="kept index time")
 
     assert git(source, "show", f"{snapshot}:a.txt").stdout == "two\n"
     assert (source / ".git" / "index").read_bytes() == index_before, "the real index is never written"
@@ -431,7 +431,7 @@ def test_an_entry_standing_where_the_evidence_folder_belongs_follows_the_same_ru
         assert ".review-evidence" not in tree and b"written by the run" not in patch.read_bytes()
 
 
-def test_release_keeps_the_result_and_recreate_restores_its_files_at_the_baseline(tmp_path):
+def test_release_keeps_the_result_and_recreate_restores_its_files_and_index_with_head_at_the_baseline(tmp_path):
     source = make_source(tmp_path / "source")
     data, copies = tmp_path / "data", tmp_path / "copies"
     handle = provision(source, tmp_path)
@@ -455,10 +455,70 @@ def test_release_keeps_the_result_and_recreate_restores_its_files_at_the_baselin
     assert (copy / "c.txt").read_text(encoding="utf-8") == "child new\n"
     assert not (copy / "sub" / "b.txt").exists()
     assert git(copy, "rev-parse", "HEAD").stdout.strip() == handle.baseline_sha  # HEAD at B
-    assert git(copy, "diff", "--cached", "--quiet", "HEAD", check=False).returncode == 0  # index at B
-    assert git(copy, "diff", "--quiet", check=False).returncode == 1  # files of C
+    assert git(copy, "write-tree").stdout.strip() == result["result_tree"]  # the index of C
+    assert git(copy, "diff", "--quiet", check=False).returncode == 0  # and its files
     again = sw.capture_result_commit("snap1", tmp_path / "capture2" / "workspace.patch", data_dir=data)
     assert again["result_tree"] == result["result_tree"], "a continuation measures the whole run from B"
+
+
+def test_a_file_c_holds_stays_tracked_once_the_checkout_is_recreated_even_when_git_ignores_it(tmp_path):
+    source = make_source(tmp_path / "source")  # its .gitignore hides ignored/ and *.log
+    data, copies = tmp_path / "data", tmp_path / "copies"
+    copy = pathlib.Path(provision(source, tmp_path).path)
+    (copy / "expected.log").write_text("a fixture the run delivers\n", encoding="utf-8")
+    (copy / "build.log").write_text("a log it does not\n", encoding="utf-8")
+    git(copy, "add", "-f", "expected.log")
+    first = sw.capture_result_commit("snap1", tmp_path / "c1" / "workspace.patch", data_dir=data)
+    assert sw.release_snapshot_checkout("snap1", worktree_root=copies, data_dir=data)
+
+    sw.recreate_snapshot_checkout("snap1", worktree_root=copies, data_dir=data)
+    again = sw.capture_result_commit("snap1", tmp_path / "c2" / "workspace.patch", data_dir=data)
+
+    names = git(source, "ls-tree", "-r", "--name-only", again["result_sha"]).stdout.split()
+    assert again["result_tree"] == first["result_tree"] and "expected.log" in names and "build.log" not in names
+
+
+@pytest.mark.parametrize("remnant", ["release", "restore"])
+def test_a_remnant_of_an_interrupted_release_or_restore_is_checked_out_again_whole(tmp_path, remnant):
+    source = make_source(tmp_path / "source")
+    data, copies = tmp_path / "data", tmp_path / "copies"
+    handle = provision(source, tmp_path)
+    copy = pathlib.Path(handle.path)
+    (copy / "a.txt").write_text("child edit\n", encoding="utf-8")
+    result = sw.capture_result_commit("snap1", tmp_path / "capture" / "workspace.patch", data_dir=data)
+    assert sw.checkout_whole(sw.find_execution_snapshot("snap1", data))
+    if remnant == "release":  # the removal stopped part-way after the record said so
+        sw._update_record(handle.path, lambda row: {**row, "checkout_released": "earlier"}, data, op="test")
+        (copy / "sub" / "b.txt").unlink()
+    else:  # a restore stopped after `worktree add --no-checkout`, before any file
+        assert sw.release_snapshot_checkout("snap1", worktree_root=copies, data_dir=data)
+        sw._update_record(handle.path, lambda row: {**row, "checkout_released": "earlier"}, data, op="test")
+        git(source, "worktree", "add", "--detach", "--no-checkout", str(copy), result["result_sha"])
+    assert copy.is_dir() and not sw.checkout_whole(sw.find_execution_snapshot("snap1", data))
+
+    restored = sw.recreate_snapshot_checkout("snap1", worktree_root=copies, data_dir=data)
+
+    assert "checkout_released" not in restored and sw.checkout_whole(sw.find_execution_snapshot("snap1", data))
+    assert (copy / "a.txt").read_text(encoding="utf-8") == "child edit\n" and (copy / "sub" / "b.txt").is_file()
+    assert git(copy, "rev-parse", "HEAD").stdout.strip() == handle.baseline_sha
+    assert git(copy, "write-tree").stdout.strip() == result["result_tree"]
+    assert git(source, "worktree", "list", "--porcelain").stdout.count(f"worktree {copy}") == 1
+
+
+def test_removing_a_copy_drops_only_its_own_worktree_registration(tmp_path):
+    """A global ``worktree prune`` would also drop the source's own missing worktree (one on an
+    unplugged disk); a copy's removal names its one path."""
+    source = make_source(tmp_path / "source")
+    data, copies = tmp_path / "data", tmp_path / "copies"
+    own = tmp_path.resolve() / "usb" / "feature"  # Git records a worktree's real path
+    git(source, "worktree", "add", "-q", "--detach", str(own))
+    shutil.rmtree(tmp_path / "usb")  # the disk is unplugged: git still lists it, as missing
+    handle = provision(source, tmp_path)
+
+    assert sw.remove_execution_snapshot("snap1", worktree_root=copies, data_dir=data) is True
+
+    listed = git(source, "worktree", "list", "--porcelain").stdout
+    assert handle.path not in listed and f"worktree {own}" in listed
 
 
 def test_a_released_copy_without_a_captured_result_is_never_recreated_at_b(tmp_path):
@@ -496,3 +556,33 @@ def test_remove_drops_the_checkout_both_pins_and_the_record(tmp_path, released):
     # The sibling copy keeps its checkout, its pin and its record.
     assert pathlib.Path(other.path).is_dir() and refs(source) == f"{other.baseline_ref}\n"
     assert sw.find_execution_snapshot("other", data)["path"] == other.path
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs POSIX permissions that bind this user")
+def test_a_folder_git_cannot_open_is_named_never_silently_skipped(tmp_path):
+    source = make_source(tmp_path / "source")
+    locked = source / "locked"
+    locked.mkdir()
+    (locked / "x.txt").write_text("x\n", encoding="utf-8")
+    locked.chmod(0)
+    try:
+        handle = provision(source, tmp_path)
+    finally:
+        locked.chmod(0o755)
+    assert {"path": "locked", "reason": "unlistable_directory"} in handle.excluded_untracked
+    readable = provision(source, tmp_path, snap="readable")  # once it opens, its files are simply in B
+    assert all(row["reason"] != "unlistable_directory" for row in readable.excluded_untracked)
+    assert git(source, "show", f"{readable.baseline_sha}:locked/x.txt").stdout == "x\n"
+
+
+def test_a_leaked_repository_location_never_redirects_a_copy(tmp_path, monkeypatch):
+    source = make_source(tmp_path / "source")
+    victim = make_source(tmp_path / "victim")
+    (source / "only-in-source.txt").write_text("source\n", encoding="utf-8")
+    with monkeypatch.context() as leaked:  # a host process started from a Git hook, say
+        leaked.setenv("GIT_DIR", str(victim / ".git"))
+        leaked.setenv("GIT_INDEX_FILE", str(victim / ".git" / "index"))
+        handle = provision(source, tmp_path)
+    assert (pathlib.Path(handle.path) / "only-in-source.txt").read_text(encoding="utf-8") == "source\n"
+    assert git(victim, "cat-file", "-e", handle.baseline_sha, check=False).returncode != 0
+    assert git(source, "cat-file", "-e", handle.baseline_sha, check=False).returncode == 0

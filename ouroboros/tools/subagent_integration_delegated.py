@@ -185,8 +185,8 @@ def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
             "start a child that holds write authority."
         )
     if entry.patch_disposed == custody.NO_CHANGES:
-        return (f"OK: delegated run {rid} changed nothing: its private copy ended exactly as it started, "
-                "so its result closed itself (no_changes). There is nothing to apply or reject.")
+        return (f"OK: delegated run {rid} changed nothing: its result holds exactly the files its copy started "
+                "from, so it closed itself (no_changes). There is nothing to apply or reject.")
     if entry.patch_disposed:
         return (
             f"⚠️ INTEGRATE_DELEGATED_ALREADY_DISPOSED: run {rid}'s patch was already "
@@ -298,13 +298,16 @@ def _settle_writer_capture(drive: Any, entry: Any, block: Dict[str, Any], named:
     """Once a writer's capture row and its named evidence are durably saved, the result
     lives as the patch plus pinned commits B and C, so the checkout goes; an empty result
     (C equals B, HEAD unmoved, nothing retained beside it) closes as no_changes. A pending
-    continuation, a copy made before this update or anything still owed keeps the checkout."""
+    continuation, a copy made before this update, a path the result could not hold (a Git
+    repository inside the copy, a folder Git could not open) or anything still owed keeps it."""
     from ouroboros import delegate_custody as custody
     from ouroboros.delegate_directory import is_directory_run
+    from ouroboros.delegate_registration_policy import NO_CHANGES_NOTE
     from ouroboros.subagent_worktrees import find_execution_snapshot, release_snapshot_checkout
 
     if (not entry.snapshot_id or entry.authority_source == "skill_payload" or is_directory_run(entry)
             or block.get("status") not in _READY_CAPTURE_STATUSES or not entry.patch_captured
+            or block.get("unsaved_paths")  # what the result could not hold stays until disposition
             or entry.patch_disposed or entry.superseded_by or entry.mode == "plan"
             or not (entry.settled or entry.terminal_state in custody.TERMINAL_STATES)
             or (named and named.get("status") != "retained")
@@ -319,9 +322,7 @@ def _settle_writer_capture(drive: Any, entry: Any, block: Dict[str, Any], named:
         recorded, note = _dispose_delegated(drive, entry, entry.snapshot_id, "the run changed nothing",
                                             custody.NO_CHANGES, True, disposed_by=entry.task_id)
         if recorded:
-            return {**block, "disposition": custody.NO_CHANGES,
-                    "note": "No changes: the run's private copy ended exactly as it started, so the result "
-                            f"closed itself; there is nothing to apply or reject.{note}"}
+            return {**block, "disposition": custody.NO_CHANGES, "note": NO_CHANGES_NOTE + note}
         return block
     try:
         released = release_snapshot_checkout(entry.snapshot_id)
@@ -402,18 +403,18 @@ def _drift_refusal(
         return (
             f"⚠️ INTEGRATE_DELEGATED_BASELINE_UNVERIFIABLE: run {rid}'s patch was NOT "
             f"applied — its target state could not be compared against the run's "
-            f"baseline ({drift_error}). Nothing was changed; the patch and its pinned "
-            f"commits are kept. Verdict: {verdict_path or '(unwritten)'}."
+            f"baseline ({drift_error}). Nothing was changed; the saved patch is kept. "
+            f"Verdict: {verdict_path or '(unwritten)'}."
         )
     return (
         f"⚠️ INTEGRATE_CONFLICT: {len(drifted)} path(s) in {target} CHANGED since run "
         f"{rid}'s snapshot was taken, so its patch was NOT applied (a plain apply "
         f"would relocate hunks and silently land them on moved content). Drifted: "
         f"{', '.join(drifted[:10])}{' …' if len(drifted) > 10 else ''}\n"
-        "YOU own this conflict: the captured patch and its pinned commits are kept "
-        "until you resolve it. Reconcile your tree with the run's changes (read the "
-        "patch artifact, or vcs_read diff from the capture's baseline_id to its "
-        "result_commit), then retry the apply, or "
+        "YOU own this conflict: the captured patch (and its pinned commits, unless the owner "
+        "released them in Storage) is kept until you resolve it. Reconcile your tree with the "
+        "run's changes (read the patch artifact, or vcs_read diff from the capture's baseline_id "
+        "to its result_commit while they are pinned), then retry the apply, or "
         "integrate_delegated_patch(decision='reject') to discard. "
         f"Verdict: {verdict_path or '(unwritten)'}."
     )
@@ -422,7 +423,7 @@ def _drift_refusal(
 def _locked_apply(
     ctx: ToolContext, target: pathlib.Path, patch_path: pathlib.Path,
     ordered_touched: List[str], baseline_sha: str, *, file_changes=None, file_baseline=None,
-    admission_check=None, three_way: bool = False,
+    admission_check=None, three_way: bool = False, baseline_entries=None,
 ) -> Dict[str, Any]:
     """Apply one captured patch under the repo git lock — mechanics only.
 
@@ -455,7 +456,8 @@ def _locked_apply(
         # retain Git three-way synthesis and its explicit conflicts.
         try:
             result["drifted"], result["drift_error"] = _si()._baseline_drifted_paths(
-                target, baseline_sha, [path for path in ordered_touched if path not in (file_baseline or {})])
+                target, baseline_sha, [path for path in ordered_touched if path not in (file_baseline or {})],
+                baseline_entries)
         except Exception as exc:
             result["drifted"], result["drift_error"] = [], f"{type(exc).__name__}: {exc}"
         if result["drift_error"] or (result["drifted"] and not three_way):
@@ -863,7 +865,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
         snapshot = find_execution_snapshot(entry.snapshot_id) or {}
         file_options = {"file_changes": file_changes, "file_baseline": snapshot.get("file_baseline") or {}}
     outcome = _si()._locked_apply(
-        ctx, target, patch_path, ordered_touched, entry.baseline_sha,
+        ctx, target, patch_path, ordered_touched, entry.baseline_sha, baseline_entries=manifest.get("baseline_entries"),
         admission_check=lambda: _current_disposition_refusal(ctx, rid), **file_options)
     if outcome.get("admission_refusal"):
         custody.record_patch_apply_resolved(drive, entry, reason="authority_changed")
@@ -941,10 +943,10 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
         return (
             f"⚠️ INTEGRATE_CONFLICT: applying run {rid}'s patch into {target} did not "
             f"apply cleanly. git said: {stderr[:600]}\n"
-            "YOU own this conflict: the captured patch and its pinned commits are kept "
-            "until you resolve it. Reconcile your tree with the run's changes (read the "
-            "patch artifact, or vcs_read diff from the capture's baseline_id to its "
-            "result_commit), retry the apply, or "
+            "YOU own this conflict: the captured patch (and its pinned commits, unless the owner "
+            "released them in Storage) is kept until you resolve it. Reconcile your tree with the "
+            "run's changes (read the patch artifact, or vcs_read diff from the capture's baseline_id "
+            "to its result_commit while they are pinned), retry the apply, or "
             "integrate_delegated_patch(decision='reject') to discard. "
             f"Verdict: {verdict_path or '(unwritten)'}."
         )

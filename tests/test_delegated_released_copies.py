@@ -4,8 +4,9 @@ Once a delegated Git writer's capture row and its named evidence are saved, its 
 the snapshot commit B, the result commit C (parent B) and the B..C plumbing patch, so the
 copy's checkout is released; the record and both pins stay until apply or reject, which
 work from the saved patch and the pinned B. An empty result (C equals B, HEAD unmoved,
-nothing retained beside it) closes itself as ``no_changes``. A continuation gets the
-checkout back from C with HEAD and index at B. A copy recorded before this update keeps
+nothing retained beside it) closes itself as ``no_changes``; a Git repository made inside the
+copy or a folder Git cannot open keeps the checkout until disposition. A continuation gets the
+checkout back with the files and index of C and HEAD at B. A copy recorded before this update keeps
 its old capture and its checkout. A legacy 64 MiB-capped investigation receipt is retaken
 whole once and then the copy goes. The patch never follows porcelain diff config, and a
 same-size edit inside the index's timestamp tick still reaches B and C.
@@ -173,6 +174,79 @@ def test_an_empty_result_closes_itself_only_when_nothing_else_happened(tmp_path,
         custody._CUSTODY.clear()
 
 
+# --------------------------------------------------------------------------- what a result cannot hold
+
+@pytest.mark.parametrize("beside", [False, True], ids=["alone", "beside_an_edit"])
+def test_a_git_repository_the_run_made_in_its_copy_keeps_the_checkout_until_disposition(tmp_path, monkeypatch,
+                                                                                         beside):
+    target, ctx, handle = _CaptureFixture()._provisioned(tmp_path, monkeypatch)
+    copy = pathlib.Path(handle.path)
+    vendored = copy / "vendor" / "lib"
+    vendored.mkdir(parents=True)
+    _git(vendored, "init", "-q")
+    (vendored / "README").write_text("vendored work\n", encoding="utf-8")
+    if beside:
+        (copy / "tracked.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        capture = _capture_terminal_patch(ctx, entry)
+        assert capture["status"] == ("ready_with_changes" if beside else "ready_no_changes"), capture
+        assert capture["unsaved_paths"] == ["vendor/lib"] and "KEPT" in capture["note"] and "vendor/lib" in capture["note"]
+        assert "disposition" not in capture and "checkout_released" not in capture and entry.patch_disposed == ""
+        assert (vendored / "README").read_text(encoding="utf-8") == "vendored work\n"
+        out = _integrate_delegated_patch(ctx, entry.run_id, "reject", "copied it out first")
+        assert "🚫 Rejected" in out and not copy.exists() and _pins(target) == [], out
+    finally:
+        custody._CUSTODY.clear()
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs POSIX permissions that bind this user")
+def test_a_folder_git_cannot_open_is_named_and_keeps_the_checkout(tmp_path, monkeypatch):
+    """Git lists past an unreadable folder with exit 0 and a warning: its files are named as unsaved,
+    never an empty result that closes itself and deletes the only copy of them."""
+    target, ctx, handle = _CaptureFixture()._provisioned(tmp_path, monkeypatch)
+    private = pathlib.Path(handle.path) / "private-output"
+    private.mkdir()
+    (private / "answer.txt").write_text("unique work\n", encoding="utf-8")
+    private.chmod(0)
+    entry = _isolated_entry(ctx, target, handle)
+    try:
+        capture = _capture_terminal_patch(ctx, entry)
+        assert capture["status"] == "ready_no_changes" and capture["unsaved_paths"] == ["private-output"], capture
+        assert "disposition" not in capture and "checkout_released" not in capture and entry.patch_disposed == ""
+        manifest = json.loads(pathlib.Path(capture["manifest_artifact"]).read_text(encoding="utf-8"))
+        assert {"path": "private-output", "reason": "unlistable_directory"} in manifest["untracked_excluded"]
+    finally:
+        private.chmod(0o755)
+        custody._CUSTODY.clear()
+    assert (private / "answer.txt").read_text(encoding="utf-8") == "unique work\n"
+
+
+@pytest.mark.parametrize("moved", [False, True], ids=["unchanged_target", "moved_target"])
+def test_once_the_owner_released_the_pins_and_git_collected_b_an_apply_still_proves_drift(released, moved):
+    """Storage → Free drops a finished writer's pins; the saved patch stays and applies as a plain
+    patch, its drift proven from the baseline entries the capture recorded."""
+    from ouroboros import subagent_worktrees as sw
+
+    target, ctx, handle, _copy, entry, _capture = released
+    record = find_execution_snapshot(handle.snapshot_id)
+    sw._unpin_snapshot(target, record)  # what storage_free._release_pins does
+    sw._update_record(handle.path, lambda row: {**{key: value for key, value in row.items() if key not in (
+        "baseline_ref", "result_ref", "result_sha", "result_tree")}, "pins_released": "now"}, op="test")
+    _git(target, "gc", "-q", "--prune=now")
+    assert _git(target, "cat-file", "-e", handle.baseline_sha, check=False).returncode != 0  # B is gone
+    if moved:
+        (target / "tracked.txt").write_text("one\ntwo\nthe owner's line\n", encoding="utf-8")
+    out = _integrate_delegated_patch(ctx, entry.run_id, "apply", "")
+    if moved:
+        assert "INTEGRATE_CONFLICT" in out and "tracked.txt" in out and entry.patch_disposed == "", out
+        assert (target / "tracked.txt").read_text(encoding="utf-8") == "one\ntwo\nthe owner's line\n"
+    else:
+        assert "✅ Integrated" in out and entry.patch_disposed == "applied", out
+        assert (target / "tracked.txt").read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+        assert (target / "new.txt").read_text(encoding="utf-8") == "brand new\n"
+
+
 # --------------------------------------------------------------------------- continuation
 
 def test_a_continuation_restores_the_released_checkout_from_its_result(tmp_path, monkeypatch):
@@ -191,7 +265,7 @@ def test_a_continuation_restores_the_released_checkout_from_its_result(tmp_path,
     assert payload["continuation"]["workspace"] == "same_snapshot" and payload["continuation"]["checkout"] == "recreated"
     assert request["execution"]["workspaceRoot"] == str(snapshot_root)
     assert "restored from the saved result" in request["prompt"] and ".review-evidence/ files are not here" in request["prompt"]
-    # Files of C, HEAD and index at B: the successor's capture measures the whole work from B.
+    # Files and index of C, HEAD at B: the successor's capture measures the whole work from B.
     assert (snapshot_root / "first.txt").read_text(encoding="utf-8") == "from the first run\n"
     assert _git(snapshot_root, "rev-parse", "HEAD").stdout.strip() == pred.baseline_sha
     assert "checkout_released" not in find_execution_snapshot(pred.snapshot_id)
@@ -287,6 +361,28 @@ def test_a_legacy_capped_investigation_receipt_is_retaken_whole_once_then_releas
     assert (retaken / "files" / ".review-evidence" / "result.bin").read_bytes() == EVIDENCE
     assert json.loads((receipt / "summary.json").read_text(encoding="utf-8"))["status"] == "partial"  # kept as written
     assert not legacy_cap(final) and not collection_due(final)  # retaken once: it rests
+
+
+@pytest.mark.parametrize("staging", ["directory", "linked_receipt"])
+def test_unpublished_evidence_staging_has_a_remover_and_published_receipts_survive(tmp_path, staging):
+    """PERSISTENCE names ``prune_abandoned_generations`` the remover of ``.evidence-<id>.pending/``: an
+    interrupted capture's staging goes at the next addressed capture, a published receipt never does."""
+    from ouroboros import delegate_named_evidence as named
+
+    home = tmp_path / "capture"
+    receipt = home / "evidence" / "summary.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text('{"status": "retained"}', encoding="utf-8")
+    abandoned = home / ".evidence-interrupted.pending"
+    if staging == "directory":
+        abandoned.mkdir()
+        (abandoned / "bytes").write_bytes(b"incomplete")
+    else:  # a staging link to a published receipt: the link goes, never what it names
+        abandoned.symlink_to(receipt.parent, target_is_directory=True)
+
+    named.prune_abandoned_generations(home)
+
+    assert not os.path.lexists(abandoned) and receipt.read_text(encoding="utf-8") == '{"status": "retained"}'
 
 
 # --------------------------------------------------------------------------- the capture's own Git

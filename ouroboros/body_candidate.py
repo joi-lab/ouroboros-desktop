@@ -195,7 +195,7 @@ def _provision(serving: pathlib.Path, owner: str, data_dir: Optional[Any]) -> Di
             branch = f"{BRANCH_PREFIX}{safe}-{suffix}"
         row["branch"] = branch
         _wt._put_record(row, data_dir)  # the record before the admin dir
-        _wt._git_quiet(serving, "worktree", "prune")
+        _wt._forget_checkout(serving, wt_path)  # a crashed earlier attempt's registration of this path
         _git(serving, "worktree", "add", "--no-checkout", "-b", branch, str(wt_path), base_sha)
     row = _populate(row, data_dir)
     _event(data_dir, "body_candidate_prepared", candidate_id=candidate_id, owner=owner,
@@ -472,7 +472,7 @@ def _forget_missing(row: Dict[str, Any]) -> None:
         current = _wt._record_at(path, None, op="forget_body_candidate")
         if current is not None and current.get("kind") == KIND:
             _wt._drop_record(path, None)
-        _wt._git_quiet(pathlib.Path(str(row.get("git_dir") or row.get("repo_dir") or ".")), "worktree", "prune")
+        _wt._forget_checkout(pathlib.Path(str(row.get("git_dir") or row.get("repo_dir") or ".")), pathlib.Path(path))
     _event(None, "body_candidate_checkout_missing", candidate_id=row.get("candidate_id"), branch=row.get("branch"))
 
 

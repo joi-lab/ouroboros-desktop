@@ -33,8 +33,9 @@ export const FREE_GROUPS = {
     },
     review_checkouts: {
         label: 'Review copies no task owns',
-        loss: 'Copies of reviewed code from rounds no recorded task owns. A review that needs one makes it again.',
+        loss: 'Copies of reviewed code from rounds no recorded task owns. A review that needs one makes it again; changes a reviewer left in one are not kept.',
         unit: ['{n} copy', '{count} copies'],
+        saved: true,
     },
     lost_copies: {
         label: 'Helper copies no record names',

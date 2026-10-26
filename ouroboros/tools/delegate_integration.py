@@ -22,7 +22,7 @@ from ouroboros.delegate_custody import RunCustody as _RunCustody
 # ONE refusal author for the whole delegate surface: the neutral leaf
 # `delegate_shared` (phase B's facade split), never a local twin that could drift.
 from ouroboros.delegate_registration_policy import (
-    INVESTIGATION_AUTHORITY, INVESTIGATION_NOTE, evidence_only, no_write_authority,
+    INVESTIGATION_AUTHORITY, INVESTIGATION_NOTE, NO_CHANGES_NOTE, evidence_only, no_write_authority,
     record_persistent as _record_persistent)
 from ouroboros.delegate_shared import _fail
 from ouroboros.configured_subagents import SESSION_ACCESS_PROFILES
@@ -452,8 +452,13 @@ def _snapshot_facts(handle: Any) -> Dict[str, Any]:
     else:
         facts = {"entries": int(getattr(handle, "entry_count", 0) or 0),
                  "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0)}
-    nested = sorted(str(row.get("path") or "") for row in getattr(handle, "excluded_untracked", ()) or ()
-                    if isinstance(row, dict) and row.get("reason") == "nested_repository")
+    rows = [row for row in getattr(handle, "excluded_untracked", ()) or () if isinstance(row, dict)]
+    nested = sorted(str(row.get("path") or "") for row in rows if row.get("reason") == "nested_repository")
+    unlistable = sorted(str(row.get("path") or "") for row in rows if row.get("reason") == "unlistable_directory")
+    if unlistable:
+        facts["unlistable_directories_excluded"] = unlistable[:_NESTED_REPOSITORIES_SHOWN]
+        facts["unlistable_directories_note"] = ("Folders Git could not open are not in this snapshot, so the run "
+                                                "does not see their files; the baseline manifest lists them all.")
     if nested:
         facts["nested_repositories_excluded"] = nested[:_NESTED_REPOSITORIES_SHOWN]
         if len(nested) > _NESTED_REPOSITORIES_SHOWN:
@@ -502,6 +507,7 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
         ARTIFACT_STATUS_READY_NO_CHANGES,
         ARTIFACT_STATUS_READY_WITH_CHANGES,
     )
+    from ouroboros.subagent_worktrees import UNSAVED_REASONS
 
     status = str(manifest.get("status") or "")
     patch_path = cap_dir / "workspace.patch"
@@ -511,6 +517,12 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
     # read_file(root='artifact_store', path=...) resolves this prefix against the
     # canonical root for the owning task, so THIS pair is what the agent reads.
     read_prefix = f"delegated_runs/{cap_dir.name}"
+    unsaved = [str(row.get("path") or "") for row in manifest.get("untracked_excluded") or []
+               if isinstance(row, dict) and row.get("reason") in UNSAVED_REASONS] if not evidence_only(entry) else []
+    checkout = ("the copy's checkout itself is released once the capture is saved" if not unsaved else
+                f"the copy's checkout is KEPT until then: {len(unsaved)} path(s) in it could not be saved in the "
+                f"result (Git repositories inside it, or folders Git could not open): {', '.join(unsaved[:8])}. "
+                "Copy what you need out of execution_root before you decide")
     block: Dict[str, Any] = {
         "status": status or "missing",
         "baseline_id": entry.baseline_sha,
@@ -530,10 +542,10 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
             "NOT APPLIED: the run edited its private copy only. Nothing reaches the shared "
             "tree until you explicitly call integrate_delegated_patch(run_id=...) with "
             "decision='apply' or 'reject'. The result is kept until then as the patch and "
-            "its pinned commits (vcs_read diff base=baseline_id head=result_commit); the "
-            "copy's checkout itself is released once the capture is saved. Read "
-            "manifest_read, its file artifacts, and patch_read when present."
+            f"its pinned commits (vcs_read diff base=baseline_id head=result_commit); {checkout}. "
+            "Read manifest_read, its file artifacts, and patch_read when present."
         ),
+        **({"unsaved_paths": unsaved} if unsaved else {}),
     }
     if manifest.get("result_commit"):
         block["result_commit"] = str(manifest["result_commit"])
@@ -549,8 +561,7 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path, manifest: Dict[str
             block["disposition"] = custody.EVIDENCE_RETAINED
     elif getattr(entry, "patch_disposed", "") == custody.NO_CHANGES:
         block["disposition"] = custody.NO_CHANGES
-        block["note"] = ("No changes: the run's private copy ended exactly as it started, so the result "
-                         "closed itself; there is nothing to apply or reject.")
+        block["note"] = NO_CHANGES_NOTE
     current_head = str(manifest.get("current_head") or "")
     if current_head and entry.baseline_sha and current_head != entry.baseline_sha:
         # Single-writer snapshot: a moved HEAD can only mean the run itself committed.
@@ -577,7 +588,7 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
     from ouroboros.artifact_storage import compress_in_place
     from ouroboros.artifacts import stream_artifact_file
     from ouroboros.headless import ARTIFACT_STATUS_READY_NO_CHANGES, ARTIFACT_STATUS_READY_WITH_CHANGES
-    from ouroboros.subagent_worktrees import GitFailed, _git_env, _nul_paths, capture_result_commit
+    from ouroboros.subagent_worktrees import GitFailed, _git_env, _host_env, _nul_paths, capture_result_commit
     from ouroboros.utils import atomic_write_json, utc_now_iso
     from ouroboros.workspace_patch_rules import NAMED_EVIDENCE_EXCLUSION
 
@@ -593,12 +604,15 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
         "diagnostics": [], "errors": []}
     try:
         result = capture_result_commit(entry.snapshot_id, patch_path, held_out=evidence)
-        env = dict(os.environ)
-        status_rows = _git_env(clone, "diff-tree", "-r", "-z", "--no-renames", "--name-status", base,
-                               result["result_sha"], env=env).stdout.decode("utf-8", "surrogateescape").split("\0")
-        pairs = list(zip(status_rows[0::2], status_rows[1::2]))
-        added = [path for code, path in pairs if code == "A"]
-        changed = [path for code, path in pairs if code and code != "A"]
+        env = _host_env()
+        # Raw rows (":mode mode blob blob status", path) also say what B held at each changed path:
+        # a later apply proves drift from them once the owner released the pins and Git collected B.
+        raw = _git_env(clone, "diff-tree", "-r", "-z", "--no-renames", base, result["result_sha"],
+                       env=env).stdout.decode("utf-8", "surrogateescape").split("\0")
+        rows = [(meta.split(), path) for meta, path in zip(raw[0::2], raw[1::2]) if meta]
+        added = [path for meta, path in rows if meta[4] == "A"]
+        changed = [path for meta, path in rows if meta[4] != "A"]
+        baseline_entries = {path: f"{meta[0][1:]} {meta[2]}" for meta, path in rows if meta[4] != "A"}
         diffstat = _git_env(clone, "diff-tree", "-r", "--stat", "--no-renames", base, result["result_sha"],
                             env=env).stdout.decode("utf-8", "replace").strip()
         # Each new file held out of C under the evidence folder, in the reason every reader of an
@@ -628,7 +642,7 @@ def _write_result_commit_artifacts(entry: _RunCustody, clone: pathlib.Path, cap_
         tracked_changed=changed, untracked_included=added, untracked_excluded=excluded,
         counts={"tracked_changed": len(changed), "tracked_excluded": 0, "untracked_included": len(added),
                 "untracked_excluded": len(excluded), "sensitive_blocked": 0},
-        result_commit=result["result_sha"], result_tree=result["result_tree"],
+        result_commit=result["result_sha"], result_tree=result["result_tree"], baseline_entries=baseline_entries,
         result_ref=result["result_ref"], baseline_ref=result["baseline_ref"])
     atomic_write_json(cap_dir / "workspace_patch.json", manifest, trailing_newline=True)
     return manifest

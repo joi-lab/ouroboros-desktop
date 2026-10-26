@@ -247,15 +247,17 @@ def _validated_schedule_fields(params: Dict[str, Any], *, ctx: Any = None) -> tu
         directory_options["scope_paths"] = list(paths)
     if directory_options.get("directory_strategy") == "copy" and not directory_options.get("scope_paths"):
         return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): copy requires scope_paths; use ['.'] to select the whole folder."
+    from ouroboros.delegate_directory import DIRECTORY_OPTIONS_NEED_WRITE, default_shaped_directory_options
+
     if params.get("workspace") not in (None, "copy", "in_place"):
         return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): workspace must be copy or in_place."
-    if params.get("workspace") == "in_place":
+    if params.get("workspace") == "in_place":  # the documented default geometry is no folder request, as at delegate_start
         if str(params.get("write_surface") or "").strip().lower() not in {"self_worktree", "external_workspace", "genesis"} \
-                or directory_options:
+                or not default_shaped_directory_options(directory_options.get("directory_strategy"),
+                                                        directory_options.get("scope_paths")):
             return {}, ("⚠️ TOOL_ARG_ERROR (schedule_subagent): workspace='in_place' needs an acting Git write_surface "
                         "and no directory options.")
         directory_options["workspace"] = "in_place"
-    from ouroboros.delegate_directory import DIRECTORY_OPTIONS_NEED_WRITE, default_shaped_directory_options
 
     # Folder geometry is a WRITE-side request: a read-only child reads the selected
     # folder as it is, and the host's pre-start refuses geometry it can never serve —

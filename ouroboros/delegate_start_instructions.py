@@ -57,7 +57,7 @@ UNPROVEN_BOUNDARY_INSTRUCTION = (
 )
 
 # The one name of the folder whose files the host retains as named evidence before it
-# releases a copy (`review_checking.retain_named_evidence` reads it from here); a session
+# releases a copy (`delegate_named_evidence.retain_named_evidence` reads it from here); a session
 # is told it, never asked to guess.
 EVIDENCE_DIRNAME = ".review-evidence"
 
@@ -220,6 +220,10 @@ def execution_binding_text(execution_root: str, authority_root: str,
         f"work order remains byte-identical; sha256={digest}): "
         f"the private execution root for this run is {execution}: your work product — every file "
         "and patch change you make — goes only under it, by relative paths or absolute paths under it. "
+        + ("This copy is a linked worktree of the author's repository: its branches, tags, stash and Git config "
+           "are the author's, so create no branch or tag, do not stash and change no Git config. Files Git "
+           "ignores here, and Git repositories you create inside the copy, are not part of what is captured: "
+           "`git add -f` an ignored file you must deliver. " if evidence_root is None else "")
         + disposable_state_instruction(evidence, granted=granted_scratch) + " The stable authority/project root "
         f"{authority or '(unknown)'} is a read-only identity/reference until the "
         "parent explicitly integrates the captured result. Do not write, patch, "

@@ -553,7 +553,7 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
                     f"settled with its changes captured from a private snapshot of "
                     f"{run.target_root or '?'}"
                 )
-                persist_clause = "The snapshot and patch persist until that disposition."
+                persist_clause = "The saved patch and its pinned commits persist until that disposition."
             else:
                 state_clause = (
                     f"settled with its work preserved in its private snapshot of "

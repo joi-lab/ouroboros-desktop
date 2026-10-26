@@ -32,8 +32,8 @@ A delegated mutating child uses the shape from
 `workspace_write`, `execution.isolation: live`, with the delegated marker. For Git and skill
 payload work, `tools/delegate.py` provisions a private execution snapshot
 before dispatch; a Git one is a linked `git worktree` at a commit git makes from
-the target's current files (`subagent_worktrees.snapshot_commit`, the one
-primitive of every private Git copy, so shallow and partial clones work and a
+the target's current files (`subagent_worktrees.snapshot_commit`, shared by writer,
+investigation and task copies, so shallow and partial clones work and a
 target edit during provisioning cannot reach or refuse the copy). `live` means
 that Claudexor works in that supplied execution root; it does not mean direct
 edits to the authoritative target. The host captures the result as a commit,
