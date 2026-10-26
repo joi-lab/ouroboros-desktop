@@ -198,6 +198,7 @@ test('a phone: a bottom sheet over a scrim; the scrim closes on its click, a swi
     assert.equal(c.panel.isOpen(), true, 'not on the press: what lies under the scrim is never pressed');
     scrim.click();
     assert.deepEqual([c.panel.isOpen(), c.doc.body.children.length], [false, 0], 'the scrim\'s click closes, the scrim goes with it');
+    assert.equal(c.node.hasAttribute('aria-modal'), false, 'closed, it is no dialog for Back to reach');
     // A swipe from the grabber: a short one springs back, past a third of its height it goes.
     const grab = c.node.querySelector('.capsule-panel-grab');
     const swipe = (from, to, ms, at = 0) => {

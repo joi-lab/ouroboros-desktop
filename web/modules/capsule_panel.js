@@ -147,7 +147,6 @@ export function createCapsulePanel({
         const sheet = phone();
         panel.dataset.place = sheet ? 'sheet' : 'float';
         if (sheet) panel.setAttribute('aria-modal', 'true');  // Back gives it Escape first (layers.js)
-        else panel.removeAttribute('aria-modal');
         el.dataset.open = 'true';
         head.setAttribute('aria-expanded', 'true');
         syncGlyph();
@@ -176,6 +175,7 @@ export function createCapsulePanel({
         if (current === api) current = null;
         el.dataset.open = 'false';
         head.setAttribute('aria-expanded', 'false');
+        panel.removeAttribute('aria-modal');  // its leaving picture is no dialog Back could reach
         repaint(false);
         if (focus) head.focus({ preventScroll: true });
         // The panel goes at once; its picture plays the leaving (motion.js), from where a swipe let it go.
