@@ -436,7 +436,7 @@ operator's separate authorization; installation alone changes no old money.
 ## 10. Residuals
 
 - A subscription session's input axes are its harness's normalized split from
-  2026-10-28 (unknown where the split is), the harness's own counters kept in
+  2026-10-27 (unknown where the split is), the harness's own counters kept in
   `extra.harness_tokens`; older session rows hold those counters (Claude Code:
   the uncached rest), so token sums spanning the change mix the two. A sum no
   row reported stays null in the ledger, task totals, `/status` and Logs; the
