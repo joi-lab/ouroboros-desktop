@@ -980,6 +980,10 @@ def test_a_scheduled_run_takes_the_schedule_name_as_its_authored_name():
     unnamed = squeue._task_from_schedule({"id": "plain", "task": {"text": "# Nightly check\n\nRun the battery."}})
     assert "title" not in unnamed  # a derived name never outranks one coined later (admission_names)
     assert unnamed["suggested_name"] == "Nightly check"
+    # The host's placeholder for an unnamed follow-up names no work: the run reads its request.
+    followup = squeue._task_from_schedule({"id": "followup-0dac19ae-1", "name": "Follow-up of task 0dac19ae",
+                                           "task": {"text": "Check whether CI on the PR passed\nIf green, report it."}})
+    assert "title" not in followup and followup["suggested_name"] == "Check whether CI on the PR passed"
 
 
 def test_task_presentation_snapshot_reads_existing_title_from_durable_live_queue(tmp_path):
