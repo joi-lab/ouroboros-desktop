@@ -86,8 +86,12 @@ def _open(page, press) -> dict:
     press(f"{SUBAGENTS} .chat-capsule-head")
     page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=SUBAGENTS)
     _settle(page)
-    facts = page.evaluate(FACTS)
-    return {**facts, "rose": round(closed - facts["capsule"]["top"], 1)}
+    return _since(closed, page.evaluate(FACTS))
+
+
+def _since(closed: float, facts: dict) -> dict:
+    """How far the capsule rose since it stood closed (the hint never joins the row's flow, so it never rises)."""
+    return {**facts, "closed": closed, "rose": round(closed - facts["capsule"]["top"], 1)}
 
 
 def _assert_in_the_row(facts: dict, *, phone: bool) -> None:
@@ -125,7 +129,7 @@ def test_subagents_opens_in_the_row_with_the_hint_above_it(
             for theme in ("light", "dark"):
                 held.update(subagents_mode="auto", subagents_availability="available")
                 _open_chat(page, url, width=width, height=860, theme=theme)
-                facts = seen[f"{theme}-auto"] = _open(page, press)
+                facts = seen[f"{theme}-auto"] = opened = _open(page, press)
                 _shot(page, tmp_path, f"subagents-inline-auto-{engine}-{width}-{theme}")
                 _assert_in_the_row(facts, phone=phone)
                 assert facts["word"] == "Auto" and facts["meaning"] == "Ouroboros decides when helpers are worth it.", facts
@@ -136,7 +140,7 @@ def test_subagents_opens_in_the_row_with_the_hint_above_it(
                     press(f'{SUBAGENTS} .chat-seg[data-mode="swarm"]')
                 page.wait_for_function("sel => document.querySelector(sel).dataset.mode === 'swarm'", arg=SUBAGENTS)
                 _settle(page)
-                facts = seen[f"{theme}-swarm"] = page.evaluate(FACTS)
+                facts = seen[f"{theme}-swarm"] = _since(opened["closed"], page.evaluate(FACTS))
                 _shot(page, tmp_path, f"subagents-inline-swarm-{engine}-{width}-{theme}")
                 _assert_in_the_row(facts, phone=phone)
                 assert facts["meaning"].startswith("Don't economise") and facts["rule"] == RULE, facts
@@ -308,7 +312,9 @@ def test_the_keyboard_walks_subagents_on_a_320px_phone(direct_server_with_data, 
             is_open("true")
             seen["locked-enter"] = page.evaluate(FOCUSED)
             assert seen["locked-enter"] == "off", seen
-            page.keyboard.press("Tab")
+            # Safari's Tab reaches only fields unless "Press Tab to highlight each item" is on; Option+Tab reaches
+            # every control, and WebKit here keeps that default.
+            page.keyboard.press("Alt+Tab" if engine == "webkit" else "Tab")
             seen["locked-tab"] = page.evaluate(FOCUSED)
             _shot(page, tmp_path, f"subagents-keyboard-settings-{engine}-320")
             assert seen["locked-tab"] == "settings", ("Tab goes from the strip to Open Settings", seen)
