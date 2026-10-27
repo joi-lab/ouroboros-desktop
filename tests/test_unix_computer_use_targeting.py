@@ -12,7 +12,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -456,10 +455,10 @@ def test_the_surface_is_24_tools_with_app_on_the_inputs(tmp_path, monkeypatch):
     for tool in ("click", "double_click", "triple_click", "left_click_drag", "mouse_down", "type_text", "key", "hold_key", "scroll"):
         assert api.meta[tool]["schema"]["properties"]["app"] == {"type": "string", "default": ""}, tool
     lead = api.meta["key"]["description"]
-    assert lead.startswith("Press keys in the frontmost app, or in app=") and "not that the app reacted" in lead[:200]
+    assert lead.startswith("Press keys in the front app or app=") and "not that the app reacted" in lead[:120]
     assert "run_command" in lead
     for tool in ("click", "double_click", "triple_click", "left_click_drag", "mouse_down", "hold_key", "scroll"):
-        assert "app=" in api.meta[tool]["description"][:130], tool
+        assert "app=" in api.meta[tool]["description"][:120], tool
     assert all(api.meta[tool]["timeout_sec"] >= 45 for tool in ("click", "key", "type_text", "activate_app")), "a switch plus an input fits the budget"
 
 
@@ -674,246 +673,196 @@ def test_native_walk_names_a_wide_node_it_could_not_finish_and_releases_every_el
     assert native._bounds((float("nan"), 1.0), (2.0, 3.0)) is None and native._bounds((1.0, 2.0), (3.5, 4.5)) == [1, 2, 3, 4]
 
 
-# --- remote targets: OSWorld guest and a Mac over SSH ------------------------------------------
+# --- cycle 2: window identity, stage facts, generated programs ---------------------------------
 
-GUEST_ROWS = ("0x00000001  0 4242 10 20 800 600 navigator.Firefox vm Browser\n"
-              "0x00000002  0 5151 0 0 1024 768 keynote.Keynote vm Deck - Keynote\n"
-              "0x00000003  0 5151 0 0 300 200 keynote.Keynote vm Inspector - Keynote\n")
-FIREFOX_FRONT = "1|4242|Browser"
-KEYNOTE_FRONT = "2|5151|Deck - Keynote"
-
-
-class Guest:
-    """``urlopen`` toward an OSWorld guest; ``answer(command)`` -> (returncode, output) per /execute call."""
-
-    def __init__(self, answer):
-        self.answer, self.commands = answer, []
-
-    def __call__(self, request, timeout=None):
-        command = json.loads(request.data.decode("utf-8"))["command"]
-        self.commands.append(command)
-        returncode, output = self.answer(command[-1], len(self.commands))
-        body = {"status": "success", "output": output, "error": "", "returncode": returncode}
-
-        class Response:
-            status = 200
-
-            def __init__(self, data):
-                self._data = data
-
-            def read(self):
-                return self._data
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-        return Response(json.dumps(body).encode("utf-8"))
+def test_a_sequence_whose_first_combo_is_invalid_keeps_the_switch_mark(tmp_path, monkeypatch):
+    module, api, state = mac(tmp_path, monkeypatch)
+    out = receipt(api.tools["key"](keys="bogus+right down", app="Keynote"))
+    assert out["ok"] is False and "bogus" in out["error"] and out["steps_done"] == 0 and inputs(state) == []
+    assert out["observed_effect"] is True and out["activation_done"] is True, "Keynote came forward before the combo was refused"
+    assert "not sent" in out["error"]
 
 
-def osworld(tmp_path, monkeypatch, answer):
-    module = load_plugin()
-    monkeypatch.setattr(module, "_platform", lambda: "linux")
-    monkeypatch.setattr(module, "_session_type", lambda: "x11")
-    monkeypatch.setattr(module, "_which", lambda name: "")
-    api = API(tmp_path / "state")
-    module.register(api)
-    api.tools["add_connection"](name="vm", backend="osworld_http", target="http://guest.invalid:5000", activate=True)
-    guest = Guest(answer)
-    monkeypatch.setattr(urllib.request, "urlopen", guest)
-    return module, api, guest
+def test_a_failed_paste_helper_still_reports_the_clipboard_write(tmp_path, monkeypatch):
+    module, api, state = mac(tmp_path, monkeypatch, cliclick=(1, "", "boom"))
+    out = receipt(api.tools["type_text"](text="secret", via="paste", app="Keynote"))
+    assert out["ok"] is False and out["clipboard_replaced"] is True and out["method"] == "paste" and state["clipboard"] == "secret"
+    assert out["observed_effect"] is True and out["activation_done"] is True and "unknown" in out["note"]
 
 
-def test_osworld_targeted_input_resolves_from_the_guest_rows_activates_by_window_id_and_reads_the_front(tmp_path, monkeypatch):
-    def answer(code, index):
-        if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
-        if "wmctrl -i -a" in code:
-            return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
-        return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
-    module, api, guest = osworld(tmp_path, monkeypatch, answer)
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is True and out["observed_effect"] is True, out
-    listing, activate, action = guest.commands
-    assert listing[:2] == ["bash", "-lc"] and "wmctrl -lpxG" in listing[2]
-    assert "wmctrl -i -a 0x00000002" in activate[2] and "Keynote" not in activate[2], "activation by window id, never by name"
-    assert "pyautogui.press('right')" in action[2] and "__TARGET_LOST__" in action[2] and "'5151'" in action[2], "the guest checks the pid before pressing"
-    assert out["target"]["activated"] is True and out["target"]["resolved"]["matched_by"] == "class"
-    assert out["delivered_to"] == {"window_id": "0x00000002", "pid": 5151, "title": "Deck - Keynote"}
-    assert out["front_before"] == {"window_id": "0x00000001", "pid": 4242, "title": "Browser", "app": "navigator.Firefox"}
-    assert "__FRONT" not in json.dumps(out["execute_result"]), "the markers never reach the model as command output"
+def test_a_failed_clipboard_write_sends_nothing_and_says_so(tmp_path, monkeypatch):
+    module, api, state = mac(tmp_path, monkeypatch)
+    original = module.subprocess.run
+
+    def broken_pbcopy(cmd, *a, **k):
+        if [str(p) for p in cmd][0] == "pbcopy":
+            raise module.subprocess.TimeoutExpired(cmd, 10)
+        return original(cmd, *a, **k)
+    monkeypatch.setattr(module.subprocess, "run", broken_pbcopy)
+    out = receipt(api.tools["type_text"](text="x", via="paste", app="Keynote"))
+    assert out["ok"] is False and "TimeoutExpired" in out["error"] and inputs(state) == [], out
+    assert out["note"].startswith("the input was not sent") and out["activation_done"] is True and out["reason"] == "clipboard_failed"
 
 
-def test_osworld_refuses_when_the_guest_window_did_not_come_forward_or_does_not_exist(tmp_path, monkeypatch):
-    def stays(code, index):
-        if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
-        return 0, "__FRONT_AFTER__" + FIREFOX_FRONT + "\n"
-    module, api, guest = osworld(tmp_path, monkeypatch, stays)
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is False and out["reason"] == "not_frontmost_after_activate" and "observed_effect" not in out
-    assert len(guest.commands) == 2, "the action was never sent"
-    out = receipt(api.tools["click"](x=1, y=2, raw=True, app="Emacs"))
-    assert out["ok"] is False and out["reason"] == "not_running" and len(guest.commands) == 3, "no activation for an absent window"
-    hinted = receipt(api.tools["click"](x=1, y=2, raw=True, app="Deck"))
-    assert hinted["ok"] is False and hinted["reason"] == "not_running" and hinted["candidates"][0]["title"] == "Deck - Keynote"
+def test_a_demoted_step_inside_a_sequence_is_reported_as_dispatched_with_its_facts(tmp_path, monkeypatch):
+    warning = "WARNING: Accessibility privileges not enabled. Many actions may fail.\n"
+    module, api, state = mac(tmp_path, monkeypatch, cliclick=(0, "", warning))
+    out = receipt(api.tools["key"](keys="down return"))
+    assert out["ok"] is False and out["reason"] == "permission_denied" and out["steps_done"] == 0
+    assert "failed" in out["error"] and "not sent" not in out["error"] and out["permission"]["accessibility"] == "untrusted"
 
 
-def test_osworld_already_front_and_same_process_windows(tmp_path, monkeypatch):
-    def answer(code, index):
-        if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + KEYNOTE_FRONT + "\n"
-        if "wmctrl -i -a" in code:
-            return 0, "__FRONT_AFTER__3|5151|Inspector - Keynote\n"
-        return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
-    module, api, guest = osworld(tmp_path, monkeypatch, answer)
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is True and out["target"]["already_front"] is True and len(guest.commands) == 2, "no activation when already in front"
-    switch = receipt(api.tools["activate_app"](app="Inspector - Keynote"))
-    assert switch["ok"] is True and switch["activated"] is True and switch["observed_effect"] is True, switch
-    assert switch["front"]["window_id"] == "0x00000003", "a window named by title is that window, even in the same process"
-    again = receipt(api.tools["activate_app"](app="Keynote"))
-    assert again["ok"] is True and again["activated"] is False and "observed_effect" not in again, "already in front: no mark"
+def test_cliclick_gets_absolute_negative_coordinates_for_a_display_left_of_the_main_one(tmp_path, monkeypatch):
+    def helper(args, state):
+        if args[0] == "displays":
+            return {"ok": True, "displays": [{"id": 1, "main": True, "x": 0, "y": 0, "width": 1728, "height": 1117, "index": 1},
+                                             {"id": 2, "main": False, "x": -1920, "y": -200, "width": 1920, "height": 1080, "index": 2}]}
+        if args[0] == "resolve":
+            return {"ok": True, "candidates": [app_dict(KEYNOTE)]}
+        if args[0] == "tree":
+            return {"ok": True, "nodes": [{"id": 1, "depth": 0, "role": "Window", "x": -1800, "y": -100, "w": 800, "h": 600}]}
+        return {"ok": False, "error": "no fake"}
+    module, api, state = mac(tmp_path, monkeypatch, helper=helper)
+    monkeypatch.setattr(module, "_png_dimensions", lambda _p: (3840, 2160))
+    shot = receipt(api.tools["screenshot"](job_id="left", app="Keynote"))
+    assert shot["display"]["index"] == 2 and (shot["coord_transform"]["ox"], shot["coord_transform"]["oy"]) == (-1920, -200)
+    click = receipt(api.tools["click"](x=100, y=50))
+    assert click["ok"] is True and inputs(state)[-1] == ["cliclick", "c:=-1870,=-175"], "a bare '-' would be a relative move"
+    assert receipt(api.tools["click"](x=-10, y=20, raw=True))["ok"] is True and inputs(state)[-1] == ["cliclick", "c:=-10,20"]
+    assert receipt(api.tools["move"](x=5, y=5, raw=True))["ok"] is True and inputs(state)[-1] == ["cliclick", "m:5,5"]
 
 
-def test_osworld_untargeted_input_names_the_front_and_tolerates_a_silent_probe(tmp_path, monkeypatch):
-    def answer(code, index):
-        if "pyautogui" in code:
-            return 0, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__FRONT_AFTER__{FIREFOX_FRONT}\n"
-        return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
-    module, api, guest = osworld(tmp_path, monkeypatch, answer)
-    out = receipt(api.tools["key"](keys="return"))
-    assert out["ok"] is True and out["delivered_to"] == {"window_id": "0x00000001", "pid": 4242, "title": "Browser"} and "front_after" not in out
-    assert len(guest.commands) == 1 and "pyautogui.press('enter')" in guest.commands[0][2], "no activation without app="
-    assert "except Exception" in guest.commands[0][2], "the probe cannot raise: a probe failure is never a failed input"
+LIBRE = ("0x00000001  0 4242 10 20 800 600 navigator.Firefox host Browser - Docs\n"
+         "0x00000004  0 7000 0 0 1024 768 libreoffice.libreoffice-writer host Letter - LibreOffice Writer\n"
+         "0x00000005  0 7000 0 0 1024 768 libreoffice.libreoffice-calc host Sheet - LibreOffice Calc\n"
+         "0x00000006  0 0 0 0 640 480 xterm.XTerm host xterm\n"
+         "0x00000007  0 0 0 0 640 480 OldJava.OldJava host Old Java App\n"
+         "0x00000008  0 8000 0 0 640 480 gimp-2.10.Gimp-2.10 host GNU Image Manipulation Program\n"
+         "0x00000009  0 9000 0 0 640 480 org.gnome.Nautilus.Org.gnome.Nautilus host Home\n")
+
+
+def test_x11_a_class_is_its_own_windows_not_every_window_of_its_process(tmp_path, monkeypatch):
+    """LibreOffice Writer and Calc share one process: naming Writer with Calc in front is a switch, never 'already front'."""
+    monkeypatch.setattr(sys.modules[__name__], "WMCTRL", LIBRE)
+    PIDS.update({"4": "7000", "5": "7000", "6": "0", "7": "0"})
+    TITLES.update({"4": "Letter - LibreOffice Writer", "5": "Sheet - LibreOffice Calc", "6": "xterm", "7": "Old Java App"})
+    module, api, state = x11(tmp_path, monkeypatch, active="5", switch_to="4")
+    out = receipt(api.tools["key"](keys="ctrl+v", app="libreoffice-writer"))
+    assert out["ok"] is True and ["wmctrl", "-i", "-a", "0x00000004"] in state["calls"], out
+    assert out["target"]["activated"] is True and out["delivered_to"]["window_id"] == "0x00000004"
     rows = receipt(api.tools["window_list"]())
-    assert rows["ok"] is True and rows["frontmost"]["pid"] == 4242 and [r["frontmost"] for r in rows["windows"]] == [True, False, False]
-    # No markers at all (an older guest image): the action's exit code still governs, the place is unknown.
-    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, ""))
-    out = receipt(api.tools["key"](keys="return"))
-    assert out["ok"] is True and out["observed_effect"] is True and out["delivered_to"] == "unknown"
-    empty = receipt(api.tools["window_list"]())
-    assert empty["ok"] is True and empty["windows"] == [] and empty["frontmost"] is None and "front_unread" in empty
+    assert [(r["app"], r["frontmost"]) for r in rows["windows"] if r["pid"] == 7000] == [("libreoffice.libreoffice-writer", True), ("libreoffice.libreoffice-calc", False)]
+    module, api, state = x11(tmp_path, monkeypatch, active="5")  # the switch does not happen
+    stuck = receipt(api.tools["key"](keys="ctrl+v", app="libreoffice-writer"))
+    assert stuck["ok"] is False and stuck["reason"] == "not_frontmost_after_activate" and not any(argv[:2] == ["xdotool", "key"] for argv in state["calls"])
+    assert receipt(api.tools["activate_app"](app="libreoffice-writer"))["ok"] is False, "Calc in front is not 'Writer already in front'"
+    # pid: names any window of the process; a window the X server has no pid for is itself.
+    module, api, state = x11(tmp_path, monkeypatch, active="5")
+    assert receipt(api.tools["key"](keys="ctrl+v", app="pid:7000"))["target"]["already_front"] is True
+    module, api, state = x11(tmp_path, monkeypatch, active="6", switch_to="7")
+    old = receipt(api.tools["key"](keys="return", app="OldJava"))
+    assert old["ok"] is True and old["target"]["activated"] is True and ["wmctrl", "-i", "-a", "0x00000007"] in state["calls"]
+    module, api, state = x11(tmp_path, monkeypatch, active="6")
+    assert receipt(api.tools["key"](keys="return", app="OldJava"))["reason"] == "not_frontmost_after_activate", "pid 0 == pid 0 is not 'the same window'"
 
 
-def test_osworld_guest_precheck_withholds_an_input_when_the_target_left_the_front(tmp_path, monkeypatch):
-    def answer(code, index):
-        if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
-        if "wmctrl -i -a" in code:
-            return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
-        return 3, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__TARGET_LOST__\n"
-    module, api, guest = osworld(tmp_path, monkeypatch, answer)
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is False and out["reason"] == "target_lost" and "observed_effect" not in out, out
-    assert out["front"]["pid"] == 4242 and "nothing more was sent" in out["error"]
+def test_x11_dotted_classes_are_named_whole_or_by_either_part(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "WMCTRL", LIBRE)
+    module, api, state = x11(tmp_path, monkeypatch, active="8")
+    assert receipt(api.tools["key"](keys="right", app="Gimp-2.10"))["ok"] is True
+    assert receipt(api.tools["key"](keys="right", app="gimp-2.10.Gimp-2.10"))["ok"] is True
+    module, api, state = x11(tmp_path, monkeypatch, active="9")
+    assert receipt(api.tools["key"](keys="right", app="org.gnome.Nautilus"))["ok"] is True
+    assert receipt(api.tools["key"](keys="right", app="gnome"))["reason"] == "not_running", "a fragment between dots is not a name"
 
 
-def test_osworld_window_list_failure_is_not_an_empty_desktop(tmp_path, monkeypatch):
-    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (127, "bash: wmctrl: command not found"))
-    rows = receipt(api.tools["window_list"]())
-    assert rows["ok"] is False and rows["reason"] == "unsupported" and "wmctrl" in rows["error"]
-    assert receipt(api.tools["key"](keys="right", app="Keynote"))["reason"] == "unsupported"
-
-
-LISTING = (' 1) "Safari" ASN:0x0-0x1: \n    bundleID="com.apple.Safari"\n    bundle path="/Applications/Safari.app"\n    pid = 100 type="Foreground" flavor=3\n'
-           ' 2) "Keynote" ASN:0x0-0x2: \n    bundleID="com.apple.iWork.Keynote"\n    bundle path="/Applications/Keynote.app"\n    pid = 200 type="Foreground" flavor=3\n'
-           ' 3) "Google Chrome" ASN:0x0-0x3: \n    bundleID="com.google.Chrome"\n    bundle path="/Applications/Google Chrome.app"\n    pid = 300 type="Foreground" flavor=3\n'
-           ' 4) "Don\'t Sleep" ASN:0x0-0x4: \n    bundleID="com.example.dontsleep"\n    bundle path="/Applications/Don\'t Sleep.app"\n    pid = 400 type="Foreground" flavor=3\n')
-
-
-def info_line(triple) -> str:
-    name, pid, bid = triple
-    return f'"pid"={pid} "CFBundleIdentifier"="{bid}" "LSDisplayName"="{name}" '
-
-
-def ssh(tmp_path, monkeypatch, script):
-    """A Mac over SSH: ``script(command)`` -> (rc, stdout[, stderr]) for every ssh call."""
-    module = load_plugin()
-    monkeypatch.setattr(module, "_platform", lambda: "linux")
-    monkeypatch.setattr(module, "_session_type", lambda: "x11")
-    monkeypatch.setattr(module, "_which", lambda name: "")
-    calls = []
+def focus_inspector_after_a_key(module, state, monkeypatch):
+    """The first key opens the Inspector window of the same process (a sibling window comes forward)."""
+    original = module.subprocess.run
 
     def run(cmd, *a, **k):
-        argv = [str(part) for part in cmd]
-        calls.append(argv)
-        answer = script(argv[-1])
-        rc, out, err = (answer + ("",))[:3]
-        return subprocess.CompletedProcess(argv, rc, out, err)
+        argv = [str(p) for p in cmd]
+        if argv[:2] == ["xdotool", "key"]:
+            state["active"] = "3"
+        return original(cmd, *a, **k)
     monkeypatch.setattr(module.subprocess, "run", run)
-    api = API(tmp_path / "state")
-    module.register(api)
-    api.tools["add_connection"](name="mac", backend="ssh_macos", host="mac.invalid", user="owner", activate=True)
-    return module, api, calls
 
 
-def mac_over_ssh(front, after=None, input_stderr=""):
-    """Scripts: the listing reports ``front``; an activation ends with ``after`` (or ``front``) in front."""
-    def script(command):
-        if "lsappinfo list" in command:
-            return 0, LISTING + "__FRONT__" + info_line(front)
-        if "System Events" in command:
-            return 0, f"__FRONT_BEFORE__{info_line(front)}\n__FRONT_AFTER__{info_line(after or front)}\n"
-        if "cliclick" in command:
-            now = after or front
-            return 0, f"__FRONT_BEFORE__{info_line(now)}\n__FRONT_AFTER__{info_line(now)}\n", input_stderr
-        return 0, ""
-    return script
+def test_x11_a_window_named_by_title_stops_a_sequence_when_its_sibling_comes_forward(tmp_path, monkeypatch):
+    module, api, state = x11(tmp_path, monkeypatch, active="2")
+    focus_inspector_after_a_key(module, state, monkeypatch)
+    out = receipt(api.tools["key"](keys="right down", app="Deck"))
+    assert out["ok"] is False and out["reason"] == "target_lost" and out["steps_done"] == 1, out
+    assert [argv for argv in state["calls"] if argv[:2] == ["xdotool", "key"]] == [["xdotool", "key", "Right"]]
+    assert out["front_after"]["window_id"] == "0x00000003" and out["delivered_to"]["window_id"] == "0x00000002"
+    # The same two keys named by class: any window of Keynote is Keynote, both are sent, both recipients named.
+    module, api, state = x11(tmp_path, monkeypatch, active="2")
+    focus_inspector_after_a_key(module, state, monkeypatch)
+    both = receipt(api.tools["key"](keys="right down", app="Keynote"))
+    assert both["ok"] is True and [r["window_id"] for r in both["steps_delivered_to"]] == ["0x00000002", "0x00000003"]
+    assert both["front_after"]["window_id"] == "0x00000003", "a sibling window in front is a different place"
+    module, api, state = x11(tmp_path, monkeypatch, active="2")
+    focus_inspector_after_a_key(module, state, monkeypatch)
+    one = receipt(api.tools["key"](keys="right"))
+    assert one["delivered_to"]["window_id"] == "0x00000002" and one["front_after"]["window_id"] == "0x00000003"
 
 
-def test_ssh_targeted_input_resolves_from_lsappinfo_and_activates_by_pid(tmp_path, monkeypatch):
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI, KEYNOTE))
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is True and out["observed_effect"] is True, out
-    assert "lsappinfo list" in calls[0][-1] and "unix id is 200" in calls[1][-1] and "to activate" not in calls[1][-1]
-    assert "cliclick kp:arrow-right" in calls[2][-1] and '"$P" != "200"' in calls[2][-1], "the same ssh call checks the pid before the input"
-    assert out["delivered_to"]["app"] == "Keynote" and out["target"]["activated"] is True and out["front_before"]["app"] == "Safari"
-    assert out["output"] == "", "the probe markers never reach the model as command output"
-    assert "error" not in out
+def test_an_untargeted_sequence_counts_an_unknown_recipient(tmp_path, monkeypatch):
+    module, api, state = mac(tmp_path, monkeypatch)
+    original = module.subprocess.run
+    calls = {"front": 0}
+
+    def flaky_lsappinfo(cmd, *a, **k):
+        argv = [str(p) for p in cmd]
+        if argv[:2] == ["lsappinfo", "front"]:
+            calls["front"] += 1
+            if calls["front"] >= 3:  # the reader goes silent before the second step
+                return subprocess.CompletedProcess(argv, 1, "", "")
+        return original(cmd, *a, **k)
+    monkeypatch.setattr(module.subprocess, "run", flaky_lsappinfo)
+    out = receipt(api.tools["key"](keys="down return"))
+    assert out["ok"] is True and out["steps_delivered_to"][0]["app"] == "Safari" and out["steps_delivered_to"][1] == "unknown", out
 
 
-def test_ssh_names_with_spaces_or_apostrophes_are_never_interpolated(tmp_path, monkeypatch):
-    chrome = ("Google Chrome", 300, "com.google.Chrome")
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI, chrome))
-    out = receipt(api.tools["key"](keys="right", app="Google Chrome"))
-    assert out["ok"] is True and out["delivered_to"]["app"] == "Google Chrome" and out["target"]["verified"] is True, out
-    sleepy = ("Don't Sleep", 400, "com.example.dontsleep")
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI, sleepy))
-    out = receipt(api.tools["key"](keys="right", app="Don't Sleep"))
-    assert out["ok"] is True and "unix id is 400" in calls[1][-1]
-    assert all("Don't" not in argv[-1] for argv in calls), "the name itself never enters a remote command"
+def test_native_reads_say_which_attributes_failed_and_never_render_a_failed_read_as_false():
+    from skills.unix_computer_use import macos_native as native
+
+    vals, failed = native.split_attr_errors(["AXTitle", "AXMinimized", "AXMain"], ["Deck", ("axerror", -25204), ("axerror", -25212)])
+    assert vals == ["Deck", None, None] and failed == {"AXMinimized": "CannotComplete"}, "ordinary absence is not a failure"
+    busy = [("axerror", -25204)] * 7
+
+    def read(el):
+        return (0, busy) if el == "b" else (0, ["AXButton", None, el, None, None, (1, 1), (2, 2)])
+
+    def children(el, n):
+        kids = {"root": ["a", "b"]}.get(el, [])
+        return 0, kids[:n], len(kids)
+    out = native.walk("root", read, children, max_nodes=10, deadline_s=5)
+    assert out["visited"] == 2 and out["errors"] == {name + ":CannotComplete": 1 for name in native._WALK_ATTRS}
+    # A node wider than the budget whose fetched children all fail is still a cut, named.
+    wide = {"root": [f"row{i}" for i in range(100)]}
+
+    def read_failing_rows(el):
+        return (0, busy) if el.startswith("row") else (0, ["AXGroup", None, el, None, None, (0, 0), (9, 9)])
+
+    def children_wide(el, n):
+        kids = wide.get(el, [])
+        return 0, kids[:n], len(kids)
+    cut = native.walk("root", read_failing_rows, children_wide, max_nodes=5, deadline_s=5)
+    assert cut["visited"] == 1 and cut["nodes"][0]["children_unread"] == 95 and cut["truncated_by"] == ["max_nodes"]
 
 
-def test_ssh_refuses_a_not_running_app_before_any_activation(tmp_path, monkeypatch):
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI))
-    out = receipt(api.tools["key"](keys="right", app="Xcode"))
-    assert out["ok"] is False and out["reason"] == "not_running" and "Keynote" in out["running"]
-    assert len(calls) == 1 and "System Events" not in calls[0][-1] and "to activate" not in calls[0][-1], "nothing is launched"
-    stuck = receipt(api.tools["type_text"](text="x", app="Keynote"))
-    assert stuck["ok"] is False and stuck["reason"] == "not_frontmost_after_activate" and "observed_effect" not in stuck
-    assert not any("cliclick" in argv[-1] for argv in calls)
+def test_native_activation_rules_without_a_desktop(monkeypatch):
+    from skills.unix_computer_use import macos_native as native
 
-
-def test_ssh_already_front_sends_without_a_switch_and_marks_no_activation(tmp_path, monkeypatch):
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(KEYNOTE))
-    out = receipt(api.tools["key"](keys="right", app="Keynote"))
-    assert out["ok"] is True and out["target"]["already_front"] is True and "front_before" not in out
-    assert len(calls) == 2 and "cliclick" in calls[1][-1]
-    again = receipt(api.tools["activate_app"](app="Keynote"))
-    assert again["ok"] is True and again["activated"] is False and "observed_effect" not in again
-
-
-def test_ssh_input_dropped_by_the_remote_mac_is_an_honest_failure(tmp_path, monkeypatch):
-    warning = "WARNING: Accessibility privileges not enabled. Many actions may fail.\n"
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI, input_stderr=warning))
-    out = receipt(api.tools["key"](keys="right"))
-    assert out["ok"] is False and out["reason"] == "permission_denied" and "observed_effect" not in out, out
-
-
-def test_ssh_paste_writes_the_remote_clipboard(tmp_path, monkeypatch):
-    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI))
-    out = receipt(api.tools["type_text"](text="Привет 'мир'", via="paste"))
-    assert out["ok"] is True and out["method"] == "paste" and out["clipboard_replaced"] is True
-    assert "pbcopy" in calls[-1][-1] and "cliclick kd:cmd t:v ku:cmd" in calls[-1][-1]
+    monkeypatch.setattr(native, "op_resolve", lambda q: {"ok": True, "candidates": [app_dict(KEYNOTE)]})
+    monkeypatch.setattr(native, "_AX", lambda: None)
+    reads = iter([None, app_dict(KEYNOTE)])
+    monkeypatch.setattr(native, "front_app", lambda: next(reads, None))
+    monkeypatch.setattr(native, "_activate_pid", lambda ax, pid, wait_ms: ("ax_frontmost", app_dict(KEYNOTE), 40))
+    out = native.op_activate("Keynote", 500)
+    assert out["ok"] is True and out["activated"] is None and out["verified"] is True, "unknown before: a verified front, not a claimed switch"
+    monkeypatch.setattr(native, "front_app", lambda: app_dict(SAFARI))
+    monkeypatch.setattr(native, "_activate_pid", lambda ax, pid, wait_ms: ("system_events", None, 2000))
+    unread = native.op_activate("Keynote", 500)
+    assert unread["ok"] is False and unread["reason"] == "front_unread" and unread["activated"] is None

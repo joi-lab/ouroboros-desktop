@@ -16,6 +16,7 @@ receipt composer (``_finish``) serves the local, X11, OSWorld and SSH transports
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import pathlib
@@ -66,6 +67,11 @@ def parse_x11_front(text: str, rows: list[dict[str, Any]] | None = None) -> dict
     pid_text, _sep, title = rest.partition("|")
     if pid_text.strip().isdigit():
         front["pid"] = int(pid_text.strip())
+    if title.startswith("b64:"):
+        try:
+            title = base64.b64decode(title[4:].strip() + "=" * (-len(title[4:].strip()) % 4)).decode("utf-8", "replace")
+        except (ValueError, UnicodeError):
+            title = ""
     if title:
         front["title"] = title
     for row in rows or []:
@@ -77,10 +83,20 @@ def parse_x11_front(text: str, rows: list[dict[str, Any]] | None = None) -> dict
     return front
 
 
+def class_matches(wm_class: str, query: str) -> bool:
+    """Whether ``query`` names this ``wmctrl`` WM_CLASS (``instance.Class``): the whole string, its instance (the
+    part before the first dot) or its class (the part after a dot, so ``Firefox`` names ``navigator.Firefox`` and
+    ``Gimp-2.10`` names ``gimp-2.10.Gimp-2.10``). Never a bare fragment between dots."""
+    whole, low = wm_class.lower(), query.lower()
+    return bool(low) and (low == whole or whole.startswith(low + ".") or whole.endswith("." + low))
+
+
 def x11_resolve(query: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Which window a name means, from ``wmctrl`` rows: ``pid:<n>``, a window id, an exact WM_CLASS part
-    (``Firefox`` or ``navigator.Firefox``) or an exact title. Substring hits are never a target; they are
-    returned as ``candidates`` so the caller can name one exactly."""
+    """Which window(s) a name means, from ``wmctrl`` rows: ``pid:<n>``, a window id, a WM_CLASS (whole, instance or
+    class part) or an exact title. Substring hits are never a target; they are returned as ``candidates`` so the
+    caller can name one exactly. The target carries ``window_ids``: the windows that ARE the target (one for a title
+    or id, every window of that class for a class, every window of the process for ``pid:``), which is what every
+    later "is it in front" check compares against."""
     q = str(query or "").strip()
     low = q.lower()
 
@@ -95,7 +111,7 @@ def x11_resolve(query: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         wid = window_id_int(low)
         by, matches = "window_id", [r for r in rows if wid is not None and window_id_int(r["window_id"]) == wid]
     else:
-        by, matches = "class", [r for r in rows if low == r["app"].lower() or low in {p.lower() for p in r["app"].split(".")}]
+        by, matches = "class", [r for r in rows if class_matches(r["app"], low)]
         if not matches:
             by, matches = "title", [r for r in rows if low == r["title"].lower()]
         if not matches:
@@ -106,20 +122,40 @@ def x11_resolve(query: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
             return out
     if not matches:
         return {"ok": False, "reason": "not_running", "running": running[:40]}
-    # A window named by its title or id is that window; an application named by class or pid is any of its windows.
-    identities = {r["window_id"] if by in ("title", "window_id") else (r["pid"] or r["window_id"]) for r in matches}
+    # A window named by its title or id is that window; a class is every window of that class (a process may host
+    # several classes: LibreOffice's Writer and Calc); ``pid:`` is every window of the process. Two different
+    # applications (classes) or two same-titled windows are an ambiguity the caller resolves.
+    if by == "class":
+        identities = {r["app"].lower() for r in matches}
+    elif by == "title":
+        identities = {r["window_id"] for r in matches}
+    else:
+        identities = {r["pid"] or r["window_id"] for r in matches}
     if len(identities) > 1:
         return {"ok": False, "reason": "ambiguous", "candidates": [candidate(r) for r in matches[:10]]}
-    return {"ok": True, "target": {**candidate(matches[0]), "matched_by": by}}
+    return {"ok": True, "target": {**candidate(matches[0]), "matched_by": by,
+                                   "window_ids": [r["window_id"] for r in matches]}}
 
 
 def x11_same(front: dict[str, Any] | None, target: dict[str, Any]) -> bool:
-    """Whether the front window is the target: by window id when the target was named as a window, else by pid."""
+    """Whether the front window is the target: its window id is one of the target's ``window_ids`` (the windows the
+    resolver matched). A front read without a window id falls back to the process id, and a missing pid is unknown,
+    never equal."""
     if not front:
         return False
-    if target.get("matched_by") in ("title", "window_id"):
-        return window_id_int(front.get("window_id")) == window_id_int(target.get("window_id"))
-    return front.get("pid") == target.get("pid")
+    ids = {window_id_int(w) for w in (target.get("window_ids") or [target.get("window_id")]) if w is not None}
+    if front.get("window_id") is not None and ids:
+        return window_id_int(front.get("window_id")) in ids
+    return bool(front.get("pid")) and front.get("pid") == target.get("pid")
+
+
+def same_place(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
+    """Whether two front reads name the same place: the same window when both carry a window id, else the same pid."""
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return False
+    if a.get("window_id") is not None and b.get("window_id") is not None:
+        return window_id_int(a.get("window_id")) == window_id_int(b.get("window_id"))
+    return a.get("pid") is not None and a.get("pid") == b.get("pid")
 
 
 class PlaceMixin:
@@ -307,10 +343,13 @@ class PlaceMixin:
         target = (ctx.get("target") or {}).get("resolved") if ctx.get("target") else None
         if target:
             app = ctx["target"]["requested"]
+            ctx["front_last"] = front  # the newest read, for the aggregate even when the step is refused
             if front is None:
                 res = {"reason": "front_unread", "error": "no front reader answered before the next step"}
                 return {"ok": False, "reason": "front_unread", "error": self._target_error(app, res), "target": ctx["target"]}, step
-            if front.get("pid") != target.get("pid"):
+            # An X11/OSWorld target is its matched windows; a macOS/SSH application is its pid.
+            still = x11_same(front, target) if target.get("window_ids") else front.get("pid") == target.get("pid")
+            if not still:
                 res = {"reason": "target_lost", "front": front}
                 return {"ok": False, "reason": "target_lost", "error": self._target_error(app, res), "target": ctx["target"], "front": front}, step
         return None, step
@@ -334,19 +373,24 @@ class PlaceMixin:
                 payload["helper_stderr_truncated"] = True
         known = isinstance(delivered, dict)
         where = (delivered.get("app") or delivered.get("title")) if known else None
-        if after is not None and (not known or after.get("pid") != delivered.get("pid")):
+        if after is not None and not same_place(after, delivered):
             payload["front_after"] = after
         steps_done = int(payload.get("steps_done") or 0)
         if not payload.get("ok") and not steps_done:
-            # The input helper did not report success: whether anything reached the screen is unknown.
             if known:
                 payload["front_at_dispatch"] = delivered
+            if payload.pop("not_sent", False):
+                # The preparation before the input failed (the clipboard write): nothing was dispatched.
+                payload["note"] = "the input was not sent" + (f"; the switch to {target.get('requested')} ran before it"
+                                                              if payload.get("activation_done") else "")
+                return payload
+            # The input helper did not report success: whether anything reached the screen is unknown.
             payload["note"] = ("the input helper did not report success, so whether anything reached "
                                f"{where or 'the front application'} is unknown"
                                + (f"; the switch to {target.get('requested')} ran before it" if payload.get("activation_done") else ""))
             return payload
         payload["delivered_to"] = delivered if known else "unknown"
-        if isinstance(before, dict) and known and before.get("pid") != delivered.get("pid"):
+        if isinstance(before, dict) and known and not same_place(before, delivered):
             payload["front_before"] = before
         if not payload.get("ok"):
             # Some steps of one call were dispatched before it stopped (``error`` says why).
@@ -378,6 +422,9 @@ class PlaceMixin:
             if target.get("activated"):
                 payload["observed_effect"] = True  # the switch before it was observed
                 payload["activation_done"] = True
+                payload["note"] = f"the switch to {target.get('requested')} ran; the input after it was dropped (see error)"
+            else:
+                payload["note"] = "the input was dropped (see error); this tool observed no UI change"
             return payload
         if payload.get("observed_effect"):
             payload["note"] = ((f"dispatched while {where} was in front" if where else "dispatched; who was in front is unknown")
@@ -429,6 +476,8 @@ class PlaceMixin:
                                        "titles_available": bool(res.get("titles_available")), "truncated": bool(res.get("truncated")),
                                        "limit": limit, "note": "rows are applications with their windows; pass app=<name|bundle id|pid:n> "
                                                                 "to the input tools to act in one of them"}
+            if res.get("frontmost") is None:
+                payload["front_unread"] = "lsappinfo named no frontmost application"
             if res.get("warning"):
                 payload["warning"] = res["warning"]
             return self._json_text(payload)
@@ -443,7 +492,7 @@ class PlaceMixin:
             front = self._front_local(rows)
             if front:
                 for row in rows:
-                    row["frontmost"] = front.get("pid") == row["pid"]
+                    row["frontmost"] = same_place(front, row)
             if query:
                 rows = [r for r in rows if query in r["app"].lower() or query in r["title"].lower() or query == f"pid:{r['pid']}"]
             payload = {"ok": True, "platform": plat, "session_type": self._session(), "frontmost": front,

@@ -20,7 +20,9 @@ Operations (all read-only except ``activate``):
 Honesty rules: ``ok`` answers the question asked; ``unknown`` is spelled out, never rendered as an
 empty list or ``false``; a window the walk did not finish says so in ``truncated_by`` (the only
 bounds are ``max_nodes`` and ``timeout_ms``: a node's children are read up to the remaining node
-budget, so a wide node is cut by ``max_nodes`` and the node says how many children were not read);
+budget, so a wide node is cut by ``max_nodes`` and the node says how many children were not read: one
+``AXUIElementGetAttributeValueCount`` call per node pays for that count, and a wide node near the start can hold up to
+``max_nodes`` child references at once, all released on every exit);
 ``-25204`` (the app did not answer in time) is busy, not denied. A switch is ``activated`` only when
 the front was read as another application before and as the target afterwards.
 """
@@ -257,6 +259,8 @@ class _AX:
                 p = CGPoint(); self.AXValueGetValue(ref, kind, byref(p)); return (p.x, p.y)
             if kind == 2:
                 s = CGSize(); self.AXValueGetValue(ref, kind, byref(s)); return (s.w, s.h)
+            if kind == 5:  # kAXValueTypeAXError: a multi-attribute read answers a failed attribute with its error
+                e = c_int32(); self.AXValueGetValue(ref, kind, byref(e)); return ("axerror", int(e.value))
             return None
         return ("ref", ref)
 
@@ -268,10 +272,16 @@ class _AX:
             if out.value:
                 self.CFRelease(out.value)
             return None, err
-        val = self.to_py(out.value)
+        try:
+            val = self.to_py(out.value)
+        except Exception:
+            self.CFRelease(out.value)
+            raise
         if isinstance(val, tuple) and val and val[0] == "ref":
             return val, 0
         self.CFRelease(out.value)
+        if isinstance(val, tuple) and val and val[0] == "axerror":
+            return None, val[1]
         return val, 0
 
     def multi(self, elem, names: list[str]) -> tuple[int, list[Any]]:
@@ -287,10 +297,12 @@ class _AX:
             self.CFRelease(out.value)
             return -25200, []
         vals = []
-        for i in range(len(names)):
-            v = self.to_py(self.CFArrayGetValueAtIndex(out.value, i))
-            vals.append(None if isinstance(v, tuple) and v and v[0] == "ref" else v)
-        self.CFRelease(out.value)
+        try:
+            for i in range(len(names)):
+                v = self.to_py(self.CFArrayGetValueAtIndex(out.value, i))
+                vals.append(None if isinstance(v, tuple) and v and v[0] == "ref" else v)
+        finally:
+            self.CFRelease(out.value)
         return 0, vals
 
     def children(self, elem, limit: int) -> tuple[int, list[int], int | None]:
@@ -333,12 +345,22 @@ class _AX:
         try:
             for i in range(self.CFArrayGetCount(arr)):
                 win = self.CFArrayGetValueAtIndex(arr, i)
-                _e, vals = self.multi(win, ["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"])
-                title, minimized, pos, size, main = (vals + [None] * 5)[:5]
-                row: dict[str, Any] = {"title": title, "minimized": bool(minimized), "main": bool(main)}
-                bounds = _bounds(pos, size)
-                if bounds:
-                    row["bounds"] = bounds
+                e, vals = self.multi(win, ["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"])
+                row: dict[str, Any] = {}
+                if e != 0:
+                    row["unread"] = AX_ERR.get(e, str(e))  # nothing of this window could be read
+                else:
+                    vals, failed = split_attr_errors(["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"], vals)
+                    title, minimized, pos, size, main = (vals + [None] * 5)[:5]
+                    row["title"] = title
+                    for key, value in (("minimized", minimized), ("main", main)):
+                        if isinstance(value, bool):
+                            row[key] = value
+                    if failed:
+                        row["unread"] = failed  # an attribute the app failed to answer, never rendered as false
+                    bounds = _bounds(pos, size)
+                    if bounds:
+                        row["bounds"] = bounds
                 if self.AXUIElementGetWindow is not None:
                     wid = c_uint32()
                     if self.AXUIElementGetWindow(win, byref(wid)) == 0:
@@ -347,6 +369,24 @@ class _AX:
         finally:
             self.CFRelease(arr)
         return rows, None
+
+
+_ABSENT = (-25212, -25205)  # NoValue / AttributeUnsupported: ordinary absence, not a failed read
+
+
+def split_attr_errors(names: list[str], vals: list[Any]) -> tuple[list[Any], dict[str, str]]:
+    """Separate the values of a multi-attribute read from the attributes the app FAILED to answer (an AXError
+    other than ordinary absence): (values with errors as None, {attribute: error name})."""
+    clean: list[Any] = []
+    failed: dict[str, str] = {}
+    for name, v in zip(names, list(vals) + [None] * (len(names) - len(vals))):
+        if isinstance(v, tuple) and v and v[0] == "axerror":
+            if v[1] not in _ABSENT:
+                failed[name] = AX_ERR.get(v[1], str(v[1]))
+            clean.append(None)
+        else:
+            clean.append(v)
+    return clean, failed
 
 
 def _bounds(pos: Any, size: Any) -> list[int] | None:
@@ -382,21 +422,33 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
     errors: dict[str, int] = {}
     truncated_by: list[str] = []
     skipped_web = 0
+
+    def cut(reason: str) -> None:
+        if reason not in truncated_by:
+            truncated_by.append(reason)
+
+    def count(key: str) -> None:
+        errors[key] = errors.get(key, 0) + 1
+
     try:
         while queue:
             if visited >= max_nodes:
-                truncated_by.append("max_nodes")
+                cut("max_nodes")
                 break
             if now() > deadline:
-                truncated_by.append("timeout")
+                cut("timeout")
                 break
             el, depth = queue.popleft()
             try:
                 err, vals = read_node(el)
                 if err != 0:
-                    key = AX_ERR.get(err, str(err))
-                    errors[key] = errors.get(key, 0) + 1
+                    count(AX_ERR.get(err, str(err)))
                     continue
+                vals, failed = split_attr_errors(_WALK_ATTRS, list(vals))
+                for name, reason in failed.items():
+                    count(f"{name}:{reason}")
+                if failed and all(v is None for v in vals):
+                    continue  # not one attribute of this element could be read: a failed read, not an empty node
                 visited += 1
                 role, subrole, title, desc, value, pos, size = (list(vals) + [None] * 7)[:7]
                 node: dict[str, Any] = {"id": visited, "depth": depth, "role": (role or "")[2:] if isinstance(role, str) and role.startswith("AX") else role}
@@ -421,10 +473,11 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 cerr, kids = answer[0], list(answer[1])
                 total = answer[2] if len(answer) > 2 else None
                 if cerr not in (0, -25212, -25205):
-                    key = "children:" + AX_ERR.get(cerr, str(cerr))
-                    errors[key] = errors.get(key, 0) + 1
+                    count("children:" + AX_ERR.get(cerr, str(cerr)))
                 if total is not None and total > len(kids):
+                    # The budget left children unrequested: that is a cut, whether or not the visited count reaches it.
                     node["children_unread"] = total - len(kids)
+                    cut("max_nodes")
                 for kid in kids:
                     queue.append((kid, depth + 1))
             finally:
@@ -435,7 +488,7 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
             for el, _depth in queue:
                 release(el)
     if skipped_web:
-        truncated_by.append("web_content_skipped")
+        cut("web_content_skipped")
     return {"nodes": nodes, "visited": visited, "truncated": bool(truncated_by), "truncated_by": truncated_by,
             "errors": errors, "elapsed_ms": int((now() - t0) * 1000)}
 
@@ -578,7 +631,10 @@ def op_activate(query: str, wait_ms: int = 2000) -> dict[str, Any]:
     out.update({"activated": activated, "verified": verified, "method": method, "front": front or None, "waited_ms": waited})
     if not verified:
         out["ok"] = False
-        out["reason"] = "not_frontmost_after_activate"
+        if front is None:
+            out.update({"reason": "front_unread", "activated": None, "error": "lsappinfo named no frontmost application after the switch"})
+        else:
+            out["reason"] = "not_frontmost_after_activate"
     return out
 
 

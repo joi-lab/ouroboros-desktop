@@ -169,12 +169,14 @@ def test_macos_middle_click_honest_unsupported(tmp_path, monkeypatch):
     assert result["ok"] is False and "middle" in result["error"]
 
 
-def test_negative_coordinates_rejected(tmp_path, monkeypatch):
+def test_negative_coordinates_are_absolute_points_on_macos(tmp_path, monkeypatch):
+    """A display left of or above the main one has negative logical coordinates: cliclick takes them with the `=`
+    prefix (a bare `-` would be a move relative to the pointer), so they are valid input here, not an error."""
     captured: list = []
     impl = _macos_impl(tmp_path, monkeypatch, captured)
-    assert json.loads(impl.click(x=-5, y=20))["ok"] is False
-    assert json.loads(impl.move(x=10, y=-1))["ok"] is False
-    assert captured == []  # no cliclick issued for invalid coords
+    assert json.loads(impl.click(x=-5, y=20))["ok"] is True
+    assert json.loads(impl.move(x=10, y=-1))["ok"] is True
+    assert _inputs(captured) == [["cliclick", "c:=-5,20"], ["cliclick", "m:10,=-1"]]
 
 
 def test_macos_key_combo_uses_modifier_down_up(tmp_path, monkeypatch):

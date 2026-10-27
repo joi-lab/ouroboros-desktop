@@ -86,24 +86,33 @@ Acting in a named application (`app=`):
   application's name (case-insensitive), its bundle id or WM_CLASS, or
   `pid:<n>` copied from `window_list`; on X11 and OSWorld also a window's exact
   title or its `0x…` id. Resolution is exact: no prefix or substring guessing
-  (a substring hit is returned as a candidate, so the exact name can be given).
-  The tool resolves the name against the running list without launching
-  anything, brings the application forward when it is not already in front,
-  reads who is in front again, and only then sends the input. Two matches are
-  a refusal that lists the candidates; an application that is not running,
+  (on X11 and OSWorld a substring hit is returned as a candidate, so the exact
+  name can be given; macOS and SSH answer with the running list).
+  On X11 and OSWorld the target is a set of windows: the one window for a
+  title or id, every window of that WM_CLASS for a class (a process may host
+  several classes, as LibreOffice's Writer and Calc do), every window of the
+  process for `pid:`; "in front" means the active window is one of them. The
+  tool resolves the name against the running list without launching anything,
+  brings the application forward when it is not already in front, reads who is
+  in front again, and only then sends the input. Two matches are
+  a refusal that lists the candidates; an application that is not running, or
   that did not come to the front (macOS 14+ may refuse activation from a
-  background process), or whose front could not be read after the switch
-  (`front_unread`), is a refusal that names who is in front instead. A refusal
-  sends nothing and carries no effect mark. An empty `app` (what a voice model
+  background process), is a refusal that names who is in front instead; a
+  front that could not be read after the switch is the refusal `front_unread`.
+  A refusal sends nothing and carries no effect mark (a switch it observed
+  first keeps its own, `activation_done`). An empty `app` (what a voice model
   sends for an unused optional field) means "untargeted": the input goes to
   whatever is in front, as before.
 - A `key` sequence (`'down down return'`) brings the target forward once and,
   before every later step, reads the front again: when the named application
-  has left the front (a `cmd+tab` in the sequence, the owner switching away)
-  the remaining steps are not sent (`target_lost`, `steps_done` says how many
-  ran). Without `app=` every step goes to whatever is in front at that moment,
-  and the receipt names each step's recipient when they differ
-  (`steps_delivered_to`).
+  (or window) has left the front (a `cmd+tab` in the sequence, the owner
+  switching away, a sibling window of the same process coming forward for a
+  title-named target) the remaining steps are not sent (`target_lost`,
+  `steps_done` says how many ran); a switch that ran before a step that could
+  not be sent keeps its mark (`activation_done`). Without `app=` every step
+  goes to whatever is in front at that moment, and the receipt names each
+  step's recipient when they differ (`steps_delivered_to`, `"unknown"` for a
+  step whose front could not be read).
 - `move` and `mouse_up` never change which application is in front: a drag
   must end where it started.
 - Keyboard focus follows the switch and stays there, as if the owner had
@@ -128,8 +137,12 @@ Coordinate contract:
 - macOS input consumes LOGICAL points while screenshots are physical pixels;
   the stored transform folds the Retina scale in, computed from the captured
   display's own CoreGraphics bounds (a second display no longer stretches the
-  scale). Without those bounds the Finder desktop size is used (the union of
-  all displays) and the transform is always flagged `approx`.
+  scale), including a negative origin for a display left of or above the main
+  one (cliclick then receives `=`-prefixed absolute coordinates; on macOS
+  negative raw coordinates are valid input). Without those bounds the Finder
+  desktop size is used (the union of all displays) and the transform is always
+  flagged `approx`; an SSH Mac's transform is always `approx` for the same
+  reason.
 
 Input receipts (the same contract on every backend):
 
@@ -142,17 +155,22 @@ Input receipts (the same contract on every backend):
   bundle id or class, window id and title where the backend knows them;
   `"unknown"` when no reader answered), `front_before` (only when the tool
   switched applications first), `front_after` (who was in front when the tool
-  read again after the input: present when that differs from `delivered_to` or
-  when `delivered_to` is unknown; an observation, not proof that the input
-  caused a change), `target` (with `app=`: what was requested and resolved,
-  `verified` in front before dispatch, `activated` when the front was read as
-  another application before and as the target afterwards, `already_front`,
-  `method`, `waited_ms`; `activated` is `null` when the previous front could
-  not be read), `helper_stderr` when the input helper printed anything, and
-  one `note` saying that no UI change was observed by this tool.
+  read again after the input: present when that is another place than
+  `delivered_to` (another window where the backend knows windows, else another
+  application) or when `delivered_to` is unknown; an observation, not proof
+  that the input caused a change), `target` (with `app=`: what was requested
+  and resolved, `verified` in front before dispatch, `activated` when the front
+  was read as another place before and as the target afterwards,
+  `already_front`, `method`, `waited_ms` (on a remote: the host's round trip
+  for the switch); `activated` is `null` when the previous front could not be
+  read), `helper_stderr` when the input helper printed anything, and one
+  `note` saying that no UI change was observed by this tool.
 - An input whose helper did not report success (non-zero exit, timeout) is
   `ok: false` without the mark; it carries `front_at_dispatch` instead of
-  `delivered_to`, because whether anything reached the screen is unknown.
+  `delivered_to`, because whether anything reached the screen is unknown. An
+  input that was never dispatched (the clipboard write before a paste failed)
+  says so in its note. A `via=paste` receipt says whether the clipboard was
+  replaced, also when the paste chord after it failed.
 - On a local or SSH Mac, `cliclick` exits 0 and only warns on stderr when the
   posting process lacks the Accessibility grant (the OS drops the event) or
   when a character has no key code in the active keyboard layout (nothing is
@@ -179,21 +197,28 @@ Observation without images (`ax_tree`, `window_list`):
   focused element), stops at `max_nodes` (default 150, ceiling 2000) or
   `timeout_ms` (default 3000, ceiling 15000) and names every cut in
   `truncated_by`: a node's children are requested up to the remaining node
-  budget, so a wide list is cut by `max_nodes` and the node records
-  `children_unread`; web content (`AXWebArea`) is skipped unless
-  `include_web=true`. Nodes carry role, label, value (capped, with
-  `value_len`), and bounds; `marks` number the elements of the marked roles
-  with centre points in input space (`raw=true`): a mark is a position, not
-  proof that the element reacts to a click. A failed read is `ok: false` with
-  its reason (`not_running`, `accessibility_untrusted`, `no_window`, a busy
-  application, `accessibility_read_failed` when not one node could be read);
-  it never answers with a process list. Measured on 27.10.2026: the old
+  budget plus one, so a wide list is cut by `max_nodes` (named whenever
+  children were left unrequested, whether or not the visited count reached the
+  budget) and the node records `children_unread`; web content (`AXWebArea`)
+  is skipped unless `include_web=true`. Nodes carry role, label, value (capped,
+  with `value_len`), and bounds; an attribute the application failed to answer
+  (an error other than ordinary absence) is counted in `errors` by attribute,
+  and an element none of whose attributes could be read is a failed read, not
+  an empty node; `marks` number the elements of the marked roles with centre
+  points in input space (`raw=true`): a mark is a position, not proof that
+  the element reacts to a click. A failed read is `ok: false` with its reason
+  (`not_running`, `accessibility_untrusted`, `no_window`, a busy application,
+  `accessibility_read_failed` when not one node could be read); it never
+  answers with a process list. Measured on 27.10.2026: the old
   AppleScript `entire contents` walk took 18–31 s on a 37-node window; this
   reads it in 1.6 s cold and 50 ms warm.
 - `window_list` never renders an unread fact as `false` or `[]`: a window list
-  the Accessibility API refused says `windows_unread`, an unread front leaves
-  the per-row `frontmost` out and says `front_unread`, a listing that failed is
-  `ok: false`.
+  the Accessibility API refused says `windows_unread` (a window attribute it
+  refused is listed in that window's `unread`, never shown as `false`), an
+  unread front leaves the per-row `frontmost` out and says `front_unread`
+  (on every backend), a listing that failed is `ok: false`. On X11 and OSWorld
+  a row is `frontmost` when it is the active window, not merely a window of
+  the active process.
 - Linux: no element reader in this skill (`ok: false`, `reason: unsupported`,
   with the window rows); OSWorld remotes return the guest's whole accessibility
   tree (opt-in in the bridge; `app`, `root`, `max_nodes`, `timeout_ms` do not
@@ -208,9 +233,10 @@ Backend matrix (honest limitations):
   `lsappinfo` for the frontmost application; the native helper for windows,
   activation, the element walk, grants and displays. Activation tries AX
   `AXFrontmost`, then `NSRunningApplication`, then System Events, accepting
-  each only after a fresh read shows the target in front (a request the OS
-  accepts and ignores falls through to the next); the System Events step can
-  raise a one-time Automation consent prompt. `scroll` is **unsupported**
+  each only after a fresh read shows the target in front within `wait_ms` (a
+  request the OS accepts and ignores, or completes slower than that, falls
+  through to the next); the System Events step can raise a one-time
+  Automation consent prompt. `scroll` is **unsupported**
   (cliclick has no scroll-wheel command — page via `key` with
   `page-down`/`page-up`); `middle` click and non-left `mouse_down`/`mouse_up`
   are unsupported via cliclick. `hold_key` holds PURE-MODIFIER combos only
@@ -228,10 +254,14 @@ Backend matrix (honest limitations):
   so no `getwindowclassname` is needed), ImageMagick (downscaling). Targeting
   needs both wmctrl and xdotool: without xdotool a switch cannot be verified
   and targeted inputs are refused. A name is matched exactly against the
-  WM_CLASS (either part), the window title or `pid:<n>`/`0x<id>`; an
-  application named by class or pid is any of its windows, a window named by
-  title or id is that window. Function keys and case-sensitive keysyms are
-  supported (`f5`→`F5`, `XF86AudioPlay` as-is).
+  WM_CLASS as `wmctrl -x` prints it (`instance.Class`: the whole string, the
+  part before the first dot or the part after a dot, so `Firefox` names
+  `navigator.Firefox` and `Gimp-2.10` names `gimp-2.10.Gimp-2.10`; a fragment
+  between dots never does), the window title or `pid:<n>`/`0x<id>`; a class
+  is every window of that class, `pid:` every window of the process, a title
+  or id that one window, and a window the X server has no pid for is itself.
+  Function keys and case-sensitive keysyms are supported (`f5`→`F5`,
+  `XF86AudioPlay` as-is).
 - Linux Wayland: `ydotool` (pointer + typing; requires a running `ydotoold`)
   or `wtype` (typing only), `grim` or `gnome-screenshot` (capture). `xdotool`
   does NOT work on Wayland. `key`, `hold_key`, `app=` targeting and
@@ -245,14 +275,21 @@ Backend matrix (honest limitations):
   each task. `app=` is resolved from the guest's `wmctrl -lpxG` rows (the same
   exact matching as local X11), activated by window id (`wmctrl -i -a`) and
   verified by polling `xdotool getactivewindow` up to `wait_ms`; every input's
-  guest program reads the active window (`id|pid|title`) before and after the
-  action in the same call and withholds a targeted input when that window is
-  no longer in front. The probe cannot raise: a probe failure leaves the place
-  unknown and never fails the action. With `app=""` the action, its exit-code
+  guest program reads the active window (`id|pid|title`, two `xdotool` calls
+  per read, the title base64-encoded so that nothing a window is called can
+  look like a marker) before and after the action in the same call and withholds a targeted input
+  when the active window is not one of the target's windows (`target_lost`)
+  or could not be read (`front_unread`); a switch observed earlier in the call
+  keeps its mark. The probe cannot raise: for an untargeted input a probe
+  failure leaves the place unknown and never fails the action. A targeted
+  `type_text` makes one switch for the whole call; a withheld or refused paste
+  is final (never retried by typing), only a clipboard program that ran and
+  failed falls back to `typewrite`. With `app=""` the action, its exit-code
   reading and the clipboard/typewrite routing are unchanged; what changed on
   the benchmark path is the probe around the action (markers are stripped from
   the returned output), `activate_app` in the tool list, `app` in the input
-  schemas and `window_list` answering parsed rows. Honesty guarantees on this
+  schemas and `window_list` answering parsed rows (`ok: false` when the guest
+  printed no listing). Honesty guarantees on this
   backend: `scroll` clicks are 1:1 wheel detents (not multiplied); non-ASCII,
   angle brackets, multi-line or long `type_text` (or `via=paste`) is pasted via
   the in-VM clipboard (`pyperclip` + `ctrl+v`, ASCII `typewrite` fallback) so
@@ -266,10 +303,13 @@ Backend matrix (honest limitations):
   is no longer in front. `app=` is resolved from the Mac's `lsappinfo list`
   (name, bundle id, `pid:<n>`; nothing is launched) and activated by pid
   through System Events (only the integer pid enters the remote command, never
-  the name), verified by polling `lsappinfo front` up to `wait_ms`. cliclick's
-  stderr is read the same way as locally. `type_text` with `via=paste` writes
-  the Mac's clipboard (`pbcopy`) and pastes. `window_list` lists applications
-  and the frontmost one (no window titles over SSH). The remote Mac must have
+  the name), verified by polling `lsappinfo front` up to `wait_ms`; an input
+  cliclick cannot express is refused before any switch; a transport failure
+  after a switch still reports the switch. cliclick's stderr is read the same
+  way as locally. `type_text` with `via=paste` writes the Mac's clipboard
+  (`pbcopy`) and pastes, and the receipt says whether the clipboard stage
+  completed. `window_list` lists applications and the frontmost one (no window
+  titles over SSH); a listing that failed or named nothing is `apps_unread`. The remote Mac must have
   Screen Recording, Accessibility and (for activation) Automation grants
   configured by the owner. This skill does not install or store private SSH
   keys.

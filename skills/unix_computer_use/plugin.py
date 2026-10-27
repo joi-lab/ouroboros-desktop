@@ -190,6 +190,12 @@ def _coerce_point(x: Any, y: Any) -> tuple[int, int]:
     raise ValueError(f"cannot parse coordinates from x={x!r}, y={y!r}")
 
 
+def _cc(x: int, y: int) -> str:
+    """A cliclick point: an absolute negative coordinate (a display left of or above the main one) takes the ``=``
+    prefix, because a bare ``-`` means a move relative to the pointer."""
+    return f"{'=' if int(x) < 0 else ''}{int(x)},{'=' if int(y) < 0 else ''}{int(y)}"
+
+
 def _run(cmd: list[str], *, timeout: int = _TIMEOUT_SEC) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
@@ -515,8 +521,9 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             backend = str(conn.get("backend") or "")
             payload["frontmost"] = self._remote_front(conn)
             payload["targeting"] = {"app": "supported", "resolved_from": "wmctrl rows in the guest" if backend == "osworld_http"
-                                    else "lsappinfo on the remote Mac",
-                                    "note": "grants of the remote machine are not probed; a dropped input is reported from the helper's warning"}
+                                    else "lsappinfo on the remote Mac", "availability": "checked at use",
+                                    "note": "the remote machine's grants and tools are not probed here; a missing tool or a dropped "
+                                            "input is reported by the call that needed it"}
             return _json(payload)
         plat, session = _platform(), _session_type()
         payload["frontmost"] = self._front_local()
@@ -808,7 +815,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             x, y = _coerce_point(x, y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        if int(x) < 0 or int(y) < 0:
+        if plat != "macos" and (int(x) < 0 or int(y) < 0):
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
         repeat = 3 if triple else (2 if double else 1)
@@ -830,7 +837,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 op = "dc"
             else:
                 op = "c"
-            cmd = ["cliclick", f"{op}:{ix},{iy}"]
+            cmd = ["cliclick", f"{op}:{_cc(ix, iy)}"]
         elif plat == "linux" and _session_type() == "wayland" and _which("ydotool"):
             button_code = {"left": "0xC0", "middle": "0xC2", "right": "0xC1"}[button]
             return self._exec_sequence([
@@ -850,14 +857,14 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             x, y = _coerce_point(x, y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        if int(x) < 0 or int(y) < 0:
+        if plat != "macos" and (int(x) < 0 or int(y) < 0):
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
         if self._is_remote():
             _name, conn = self._active_connection()
             return self._remote_pyautogui(conn, f"pyautogui.moveTo({ix}, {iy})", note=note)
         if plat == "macos" and _which("cliclick"):
-            cmd = ["cliclick", f"m:{ix},{iy}"]
+            cmd = ["cliclick", f"m:{_cc(ix, iy)}"]
         elif plat == "linux" and _session_type() == "wayland" and _which("ydotool"):
             cmd = ["ydotool", "mousemove", "--absolute", "-x", str(ix), "-y", str(iy)]
         elif plat == "linux" and _which("xdotool"):
@@ -874,9 +881,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             end_x, end_y = _coerce_point(end_x, end_y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        for v in (start_x, start_y, end_x, end_y):
-            if int(v) < 0:
-                return _json({"ok": False, "error": "negative coordinates not allowed"})
+        if plat != "macos" and any(int(v) < 0 for v in (start_x, start_y, end_x, end_y)):
+            return _json({"ok": False, "error": "negative coordinates not allowed"})
         sx_, sy_, note = self._map_xy(start_x, start_y, raw=raw)
         ex_, ey_, _ = self._map_xy(end_x, end_y, raw=raw)
         if self._is_remote():
@@ -887,7 +893,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 note=note, target=app,
             )
         if plat == "macos" and _which("cliclick"):
-            cmd = ["cliclick", f"dd:{sx_},{sy_}", f"dm:{ex_},{ey_}", f"du:{ex_},{ey_}"]
+            cmd = ["cliclick", f"dd:{_cc(sx_, sy_)}", f"dm:{_cc(ex_, ey_)}", f"du:{_cc(ex_, ey_)}"]
         elif plat == "linux" and _session_type() == "wayland" and _which("ydotool"):
             # ydotool encodes press/release in the button byte: 0x40|btn=down,
             # 0x80|btn=up (0xC0|btn = full click). There are no --down/--up flags.
@@ -932,7 +938,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 x, y = _coerce_point(x, y)
             except ValueError as exc:
                 return _json({"ok": False, "error": str(exc)})
-            has_xy = int(x) >= 0 and int(y) >= 0
+            has_xy = plat == "macos" or (int(x) >= 0 and int(y) >= 0)
         ix = iy = 0
         note: dict[str, Any] = {}
         if has_xy:
@@ -947,7 +953,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             if button != "left":
                 return _json({"ok": False, "error": "mouse_down/up supports only the left button on macOS (cliclick dd/du)"})
             op = "dd" if press else "du"
-            target = f"{op}:{ix},{iy}" if has_xy else f"{op}:."
+            target = f"{op}:{_cc(ix, iy)}" if has_xy else f"{op}:."
             cmd = ["cliclick", target]
         elif plat == "linux" and _session_type() == "wayland" and _which("ydotool"):
             # press = 0x40|btn, release = 0x80|btn (left +0, right +1, middle +2).
@@ -1088,27 +1094,33 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             results.append(self._key_step(step, ctx=ctx, recheck=index > 0))
             if not results[-1].get("ok"):
                 break
-        recipients = [r.get("delivered_to") or r.get("front_at_dispatch") for r in results]
+        recipients = [r.get("delivered_to") or r.get("front_at_dispatch") or "unknown"
+                      for r in results if "delivered_to" in r or "front_at_dispatch" in r]  # the dispatched steps
         last = results[-1]
         if last.get("ok"):
             payload: dict[str, Any] = {"ok": True, "sequence": steps, "steps": len(steps), "keys": combo}
         else:
             done = len(results) - 1
-            payload = {"ok": False, "error": f"step {steps[done]!r} {'not sent' if last.get('reason') else 'failed'}: {last.get('error')}",
+            dispatched = "delivered_to" in last or "front_at_dispatch" in last  # a demoted or failed helper ran
+            payload = {"ok": False, "error": f"step {steps[done]!r} {'failed' if dispatched else 'not sent'}: {last.get('error')}",
                        "steps_done": done, "steps_total": len(steps), "keys": combo}
-            for key in ("reason", "candidates", "front", "cmd", "returncode"):
+            for key in ("reason", "candidates", "front", "cmd", "returncode", "permission", "untyped"):
                 if key in last:
                     payload[key] = last[key]
-        # Each step's own receipt mark survives the sequence, a failed step's included (a switch before it, too).
+        # Each step's own receipt mark survives the sequence, a failed step's included; so does the switch that
+        # ran before a first step that never did (an invalid combo, a refusal).
         if any(r.get("observed_effect") is True for r in results):
             payload["observed_effect"] = True
             if last.get("activation_done"):
                 payload["activation_done"] = True
+        elif (ctx.get("target") or {}).get("activated"):
+            payload["observed_effect"] = True
+            payload["activation_done"] = True
         if not isinstance(ctx.get("delivered_to"), dict) and isinstance(results[0].get("delivered_to"), dict):
             ctx["delivered_to"] = results[0]["delivered_to"]  # a remote probe read it in the first step
         stderr = "\n".join(r.get("helper_stderr") or "" for r in results).strip()
         payload = self._finish(payload, ctx, stderr, after=ctx.get("front_last"))
-        if len({json.dumps(r, sort_keys=True) for r in recipients if isinstance(r, dict)}) > 1:
+        if len({json.dumps(r, sort_keys=True) if isinstance(r, dict) else "unknown" for r in recipients}) > 1:
             payload["steps_delivered_to"] = recipients
         return _json(payload)
 
@@ -1311,9 +1323,13 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 return refusal
         activated = bool((ctx.get("target") or {}).get("activated"))
         if before is not None:
-            problem = before()
+            try:
+                problem = before()
+            except Exception as exc:  # noqa: BLE001 - a failed preparation cancels the input, with a receipt
+                problem = f"{type(exc).__name__}: {exc}"
             if problem:
-                payload: dict[str, Any] = {"ok": False, "error": problem, "cmd": cmd}
+                payload: dict[str, Any] = {"ok": False, "error": problem, "cmd": cmd, "not_sent": True,
+                                           "reason": "clipboard_failed" if (extra or {}).get("method") == "paste" else "preparation_failed"}
                 if activated:
                     payload["observed_effect"] = True  # the switch ran before the input was cancelled
                     payload["activation_done"] = True
@@ -1324,6 +1340,9 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             if activated:
                 payload["observed_effect"] = True  # the switch ran before the input failed
                 payload["activation_done"] = True
+            if before is not None and extra:
+                # The preparation (the clipboard write) completed; only the helper after it failed.
+                payload.update({k: extra[k] for k in ("method", "clipboard_replaced", "chars") if k in extra})
         else:
             payload = {"ok": True, "cmd": cmd, "observed_effect": True}
             if extra:
@@ -1374,28 +1393,28 @@ def register(api: Any) -> None:
     api.register_tool("activate_connection", impl.activate_connection, description="Select a configured connection as the active target for screenshot/input tools.", schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, timeout_sec=5)
     api.register_tool("use_local", lambda: impl.use_local(), description="Return computer-use tools to the local desktop backend.", schema={"type": "object", "properties": {}}, timeout_sec=5)
     api.register_tool("capabilities", lambda: impl.capabilities(), description="Who is in front, which OS grants this process holds (prompt-free preflights on macOS), whether app= targeting works here, and the installed backends.", schema={"type": "object", "properties": {}}, timeout_sec=20)
-    api.register_tool("screenshot", impl.screenshot, description="Capture the main display (or, with app=, the display holding that app's window on macOS; display.selected_by says which was captured), downscale to <=WXGA and persist the image->input transform. The image is attached automatically; an engine without vision gets its path.", schema={"type": "object", "properties": {"job_id": {"type": "string", "default": "manual"}, "max_width": {"type": "integer", "default": _MAX_IMAGE_W}, "max_height": {"type": "integer", "default": _MAX_IMAGE_H}, **_app}}, timeout_sec=40)
+    api.register_tool("screenshot", impl.screenshot, description="Capture the main display (or, with app=, the display holding that app's window on macOS; display.selected_by says which was captured), downscale to <=WXGA and persist the image->input transform. The image is attached automatically; an engine without vision gets its path.", schema={"type": "object", "properties": {"job_id": {"type": "string", "default": "manual"}, "max_width": {"type": "integer", "default": _MAX_IMAGE_W}, "max_height": {"type": "integer", "default": _MAX_IMAGE_H}, **_app}}, timeout_sec=45)
     # y is deliberately NOT in `required` for click/move: models recurringly emit the
     # whole point inside x ("663, 500") with y omitted, and a required-field rejection
     # then fires BEFORE the handler's _coerce_point can recover the pair.
-    api.register_tool("click", impl.click, description="Click at screenshot-space coordinates (auto-remapped; raw=true for native input space). " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, "double": {"type": "boolean", "default": False}, "triple": {"type": "boolean", "default": False}, **_app}, "required": ["x"]}, timeout_sec=45)
+    api.register_tool("click", impl.click, description="Click at screenshot-space coordinates (auto-remapped; raw=true for native input space). " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, "double": {"type": "boolean", "default": False}, "triple": {"type": "boolean", "default": False}, **_app}, "required": ["x"]}, timeout_sec=90)
     # Models call these names unprompted (111 such calls in one OSWorld run, all
     # previously "Unknown tool"): register them as thin aliases of click.
-    api.register_tool("double_click", lambda **kw: impl.click(**{**kw, "double": True}), description="Alias of click with double=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=45)
-    api.register_tool("triple_click", lambda **kw: impl.click(**{**kw, "triple": True}), description="Alias of click with triple=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=45)
+    api.register_tool("double_click", lambda **kw: impl.click(**{**kw, "double": True}), description="Alias of click with double=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
+    api.register_tool("triple_click", lambda **kw: impl.click(**{**kw, "triple": True}), description="Alias of click with triple=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
     api.register_tool("move", impl.move, description="Move the mouse pointer to screenshot-space coordinates (auto-remapped; raw=true for native input space).", schema={"type": "object", "properties": _xy, "required": ["x"]}, timeout_sec=10)
     # start_y/end_y are recoverable from a pair packed into start_x/end_x, so only
     # the x-side fields stay required (same rationale as click/move above).
-    api.register_tool("left_click_drag", impl.left_click_drag, description="Drag with the left button from start to end (screenshot-space, auto-remapped; raw=true for native). " + _targeted, schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}, "raw": {"type": "boolean", "default": False}, **_app}, "required": ["start_x", "end_x"]}, timeout_sec=45)
-    api.register_tool("mouse_down", impl.mouse_down, description="Press and hold a mouse button (left only on macOS) at the pointer or at screenshot-space coordinates. " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}}, timeout_sec=45)
+    api.register_tool("left_click_drag", impl.left_click_drag, description="Drag with the left button from start to end (screenshot-space, auto-remapped; raw=true for native). " + _targeted, schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}, "raw": {"type": "boolean", "default": False}, **_app}, "required": ["start_x", "end_x"]}, timeout_sec=90)
+    api.register_tool("mouse_down", impl.mouse_down, description="Press and hold a mouse button (left only on macOS) at the pointer or at screenshot-space coordinates. " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}}, timeout_sec=90)
     api.register_tool("mouse_up", impl.mouse_up, description="Release a held mouse button at the pointer, or at screenshot-space coordinates (auto-remapped; raw=true for native input space). Never changes which app is in front.", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}}}, timeout_sec=10)
     api.register_tool("cursor_position", lambda: impl.cursor_position(), description="Report the current pointer position in native input coordinates.", schema={"type": "object", "properties": {}}, timeout_sec=10)
-    api.register_tool("type_text", impl.type_text, description="Type text into the focused field of the frontmost app, or of app= (brought forward and verified first). via=paste writes the clipboard and pastes (long or non-ASCII text on a local or SSH Mac; the clipboard is replaced); an OSWorld guest pastes such text through its clipboard by itself.", schema={"type": "object", "properties": {"text": {"type": "string"}, "interval_ms": {"type": "integer", "default": 0}, **_app, "via": {"type": "string", "default": ""}}, "required": ["text"]}, timeout_sec=45)
-    api.register_tool("key", impl.key, description="Press keys in the frontmost app, or in app= (brought forward and verified first; nothing is sent when it is not in front). The result says who was in front, not that the app reacted. Combos with '+', sequences with spaces (cmd+s, ctrl+l, page-down, 'down down return'); a targeted sequence stops when its app leaves the front. Scriptable apps are better driven by their own commands through run_command.", schema={"type": "object", "properties": {"keys": {"type": "string"}, **_app}, "required": ["keys"]}, timeout_sec=45)
-    api.register_tool("hold_key", impl.hold_key, description="Hold a key or modifier combo for a duration (50-10000 ms). " + _targeted, schema={"type": "object", "properties": {"keys": {"type": "string"}, "duration_ms": {"type": "integer", "default": 500}, **_app}, "required": ["keys"]}, timeout_sec=45)
-    api.register_tool("scroll", impl.scroll, description="Scroll 1-20 wheel steps (up/down/left/right on X11 and OSWorld, up/down on Wayland; unsupported on macOS: use key paging). " + _targeted, schema={"type": "object", "properties": {"clicks": {"type": "integer", "default": 3}, "direction": {"type": "string", "default": "down"}, **_app}}, timeout_sec=45)
+    api.register_tool("type_text", impl.type_text, description="Type text into the focused field of the frontmost app, or of app= (brought forward and verified first). via=paste writes the clipboard and pastes (long or non-ASCII text on a local or SSH Mac; the clipboard is replaced); an OSWorld guest pastes such text through its clipboard by itself.", schema={"type": "object", "properties": {"text": {"type": "string"}, "interval_ms": {"type": "integer", "default": 0}, **_app, "via": {"type": "string", "default": ""}}, "required": ["text"]}, timeout_sec=90)
+    api.register_tool("key", impl.key, description="Press keys in the front app or app= (verified; else nothing sent). Result: who was in front, not that the app reacted. Combos with '+', sequences with spaces (cmd+s, ctrl+l, page-down, 'down down return'); a targeted sequence stops when its app leaves the front. Scriptable apps are better driven by their own commands through run_command.", schema={"type": "object", "properties": {"keys": {"type": "string"}, **_app}, "required": ["keys"]}, timeout_sec=90)
+    api.register_tool("hold_key", impl.hold_key, description="Hold a key or modifier combo for a duration (50-10000 ms). " + _targeted, schema={"type": "object", "properties": {"keys": {"type": "string"}, "duration_ms": {"type": "integer", "default": 500}, **_app}, "required": ["keys"]}, timeout_sec=90)
+    api.register_tool("scroll", impl.scroll, description="Scroll 1-20 wheel steps; app= acts in that app (verified first, else nothing is sent). X11/OSWorld: up/down/left/right; Wayland: up/down; macOS: unsupported, page with key. The result names who was in front at dispatch.", schema={"type": "object", "properties": {"clicks": {"type": "integer", "default": 3}, "direction": {"type": "string", "default": "down"}, **_app}}, timeout_sec=90)
     api.register_tool("wait", impl.wait, description="Sleep up to 10s so the UI can settle before the next observation.", schema={"type": "object", "properties": {"ms": {"type": "integer", "default": 500}}}, timeout_sec=12)
-    api.register_tool("activate_app", impl.activate_app, description="Bring a running application to the front (name, bundle id / WM_CLASS, or pid:<n> from window_list; resolved from the running list, never launched) and report who is in front afterwards. Inputs with app= do this themselves; use this to switch before several inputs or to check that a switch works.", schema={"type": "object", "properties": {"app": {"type": "string"}, "wait_ms": {"type": "integer", "default": 2000}}, "required": ["app"]}, timeout_sec=45)
+    api.register_tool("activate_app", impl.activate_app, description="Bring a running application to the front (name, bundle id / WM_CLASS, or pid:<n> from window_list; resolved from the running list, never launched) and report who is in front afterwards. Inputs with app= do this themselves; use this to switch before several inputs or to check that a switch works.", schema={"type": "object", "properties": {"app": {"type": "string"}, "wait_ms": {"type": "integer", "default": 2000}}, "required": ["app"]}, timeout_sec=90)
     api.register_tool("window_list", impl.window_list, description="Running applications with their windows: who is in front, titles, bounds, pid, and on macOS whether the app has its own scripting commands (scriptable). app= filters; limit caps the rows (truncated says so).", schema={"type": "object", "properties": {**_app, "limit": {"type": "integer", "default": 50}}}, timeout_sec=30)
-    api.register_tool("ax_tree", impl.ax_tree, description="Read one window as text through the Accessibility API (macOS), bounded: the frontmost app's window or app='s (without bringing it forward). Nodes with role/label/value/bounds plus numbered marks (positions to click with raw=true; a mark is not proof the element reacts); truncated_by names every cut. An OSWorld remote returns the guest's whole tree; Linux reports unsupported with the window rows, SSH Macs unsupported.", schema={"type": "object", "properties": {**_app, "max_nodes": {"type": "integer", "default": 150}, "timeout_ms": {"type": "integer", "default": 3000}, "root": {"type": "string", "default": "window"}, "include_web": {"type": "boolean", "default": False}}}, timeout_sec=25)
+    api.register_tool("ax_tree", impl.ax_tree, description="Read one window as text through the Accessibility API (macOS), bounded: the frontmost app's window or app='s (without bringing it forward). Nodes with role/label/value/bounds plus numbered marks (positions to click with raw=true; a mark is not proof the element reacts); truncated_by names every cut. An OSWorld remote returns the guest's whole tree; Linux reports unsupported with the window rows, SSH Macs unsupported.", schema={"type": "object", "properties": {**_app, "max_nodes": {"type": "integer", "default": 150}, "timeout_ms": {"type": "integer", "default": 3000}, "root": {"type": "string", "default": "window"}, "include_web": {"type": "boolean", "default": False}}}, timeout_sec=45)
     api.register_tool("remote_exec", impl.remote_exec, description="Run a shell command on the active remote connection only; refuses on local backend. OSWorld/Linux guest: each call is a FRESH `bash -lc` starting in $HOME. SSH Mac: each call runs through the remote account's login shell via ssh. Either way this is NOT the visible desktop terminal: it does not inherit that terminal's working directory and leaves nothing in its shell history.", schema={"type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "integer", "default": 60}}, "required": ["command"]}, timeout_sec=120)

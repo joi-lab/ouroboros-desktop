@@ -85,38 +85,47 @@ _PYAUTOGUI_BASE_ALIASES = {
     "down": "down", "up": "up", "left": "left", "right": "right",
 }
 
-# The one X11 front reader (guest shell): ``<window id>|<pid>|<title>`` on one line, nothing when unread.
+# The one X11 front reader (guest shell): ``<window id>|<pid>|<base64 title>`` on one line, nothing when unread.
+# The title travels base64-encoded: whatever a window is called, it can never look like a marker or add a line.
 _X11_FRONT_SH = ("W=$(xdotool getactivewindow 2>/dev/null); if [ -n \"$W\" ]; then "
-                 "printf '%s|%s|%s' \"$W\" \"$(xdotool getwindowpid \"$W\" 2>/dev/null)\" \"$(xdotool getwindowname \"$W\" 2>/dev/null)\"; fi")
+                 "printf '%s|%s|b64:%s' \"$W\" \"$(xdotool getwindowpid \"$W\" 2>/dev/null)\" "
+                 "\"$(xdotool getwindowname \"$W\" 2>/dev/null | base64 | tr -d '\\n')\"; fi")
 # The same reader inside the guest python that runs an input: it cannot raise (a probe failure is an unknown
-# place, never a failed input), prints the markers the receipt is read from, and withholds a targeted input
-# when the expected window is not in front.
+# place, never a failed input), prints the markers the receipt is read from (each on its own line, the title
+# base64-encoded), and withholds a targeted input when the expected window is not in front (``__TARGET_LOST__``)
+# or could not be read at all (``__FRONT_UNREAD__``).
 _OSWORLD_PROBE = (
-    "import subprocess as _sp\n"
+    "import subprocess as _sp, base64 as _b64\n"
     "def _front():\n"
     "    try:\n"
     "        w = _sp.run(['xdotool', 'getactivewindow'], capture_output=True, text=True, timeout=3).stdout.strip()\n"
     "        if not w:\n"
     "            return ''\n"
-    "        p = _sp.run(['xdotool', 'getwindowpid', w], capture_output=True, text=True, timeout=3).stdout.strip()\n"
-    "        n = _sp.run(['xdotool', 'getwindowname', w], capture_output=True, text=True, errors='replace', timeout=3).stdout.strip()\n"
-    "        return w + '|' + p + '|' + n\n"
+    "        pn = _sp.run(['xdotool', 'getwindowpid', w, 'getwindowname', w], capture_output=True, text=True, errors='replace', timeout=3).stdout\n"
+    "        p, _, n = pn.partition(chr(10))\n"
+    "        return w + '|' + p.strip() + '|b64:' + _b64.b64encode(n.rstrip(chr(10)).encode('utf-8', 'replace')).decode('ascii')\n"
     "    except Exception:\n"
     "        return ''\n"
     "_b = _front()\n"
+    "print()\n"
     "print('__FRONT_BEFORE__' + _b)\n"
-    "if ({expect!r} and _b.split('|')[0] != {expect!r}) or ({expect_pid!r} and (_b.split('|') + [''])[1] != {expect_pid!r}):\n"
+    "if {expect!r} and not _b:\n"
+    "    print('__FRONT_UNREAD__')\n"
+    "    raise SystemExit(3)\n"
+    "if {expect!r} and _b.split('|')[0] not in {expect!r}:\n"
     "    print('__TARGET_LOST__')\n"
     "    raise SystemExit(3)\n"
     "{command}\n"
+    "print()\n"
     "print('__FRONT_AFTER__' + _front())\n"
 )
 # Mac over SSH: who is in front (one line), the input wrapper and the pre-check of a targeted input.
 _SSH_FRONT_READ = ("lsappinfo info -only pid -only bundleid -only name \"$(lsappinfo front 2>/dev/null)\" 2>/dev/null"
                    " | tr '\\n' ' '")
-_SSH_INPUT_WRAPPER = ("B=$({read}); echo \"__FRONT_BEFORE__$B\"; {precheck}"
-                      "{command}; RC=$?; A=$({read}); echo \"__FRONT_AFTER__$A\"; exit $RC")
+_SSH_INPUT_WRAPPER = ("B=$({read}); echo; echo \"__FRONT_BEFORE__$B\"; {precheck}"
+                      "{command}; RC=$?; A=$({read}); echo; echo \"__FRONT_AFTER__$A\"; exit $RC")
 _SSH_PRECHECK = ("P=$(printf '%s' \"$B\" | grep -o '\"pid\"=[0-9]*' | tr -dc 0-9); "
+                 "if [ -z \"$P\" ]; then echo __FRONT_UNREAD__; exit 3; fi; "
                  "if [ \"$P\" != \"{pid}\" ]; then echo __TARGET_LOST__; exit 3; fi; ")
 # Activation by pid (only an integer is interpolated): System Events brings the process forward; the same call
 # polls who is in front up to the wait and reads it before and after.
@@ -124,17 +133,28 @@ _SSH_ACTIVATE = ("B=$({read}); osascript -e 'tell application \"System Events\" 
                  "(first process whose unix id is {pid}) to true' 2>&1; RC=$?; i=0; while [ $i -lt {polls} ]; do "
                  "F=$(lsappinfo info -only pid \"$(lsappinfo front 2>/dev/null)\" 2>/dev/null | tr -dc 0-9); "
                  "[ \"$F\" = \"{pid}\" ] && break; sleep 0.1; i=$((i+1)); done; "
-                 "A=$({read}); echo \"__FRONT_BEFORE__$B\"; echo \"__FRONT_AFTER__$A\"; exit $RC")
-_MARKER_LINE = re.compile(r"^.*__(FRONT_BEFORE|FRONT_AFTER|TARGET_LOST)__.*$\n?", re.M)
+                 "A=$({read}); echo; echo \"__FRONT_BEFORE__$B\"; echo \"__FRONT_AFTER__$A\"; exit $RC")
+# The Mac's inventory: the listing's own exit code is kept (a pipeline's last command would mask it).
+_SSH_INVENTORY = "lsappinfo list; RC=$?; echo; echo __FRONT__; {read}; exit $RC"
+# SSH paste: the clipboard write and the paste chord are two stages, and the receipt says which ones ran.
+_SSH_PASTE = "printf %s {text} | pbcopy && echo __CLIPBOARD_WRITTEN__ && cliclick kd:cmd t:v ku:cmd"
+_MARKER_LINE = re.compile(r"^__(FRONT_BEFORE|FRONT_AFTER|TARGET_LOST|FRONT_UNREAD|CLIPBOARD_WRITTEN)__.*$\n?", re.M)
 
 
-def parse_markers(text: str, parse: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
-    """``__FRONT_BEFORE__``/``__FRONT_AFTER__`` lines -> (before, after, target_lost); ``parse(raw)`` reads one line."""
+def parse_markers(text: str, parse: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    """Marker LINES (``__FRONT_BEFORE__…``, ``__FRONT_AFTER__…``, ``__TARGET_LOST__``, ``__FRONT_UNREAD__``) ->
+    (before, after, stop) where ``stop`` is ``"target_lost"``, ``"front_unread"`` or ``""``. Only a whole line is a
+    marker, and the readers encode titles, so text an application shows can never be read as one."""
     found: dict[str, dict[str, Any] | None] = {}
     for label in ("BEFORE", "AFTER"):
-        m = re.search(rf"__FRONT_{label}__([^\n]*)", text or "")
+        m = re.search(rf"^__FRONT_{label}__(.*)$", text or "", re.M)
         found[label] = parse(m.group(1).strip()) if m else None
-    return found["BEFORE"], found["AFTER"], "__TARGET_LOST__" in (text or "")
+    stop = ""
+    if re.search(r"^__TARGET_LOST__$", text or "", re.M):
+        stop = "target_lost"
+    elif re.search(r"^__FRONT_UNREAD__$", text or "", re.M):
+        stop = "front_unread"
+    return found["BEFORE"], found["AFTER"], stop
 
 
 def _info_or_none(raw: str) -> dict[str, Any] | None:
@@ -258,6 +278,12 @@ class RemoteBackends:
         if conn.get("disabled"):
             return json.loads(self._disabled_connection_error(str(self._read_connections().get("active") or "?"), conn))
         backend = str(conn.get("backend") or "").lower()
+        if backend == "ssh_macos" and not ssh_command:
+            # Translate before any switch: a snippet cliclick cannot express is refused without moving the front.
+            cliclick_args, err = self._ssh_macos_cliclick_for_pyautogui(code)
+            if err:
+                return {"ok": False, "backend": backend, "error": err, "code": code}
+            ssh_command = "cliclick " + " ".join(shlex.quote(arg) for arg in cliclick_args)
         if input_effect and ctx is None:
             refusal, ctx = self._begin(target)
             if refusal:
@@ -269,20 +295,18 @@ class RemoteBackends:
         try:
             if backend == "osworld_http":
                 if input_effect:
-                    by_window = expect.get("matched_by") in ("title", "window_id")
-                    wid = window_id_int(expect.get("window_id")) if expect else None
-                    probe = _OSWORLD_PROBE.format(expect=str(wid) if (wid is not None and by_window) else "",
-                                                  expect_pid=str(expect.get("pid")) if (expect and not by_window and expect.get("pid")) else "",
-                                                  command=code)
+                    # The guest checks the active window id against the target's windows before it acts.
+                    ids = [str(window_id_int(w)) for w in (expect.get("window_ids") or []) if window_id_int(w) is not None]
+                    probe = _OSWORLD_PROBE.format(expect=ids, command=code)
                     wrapped = _OSWORLD_PKGS_PREFIX.format(command=probe)
                 else:
                     wrapped = _OSWORLD_PKGS_PREFIX.format(command=code)
                 out = self._osworld_execute(conn, ["python", "-c", wrapped], timeout=timeout)
                 result = out.get("result")
                 text = str(result.get("output") or "") if isinstance(result, dict) else ""
-                before, after, lost = parse_markers(text, parse_x11_front)
-                if lost:
-                    return self._lost(ctx, before, backend)
+                before, after, stop = parse_markers(text, parse_x11_front)
+                if stop:
+                    return self._stopped(ctx, shared, before, backend, stop)
                 ok, err = _osworld_result_ok(out)
                 if isinstance(result, dict) and input_effect:
                     result = {**result, "output": strip_markers(text)}
@@ -291,29 +315,34 @@ class RemoteBackends:
                     payload["error"] = err
                 stderr = ""
             elif backend == "ssh_macos":
-                if ssh_command:
-                    remote = ssh_command
-                else:
-                    cliclick_args, err = self._ssh_macos_cliclick_for_pyautogui(code)
-                    if err:
-                        return {"ok": False, "backend": backend, "error": err, "code": code}
-                    remote = "cliclick " + " ".join(shlex.quote(arg) for arg in cliclick_args)
+                remote = ssh_command
                 if input_effect:
                     precheck = _SSH_PRECHECK.format(pid=int(expect["pid"])) if expect.get("pid") else ""
                     remote = _SSH_INPUT_WRAPPER.format(read=_SSH_FRONT_READ, precheck=precheck, command=remote)
                 rc, stdout, stderr = self._ssh_run(conn, remote, timeout=timeout)
-                before, after, lost = parse_markers(stdout, _info_or_none)
-                if lost:
-                    return self._lost(ctx, before, backend)
+                before, after, stop = parse_markers(stdout, _info_or_none)
+                if stop:
+                    return self._stopped(ctx, shared, before, backend, stop)
                 payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout)}
                 if rc != 0:
-                    payload["error"] = stderr.strip() or stdout.strip() or f"exit {rc}"
+                    payload["error"] = stderr.strip() or strip_markers(stdout) or f"exit {rc}"
+                if note and "clipboard_replaced" in note:
+                    # The clipboard stage reports itself; the paste chord may still have failed after it.
+                    payload["clipboard_replaced"] = bool(re.search(r"^__CLIPBOARD_WRITTEN__$", stdout, re.M))
             else:
                 return {"ok": False, "error": f"unsupported remote backend {backend!r}"}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}", "code": code}
+        except Exception as exc:  # noqa: BLE001 - the transport failed; an earlier observed switch is still a fact
+            failed: dict[str, Any] = {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}", "code": code}
+            if ctx.get("target"):
+                failed["target"] = ctx["target"]
+            if ctx.get("front_before") is not None:
+                failed["front_before"] = ctx["front_before"]
+            if activated:
+                failed["observed_effect"] = True
+                failed["activation_done"] = True
+            return failed
         if note:
-            payload.update(note)
+            payload.update({k: v for k, v in note.items() if k not in payload})
         if not input_effect:
             return payload
         if payload["ok"]:
@@ -327,12 +356,23 @@ class RemoteBackends:
         shared["front_last"] = ctx.get("front_last")  # the call's last front read, for a sequence's aggregate
         return payload
 
-    def _lost(self, ctx: dict[str, Any], front: dict[str, Any] | None, backend: str) -> dict[str, Any]:
-        """The guest pre-check found another window in front: nothing was sent, no mark."""
+    def _stopped(self, ctx: dict[str, Any], shared: dict[str, Any], front: dict[str, Any] | None, backend: str,
+                 reason: str) -> dict[str, Any]:
+        """The remote pre-check withheld the input (another window in front, or the front unread): nothing was sent;
+        a switch observed earlier in the same call keeps its own mark."""
         target = ctx.get("target") or {}
-        res = {"reason": "target_lost", "front": front}
-        return {"ok": False, "backend": backend, "reason": "target_lost", "target": target,
-                "error": self._target_error(str(target.get("requested") or ""), res), **({"front": front} if front else {})}
+        res = {"reason": reason, "front": front, "error": "the remote front reader printed nothing"}
+        out: dict[str, Any] = {"ok": False, "backend": backend, "reason": reason, "target": target,
+                               "error": self._target_error(str(target.get("requested") or ""), res)}
+        if front:
+            out["front"] = front
+            shared["front_last"] = front
+        if ctx.get("front_before") is not None:
+            out["front_before"] = ctx["front_before"]
+        if target.get("activated"):
+            out["observed_effect"] = True
+            out["activation_done"] = True
+        return out
 
     # --- remote place readers ------------------------------------------------------------------
 
@@ -345,10 +385,12 @@ class RemoteBackends:
             return [], None, f"{type(exc).__name__}: {exc}"
         ok, err = _osworld_result_ok(out)
         text = str((out.get("result") or {}).get("output") if isinstance(out.get("result"), dict) else "")
-        listing, _sep, active = text.partition("__ACTIVE__")
+        listing, sep, active = text.partition("__ACTIVE__")
         rows = parse_wmctrl_rows(listing)
         front = parse_x11_front(active.strip(), rows)
-        return rows, front, ("" if ok else (err or "wmctrl failed in the guest"))
+        if not sep:
+            return rows, front, "the guest printed no window listing (the script did not run as written)"
+        return rows, front, ("" if ok else (strip_markers(err) or "wmctrl failed in the guest"))
 
     def _remote_front(self, conn: dict[str, Any]) -> dict[str, Any] | None:
         """Who is in front on the remote now (OSWorld: the X11 window; SSH Mac: the application); None = unread."""
@@ -386,23 +428,28 @@ class RemoteBackends:
             wid = window_id_int(target["window_id"])
             script = (f"export DISPLAY=:0; wmctrl -i -a {shlex.quote(str(target['window_id']))} 2>/dev/null; RC=$?; i=0; "
                       f"while [ $i -lt {polls} ]; do W=$(xdotool getactivewindow 2>/dev/null); [ \"$W\" = \"{wid}\" ] && break; "
-                      f"sleep 0.1; i=$((i+1)); done; printf '__FRONT_AFTER__'; {_X11_FRONT_SH}; echo; exit $RC")
+                      f"sleep 0.1; i=$((i+1)); done; echo; printf '__FRONT_AFTER__'; {_X11_FRONT_SH}; echo; exit $RC")
+            t0 = time.monotonic()
             try:
                 out = self._osworld_execute(conn, ["bash", "-lc", script], timeout=max(20, wait_ms // 1000 + 15))
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "backend": backend, "reason": "activate_failed", "error": f"{type(exc).__name__}: {exc}", "target": target}
+            waited = int((time.monotonic() - t0) * 1000)
             ok, err = _osworld_result_ok(out)
             result = out.get("result")
             text = str(result.get("output") or "") if isinstance(result, dict) else ""
-            _b, after, _lost = parse_markers(text, lambda raw: parse_x11_front(raw, rows))
-            return self._activation_result(backend, target, before, after, "wmctrl -i -a", ok, err, same=x11_same)
+            _b, after, _stop = parse_markers(text, lambda raw: parse_x11_front(raw, rows))
+            return self._activation_result(backend, target, before, after, "wmctrl -i -a", ok, err, waited, same=x11_same)
         if backend == "ssh_macos":
-            rc, out, err = self._ssh_run(conn, f"lsappinfo list; echo __FRONT__; {_SSH_FRONT_READ}", timeout=20)
+            rc, out, err = self._ssh_run(conn, _SSH_INVENTORY.format(read=_SSH_FRONT_READ), timeout=20)
             if rc != 0:
-                return {"ok": False, "backend": backend, "reason": "unsupported",
-                        "error": f"the remote Mac's applications could not be listed ({err.strip() or out.strip() or f'exit {rc}'})"}
+                return {"ok": False, "backend": backend, "reason": "apps_unread",
+                        "error": f"the remote Mac's applications could not be listed ({err.strip() or strip_markers(out) or f'exit {rc}'})"}
             listing, _sep, front_text = out.partition("__FRONT__")
             apps = parse_list(listing)
+            if not apps:
+                return {"ok": False, "backend": backend, "reason": "apps_unread",
+                        "error": "lsappinfo list named no application on the remote Mac"}
             before = _info_or_none(front_text)
             matches = resolve(app, apps)
             if not matches:
@@ -415,23 +462,28 @@ class RemoteBackends:
                 return {"ok": True, "backend": backend, "target": target, "front_before": before, "front": before,
                         "activated": False, "already_front": True, "verified": True, "waited_ms": 0}
             script = _SSH_ACTIVATE.format(read=_SSH_FRONT_READ, pid=int(target["pid"]), polls=polls)
+            t0 = time.monotonic()
             rc, out, err = self._ssh_run(conn, script, timeout=max(20, wait_ms // 1000 + 15))
-            _b, after, _lost = parse_markers(out, _info_or_none)
+            waited = int((time.monotonic() - t0) * 1000)
+            _b, after, _stop = parse_markers(out, _info_or_none)
             return self._activation_result(backend, target, before, after, "system_events", rc == 0,
-                                           (err.strip() or strip_markers(out) or f"exit {rc}")[:300])
+                                           (err.strip() or strip_markers(out) or f"exit {rc}")[:300], waited)
         return {"ok": False, "reason": "unsupported", "error": f"unsupported remote backend {backend!r}"}
 
     @staticmethod
     def _activation_result(backend: str, target: dict[str, Any], before: dict[str, Any] | None, after: dict[str, Any] | None,
-                           method: str, ok: bool, err: str, same: Any = None) -> dict[str, Any]:
+                           method: str, ok: bool, err: str, waited_ms: int, same: Any = None) -> dict[str, Any]:
         same = same or (lambda front, tgt: bool(front) and front.get("pid") == tgt.get("pid"))
         verified = bool(same(after, target))
         activated: bool | None = (verified and not same(before, target)) if before else (None if verified else False)
         out: dict[str, Any] = {"ok": verified, "backend": backend, "target": target, "front_before": before, "front": after,
-                               "activated": activated, "verified": verified, "method": method}
+                               "activated": activated, "verified": verified, "method": method, "waited_ms": waited_ms}
         if not verified:
             if not ok:
-                out.update({"reason": "activate_failed", "error": err})
+                out.update({"reason": "activate_failed", "error": strip_markers(err)})
+            elif after is None:
+                out.update({"reason": "front_unread", "activated": None,
+                            "error": "the remote front reader printed nothing after the switch"})
             else:
                 out["reason"] = "not_frontmost_after_activate"
         return out
@@ -445,7 +497,7 @@ class RemoteBackends:
                                         "error": f"the guest's window list could not be read (wmctrl/xdotool: {err})"})
             if front:
                 for row in rows:
-                    row["frontmost"] = front.get("pid") == row["pid"]
+                    row["frontmost"] = window_id_int(row["window_id"]) == window_id_int(front.get("window_id"))
             if query:
                 rows = [r for r in rows if query in r["app"].lower() or query in r["title"].lower() or query == f"pid:{r['pid']}"]
             payload: dict[str, Any] = {"ok": True, "backend": backend, "frontmost": front, "windows": rows[:limit],
@@ -456,9 +508,10 @@ class RemoteBackends:
                 payload["warning"] = err
             return self._json_text(payload)
         if backend == "ssh_macos":
-            rc, out, err = self._ssh_run(conn, f"lsappinfo list; echo __FRONT__; {_SSH_FRONT_READ}", timeout=20)
+            rc, out, err = self._ssh_run(conn, _SSH_INVENTORY.format(read=_SSH_FRONT_READ), timeout=20)
             if rc != 0:
-                return self._json_text({"ok": False, "backend": backend, "error": err.strip() or out.strip() or f"exit {rc}"})
+                return self._json_text({"ok": False, "backend": backend, "reason": "apps_unread",
+                                        "error": f"lsappinfo list failed on the remote Mac ({err.strip() or strip_markers(out) or f'exit {rc}'})"})
             listing, _sep, front_text = out.partition("__FRONT__")
             front = _info_or_none(front_text)
             rows = [{"app": a["app"], "pid": a["pid"], "app_id": a["app_id"], **({"frontmost": a["pid"] == front["pid"]} if front else {})}
@@ -499,6 +552,7 @@ class RemoteBackends:
         input_w: int,
         input_h: int,
         extra: dict[str, Any] | None = None,
+        approx: bool = False,
     ) -> str:
         px_w, px_h = self._png_dims(raw_path)
         if px_w <= 0 or px_h <= 0 or not self._png_ok(raw_path):
@@ -548,13 +602,15 @@ class RemoteBackends:
                 "image_w": img_w, "image_h": img_h,
                 "input_w": input_w, "input_h": input_h,
                 "platform": backend, "session": "remote",
-                "approx": False, "ts": time.time(),
+                "approx": bool(approx), "ts": time.time(),
             }
             self._save_transform(transform)
             result["coord_transform"] = transform
             result["coordinate_note"] = (
                 "Pass coordinates read off THIS image directly to click/move/drag — "
                 "they are auto-remapped through coord_transform (image -> remote input space)."
+                + (" The remote Mac's logical size came from the Finder desktop (the union of its displays) or from the capture's"
+                   " pixels: the scale is approximate." if approx else "")
             )
         return self._json_text(result)
 
@@ -688,6 +744,7 @@ class RemoteBackends:
             input_w=input_w,
             input_h=input_h,
             extra={"host": str(conn.get("ssh_alias") or conn.get("host") or "")},
+            approx=True,  # Finder's desktop bounds span every display; a one-display capture cannot be told apart
         )
 
     def _test_ssh_macos(self, conn: dict[str, Any], name: str) -> str:
@@ -716,9 +773,15 @@ class RemoteBackends:
         backend = str(conn.get("backend") or "").lower()
         if backend == "ssh_macos" and via == "paste":
             # The clipboard of the remote Mac is replaced (said in the receipt); the text travels as one quoted argument.
-            command = f"printf %s {shlex.quote(text)} | pbcopy && cliclick kd:cmd t:v ku:cmd"
+            command = _SSH_PASTE.format(text=shlex.quote(text))
             return self._json_text(self._remote_input(conn, "paste", note={"method": "paste", "clipboard_replaced": True, "chars": len(text)},
                                                       timeout=60, target=target, ssh_command=command))
+        ctx: dict[str, Any] | None = None
+        if target:
+            # One switch for the whole call: a typewrite fallback reuses it instead of bringing the app forward again.
+            refusal, ctx = self._begin(target)
+            if refusal:
+                return self._json_text(refusal)
         # typewrite silently drops non-ASCII, so paste it via the in-VM clipboard
         # (base64-safe), like official OSWorld agents; ssh_macos `t:` handles unicode.
         #
@@ -759,18 +822,20 @@ class RemoteBackends:
                 "print('paste_target=' + ('terminal' if _term else 'field'))"
             )
             out = self._remote_pyautogui(
-                conn, clip_code, note={"method": "clipboard"}, timeout=60, target=target,
+                conn, clip_code, note={"method": "clipboard"}, timeout=60, target=target, ctx=ctx,
             )
             try:
-                if json.loads(out).get("ok"):
+                parsed = json.loads(out)
+                if parsed.get("ok") or parsed.get("reason"):
+                    # Done, or withheld/refused (target lost, front unread): a refusal is never retried by typing.
                     return out
             except Exception:
                 pass
-            # Clipboard path failed (pyperclip/xclip absent) — typewrite fallback.
+            # Clipboard path failed (pyperclip/xclip absent) — typewrite fallback, same switch.
             return self._remote_pyautogui(
-                conn, typewrite_code, note={"method": "typewrite", "clipboard_fallback": True}, timeout=60, target=target,
+                conn, typewrite_code, note={"method": "typewrite", "clipboard_fallback": True}, timeout=60, target=target, ctx=ctx,
             )
-        return self._remote_pyautogui(conn, typewrite_code, note={"method": "typewrite"}, timeout=60, target=target)
+        return self._remote_pyautogui(conn, typewrite_code, note={"method": "typewrite"}, timeout=60, target=target, ctx=ctx)
 
     def remote_exec(self, *, command: str, timeout: int = 60) -> str:
         """Run a shell command on the active remote connection.
