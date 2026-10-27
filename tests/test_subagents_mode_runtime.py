@@ -206,7 +206,7 @@ def test_loading_legacy_review_slots_never_reads_the_room(mode, monkeypatch):
     def unexpected_room_read(*args, **kwargs):
         pytest.fail("Review slot resolution must not read the room or reload settings")
 
-    review_pool_migration._MIGRATIONS_SEEN.clear()
+    monkeypatch.setattr(review_pool_migration, "_MIGRATIONS_SEEN", {})
     values = {**anton_document(), "OUROBOROS_SUBAGENTS_MODE": mode}
     config.SETTINGS_PATH.write_text(json.dumps(values), encoding="utf-8")
     monkeypatch.setattr(settings_integrity, "live_subagents_mode", unexpected_room_read)
