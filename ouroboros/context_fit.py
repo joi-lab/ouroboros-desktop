@@ -329,16 +329,18 @@ def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, 
         development_text=core.development_md,
         books=core.reference_books,
     )
-    static_parts.extend(sections)
-    static_parts.extend(core.reference_book_errors)
+    static_parts.extend([*sections, *core.reference_book_errors])
     return ("\n\n".join(static_parts), development)
 
 
 def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "", *,
                    mode: str) -> List[Dict[str, Any]]:
-    # All stable items precede C, including D only when the captured core calls for the full
-    # handbook; the mode picks the connections map's form. Never create an empty cache boundary.
-    stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, core.connections[mode == "nano"], story) if part))
+    # All stable items precede C; D is its own block only for the full handbook: Max without it carries the
+    # handbook's chapter map at the head of B, spending no breakpoint. The mode picks the connections map's
+    # form in B. Never create an empty cache boundary.
+    stable = (governance[0], *(governance[1:] if core.docs_need_development else ()), "\n\n".join(part for part in (
+        *(() if core.docs_need_development else governance[1:]), core.semi_stable_text,
+        core.connections[mode == "nano"], story) if part))
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [
         {"type": "text", "text": "\n\n".join(part for part in (core.dynamic_head_text, room, core.dynamic_text) if part)},
@@ -799,10 +801,11 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
 
     # Max names whole books. Story is the last rung: change books before taking its pages.
     whole_story = render_story(snapshot) if snapshot else ""
-    if kept is None and mode == "max" and allowances["margin"] is not None:
-        if floor.view_tokens(whole_story) > allowances["margin"] or math.ceil(fixed * ratio) + reserve + work() > window:
-            mode = "low"
-            sent, fixed, reserve, window, boundary, allowances = frame(mode)
+    if (room_fact := floor.max_room_fact(snapshot, core, governance[form[mode]], story=whole_story, fixed=fixed, ratio=ratio,
+            schemas=tool_schema_tokens(list(sent.schemas)), window=window, reserve=reserve, work=work(),
+            allowance=allowances["margin"]) if kept is None and mode == "max" else None) and floor.max_room_lost(room_fact):
+        mode = "low"
+        sent, fixed, reserve, window, boundary, allowances = frame(mode)
     if kept is None and known_window and math.ceil(fixed * ratio) + reserve + work() > window:
         unfit = MinimumViewUnfit(f"Core, assignment, resident control tools and work room cannot fit: "
                                  f"{math.ceil(fixed * ratio)} input + {reserve} reply + {work()} work > {window} tokens")
@@ -816,7 +819,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
         return floor.render_view_for_mode(snapshot, mode=mode, owner_mode=preferred,
             window_tokens=window, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
             non_memory_tokens=fixed, lowered_from=preferred if mode != preferred else None,
-            tool_names=None if tool_schemas is None else sent.chosen,
+            tool_names=None if tool_schemas is None else sent.chosen, max_room=room_fact,
             kept=None if kept is None else kept.get(start or preferred), saving=saved, boundary_tokens=boundary)
     if snapshot:
         story, room, facts = render()
@@ -828,7 +831,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
             story, room, facts = render()
         if kept is None and known_window and math.ceil((fixed + floor.view_tokens(story) + floor.view_tokens(room)) * ratio) + reserve > window:
             raise MinimumViewUnfit("Protected owner words and the minimum view cannot fit the usable input")
-        receipt = floor.view_receipt(snapshot, story, room, facts)
+        receipt = floor.view_receipt(snapshot, story, room, floor.with_max_room(facts, room_fact, mode))
     else:
         story, room, receipt = "", "", {}
     return {m: (_system_blocks(core, governance[form[m]], story, room, mode=m), receipt) for m in floor.MODES}, mode

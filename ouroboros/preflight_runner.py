@@ -863,6 +863,7 @@ def _execute_pytest_pass(
     """
     from ouroboros.process_containment import ProcessContainer
 
+    from ouroboros.preflight_inventory import note_lane_process
     from ouroboros.test_evidence import CapturedPass, FileOutput
 
     container = ProcessContainer(lifeline=True, overload=True)
@@ -894,6 +895,9 @@ def _execute_pytest_pass(
         except OSError as exc:
             output.failed("controller diagnostics", exc)
         return CapturedPass(returncode, preview, reap_error, output.errors)
+    except BaseException as exc:
+        note_lane_process(exc, container, proc)
+        raise
     finally:
         if proc is not None and proc.poll() is None:
             _terminate_preflight_tree(proc, temp_root)
@@ -1381,7 +1385,7 @@ def _run_hermetic_pytest(
             preflight_test_workload_unchanged, selected_workload_unchanged,
         )
         from ouroboros.preflight_receipts import GateReceipt
-        from ouroboros.preflight_inventory import selection_passes, read_inventory, inventory_problem
+        from ouroboros.preflight_inventory import launching, selection_passes, read_inventory, inventory_problem
         if selected:
             from ouroboros.test_selection import select_tests
             selection = select_tests(worktree, base=base or ("HEAD" if phase == PRE_COMMIT_PHASE else "HEAD~1"),
@@ -1410,7 +1414,8 @@ def _run_hermetic_pytest(
             return None
         started = time.monotonic()
         unproven_teardown = "the node lane did not return, so its teardown is unconfirmed"
-        node_result = run_node_tests(worktree, temp_root, timeout, max_output)
+        with launching(evidence):
+            node_result = run_node_tests(worktree, temp_root, timeout, max_output)
         evidence["execution"] = (node_result or {}).get("execution", "not_run")
         unproven_teardown = (node_result or {}).get("reap_error") or ""
         if node_result is not None:
@@ -1430,14 +1435,13 @@ def _run_hermetic_pytest(
             # Headers report this pass, not cumulative shared-budget time.
             pass_started = time.monotonic()
             unproven_teardown = f"the {spec.label} pass did not return, so its teardown is unconfirmed"
-            evidence["execution"] = "attempted"
-            lane_result = _execute_pytest_pass(
-                agent_python, worktree, temp_root, spec.args, remaining
-            )
+            with launching(evidence):
+                lane_result = _execute_pytest_pass(
+                    agent_python, worktree, temp_root, spec.args, remaining
+                )
             returncode, output, reap_error = lane_result
             _record_lane(evidence, "pytest", lane_result, returncode=returncode, containment_error=reap_error, **{"pass": spec.label})
             unproven_teardown = reap_error
-            evidence["execution"] = "executed"
             inventory_error = ""
             if selection is not None:  # the full native inventory is run evidence; ledgers stay compact
                 inventory[spec.label], inventory_error = read_inventory(evidence["path"], spec.label)
@@ -1541,7 +1545,7 @@ def _run_hermetic_pytest(
     finally:
         evidence["cleanup"] = (repo, temp_root, worktree, worktree_added, unproven_teardown)
         from ouroboros.preflight_inventory import record_failed_attempt
-        record_failed_attempt(ctx, selection, subject, inventory)
+        record_failed_attempt(ctx, selection, subject, inventory, evidence)
     return _with_retention_notice(failure, unproven_teardown, worktree, max_output)
 
 

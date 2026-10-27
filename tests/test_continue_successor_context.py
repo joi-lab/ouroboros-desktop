@@ -22,7 +22,7 @@ import pytest
 
 from ouroboros.task_store import delete_document
 from tests._budget_pause_exact_helpers import _install_queue
-from tests.test_doc_context import _make_env_and_memory
+from tests.test_doc_context import _make_env_and_memory, foreign_tree
 from tests.test_owner_continue import NONCE, _interrupted
 
 FIELD = "context_requires_self_body_docs"
@@ -89,8 +89,7 @@ def test_successor_first_request_carries_the_predecessor_once_with_its_flag_and_
     (tmp_path / "memory" / "identity.md").write_text("I am Ouroboros.", encoding="utf-8")
     env = Env(repo_dir=books.repo_dir, drive_root=tmp_path, budget_drive_root=tmp_path)
     memory = Memory(tmp_path, repo_dir=books.repo_dir)
-    workspace = tmp_path / "working-copy"
-    workspace.mkdir()
+    workspace = foreign_tree(tmp_path / "working-copy")  # proven foreign: only the flag restores the handbook
     contract = {"context": "PREDECESSOR-CONTRACT-SENTINEL", **({FIELD: flag} if flag is not None else {})}
     _interrupted(tmp_path, workspace_root=str(workspace), workspace_mode="external",
                  task_contract=contract, mutation_evidence=_mutation_evidence())

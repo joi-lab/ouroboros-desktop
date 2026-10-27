@@ -108,11 +108,11 @@ def _decode_diff(raw: bytes) -> str:
         )
 
 
-def _tree_delta_diff(repo_dir, m0_tree: str, staged_tree: str, unified: int) -> str:
-    """The hardened resolution delta between the two pinned trees."""
+def _tree_delta_diff(repo_dir, m0_tree: str, staged_tree: str, unified: int, paths: Sequence[str] = ()) -> str:
+    """The hardened resolution delta between the two pinned trees (``paths``: only those)."""
     rc, raw, err = _git_bytes(repo_dir, [
         "diff", *_HARDENED_DIFF_FLAGS, f"--unified={int(unified)}",
-        m0_tree, staged_tree,
+        m0_tree, staged_tree, *(("--", *paths) if paths else ()),
     ])
     if rc != 0:
         raise StagedDiffUnavailable(
@@ -1053,17 +1053,18 @@ def assigned_seats(triad_seat_ids: Any, scope_seat_ids: Any) -> Tuple[Tuple[str,
 
 
 def review_round_sha(frozen: FrozenSubject, *, rebuttal_sha: str = "", questions: Sequence[str] = (),
-                     goal: str = "", scope: str = "") -> str:
+                     goal: str = "", scope: str = "", since_review: str = "") -> str:
     """Identity (b), the LOGICAL round of one subject: what the author asked of the
     reviewers this time — the rebuttal (its sha), the author questions, the semantic
-    brief (goal, scope) — and the resolved revisions the record names (parent and
-    head: two commits with one tree are two rounds). It enters identity (a), so a
-    changed brief never reuses an old answer, and identity (c), so a new round is a
-    new physical operation while a retry of the SAME round rejoins the old one."""
+    brief (goal, scope), the earlier review named for comparison (``since_review``) —
+    and the resolved revisions the record names (parent and head: two commits with one
+    tree are two rounds). It enters identity (a), so a changed brief never reuses an old
+    answer, and identity (c), so a new round is a new physical operation while a retry
+    of the SAME round rejoins the old one. Host observations never enter it."""
     from ouroboros.review_ledger import round_sha_of
 
     return round_sha_of(rebuttal_sha=rebuttal_sha, questions=questions, goal=goal, scope=scope,
-                        base=frozen.parent_sha, head=frozen.spec.head)
+                        base=frozen.parent_sha, head=frozen.spec.head, since_review=since_review)
 
 
 def review_reuse_key(frozen: FrozenSubject, *, rules_sha: str, layer: str, assigned: Any, enforcement: str,

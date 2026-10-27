@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ouroboros.dialogue_provenance import presence_root_carrier
 from ouroboros.tools.control_events import (
@@ -233,6 +233,7 @@ def _start_task(
     source: str = "",
     context_requires_self_body_docs: bool = False,
     reasoning_effort: Any = None,
+    context_requires_development: Optional[bool] = None,
 ) -> str:
     """Start separate new work; the caller keeps its identity and obligations."""
     effort_fields, effort_error, effort_note = _root_effort_arg(reasoning_effort, "start_task")
@@ -337,6 +338,9 @@ def _start_task(
         # default (a folder-less task in a folder-ful project stays possible).
         "workspace": workspace_sentinel,
         "context_requires_self_body_docs": context_requires_self_body_docs,
+        # Absent is not false: only an explicit answer overrides the subject-of-work rule (BIBLE P1).
+        **({"context_requires_development": bool(context_requires_development)}
+           if isinstance(context_requires_development, bool) else {}),
         **effort_fields,
         "chat_id": current_chat_id,
         **({"resource_intent": {"kind": "system_repo"}} if intent_system_repo else {}),
