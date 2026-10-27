@@ -375,4 +375,5 @@ def _capture_declared_context_core(
         compact_reference_docs=True,
         dynamic_head_text=sources.get("design_nav", ""),
         supplementary_messages_json=json.dumps(supplementary_messages, ensure_ascii=False, sort_keys=True),
+        connections=sources.get("connections", ("", "")),
     )

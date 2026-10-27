@@ -41,7 +41,8 @@ _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification
 _BLOB_KIND_HINT = ("; op=blob reads observability CAS blobs only. A digest in a task-source handle name "
                    "(source_handles/...-<sha256>.<ext>) is that file's own hash: open it with the reader its mark or "
                    "result names, memory_read(source_ref={kind, root, path, size, sha256, task_id})")
-_STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
+# ``context_snapshot``: the skill's current declared context snapshot, the address its outdated note names.
+_STATES = ("review", "review_job", "health", "enabled", "deps", "grants", "context_snapshot")
 # Each knowledge history row holds both complete versions of its note, so the ordinary
 # 8 MiB log window would cover hours of writes; this read budget covers far more of them.
 _HISTORY_SCAN_BYTES = 256 * 1024 * 1024
@@ -323,6 +324,13 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if root is None:
         raise FileNotFoundError("owned child drive is unavailable")
     relative = _FILES[kind].format(id=identity, child=child, state_file=state_file)
+    if kind == "skill_state" and state_file == "context_snapshot":
+        from ouroboros.extension_liveness import live_context_publishers
+
+        descriptor = live_context_publishers(root).get(identity)
+        if not descriptor or not descriptor.get("eligible"):
+            raise FileNotFoundError(f"{identity} publishes no live context snapshot")
+        relative = (Path(descriptor["state_dir"]).resolve() / descriptor["path"]).relative_to(Path(root).resolve()).as_posix()
     if kind == "run" and root.parts[-2:] == ("task_drives", child):
         relative = f"delegated_runs/{identity}.json"
     path = _path(ctx, root, relative)
