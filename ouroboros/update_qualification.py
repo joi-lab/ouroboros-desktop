@@ -167,6 +167,40 @@ def refresh_qualification(authored: dict, repo_url: str, *, previous: dict | Non
     return {**authored, "github": github}, changed
 
 
+def qualification_summary(qualification: dict | None) -> dict | None:
+    """A range's qualification in counts for the Runtime context, with the reader of the whole record.
+
+    The panel, preflight and the letter's author keep the full record (owner 8B); a task sees the range, how
+    many commits carry a receipt and each check's outcomes, the post-merge read with its runs and gaps.
+    """
+    if not isinstance(qualification, dict):
+        return qualification
+    commits = [c for c in qualification.get("commits") or [] if isinstance(c, dict)]
+    receipts = [c["receipt"] for c in commits if isinstance(c.get("receipt"), dict)]
+    checks: dict = {}
+    for receipt in receipts:
+        for row in receipt.get("checks") or []:
+            outcome = checks.setdefault(str(row.get("name")), {})
+            outcome[str(row.get("status"))] = outcome.get(str(row.get("status")), 0) + 1
+    github = qualification.get("github") if isinstance(qualification.get("github"), dict) else {}
+    conclusions: dict = {}
+    for run in github.get("runs") or []:
+        key = str(run.get("conclusion") or run.get("status") or "unknown")
+        conclusions[key] = conclusions.get(key, 0) + 1
+    return {"base_sha": qualification.get("base_sha"), "target_sha": qualification.get("target_sha"),
+            "commits": len(commits), "with_receipt": len(receipts), "checks": checks,
+            "post_merge": {"read": github.get("status", "unknown"), "reason": github.get("reason"),
+                           "runs": conclusions, "missing": len(github.get("missing_shas") or [])},
+            "full": "query_data(op='json', kind='update_letter')"}
+
+
+def runtime_letter(letter: dict | None) -> dict | None:
+    """The letter as the Runtime context carries it: whole, but its qualification summarized."""
+    if not letter or not letter.get("qualification"):
+        return letter
+    return {**letter, "qualification": qualification_summary(letter["qualification"])}
+
+
 def preflight_description(plan: dict, *, drive_root=None) -> dict:
     """Read the saved description for the exact pins; never fetch, write or author."""
     from ouroboros import update_letter as letter
