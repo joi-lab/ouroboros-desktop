@@ -11,6 +11,7 @@ boundary (``subprocess.run``, ``urlopen``) is faked, so no desktop, SSH or guest
 from __future__ import annotations
 
 import importlib.util
+import sys
 import io
 import json
 import subprocess
@@ -24,8 +25,9 @@ TIMEOUT = subprocess.TimeoutExpired(["fixture"], 10)
 
 
 def load_plugin():
-    spec = importlib.util.spec_from_file_location("unix_computer_use_effects_plugin", PLUGIN)
+    spec = importlib.util.spec_from_file_location("unix_computer_use_effects_plugin", PLUGIN, submodule_search_locations=[str(PLUGIN.parent)])
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -52,16 +54,26 @@ def png(path: Path) -> None:
     Image.new("RGB", (64, 40), (7, 11, 13)).save(path, format="PNG")
 
 
+def is_probe(argv: list[str]) -> bool:
+    """A place fact the skill reads around an input (who is in front, the native helper, a window listing)."""
+    return (argv[:1] == ["lsappinfo"] or argv[:2] == ["xdotool", "getactivewindow"] or argv[:2] == ["wmctrl", "-lpxG"]
+            or any(str(part).endswith("macos_native.py") for part in argv))
+
+
 class Transport:
     """``subprocess.run`` as the skill sees it. Every argv is recorded; ``answer(argv, index)`` returns
     a return code, ``(code, stdout)``, or an exception to raise. Screen captures get a real PNG."""
 
     def __init__(self, answer=None):
-        self.calls: list[list[str]] = []
+        self.calls: list[list[str]] = []   # the inputs and reads a test pins
+        self.probes: list[list[str]] = []  # front reads, the native helper, window listings: the receipt's place facts
         self.answer = answer or (lambda argv, index: 0)
 
     def __call__(self, cmd, *args, **kwargs):
         argv = [str(part) for part in cmd]
+        if is_probe(argv):
+            self.probes.append(argv)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
         self.calls.append(argv)
         outcome = self.answer(argv, len(self.calls) - 1)
         if isinstance(outcome, BaseException):
@@ -166,6 +178,7 @@ def test_mac_refusals_reads_and_waits_carry_no_mark(tmp_path, monkeypatch):
         assert not marked(receipt(text)), text
     assert receipt(reads[0])["ok"] is True and receipt(reads[4])["ok"] is True, "the reads really answered"
     assert {argv[0] for argv in transport.calls} == {"cliclick", "osascript", "screencapture"}
+    assert any(str(argv[-2]).endswith("macos_native.py") for argv in transport.probes), "window_list/ax_tree ask the native helper"
 
 
 def test_a_mac_key_sequence_keeps_the_mark_of_the_steps_that_ran(tmp_path, monkeypatch):
@@ -297,7 +310,8 @@ def test_a_successful_ssh_input_carries_the_mark(tmp_path, monkeypatch, tool, ar
     tools, transport = ssh_mac(tmp_path, monkeypatch)
     result = receipt(tools[tool](**args))
     assert result["ok"] is True and result["returncode"] == 0 and marked(result), result
-    assert [remote(argv) for argv in transport.calls] == [command]
+    assert len(transport.calls) == 1 and command in remote(transport.calls[0]), transport.calls
+    assert "__FRONT_BEFORE__" in remote(transport.calls[0]), "the same ssh call reads who is in front"
 
 
 @pytest.mark.parametrize("outcome", [1, 255, TIMEOUT])
@@ -321,11 +335,13 @@ def test_ssh_reads_refusals_and_remote_exec_carry_no_mark(tmp_path, monkeypatch)
     refused = [tools["scroll"](clicks=2), tools["click"](x=1, y=1, button="middle", raw=True),
                tools["hold_key"](keys="cmd"), tools["cursor_position"]()]
     assert transport.calls == [], "nothing unsupported reaches the Mac"
-    reads = [tools["remote_exec"](command="true"), tools["window_list"](), tools["ax_tree"](),
-             tools["test_connection"](), tools["screenshot"](), tools["capabilities"](), tools["wait"](ms=1)]
-    for text in refused + reads:
+    reads = [tools["remote_exec"](command="true"), tools["window_list"](), tools["test_connection"](),
+             tools["screenshot"](), tools["capabilities"](), tools["wait"](ms=1)]
+    refusal = tools["ax_tree"]()  # no accessibility reader over SSH: an honest refusal, never a window list as success
+    for text in refused + reads + [refusal]:
         assert not marked(receipt(text)), text
     assert all(receipt(text)["ok"] is True for text in reads), reads
+    assert receipt(refusal)["ok"] is False and receipt(refusal)["reason"] == "unsupported"
     assert {argv[0] for argv in transport.calls} == {"ssh", "scp"}
 
 
@@ -338,7 +354,8 @@ def test_an_ssh_key_sequence_keeps_the_mark_of_the_steps_that_ran(tmp_path, monk
     transport.answer = fail_at(2)
     result = receipt(tools["key"](keys="down down return"))
     assert result["ok"] is False and marked(result) and result["steps_done"] == 2, result
-    assert [remote(argv) for argv in transport.calls] == ["cliclick kp:arrow-down"] * 2 + ["cliclick kp:return"]
+    assert [c for c in ("cliclick kp:arrow-down", "cliclick kp:arrow-down", "cliclick kp:return")] == \
+        [next(c for c in ("cliclick kp:arrow-down", "cliclick kp:return") if c in remote(argv)) for argv in transport.calls]
 
     transport.calls.clear()
     transport.answer = fail_at(0, outcome=255)
