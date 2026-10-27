@@ -217,8 +217,11 @@ def _chat_record(
             from ouroboros.settings_integrity import effective_subagents_mode
 
             record["message_accepted_at"] = utc_now_iso()
-            if effective_subagents_mode(task={"chat_id": chat_id}, drive_root=root) == "swarm":
-                record["subagents_mode"] = "swarm"
+            try:
+                if effective_subagents_mode(task={"chat_id": chat_id}, drive_root=root) == "swarm":
+                    record["subagents_mode"] = "swarm"
+            except Exception:
+                log.debug("Subagents label unavailable for the inbound row", exc_info=True)
         if direction == "in" and source == "web" and client_message_id and require_write:
             # The canonical append is the proof used by the live echo. Keep it
             # on that SAME row so history can replay the fact after a reload.

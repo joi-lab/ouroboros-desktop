@@ -661,9 +661,14 @@ def subagents_fact_line() -> str:
 
     if not room_subagents_mode_applies():
         return ""
-    if subagents_availability(config.load_settings()) != "available":
-        return "Subagents: Off — off in Settings"
-    return f"Subagents: {live_subagents_mode().title()} — set by my human for this chat"
+    try:
+        settings = config.load_settings()
+        if subagents_availability(settings) != "available":
+            return "Subagents: Off — off in Settings"
+        return f"Subagents: {live_subagents_mode(settings=settings).title()} — set by my human for this chat"
+    except Exception:
+        log.debug("Subagents fact unavailable for the facts line", exc_info=True)
+        return "Subagents: unknown (room settings unavailable)"
 
 
 def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
@@ -696,9 +701,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     from ouroboros.context_view_facts import window_fact, wake_facts
     source = window_fact(getattr(ctx, "context_fit_plan", None), usage.get("_context_response_reserve_tokens")) if measured else ""
     parts.append((source or ("window unknown" if capacity is None else f"window {int(capacity):,}")) + largest)
-    wake = wake_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)
-    if wake:
-        parts.append(wake)
+    parts.extend(filter(None, [wake_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)]))
     if target is not None:
         parts.append(f"target {int(target):,}")
     if estimate is None:
@@ -744,9 +747,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
             log.debug("time/nanny facts unavailable for the facts line", exc_info=True)
             parts.append("time and nanny facts unavailable")
     parts.append(_tool_results_fact(usage))
-    if focus_fact:
-        parts.append(focus_fact)
-    parts.extend(filter(None, [reasoning_retirement_fact(usage, ctx.round_idx)]))
+    parts.extend(filter(None, [focus_fact, reasoning_retirement_fact(usage, ctx.round_idx)]))
     mode_fact = subagents_fact_line() if subagents_fact is None else subagents_fact
     return f"{CONTEXT_FACTS_HEADER} " + " | ".join(parts) + ("\n" + mode_fact if mode_fact else "")
 
