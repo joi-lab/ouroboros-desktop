@@ -905,3 +905,29 @@ def test_boot_prepares_existing_child_stores_before_lazy_consumers(tmp_path, mon
         assert dialogue_store.meta(root, "cutover") is not None
         with usage_store.read(root) as txn:
             assert txn.meta("import")["status"] == "completed"
+
+
+@pytest.mark.parametrize("mode", ["PERSIST", "WAL"])
+def test_an_open_read_blocks_a_commit_only_under_a_rollback_journal(tmp_path, monkeypatch, mode):
+    """The convoy WAL removes (ouroboros#2341): under a rollback journal an open read's SHARED lock holds a
+    writer's COMMIT (here, with no busy wait, a typed StoreBusy and the write rolled back); under WAL the
+    write commits beside the open read, and the read's snapshot keeps its own answer either way."""
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 53, 1) if mode == "WAL" else (3, 50, 4))
+    monkeypatch.setattr(store, "_filesystem_type", lambda _path: "apfs")
+    publish(tmp_path, {"task_id": "t", "status": "running"})
+
+    def write():  # nested inside the read: its own connection
+        with store.acquisition_budget(0), store.open_store(tmp_path, write=True) as writer:
+            writer.conn.execute("UPDATE tasks SET status='completed' WHERE task_id='t'")
+
+    with store.open_store(tmp_path, write=False) as reader:
+        assert reader.conn.execute("PRAGMA journal_mode").fetchone()[0] == mode.lower()
+        assert reader.row("t", "status") == "running"
+        if mode == "WAL":
+            write()
+        else:
+            with pytest.raises(store.StoreBusy):
+                write()
+        assert reader.row("t", "status") == "running"
+    with store.open_store(tmp_path, write=False) as after:
+        assert after.row("t", "status") == ("completed" if mode == "WAL" else "running")
