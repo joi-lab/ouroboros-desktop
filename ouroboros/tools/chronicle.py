@@ -217,6 +217,10 @@ def _expand(root: Path, room: str, lineage: Dict[str, Any], *, from_addr: Any = 
         if not isinstance(task_ids, (list, tuple)):
             raise ValueError("covers.task_ids is a list of task ids")
         found, request, mode = _task_rows(root, room, task_ids), {"task_ids": [str(t) for t in task_ids]}, "tasks"
+        # Like {to}: the task's rows still open, so a page after a sweep of the room's open rows takes the rest;
+        # when none is left the full set goes on and the store's refusal names the page(s) that sealed them.
+        still_open = {address["row_sha256"] for address, _meta, _pos in memory_inventory.open_room_rows(root, room)}
+        found = [entry for entry in found if entry[0]["row_sha256"] in still_open] or found
     elif to_addr and not from_addr:  # "up to here": the room's open rows, as the view counts them, to the address
         open_rows = {address["row_sha256"] for address, _meta, _pos in memory_inventory.open_room_rows(root, room)}
         found = [entry for entry in chat_chain.iter_room_rows(root, room, to_addr=to_addr)

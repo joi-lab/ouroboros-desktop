@@ -94,7 +94,7 @@ def test_story_terminal_links_are_addressed_together(tmp_path, monkeypatch):
     reference = mv._story_pages(store, lambda room, *_args: str(room), {})
     opened = _counted(monkeypatch, ds, "transaction")
     story = mv._story_pages(store, lambda room, *_args: str(room), {})
-    assert story == reference and sum(len(page["terminal_links"]) for page in story) == 80
+    assert story == reference and sum(len(page["terminal_links"]) for page in story) == 40  # one line per page
     assert len(opened) <= 10, collections.Counter(opened)  # 160 when each terminal row was addressed alone
 
 
