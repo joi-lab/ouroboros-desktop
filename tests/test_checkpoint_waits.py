@@ -109,13 +109,15 @@ def test_a_history_page_reads_past_wait_rows_without_counting_them():
     assert counts({**wait("w", "ended"), "episode_id": "", "chat_id": 1})  # an untyped row still counts
 
 
-def _room_page(root, notes, waits, n_progress):
-    """Main's opening page over ``notes`` own rows followed by ``waits`` wait episodes."""
+def _room_page(root, notes, waits, n_progress, waits_first=False):
+    """Main's opening page over ``notes`` own rows and ``waits`` wait episodes, in that order unless
+    the waits come first (a task waits for accounting before its first note)."""
     logs = root / "logs"
     logs.mkdir()
     (logs / "chat.jsonl").write_text("", encoding="utf-8")
     rows = [{**note(f"note {i}"), "chat_id": 1, "role": "assistant", "narration": True} for i in range(notes)]
-    rows += [{**wait(f"w{i}", phase), "chat_id": 1} for i in range(waits) for phase in ("entered", "ended")]
+    episodes = [{**wait(f"w{i}", phase), "chat_id": 1} for i in range(waits) for phase in ("entered", "ended")]
+    rows = episodes + rows if waits_first else rows + episodes
     for index, row in enumerate(rows):
         row["ts"] = f"2026-10-27T13:{index // 60:02d}:{index % 60:02d}+00:00"
     (logs / "progress.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -129,6 +131,12 @@ def _room_page(root, notes, waits, n_progress):
 def test_a_room_page_keeps_the_tasks_note_beside_a_burst_of_waits(tmp_path):
     own, waits, window = _room_page(tmp_path, notes=1, waits=40, n_progress=60)
     assert own == ["note 0"] and waits == 80
+    assert window == {"complete": True, "truncated_by": []}
+
+
+def test_a_complete_room_page_keeps_the_waits_before_the_first_note(tmp_path):
+    own, waits, window = _room_page(tmp_path, notes=2, waits=3, n_progress=60, waits_first=True)
+    assert own == ["note 0", "note 1"] and waits == 6
     assert window == {"complete": True, "truncated_by": []}
 
 

@@ -1250,7 +1250,7 @@ def _apply_window_quotas(
     # dropped unless anchored below, so an ABSENT finished swarm cannot
     # re-materialise as a stuck "Working" parent card.
     floor = str(other_tail[0].get("ts") or "") if other_tail else ""
-    waits = [m for m in waits if not floor or str(m.get("ts") or "") >= floor] if n_progress > 0 else []
+    waits = [m for m in waits if len(other) <= n_progress or str(m.get("ts") or "") >= floor] if n_progress > 0 else []
     lineage_rows = [m for m in progress if _is_subagent_lineage(m)]
     # Resolve effective child truth BEFORE the floor/cap and share the result
     # cache with annotation: one read per task per request. Effective orphan
