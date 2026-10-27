@@ -698,10 +698,10 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     notes = [note for note in (f"largest accepted input {int(accepted):,}" if accepted else "",
                                f"refused at ~{int(refused):,}" if refused else "") if note]
     largest = f" ({'; '.join(notes)})" if notes else ""
-    from ouroboros.context_view_facts import window_fact, wake_facts
+    from ouroboros.context_view_facts import memory_facts, window_fact
     source = window_fact(getattr(ctx, "context_fit_plan", None), usage.get("_context_response_reserve_tokens")) if measured else ""
     parts.append((source or ("window unknown" if capacity is None else f"window {int(capacity):,}")) + largest)
-    parts.extend(filter(None, [wake_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)]))
+    parts.extend(filter(None, [memory_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)]))
     if target is not None:
         parts.append(f"target {int(target):,}")
     if estimate is None:

@@ -803,10 +803,11 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
 
     # Max names whole books. Story is the last rung: change books before taking its pages.
     whole_story = render_story(snapshot) if snapshot else ""
-    if kept is None and mode == "max" and allowances["margin"] is not None:
-        if floor.view_tokens(whole_story) > allowances["margin"] or math.ceil(fixed * ratio) + reserve + work() > window:
-            mode = "low"
-            sent, fixed, reserve, window, boundary, allowances = frame(mode)
+    if (room_fact := floor.max_room_fact(snapshot, core, governance[form[mode]], story=whole_story, fixed=fixed, ratio=ratio,
+            schemas=tool_schema_tokens(list(sent.schemas)), window=window, reserve=reserve, work=work(),
+            allowance=allowances["margin"]) if kept is None and mode == "max" else None) and floor.max_room_lost(room_fact):
+        mode = "low"
+        sent, fixed, reserve, window, boundary, allowances = frame(mode)
     if kept is None and known_window and math.ceil(fixed * ratio) + reserve + work() > window:
         unfit = MinimumViewUnfit(f"Core, assignment, resident control tools and work room cannot fit: "
                                  f"{math.ceil(fixed * ratio)} input + {reserve} reply + {work()} work > {window} tokens")
@@ -820,7 +821,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
         return floor.render_view_for_mode(snapshot, mode=mode, owner_mode=preferred,
             window_tokens=window, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
             non_memory_tokens=fixed, lowered_from=preferred if mode != preferred else None,
-            tool_names=None if tool_schemas is None else sent.chosen,
+            tool_names=None if tool_schemas is None else sent.chosen, max_room=room_fact,
             kept=None if kept is None else kept.get(start or preferred), saving=saved, boundary_tokens=boundary)
     if snapshot:
         story, room, facts = render()
@@ -832,7 +833,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
             story, room, facts = render()
         if kept is None and known_window and math.ceil((fixed + floor.view_tokens(story) + floor.view_tokens(room)) * ratio) + reserve > window:
             raise MinimumViewUnfit("Protected owner words and the minimum view cannot fit the usable input")
-        receipt = floor.view_receipt(snapshot, story, room, facts)
+        receipt = floor.view_receipt(snapshot, story, room, floor.with_max_room(facts, room_fact, mode))
     else:
         story, room, receipt = "", "", {}
     return {m: (_system_blocks(core, governance[form[m]], story, room), receipt) for m in floor.MODES}, mode
