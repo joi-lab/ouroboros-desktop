@@ -93,7 +93,7 @@ function effortRangeMarkup() {
     // The value is a tier word read through the catalog seam (effortText): the overlay leaves it alone.
     return capsuleHead(ring, 'Effort', 'chat-effort-head', ' data-i18n-skip')
         + '<div class="chat-capsule-body">'
-        + '<div class="chat-effort-strip" data-effort-strip data-scroll="none"><div class="chat-effort-band" data-effort-band aria-hidden="true"></div>'
+        + '<div class="chat-effort-strip ui-hit-area" data-effort-strip data-scroll="none"><div class="chat-effort-band" data-effort-band aria-hidden="true"></div>'
         + '<div class="chat-effort-handle chat-effort-rec" data-handle="rec" role="slider" tabindex="-1" aria-label="Primary effort"></div>'
         + segments
         + '<div class="chat-effort-handle chat-effort-cap chat-effort-min" data-handle="min" role="slider" tabindex="-1" aria-label="Minimum helper effort"></div>'
@@ -104,7 +104,7 @@ function effortRangeMarkup() {
 function contextModeMarkup() {
     const arcs = CONTEXT_MODES.map((mode) => `<path class="chat-context-arc" data-arc="${mode}" d="${ringArc(...CONTEXT_ARCS[mode])}" fill="none" stroke-width="24" stroke-linecap="round"></path>`).join('');
     const modes = CONTEXT_MODES.map((mode) =>
-        `<button class="chat-seg" type="button" role="radio" tabindex="-1" aria-checked="false" data-mode="${mode}"><span class="chat-seg-text">${CONTEXT_LABELS[mode]}</span></button>`).join('');
+        `<button class="chat-seg ui-hit-area" type="button" role="radio" tabindex="-1" aria-checked="false" data-mode="${mode}"><span class="chat-seg-text">${CONTEXT_LABELS[mode]}</span></button>`).join('');
     return capsuleHead(arcs, 'Context', 'chat-context-head')
         + `<div class="chat-capsule-body"><div class="chat-context-strip" role="radiogroup" aria-label="Context size mode" data-scroll="none"><span class="chat-context-thumb" aria-hidden="true"></span>${modes}</div></div>`;
 }
