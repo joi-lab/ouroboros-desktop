@@ -34,6 +34,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
+from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
 from ouroboros.gateways import claudexor_metadata as metadata
 from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
 from ouroboros.observability import timed_phase
@@ -430,7 +431,7 @@ def run_message_supported(operations: list[dict]) -> bool:
     )
 
 
-class ClaudexorGateway(ClaudexorMaintenanceGateway):
+class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway):
     """Thin typed client over the Claudexor ``/v2`` control API."""
 
     def __init__(self, endpoint: Optional[DaemonEndpoint] = None, *, home: Optional[pathlib.Path] = None):
@@ -728,8 +729,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
             if status.get("uploadId") != upload_id:
                 raise ClaudexorUnavailable("malformed_response", "Model upload status identity mismatch")
             if status.get("state") == "open":
-                self._request("PUT", f"{path}/bytes", content_body=data,
-                              headers={"Content-Type": "application/octet-stream"})
+                self.put_upload_bytes(upload_id, data)
             elif status.get("state") != "uploaded":
                 raise ClaudexorUnavailable("model_upload_unavailable", "Model upload is not ready for finalization")
         resource = _model_object(self._request(
