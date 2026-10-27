@@ -210,14 +210,12 @@ def test_unchanged_text_renewal_frequency(publisher, monkeypatch):
     print("\nWITNESS appended at seconds:", appended_at)
     print("WITNESS full-text notes in one hour for unchanged text:", len(full_notes),
           "| chars appended:", sum(len(m["content"]) for m in full_notes))
-    assert len(full_notes) == 1 and len(messages) > 10
-    full = json.loads(full_notes[0]["content"].split("\n", 1)[1])
-    assert all("text_ref" in json.loads(note["content"].split("\n", 1)[1]) for note in messages[1:])
+    # Once the dates in view run out one note says so and names the current text; later
+    # renewals add nothing until the conversation is next rebuilt (#2333).
+    assert len(full_notes) == 1 and len(messages) == 2
     value = json.loads(messages[-1]["content"].split("\n", 1)[1])
-    assert "text" not in value
-    assert value["text_ref"]["source_sha256"] == full["source"]["sha256"]
-    assert scs.visible_snapshots(messages)[skill.name][1]["text"] == text
-    assert 0 not in scs.obsolete_snapshot_positions(messages)
+    assert "text" not in value and (value["state"], value["reason"]) == ("outdated", "validity_ended")
+    assert scs.obsolete_snapshot_positions(messages) == {0}
     from ouroboros.llm_attempt import _physical_candidate
     from ouroboros.llm_claudexor import _request
     for wire in (_physical_candidate({"messages": messages, "tools": []}),
@@ -347,9 +345,10 @@ def test_renewals_keep_visible_full_base_through_reclaim_and_restore_it_when_abs
     for step in range(2, 42, 2):
         clock["now"] = start + timedelta(seconds=step)
         _write(path, text, observed=clock["now"], valid=clock["now"] + timedelta(seconds=1))
-        assert scs.maybe_append_skill_snapshots(ctx, messages, root)
+        assert scs.maybe_append_skill_snapshots(ctx, messages, root) is (step == 2)  # one note, then nothing
         assert messages[2] == base
-    # The real host-copy reclaim may remove superseded renewals, not their text base.
+    assert len(messages) == 4 and scs.visible_snapshots(messages)[skill.name][1]["state"] == "outdated"
+    # The real host-copy reclaim removes the outdated full text and keeps the note naming the current one.
     before = deepcopy(messages)
     request = ContextReclaimRequest(route_fp="fixture", round_id="7", transcript_sha256=
         context_compaction.context_reclaim_transcript_sha256(messages), measurement_basis="cold_estimate",
@@ -357,13 +356,13 @@ def test_renewals_keep_visible_full_base_through_reclaim_and_restore_it_when_abs
     reclaimed, receipt = emergency_address_view(messages, request, rung="host_copies",
         drive_root=root, task_id="root", measure_candidate=lambda rows: len(json.dumps(rows)))
     assert receipt.status == "applied"
-    assert base in reclaimed and scs.visible_snapshots(reclaimed)[skill.name][1]["text"] == text
+    assert base not in reclaimed and scs.visible_snapshots(reclaimed)[skill.name][1]["state"] == "outdated"
     assert messages == before
-    current = scs.visible_snapshots(reclaimed)[skill.name][1]
-    assert json.loads(read_blob_ref(root, current["source"]["retained"], expected_kind="txt"))["text"] == text
-    # Cold restore loses the full base, even if a later reference survives. No memo can certify it.
+    retained = json.loads(base["content"].split("\n", 1)[1])["source"]["retained"]
+    assert json.loads(read_blob_ref(root, retained, expected_kind="txt"))["text"] == text
+    # A rebuilt conversation with no full text in view shows the current one in full again.
     cold = [*reclaimed[:2], reclaimed[-1]]
-    assert scs.visible_snapshots(cold)[skill.name][1]["state"] == "unknown"
+    assert scs.visible_snapshots(cold)[skill.name][1]["state"] == "outdated"
     fresh_ctx = SimpleNamespace(task_id="root", task_metadata={}, budget_drive_root=str(root))
     round_ctx = _CompactionRoundContext(tools=SimpleNamespace(_ctx=fresh_ctx), drive_root=root,
         drive_logs=root / "logs", task_id="root", round_idx=8, event_queue=None, emit_progress=lambda x: None)

@@ -46,7 +46,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ouroboros.owner_pause import episode_armed
-from ouroboros.review_operation import _CLOSED_DETACHED, _LIVE, _LOCK, ReviewOperation
+from ouroboros.review_operation import _CLOSED_DETACHED, _LIVE, _LOCK, START_UNBOUND, ReviewOperation
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,8 @@ TIME_EVENT = "wake_at"
 # The author never waits at all (a Presence completion: its speech is never held): its drain leaves at once,
 # no mailbox notice follows, and the wave settles as an unwaited one (``owe_unwaited_review``).
 DEPARTED_EVENT = "author_departed"
+# A lost seat's cause, written only by the settlement that runs after its author's task ended.
+AUTHOR_ENDED_CAUSE = "no retained outcome when its author's task ended"
 # This process's identity: a left-review wait restored from a checkpoint names another
 # process, whose live custody and settlement notice died with it.
 PROCESS_TOKEN = uuid.uuid4().hex
@@ -607,8 +609,9 @@ def _owe_left_review(record: Dict[str, Any]) -> bool:
 
 def settle_left_review(drive_root: Any, row: Dict[str, Any]) -> str:
     """The owed duty of a left wave whose author's task ended: its mark (``ended_left_review``) once every
-    seat of the wave's recorded roster has a terminal outcome on disk or its controller is proven dead,
-    else ``waiting`` (a live controller may still settle a seat that has none)."""
+    seat of the wave's recorded roster has a terminal outcome on disk or a completed producer nothing live can
+    still settle (``_left_roster_settled``), or its controller is proven dead, else ``waiting`` (a live
+    controller may still settle a seat that has none)."""
     from ouroboros.review_operation import controller_state
 
     record = dict(row["left_review"])
@@ -662,10 +665,17 @@ def _left_rows(attempt: Any) -> Iterable[Tuple[str, str, Dict[str, Any]]]:
 
 def _left_roster_settled(record: Dict[str, Any]) -> bool:
     """Whether every seat of the left wave has a terminal outcome on disk: settled in its attempt row, or the
-    producer's own retained CAS under its recorded assignment (``recover_review_producer``). Local reads
-    only, never a send or a remote poll; an unreadable record proves no settlement."""
+    producer's own retained CAS under its recorded assignment (``recover_review_producer``). A completed
+    producer whose delegated start is still in flight leaves nothing for a live controller to settle once no
+    review operation of the task is live (``task_has_live_review_operation``: none can still bind or rejoin
+    that start); the final collection then reads it attach-only, where a run still running stays pending.
+    Local reads only, never a send or a remote poll; an unreadable record proves no settlement."""
     from ouroboros.review_custody import _row_is_pending
-    from ouroboros.review_operation import recorded_review_assignment, recover_review_producer
+    from ouroboros.review_operation import (
+        recorded_review_assignment,
+        recover_review_producer,
+        task_has_live_review_operation,
+    )
 
     drive = _custody_root(record)
     try:
@@ -677,7 +687,8 @@ def _left_roster_settled(record: Dict[str, Any]) -> bool:
                 drive, task_id=str(record["task_id"]), surface=kind, row=row, retry_key=str(record["retry_key"]),
                 root_task_id=str(attempt.root_task_id or ""), review_contract=str(attempt.review_contract_fingerprint or ""))
             actor = recover_review_producer(drive, request, slot, row)
-            if actor is None or actor.operation_state == "in_flight":
+            if actor is None or (actor.operation_state == "in_flight"
+                                 and task_has_live_review_operation(drive, str(record["task_id"]))):
                 return False
         return True
     except Exception:
@@ -764,9 +775,11 @@ def _record_state(record: Dict[str, Any]) -> str:
 def _settle_left_record(record: Dict[str, Any], seats: List[Dict[str, Any]], *, final: bool) -> Optional[Dict[str, Any]]:
     """Settle the wave's own ledger record from the seats it recorded: each answer is read by the gate's own
     parser (``triad_review.parse_seat_answers``) and the verdict reduced by the ledger
-    (``review_ledger.settle_from_collected``). ``final`` (its author ended and no live drain will collect
-    it) counts a seat without a retained outcome as a failed seat; otherwise such a seat keeps the record
-    pending. ``None`` when the wave names no record or it cannot be settled; never raises."""
+    (``review_ledger.settle_from_collected``). A seat in flight or unsent keeps the record pending. A lost seat
+    is a failed seat with its own recorded cause, except an unbound start that its author's own collection may
+    still replay under its original key (``START_UNBOUND``): while that author lives it keeps the record
+    pending. ``final`` (its author ended and no live drain will collect it) fails every lost seat and names
+    that cause. ``None`` when the wave names no record or it cannot be settled; never raises."""
     from ouroboros import review_ledger as ledger
     from ouroboros.triad_review import parse_seat_answers
 
@@ -777,8 +790,9 @@ def _settle_left_record(record: Dict[str, Any], seats: List[Dict[str, Any]], *, 
     for seat in seats:
         slot = str(seat.get("slot_id") or "")
         unknown = _seat_unknown(seat)
-        if unknown and str(seat.get("operation_state") or "") != "custody_lost":
-            continue  # its answer may still arrive: the record stays pending
+        lost = str(seat.get("operation_state") or "") == "custody_lost"
+        if unknown and (not lost or (not final and (seat.get("usage") or {}).get("custody_state") == START_UNBOUND)):
+            continue  # its answer may still arrive, or its live author's collection may still bind its start
         row_parts[slot] = tuple(seat.get("parts") or ("change",))
         result = {key: seat[key] for key in _SEAT_FACTS if seat.get(key) is not None}
         usage = seat.get("usage") or {}
@@ -788,9 +802,11 @@ def _settle_left_record(record: Dict[str, Any], seats: List[Dict[str, Any]], *, 
                       tokens_out=seat.get("tokens_out") or usage.get("completion_tokens", 0))
         raw = str(seat.get("raw_text") or "")
         if unknown:
+            cause = (AUTHOR_ENDED_CAUSE if final
+                     else seat.get("reported_cause") or seat.get("error") or "no retained outcome")
             result.update(verdict="ERROR", text="", operation_state="custody_lost",
                           failure_code=str(seat.get("failure_code") or "review_custody_lost"),
-                          reported_cause="no retained outcome when its author's task ended")
+                          reported_cause=str(cause))
         elif "not_dispatched" in (str(seat.get("operation_state") or ""), str(seat.get("status") or "")):
             result.update(operation_state="not_dispatched", text="")
         elif not raw.strip() or str(seat.get("status") or "") == "error":

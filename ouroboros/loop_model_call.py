@@ -1323,6 +1323,7 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
     names reach the actor as a fact.
     Called by every Main round and by a wait's reprepare; True when the list changed.
     """
+    from ouroboros.continuation_tools import history_tool_names
     from ouroboros.provider_models import tool_schema_limit
     from ouroboros.tool_policy import fit_tool_schemas_to_limit, route_tool_limit_notice, usable_selectors
 
@@ -1332,7 +1333,8 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
     earlier = frozenset(getattr(ctx.tools._ctx, "_route_left_out_tool_names", ()) or ())
     loaded = frozenset(getattr(ctx.tools._ctx, "_actor_loaded_tool_names", ()) or ())
     total = len(schemas)
-    schemas[:], left_out = fit_tool_schemas_to_limit(schemas, limit, keep=earlier | loaded)
+    schemas[:], left_out = fit_tool_schemas_to_limit(schemas, limit, keep=earlier | loaded,
+                                                     protect=history_tool_names(ctx.messages))
     ctx.tools._ctx._route_left_out_tool_names = earlier | set(left_out)
     invalidate_task_cache_splits(ctx.task_id)
     _loop()._append_or_merge_user_message(ctx.messages, route_tool_limit_notice(

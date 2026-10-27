@@ -72,7 +72,8 @@ def test_manager_discovery_and_registry_preserve_full_text_and_metadata(monkeypa
     row = manager.list_tools_for_registry()[0]
     assert row["raw_description"] == description
     assert description in row["description"]
-    assert "Server metadata (untrusted, not permissions)" in row["description"]
+    assert "[not read-only]" in row["description"] and "Server metadata: " in row["description"]
+    assert '"title": "Readable source"' in row["description"] and row["description"].count("untrusted") == 1
     assert row["schema"]["properties"]["value"]["description"].endswith(annotation)
     assert row["schema"]["properties"]["value"]["default"] == literal
     assert row["metadata"] == metadata
@@ -213,7 +214,9 @@ def test_real_sdk_to_registered_schema_preserves_complete_contract(tmp_path, mon
         schema = registry.get_schema_by_name("mcp_fidelity__echo")["function"]
         assert description.replace(token, "<redacted:mcp-auth-token>") in schema["description"]
         assert argument in schema["parameters"]["properties"]["text"]["description"]
-        assert "readOnlyHint" in schema["description"] and "outputSchema" in schema["description"]
+        # One frame per loaded tool: hints render as marks, other metadata stays complete under it.
+        assert "[read-only]" in schema["description"] and "outputSchema" in schema["description"]
+        assert schema["description"].count("untrusted") == 1
         assert token not in json.dumps(schema)
         status = manager.status_payload()["servers"][0]["tools"][0]
         assert status["metadata"]["annotations"]["readOnlyHint"] is True

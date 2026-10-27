@@ -938,6 +938,15 @@ class ToolRegistry:
                 return _dynamic_tool_schema(mcp_tool)
         return None
 
+    def on_demand_schema_names(self) -> frozenset:
+        """Visible MCP tools whose server the owner did not pin: their schemas start unloaded (#2332)."""
+        if not _resource_allowed(self._ctx, "network"):
+            return frozenset()
+        try:
+            return frozenset(row["name"] for row in self._mcp_rows(record=False) if not row.get("schemas_at_start"))
+        except Exception:
+            return frozenset()  # the same failure keeps MCP out of schemas(), recorded there
+
     def callable_rows(self, namespace: str = "") -> Optional[List[Dict[str, Any]]]:
         """Tools this task can dispatch now, as ``name`` rows (MCP rows add ``raw_name``).
 
@@ -948,6 +957,8 @@ class ToolRegistry:
         extension/MCP catalog could not be read (an unselected failing surface is
         left out, its failure being ``schemas()``'s recorded omission).
         """
+        from ouroboros.mcp_schema import annotation_marks
+
         disabled = _disabled_tools(self._ctx)
         rows: List[Dict[str, Any]] = [
             {"name": name} for name in self.available_tools()
@@ -960,7 +971,8 @@ class ToolRegistry:
             try:
                 rows += ([{"name": tool["name"]} for tool in self._extension_rows(record=False)] if surface == "ext_"
                          else [{"name": tool["name"], "raw_name": str(tool.get("raw_name") or ""),
-                                "raw_description": str(tool.get("raw_description") or "")}
+                                "raw_description": str(tool.get("raw_description") or ""),
+                                "marks": annotation_marks((tool.get("metadata") or {}).get("annotations"))}
                                for tool in self._mcp_rows(record=False)])
             except Exception:
                 if namespace:

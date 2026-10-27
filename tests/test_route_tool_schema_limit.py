@@ -101,6 +101,15 @@ def test_main_fits_its_resident_list_in_place_and_names_what_it_left_out():
     assert len(ctx.messages) == rows + 1
 
 
+def test_the_ceiling_keeps_a_tool_this_task_already_called():
+    catalog = _catalog(129)
+    called = [name for name in _names(catalog) if name.startswith("extra_")][-1]  # the tail a plain fit leaves out
+    ctx = _round_ctx(list(catalog))
+    ctx.messages.append({"role": "assistant", "tool_calls": [{"function": {"name": called}}]})
+    loop_model_call._fit_route_tool_ceiling(ctx)
+    assert called in _names(ctx.tool_schemas) and len(ctx.tool_schemas) == 128
+
+
 def test_a_schema_the_actor_enabled_stays_though_no_fit_left_it_out_before(tmp_path, monkeypatch):
     """A cold continuation keeps only its fitted list and a late-registered tool was never left out:
     what enable_tools loads in this run is the actor's choice, so the ceiling keeps it."""
@@ -115,7 +124,7 @@ def test_a_schema_the_actor_enabled_stays_though_no_fit_left_it_out_before(tmp_p
     resident = [schema for schema in catalog if schema["function"]["name"] != chosen]
     monkeypatch.setitem(provider_models.PROVIDER_TOOL_SCHEMA_LIMITS, "openai", len(resident))  # at the ceiling
     loop._setup_dynamic_tools(registry, resident, [])
-    assert "registered late" in registry.execute("enable_tools", {"tools": chosen})
+    assert "Call schemas loaded" in registry.execute("enable_tools", {"tools": chosen})
     ctx = _round_ctx(resident)
     ctx.tools = registry
     loop_model_call._fit_route_tool_ceiling(ctx)
