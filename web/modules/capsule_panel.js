@@ -107,6 +107,7 @@ export function createCapsulePanel({
     let destroyed = false;
     let scrim = null;
     let drag = 0;
+    let swipe = null;  // the swipe a finger draws now: ends on its own release, or with any close
     const api = { panel, top, body, isOpen: () => open };
     const phone = () => { try { return Boolean(win?.matchMedia?.(PHONE)?.matches); } catch { return false; } };
     const ease = () => { try { return win.getComputedStyle(doc.documentElement).getPropertyValue('--ease-sheet').trim() || 'ease-out'; } catch { return 'ease-out'; } };
@@ -179,6 +180,7 @@ export function createCapsulePanel({
     function close({ focus = false, instant = false } = {}) {
         if (!open) return;
         open = false;
+        swipe?.();  // closed mid-swipe (Escape, Back, the scrim): the finger moves this panel no more
         if (current === api) current = null;
         el.dataset.open = 'false';
         head.setAttribute('aria-expanded', 'false');
@@ -204,6 +206,7 @@ export function createCapsulePanel({
     // A sheet follows a finger down from its grabber or head; let go past a third (or flung), it goes.
     function onSwipeStart(event) {
         if (!open || panel.dataset.place !== 'sheet' || event.button) return;
+        swipe?.();  // one finger draws the sheet at a time
         const y0 = event.clientY;
         const height = panel.offsetHeight || 1;
         let lastY = y0;
@@ -219,11 +222,15 @@ export function createCapsulePanel({
             lastY = ev.clientY;
             lastT = ev.timeStamp;
         };
-        const end = (ev) => {
-            if (ev.pointerId !== event.pointerId) return;
+        const stop = () => {
             panel.removeEventListener('pointermove', move);
             panel.removeEventListener('pointerup', end);
             panel.removeEventListener('pointercancel', end);
+            swipe = null;
+        };
+        const end = (ev) => {
+            if (ev.pointerId !== event.pointerId) return;
+            stop();
             if (open && (drag > height * SWIPE_SHARE || speed > FLICK_PX_MS)) { close({ focus: true }); return; }
             const from = drag;
             drag = 0;
@@ -237,6 +244,7 @@ export function createCapsulePanel({
         panel.addEventListener('pointermove', move);
         panel.addEventListener('pointerup', end);
         panel.addEventListener('pointercancel', end);
+        swipe = stop;
     }
 
     // A click with detail 0 is Enter or Space on the focused capsule: a keyboard open lands on the chosen option.

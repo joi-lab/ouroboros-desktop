@@ -240,6 +240,31 @@ test('the same panel opened as a float and then as a sheet keeps none of the flo
     c.panel.destroy();
 });
 
+test('a sheet closed mid-swipe ends the swipe: the finger moves or closes nothing after it', () => {
+    for (const how of ['escape', 'scrim']) {
+        const c = capsule({ phone: true });
+        c.node.removeEventListener = (type, fn) => {  // a real removal, as in a browser
+            const listeners = c.node.listeners.get(type) || [];
+            if (listeners.includes(fn)) listeners.splice(listeners.indexOf(fn), 1);
+        };
+        const swipeListeners = () => ['pointermove', 'pointerup', 'pointercancel'].map((type) => (c.node.listeners.get(type) || []).length);
+        c.press();
+        fire(c.node.querySelector('.capsule-panel-grab'), 'pointerdown', { button: 0, pointerId: 1, clientY: 500, timeStamp: 0 });
+        fire(c.node, 'pointermove', { pointerId: 1, clientY: 540, timeStamp: 100 });
+        assert.equal(c.node.style.transform, 'translateY(40px)');
+        assert.deepEqual(swipeListeners(), [1, 1, 1], 'the swipe listens while the finger draws');
+        if (how === 'escape') c.doc.fire('keydown', escape());
+        else c.doc.body.children.find((node) => node.classList.contains('capsule-panel-scrim')).click();
+        assert.equal(c.panel.isOpen(), false, how);
+        assert.deepEqual(swipeListeners(), [0, 0, 0], `${how}: the swipe ended with the sheet`);
+        c.press();  // the same finger, still down, crosses the reopened sheet and lets go far below
+        fire(c.node, 'pointermove', { pointerId: 1, clientY: 760, timeStamp: 200 });
+        fire(c.node, 'pointerup', { pointerId: 1, clientY: 760, timeStamp: 210 });
+        assert.deepEqual([c.panel.isOpen(), c.node.style.transform], [true, ''], `${how}: the reopened sheet stays where it is`);
+        c.panel.destroy();
+    }
+});
+
 test('a resize across the phone\'s width closes the panel at once; a desk panel never swipes', () => {
     const c = capsule();
     c.press();
