@@ -356,6 +356,14 @@ def _own_or_legacy(record: Optional[Dict[str, Any]], author: Dict[str, Any]) -> 
         str(signer.get("task_id") or "") == str(author.get("task_id") or ""))
 
 
+def _fold_effect(store: ChronicleStore, action: str, ids: Iterable[Any], text: str) -> str:
+    """What a fold did, measured (the records' own words before, the new text after); never a claim about Max."""
+    ids = [str(ident) for ident in ids]
+    before = sum(len(str((store.get(ident) or {}).get("text") or "")) for ident in ids)
+    return (f"{action} {len(ids)} record{'' if len(ids) == 1 else 's'}: {before:,} -> {len(text or ''):,} characters. "
+            "This task's view is not refreshed; the next start re-measures its Max room.")
+
+
 def _write_part(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
     members = a["member_ids"]
     if not isinstance(members, list) or not members:
@@ -371,9 +379,9 @@ def _write_part(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, A
         first = store.get(str(members[0]))  # the members' own room unless one is named
         room = first["room_id"] if first else _room(ctx, root, None)
     resolver = _quote_resolver(root, row_lineage(root))
-    return _published(ctx, store.publish_part(room_id=room, text=a["text"], member_ids=[str(m) for m in members],
-                                              author=author, expected_sequence=a["expected_sequence"],
-                                              quotes=a["quotes"] or (), quote_resolver=resolver))
+    result = store.publish_part(room_id=room, text=a["text"], member_ids=[str(m) for m in members], author=author,
+                                expected_sequence=a["expected_sequence"], quotes=a["quotes"] or (), quote_resolver=resolver)
+    return _published(ctx, result, effect=_fold_effect(store, "folded", members, a["text"]) if result.ok else None)
 
 
 def _write_note(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
@@ -401,7 +409,10 @@ def _write_account(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str
     if not isinstance(sources, list) or not sources:
         return _arg_error(ctx, "an account needs sources: the records it is based on, each {id, revision?} or an id")
     result = store.publish_account(room_id=_room(ctx, root, a["room_id"]), text=a["text"], sources=sources, author=author)
-    return _published(ctx, result, sources=len(sources) if result.ok else None)
+    ids = [src.get("id") if isinstance(src, dict) else src for src in sources]
+    return _published(ctx, result, sources=len(sources) if result.ok else None, effect=_fold_effect(
+        store, "wrote an account over", ids, a["text"]) + " It tells nothing in their place until a selection shows it."
+        if result.ok else None)
 
 
 def _write_selection(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
@@ -414,7 +425,11 @@ def _write_selection(ctx: Any, root: Path, store: ChronicleStore, author: Dict[s
     shown = True if a["shown"] is None else a["shown"]
     result = store.select_account(str(a["target_id"]), replaces=[str(r) for r in replaces], author=author,
                                   reason=str(a["reason"] or ""), shown=shown)
-    return _published(ctx, result, replaces=len(replaces) if result.ok else None, shown=shown if result.ok else None)
+    effect = (_fold_effect(store, "the account now tells", replaces, str((store.get(str(a["target_id"])) or {}).get("text") or ""))
+              if shown else "withdrawn: the account leaves the common view and the records it told return there. This "
+              "task's view is not refreshed; the next start re-measures its Max room.")
+    return _published(ctx, result, replaces=len(replaces) if result.ok else None, shown=shown if result.ok else None,
+                      effect=effect if result.ok else None)
 
 
 _WRITERS = {"page": _write_page, "part": _write_part, "note": _write_note,
