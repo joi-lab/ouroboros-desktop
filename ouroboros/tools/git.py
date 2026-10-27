@@ -1516,8 +1516,6 @@ from ouroboros.tools.git_plumbing import (  # noqa: E402,F401
 
 
 from ouroboros.tools.git_review_cycle import (  # noqa: E402,F401
-    _DOC_ONLY_EXTENSIONS,
-    _diff_is_doc_only,
     _finalize_blocked_review,
     _finalize_pending_review,
     _fingerprint_staged_diff,

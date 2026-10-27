@@ -354,26 +354,6 @@ def _finalize_blocked_review(
         return f"{combined_msg}\n\n---\n{warning}"
     return combined_msg
 
-_DOC_ONLY_EXTENSIONS = (".md", ".txt", ".rst")
-
-
-def _diff_is_doc_only(staged_paths: List[str]) -> bool:
-    """Return True only for docs outside tests; JSON/config keep preflight."""
-    if not staged_paths:
-        return False
-    saw_any = False
-    for raw in staged_paths:
-        p = str(raw).strip()
-        if not p:
-            continue
-        saw_any = True
-        if p.startswith("tests/") or "/tests/" in p:
-            return False
-        if not p.lower().endswith(_git()._DOC_ONLY_EXTENSIONS):
-            return False
-    return saw_any
-
-
 def _review_cycle_infra_failure(
     ctx: ToolContext,
     commit_message: str,

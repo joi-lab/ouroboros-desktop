@@ -73,7 +73,7 @@ def get_tools() -> List[ToolEntry]:
                 "Roll Ouroboros's own running checkout (its current branch) back to a tag or commit SHA through "
                 "the supervisor's Rollback procedure (the UI Restore button): every running task is interrupted, a rescue snapshot of "
                 "uncommitted changes is created, the server restarts. "
-                "Review-exempt: restores to an already-reviewed state."
+                "Review-exempt mechanical recovery; the target's review status and compatibility are not guaranteed."
             ),
             "parameters": {
                 "type": "object",

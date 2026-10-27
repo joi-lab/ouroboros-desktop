@@ -1067,6 +1067,14 @@ def release_diagnostics(ctx: ToolContext, paths: Optional[List[str]], source: st
             "book_balance": {"source": "worktree", "note": note}}
 
 
+def _neutral_commit_allowed(ctx: ToolContext) -> bool:
+    """Prepared body contributions and authorized adoption of the selected official release."""
+    from ouroboros import body_candidate
+    from ouroboros.tools.registry_guards import _authorized_managed_update_resolver
+
+    return body_candidate.is_bound(ctx) or _authorized_managed_update_resolver(ctx)
+
+
 def deterministic_preflight(ctx: ToolContext, commit_message: str, paths: Optional[List[str]]) -> str:
     """The free checks that ran ahead of the retired advisory delivery, kept whole for every
     commit: size headroom, the staged change's diff pulse (the text the panel's seats read
@@ -1091,7 +1099,8 @@ def deterministic_preflight(ctx: ToolContext, commit_message: str, paths: Option
                 "task_id": str(getattr(ctx, "task_id", "") or "")})
         except Exception:
             pass
-    return (release_metadata_preflight(repo_dir, commit_message, paths, source="index")
+    return (release_metadata_preflight(repo_dir, commit_message, paths, source="index",
+                                       neutral_allowed=_neutral_commit_allowed(ctx))
             or syntax_preflight_staged_py_files(repo_dir, list(paths or [])) or "")
 
 
@@ -1273,7 +1282,8 @@ def bind_author_commit_candidate(ctx: ToolContext, commit_message: str, pre_fing
     )
     ctx._author_commit_record = author
     staged = git_mod.run_cmd(["git", "diff", "--cached", "--name-status"], cwd=ctx.repo_dir)
-    return _preflight_check(commit_message, format_name_status_for_preflight(staged), ctx.repo_dir)
+    return _preflight_check(commit_message, format_name_status_for_preflight(staged), ctx.repo_dir,
+                            neutral_allowed=_neutral_commit_allowed(ctx))
 
 
 def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_at: float, before: dict, after: dict) -> None:

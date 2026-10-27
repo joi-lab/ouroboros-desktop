@@ -124,16 +124,17 @@ explicit work-order review obligations.
 
 ### Review-exempt operations
 
-The following tools create commits but are **exempt** from multi-model review
-(Bible P9 explicit exception):
+Mechanical recovery is **exempt** from new blocking review (BIBLE P9);
+the caller's mode, root and task authority still apply:
 
 - `vcs_restore` — discards uncommitted changes (not a commit, no review needed)
-- `vcs_revert` — creates a mechanical inverse of an already-reviewed commit
-- `vcs_rollback` — resets to an existing tag/SHA (already-reviewed state)
+- `vcs_revert` — applies a commit's inverse to the current tree; Pro/Cyber Pro
+  need no new panel for protected system files, while Advanced keeps its boundary
+- `vcs_rollback` — requests the supervisor's restore to the named tag/SHA
 
-Rationale: review gates on rollbacks create a paradox where reviewers block
-the undo for missing tests/VERSION, trapping the agent with broken code.
-These tools restore to already-reviewed states by definition.
+Review must not trap the agent in broken code. A target SHA or inverse patch
+does not establish prior review, compatibility with current data, or reversal
+of external effects; report the actual target evidence and recovery outcome.
 
 ---
 
@@ -155,8 +156,8 @@ diff, but it is not loaded as a standalone checklist the way the Change Review
 
 | # | Check | How |
 |---|-------|-----|
-| 1 | `VERSION`, `web/package.json`, `web/modules/api_types.js` (`GATEWAY_CONTRACT_VERSION`), the `README.md` badge, the named direct-download links (`README.md`, `site/install/index.html`, `docs/install/index.html`), the latest `README.md` history row, and the `docs/ARCHITECTURE.md` header — are they all carrying the *author-facing* spelling (for example `4.50.0-rc.3`)? And do `pyproject.toml` and the `uv.lock` root version carry the **PEP 440 canonical form** of that same version (for example `4.50.0rc3`)? | `read_file` each file before editing. Never reconstruct version strings from memory — the in-context copy may be stale. The `VERSION` vs `pyproject.toml` divergence is intentional: `pyproject.toml` must satisfy PEP 440 so pip / build / twine accept it, while `VERSION` / tags / README / ARCHITECTURE use the author-facing spelling. `tests/test_packaging_sync.py::test_version_file_and_pyproject_are_synced` enforces the relationship via `ouroboros.tools.release_sync._normalize_pep440`. |
-| 2 | Preparing any commit → is `VERSION` bumped? | Under BIBLE.md P9, every commit is a release. A `VERSION` bump is mandatory for every commit, including docs/config/memory changes. Update every carrier together — `VERSION`, `pyproject.toml`, `uv.lock`, `web/package.json`, `web/modules/api_types.js`, the `README.md` badge / history row / download links, both install pages' download links, `docs/ARCHITECTURE.md` header; `ouroboros/tools/release_sync.py::version_carrier_desyncs()` checks the file carriers (the git tag follows on commit). Exception: a version-neutral contribution keeps every carrier byte-identical — an external contribution commit (P9 / CONTRIBUTING.md; the maintainer's integration commit performs the bump), or a commit prepared in a body candidate, which P9 lets the installation adopt locally as it is. Choose that form or a numbered release deliberately and state it; never a partial bump. |
+| 1 | Do the numbered release carriers agree with `VERSION`, using the **PEP 440 canonical form** where required? | The inventory is `ouroboros/tools/release_sync.py::VERSION_CARRIER_SPANS`; `version_carrier_desyncs()` checks it. Read current files before editing, never reconstruct versions from memory. `_normalize_pep440` maps the author-facing spelling (e.g. `4.50.0-rc.3`) to `4.50.0rc3` for `pyproject.toml` and the `uv.lock` root. `tests/test_packaging_sync.py::test_version_file_and_pyproject_are_synced` checks this relationship. |
+| 2 | Which BIBLE P9 commit form is being prepared? | An ordinary commit on the serving checkout is a numbered release, including documentation or prompt changes. Bump `VERSION` and synchronize every carrier from `release_sync.VERSION_CARRIER_SPANS`; the annotated tag follows on commit. An external contribution or body-candidate commit may instead be version-neutral: every carrier stays byte-identical and no tag is created. Choose and state the form; a partial carrier change is neither. Managed-update resolution keeps the official target version; forensic snapshots and mechanical recovery retain P9 exemptions. |
 | 3 | New or changed logic → does an existing or newly staged test assert on the specific scenario it introduces? | Name the scenario in plain words and the test that distinguishes it; extend that test, write a new one only when none does, and retire assertions the change supersedes in the same diff. A pin of wording, source text, call presence or AST shape does not cover behaviour: review owns meaning. "Tests exist for the module" is not "tests cover this behaviour". |
 | 4 | Shared log / memory / replay format changed? | Grep every reader and writer first. JSONL logs (`events.jsonl`, `task_reflections.jsonl`, replay indexes), durable state files (`advisory_review.json`, `review_continuations/*.json`), and memory note/history pairs (a knowledge note / its `knowledge_history.jsonl` records) must stay coherent across every consumer. |
 | 5 | New validation guard, input filter, or edge-case check? | Before the first commit attempt, name three concrete ways it could break: wrong bounds, legitimate inputs it silently blocks, platform-specific edge cases. If you cannot name three, think longer. One honest minute here is cheaper than one reviewer round. |

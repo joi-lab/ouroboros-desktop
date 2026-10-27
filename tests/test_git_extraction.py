@@ -39,8 +39,6 @@ _MOVED_OWNERS = {
     "_release_git_lock": git_plumbing,
     "_sanitize_git_error": git_plumbing,
     "_unstage_binaries": git_plumbing,
-    "_DOC_ONLY_EXTENSIONS": git_review_cycle,
-    "_diff_is_doc_only": git_review_cycle,
     "_finalize_blocked_review": git_review_cycle,
     "_fingerprint_staged_diff": git_review_cycle,
     "_handle_revalidation_failure": git_review_cycle,
