@@ -1136,11 +1136,13 @@ def reuse_key_digest(*, surface: str, kind: str, root: str, diff_sha: str, tree_
 
 
 def round_sha_of(*, rebuttal_sha: str = "", questions: Any = (), goal: str = "", scope: str = "",
-                 base: str = "", head: str = "") -> str:
+                 base: str = "", head: str = "", since_review: str = "") -> str:
     """The logical-round digest over a record's own fields — the same bytes
-    ``review_subject.review_round_sha`` hashes from a frozen subject."""
+    ``review_subject.review_round_sha`` hashes from a frozen subject. A named
+    ``since_review`` joins only when given, so every earlier round keeps its digest."""
     fields = {"rebuttal_sha": str(rebuttal_sha or ""), "questions": [str(item) for item in (questions or [])],
-              "goal": str(goal or ""), "scope": str(scope or ""), "base": str(base or ""), "head": str(head or "")}
+              "goal": str(goal or ""), "scope": str(scope or ""), "base": str(base or ""), "head": str(head or ""),
+              **({"since_review": str(since_review)} if since_review else {})}
     return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
@@ -1247,7 +1249,7 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
         contract_fp=contract_fp, round_sha=round_sha_of(
             rebuttal_sha=str(facts.get("rebuttal_sha256") or ""), questions=facts.get("author_questions") or [],
             goal=str(facts.get("goal") or ""), scope=str(facts.get("scope") or ""),
-            base=subject["base"], head=subject["head"]))
+            base=subject["base"], head=subject["head"], since_review=str(facts.get("since_review") or "")))
     return ReviewLedgerRecord(
         record_id=record_id, state=STATE_PENDING if pending else STATE_SETTLED, ts=utc_now_iso(), task_id=task_id,
         root_task_id=str(facts.get("root_task_id") or ""), review_wave_id=str(facts.get("review_wave_id") or ""),
@@ -1255,6 +1257,7 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
         brief={"goal": str(facts.get("goal") or ""), "scope": str(facts.get("scope") or ""),
                "parts": [part for part in ALL_PARTS if any(part in (seat.get("parts") or []) for seat in rows)],
                "author_questions": list(facts.get("author_questions") or []), "checklist": checklist,
+               **({"since_review": str(facts["since_review"])} if facts.get("since_review") else {}),
                "dispute_input": dispute_input},
         enforcement=enforcement, mode=str(facts.get("mode") or ""),
         enforcement_blocks=bool(facts.get("enforcement_blocks")),
