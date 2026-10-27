@@ -70,7 +70,11 @@ export function createCapsuleFit({ el, row, kind, strip, segs, padMax = SEG_PAD.
         const rowStyle = styleOf(row);
         const room = widthOf(row) - px(rowStyle?.paddingLeft) - px(rowStyle?.paddingRight) - 1;  // 1 px of slack
         if (!(room > 0)) return null;  // not laid out: a hidden pane, the unit-test DOM
-        const words = segs.reduce((sum, seg) => sum + widthOf(seg.firstElementChild), 0);
+        const words = segs.map((seg) => widthOf(seg.firstElementChild));
+        // A segment is never narrower than its own minimum (Subagents' options keep a finger's width), so
+        // the strip is each word with its padding or that minimum, whichever is wider.
+        const floors = segs.map((seg) => px(styleOf(seg)?.minWidth));
+        const stripAt = (pad) => words.reduce((sum, word, i) => sum + Math.max(word + 2 * pad, floors[i]), 0);
         const elStyle = styleOf(el);
         const stripStyle = styleOf(strip);
         // Besides the head and the words: the borders and the strip's end gutter (its optical
@@ -78,16 +82,20 @@ export function createCapsuleFit({ el, row, kind, strip, segs, padMax = SEG_PAD.
         const frame = px(elStyle?.borderLeftWidth) + px(elStyle?.borderRightWidth)
             + px(stripStyle?.marginLeft) + px(stripStyle?.marginRight);
         const heads = headWidths();
-        const padFor = (width, headWidth) => Math.floor((width - headWidth - frame - words) / (2 * segs.length));
-        const fitted = (mode, pad, label) => ({ mode, pad: Math.min(padMax, pad), label });
+        // The widest padding, from padMax down to `least`, at which the head and the strip fit `width`.
+        const padIn = (width, headWidth, least) => {
+            for (let pad = padMax; pad >= least; pad -= 1) if (headWidth + frame + stripAt(pad) <= width) return pad;
+            return null;
+        };
+        const fitted = (mode, pad, label) => ({ mode, pad, label });
         const beside = measurePeers(px(rowStyle?.columnGap));
-        let pad = padFor(room - beside.width, heads.label);
-        if (pad >= (beside.count ? SEG_PAD.beside : SEG_PAD.alone)) return fitted('inline', pad, true);
+        let pad = padIn(room - beside.width, heads.label, beside.count ? SEG_PAD.beside : SEG_PAD.alone);
+        if (pad !== null) return fitted('inline', pad, true);
         const alone = beside.count ? 'solo' : 'inline';
-        pad = padFor(room, heads.label);
-        if (pad >= SEG_PAD.alone) return fitted(alone, pad, true);
-        pad = padFor(room, heads.bare);
-        if (pad >= SEG_PAD.alone) return fitted(alone, pad, false);
+        pad = padIn(room, heads.label, SEG_PAD.alone);
+        if (pad !== null) return fitted(alone, pad, true);
+        pad = padIn(room, heads.bare, SEG_PAD.alone);
+        if (pad !== null) return fitted(alone, pad, false);
         return fitted('overflow', SEG_PAD.alone, false);
     }
     function fit() {
