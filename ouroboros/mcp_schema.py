@@ -230,7 +230,3 @@ def _model_facing_description(tool: Any) -> str:
     if metadata:
         parts.append("Server metadata: " + json.dumps(metadata, ensure_ascii=False))
     return "\n\n".join(parts)
-
-
-def _wrap_schema_text_fields(value: Any, cfg: Any = None) -> Any:
-    return wrap_schema_text(value, lambda text: _redact_error_text(text, cfg))

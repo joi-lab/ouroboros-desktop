@@ -197,7 +197,8 @@ def select_view(plan, mode: str, addresses: Iterable[str], *, owner_note: bool =
                        allowances={"margin": old.get("allowance_tokens"), "physical": old.get("physical_allowance_tokens"),
                                    "budget": old.get("budget_allowance_tokens")},
                        target_tokens=old.get("target_tokens"), lowered_from=switched.get("from"))
-    system = _system_blocks(plan.core, _governance_blocks(None, plan.core, mode="low" if mode == "nano" else mode), story, room)
+    governance = _governance_blocks(None, plan.core, mode="low" if mode == "nano" else mode)
+    system = _system_blocks(plan.core, governance, story, room, mode=mode)
     tokens = _request_tokens(system, shown.user_content_json or plan.user_content_json,
                             current_messages=plan.messages_for(mode))
     projection = dataclasses.replace(shown, system_content_json=json.dumps(system, ensure_ascii=False, sort_keys=True),

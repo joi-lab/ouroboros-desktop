@@ -40,7 +40,8 @@ def test_a_round_that_only_appends_keeps_every_row(tmp_path):
     messages += [{"role": "assistant", "content": "step 3"}, bound_host_row(CONTEXT_FACTS_NAME, "[CONTEXT_FACTS] round 3")]
     assert departure(slot, messages, TOOLS) is None
     assert retire_superseded_at_departure(slot, messages, TOOLS, drive_root=tmp_path, task_id="t") == (messages, None)
-    assert "superseded host rows 5 " in superseded_host_fact(messages)  # visible to the mind meanwhile
+    # Visible to the mind meanwhile; the facts row written now supersedes the latest one too.
+    assert "superseded host rows 6 " in superseded_host_fact(messages)
 
 
 def test_a_tool_load_retires_every_superseded_row_with_exact_custody(tmp_path):
@@ -58,9 +59,25 @@ def test_a_tool_load_retires_every_superseded_row_with_exact_custody(tmp_path):
     record = next(row for row in rebuilt if row.get(HOST_CONTEXT_KIND_KEY) == HOST_STATE_RETIRED_NAME)
     assert "6 superseded host rows" in record["content"] and "nothing summarized" in record["content"]
     stored = json.loads(read_actor_source_bytes(tmp_path, "t", fact["checkpoint_ref"]))
-    assert stored["rows"] == retired  # exact bytes, before removal
+    assert stored["rows"] == retired and stored["positions"] == superseded  # exact bytes and places, before removal
     assert [row for row in rebuilt if row.get("role") == "assistant"] == [
         row for row in messages if row.get("role") == "assistant"]  # the work stays whole
+
+
+def test_repeated_departures_keep_one_record_that_holds_the_earlier_ones(tmp_path):
+    slot, messages, tools, refs = SimpleNamespace(), _transcript(3), list(TOOLS), []
+    for load in range(3):
+        observe_send(slot, messages, round_idx=load, tools=tools)
+        messages = [*messages, {"role": "assistant", "content": f"after load {load}"},
+                    bound_host_row(CONTEXT_FACTS_NAME, f"[CONTEXT_FACTS] after load {load}")]
+        tools = [*tools, {"type": "function", "function": {"name": f"mcp_x__t{load}", "description": "e", "parameters": {}}}]
+        messages, fact = retire_superseded_at_departure(slot, messages, tools, drive_root=tmp_path, task_id="t")
+        records = [i for i, row in enumerate(messages) if row.get(HOST_CONTEXT_KIND_KEY) == HOST_STATE_RETIRED_NAME]
+        assert fact is not None and len(records) == 1 and records[0] not in _obsolete_host_rows(messages)
+        refs.append(fact["checkpoint_ref"])
+    for earlier, later in zip(refs, refs[1:]):  # each record's exact bytes sit in the next one's rows
+        rows = json.loads(read_actor_source_bytes(tmp_path, "t", later))["rows"]
+        assert any(json.dumps(earlier, sort_keys=True) in str(row.get("content")) for row in rows)
 
 
 def test_a_rewrite_retires_only_from_its_departure_on(tmp_path):
@@ -76,13 +93,18 @@ def test_a_rewrite_retires_only_from_its_departure_on(tmp_path):
                if rebuilt[i].get(HOST_CONTEXT_KIND_KEY) != HOST_STATE_RETIRED_NAME)
 
 
-def test_rows_stay_when_their_exact_bytes_cannot_be_retained(tmp_path, monkeypatch):
+def test_rows_stay_without_a_recorded_send_or_when_their_exact_bytes_cannot_be_retained(tmp_path, monkeypatch):
     from ouroboros import artifacts
 
-    slot = SimpleNamespace()
     messages = _transcript(3)
+    # No recorded send: nothing proves the provider's cached prefix is gone.
+    assert retire_superseded_at_departure(SimpleNamespace(), messages, TOOLS, drive_root=tmp_path, task_id="t") == (
+        messages, None)
+    slot = SimpleNamespace()
+    observe_send(slot, messages, round_idx=3, tools=TOOLS)
+    loaded = [*TOOLS, {"type": "function", "function": {"name": "mcp_x__y", "description": "e", "parameters": {}}}]
     monkeypatch.setattr(artifacts, "store_actor_source_bytes", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
-    assert retire_superseded_at_departure(slot, messages, TOOLS, drive_root=tmp_path, task_id="t") == (messages, None)
+    assert retire_superseded_at_departure(slot, messages, loaded, drive_root=tmp_path, task_id="t") == (messages, None)
 
 
 def test_a_rebuild_shows_the_current_snapshot_once_and_changes_cannot_multiply(publisher, monkeypatch):  # noqa: F811

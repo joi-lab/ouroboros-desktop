@@ -157,7 +157,7 @@ def _subagent_and_update_guard_result(
             "external tools and may write knowledge notes, memory marks and "
             "chronicle page drafts in its own name, but may not call first-party "
             f"local tool {name!r}. Parent tasks must perform other writes, commits, "
-            "review gates, tool expansion, runtime control, shell, and skills. "
+            "review gates, capability expansion, runtime control, shell, and skills. "
             "Nested readonly delegation is allowed only through schedule_subagent "
             "within configured depth/cap limits."
         ))

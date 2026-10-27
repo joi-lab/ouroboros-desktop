@@ -1005,8 +1005,8 @@ def _connections(tool_registry: Any, task: Dict[str, Any]) -> Tuple[str, str]:
         return connection_views(tool_registry, helper=helper)
     except Exception as exc:
         log.warning("Failed to build the connections map", exc_info=True)
-        text = (f"## Connections\n\nThe connections map could not be built ({type(exc).__name__}: {exc}); "
-                "list_available_tools lists every tool I can call.")
+        text = (f"## Connections\n\nThe connections map could not be built ({type(exc).__name__}; its cause is in "
+                "the log); list_available_tools lists every tool I can call.")
         return text, text
 
 

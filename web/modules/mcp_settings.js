@@ -131,9 +131,9 @@ function weightLabel(server) {
     const status = mcpStatusByServer[String(server.id ?? '')] || null;
     if (!status || status.schema_tokens == null) return '';
     const schemas = isPinned(server)
-        ? `call schemas ${tokensLabel(status.schema_tokens)} in every request from task start`
+        ? `call schemas ${tokensLabel(status.schema_tokens)} in every Low/Max request from task start`
         : `call schemas ${tokensLabel(status.schema_tokens)}, loaded when Ouroboros takes up this server`;
-    return `Connections map ${tokensLabel(status.map_tokens)} in every request; ${schemas}.`;
+    return `Connections map ${tokensLabel(status.map_tokens)} in every Low/Max request; ${schemas}.`;
 }
 
 function unsupportedFields(server) {
@@ -249,7 +249,7 @@ function renderServerCard(server, index) {
                         <input class="ui-checkbox" type="checkbox" aria-label="MCP server ${index + 1}: Enabled" data-mcp-field="enabled" ${enabled ? 'checked' : ''}>
                         <span>Enabled</span>
                     </label>
-                    <label class="mcp-server-enabled" title="Off: Ouroboros sees this server's tools in its connections map and loads their call schemas when it needs them. On: the call schemas are in every request from the start of each task.">
+                    <label class="mcp-server-enabled" title="Off: Ouroboros sees this server's tools in its connections map and loads their call schemas when it needs them. On: in Low and Max the call schemas are in every request from the start of each task.">
                         <input class="ui-checkbox" type="checkbox" aria-label="MCP server ${index + 1}: Call schemas from task start" data-mcp-field="schemas_at_start" ${isPinned(server) ? 'checked' : ''}>
                         <span>Schemas from task start</span>
                     </label>
@@ -507,7 +507,7 @@ function renderEnvelopeStatus() {
         ? mcpStatusEnvelope.servers.reduce((sum, s) => sum + Number(s.tool_count || 0), 0)
         : 0;
     const weights = mcpStatusEnvelope.weights;
-    const cost = weights ? ` Connections map ${tokensLabel(weights.map_tokens)} in every request; call schemas from task start ${tokensLabel(weights.schema_tokens_from_task_start)}.` : '';
+    const cost = weights ? ` Connections map ${tokensLabel(weights.map_tokens)} in every Low/Max request; call schemas from task start ${tokensLabel(weights.schema_tokens_from_task_start)}.` : '';
     el.textContent = `${total} server${total === 1 ? '' : 's'} configured, ${totalTools} tool${totalTools === 1 ? '' : 's'} discovered.${cost}`;
     el.dataset.tone = 'ok';
 }

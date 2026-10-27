@@ -223,12 +223,13 @@ note after compaction; children and Presence do not. No callback, model, network
 refresh or scheduler is run by prompt preparation. Current enablement, review,
 grants, dependencies and publication must remain eligible. Revocation/expiry emits
 one withdrawal; it does not resend old facts. The full text is shown once. When it
-changes, or the dates in view run out, one outdated note says so and names where the
-current text is read (`query_data` kind `skill_state`, state_file `context_snapshot`);
-later changes add nothing until the conversation is next rebuilt (a fold, a tool
-load, a resume). There superseded notes leave with their exact rows retained, and the
-current text is shown in full again. So how often you publish cannot multiply what the
-context holds; figures that move on every poll belong behind your skill's own tool.
+changes, its dates run out or the file goes stale or unreadable, one note says so and
+names where the current text is read (`query_data` kind `skill_state`, state_file
+`context_snapshot`); nothing more is added until the conversation is next rebuilt (a
+fold, a tool load, a resume without its cached prefix). There superseded notes leave
+with their exact rows retained, and the current text is shown in full again. So how
+often you publish cannot multiply what the context holds; figures that move on every
+poll belong behind your skill's own tool.
 Exact sources are retained. Earlier notes are historical, never current authority.
 
 Manifest refusals teach: every `SkillManifestError` carries the problem plus,

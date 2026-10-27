@@ -321,7 +321,7 @@ def test_capability_omission_manifest_surfaces_extension_discovery_failure(tmp_p
     monkeypatch.setattr(extension_loader, "_lock", BoomLock())
 
     registry.schemas()
-    tool_discovery.set_registry(registry)
+    monkeypatch.setattr(tool_discovery, "_registry", registry)  # never leak an unrestricted fallback into later tests
     text = tool_discovery._list_available_tools(registry._ctx)
 
     assert "CAPABILITY_OMISSION_MANIFEST" in text

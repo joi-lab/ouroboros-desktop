@@ -129,12 +129,12 @@ def list_available_tools(
     complete = {schema["function"]["name"]: " ".join(str(schema["function"].get("description") or "").split())
                 for schema in schemas}
     rows = []
-    # A namespace listing gives complete descriptions (an MCP row its server's text and hints); the overview stays bounded.
+    # An MCP namespace lists complete descriptions and hints (its only resident text is the map); other text stays bounded.
     for row in compact_tool_catalog(schemas, schema_names=_resident_names(registry, ctx, resident)):
         if (source := callable_rows.get(row["name"])) is None:
             continue
         text = " ".join(source["raw_description"].split()) if source.get("raw_name") else complete[row["name"]]
-        whole = bool(selected) and tool_namespace(row["name"]) == selected
+        whole = bool(selected) and tool_namespace(row["name"]) == selected and selected.startswith("mcp_")
         rows.append({**source, "loaded": row["residency"] == "loaded",
                      "description": text if whole else text[:120],
                      "description_truncated": not whole and len(text) > 120})

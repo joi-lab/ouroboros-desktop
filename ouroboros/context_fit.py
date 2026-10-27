@@ -334,8 +334,8 @@ def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, 
     return ("\n\n".join(static_parts), development)
 
 
-def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "",
-                   mode: str = "max") -> List[Dict[str, Any]]:
+def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "", *,
+                   mode: str) -> List[Dict[str, Any]]:
     # All stable items precede C, including D only when the captured core calls for the full
     # handbook; the mode picks the connections map's form. Never create an empty cache boundary.
     stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, core.connections[mode == "nano"], story) if part))

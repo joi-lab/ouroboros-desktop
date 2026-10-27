@@ -47,7 +47,6 @@ from ouroboros import mcp_catalog
 from ouroboros.mcp_schema import (
     _redact_error_text as _redact_error_text,
     _exception_text, _model_facing_description, _model_facing_result, _normalize_input_schema,
-    _wrap_schema_text_fields as _wrap_schema_text_fields,
 )
 
 log = logging.getLogger(__name__)

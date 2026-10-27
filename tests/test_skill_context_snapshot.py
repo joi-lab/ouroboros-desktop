@@ -155,6 +155,35 @@ def test_changes_mark_once_until_rebuild_and_cold_resume_needs_no_ledger(publish
     assert not maybe_append_skill_snapshots(fresh_ctx, messages, root)
 
 
+def test_expiry_recovery_and_failures_add_one_note_until_rebuild(publisher):
+    root, skill, ctx, path = publisher
+    messages = []
+    _write(path)
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    for cycle in range(6):  # a polling publisher whose upstream comes and goes
+        _write(path, valid=expired)
+        maybe_append_skill_snapshots(ctx, messages, root)
+        _write(path)
+        maybe_append_skill_snapshots(ctx, messages, root)
+        path.unlink()
+        maybe_append_skill_snapshots(ctx, messages, root)
+        _write(path, "B" if cycle % 2 else "A")
+        maybe_append_skill_snapshots(ctx, messages, root)
+    assert len(messages) == 2  # the full text and one note, however often it expires, recovers or fails
+    note = visible_snapshots(messages)[skill.name][1]
+    assert note["state"] == "stale" and "text" not in note and 'state_file="context_snapshot"' in note["current_text"]
+    # Without a full text in view, one unavailable note stands until a fresh one arrives in full.
+    messages.clear()
+    path.unlink()
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    _write(path, valid=expired)
+    assert not maybe_append_skill_snapshots(ctx, messages, root)
+    _write(path, "C")
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    assert len(messages) == 2 and visible_snapshots(messages)[skill.name][1]["text"] == "C"
+
+
 @pytest.mark.parametrize("mode", ["disabled", "ungranted", "unreviewed", "removed"])
 def test_readiness_revocation_withdraws_once_without_rehashing(publisher, monkeypatch, mode):
     from ouroboros import skill_loader

@@ -381,7 +381,13 @@ def test_review_grants_no_commit_control_or_self_approval(tree):
         assert reg.get_schema_by_name(tool) is None, tool
         assert 'BLOCKED' in reg.execute(tool, {}), tool
     # The schema selector rides every role (#1860) and loads nothing the role lacks.
-    assert 'commit_reviewed' not in reg.execute('enable_tools', {'tools': 'commit_reviewed'}).split('Hidden by policy')[0]
+    from ouroboros.tools.tool_discovery import bind_resident_schemas
+    resident = []
+    bind_resident_schemas(reg, resident)
+    assert reg.execute_result('enable_tools', {'tools': 'commit_reviewed'}).code == 'ACCESS_BLOCKED' and resident == []
+    allowed = reg.schemas()[0]['function']['name']
+    assert 'Call schemas loaded' in reg.execute('enable_tools', {'tools': allowed})
+    assert [schema['function']['name'] for schema in resident] == [allowed]
     assert not _starts()
 
 

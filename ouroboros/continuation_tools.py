@@ -96,7 +96,7 @@ def _adopt_current_tools(tools: Any, state: dict, messages: list, mode: str, bef
             "cannot represent tools in this task's history: " + ", ".join(sorted(missing)) + ".")})
         return False
     frozen[:] = fitted
-    loaded.intersection_update(current)
+    loaded.intersection_update(fresh)  # current policy forgets a revoked tool; a ceiling never forgets a choice
     ctx._route_left_out_tool_names = earlier | set(left_out)
     from ouroboros.usage_accounting import invalidate_task_cache_splits
     from ouroboros.loop_messages import _emit_checkpoint_event

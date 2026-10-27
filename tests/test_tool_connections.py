@@ -7,6 +7,8 @@ manager and loader with a fake transport; no server or model is called.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ouroboros import mcp_catalog, mcp_client
@@ -28,14 +30,12 @@ SLACK = [{"name": "history", "description": "Channel history.", "input_schema": 
 
 
 @pytest.fixture(autouse=True)
-def _isolate_manager(monkeypatch):
+def _isolate_manager(tmp_path, monkeypatch):
     from ouroboros import config
-    configure = mcp_client.reconfigure_from_settings
 
-    def configured(settings):
-        monkeypatch.setattr(config, "load_settings", lambda: settings)
-        configure(settings)
-    monkeypatch.setattr(mcp_client, "reconfigure_from_settings", configured)
+    # A settings file of this test's own: the manager's settings reads find the servers there, and no
+    # module that bound ``load_settings`` at import ever sees a stand-in for it.
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "isolated-settings.json")
     mcp_client.reset_manager_for_tests()
     yield
     mcp_client.reset_manager_for_tests()
@@ -56,7 +56,11 @@ def _servers(*, slack_pinned=True, listing=None):
                 "url": "https://gitlab.example/mcp"},
                {"id": "slack", "name": "Slack", "enabled": True, "transport": "streamable_http",
                 "url": "https://slack.example/mcp", "schemas_at_start": slack_pinned}]
-    mcp_client.reconfigure_from_settings({"MCP_ENABLED": True, "MCP_SERVERS": servers})
+    from ouroboros import config
+
+    settings = {"MCP_ENABLED": True, "MCP_SERVERS": servers}
+    config.SETTINGS_PATH.write_text(json.dumps(settings), encoding="utf-8")
+    mcp_client.reconfigure_from_settings(settings)
     for server in ("gitlab", "slack"):
         manager.refresh_server(server)
     return manager
@@ -85,13 +89,17 @@ def test_an_unpinned_server_starts_on_demand_in_every_mode_and_the_map_names_its
     long_tail = GITLAB[2]["description"].split("Work account only. ", 1)[1].strip()
     assert f"- get_merge_request [read-only]: {' '.join(long_tail.split())}" in full  # complete, never clipped
     assert "### mcp_slack (Slack): 1 tool," in full and "loaded from task start" in full
-    assert "- history" not in full  # a pinned server's descriptions are already in the tool list
+    # Pinned too: the map is frozen with the task, and a route ceiling or a later load can leave a pinned schema out.
+    assert "- history: Channel history." in full
     assert full.count("untrusted") == 1  # one frame for the whole map
-    # Nano and helpers read names; the complete text is one namespace listing away.
+    # Nano and helpers read names under each server's header and instructions; the complete text is one listing away.
     assert "- builtin: " in nano and "read_file" in nano and "enable_tools" not in nano.split("- builtin: ")[1]
     assert "create_issue, get_merge_request" in nano and "history" in nano
     helper, _ = connection_views(registry, helper=True)
     assert "create_issue, get_merge_request" in helper and "Create an issue" not in helper
+    assert "- mcp_slack (Slack): 1 tool," in helper and "loaded from task start; callable as mcp_slack__<name>: history" in helper
+    for compact in (nano, helper):
+        assert "\n  Server instructions: Use numeric project ids, never names." in compact
 
 
 def test_the_map_is_a_pure_function_of_catalog_facts(registry):
@@ -140,8 +148,10 @@ def test_a_load_goes_first_under_a_route_ceiling_after_selectors_and_history(reg
     resident = initial_tool_schemas(registry)
     loop_module._setup_dynamic_tools(registry, resident, [])
     registry._ctx.active_model, registry._ctx.active_use_local = "openai::gpt-fixture", False
-    called = next(name for name in _names(resident) if name not in {"read_file", "enable_tools", "list_available_tools"}
-                  and not name.startswith("mcp_"))
+    from ouroboros.tool_capabilities import CORE_TOOL_NAMES, META_TOOL_NAMES
+    # The last optional built-in: a plain fit would leave it out, so only the history rank keeps it.
+    called = [name for name in _names(resident) if name not in CORE_TOOL_NAMES | META_TOOL_NAMES
+              and not name.startswith("mcp_")][-1]
     registry._ctx.messages = [{"role": "assistant", "tool_calls": [{"function": {"name": called}}]}]
     monkeypatch.setitem(provider_models.PROVIDER_TOOL_SCHEMA_LIMITS, "openai", len(resident))
     receipt = registry.execute("enable_tools", {"tools": "mcp_gitlab"})
@@ -155,6 +165,21 @@ def test_a_load_goes_first_under_a_route_ceiling_after_selectors_and_history(reg
     kept, left_out = fit_tool_schemas_to_limit(
         [{"function": {"name": name}} for name in ("a", "x", "b", "new")], 2, first=("new",), protect=("x",), keep=("b",))
     assert _names(kept) == ["x", "new"] and left_out == ("a", "b")
+
+
+def test_the_current_load_outranks_an_earlier_one_at_the_ceiling(registry, monkeypatch):
+    from ouroboros import loop as loop_module, provider_models
+
+    _servers()
+    resident = [s for s in initial_tool_schemas(registry)
+                if s["function"]["name"] in {"enable_tools", "list_available_tools"}]
+    loop_module._setup_dynamic_tools(registry, resident, [])
+    registry._ctx.active_model, registry._ctx.active_use_local = "openai::gpt-fixture", False
+    assert "Call schemas loaded" in registry.execute("enable_tools", {"tools": "mcp_gitlab__create_issue"})
+    monkeypatch.setitem(provider_models.PROVIDER_TOOL_SCHEMA_LIMITS, "openai", 3)
+    receipt = registry.execute("enable_tools", {"tools": "mcp_gitlab__get_merge_request"})
+    assert "mcp_gitlab__get_merge_request" in _names(resident) and "mcp_gitlab__create_issue" not in _names(resident)
+    assert "leaves out: mcp_gitlab__create_issue" in receipt
 
 
 def test_a_load_none_of_which_fits_is_a_typed_physical_limit(registry, monkeypatch):

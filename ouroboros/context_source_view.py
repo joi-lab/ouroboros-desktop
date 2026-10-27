@@ -71,10 +71,14 @@ def _obsolete_host_rows(messages: Sequence[Mapping[str, Any]]) -> set[int]:
 
 
 def superseded_host_fact(messages: Sequence[Mapping[str, Any]]) -> str:
-    """The facts row's count of superseded host rows in view (they leave where the conversation is next rebuilt)."""
+    """The count, for the facts row being written now, of superseded host rows in view: the latest facts
+    row is one of them once this one follows it. They leave where the conversation is next rebuilt."""
+    from ouroboros.loop_messages import CONTEXT_FACTS_NAME
     from ouroboros.utils import estimate_tokens
 
-    positions = _obsolete_host_rows(messages)
+    latest = max((i for i, row in enumerate(messages) if row.get("role") == "user"
+                  and row.get(HOST_CONTEXT_KIND_KEY) == CONTEXT_FACTS_NAME and host_row_intact(row)), default=None)
+    positions = _obsolete_host_rows(messages) | ({latest} if latest is not None else set())
     tokens = sum(estimate_tokens(str(messages[i].get("content") or "")) for i in positions)
     return f"superseded host rows {len(positions)} ~{tokens:,} (leave at the next rebuild)" if positions else ""
 
@@ -83,26 +87,33 @@ def retire_superseded_at_departure(slot: Any, messages: list, tools: Any, *, dri
                                    task_id: str) -> Tuple[list, Optional[Dict[str, Any]]]:
     """Superseded host state leaves where this request already departs from the last send.
 
-    From the departure on (``transcript_prefix.departure``: a tool load or a cold resume re-reads
-    from the start, a rewrite from its first change) every row is read again anyway, so retiring
+    From the departure on (``transcript_prefix.departure``: a tool load re-reads from the start, a
+    rewrite from its first change) every row is read again anyway, so retiring
     the superseded host rows there costs no extra re-read and retires no reasoning the departure
     itself does not. Their exact rows are retained first; one host record names what left and
     where it is. Nothing before the departure moves, and a round that only appends keeps its
-    cached prefix: this never starts a rewrite, it only rides one.
+    cached prefix: this never starts a rewrite, it only rides one. Without a recorded send nothing
+    proves the provider's cached prefix is gone, so nothing leaves.
     """
     from ouroboros.transcript_prefix import departure
     from ouroboros.utils import estimate_tokens
 
-    found = departure(slot, messages, tools)
-    if found is None:
+    superseded = _obsolete_host_rows(messages)  # the cheap scan first: most rounds have nothing to retire
+    found = departure(slot, messages, tools) if superseded else None
+    if found is None or found[1] == "no_baseline":
         return messages, None
     start, cause = found
     first_user = next((i for i, row in enumerate(messages) if row.get("role") == "user"), -1)
-    positions = sorted(i for i in _obsolete_host_rows(messages) if i >= start and i != first_user)
+    positions = sorted(i for i in superseded if i >= start and i != first_user
+                       and messages[i].get(HOST_CONTEXT_KIND_KEY) != HOST_STATE_RETIRED_NAME)
     if not positions:
         return messages, None
+    # One record names what left: earlier records from the departure on join its exact rows.
+    positions = sorted({*positions, *(i for i, row in enumerate(messages) if i >= start and host_row_intact(row)
+                                      and row.get(HOST_CONTEXT_KIND_KEY) == HOST_STATE_RETIRED_NAME)})
     rows = [messages[i] for i in positions]
-    data = json.dumps({"departure": start, "cause": cause, "rows": rows}, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    data = json.dumps({"departure": start, "cause": cause, "positions": positions, "rows": rows},
+                      ensure_ascii=False, sort_keys=True).encode("utf-8")
     try:
         from ouroboros.artifacts import store_actor_source_bytes
 

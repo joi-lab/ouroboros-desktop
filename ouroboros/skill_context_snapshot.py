@@ -2,11 +2,13 @@
 
 Only local data files are read. No callback, model, network or refresh belongs
 on this path. Deduplication reads the visible transcript. A skill's full text is shown
-once; when it changes, or its dates run out, one ``outdated`` note says so and names
-where the current text is read, and later changes add nothing until the conversation is
-next rebuilt. Then superseded notes leave (``context_source_view.retire_superseded_at_departure``)
-and, with no full text left in view, the current one is shown in full. So how often a
-publisher changes cannot multiply what the context holds. Cold Resume needs no seen-state.
+once; when it changes, its dates run out, or its publisher goes stale or unreadable, one
+note says so and names where the current text is read, and nothing more (later changes,
+expiry or recovery) is added until the conversation is next rebuilt. Then superseded notes
+leave (``context_source_view.retire_superseded_at_departure``) and, with no full text left
+in view, the current one is shown in full. Without a full text in view one unavailable
+note stands until a fresh one arrives. So how often a publisher changes or fails cannot
+multiply what the context holds. Cold Resume needs no seen-state.
 """
 from __future__ import annotations
 
@@ -24,9 +26,11 @@ _LEGACY_SNAPSHOT_HEADER = ("[System context: optional skill snapshot — UNTRUST
                            "The latest note for this skill supersedes earlier notes; unavailable revokes earlier freshness.]")
 _RENEWAL_SNAPSHOT_HEADER = (_LEGACY_SNAPSHOT_HEADER[:-1] + " A renewal dates the unchanged full text identified by "
                             "text_ref, only while that base is visible.]")
-SNAPSHOT_HEADER = (_LEGACY_SNAPSHOT_HEADER[:-1] + " An outdated note says the full text above is no longer current and "
-                   "where to read the current one; it returns here in full when the conversation is next rebuilt.]")
+SNAPSHOT_HEADER = (_LEGACY_SNAPSHOT_HEADER[:-1] + " A note after the full text above says it may be out of date (changed, "
+                   "past its dates or unreadable) and where to read the current one, which returns here in full when "
+                   "the conversation is next rebuilt.]")
 _HEADERS = (SNAPSHOT_HEADER, _RENEWAL_SNAPSHOT_HEADER, _LEGACY_SNAPSHOT_HEADER)
+_INVALIDATED = ("outdated", "stale", "unknown")
 MAX_SNAPSHOT_BYTES = 32768
 
 
@@ -149,10 +153,11 @@ def maybe_append_skill_snapshots(ctx, messages, drive_root) -> bool:
                    {"skill": name, "revision": prior.get("revision", ""),
                     "state": "unknown", "reason": "publisher_not_live"})
         shown = [(index, key, text) for key, (index, text) in bases.items() if key[0] == name]
+        if prior.get("state") in _INVALIDATED and (shown or current["state"] != "fresh"):
+            continue  # the note in view covers every later change, expiry and recovery until the next rebuild
+        reader = f'query_data(op="json", kind="skill_state", ids=["{name}"], state_file="context_snapshot")'
         if current["state"] == "fresh" and shown:
-            if prior.get("state") == "outdated":
-                continue  # the note in view covers every later change until the next rebuild
-            _index, (_name, base_revision, base_source, _sha), base_text = max(shown, key=lambda row: row[0])
+            _index, (_name, base_revision, _source, _sha), base_text = max(shown, key=lambda row: row[0])
             unchanged = current["revision"] == base_revision and current["text"] == base_text
             try:
                 dated = prior.get("state") == "fresh" and _date(prior["valid_until"]) > now
@@ -160,20 +165,11 @@ def maybe_append_skill_snapshots(ctx, messages, drive_root) -> bool:
                 dated = False
             if unchanged and dated:
                 continue  # timestamp-only polls keep a valid prefix
-            if unchanged and prior.get("state") != "fresh":
-                # Back from stale or unknown with the text in view: date that text again.
-                current["text_ref"] = {"source_sha256": base_source,
-                                       "text_sha256": hashlib.sha256(base_text.encode("utf-8")).hexdigest()}
-                current.pop("text")
-            else:
-                current = {"skill": name, "revision": current["revision"], "state": "outdated",
-                           "since": datetime.fromtimestamp(now, timezone.utc).isoformat(),
-                           "reason": "validity_ended" if unchanged else "text_changed",
-                           "current_text": f'query_data(op="json", kind="skill_state", ids=["{name}"], '
-                                           'state_file="context_snapshot")'}
-        elif (current["state"] != "fresh" and current["state"] == prior.get("state")
-              and current["revision"] == prior.get("revision") and current.get("reason") == prior.get("reason")):
-            continue
+            current = {"skill": name, "revision": current["revision"], "state": "outdated",
+                       "since": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                       "reason": "validity_ended" if unchanged else "text_changed", "current_text": reader}
+        elif shown:
+            current["current_text"] = reader  # the full text above is no longer dated
         if "_raw" in current:
             from ouroboros.observability import write_blob
             raw_text = current.pop("_raw")

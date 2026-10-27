@@ -33,7 +33,7 @@ _LOCAL_READONLY_TEXT = (
     "external tools and may write knowledge notes, memory marks and "
     "chronicle page drafts in its own name, but may not call first-party "
     "local tool 'commit_reviewed'. Parent tasks must perform other writes, commits, "
-    "review gates, tool expansion, runtime control, shell, and skills. "
+    "review gates, capability expansion, runtime control, shell, and skills. "
     "Nested readonly delegation is allowed only through schedule_subagent "
     "within configured depth/cap limits."
 )
