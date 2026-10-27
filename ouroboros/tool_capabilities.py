@@ -208,16 +208,11 @@ ACTING_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
 })
 
 def schema_selection_tools_for_context(ctx: object) -> frozenset[str]:
-    """The schema selectors every role holds; they select schemas, never grant capabilities.
-
-    ``list_available_tools`` and ``enable_tools`` in every mode: an on-demand MCP server and a
-    route's schema ceiling leave permitted tools without schemas in Low/Max too (#1860, #2332).
-    Nano adds ``compact_context``'s schema selection.
-    """
+    """Existing Nano view controls select schemas without granting capabilities."""
     from ouroboros.config import get_context_mode
 
     mode = str(getattr(ctx, "active_context_mode", "") or get_context_mode())
-    return META_TOOL_NAMES | {"compact_context"} if mode == "nano" else META_TOOL_NAMES
+    return META_TOOL_NAMES | {"compact_context"} if mode == "nano" else frozenset()
 
 
 def acting_tool_names_for_context(ctx: object, registered_names: Iterable[str]) -> frozenset[str]:

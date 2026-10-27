@@ -102,6 +102,19 @@ def test_an_unpinned_server_starts_on_demand_in_every_mode_and_the_map_names_its
         assert "\n  Server instructions: Use numeric project ids, never names." in compact
 
 
+@pytest.mark.parametrize("disabled", [(), ("enable_tools",), ("enable_tools", "list_available_tools")])
+def test_the_map_names_only_the_selectors_this_actor_can_call(registry, disabled):
+    _servers()
+    registry._ctx.task_contract = {"disabled_tools": list(disabled)}
+    full, nano = connection_views(registry, helper=False)
+    helper, _ = connection_views(registry, helper=True)
+    for text in (full, nano, helper):
+        assert ("enable_tools" in text) is ("enable_tools" not in disabled), text[:300]
+    for text in (nano, helper):
+        assert ("list_available_tools" in text) is ("list_available_tools" not in disabled)
+    assert "### mcp_gitlab (GitLab)" in full and "create_issue" in nano  # the map itself stays
+
+
 def test_the_map_is_a_pure_function_of_catalog_facts(registry):
     manager = _servers()
     before = connection_views(registry, helper=False)

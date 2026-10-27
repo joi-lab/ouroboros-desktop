@@ -51,10 +51,10 @@ class OnDemand(Registry):
 
 
 def prepare(tmp_path, monkeypatch, *, frozen=None, current=None, mode="max", system_changed=True,
-            baseline=True, loaded=(), legacy=False, history=None, registry_type=Registry):
+            baseline=True, loaded=(), legacy=False, history=None, registry_type=None):
     frozen = deepcopy(frozen if frozen is not None else [_schema("old")])
     current = deepcopy(current if current is not None else [_schema("new")])
-    registry = registry_type(tmp_path, current, mode)
+    registry = (registry_type or Registry)(tmp_path, current, mode)  # a test may patch this module's Registry
     ctx = registry._ctx
     saved_messages = [{"role": "system", "content": "saved system"},
                       {"role": "user", "content": "continue"},
