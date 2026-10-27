@@ -181,13 +181,13 @@ Equivalent historical prose stays review-only under CHECKLISTS item 5.
 ### Current state first (ARCHITECTURE invariant 10)
 
 Apply ARCHITECTURE §10 invariant 10 (enforcement: 03 "Projection over replay"). Store transactions
-lease the shared core's per-thread connection, capture rows and end before decoding or external
-work; fork only outside them; lifecycle code quiesces users and calls `store.prepare_handoff`
-before renaming a database or handing it to an older runtime, name-tier callers holding their
-name lock (`tests/test_store_connections.py`, `tests/test_store.py`; the WAL gate both ways, FULL
-unchanged: `tests/test_store_journal.py`). Once per process is not once per installation: an
-installation fact is a durable row, and history-sized work is a named job of the maintenance
-child (`ouroboros/maintenance.py`).
+lease the shared core's per-thread connection, capture rows (`store_capture.py`) and end before
+decoding or external work; fork only outside them; lifecycle code quiesces users and calls
+`store.prepare_handoff` before renaming a database or handing it to an older runtime, name-tier
+callers holding their name lock (`tests/test_store_connections.py`, `tests/test_store.py`; the WAL
+gate both ways, FULL unchanged: `tests/test_store_journal.py`). Once per process is not once per
+installation: an installation fact is a durable row; history-sized work is a named job of the
+maintenance child (`ouroboros/maintenance.py`).
 
 ### Generality and emergence (P13)
 

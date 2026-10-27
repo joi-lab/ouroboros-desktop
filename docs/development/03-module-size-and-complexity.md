@@ -90,17 +90,16 @@ generation, keeping strict per-member gaps if a batch fails (`tests/test_main_de
   an empty store without pending import; otherwise display reports unavailable data and
   leaves import to startup (`tests/test_usage_store.py`).
 - **Reuse precedents:** a writer seam whose transaction also writes the facts readers
-  address (`dialogue_store.py::append`); current rows reduced by the writing transaction
-  (`delegate_custody_current.py`); bounded filtered tail (`jsonl_tail.py`);
-  transactional summaries (`usage_store.py`, `store.py`);
-  indexed selects (`task_store.py`); task-event SSE v2 cursor (ARCHITECTURE §3).
+  address (`dialogue_store.py::append`) or reduces current rows (`delegate_custody_current.py`);
+  bounded filtered tail (`jsonl_tail.py`); transactional summaries (`usage_store.py`, `store.py`);
+  one-step indexed selects (`store_capture.py`); task-event SSE v2 cursor (ARCHITECTURE §3).
 
 CHECKLISTS item 9 `perf_lifecycle` covers changed readers, startup/shutdown, batches, endpoints, pollers, subscriptions and timers. Runtime `storage` supplies the last count; `query_data(kind="storage")` its detail. The mind judges growth (P5). New growing stores name their `storage.PLACES` entry and PERSISTENCE retirer.
 
 `tests/test_store_boot.py` fixes `prepare_startup_state` at 50/500 frozen results and 20/200
 child stores (a clean boot is one read transaction, no history access or writes);
 `tests/test_store_legacy_reconcile.py` covers both detector outcomes, cursor resume and the
-foreground CLI, and the import/switch suites keep downgrade semantics.
+foreground CLI; the import/switch suites keep downgrade semantics.
 
 ### Invariant: Source-complete decision pipeline
 
