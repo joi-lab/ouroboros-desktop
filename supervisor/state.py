@@ -1147,9 +1147,8 @@ def model_breakdown(st: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
             breakdown[str(model)] = {
                 "cost": float(bucket.get("accounted_usd") or 0.0),
                 "calls": int(bucket.get("physical_calls") or 0),
-                "prompt_tokens": int(bucket.get("prompt_tokens") or 0),
-                "completion_tokens": int(bucket.get("completion_tokens") or 0),
-                "cached_tokens": int(bucket.get("cached_tokens") or 0),
+                # None: no row of this model reported the counter, never a zero.
+                **{name: bucket.get(name) for name in ("prompt_tokens", "completion_tokens", "cached_tokens")},
             }
     except Exception:
         log.error("Failed to calculate ledger model breakdown", exc_info=True)
@@ -1216,8 +1215,8 @@ def reconstruct_task_cost(
                     else None
                 ),
                 "total_rounds": int(bucket.get("physical_calls") or 0),
-                "prompt_tokens": int(bucket.get("prompt_tokens") or 0),
-                "completion_tokens": int(bucket.get("completion_tokens") or 0),
+                # None: no row of the task reported the counter (a session without its input split), never 0.
+                **{name: None if bucket.get(name) is None else int(bucket[name]) for name in ("prompt_tokens", "completion_tokens")},
                 "cost_final": bool(bucket.get("cost_final")),
                 "reserved_usd": float(bucket.get("reserved_usd") or 0.0),
                 "unresolved_upper_bound_usd": float(
@@ -1257,8 +1256,13 @@ def reconstruct_task_cost(
         raise UsageAccountingError(f"task cost authority unavailable for {task_id}")
     return (
         float(projection["accounted_upper_bound_usd"]), int(projection["total_rounds"]),
-        int(projection["prompt_tokens"]), int(projection["completion_tokens"]),
+        int(projection["prompt_tokens"] or 0), int(projection["completion_tokens"] or 0),
     )
+
+
+def _token_text(value: Any, form: str = "{}", unknown: str = "unknown") -> str:
+    """A ledger token sum, or ``unknown`` when no row reported the counter (never a zero)."""
+    return unknown if value is None else form.format(int(value))
 
 
 def status_text(workers_dict: Dict[int, Any], pending_list: list,
@@ -1322,9 +1326,8 @@ def status_text(workers_dict: Dict[int, Any], pending_list: list,
             else float("inf")
         )
         spent_calls = int(ledger_breakdown.get("physical_calls") or 0)
-        prompt_tokens = int(ledger_breakdown.get("prompt_tokens") or 0)
-        completion_tokens = int(ledger_breakdown.get("completion_tokens") or 0)
-        cached_tokens = int(ledger_breakdown.get("cached_tokens") or 0)
+        prompt_tokens, completion_tokens, cached_tokens = (
+            _token_text(ledger_breakdown.get(name)) for name in ("prompt_tokens", "completion_tokens", "cached_tokens"))
     except Exception:
         log.exception("Budget ledger unavailable while building status")
         accounting_available = False
@@ -1393,9 +1396,8 @@ def status_text(workers_dict: Dict[int, Any], pending_list: list,
             if stats["cost"] > 0 or stats["calls"] > 0:
                 cost = stats["cost"]
                 calls = int(stats["calls"])
-                pt = int(stats["prompt_tokens"])
-                ct = int(stats["completion_tokens"])
-                lines.append(f"  {model_name}: ${cost:.2f} ({calls} calls, {pt:,}p/{ct:,}c tok)")
+                pt, ct = (_token_text(stats[name], "{:,}", "?") for name in ("prompt_tokens", "completion_tokens"))
+                lines.append(f"  {model_name}: ${cost:.2f} ({calls} calls, {pt}p/{ct}c tok)")
 
     lines.append(
         "evolution: "

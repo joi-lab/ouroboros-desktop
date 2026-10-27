@@ -841,8 +841,42 @@ def test_claudexor_display_reaches_error_and_terminal_without_retry(tmp_path, mo
     assert ("remote_context_overflow" in [row["type"] for row in rows]) is (kind == "context_overflow")
     hint = _provider_failure_hint(usage)
     assert f'The provider reported error code "{vendor}" and parameter "{parameter}"' in hint
-    assert "The provider said" not in hint and "provider_code=" not in hint and "private-body" not in hint
+    assert "The provider said" not in hint and "provider_error_type=" not in hint and "private-body" not in hint
+    assert event["provider_error_type"] == vendor and event["error"].startswith(f"provider_error_type={vendor}")
     assert provider_recovery_hint(usage) == provider_recovery_hint({**usage, "_last_llm_error": repr(error)})
+
+
+def test_a_model_error_outlives_its_tasks_drive_in_the_canonical_log_once(tmp_path, monkeypatch):
+    """REPLICA_RULE: a task with its own drive writes llm_api_error there and, durable only, to the installation's
+    log, so the cause of a charge outlives the drive; a task on the canonical drive writes one row, and each
+    error reaches the live stream once."""
+    import json
+    from ouroboros.llm_claudexor import ClaudexorModelError
+    from ouroboros.utils import set_log_sink
+
+    frames = []
+    set_log_sink(frames.append)  # the autouse fixture removes it after the test
+    monkeypatch.setattr("ouroboros.loop_llm_call.time.sleep", lambda _s: pytest.fail("Field refusal cannot retry"))
+    child = tmp_path / "state" / "headless_tasks" / "child1" / "data" / "logs"
+    for drive_logs, task_id in ((child, "child1"), (tmp_path / "logs", "main1")):
+        drive_logs.mkdir(parents=True, exist_ok=True)
+        error = ClaudexorModelError({"code": "invalid_request", "message": "Refused (HTTP 400).",
+                                     "context": {"httpStatus": 400, "vendorCode": "string_above_max_length"}})
+
+        class Refused:
+            def chat(self, **kwargs):
+                raise error
+
+        call_llm_with_retry(Refused(), [{"role": "user", "content": "hi"}], "claudexor::fixture=exact-model",
+                            None, "high", 3, drive_logs, task_id, 1, _RecordingEvents(), {}, "task", False)
+
+    def errors(logs):
+        return [row for row in map(json.loads, (logs / "events.jsonl").read_text().splitlines())
+                if row["type"] == "llm_api_error"]
+
+    replica, own = errors(tmp_path / "logs")
+    assert errors(child) == [replica] and replica["task_id"] == "child1" and own["task_id"] == "main1"
+    assert [frame["task_id"] for frame in frames if frame.get("type") == "llm_api_error"] == ["child1", "main1"]
 
 
 def test_call_llm_with_retry_accumulates_live_catalog_estimated_cost(tmp_path):
