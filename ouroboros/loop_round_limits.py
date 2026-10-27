@@ -407,9 +407,8 @@ def _run_authored_context_view(messages, ctx, pending, selected_names):
             tool_ctx._pending_compaction = None
             tool_ctx._context_view_receipt = {"status": "selection_failed", "reason": str(exc)}
             return messages
-        memory_price = {"view_address": list(addresses), "re_read_input_tokens_estimate":
-                        view_tokens(json.dumps(messages, ensure_ascii=False)),
-                        "basis": "system prefix changes; later cached input may be re-read"}
+        memory_price = {"view_address": list(addresses), "re_read_input_tokens_estimate": view_tokens(json.dumps(
+            messages, ensure_ascii=False)), "basis": "system prefix changes; later cached input may be re-read"}
         original_fit = fit_candidate
         fit_candidate = lambda candidate, selected: original_fit(memory_plan.reproject_transcript(candidate, mode), selected)
     if pending is None:
@@ -527,10 +526,11 @@ def _run_authored_context_view(messages, ctx, pending, selected_names):
             ctx.emit_progress("Context view kept unchanged: the review selection was not durably published.")
     if receipt["status"] == "applied":
         if memory_plan is not None:
-            tool_ctx.context_fit_plan = memory_plan
-            tool_ctx._authored_memory_plan = memory_plan
+            tool_ctx.context_fit_plan = tool_ctx._authored_memory_plan = memory_plan
             from ouroboros.loop_model_call import _adopt_view_facts
+            from ouroboros.primary_route_observation import hold_selection
             _adopt_view_facts(tool_ctx, memory_plan, mode)
+            hold_selection(tool_ctx, addresses, owner_note=bool(proposal.get("working_note", "").strip()))
         receipt["view_revision"] = receipt["after_transcript_sha256"] = context_reclaim_transcript_sha256(candidate)
         from ouroboros.main_context_authority import publish_working_notes
 
