@@ -230,9 +230,10 @@ class _Probed:
 
 
 def finished_seat_homes(data_root: Any, live: Callable[[str], Any], stopped: Callable[[], bool],
-                        proven: Optional[Dict[str, bool]] = None) -> list:
-    """For the owner's Storage -> Free: ``(home, verdict, task_id)`` per seat home, ``offer`` when its copy
-    is gone and its task is proven over (``proven`` caches that per task), else ``in_use`` or ``unreadable``.
+                        proven: Optional[Dict[str, bool]] = None, only: Optional[Any] = None) -> list:
+    """For the owner's Storage -> Free and the ``record_compression`` job: ``(home, verdict, task_id)`` per
+    seat home (``only``: these home names), ``offer`` when its copy is gone and its task is proven over
+    (``proven`` caches that per task), else ``in_use`` or ``unreadable``.
     Pure: markers and task rows are read, no seat lock is taken (a lock writes a file)."""
     from ouroboros.subagent_worktrees import _task_proven_over
 
@@ -240,7 +241,7 @@ def finished_seat_homes(data_root: Any, live: Callable[[str], Any], stopped: Cal
     for home in sorted(seats.iterdir()) if seats.is_dir() else ():
         if stopped():
             break
-        if home.name.startswith(".") or home.is_symlink() or not home.is_dir():
+        if home.name.startswith(".") or home.is_symlink() or not home.is_dir() or only is not None and home.name not in only:
             continue
         try:
             task_id = str(json.loads((home / "checking.json").read_text(encoding="utf-8")).get("task_id") or "")
@@ -254,20 +255,30 @@ def finished_seat_homes(data_root: Any, live: Callable[[str], Any], stopped: Cal
     return found
 
 
-def retire_seat_home(data_root: Any, home: pathlib.Path, live: Callable[[str], Any], proven: Dict[str, bool]) -> str:
-    """Move one finished seat home (its evidence and marker) into the custody trash the maintenance child
-    empties, after re-checking it under the seat lock; returns why it stayed, or ``""``."""
+@contextlib.contextmanager
+def finished_home_held(data_root: Any, home: pathlib.Path, live: Callable[[str], Any], proven: Dict[str, bool]):
+    """HOME under its seat lock (a thread seat's is its thread's; never waits): yields ``""`` while the home
+    is still finished (its copy gone, its task proven over), else ``busy`` or ``in_use``; the lock is held
+    until the caller's block ends, so no worker prepares, refreshes or captures it meanwhile."""
     from ouroboros.subagent_worktrees import _task_proven_over
 
     marker = json.loads((home / "checking.json").read_text(encoding="utf-8"))
     task_id, thread = str(marker.get("task_id") or ""), str(marker.get("thread_seat") or "")
     with _seat_locked(seat_dir(data_root, task_id, f"thread:{thread}") if thread else home, wait=False) as held:
         if not held:
-            return "busy"
+            yield "busy"
+            return
         if task_id not in proven:
             proven[task_id] = _task_proven_over(task_id, data_root, live)
-        if _checking_area_present(unindexed(home, "area")) or not proven[task_id]:
-            return "in_use"
+        yield "in_use" if _checking_area_present(unindexed(home, "area")) or not proven[task_id] else ""
+
+
+def retire_seat_home(data_root: Any, home: pathlib.Path, live: Callable[[str], Any], proven: Dict[str, bool]) -> str:
+    """Move one finished seat home (its evidence and marker) into the custody trash the maintenance child
+    empties, after re-checking it under the seat lock; returns why it stayed, or ``""``."""
+    with finished_home_held(data_root, home, live, proven) as why:
+        if why:
+            return why
     trash = pathlib.Path(data_root) / "state" / "custody_trash" / f"{home.name}-{uuid.uuid4().hex[:12]}"
     trash.parent.mkdir(parents=True, exist_ok=True)
     home.replace(trash)  # outside the lock: Windows moves no folder with an open file

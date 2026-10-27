@@ -23,6 +23,14 @@ _ATOMIC_TEMP_PRUNED = (("state", "headless_tasks"), ("state", "review_checkouts"
 
 # A file name is at most 255 bytes on the filesystems Ouroboros runs on (a physical limit).
 _NAME_MAX_BYTES = 255
+_SIGNATURE = set("0123456789abcdef.")  # pid, tid and uuid after the final ``.tmp.``
+
+
+def is_atomic_temp(name: str) -> bool:
+    """The signature ``atomic_temp_path`` writes (hex digits and dots after the final ``.tmp.``), so a
+    user dotfile such as ``.config.tmp.backup`` never matches."""
+    suffix = name.rsplit(".tmp.", 1)
+    return name.startswith(".") and len(suffix) == 2 and bool(suffix[1]) and not set(suffix[1]) - _SIGNATURE
 
 
 def atomic_temp_path(path: pathlib.Path) -> pathlib.Path:
@@ -80,7 +88,6 @@ def sweep_stale_temp_files(root: pathlib.Path, *, min_age_sec: float = 3600.0,
     root = pathlib.Path(root)
     if not root.is_dir():
         return 0
-    hex_chars = set("0123456789abcdef.")
     removed = 0
     now = time.time()
     try:
@@ -94,13 +101,8 @@ def sweep_stale_temp_files(root: pathlib.Path, *, min_age_sec: float = 3600.0,
         try:
             if not tmp.is_file():
                 continue
-            if not (tmp.parent == fallback_scripts and tmp.name.startswith("script_")):
-                # Require the post-".tmp." suffix to be the atomic signature
-                # (hex/dot only) so we never delete an unrelated dotfile that
-                # happens to match.
-                suffix = tmp.name.rsplit(".tmp.", 1)
-                if len(suffix) != 2 or not suffix[1] or set(suffix[1]) - hex_chars:
-                    continue
+            if not (tmp.parent == fallback_scripts and tmp.name.startswith("script_")) and not is_atomic_temp(tmp.name):
+                continue  # never an unrelated dotfile that happens to match
             if now - tmp.stat().st_mtime < min_age_sec:
                 continue
             tmp.unlink()
