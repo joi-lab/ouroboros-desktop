@@ -546,6 +546,10 @@ def test_an_unreported_token_count_is_unknown_not_zero(tmp_path, monkeypatch):
     assert unsplit["prompt_tokens"] is None and unsplit["cached_tokens"] is None, \
         "without the split the input is unknown, never a harness counter of another meaning"
     assert unsplit["completion_tokens"] == 5 and unsplit["harness_tokens"] == counted["harness_tokens"]
+    from supervisor.state import reconstruct_task_cost
+    task = reconstruct_task_cost("t-a", fields=True, drive_root=tmp_path / "unsplit")
+    assert task["prompt_tokens"] is None and task["completion_tokens"] == 5, "the task total keeps unknown, never 0"
+    assert reconstruct_task_cost("t-a", fields=True, drive_root=tmp_path / "counted")["prompt_tokens"] == 34808503
 
 
 def test_the_start_request_asks_for_the_substrate_it_claims(tmp_path, monkeypatch):

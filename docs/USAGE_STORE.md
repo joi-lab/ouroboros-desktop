@@ -174,8 +174,9 @@ the task's own attempts their `physical_context.round_id`. The `attempts` row
 failure source in the observability CAS (`query_data(op="blob", sha256=...)`).
 The worker's `llm_api_error` row names the same attempts
 (`physical_attempt_id`, `ledger_attempt_ids`) with the classification the loop
-acted on; it lives in the task's drive, which retention or the owner's storage
-run deletes (`docs/PERSISTENCE.md`), while the attempt row and its blob stay.
+acted on; a task with its own drive writes it there and in the installation's
+`logs/events.jsonl`, so it outlives the drive that retention or the owner's
+storage run deletes (`docs/PERSISTENCE.md`), as the attempt row and its blob do.
 
 ## 5. Lock tiers
 

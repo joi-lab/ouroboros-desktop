@@ -712,6 +712,10 @@ class _TaskEventCursorFollower(_TaskEventFollower):
                         event.pop("line")
                         if self.suppress_task_done and event["type"] == "task_done":
                             continue
+                        if (key := replica_key(entry)) is not None:  # one per connection; a reconnect between
+                            if key in self.replicas:                   # the two appends may show both (disclosed)
+                                continue
+                            self.replicas.add(key)
                         yield self.envelope(event, identity=identity)
                     if position == before:
                         break

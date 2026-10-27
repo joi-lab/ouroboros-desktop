@@ -321,10 +321,11 @@ export function formatLogDuration(sec) {
     return `${num < 10 ? num.toFixed(1) : Math.round(num)}s`;
 }
 
+// task_done ledger totals: a sum no row reported (null) is '?', never 0.
 function formatLogTokens(evt) {
-    const prompt = Number(evt.prompt_tokens || 0);
-    const completion = Number(evt.completion_tokens || 0);
-    if (!prompt && !completion) return '';
+    const count = (n) => (n === null ? '?' : Number(n || 0));
+    const prompt = count(evt.prompt_tokens), completion = count(evt.completion_tokens);
+    if (![prompt, completion].some((n) => n !== '?' && n)) return '';
     return `${prompt}\u2192${completion} tok`;
 }
 

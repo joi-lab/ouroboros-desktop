@@ -4,7 +4,8 @@ Verified on 2026-10-06 with Vector 0.58.0 (macOS arm64) against the Ouroboros so
 that added this example: `vector validate` and `vector test` on this file; a running Vector over a scratch
 data root that Ouroboros's own writer filled and its own rotator rotated (at a lower size), stopped and
 restarted midway; and a running Vector over the data root of an isolated Ouroboros server. The results are
-in that pull request.
+in that pull request. The provider fields and the `llm_api_error` route and dedupe added later were checked
+against the record passport by `tests/test_monitoring_examples.py` only, not with `vector test`.
 
 Ouroboros sends no telemetry. This example is for a deployment that wants its own monitoring: a collector
 next to Ouroboros (a sidecar container, a host agent) reads the local JSONL records and forwards only
@@ -37,7 +38,8 @@ statuses, durations and tokens. Content (`args`, `result_preview`, `task`, `outc
 `artifact_bundle`, `error`, `traceback`, ...) is dropped. Extend it only with passport fields for
 that row type; unlisted fields can change without notice. `task_received` uses top-level `task_id`,
 falling back to legacy `task.id`; the rest of `task` is content. Rows gain `log` (events/tools/supervisor)
-and `child_drive` (subagent/forked drive). If adding child `tools.jsonl`, deduplicate by
+and `child_drive` (subagent/forked drive; for a replicated `llm_api_error`, whichever copy came first).
+If adding child `tools.jsonl`, deduplicate by
 `(invocation_id, type)`. A collector stopped past retention or `ignore_older_secs` misses rows.
 
 Money is excluded: spend comes from `GET /api/cost-breakdown` or `GET /api/state` `accounting`,

@@ -119,6 +119,21 @@ def test_late_child_and_changed_existing_lineage_replay_disclosed_view(tmp_path)
     assert next(r for r in resumed if r.get("data", {}).get("content") == "parent")["event_id"] == first[0]["event_id"]
 
 
+def test_a_row_written_to_both_planes_streams_once_and_a_drive_only_row_still_streams(tmp_path):
+    """REPLICA_RULE: a child's model error is in its drive and the canonical log; the v2 stream delivers it
+    once on a connection by its natural key, while an older error only the drive holds still streams."""
+    root = seed(tmp_path / "data")
+    child = tmp_path / "child"
+    (child / "logs").mkdir(parents=True)
+    write_task_result(root, "child", "running", parent_task_id="root", child_drive_root=str(child))
+    error = dict(source="events", task_id="child", type="llm_api_error", ts="2026-01-01T00:00:01Z")
+    append(child, "drive only", llm_call_id="c0", **error)
+    append(child, "replicated", llm_call_id="c1", **error)
+    append(root, "replicated", llm_call_id="c1", **error)
+    events = stream(root)
+    assert sorted(row["data"]["llm_call_id"] for row in events if row.get("type") == "llm_api_error") == ["c0", "c1"]
+
+
 def test_live_partial_waits_but_immutable_partial_discloses_and_advances(tmp_path):
     """The file logs (tools here): an unfinished live line waits for its writer; a torn line in an
     immutable archive is disclosed once and stepped over."""

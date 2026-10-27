@@ -495,6 +495,17 @@ def test_earlier_dispatched_rotation_cannot_hide_behind_final_not_started(setup)
     assert len(gateway.accepted_operations) == 2
 
 
+@pytest.mark.parametrize("code,label", [("provider_failed", "provider_error_type"), ("invalid_request", "provider_error_type"),
+                                        ("rate_limited", "vendor_code"), ("subscription_window_exhausted", "vendor_code")])
+def test_a_vendor_code_is_labelled_by_the_event_field_only_when_it_fills_that_field(code, label):
+    """The text names provider_error_type only when this error's own type carries the code into that field."""
+    from ouroboros.transport_custody import attempt_custody_event_fields
+
+    error = transport.ClaudexorModelError({"code": code, "message": "m", "context": {"vendorCode": "v1"}})
+    assert error.display_message.startswith(f"{label}=v1")
+    assert (attempt_custody_event_fields(error).get("provider_error_type") == "v1") is (label == "provider_error_type")
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("code,vendor", [("invalid_request", "string_above_max_length"),
     ("invalid_request", "context_length_exceeded"), ("provider_failed", "context_length_exceeded")])

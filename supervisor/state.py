@@ -1215,8 +1215,8 @@ def reconstruct_task_cost(
                     else None
                 ),
                 "total_rounds": int(bucket.get("physical_calls") or 0),
-                "prompt_tokens": int(bucket.get("prompt_tokens") or 0),
-                "completion_tokens": int(bucket.get("completion_tokens") or 0),
+                # None: no row of the task reported the counter (a session without its input split), never 0.
+                **{name: None if bucket.get(name) is None else int(bucket[name]) for name in ("prompt_tokens", "completion_tokens")},
                 "cost_final": bool(bucket.get("cost_final")),
                 "reserved_usd": float(bucket.get("reserved_usd") or 0.0),
                 "unresolved_upper_bound_usd": float(
@@ -1256,7 +1256,7 @@ def reconstruct_task_cost(
         raise UsageAccountingError(f"task cost authority unavailable for {task_id}")
     return (
         float(projection["accounted_upper_bound_usd"]), int(projection["total_rounds"]),
-        int(projection["prompt_tokens"]), int(projection["completion_tokens"]),
+        int(projection["prompt_tokens"] or 0), int(projection["completion_tokens"] or 0),
     )
 
 

@@ -70,4 +70,7 @@ test('task_done ledger totals never borrow the usage passport or cache noise', (
     const partial = meta({ ...done, prompt_tokens: 12, completion_tokens: 0 });
     assert.match(partial, /12→0 tok/);
     assert.doesNotMatch(partial, /legacy|\?|not reported/);
+    // A sum no row reported (a session without its input split) is unknown, never a zero.
+    assert.match(meta({ ...done, prompt_tokens: null, completion_tokens: 300 }), /\?→300 tok/);
+    assert.doesNotMatch(meta({ ...done, prompt_tokens: null, completion_tokens: null }), /tok/);
 });

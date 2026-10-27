@@ -13,7 +13,7 @@ sources:
       - /data/archive/events_*.jsonl
       - /data/archive/tools_*.jsonl
       - /data/archive/supervisor_*.jsonl
-      # Worker rows of subagents and forked-memory tasks; deleted with the task drive after retention.
+      # Worker rows of subagents and forked-memory tasks; deleted with the task drive (retention or the owner's storage run).
       # Their tools.jsonl is not read: the canonical tools.jsonl holds the same rows. Their llm_api_error
       # rows reach the canonical events.jsonl too; ouroboros_api_error_once keeps one of each.
       - /data/state/headless_tasks/*/data/logs/events.jsonl

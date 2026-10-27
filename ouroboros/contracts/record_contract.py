@@ -302,7 +302,7 @@ LEGACY_RULE = (
     "outcome_axes members may be bare strings; llm_round duration_ms, ledger_attempt_ids and "
     "physical_attempt_id, and llm_api_error ledger_attempt_ids, start with RECORD_CONTRACT_VERSION 1; "
     "llm_api_error rows of a task with a child drive reach the canonical file from 2026-10-28, earlier ones "
-    "only their drive."
+    "only their drive, and an earlier llm_api_error provider_error_type may name an exception class."
 )
 
 ACCOUNTING_RULE = (
