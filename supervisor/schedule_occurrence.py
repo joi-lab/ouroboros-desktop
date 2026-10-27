@@ -252,9 +252,12 @@ def work_settled(record: Dict[str, Any], *, drive_root: Optional[pathlib.Path] =
 
     A receipt-less claim positively never started, and a row that never admitted
     anything owes nothing: neither needs a queue observation to prove settlement.
-    Otherwise the admitted task must be absent from
-    the queue and settled; a collected result of a task no occurrence still
-    names is settled history. Unreadable or unknown evidence keeps the row.
+    Otherwise the admitted task must be absent from the queue and its result
+    settled. Task rows have no GC, so an absent result is no proof of settlement:
+    bare absence without an occurrence is only a legacy compatibility case.
+    Prepared reads retain owner_pause's refusal for authority seen by this
+    process's fence reads or recorded in quarantine. Quarantine remains evidence
+    across restarts. This refusal and unreadable or unknown evidence keep the row.
     """
     from supervisor.queue_schedules import _schedule_running_or_queued
     from ouroboros.task_status import SETTLED_STATUSES

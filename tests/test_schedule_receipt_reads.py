@@ -305,7 +305,9 @@ def test_retention_uses_the_same_strict_receipt_observation(q, monkeypatch, evid
     _save(q, row)
     with monkeypatch.context() as patch:
         if evidence == "missing":
-            delete_result(q.root, tid)  # a collected result with no occurrence is settled history
+            # Bare absence this process never observed (task rows have no GC): the limited
+            # legacy compatibility of a row with no occurrence, not proven settlement.
+            delete_result(q.root, tid)
         elif evidence == "changed":
             _after_receipt(patch, tid, lambda: task_results.write_task_result(
                 q.root, tid, "completed", result="Enriched terminal result"))
