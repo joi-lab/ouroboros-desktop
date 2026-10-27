@@ -110,6 +110,19 @@ def health_line(root: Any, role: str = "integrator") -> str:
             f"{floor.measure_text(last)}. {floor.CROWDED_POSSIBILITY}")
 
 
+def memory_can_help(root: Any) -> bool:
+    """An open episode whose last Low start had room for the books without memory (``zero_need`` within the
+    window): folding memory can bring Max back. Tool schemas that tip it are not memory's to fold."""
+    try:
+        with store.open_store(root, write=False) as txn:
+            row = txn.get_row(SET, IDENTITY)
+    except Exception:
+        log.debug("Max episode unreadable for the helper", exc_info=True)
+        return False
+    last = (row or {}).get("last") or {}
+    return bool(row) and not row.get("closed") and "zero_need" in last and last["zero_need"] <= last["window"]
+
+
 def _publish(root: Any, row: Dict[str, Any], event_queue: Any) -> bool:
     """Send each line not yet delivered and no longer owed; mark delivered ones. True when the row changed."""
     from supervisor import terminal_delivery as outbox
