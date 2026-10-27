@@ -1,6 +1,6 @@
 // The Main and Project composer is a message field (docs/DESIGN.md "Controls and editable
-// choices"): Enter presses Send, so the key takes Send's own path (Swarm, pending upload,
-// empty text); Shift+Enter is a line break, and a composing or held Enter sends nothing.
+// choices"): Enter presses Send, so the key takes Send's own path (pending upload, empty text);
+// Shift+Enter is a line break, and a composing or held Enter sends nothing.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createChatInstance } from '../modules/chat.js';
@@ -59,17 +59,16 @@ for (const [room, options] of [['Main', {}], ['a Project', { chatId: 7, projectI
     });
 }
 
-test('Enter follows Send: Swarm arms the next message, the existing chords send, a busy Send holds the draft', () => {
+test('Enter follows Send: the existing chords send an ordinary message, a busy Send holds the draft', () => {
     const c = composer();
     try {
-        c.byId('swarm').click();
+        assert.equal(c.byId('swarm'), undefined, 'no one-shot Swarm pill: the room\'s Subagents capsule holds the mode');
         c.input.value = 'plan the migration';
         c.press({ metaKey: true });
-        assert.equal(c.frames[0].force_plan, true);
-        assert.equal(c.byId('swarm').dataset.armed, 'false', 'one-shot, exactly as a click on Send');
+        assert.equal('force_plan' in c.frames[0], false, 'the frame carries no one-shot field');
         c.input.value = 'and report back';
         c.press({ ctrlKey: true });
-        assert.equal(c.frames[1].force_plan, false);
+        assert.equal(c.frames[1].content, 'and report back');
         c.byId('send').disabled = true;
         c.input.value = 'while uploading';
         assert.equal(c.press().defaultPrevented, true);
@@ -207,7 +206,9 @@ test('Send waits for a pending effort-range save; a refused save keeps the draft
         const row = page.children.find((node) => node.classList.contains('chat-toolbar-row'));
         const control = row.children.find((node) => node.classList.contains('chat-effort-range'));
         assert.ok(control, 'the effort range control mounts in the toolbar row');
-        const rec = control.querySelector('.chat-effort-rec');
+        // Its levels live in its panel: a press on the capsule opens it.
+        for (const listener of control.querySelector('.chat-effort-head').listeners.get('click')) listener({ detail: 1 });
+        const rec = document.body.querySelector('.chat-effort-rec');
         const input = document.byId.get('chat-input');
         const send = document.byId.get('chat-send');
         const press = () => {

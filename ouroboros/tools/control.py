@@ -241,7 +241,6 @@ def get_tools() -> List[ToolEntry]:
                 "at the next execution boundary; knowledge is not automatically reloaded. "
                 "The result reports the recorded durable binding, refusal or unconfirmed outcome. "
                 "A task already bound to a room stays there; a requested name renames that room. "
-                "A planning obligation stays with this task."
             ),
             "parameters": {
                 "type": "object",

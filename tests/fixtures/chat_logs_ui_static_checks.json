@@ -768,37 +768,37 @@
     "value": "const wasFirstLoad = !historyLoaded;"
   },
   {
-    "id": "test_swarm_and_context_dom_present",
+    "id": "test_subagents_and_context_dom_present",
     "path": "web/modules/composer.js",
     "kind": "contains",
-    "value": "id=\"chat-swarm\""
+    "value": "id=\"chat-subagents-mode\""
   },
   {
-    "id": "test_swarm_and_context_dom_present",
+    "id": "test_subagents_and_context_dom_present",
     "path": "web/modules/composer.js",
     "kind": "contains",
     "value": "id=\"chat-context-mode\""
   },
   {
-    "id": "test_swarm_and_context_dom_present",
-    "path": "web/modules/composer.js",
+    "id": "test_subagents_and_context_dom_present",
+    "path": "web/modules/composer_subagents.js",
     "kind": "contains",
-    "value": "class=\"chat-composer-pills\""
+    "value": "role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" data-mode=\"${mode}\""
   },
   {
-    "id": "test_swarm_and_context_dom_present",
+    "id": "test_subagents_and_context_dom_present",
     "path": "web/modules/composer_owner_controls.js",
     "kind": "contains",
     "value": "const CONTEXT_MODES = ['nano', 'low', 'max'];"
   },
   {
-    "id": "test_swarm_and_context_dom_present",
+    "id": "test_subagents_and_context_dom_present",
     "path": "web/modules/composer_owner_controls.js",
     "kind": "contains",
     "value": "role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" data-mode=\"${mode}\""
   },
   {
-    "id": "test_swarm_and_context_dom_present",
+    "id": "test_subagents_and_context_dom_present",
     "path": "web/modules/composer.js",
     "kind": "contains",
     "value": "class=\"chat-send-group\""
@@ -822,85 +822,73 @@
     "value": "reviewingSkills.add(name);"
   },
   {
-    "id": "test_swarm_send_listener_uses_arrow_function",
+    "id": "test_one_shot_swarm_pill_is_gone",
     "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "sendMessage(swarmArmed())"
+    "kind": "not_contains",
+    "value": "id=\"chat-swarm\""
   },
   {
-    "id": "test_swarm_send_listener_uses_arrow_function",
+    "id": "test_one_shot_swarm_pill_is_gone",
     "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "sendBtn.addEventListener('click', () => sendMessage(swarmArmed()))"
+    "kind": "not_contains",
+    "value": "swarmArmed"
   },
   {
-    "id": "test_swarm_default_off",
+    "id": "test_one_shot_swarm_pill_is_gone",
     "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "data-armed=\"false\""
+    "kind": "not_contains",
+    "value": "force_plan"
   },
   {
-    "id": "test_swarm_functions_exist",
+    "id": "test_one_shot_swarm_pill_is_gone",
     "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "function swarmArmed()"
+    "kind": "not_contains",
+    "value": "planMode"
   },
   {
-    "id": "test_swarm_functions_exist",
-    "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "function setSwarm(armed)"
-  },
-  {
-    "id": "test_swarm_one_shot_disarms_on_send",
-    "path": "web/modules/composer.js",
-    "kind": "contains",
-    "value": "if (planMode) setSwarm(false);"
+    "id": "test_one_shot_swarm_pill_is_gone",
+    "path": "web/style.css",
+    "kind": "not_contains",
+    "value": ".chat-swarm"
   },
   {
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-context-mode .chat-seg {"
+    "value": ".capsule-panel .chat-seg {"
   },
   {
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-context-mode .chat-seg[aria-checked=\"true\"]"
+    "value": ".capsule-panel .chat-seg[aria-checked=\"true\"]"
   },
   {
     "id": "test_context_segmented_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-context-mode[data-context-mode=\"low\"] {"
+    "value": ":is(.chat-context-mode[data-context-mode=\"low\"], .capsule-panel[data-kind=\"context\"][data-mode=\"low\"]) {"
   },
   {
-    "id": "test_swarm_armed_marker_css",
+    "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-swarm[data-armed=\"true\"]"
+    "value": ":is(.chat-subagents-mode, .capsule-panel[data-kind=\"subagents\"]) {"
   },
   {
-    "id": "test_composer_pills_css_exists",
+    "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-composer-pills {"
+    "value": ".capsule-panel {"
   },
   {
-    "id": "test_composer_pills_css_exists",
+    "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
-    "value": ".chat-swarm {"
+    "value": ":is(.chat-context-mode, .capsule-panel[data-kind=\"context\"]) {"
   },
   {
-    "id": "test_composer_pills_css_exists",
-    "path": "web/style.css",
-    "kind": "contains",
-    "value": ".chat-context-mode {"
-  },
-  {
-    "id": "test_composer_pills_css_exists",
+    "id": "test_composer_capsules_css_exists",
     "path": "web/style.css",
     "kind": "contains",
     "value": ".chat-send-group {"

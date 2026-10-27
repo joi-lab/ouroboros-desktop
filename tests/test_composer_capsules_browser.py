@@ -1,74 +1,117 @@
-"""The composer's two owner capsules in the real composer (DESIGN "Composer owner controls").
+"""The composer's three owner capsules and their panels in the real composer (DESIGN "Composer owner controls").
 
-On a real server in Chromium and WebKit: `Context Max` opens inline into exactly three modes
-(a choice posts the owner endpoint at once, a refusal says why and keeps the saved mode, a reload
-reads it back; Enter opens onto the chosen mode, arrows choose a neighbour, Esc returns to the
-head); one capsule is open at a time — one press on the other capsule switches on a desktop, and on
-a phone, where an open strip stands alone, the capsule that opens next is never left hidden by the
-first one's layout. Effort's max bracket keeps clear of the capsule's rounded end — measured
-against the rounded contour at the bracket's corners — beside the others, alone, at the tightest
-padding, at a scrolling strip's end and during a drag, while Context's pill-shaped thumb stays
-concentric. Closed, the capsules keep their names while the line holds them. Reduced motion
-removes the transitions; a resize refits an open strip. On no animation frame of an opening or
-a closing does the row wrap; a translated Context strip that scrolls on a 320 px phone shows the
-chosen mode whole on opening, after Home and End, and when a resize makes the open strip scroll,
-while a later relayout keeps where the owner scrolled it. Right to left the strips mirror: they
-scroll leftwards, keep the moved mode or bracket whole, fade where levels hide, and a press lands
-on the level under it. A closed row whose long translated values still wrap without the names
-cuts the longest values to one width (the whole word stays in the button's name and the open strip),
-and no frame of an opening or a closing wraps there, left to right or right to left.
+On a real server in Chromium and WebKit: each capsule (Subagents, Context, Effort) opens a panel, never inline — on a
+desk a float panel above it, its leading edge on the capsule's and inside the composer's column; on a phone a bottom
+sheet over a scrim. At 390 and 1280 px, light and dark, in Main and in a Project, the row's boxes are the same to the byte
+before a panel opens, on every frame while it opens, stands and closes, and after; every option in a panel is at least
+44 × 44 px and nothing scrolls sideways. One panel is open at a time: a press on another capsule switches at once;
+Escape, an outside press, the same capsule or, on a phone, the scrim closes it, focus coming back to the capsule from the
+keyboard. A choice never changes the panel's height. `Context Max` chooses one of three modes (a choice posts the owner
+endpoint at once, a refusal says why and keeps the saved mode, a reload reads it back; Enter opens onto the chosen mode,
+arrows choose a neighbour). Effort's max bracket keeps clear of the strip's rounded end, Context's thumb stays concentric
+with it. Settings-off locks Subagents on Off with the reason and Open Settings. Reduced motion opens and closes at once.
+Closed, the capsules keep their names while the line holds them; long translated values give way on a 320 px phone, left
+to right and right to left, while the panel shows the whole word; right to left the Effort strip mirrors.
 """
 from __future__ import annotations
 
 import json
+import re
+import urllib.request
 
 import pytest
 
-from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat, _shot
+from tests.test_effort_range_browser import _at_rest, _evidence_dir, _launch, _open_chat, _panel, _settled, _shot, _wait
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
-from tests.ui_chat_viewport_smoke import set_viewport
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 CONTEXT = "#page-chat .chat-context-mode"
 EFFORT = "#page-chat .chat-effort-range"
+SUBAGENTS = "#page-chat .chat-subagents-mode"
+KINDS = {"subagents": ".chat-subagents-mode", "context": ".chat-context-mode", "effort": ".chat-effort-range"}
+# Main's row and, for a capsule, its panel while open (in the document only then; the head names it).
 ROW = """() => {
     const row = document.querySelector('#page-chat .chat-toolbar-row');
     const rect = (node) => node.getBoundingClientRect();
     const shown = (node) => Boolean(node) && getComputedStyle(node).display !== 'none';
-    const ctx = row.querySelector('.chat-context-mode');
-    const eff = row.querySelector('.chat-effort-range');
-    const kids = [...row.children].filter(shown);
-    const tops = kids.map((kid) => rect(kid).top);
-    const segs = [...ctx.querySelectorAll('.chat-seg')];
-    const active = document.activeElement;
-    return {
-        ctx: {
-            open: ctx.dataset.open, mode: ctx.dataset.contextMode, fit: ctx.dataset.fit || '', shown: shown(ctx),
-            head: ctx.querySelector('.chat-capsule-head').textContent, value: ctx.querySelector('.chat-capsule-value').textContent,
+    const capsule = (el) => {
+        const head = el.querySelector('.chat-capsule-head');
+        const panel = document.getElementById(head.getAttribute('aria-controls'));
+        const segs = panel ? [...panel.querySelectorAll('.chat-seg')] : [];
+        const active = document.activeElement;
+        return {
+            open: el.dataset.open, shown: shown(el), head: head.textContent, value: el.querySelector('.chat-capsule-value').textContent,
+            expanded: head.getAttribute('aria-expanded'), disabled: el.dataset.disabled || '',
+            mode: el.dataset.contextMode || el.dataset.mode || '', place: panel?.dataset.place || '',
             checked: segs.filter((seg) => seg.getAttribute('aria-checked') === 'true').map((seg) => seg.dataset.mode),
             tabbable: segs.filter((seg) => seg.tabIndex === 0).map((seg) => seg.dataset.mode),
-            focused: active?.dataset?.mode || (active === ctx.querySelector('.chat-capsule-head') ? 'head' : ''),
-            right: rect(ctx).right, disabled: ctx.dataset.disabled || '',
-        },
-        eff: { open: eff.dataset.open, fit: eff.dataset.fit || '', shown: shown(eff), right: rect(eff).right, head: eff.querySelector('.chat-capsule-head').textContent },
-        swarmShown: shown(row.querySelector('.chat-composer-pills')),
-        menuShown: shown(row.querySelector('.composer-menu')),  // a room's ☰ (the stack layout shows it)
+            focused: active === head ? 'head' : (panel?.contains(active) ? (active.dataset.mode || active.dataset.handle || 'panel') : ''),
+            line: panel?.querySelector('.capsule-panel-line[data-on="true"]')?.textContent || '',
+            height: panel ? rect(panel).height : 0,
+        };
+    };
+    const kids = [...row.children].filter(shown);
+    const tops = kids.map((kid) => rect(kid).top);
+    return {
+        ctx: capsule(row.querySelector('.chat-context-mode')), eff: capsule(row.querySelector('.chat-effort-range')),
+        sub: capsule(row.querySelector('.chat-subagents-mode')),
+        panels: [...document.querySelectorAll('.capsule-panel:not([data-leaving])')].map((panel) => panel.dataset.kind),
+        menuShown: shown(row.querySelector('.composer-menu')),
         namesShown: [...row.querySelectorAll('.chat-capsule-name')].map(shown),
-        solo: row.dataset.ownerSolo || '', compact: row.dataset.ownerCompact || '',
+        compact: row.dataset.ownerCompact || '',
         oneLine: Math.max(...tops) - Math.min(...tops) < 2, rowHeight: rect(row).height,
-        rowRight: rect(row).right - parseFloat(getComputedStyle(row).paddingRight),
         docScroll: document.documentElement.scrollWidth > innerWidth + 1,
     };
 }"""
-# A mark's clearance from the capsule's inner contour: the straight gutter at the end, the
-# rounded contour's distance at the mark's top and bottom corners, and its vertical insets.
-CLEARANCE = """sel => {
+# A room's row to the byte: its box and every child's, as one string.
+ROW_BOX = """(root) => {
+    const row = document.querySelector(`${root} .chat-toolbar-row`);
+    const box = (node) => { const r = node.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
+    return JSON.stringify({ row: box(row), kids: [...row.children].map((kid) => [kid.className, box(kid)]) });
+}"""
+# The row read on every animation frame for `ms` (an opening, a standing panel, a closing): the strings it showed.
+ROW_FRAMES = """({ root, ms }) => {
+    const row = document.querySelector(`${root} .chat-toolbar-row`);
+    const box = (node) => { const r = node.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
+    const read = () => JSON.stringify({ row: box(row), kids: [...row.children].map((kid) => [kid.className, box(kid)]) });
+    const seen = window.__rowFrames = [];
+    const until = performance.now() + ms;
+    const tick = () => { seen.push(read()); if (performance.now() < until) requestAnimationFrame(tick); else seen.done = true; };
+    requestAnimationFrame(tick);
+}"""
+# An open capsule's panel: where it stands, its frame, its options as finger targets, its words.
+PANEL = """(sel) => {
     const el = document.querySelector(sel);
-    const style = getComputedStyle(el);
-    const shell = el.getBoundingClientRect();
-    const border = parseFloat(style.borderRightWidth) || 0;
-    const top = shell.top + border, bottom = shell.bottom - border, right = shell.right - border;
+    const head = el.querySelector('.chat-capsule-head');
+    const panel = document.getElementById(head.getAttribute('aria-controls'));
+    const rect = (node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+    const css = getComputedStyle(panel);
+    return {
+        kind: panel.dataset.kind, place: panel.dataset.place, panel: rect(panel), capsule: rect(el),
+        column: rect(el.closest('.chat-input-wrap')), view: { width: innerWidth, height: innerHeight },
+        docScroll: document.documentElement.scrollWidth > innerWidth + 1, panelScroll: panel.scrollWidth > panel.clientWidth + 1,
+        targets: [...panel.querySelectorAll('.chat-seg, .chat-effort-seg, .chat-subagents-settings')]
+            .filter((node) => node.getClientRects().length)
+            .map((node) => ({ name: node.dataset.mode || node.dataset.effortSeg || node.textContent.trim(), ...rect(node) })),
+        title: panel.querySelector('.capsule-panel-title').textContent, ring: Boolean(panel.querySelector('.capsule-panel-glyph svg')),
+        line: panel.querySelector('.capsule-panel-line[data-on="true"]')?.textContent || '',
+        rule: panel.querySelector('.capsule-panel-rule:not([hidden])')?.textContent || '',
+        scrim: Boolean(document.querySelector('.capsule-panel-scrim:not([data-leaving])')),
+        radius: [css.borderTopLeftRadius, css.borderBottomLeftRadius], glass: css.backdropFilter || css.webkitBackdropFilter || '',
+        shadow: css.boxShadow !== 'none', opaque: css.backgroundImage !== 'none' || !css.backgroundColor.endsWith(', 0)'),
+        focusInside: panel.contains(document.activeElement), headFill: getComputedStyle(head).backgroundColor,
+        open: el.dataset.open, expanded: head.getAttribute('aria-expanded'),
+    };
+}"""
+# A mark's clearance from the strip's rounded end: the straight gutter at the end, the rounded contour's distance at the
+# mark's top and bottom corners, and its vertical insets (the strip is the standing capsule in the panel).
+CLEARANCE = """({ sel, strip: stripSelector }) => {
+    const head = document.querySelector(sel).querySelector('.chat-capsule-head');
+    const panel = document.getElementById(head.getAttribute('aria-controls'));
+    const strip = panel.querySelector(stripSelector);
+    const shell = strip.getBoundingClientRect();
+    const top = shell.top, bottom = shell.bottom, right = shell.right;
     const r = (bottom - top) / 2, cy = top + r, cx = right - r;
     const contour = (y) => cx + Math.sqrt(Math.max(0, r * r - (y - cy) ** 2));
     const mark = (node) => {
@@ -76,120 +119,7 @@ CLEARANCE = """sel => {
         const m = node.getBoundingClientRect();
         return { gutter: right - m.right, corners: Math.min(contour(m.top), contour(m.bottom)) - m.right, top: m.top - top, bottom: bottom - m.bottom };
     };
-    return {
-        cap: mark(el.querySelector('.chat-effort-max')), thumb: mark(el.querySelector('.chat-context-thumb')),
-        fit: el.dataset.fit || '', scroll: el.querySelector('[data-scroll]')?.dataset.scroll || '',
-    };
-}"""
-# Every frame of an opening and then a closing, read in requestAnimationFrame: where the row's
-# shown controls stand (a spread of their tops means a second line) and the capsule's width.
-FRAMES = """async ({ sel, frames }) => {
-    const row = document.querySelector('#page-chat .chat-toolbar-row');
-    const el = document.querySelector(sel);
-    const head = el.querySelector('.chat-capsule-head');
-    const shown = (node) => getComputedStyle(node).display !== 'none';
-    // The chosen mode or the recommended level, whole inside the visible strip.
-    const whole = () => {
-        const word = el.querySelector('.chat-seg[aria-checked="true"], .chat-effort-seg[data-rec="true"]').getBoundingClientRect();
-        const s = el.querySelector('[data-scroll]').getBoundingClientRect();
-        const b = el.querySelector('.chat-capsule-body').getBoundingClientRect();
-        return word.width > 0 && word.left >= Math.max(s.left, b.left) - 0.5 && word.right <= Math.min(s.right, b.right) + 0.5;
-    };
-    const sample = () => {
-        const tops = [...row.children].filter(shown).map((kid) => kid.getBoundingClientRect().top);
-        return { spread: Math.max(...tops) - Math.min(...tops), height: row.getBoundingClientRect().height, width: el.getBoundingClientRect().width,
-                 whole: whole(), compact: row.dataset.ownerCompact || '' };
-    };
-    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-    // Every frame a press can paint, however few this host draws (a loaded WebKit draws two or three per
-    // transition): the row's transitions are held from the press on, stepped through their whole timeline, then
-    // finished, and the frames after that are sampled as they come.
-    const held = () => {
-        const moving = document.getAnimations().filter((animation) => 'transitionProperty' in animation
-            && row.contains(animation.effect?.target));
-        moving.forEach((animation) => animation.pause());
-        return moving;
-    };
-    const run = async () => {
-        held();
-        await frame();  // the press's own frame work runs; what it starts is held too
-        const moving = held();
-        const end = Math.max(0, ...moving.map((animation) => animation.effect.getComputedTiming().endTime));
-        const out = [];
-        for (let i = 0; i < frames; i += 1) {
-            moving.forEach((animation) => { animation.currentTime = end * i / (frames - 1); });
-            // The step is read once the product has refit to it: its ResizeObserver hands the fit to the next
-            // frame (composer_owner_controls.js observeLayout), so that frame runs before the read.
-            for (let wait = 0; wait < 3; wait += 1) await frame();
-            out.push(sample());
-        }
-        moving.forEach((animation) => animation.finish());
-        for (let i = 0; i < 4; i += 1) { await frame(); out.push(sample()); }
-        return out;
-    };
-    const press = () => head.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-    const closed = sample();
-    press();
-    const fit = el.dataset.fit || '';
-    const opening = await run();
-    press();
-    const closing = await run();
-    return { closed, fit, opening, closing, open: el.dataset.open };
-}"""
-# The capsule once the closing settled: its width, a value that shows whole, nothing held.
-SETTLED = """sel => {
-    const el = document.querySelector(sel);
-    const value = el.querySelector('.chat-capsule-value');
-    return { width: el.getBoundingClientRect().width, clipped: value.scrollWidth > value.clientWidth + 1,
-             held: el.style.getPropertyValue('--capsule-value-width') + el.style.getPropertyValue('--capsule-body-width') };
-}"""
-# A translated install (the house idiom: the gateway's /api/ui/i18n answer, stubbed): the overlay
-# rewrites the modes in place, and on a 320 px phone their longer words scroll inside the strip.
-TRANSLATED = {"language": "ru", "english": False, "revision": 1, "entries": {
-    english: {"text": text, "provenance": "imported"}
-    for english, text in (("Context", "Контекст"), ("Nano", "Компактный"), ("Low", "Сокращённый"), ("Max", "Максимальный"))}}
-# A mode's word against the strip that shows it: whole (inside the strip's box) and where the strip fades.
-SHOWN = """mode => {
-    const el = document.querySelector('#page-chat .chat-context-mode');
-    const strip = el.querySelector('.chat-context-strip');
-    const seg = el.querySelector(`.chat-seg[data-mode="${mode}"]`);
-    const s = strip.getBoundingClientRect();
-    const m = seg.getBoundingClientRect();
-    const word = seg.querySelector('.chat-seg-text').getBoundingClientRect();
-    return {
-        fit: el.dataset.fit || '', scroll: strip.dataset.scroll || '', scrollLeft: strip.scrollLeft, word: seg.textContent,
-        strip: [s.left, s.right], seg: [m.left, m.right], wordBox: [word.left, word.right],
-        // offsetLeft/clientWidth/scrollWidth round to CSS pixels: an end can clip <1 px of
-        // button padding while every glyph stays visible. Never excuse clipped text.
-        whole: m.left >= s.left - 1 && m.right <= s.right + 1 && word.left >= s.left && word.right <= s.right,
-        focused: document.activeElement?.dataset?.mode || '', docScroll: document.documentElement.scrollWidth > innerWidth + 1,
-        fade: getComputedStyle(strip).maskImage || getComputedStyle(strip).webkitMaskImage || '',
-    };
-}"""
-# A right-to-left install (its language profile says `rtl`; the words are the test's own, longer
-# than the English): both strips scroll on a 320 px phone.
-RTL = {"language": "ar", "english": False, "revision": 1, "profile": {"direction": "rtl"}, "entries": {
-    english: {"text": text, "provenance": "imported"}
-    for english, text in (("Context", "السياق"), ("Nano", "السياق المصغّر"), ("Low", "السياق المنخفض"), ("Max", "السياق الكامل"))}}
-# Effort's marks against its strip and its shell: boxes as [left, right], whole = inside the strip.
-MARKS = """() => {
-    const el = document.querySelector('#page-chat .chat-effort-range');
-    const strip = el.querySelector('.chat-effort-strip');
-    const s = strip.getBoundingClientRect();
-    const box = (sel) => { const r = el.querySelector(sel).getBoundingClientRect(); return [r.left, r.right]; };
-    const whole = (sel) => { const [l, r] = box(sel); return l >= s.left - 0.5 && r <= s.right + 0.5; };
-    const shell = el.getBoundingClientRect();
-    const border = parseFloat(getComputedStyle(el).borderLeftWidth) || 0;
-    return {
-        fit: el.dataset.fit || '', scroll: strip.dataset.scroll || '', dir: getComputedStyle(strip).direction,
-        fade: getComputedStyle(strip).maskImage || getComputedStyle(strip).webkitMaskImage || '',
-        band: box('.chat-effort-band'), pill: box('.chat-effort-rec'), seg: box('.chat-effort-seg[data-rec="true"]'),
-        min: box('.chat-effort-min'), max: box('.chat-effort-max'), pillWhole: whole('.chat-effort-rec'),
-        maxWhole: whole('.chat-effort-max'), ultraWhole: whole('[data-effort-seg="ultra"]'),
-        none: box('[data-effort-seg="none"]'), shellLeft: shell.left + border,
-        inset: el.querySelector('.chat-effort-max').getBoundingClientRect().top - shell.top - border,
-        focused: document.activeElement?.dataset?.handle || '',
-    };
+    return { cap: mark(strip.querySelector('.chat-effort-max')), thumb: mark(strip.querySelector('.chat-context-thumb')) };
 }"""
 # Long translated values on a 320 px phone, left to right and right to left (the test's own words).
 LONG_VALUES = {
@@ -224,6 +154,19 @@ CAPPED = """() => {
         }),
     };
 }"""
+# The chosen mode's word in the open Context panel: whole inside its strip.
+SHOWN = """mode => {
+    const head = document.querySelector('#page-chat .chat-context-mode .chat-capsule-head');
+    const panel = document.getElementById(head.getAttribute('aria-controls'));
+    const strip = panel.querySelector('.chat-context-strip');
+    const seg = strip.querySelector(`.chat-seg[data-mode="${mode}"]`);
+    const s = strip.getBoundingClientRect(), m = seg.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(seg.querySelector('.chat-seg-text'));
+    const word = range.getBoundingClientRect();  // the glyphs, not the element: an overflowing word leaves its box
+    return { word: seg.textContent, whole: m.left >= s.left - 1 && m.right <= s.right + 1 && word.left >= m.left && word.right <= m.right,
+             docScroll: document.documentElement.scrollWidth > innerWidth + 1 };
+}"""
 
 
 def _row(page) -> dict:
@@ -234,27 +177,110 @@ def _until(page, predicate: str, timeout: int = 5_000) -> None:
     page.wait_for_function(f"() => {{ const r = ({ROW})(); return {predicate}; }}", timeout=timeout)
 
 
-def _wait_for_transitions(page, selector: str) -> None:
-    # A busy renderer can reach the wall-clock deadline before the opening's final frame.
-    page.wait_for_function("""sel => document.querySelector(sel).getAnimations({subtree: true})
-        .every(animation => !animation.pending && animation.playState !== 'running')""", arg=selector, timeout=5_000)
-
-
-def _morph_settled(page) -> None:
-    # A capsule's morph ends with its glass: the controls that stepped aside leave the line then.
-    page.wait_for_function("""() => { const row = document.querySelector('#page-chat .chat-toolbar-row');
-        return !('ownerLeaving' in row.dataset) && row.getAnimations({subtree: true})
-            .filter(animation => animation.effect?.getComputedTiming().endTime !== Infinity)
-            .every(animation => !animation.pending && animation.playState !== 'running'); }""", timeout=10_000)
-
-
 def _record(tmp_path, name: str, facts) -> None:
     (_evidence_dir(tmp_path) / f"{name}.json").write_text(json.dumps(facts, indent=1), encoding="utf-8")
 
 
-def _between(frames, ends) -> int:
-    """The frames whose capsule stands clearly between its closed and its open width."""
-    return sum(min(ends) + 2 < frame["width"] < max(ends) - 2 for frame in frames)
+def _install(page, payload) -> None:
+    page.route("**/api/ui/i18n", lambda route: route.fulfill(json=payload))
+    page.route("**/api/ui/i18n/missing", lambda route: route.fulfill(json={"ok": True}))
+
+
+def _frames(page, root: str, act, ms: int = 900) -> list[str]:
+    """The row on every frame from just before `act` until `ms` later."""
+    page.evaluate(ROW_FRAMES, {"root": root, "ms": ms})
+    act()
+    page.wait_for_function("() => window.__rowFrames?.done === true", timeout=ms + 10_000)
+    return page.evaluate("() => window.__rowFrames.slice()")
+
+
+def _assert_panel(facts: dict, *, phone: bool, theme: str) -> None:
+    """Where the panel stands, its frame, and its options at a finger's size, nothing scrolling sideways."""
+    panel, view = facts["panel"], facts["view"]
+    assert facts["open"] == "true" and facts["expanded"] == "true" and facts["ring"], facts
+    if phone:
+        assert facts["place"] == "sheet" and facts["scrim"] and facts["radius"] == ["24px", "0px"], facts
+        assert abs(panel["left"]) <= 0.5 and abs(panel["right"] - view["width"]) <= 0.5, facts
+        assert abs(panel["bottom"] - view["height"]) <= 0.5, facts
+    else:
+        column, capsule = facts["column"], facts["capsule"]
+        assert facts["place"] == "float" and not facts["scrim"] and facts["radius"] == ["18px", "18px"], facts
+        assert abs(panel["bottom"] - (capsule["top"] - 8)) <= 1, ("8 px above the capsule", facts)
+        assert panel["left"] >= column["left"] - 0.5 and panel["right"] <= column["right"] + 0.5, ("inside the column", facts)
+        edge = max(column["left"], min(capsule["left"], column["right"] - panel["width"]))
+        assert abs(panel["left"] - edge) <= 1, ("its leading edge on the capsule's", facts)
+    assert facts["shadow"] and facts["opaque"], ("the float shadow over an opaque surface", facts)
+    assert (facts["glass"] not in ("", "none")) is (theme == "dark"), ("glass in dark only", facts)
+    assert panel["left"] >= -0.5 and panel["right"] <= view["width"] + 0.5, facts
+    assert not facts["docScroll"] and not facts["panelScroll"], facts
+    assert facts["targets"] and all(t["width"] >= 43.5 and t["height"] >= 43.5 for t in facts["targets"]), \
+        ("every option a finger's size", facts["targets"])
+
+
+def _project(url: str, project_id: str) -> dict:
+    request = urllib.request.Request(url + "/api/projects", data=json.dumps({"id": project_id, "name": project_id.title()}).encode(),
+                                     headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - the test's own local server
+        return json.loads(response.read())["project"]
+
+
+def _open_project(page, project: dict) -> str:
+    page.evaluate("project => window.dispatchEvent(new CustomEvent('ouro:open-project', {detail: {project}}))", project)
+    root = f"#panel-pchat-{project['id']}"
+    page.wait_for_function("root => document.querySelector(root + ' .chat-effort-range')?.dataset.known === 'true'", arg=root,
+                           timeout=30_000)
+    page.wait_for_function("root => document.querySelector(root + ' .chat-toolbar-row').getBoundingClientRect().width > 0",
+                           arg=root, timeout=10_000)
+    page.wait_for_timeout(400)  # the room's own entrance
+    return root
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 1280), ("chromium", 390), ("webkit", 390)])
+def test_a_panel_never_moves_the_row(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    """Light and dark, Main and a Project, each capsule: the row to the byte before a panel opens, on every frame of its
+    opening, standing and closing, and after; the panel where it belongs, its options a finger's size."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    phone = width < 720
+    project = _project(url, f"rows-{engine}-{width}")
+    context = {"viewport": {"width": width, "height": 860}}
+    if phone:
+        context.update(is_mobile=True, has_touch=True)
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, **context)
+        try:
+            for theme in ("light", "dark"):
+                _open_chat(page, url, width=width, height=860, theme=theme)
+                for room in ("main", "project"):
+                    root = "#page-chat" if room == "main" else _open_project(page, project)
+                    for kind, capsule in KINDS.items():
+                        sel = f"{root} {capsule}"
+                        head = f"{sel} .chat-capsule-head"
+                        key = f"{engine}-{width}-{theme}-{room}-{kind}"
+                        before = page.evaluate(ROW_BOX, root)
+                        opening = _frames(page, root, (lambda: page.tap(head)) if phone else (lambda: page.click(head)))
+                        _settled(page, sel)
+                        facts = page.evaluate(PANEL, sel)
+                        seen[key] = {"panel": facts}
+                        _assert_panel(facts, phone=phone, theme=theme)
+                        assert facts["focusInside"], ("focus goes into the panel", key, facts)
+                        _shot(page, tmp_path, f"panel-{key}")
+                        standing = _frames(page, root, lambda: None, ms=300)
+                        closing = _frames(page, root, lambda: page.keyboard.press("Escape"))
+                        page.wait_for_function("sel => document.querySelector(sel).dataset.open === 'false'", arg=sel)
+                        assert page.evaluate("sel => document.activeElement === document.querySelector(sel + ' .chat-capsule-head')", sel), key
+                        after = page.evaluate(ROW_BOX, root)
+                        frames = opening + standing + closing + [after]
+                        moved = [frame for frame in frames if frame != before]
+                        seen[key].update(frames=len(frames), moved=moved[:2], before=before)
+                        assert len(opening) >= 3 and len(closing) >= 3, ("frames were read", key, len(opening), len(closing))
+                        assert not moved, ("the row never moves", key, before, moved[:2])
+        finally:
+            _record(tmp_path, f"panels-row-{engine}-{width}", seen)
+            browser.close()
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
@@ -264,30 +290,33 @@ def test_context_capsule_chooses_one_of_three_modes_and_reads_back(direct_server
 
     url = direct_server_with_data["url"]
     with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 1440, "height": 900})
+        browser, page = _launch(pw, engine, viewport={"width": 1280, "height": 900})
         try:
-            _open_chat(page, url, width=1440, theme="light")
+            _open_chat(page, url, width=1280, theme="light")
             closed = _row(page)
-            assert closed["ctx"]["head"] == "ContextMax" and closed["ctx"]["checked"] == ["max"], closed
-            assert closed["ctx"]["tabbable"] == [] and closed["oneLine"] and closed["namesShown"] == [True, True], closed
-            _shot(page, tmp_path, f"capsules-closed-{engine}-light")
+            assert closed["ctx"]["head"] == "ContextMax" and closed["ctx"]["mode"] == "max", closed
+            assert closed["panels"] == [] and closed["oneLine"] and closed["namesShown"] == [True, True, True], closed
             posts = []
             page.on("request", lambda r: posts.append(json.loads(r.post_data)) if r.url.endswith("/api/owner/context-mode") else None)
             page.click(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            page.wait_for_timeout(450)
+            _settled(page, CONTEXT)
             opened = _row(page)
-            assert opened["ctx"]["fit"] == "inline" and opened["eff"]["shown"] and opened["swarmShown"], opened
-            assert opened["oneLine"] and opened["ctx"]["right"] <= opened["rowRight"] + 1 and not opened["docScroll"], opened
+            assert opened["panels"] == ["context"] and opened["ctx"]["place"] == "float", opened
+            assert opened["ctx"]["checked"] == ["max"] and opened["ctx"]["tabbable"] == ["max"], opened
+            assert opened["ctx"]["line"] == "Everything the model's window holds.", opened
             assert posts == [], "opening saves nothing"
-            _shot(page, tmp_path, f"capsules-context-open-{engine}-light")
-            # A press on a mode posts it at once; the capsule shows it once the server took it.
+            panel = _panel(page, CONTEXT)
+            # A press on a mode posts it at once; the capsule shows it once the server took it; the panel stays.
             with page.expect_response(lambda r: r.url.endswith("/api/owner/context-mode"), timeout=30_000) as waited:
-                page.click(f'{CONTEXT} .chat-seg[data-mode="low"]')
+                page.click(f'{panel} .chat-seg[data-mode="low"]')
             assert waited.value.status == 200 and posts[-1] == {"mode": "low"}, posts
             _until(page, "r.ctx.mode === 'low' && r.ctx.disabled === 'false'")
-            assert _row(page)["ctx"]["checked"] == ["low"]
-            # Keyboard: Esc returns to the head, Enter opens onto the chosen mode, an arrow chooses.
+            chosen = _row(page)
+            assert chosen["ctx"]["checked"] == ["low"] and chosen["ctx"]["open"] == "true", chosen
+            assert chosen["ctx"]["line"] == "About 250K tokens; fits local models.", chosen
+            assert chosen["ctx"]["height"] == opened["ctx"]["height"], ("a choice never changes the panel's height", chosen, opened)
+            _shot(page, tmp_path, f"capsules-context-low-{engine}-light")
+            # Keyboard: Esc returns to the capsule, Enter opens onto the chosen mode, an arrow chooses.
             page.keyboard.press("Escape")
             _until(page, "r.ctx.open === 'false' && r.ctx.focused === 'head'")
             assert _row(page)["ctx"]["head"] == "ContextLow"
@@ -301,7 +330,7 @@ def test_context_capsule_chooses_one_of_three_modes_and_reads_back(direct_server
             page.route("**/api/owner/context-mode", lambda route: route.fulfill(
                 status=409, content_type="application/json",
                 body=json.dumps({"error": "Context mode refused by the test."})))
-            page.click(f'{CONTEXT} .chat-seg[data-mode="max"]')
+            page.click(f'{panel} .chat-seg[data-mode="max"]')
             page.wait_for_selector(".toast", timeout=10_000)
             assert "Context mode refused by the test." in page.locator(".toast").first.inner_text()
             _until(page, "r.ctx.mode === 'nano' && r.ctx.disabled === 'false' && r.ctx.checked.join() === 'nano'")
@@ -311,461 +340,314 @@ def test_context_capsule_chooses_one_of_three_modes_and_reads_back(direct_server
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{EFFORT}')?.dataset.known === 'true'", timeout=30_000)
             _until(page, "r.ctx.mode === 'nano' && r.ctx.head === 'ContextNano'", timeout=30_000)
-            _shot(page, tmp_path, f"capsules-closed-nano-{engine}-dark")
             page.click(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            page.wait_for_timeout(450)
-            _shot(page, tmp_path, f"capsules-context-open-{engine}-dark")
+            _settled(page, CONTEXT)
+            _shot(page, tmp_path, f"capsules-context-nano-open-{engine}-dark")
         finally:
             browser.close()
 
 
-@pytest.mark.parametrize("engine,width,touch", [("chromium", 1440, False), ("webkit", 1440, False), ("chromium", 390, True),
-                                                ("webkit", 390, True), ("chromium", 440, False)])
-def test_one_capsule_open_at_a_time_and_a_narrow_switch_keeps_both_reachable(direct_server_with_data, engine, width, touch, tmp_path):  # noqa: F811
+# Every click the page delivered, by its target (capture phase): a tap on the scrim must land on the scrim alone.
+CLICKS = """() => { window.__clicks = []; document.addEventListener('click', (event) => window.__clicks.push(
+    event.target.className || event.target.id || event.target.tagName), true); }"""
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 1280), ("chromium", 390), ("webkit", 390)])
+def test_one_panel_at_a_time_and_every_way_to_close_it(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
+    from tests.test_effort_range_browser import SWIPE
+
     url = direct_server_with_data["url"]
+    phone = width < 720
     context = {"viewport": {"width": width, "height": 860}}
-    if touch:
-        context.update(is_mobile=True, has_touch=True)
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, **context)
-        try:
-            _open_chat(page, url, width=width, height=860)
-            press = page.tap if touch else page.click
-            closed = _row(page)
-            assert closed["oneLine"] and not closed["docScroll"], closed
-            assert closed["menuShown"] is (width < 1000), ("a phone's room keeps ☰ first in the row", closed)
-            seen = {"closed": closed}
-            for first, second in (("effort", "context"), ("context", "effort")):
-                heads = {"effort": f"{EFFORT} .chat-capsule-head", "context": f"{CONTEXT} .chat-capsule-head"}
-                short = {"effort": "eff", "context": "ctx"}
-                press(heads[first])
-                _until(page, f"r.{short[first]}.open === 'true'")
-                page.wait_for_timeout(450)
-                _morph_settled(page)  # a slow WebKit runner is still mid-morph after the 450 ms
-                one = _row(page)
-                if one[short[first]]["fit"] == "solo":
-                    # Alone on the line: the room's ☰, the pills and the other capsule step aside; an
-                    # outside press gives the line back before the other capsule can be reached.
-                    assert one["solo"] == first and not one[short[second]]["shown"] and not one["swarmShown"], one
-                    assert not one["menuShown"], one
-                    press("#chat-messages")
-                    _until(page, f"r.{short[first]}.open === 'false' && r.solo === '' && r.{short[second]}.shown && r.swarmShown"
-                                 f" && r.menuShown === {str(closed['menuShown']).lower()}")
-                else:
-                    assert width > 1000 and one["solo"] == "" and one[short[second]]["shown"], one
-                # The second capsule opens with one press (on a desktop the first one closes at once),
-                # visible and contained: never hidden by the first one's layout.
-                press(heads[second])
-                _until(page, f"r.{short[second]}.open === 'true' && r.{short[first]}.open === 'false'")
-                page.wait_for_timeout(450)
-                _morph_settled(page)
-                two = _row(page)
-                assert two[short[second]]["shown"] and two["solo"] in ("", second), two
-                assert two["oneLine"] and two[short[second]]["right"] <= two["rowRight"] + 1 and not two["docScroll"], two
-                assert abs(two["rowHeight"] - closed["rowHeight"]) <= 1, (two, closed)
-                _shot(page, tmp_path, f"capsules-switch-{first}-to-{second}-{engine}-{width}")
-                seen[f"{first}->{second}"] = [one, two]
-                page.keyboard.press("Escape")
-                _until(page, "r.ctx.open === 'false' && r.eff.open === 'false'")
-                back = _row(page)
-                assert back["ctx"]["shown"] and back["eff"]["shown"] and back["swarmShown"] and back["solo"] == "", back
-                assert back["menuShown"] is closed["menuShown"] and back["oneLine"], back
-            _record(tmp_path, f"capsules-switch-{engine}-{width}", seen)
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("engine,width", [("chromium", 1440), ("webkit", 1440), ("chromium", 390), ("webkit", 390),
-                                          ("chromium", 360), ("chromium", 320)])
-def test_the_max_bracket_keeps_clear_of_the_rounded_end(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    url = direct_server_with_data["url"]
-    phone = width < 1000
-    context = {"viewport": {"width": width, "height": 860}, "device_scale_factor": 2}
     if phone:
         context.update(is_mobile=True, has_touch=True)
     with sync_playwright() as pw:
         browser, page = _launch(pw, engine, **context)
         try:
             _open_chat(page, url, width=width, height=860)
-            measured = {}
-            # Context's thumb at Max, the last mode: a pill concentric with the rounded end.
-            (page.tap if phone else page.click)(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            _wait_for_transitions(page, CONTEXT)
-            thumb = page.evaluate(CLEARANCE, CONTEXT)["thumb"]
-            assert abs(thumb["gutter"] - thumb["top"]) <= 1 and abs(thumb["top"] - thumb["bottom"]) <= 1, thumb
-            measured["context-thumb-max"] = thumb
-            page.keyboard.press("Escape")
-            # Effort's max bracket at Ultra, the last level.
-            (page.tap if phone else page.click)(f"{EFFORT} .chat-capsule-head")
-            _until(page, "r.eff.open === 'true'")
-            page.wait_for_timeout(450)
-            page.focus(f"{EFFORT} .chat-effort-max")
-            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000):
-                page.keyboard.press("End")
-            page.wait_for_timeout(300)
-            page.evaluate(f"() => {{ const s = document.querySelector('{EFFORT} .chat-effort-strip'); s.scrollLeft = s.scrollWidth; }}")
-            page.wait_for_timeout(200)
-            at_end = page.evaluate(CLEARANCE, EFFORT)
-            measured["effort-max-ultra"] = at_end
-            # Fonts decide when a phone needs internal scrolling; the contour must clear in
-            # either measured mode. Wide desktop and the dedicated scroll cases cover both ends.
-            assert at_end["fit"] in (("inline",) if not phone else ("solo", "overflow")), at_end
-            if at_end["fit"] == "overflow":
-                assert at_end["scroll"] == "end", at_end
-            cap = at_end["cap"]
-            # The square bracket clears the rounded end: its corners stand off the contour, and the
-            # straight gutter is at least the band inset it keeps from the top and the bottom.
-            assert cap["corners"] >= 2, at_end
-            assert cap["gutter"] >= cap["top"] - 0.5 and abs(cap["top"] - cap["bottom"]) <= 1, at_end
-            _shot(page, tmp_path, f"capsules-effort-ultra-end-{engine}-{width}")
+            heads = {"sub": f"{SUBAGENTS} .chat-capsule-head", "ctx": f"{CONTEXT} .chat-capsule-head", "eff": f"{EFFORT} .chat-capsule-head"}
+            press = page.tap if phone else page.click
+            press(heads["sub"])
+            _until(page, "r.sub.open === 'true' && r.panels.join() === 'subagents'")
             if not phone:
-                # A drag: back to X-High, then the pointer carries the bracket to Ultra; mid-drag
-                # (the pointer still down) the bracket already keeps its clearance.
-                page.keyboard.press("ArrowLeft")
-                page.wait_for_timeout(300)
-                box = page.locator(f"{EFFORT} .chat-effort-max").bounding_box()
-                ultra = page.locator(f'{EFFORT} [data-effort-seg="ultra"]').bounding_box()
-                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                page.mouse.down()
-                page.mouse.move(ultra["x"] + ultra["width"] - 2, ultra["y"] + ultra["height"] / 2, steps=8)
-                page.wait_for_timeout(100)
-                dragging = page.evaluate(CLEARANCE, EFFORT)
-                measured["effort-max-mid-drag"] = dragging
-                with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000):
-                    page.mouse.up()
-                assert dragging["cap"]["corners"] >= 2, dragging
-            _record(tmp_path, f"capsules-clearance-{engine}-{width}", measured)
+                # One press on another capsule switches at once: one panel in the document.
+                press(heads["ctx"])
+                _until(page, "r.ctx.open === 'true' && r.sub.open === 'false' && r.panels.join() === 'context'")
+                press(heads["eff"])
+                _until(page, "r.eff.open === 'true' && r.ctx.open === 'false' && r.panels.join() === 'effort'")
+                _shot(page, tmp_path, f"capsules-switch-{engine}-{width}")
+                # The same capsule again closes it; focus comes back to it.
+                press(heads["eff"])
+                _until(page, "r.eff.open === 'false' && r.panels.length === 0 && r.eff.focused === 'head'")
+                # An outside press closes and leaves focus to what was pressed.
+                press(heads["ctx"])
+                _until(page, "r.ctx.open === 'true'")
+                page.mouse.click(width / 2, 200)
+                _until(page, "r.ctx.open === 'false' && r.panels.length === 0")
+            else:
+                # The sheet's scrim covers the page: a tap there closes, on its click, and nothing under it is pressed.
+                page.evaluate(CLICKS)
+                page.touchscreen.tap(width / 2, 140)
+                _until(page, "r.sub.open === 'false' && r.panels.length === 0")
+                assert page.evaluate("() => window.__clicks") == ["capsule-panel-scrim"], page.evaluate("() => window.__clicks")
+                # A swipe down from the grabber closes, focus back on the capsule.
+                press(heads["ctx"])
+                _settled(page, CONTEXT)
+                page.evaluate(SWIPE, {"sel": _panel(page, CONTEXT), "share": 0.6})
+                _until(page, "r.ctx.open === 'false' && r.panels.length === 0 && r.ctx.focused === 'head'")
+            # Escape closes and returns focus, from a keyboard open.
+            page.focus(heads["eff"])
+            page.keyboard.press("Enter")
+            _until(page, "r.eff.open === 'true' && r.eff.focused === 'rec'")
+            page.keyboard.press("Escape")
+            _until(page, "r.eff.open === 'false' && r.eff.focused === 'head' && r.panels.length === 0")
+            assert not _row(page)["docScroll"]
         finally:
             browser.close()
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_closed_names_reduced_motion_and_a_resize_that_refits(direct_server_with_data, engine, tmp_path):  # noqa: F811
+def test_a_panel_reopened_after_the_phone_turns_stands_where_its_new_place_is(direct_server_with_data, engine, tmp_path):  # noqa: F811
+    """Each capsule's same panel, opened in landscape (a float above the capsule) and reopened after the phone turned to
+    portrait, is a full-width sheet at the bottom: none of the float's geometry stays; and turned back, a float again."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    landscape, portrait = {"width": 844, "height": 390}, {"width": 390, "height": 844}
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, viewport=landscape, is_mobile=True, has_touch=True)
+        try:
+            _open_chat(page, url, width=landscape["width"], height=landscape["height"], theme="light")
+            for kind, capsule in KINDS.items():
+                sel = f"#page-chat {capsule}"
+                for first, then, place in ((landscape, portrait, "sheet"), (portrait, landscape, "float")):
+                    page.set_viewport_size(first)
+                    _at_rest(page, sel)
+                    page.tap(f"{sel} .chat-capsule-head")
+                    _settled(page, sel)
+                    page.keyboard.press("Escape")
+                    _wait(page, "el.dataset.open === 'false'", sel)
+                    page.set_viewport_size(then)
+                    _at_rest(page, sel)
+                    page.tap(f"{sel} .chat-capsule-head")
+                    _settled(page, sel)
+                    facts = seen[f"{kind}-{place}"] = page.evaluate(PANEL, sel)
+                    _shot(page, tmp_path, f"capsules-reopened-{kind}-{place}-{engine}")
+                    _assert_panel(facts, phone=place == "sheet", theme="light")
+                    page.keyboard.press("Escape")
+                    _wait(page, "el.dataset.open === 'false'", sel)
+        finally:
+            _record(tmp_path, f"capsules-reopened-{engine}", seen)
+            browser.close()
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 1280), ("chromium", 390), ("webkit", 390)])
+def test_the_marks_keep_clear_of_the_strips_rounded_ends(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    """Context's thumb at Max, the last mode, is concentric with the strip's rounded end; Effort's max bracket at Ultra,
+    the last level, clears the curve at its corners, at rest and mid-drag."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    phone = width < 720
+    context = {"viewport": {"width": width, "height": 860}, "device_scale_factor": 2}
+    if phone:
+        context.update(is_mobile=True, has_touch=True)
+    measured = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, **context)
+        try:
+            _open_chat(page, url, width=width, height=860)
+            (page.tap if phone else page.click)(f"{CONTEXT} .chat-capsule-head")
+            _settled(page, CONTEXT)
+            thumb = measured["context-thumb-max"] = page.evaluate(CLEARANCE, {"sel": CONTEXT, "strip": ".chat-context-strip"})["thumb"]
+            assert abs(thumb["gutter"] - thumb["top"]) <= 1 and abs(thumb["top"] - thumb["bottom"]) <= 1, thumb
+            page.keyboard.press("Escape")
+            (page.tap if phone else page.click)(f"{EFFORT} .chat-capsule-head")
+            _settled(page, EFFORT)
+            panel = _panel(page, EFFORT)
+            page.focus(f"{panel} .chat-effort-max")
+            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000):
+                page.keyboard.press("End")
+            page.wait_for_timeout(300)
+            at_end = measured["effort-max-ultra"] = page.evaluate(CLEARANCE, {"sel": EFFORT, "strip": ".chat-effort-strip"})
+            cap = at_end["cap"]
+            # The square bracket clears the rounded end: its corners stand off the contour, and the straight gutter is at
+            # least the band inset it keeps from the top and the bottom.
+            assert cap["corners"] >= 2, at_end
+            assert cap["gutter"] >= cap["top"] - 0.5 and abs(cap["top"] - cap["bottom"]) <= 1, at_end
+            _shot(page, tmp_path, f"capsules-effort-ultra-end-{engine}-{width}")
+            if not phone:
+                # A drag: back to X-High, then the pointer carries the bracket to Ultra; mid-drag (the pointer still
+                # down) the bracket already keeps its clearance.
+                page.keyboard.press("ArrowLeft")
+                page.wait_for_timeout(300)
+                box = page.locator(f"{panel} .chat-effort-max").bounding_box()
+                ultra = page.locator(f'{panel} [data-effort-seg="ultra"]').bounding_box()
+                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(ultra["x"] + ultra["width"] - 2, ultra["y"] + ultra["height"] / 2, steps=8)
+                page.wait_for_timeout(100)
+                dragging = measured["effort-max-mid-drag"] = page.evaluate(CLEARANCE, {"sel": EFFORT, "strip": ".chat-effort-strip"})
+                with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000):
+                    page.mouse.up()
+                assert dragging["cap"]["corners"] >= 2, dragging
+        finally:
+            _record(tmp_path, f"capsules-clearance-{engine}-{width}", measured)
+            browser.close()
+
+
+# The open Subagents panel: its lock, its values (chosen, disabled), the line or the reason and the way to Settings.
+SUBAGENTS_PANEL = """() => {
+    const head = document.querySelector('#page-chat .chat-subagents-mode .chat-capsule-head');
+    const panel = document.getElementById(head.getAttribute('aria-controls'));
+    const shown = (node) => Boolean(node) && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
+    const settings = panel.querySelector('.chat-subagents-settings');
+    return {
+        locked: panel.dataset.locked, lock: shown(panel.querySelector('.capsule-panel-lock')),
+        values: [...panel.querySelectorAll('.chat-seg')].map((seg) => [seg.dataset.mode, seg.getAttribute('aria-checked'), seg.getAttribute('aria-disabled') || '']),
+        line: shown(panel.querySelector('.capsule-panel-lines')), rule: shown(panel.querySelector('.capsule-panel-rule')),
+        reason: shown(panel.querySelector('.chat-subagents-reason')) ? panel.querySelector('.chat-subagents-reason').textContent : '',
+        settings: shown(settings) ? settings.getBoundingClientRect().height : 0,
+    };
+}"""
+
+
+# The page's state read: the first `/api/state` and every `?bindings_since=` read after it (chat_activity.js).
+STATE_READS = re.compile(r"/api/state(\?|$)")
+
+
+def _state_with(page, facts: dict) -> dict:
+    """The server's state reads with the room's subagents facts held by the test, so Settings-off needs no Settings
+    write. Routed once: a save and the test change `facts` in place, and every later read answers them (routing again
+    over a read in flight would answer it twice)."""
+    page.route(STATE_READS, lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
+
+    def save(route):
+        facts["subagents_mode"] = route.request.post_data_json["mode"]
+        route.fulfill(json={"ok": True, "project_id": "", "subagents_mode": facts["subagents_mode"]})
+    page.route("**/api/owner/subagents-mode", save)
+    return facts
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 390)])
+def test_a_choice_keeps_the_panel_height_and_settings_off_locks_subagents(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    phone = width < 720
+    context = {"viewport": {"width": width, "height": 860}}
+    if phone:
+        context.update(is_mobile=True, has_touch=True)
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, **context)
+        press = page.tap if phone else page.click
+        try:
+            held = _state_with(page, {"subagents_mode": "auto", "subagents_availability": "available"})
+            _open_chat(page, url, width=width, height=860, theme="light")
+            # Each value's line stands in one cell: choosing another never changes the panel's height.
+            for kind, sel, values, endpoint in (
+                    ("subagents", SUBAGENTS, ("off", "swarm", "auto"), "/api/owner/subagents-mode"),
+                    ("context", CONTEXT, ("nano", "low", "max"), "/api/owner/context-mode")):
+                press(f"{sel} .chat-capsule-head")
+                _settled(page, sel)
+                panel = _panel(page, sel)
+                heights = [page.evaluate("sel => document.querySelector(sel).getBoundingClientRect().height", panel)]
+                lines = []
+                for value in values:
+                    with page.expect_response(lambda r, endpoint=endpoint: r.url.endswith(endpoint), timeout=30_000):
+                        press(f'{panel} .chat-seg[data-mode="{value}"]')
+                    page.wait_for_function("""({sel, value}) => { const el = document.querySelector(sel);
+                        return (el.dataset.contextMode || el.dataset.mode) === value && el.dataset.disabled !== 'true'; }""",
+                                           arg={"sel": sel, "value": value})
+                    page.wait_for_timeout(250)  # the thumb's own move
+                    heights.append(page.evaluate("sel => document.querySelector(sel).getBoundingClientRect().height", panel))
+                    lines.append(page.evaluate("sel => document.querySelector(sel + ' .capsule-panel-line[data-on=\"true\"]').textContent", panel))
+                    _shot(page, tmp_path, f"capsules-{kind}-{value}-{engine}-{width}-light")
+                seen[kind] = {"heights": heights, "lines": lines}
+                assert len(set(heights)) == 1, ("a choice never changes the panel's height", kind, heights)
+                assert len(set(lines)) == len(values), ("each value says its own line", kind, lines)
+                page.keyboard.press("Escape")
+            # Settings turns subagents off: Off with a lock, Auto and Swarm disabled, the reason and Open Settings.
+            held.update(subagents_mode="swarm", subagents_availability="disabled")
+            page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'dark'); } catch (e) {}")
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_function(f"() => document.querySelector('{SUBAGENTS}')?.dataset.locked === 'true'", timeout=30_000)
+            assert page.locator(f"{SUBAGENTS} .chat-capsule-value").inner_text() == "Off"
+            press(f"{SUBAGENTS} .chat-capsule-head")
+            _settled(page, SUBAGENTS)
+            locked = seen["locked"] = page.evaluate(SUBAGENTS_PANEL)
+            assert locked["locked"] == "true" and locked["lock"], locked
+            assert locked["values"] == [["off", "true", ""], ["auto", "false", "true"], ["swarm", "false", "true"]], locked
+            assert not locked["line"] and not locked["rule"], ("the reason in place of the two lines", locked)
+            assert locked["reason"] == "Subagents are turned off in Settings › Agents" and locked["settings"] >= 43.5, locked
+            facts = page.evaluate(PANEL, SUBAGENTS)
+            _assert_panel(facts, phone=phone, theme="dark")
+            _shot(page, tmp_path, f"capsules-subagents-settings-off-{engine}-{width}-dark")
+            # A press on a value Settings rules out (aria-disabled: the browser's own actionability waits for it, so the
+            # press is forced) chooses nothing.
+            locked_swarm = page.locator(f'{_panel(page, SUBAGENTS)} .chat-seg[data-mode="swarm"]')
+            (locked_swarm.tap if phone else locked_swarm.click)(force=True)
+            page.wait_for_timeout(300)
+            assert page.locator(f"{SUBAGENTS}").get_attribute("data-mode") == "off", "a value Settings rules out is not chosen"
+            # Open Settings closes the panel first, then goes to Settings › Agents.
+            press(f"{_panel(page, SUBAGENTS)} .chat-subagents-settings")
+            page.wait_for_selector('.settings-panel.active[data-settings-panel="agents"]', state="visible", timeout=20_000)
+            assert page.locator(".capsule-panel:not([data-leaving])").count() == 0
+            assert page.locator(SUBAGENTS).get_attribute("data-open") == "false"
+        finally:
+            _record(tmp_path, f"capsules-heights-settings-off-{engine}-{width}", seen)
+            page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
+            browser.close()
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_reduced_motion_opens_and_closes_at_once_and_closed_names_fit(direct_server_with_data, engine, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
     url = direct_server_with_data["url"]
     with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+        browser, page = _launch(pw, engine, viewport={"width": 1280, "height": 900}, reduced_motion="reduce")
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
-            _open_chat(page, url, width=1440)
-            durations = page.evaluate(f"""() => [...document.querySelectorAll('{EFFORT} .chat-capsule-body, {EFFORT} .chat-capsule-value, {CONTEXT} .chat-context-thumb')]
-                .map((node) => getComputedStyle(node).transitionDuration)""")
-            assert all(set(d.replace(" ", "").split(",")) == {"0s"} for d in durations), durations
-            page.click(f"{EFFORT} .chat-capsule-head")
-            _until(page, "r.eff.open === 'true' && r.eff.fit === 'inline'")
-            # The pointer leaves the row: a pointer resting on a capsule is hover, which opens a closed one (WebKit
-            # moves it over again as the row reflows); this flow is a press, two resizes and Escape.
-            page.mouse.move(2, 2)
-            facts = {"wide": _row(page)}
-            # The window narrows to a phone's width with the strip open: it refits alone, one line.
-            set_viewport(page, 390, 900)
-            _until(page, "['solo', 'overflow'].includes(r.eff.fit) && r.solo === 'effort'")
-            facts["narrow"] = _row(page)
-            assert facts["narrow"]["oneLine"] and not facts["narrow"]["docScroll"], facts
-            assert facts["narrow"]["eff"]["right"] <= facts["narrow"]["rowRight"] + 1, facts
-            set_viewport(page, 1440, 900)
-            _until(page, "r.eff.fit === 'inline' && r.solo === '' && r.ctx.shown && r.swarmShown")
-            page.keyboard.press("Escape")
-            # Probe both sides of the actual named row's width. System fonts differ between
-            # Linux and macOS; 390/340 are not product breakpoints (DESIGN).
+            _open_chat(page, url, width=1280)
+            # Reduced motion: the panel stands at once and goes at once, no picture left behind.
+            moving = page.evaluate(f"""() => {{
+                const head = document.querySelector('{EFFORT} .chat-capsule-head');
+                head.dispatchEvent(new MouseEvent('click', {{ bubbles: true, detail: 1 }}));
+                const panel = document.getElementById(head.getAttribute('aria-controls'));
+                const opened = panel.getAnimations({{ subtree: true }}).length;
+                document.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Escape', bubbles: true }}));
+                return {{ opened, left: document.querySelectorAll('.capsule-panel').length }};
+            }}""")
+            assert moving == {"opened": 0, "left": 0}, moving
+            # Closed, the capsules keep their names while the line holds them; a narrower line keeps rings and values.
+            # Probe both sides of the named row's width (system fonts differ; these are not product breakpoints).
             _until(page, "r.eff.open === 'false' && r.namesShown.every(Boolean) && r.oneLine")
-            page.wait_for_function("""sel => !document.querySelector(sel).style.getPropertyValue('--capsule-body-width')""", arg=EFFORT)
             named_width = page.evaluate("""() => {
                 const row = document.querySelector('#page-chat .chat-toolbar-row'), css = getComputedStyle(row);
                 const kids = [...row.children].filter(n => getComputedStyle(n).display !== 'none');
                 return Math.ceil(kids.reduce((sum, n) => sum + n.getBoundingClientRect().width, 0)
                     + parseFloat(css.columnGap) * (kids.length - 1) + parseFloat(css.paddingLeft) + parseFloat(css.paddingRight));
             }""")
+            facts = {}
             for index, (width, names) in enumerate(((named_width + 4, True), (named_width - 4, False), (named_width + 4, True))):
                 page.locator('#page-chat .chat-toolbar-row').evaluate('(row, width) => row.style.width = width + "px"', width)
                 _until(page, f"r.namesShown.every(n => n === {str(names).lower()}) && r.oneLine")
                 facts[f"closed-{index}-{width}"] = _row(page)
                 _shot(page, tmp_path, f"capsules-closed-names-{engine}-{index}-{width}")
             assert not errors, errors
-            _record(tmp_path, f"capsules-names-motion-resize-{engine}", facts)
+            _record(tmp_path, f"capsules-names-motion-{engine}", facts)
         finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_opening_and_closing_never_wrap_the_row_on_any_frame(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    url = direct_server_with_data["url"]
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 1240, "height": 900})
-        try:
-            _open_chat(page, url, width=1240)
-            runs = {}
-            # The value gives way while the strip grows, and comes back while it collapses: across
-            # the widths where a strip opens beside the others, the capsule never stands wider than
-            # closed or open (all the fit measures), so no frame takes a second line.
-            for width in range(700, 1250, 50):
-                page.set_viewport_size({"width": width, "height": 900})
-                _until(page, "r.oneLine && r.ctx.open === 'false' && r.eff.open === 'false'")
-                page.wait_for_timeout(250)
-                for name, selector in (("context", CONTEXT), ("effort", EFFORT)):
-                    run = page.evaluate(FRAMES, {"sel": selector, "frames": 40})
-                    page.wait_for_timeout(500)
-                    run["settled"] = page.evaluate(SETTLED, selector)
-                    runs[f"{name}-{width}"] = run
-            _record(tmp_path, f"capsules-frames-{engine}", runs)
-            wrapped = {key: [round(frame["height"]) for frame in run["opening"] + run["closing"] if frame["spread"] >= 2]
-                       for key, run in runs.items()}
-            assert not any(wrapped.values()), {key: heights for key, heights in wrapped.items() if heights}
-            for key, run in runs.items():
-                ends = (run["closed"]["width"], run["opening"][-1]["width"])
-                peak = max(frame["width"] for frame in run["opening"] + run["closing"])
-                assert peak <= max(ends) + 1, (key, peak, ends)
-                assert run["open"] == "false" and not run["settled"]["clipped"] and run["settled"]["held"] == "", (key, run["settled"])
-                assert abs(run["settled"]["width"] - run["closed"]["width"]) <= 0.5, (key, run["settled"], run["closed"])
-                if run["fit"] == "inline":  # it still animates: frames between the two widths, both ways
-                    assert _between(run["opening"], ends) >= 3 and _between(run["closing"], ends) >= 3, key
-            inline = [key for key, run in runs.items() if run["fit"] == "inline"]
-            assert len(inline) >= 10, f"the strips must animate beside the others somewhere: {inline}"
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_a_translated_context_strip_that_scrolls_keeps_the_chosen_mode_in_view(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    url = direct_server_with_data["url"]
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 320, "height": 860}, is_mobile=True, has_touch=True)
-        try:
-            page.route("**/api/ui/i18n", lambda route: route.fulfill(json=TRANSLATED))
-            page.route("**/api/ui/i18n/missing", lambda route: route.fulfill(json={"ok": True}))
-            _open_chat(page, url, width=320, height=860)
-            page.wait_for_function(f"""() => document.querySelector('{CONTEXT} .chat-seg[data-mode="max"]')?.textContent === 'Максимальный'""",
-                                   timeout=30_000)
-            seen = {}
-            # Opening: the chosen mode, Max, is the strip's last word; the strip shows it whole.
-            page.tap(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            page.wait_for_timeout(450)
-            seen["tap"] = page.evaluate(SHOWN, "max")
-            _shot(page, tmp_path, f"capsules-translated-context-open-{engine}-320")
-            assert seen["tap"]["fit"] == "overflow" and seen["tap"]["word"] == "Максимальный", seen
-            assert seen["tap"]["whole"] and seen["tap"]["scroll"] == "end" and not seen["tap"]["docScroll"], seen
-            page.keyboard.press("Escape")
-            _until(page, "r.ctx.open === 'false' && r.ctx.focused === 'head'")
-            # The keyboard: Enter opens onto Max; Home chooses Nano at the start, End Max at the end.
-            page.keyboard.press("Enter")
-            _until(page, "r.ctx.open === 'true' && r.ctx.focused === 'max'")
-            page.wait_for_timeout(100)
-            seen["Enter"] = page.evaluate(SHOWN, "max")
-            assert seen["Enter"]["whole"] and seen["Enter"]["scroll"] == "end", seen
-            for key, mode, edge in (("Home", "nano", "start"), ("End", "max", "end")):
-                with page.expect_response(lambda r: r.url.endswith("/api/owner/context-mode"), timeout=30_000):
-                    page.keyboard.press(key)
-                _until(page, f"r.ctx.mode === '{mode}' && r.ctx.disabled === 'false' && r.ctx.focused === '{mode}'")
-                page.wait_for_timeout(100)
-                seen[key] = page.evaluate(SHOWN, mode)
-                _shot(page, tmp_path, f"capsules-translated-context-{key.lower()}-{engine}-320")
-                assert seen[key]["whole"] and seen[key]["scroll"] == edge and not seen[key]["docScroll"], seen
-            _record(tmp_path, f"capsules-translated-context-{engine}-320", seen)
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_a_resize_that_makes_the_open_context_strip_scroll_shows_the_chosen_mode_once(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    url = direct_server_with_data["url"]
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 600, "height": 860}, is_mobile=True, has_touch=True)
-        try:
-            page.route("**/api/ui/i18n", lambda route: route.fulfill(json=TRANSLATED))
-            page.route("**/api/ui/i18n/missing", lambda route: route.fulfill(json={"ok": True}))
-            _open_chat(page, url, width=600, height=860)
-            page.wait_for_function(f"""() => document.querySelector('{CONTEXT} .chat-seg[data-mode="max"]')?.textContent === 'Максимальный'""",
-                                   timeout=30_000)
-            seen = {}
-            # Open from the keyboard onto Max while the strip still fits; then the phone narrows to 320 px.
-            page.focus(f"{CONTEXT} .chat-capsule-head")
-            page.keyboard.press("Enter")
-            _until(page, "r.ctx.open === 'true' && r.ctx.focused === 'max'")
-            page.wait_for_timeout(100)
-            seen["600"] = page.evaluate(SHOWN, "max")
-            page.set_viewport_size({"width": 320, "height": 860})
-            _until(page, "r.ctx.fit === 'overflow'")
-            page.wait_for_timeout(200)
-            seen["320"] = page.evaluate(SHOWN, "max")
-            _shot(page, tmp_path, f"capsules-translated-context-resized-{engine}-320")
-            # The owner swipes back to the first mode; a later relayout that keeps the strip
-            # scrolling (the phone's toolbar takes some height) leaves it where the owner put it.
-            page.evaluate(f"() => {{ document.querySelector('{CONTEXT} .chat-context-strip').scrollLeft = 0; }}")
-            page.wait_for_function(f"() => document.querySelector('{CONTEXT} .chat-context-strip').dataset.scroll === 'start'")
-            page.set_viewport_size({"width": 320, "height": 700})
-            page.wait_for_function("() => innerHeight === 700")
-            page.wait_for_timeout(200)
-            seen["swiped"] = page.evaluate(SHOWN, "nano")
-            _shot(page, tmp_path, f"capsules-translated-context-swiped-{engine}-320")
-            _record(tmp_path, f"capsules-translated-context-resized-{engine}-320", seen)
-            assert seen["600"]["fit"] != "overflow" and seen["600"]["whole"], seen
-            assert seen["320"]["fit"] == "overflow" and seen["320"]["focused"] == "max", seen
-            assert seen["320"]["whole"] and seen["320"]["scroll"] == "end" and not seen["320"]["docScroll"], seen
-            assert seen["swiped"]["fit"] == "overflow" and seen["swiped"]["whole"] and seen["swiped"]["scroll"] == "start", seen
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_resize_reveals_the_focused_effort_bracket_without_changing_opening_target(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 390, "height": 860}, is_mobile=True, has_touch=True)
-        try:
-            _open_chat(page, direct_server_with_data["url"], width=390, height=860)
-            page.tap(f"{EFFORT} .chat-capsule-head")
-            _until(page, "r.eff.open === 'true' && r.eff.fit === 'solo'")
-            page.focus(f"{EFFORT} .chat-effort-max")
-            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range")):
-                page.keyboard.press("End")
-            page.set_viewport_size({"width": 320, "height": 860})
-            _until(page, "r.eff.fit === 'overflow'")
-            page.wait_for_timeout(250)
-            seen = page.evaluate(f"""() => {{
-                const el = document.querySelector('{EFFORT}');
-                const strip = el.querySelector('.chat-effort-strip');
-                const cap = el.querySelector('.chat-effort-max');
-                const s = strip.getBoundingClientRect(), c = cap.getBoundingClientRect();
-                return {{ focused: document.activeElement === cap, left: c.left, right: c.right,
-                    stripLeft: s.left, stripRight: s.right, scroll: strip.dataset.scroll }};
-            }}""")
-            assert seen["focused"] and seen["left"] >= seen["stripLeft"] and seen["right"] <= seen["stripRight"] + 0.5, seen
-            _record(tmp_path, f"capsules-focused-bracket-resize-{engine}", seen)
-            _shot(page, tmp_path, f"capsules-focused-bracket-resize-{engine}")
-            page.keyboard.press("Escape")
-            page.keyboard.press("Enter")
-            page.wait_for_function(f"() => document.activeElement === document.querySelector('{EFFORT} .chat-effort-rec')")
-        finally:
-            browser.close()
-
-
-def _install(page, payload) -> None:
-    page.route("**/api/ui/i18n", lambda route: route.fulfill(json=payload))
-    page.route("**/api/ui/i18n/missing", lambda route: route.fulfill(json={"ok": True}))
-
-
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_right_to_left_strips_that_scroll_keep_the_moved_mode_and_bracket_in_view(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    url = direct_server_with_data["url"]
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 320, "height": 860}, is_mobile=True, has_touch=True)
-        seen = {}
-        try:
-            _install(page, RTL)
-            _open_chat(page, url, width=320, height=860)
-            page.wait_for_function(f"""() => document.documentElement.dir === 'rtl'
-                && document.querySelector('{CONTEXT} .chat-seg[data-mode="max"]')?.textContent === 'السياق الكامل'""", timeout=30_000)
-            # Context: the chosen mode, Max, is the strip's last word, on its left; opening scrolls
-            # leftwards (a negative scrollLeft) until it is whole, and the fade is on the right,
-            # where Nano hides.
-            page.tap(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            page.wait_for_timeout(450)
-            seen["tap"] = page.evaluate(SHOWN, "max")
-            _shot(page, tmp_path, f"capsules-rtl-context-open-{engine}-320")
-            assert seen["tap"]["fit"] == "overflow" and seen["tap"]["scrollLeft"] < 0, seen
-            assert seen["tap"]["whole"] and seen["tap"]["scroll"] == "end" and "to left" in seen["tap"]["fade"], seen
-            assert not seen["tap"]["docScroll"], seen
-            page.keyboard.press("Escape")
-            _until(page, "r.ctx.open === 'false' && r.ctx.focused === 'head'")
-            page.keyboard.press("Enter")
-            _until(page, "r.ctx.open === 'true' && r.ctx.focused === 'max'")
-            page.wait_for_timeout(100)
-            seen["Enter"] = page.evaluate(SHOWN, "max")
-            assert seen["Enter"]["whole"] and seen["Enter"]["scroll"] == "end", seen
-            row = page.locator('#page-chat .chat-toolbar-row')
-            row_width = row.evaluate('node => node.getBoundingClientRect().width')
-            # Fractional columns expose the browser's integer scroll coordinates even with the
-            # same font. Keep the text whole at both ends; a mode left offscreen must fail it.
-            for fraction in (0, 0.2, 0.4, 0.6, 0.8):
-                row.evaluate('(node, width) => node.style.width = width + "px"', row_width - fraction)
-                for key, mode, edge in (("Home", "nano", "start"), ("End", "max", "end")):
-                    with page.expect_response(lambda r: r.url.endswith("/api/owner/context-mode"), timeout=30_000):
-                        page.keyboard.press(key)
-                    _until(page, f"r.ctx.mode === '{mode}' && r.ctx.disabled === 'false' && r.ctx.focused === '{mode}'")
-                    page.wait_for_timeout(100)
-                    sample = f"{fraction}-{key}"
-                    seen[sample] = page.evaluate(SHOWN, mode)
-                    _shot(page, tmp_path, f"capsules-rtl-context-{sample.lower()}-{engine}-320")
-                    assert seen[sample]["whole"] and seen[sample]["scroll"] == edge and not seen[sample]["docScroll"], seen
-                    if key == "Home":
-                        assert not page.evaluate(SHOWN, "max")["whole"], "the offscreen word must not count as whole"
-            row.evaluate("node => node.style.removeProperty('width')")
-            # The owner swipes back to the start (scrollLeft 0, Nano on the right); a relayout that
-            # keeps the strip scrolling leaves it there.
-            page.evaluate(f"() => {{ document.querySelector('{CONTEXT} .chat-context-strip').scrollLeft = 0; }}")
-            page.wait_for_function(f"() => document.querySelector('{CONTEXT} .chat-context-strip').dataset.scroll === 'start'")
-            page.set_viewport_size({"width": 320, "height": 700})
-            page.wait_for_function("() => innerHeight === 700")
-            page.wait_for_timeout(200)
-            seen["swiped"] = page.evaluate(SHOWN, "nano")
-            assert seen["swiped"]["whole"] and seen["swiped"]["scroll"] == "start" and "to left" in seen["swiped"]["fade"], seen
-            page.keyboard.press("Escape")
-            _until(page, "r.ctx.open === 'false'")
-            # Effort: the scale runs leftwards from the head. The pill covers its level and the
-            # brackets face the range from either side, the min bracket on the right.
-            page.tap(f"{EFFORT} .chat-capsule-head")
-            _until(page, "r.eff.open === 'true'")
-            page.wait_for_timeout(450)
-            seen["effort"] = opened = page.evaluate(MARKS)
-            _shot(page, tmp_path, f"capsules-rtl-effort-open-{engine}-320")
-            assert opened["fit"] == "overflow" and opened["dir"] == "rtl" and opened["pillWhole"], seen
-            assert abs(opened["pill"][0] - opened["seg"][0]) <= 0.6 and abs(opened["pill"][1] - opened["seg"][1]) <= 0.6, seen
-            assert abs(opened["band"][1] - opened["min"][1]) <= 0.6 and abs(opened["band"][0] - opened["max"][0]) <= 0.6, seen
-            assert opened["max"][1] < opened["pill"][0] < opened["pill"][1] < opened["min"][0], seen
-            # End carries the max bracket to Ultra, the last level on the far left: whole, clear of the
-            # rounded end by at least its vertical inset, the fade on the right.
-            page.focus(f"{EFFORT} .chat-effort-max")
-            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000):
-                page.keyboard.press("End")
-            page.wait_for_timeout(300)
-            seen["effort-End"] = at_end = page.evaluate(MARKS)
-            _shot(page, tmp_path, f"capsules-rtl-effort-ultra-{engine}-320")
-            assert at_end["maxWhole"] and at_end["ultraWhole"] and at_end["scroll"] == "end" and "to left" in at_end["fade"], seen
-            assert at_end["max"][0] - at_end["shellLeft"] >= at_end["inset"] - 0.5, seen
-            # A press lands on the level under it: back at the start, a press on None (outside the
-            # helper range) sets primary there without moving the min bracket.
-            page.evaluate(f"() => {{ document.querySelector('{EFFORT} .chat-effort-strip').scrollLeft = 0; }}")
-            page.wait_for_function(f"() => document.querySelector('{EFFORT} .chat-effort-strip').dataset.scroll === 'start'")
-            none = page.evaluate(MARKS)["none"]
-            box = page.locator(f'{EFFORT} [data-effort-seg="none"]').bounding_box()
-            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as saved:
-                page.mouse.click(none[0] + (none[1] - none[0]) * 0.75, box["y"] + box["height"] / 2)
-            assert json.loads(saved.value.request.post_data)["recommended"] == "none", saved.value.request.post_data
-            assert json.loads(saved.value.request.post_data)["min"] == "low", saved.value.request.post_data
-            page.wait_for_timeout(300)
-            seen["effort-press"] = pressed = page.evaluate(MARKS)
-            # The scale's outer edge is two whole-pixel offsets (as Ultra's is left to right): within a pixel.
-            assert abs(pressed["pill"][1] - pressed["none"][1]) <= 1 and abs(pressed["min"][1] - pressed["band"][1]) <= 0.6, seen
-            _shot(page, tmp_path, f"capsules-rtl-effort-press-{engine}-320")
-        finally:
-            _record(tmp_path, f"capsules-rtl-{engine}-320", seen)
             browser.close()
 
 
@@ -792,20 +674,22 @@ def test_long_closed_values_on_a_320px_phone_give_way_on_one_line(direct_server_
             seen["capped"] = capped = page.evaluate(CAPPED)
             _shot(page, tmp_path, f"capsules-long-values-closed-{engine}-{direction}-320")
             assert closed["oneLine"] and closed["rowHeight"] < 40 and capped["contained"] and not closed["docScroll"], seen
-            assert closed["compact"] == "values" and closed["namesShown"] == [False, False], seen
-            assert closed["swarmShown"] and closed["ctx"]["shown"] and closed["eff"]["shown"], seen
-            context, effort = capped["capsules"]
+            assert closed["compact"] == "values" and closed["namesShown"] == [False, False, False], seen
+            assert closed["sub"]["shown"] and closed["ctx"]["shown"] and closed["eff"]["shown"], seen
+            subagents, context, effort = capped["capsules"]
             assert context["word"] == context_word and context["cut"], seen
-            for capsule in (context, effort):  # the cut value keeps clear of both ends of its shell
+            for capsule in (subagents, context, effort):  # a value, cut or whole, keeps clear of both ends of its shell
                 assert capsule["value"][0] >= capsule["shell"][0] + 1 and capsule["value"][1] <= capsule["shell"][1] - 1, seen
-            # The whole word stays the button's: its accessible name, Effort's tooltip, the open strip.
+            # The whole word stays the button's: its accessible name, Effort's tooltip, the panel.
             assert context_word in page.locator(f"{CONTEXT} .chat-capsule-head").aria_snapshot(), seen
             assert effort_word in effort["label"] and effort_word in effort["title"], seen
+            before = page.evaluate(ROW_BOX, "#page-chat")
             page.tap(f"{CONTEXT} .chat-capsule-head")
-            _until(page, "r.ctx.open === 'true'")
-            page.wait_for_timeout(450)
+            _settled(page, CONTEXT)
             seen["open"] = page.evaluate(SHOWN, "max")
+            _shot(page, tmp_path, f"capsules-long-values-open-{engine}-{direction}-320")
             assert seen["open"]["word"] == context_word and seen["open"]["whole"] and not seen["open"]["docScroll"], seen
+            assert page.evaluate(ROW_BOX, "#page-chat") == before, "the cut row stays as it was while the panel is open"
             page.keyboard.press("Escape")
             _until(page, "r.ctx.open === 'false' && r.compact === 'values' && r.oneLine")
             # A wider line takes the cut back: the values show whole again.
@@ -818,135 +702,61 @@ def test_long_closed_values_on_a_320px_phone_give_way_on_one_line(direct_server_
             browser.close()
 
 
-@pytest.mark.parametrize("engine,direction", [("chromium", "ltr"), ("webkit", "ltr"), ("chromium", "rtl"), ("webkit", "rtl")])
-def test_long_values_open_and_close_without_a_wrapping_frame(direct_server_with_data, engine, direction, tmp_path):  # noqa: F811
-    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
-    from playwright.sync_api import sync_playwright
-
-    payload, context_word, effort_word = LONG_VALUES[direction]
-    url = direct_server_with_data["url"]
-    with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 320, "height": 900})
-        runs = {}
-        try:
-            _install(page, payload)
-            _open_chat(page, url, width=320)
-            page.wait_for_function(f"""() => document.querySelector('{CONTEXT} .chat-capsule-value')?.textContent === '{context_word}'
-                && document.querySelector('{EFFORT} .chat-capsule-value')?.textContent === '{effort_word}'""", timeout=30_000)
-            # From the narrowest phone, where the closed values are cut, through names that give way
-            # and strips that stand alone, to strips that open beside the others: every frame.
-            for width in (320, 360, 400, 480, 560, 640, 720, 800):
-                page.set_viewport_size({"width": width, "height": 900})
-                _until(page, f"innerWidth === {width} && r.ctx.open === 'false' && r.eff.open === 'false'")
-                page.wait_for_timeout(250)  # the row refits on the resize (a wrapped row fails below, frame by frame)
-                for name, selector in (("context", CONTEXT), ("effort", EFFORT)):
-                    before = page.evaluate(CAPPED)
-                    run = page.evaluate(FRAMES, {"sel": selector, "frames": 40})
-                    page.wait_for_timeout(500)
-                    run["settled"] = page.evaluate(SETTLED, selector)
-                    run["values"] = [[capsule["cut"] for capsule in before["capsules"]],
-                                     [capsule["cut"] for capsule in page.evaluate(CAPPED)["capsules"]]]
-                    runs[f"{name}-{width}"] = run
-        finally:
-            _record(tmp_path, f"capsules-long-values-frames-{engine}-{direction}", runs)
-            browser.close()
-    wrapped = {key: [round(frame["height"]) for frame in [run["closed"]] + run["opening"] + run["closing"] if frame["spread"] >= 2]
-               for key, run in runs.items()}
-    assert not any(wrapped.values()), {key: heights for key, heights in wrapped.items() if heights}
-    # The narrowest phone is the case under test: there the closed values are cut.
-    assert runs["context-320"]["opening"][0]["compact"] == "values" and any(runs["context-320"]["values"][0]), runs["context-320"]
-    for key, run in runs.items():
-        ends = (run["closed"]["width"], run["opening"][-1]["width"])
-        peak = max(frame["width"] for frame in run["opening"] + run["closing"])
-        assert peak <= max(ends) + 1, (key, peak, ends)
-        # Open, the chosen word stands whole in the strip; closed again, the capsule and its cut
-        # are what they were, nothing held.
-        assert run["opening"][-1]["whole"], (key, run["opening"][-1])
-        assert run["open"] == "false" and run["settled"]["held"] == "", (key, run["settled"])
-        assert abs(run["settled"]["width"] - run["closed"]["width"]) <= 0.5 and run["values"][0] == run["values"][1], (key, run)
-        if run["fit"] == "inline":  # it still animates: frames between the two widths, both ways
-            assert _between(run["opening"], ends) >= 3 and _between(run["closing"], ends) >= 3, key
-
-
-# The phone's alone strip, frame by frame (owner 19.10, 2A; capsule_morph.js): every animation of the press, paused
-# and read at fixed times — the head's place, the line's height, the controls that step aside — then finished.
-MORPH_FRAMES = """async ({ sel, times }) => {
-    const row = document.querySelector('#page-chat .chat-toolbar-row');
-    const el = document.querySelector(sel);
-    const head = el.querySelector('.chat-capsule-head');
-    const rect = (node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, width: r.width }; };
-    const shownKids = () => [...row.children].filter((kid) => kid !== el && getComputedStyle(kid).display !== 'none');
-    const before = { capsule: rect(el), head: rect(head), kids: shownKids().map(rect), height: row.getBoundingClientRect().height };
-    head.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
-    const animations = [el, ...row.children].flatMap((node) => node.getAnimations({ subtree: true }))
-        .filter((animation, i, all) => all.indexOf(animation) === i);
-    animations.forEach((animation) => animation.pause());
-    const frames = [];
-    for (const t of times) {
-        animations.forEach((animation) => { animation.currentTime = t; });
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const leaving = [...row.querySelectorAll(':scope > [data-capsule-leaving]')];
-        frames.push({ t, height: row.getBoundingClientRect().height, head: rect(head).left, morph: el.dataset.morph || '',
-            surface: Boolean(el.querySelector(':scope > .chat-capsule-surface')),
-            leaving: leaving.map((kid) => ({ left: rect(kid).left, opacity: Number(getComputedStyle(kid).opacity) })),
-            back: shownKids().map((kid) => Number(getComputedStyle(kid).opacity)) });
-    }
-    animations.forEach((animation) => { try { animation.finish(); } catch (e) { animation.cancel(); } });
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const after = { morph: el.dataset.morph || '', surfaces: el.querySelectorAll('.chat-capsule-surface').length,
-        leaving: row.querySelectorAll('[data-capsule-leaving]').length, ownerLeaving: row.hasAttribute('data-owner-leaving'),
-        fit: el.dataset.fit || '', open: el.dataset.open, solo: row.dataset.ownerSolo || '', head: rect(head).left,
-        kids: shownKids().length, height: row.getBoundingClientRect().height };
-    return { before, count: animations.length, frames, after };
+# Effort's marks in its open panel: boxes as [left, right] along the strip.
+MARKS = """() => {
+    const head = document.querySelector('#page-chat .chat-effort-range .chat-capsule-head');
+    const panel = document.getElementById(head.getAttribute('aria-controls'));
+    const strip = panel.querySelector('.chat-effort-strip');
+    const box = (sel) => { const r = strip.querySelector(sel).getBoundingClientRect(); return [r.left, r.right]; };
+    return {
+        dir: getComputedStyle(strip).direction, band: box('.chat-effort-band'), pill: box('.chat-effort-rec'),
+        seg: box('.chat-effort-seg[data-rec="true"]'), min: box('.chat-effort-min'), max: box('.chat-effort-max'),
+        none: box('[data-effort-seg="none"]'), ultra: box('[data-effort-seg="ultra"]'), strip: [strip.getBoundingClientRect().left, strip.getBoundingClientRect().right],
+    };
 }"""
+RTL = {"language": "ar", "english": False, "revision": 1, "profile": {"direction": "rtl"}, "entries": {
+    english: {"text": text, "provenance": "imported"}
+    for english, text in (("Context", "السياق"), ("Nano", "السياق المصغّر"), ("Low", "السياق المنخفض"), ("Max", "السياق الكامل"))}}
 
 
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_a_strip_that_opens_alone_grows_from_its_capsule_and_folds_back(direct_server_with_data, engine, tmp_path):  # noqa: F811
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 390)])
+def test_right_to_left_the_effort_strip_mirrors_in_its_panel(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    """Right to left the levels run leftwards: None on the right, the min bracket on the right of the band, the pill on
+    its level; a press lands on the level under it."""
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
     url = direct_server_with_data["url"]
-    runs = {}
+    phone = width < 720
+    context = {"viewport": {"width": width, "height": 860}}
+    if phone:
+        context.update(is_mobile=True, has_touch=True)
+    seen = {}
     with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 390, "height": 860}, is_mobile=True, has_touch=True)
+        browser, page = _launch(pw, engine, **context)
         try:
-            _open_chat(page, url, width=390, height=860, theme="light")
+            _install(page, RTL)
+            _open_chat(page, url, width=width, height=860)
+            page.wait_for_function("() => document.documentElement.dir === 'rtl'", timeout=30_000)
+            (page.tap if phone else page.click)(f"{EFFORT} .chat-capsule-head")
+            _settled(page, EFFORT)
+            opened = seen["open"] = page.evaluate(MARKS)
+            _shot(page, tmp_path, f"capsules-rtl-effort-open-{engine}-{width}")
+            assert opened["dir"] == "rtl" and opened["none"][0] > opened["ultra"][1], seen
+            assert abs(opened["pill"][0] - opened["seg"][0]) <= 0.6 and abs(opened["pill"][1] - opened["seg"][1]) <= 0.6, seen
+            assert abs(opened["band"][1] - opened["min"][1]) <= 0.6 and abs(opened["band"][0] - opened["max"][0]) <= 0.6, seen
+            assert opened["max"][1] < opened["pill"][0] < opened["pill"][1] < opened["min"][0], seen
+            assert opened["strip"][0] <= opened["ultra"][0] and opened["none"][1] <= opened["strip"][1], seen
+            # A press on None (outside the helper range) sets primary there without moving the min bracket.
+            box = page.locator(f'{_panel(page, EFFORT)} [data-effort-seg="none"]').bounding_box()
+            with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as saved:
+                (page.touchscreen.tap if phone else page.mouse.click)(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)
+            body = json.loads(saved.value.request.post_data)
+            assert body["recommended"] == "none" and body["min"] == "low", body
             page.wait_for_timeout(300)
-            for name, selector in (("effort", EFFORT), ("context", CONTEXT)):
-                runs[f"{name}-open"] = page.evaluate(MORPH_FRAMES, {"sel": selector, "times": [0, 60, 150, 300]})
-                _shot(page, tmp_path, f"capsules-morph-{name}-open-{engine}")
-                runs[f"{name}-close"] = page.evaluate(MORPH_FRAMES, {"sel": selector, "times": [0, 80, 220]})
-            page.emulate_media(reduced_motion="reduce")
-            runs["reduced"] = page.evaluate(MORPH_FRAMES, {"sel": EFFORT, "times": [0]})
-            page.keyboard.press("Escape")
+            pressed = seen["press"] = page.evaluate(MARKS)
+            assert abs(pressed["pill"][1] - pressed["none"][1]) <= 1 and abs(pressed["min"][1] - pressed["band"][1]) <= 0.6, seen
+            _shot(page, tmp_path, f"capsules-rtl-effort-press-{engine}-{width}")
         finally:
-            _record(tmp_path, f"capsules-morph-{engine}", runs)
+            _record(tmp_path, f"capsules-rtl-{engine}-{width}", seen)
             browser.close()
-    for name in ("effort", "context"):
-        opening, closing = runs[f"{name}-open"], runs[f"{name}-close"]
-        assert opening["after"]["fit"] in ("solo", "overflow") and opening["after"]["solo"] == name, (name, opening["after"])
-        first, last = opening["frames"][0], opening["frames"][-1]
-        # The glass is its own layer while it moves; the head starts where the closed capsule's head stood.
-        assert first["morph"] == "open" and first["surface"], (name, first)
-        assert abs(first["head"] - opening["before"]["head"]["left"]) <= 1, (name, first, opening["before"])
-        assert abs(last["head"] - opening["after"]["head"]) <= 1, (name, last, opening["after"])
-        # The controls that step aside stand where they stood and fade; the line never takes a second line.
-        assert len(first["leaving"]) == len(opening["before"]["kids"]) >= 2, (name, first)
-        assert all(abs(kid["left"] - box["left"]) <= 1 for kid, box in zip(first["leaving"], opening["before"]["kids"])), (name, first)
-        assert all(kid["opacity"] > 0.9 for kid in first["leaving"]), (name, first)
-        assert all(kid["opacity"] < 0.05 for kid in opening["frames"][2]["leaving"]), (name, opening["frames"][2])
-        assert all(abs(frame["height"] - opening["before"]["height"]) <= 1 for frame in opening["frames"]), (name, opening["frames"])
-        # Nothing it added outlives it.
-        assert opening["after"]["surfaces"] == 0 and opening["after"]["leaving"] == 0 and not opening["after"]["ownerLeaving"], name
-        assert opening["after"]["morph"] == "" and opening["after"]["kids"] == 0, (name, opening["after"])
-        # Closing runs back: the head rides home, the controls fade in, and the line is whole again.
-        c0 = closing["frames"][0]
-        assert c0["morph"] == "close" and c0["surface"] and abs(c0["head"] - closing["before"]["head"]["left"]) <= 1, (name, c0)
-        assert c0["back"] and all(opacity < 0.1 for opacity in c0["back"]), (name, c0)
-        assert closing["after"]["open"] == "false" and closing["after"]["solo"] == "", (name, closing["after"])
-        assert closing["after"]["kids"] == len(opening["before"]["kids"]) and closing["after"]["surfaces"] == 0, (name, closing["after"])
-        assert abs(closing["after"]["head"] - opening["before"]["head"]["left"]) <= 1, (name, closing["after"], opening["before"])
-        assert all(abs(frame["height"] - opening["before"]["height"]) <= 1 for frame in closing["frames"]), (name, closing["frames"])
-    reduced = runs["reduced"]
-    assert reduced["frames"][0]["morph"] == "" and not reduced["frames"][0]["surface"], ("reduced motion: at once", reduced)

@@ -31,7 +31,7 @@ pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 ROOM_FACTS = """(scope) => {
     const root = scope === 'main' ? document.querySelector('#page-chat') : document.querySelector('#project-panel');
     const trigger = root?.querySelector('.rw-trigger');
-    const surface = root?.querySelector('.rw-surface');
+    const surface = trigger ? document.getElementById(trigger.getAttribute('aria-controls')) : null;  // the room's work Shade, never the chip's
     const text = (el) => (el?.textContent || '').replace(/\\s+/g, ' ').trim();
     const shown = (el) => Boolean(el) && !el.hidden, markOf = (el) => (shown(el) ? `${el.dataset.shape} ${el.dataset.hue}` : '');
     const rows = [...(surface?.querySelectorAll('.rw-row') || [])].map((row) => {
@@ -225,7 +225,9 @@ class Transport:
                 raw[task_id] = {"running": pausing, **raw.get(task_id, {})}
                 fences.setdefault(item.get("root_task_id") or task_id, {
                     "state": "requested" if pausing else "paused", "parked_members": [] if pausing else [task_id]})
+        # Consciousness facts show each bar's chip: one more neighbour no word may move (DESIGN bible 6).
         return {"sha": "room-work-fixture", "supervisor_ready": ready, "active_chat_activities": rows,
+                "bg_consciousness_enabled": True, "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00"},
                 "active_chat_activities_complete": self.complete, "projects": self.projects,
                 "project_chat_ids": [p["chat_id"] for p in self.projects],
                 **work_fields(rows, raw, results=self.results, fences=fences, complete=self.complete)}
@@ -1125,7 +1127,7 @@ _BAR_GEOMETRY = """(scope) => {
     const neighbours = [...bar.querySelectorAll('button, .chat-budget-pill')]
         .filter((el) => visible(el) && el !== trigger && !trigger.contains(el) && !el.closest('.rw-shade-anchor'))
         .map((el) => ({ name: el.id || el.dataset.chatCommand || String(el.className).split(' ')[0], ...box(el) }));
-    const shade = bar.parentElement.querySelector('.rw-shade') || bar.querySelector('.rw-shade');
+    const shade = document.getElementById(trigger.getAttribute('aria-controls'));  // the work Shade, not the chip's
     const alpha = (color) => { const m = color.match(/rgba?\\(([^)]+)\\)/); if (!m) return color === 'transparent' ? 0 : 1;
         const parts = m[1].split(/[ ,/]+/).filter(Boolean); return parts.length > 3 ? parseFloat(parts[3]) : 1; };
     const reachable = [...(shade?.querySelectorAll('.rw-more, .rw-main') || [])].filter(visible).every((el) => {
@@ -1179,7 +1181,7 @@ def settle_unfold(page, room):
     """Wait until the room's Shade has finished unfolding (its 170 ms entrance slides it 6px), so geometry reads its
     resting place rather than a frame of the animation."""
     root = "#page-chat" if room == "main" else "#project-panel"
-    page.wait_for_function("""(root) => { const s = document.querySelector(`${root} .rw-shade`);
+    page.wait_for_function("""(root) => { const s = document.querySelector(`${root} .rw-shade:not(.cx-shade)`);
         return Boolean(s) && !s.hidden && !(s.getAnimations?.() || []).some((a) => a.playState === 'running'); }""",
                            arg=root, timeout=10_000)
     settle_frames(page)

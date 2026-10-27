@@ -43,7 +43,7 @@ from ouroboros.settings_scales import (
     EFFORT_SCALE, EFFORT_RANGE_KEYS, EFFORT_FORMAT_KEY, normalize_effort_document, OPTIONAL_BOUND_LEGACY, UNLIMITED,  # noqa: F401
     PROMPT_CACHE_TTL_SCALE, defaults_for_settings_document, optional_bound_value,  # noqa: F401
     REVIEW_POOL_DEFAULT_EFFORT,  # noqa: F401
-    VALID_RUNTIME_MODES,  # noqa: F401
+    VALID_RUNTIME_MODES, VALID_SUBAGENTS_MODES, normalize_subagents_mode,  # noqa: F401
     VALID_SAFETY_MODES,  # noqa: F401
     _RUNTIME_MODE_RANK,  # noqa: F401
     _SAFETY_MODE_RANK,  # noqa: F401
@@ -655,6 +655,8 @@ def _coerce_setting_value(key: str, value):
         return normalize_runtime_mode(value)
     if key == "OUROBOROS_UPDATE_CHANNEL":
         return normalize_update_channel(value)
+    if key == "OUROBOROS_SUBAGENTS_MODE":
+        return normalize_subagents_mode(value)
     if key == "OUROBOROS_CONTEXT_MODE":
         return normalize_context_mode(value)
     if key in OPTIONAL_BOUND_LEGACY:  # document spelling: "unlimited" or a positive int; a typo is finite

@@ -34,6 +34,7 @@ from ouroboros.owner_words import governing_words_for_schedule
 from ouroboros.subagent_history import snapshot_handle
 from ouroboros.subagent_runtime import (
     SubagentSelectionError,
+    _require_room_subagents,
     effective_runtime_subagent_settings,
     select_subagent_snapshot,
 )
@@ -818,6 +819,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
     try:
         from ouroboros.supervisor_route import capture_cognitive_route
 
+        _require_room_subagents()
         settings = effective_runtime_subagent_settings(runtime_settings(settings_reader=_ctl().load_settings))
         configured_subagent, legacy_selection = select_subagent_snapshot(
             settings,
@@ -1017,7 +1019,9 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "write_surface": requested_surface,
         "resource_intent": ({"kind": "explicit_none"} if folderless_scratch_dir(ctx) is not None
                             else dict(metadata.get("resource_intent") or {})),
-        "origin_metadata": {**consciousness_origin_metadata({**metadata, "task_id": str(getattr(ctx, "task_id", "") or "")}), **owner_origin},  # tree origin: consciousness label/level + owner words
+        "origin_metadata": {**consciousness_origin_metadata({**metadata, "task_id": str(getattr(ctx, "task_id", "") or "")}), **owner_origin,
+                            **({"evolution_root_task_id": metadata.get("evolution_root_task_id") or root_task_id}
+                               if metadata.get("evolution_root_task_id") or metadata.get("evolution_transaction") else {})},  # tree origin: consciousness label/level + owner words
         **presence_binding_authority_metadata(metadata, task_contract=getattr(ctx, "task_contract", None)),  # never speaker
     }
     _populate_subagent_event_extras(
@@ -1116,8 +1120,8 @@ def maybe_emit_delegated_run_fanout(ctx: ToolContext, *, run_id: str, route_id: 
                                     objective: str, durable: bool) -> None:
     """swarm_fanout for a delegated harness run, only under host-attested Swarm intent.
 
-    A task admitted through the Swarm button carries the typed metadata fact
-    ``force_plan_source == "swarm"`` — the gate reads exactly that admission fact,
+    A root records its room choice at admission as the typed metadata fact
+    ``subagents_mode == "swarm"`` — the gate reads exactly that admission fact,
     never keywords or prompt text (P5). Only such a hosting task folds its
     delegate_start into swarm telemetry; an ordinary delegated run on a task that
     never asked for a swarm emits nothing. The event reuses the exact existing
@@ -1129,7 +1133,7 @@ def maybe_emit_delegated_run_fanout(ctx: ToolContext, *, run_id: str, route_id: 
     """
     metadata = getattr(ctx, "task_metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
-    if not durable or metadata.get("force_plan_source") != "swarm":
+    if not durable or metadata.get("subagents_mode") != "swarm":
         return
     task_id = str(getattr(ctx, "task_id", "") or "")
     try:
