@@ -38,10 +38,8 @@ from ouroboros.context_fit import (
 from ouroboros.context_input_selection import (
     _capture_declared_context_core,
     _explicit_self_body_docs_flag as _explicit_self_body_docs_flag,
-    _task_requires_development_context,
-    _task_requires_self_body_docs,
-    _task_uses_external_context,
     _validate_declared_input_task,
+    development_resident,
 )
 from ouroboros.context_health import (
     _iter_recent_jsonl as _iter_recent_jsonl,
@@ -58,7 +56,7 @@ from ouroboros.context_health import (
 from ouroboros.context_health import (
     safe_read as safe_read,
 )
-from ouroboros.contracts.task_contract import normalize_bool, task_input_sources
+from ouroboros.contracts.task_contract import task_input_sources
 from ouroboros.memory import Memory, render_scratchpad_markdown
 from ouroboros.update_letter import official_update_projection  # contract: never raises
 from ouroboros.i18n_memory import current_language as _ui_language_tag
@@ -1081,18 +1079,9 @@ def _capture_context_core(
 
     # Max keeps the full capability/WHY map even for external work: binding a
     # folder changes tools' default target, not the mind's knowledge of its body.
-    # Its handbook follows the active self-body binding, with explicit task
-    # requirements taking precedence. Low/Nano and children instead receive both
-    # books' authored orientation through the same captured-source projection.
-    explicit_dev = task.get("context_requires_development")
-    if explicit_dev is not None:
-        docs_need_development = normalize_bool(explicit_dev)
-    elif _task_requires_self_body_docs(task):
-        docs_need_development = True
-    elif _task_uses_external_context(task):
-        docs_need_development = False
-    else:
-        docs_need_development = _task_requires_development_context(task)
+    # Its handbook follows the subject of the work (BIBLE P1); Low/Nano and children
+    # receive both books' authored orientation through the same captured-source projection.
+    docs_need_development = development_resident(task, design_ctx)
 
     semi_stable_parts, subagent_catalog = [], None
     try:
@@ -1138,7 +1127,7 @@ def _capture_context_core(
     from ouroboros.delegate_supervision import _attempt_key
     attempt_key = _attempt_key(ctx if ctx is not None else SimpleNamespace(task_attempt=task.get("_attempt")))
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
-                                             active_root=active_root, attempt_key=attempt_key)
+                                             active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
     dynamic_parts = [health_section] if health_section else []
     try:
         from ouroboros.subagent_runtime import review_records_block, subagent_supervision_fact_line

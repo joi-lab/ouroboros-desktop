@@ -206,10 +206,9 @@ def test_story_links_say_which_linked_row_is_preliminary(tmp_path):
     _activated(tmp_path)
     record = _page_with_later_rows(tmp_path)
     links = terminal_links(tmp_path, record)
-    assert len(links) == 2
-    assert f"Linked host summary of task w1 (completed; {PRELIMINARY}); not page coverage" in links[0]
-    assert ("Linked host summary of task w1 (completed; final=true; authority=canonical_task_result_after_finalization);"
-            " not page coverage") in links[1]
+    assert len(links) == 1  # one line per page; each row's authority stays in the row its reader opens
+    assert ("Later terminal rows of task w1 (host-linked, not page coverage): host summary (completed, "
+            f"{PRELIMINARY.partition(';')[0]}); host summary (completed, final=true); memory_read(") in links[0]
 
 
 def test_story_links_from_facts_stored_before_the_fields_name_the_gap(tmp_path, monkeypatch):
@@ -222,8 +221,7 @@ def test_story_links_from_facts_stored_before_the_fields_name_the_gap(tmp_path, 
                                                 if field not in {"outcome_final", "outcome_authority"}))
         assert mi.fill_tail(tmp_path, lambda: False)["state"] == "done"
     links = terminal_links(tmp_path, record)
-    assert "(completed; final=unknown); not page coverage" in links[0]
-    assert "(completed); not page coverage" in links[1]  # a terminal row without stored finality claims none
+    assert "host summary (completed, final=unknown); host summary (completed); memory_read(" in links[0]
     assert json.dumps(links).count("final=") == 1  # the gap alone: no finality invented for either row
 
 

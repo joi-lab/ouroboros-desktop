@@ -145,11 +145,25 @@ def test_nonrefused_gate_keeps_real_test_and_skip_exhibits(tmp_path, monkeypatch
                   "unbound": "the run completed but minted no proof of the tested subject",
                   "managed_unbound": "the run completed but minted no proof of the tested subject"}.get(
             outcome, "skipped by the author (skip_tests)")
-        assert ctx._preflight_execution == {"status": "not_run", "reason": reason}
+        exhibit = dict(ctx._preflight_execution)
+        observed = exhibit.pop("observed", [])
+        assert exhibit == {"status": "not_run", "reason": reason}
         assert tests == {"policy": "NOT_RUN", "result": "unknown", **(
             {"reason": "tests_proof_not_for_this_candidate"} if outcome.endswith("unbound") else {})}
-        assert receipts.execution_section(ctx._preflight_execution).endswith(
-            f"NOT_RUN: {reason}. No passing test result is claimed for this candidate.")
+        section = receipts.execution_section(ctx._preflight_execution)
+        if outcome != "failed":  # nothing ran red: the compatible NOT_RUN line stays the whole fact
+            assert not observed and section.endswith(
+                f"NOT_RUN: {reason}. No passing test result is claimed for this candidate.")
+            return
+        # The red run reaches every seat as what it was, on these bytes, never as "not run".
+        [run] = observed
+        assert (run["outcome"], run["relation"], run["tested"]["head"]) == (
+            "failed", "same_bytes", _git(repo, "rev-parse", "HEAD"))
+        assert run["evidence"] == ctx._preflight_test_evidence and run["terminal"] == "read"
+        assert "test_red" in run["diagnosis"] and "assert False" in run["diagnosis"]
+        assert "FAILED: a lane exited red, on the bytes of this candidate" in section
+        assert "NOT_RUN names the missing proof only; the runs and checks below did happen." in section
+        assert "test_red" in section and "never proof" in section
 
 
 @pytest.mark.parametrize("legacy", [False, True], ids=["original-exhibit", "legacy-absent"])
