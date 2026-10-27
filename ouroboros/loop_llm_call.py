@@ -166,10 +166,11 @@ _DEADLINE_RETRY_FLOOR_SEC = 10.0
 # ordinal. Every other caller passes 0: its new generation is the round's recovery.
 _TRANSPORT_DEATH_RETRIES = 2
 _TRANSPORT_DEATH_BACKOFF_SEC = (4.0, 8.0)
-# Round-keyed repeat counter on the shared usage dict ({"round_id", "count"}):
-# the wait episode's free redial re-enters call_llm_with_retry with the SAME
-# round id, so the budget must not re-arm per invocation.
+# Round-keyed repeat counter on the shared usage dict ({"round_id", "count"}): the wait episode's free
+# redial re-enters call_llm_with_retry with the SAME round id, so the budget must not re-arm per invocation.
 TRANSPORT_DEATHS_KEY = "_transport_deaths"
+# Stamped by the round gate before each round call: an open wait episode paces its own redials, so its call sends once.
+TRANSPORT_WAIT_REDIAL_KEY = "_transport_wait_redial"
 # A local pre-dispatch refusal's own candidate facts (``LocalContextTooLargeError.refused_candidate``), for the
 # round's one strict-shrink retry; a wait's reprepare rebinds the physical context of the remaining attempts.
 REFUSED_CANDIDATE_KEY, REBOUND_PHYSICAL_CONTEXT_KEY = "_refused_candidate", "_physical_context_rebound"
@@ -824,14 +825,12 @@ def classify_llm_exception(exc: Exception, safe_error: str = "") -> LlmErrorClas
         and not bool(getattr(capture, "route_is_loopback", False))
         and is_pre_dispatch_transport_failure(exc) and not model_wait_reason(exc)  # an engine resource verdict is no outage
     ):
-        # Typed $0 fact: the request never left this host toward a REMOTE
-        # provider (released custody + typed pre-dispatch transport failure).
-        # Retrying the same request is free and safe; pacing/waiting is owned
-        # by the round-level episode in loop.py, never by this helper. A local
-        # provider's connect failure stays on the generic path — a stopped
-        # local server is not a network outage worth waiting out — and so does
-        # a loopback OpenAI-compatible route (Ollama / LM Studio / vLLM): its
-        # provider stamp is remote-shaped but the server is on this host.
+        # Typed $0 fact: the request never reached a REMOTE provider (released custody + typed pre-dispatch
+        # failure). Retrying the same request is free and safe; the engine's not-delivered receipt repeats within
+        # the ordinary bound (``_stop_after_llm_error``), other pacing is the round-level episode's in loop.py. A local
+        # provider's connect failure stays on the generic path — a stopped local server is not a network outage worth
+        # waiting out — and so does a loopback OpenAI-compatible route (Ollama / LM Studio / vLLM): its provider
+        # stamp is remote-shaped but the server is on this host.
         return LlmErrorClassification(
             "transport_unavailable", True, status_code, provider_code,
         )
@@ -993,16 +992,19 @@ def _record_llm_call_error(
 
 
 def _stop_after_llm_error(ctx: _LlmErrorContext) -> bool:
-    """Retry decision for the exception path: ``True`` stops the attempt loop, and every stop
-    except the two transport shapes and a granted timeout repeat's own failure stamps the OB-01
-    marker — permanent classes stopped earlier, so a stop here means "the same-model wall is spent"."""
+    """Retry decision for the exception path: ``True`` stops the attempt loop. Every stop except a one-attempt
+    transport stop, an unknown outcome and a granted timeout repeat's own failure stamps the OB-01 marker (a spent
+    not-delivered burst does): permanent classes stopped earlier, so a stop here means "the same-model wall is spent"."""
     accumulated_usage = ctx.accumulated_usage
     error_kind = str(accumulated_usage.get("_last_llm_error_kind") or "")
     if TIMEOUT_REPEAT_KEY in accumulated_usage:
         return True  # its repeat failed, whatever the class: the no-call terminal reads the record and this row
-    if error_kind == "transport_unavailable":
-        # One free ($0) pre-dispatch attempt; the round-level wait episode owns
-        # redial pacing. NOT a spent wall — the transport-wait terminal owns this.
+    if error_kind == "transport_unavailable" and (
+            (accumulated_usage.get("_last_llm_failure") or {}).get("provider_code") != "transport_not_delivered"
+            or accumulated_usage.get(TRANSPORT_WAIT_REDIAL_KEY) or isinstance(accumulated_usage.get(TRANSPORT_DEATHS_KEY), dict)):
+        # One free attempt: configured routes and the round's episode own an unreachable route's recovery, an open episode
+        # paces its own redials and a held paid repeat sends nothing more. Only the engine's receipt that the request was
+        # not delivered first repeats on its route within the ordinary bound below, as an overloaded route does.
         return True
     if error_kind == "provider_outcome_unknown":
         from ouroboros.loop_transport import wait_transport_repeat
