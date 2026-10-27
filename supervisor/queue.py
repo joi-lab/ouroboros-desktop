@@ -301,7 +301,8 @@ def enqueue_task(
         if continuation:
             t["_consciousness_continuation"] = True
     subagents_settings = None
-    if not restoring_snapshot and not (t.get("parent_task_id") or metadata.get("parent_task_id")):
+    if (not restoring_snapshot and not (t.get("parent_task_id") or metadata.get("parent_task_id"))
+            and "subagents_mode" not in metadata):
         from ouroboros.config import load_settings
         subagents_settings = load_settings()
     attach_task_contract(apply_consciousness_authority(t))

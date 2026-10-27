@@ -91,7 +91,7 @@ def test_root_receipt_records_the_effective_admitted_room(host, monkeypatch, ava
     if producer == "api":
         response = _create_task_from_body(request_for(host), {"task_id": "mode", "description": "Owner work",
             "project_id": room["id"], "memory_mode": "empty",
-            "metadata": {"subagents_mode": "forged"}})
+            "metadata": {"subagents_mode": "off" if availability == "available" else "swarm"}})
         assert response.status_code == 200, response.body
     else:
         result = _handle_promote_chat_to_task({"task_id": "mode", "routing_token": "mode-token",
@@ -103,6 +103,24 @@ def test_root_receipt_records_the_effective_admitted_room(host, monkeypatch, ava
     stored = load_task_result(host.root, "mode", strict=True)
     assert queued["metadata"]["subagents_mode"] == stored["metadata"]["subagents_mode"] == (
         "swarm" if availability == "available" else "off")
+
+
+@pytest.mark.parametrize("accepted,later", [("swarm", "off"), ("off", "swarm")])
+@pytest.mark.parametrize("restoring", [False, True])
+def test_requeued_root_keeps_its_admission_fact_after_a_room_switch(host, monkeypatch, accepted, later, restoring):
+    from ouroboros import config
+    from tests.test_subagents_mode_messages import mode_settings
+
+    values = mode_settings(accepted, "available")
+    monkeypatch.setattr(config, "load_settings", lambda: dict(values))
+    response = _create_task_from_body(request_for(host), {"task_id": "mode", "description": "Owner work"})
+    assert response.status_code == 200, response.body
+    admitted = host.pending.pop()
+    assert admitted["metadata"]["subagents_mode"] == accepted
+    values["OUROBOROS_SUBAGENTS_MODE"] = later
+    requeued = queue.enqueue_task(admitted, restoring_snapshot=restoring)
+    assert not requeued.get("_admission_blocked")
+    assert requeued["metadata"]["subagents_mode"] == accepted
 
 
 def test_queue_gateway_preserves_child_wait_and_recovery_without_root_census_inflation(host, tmp_path, monkeypatch):
