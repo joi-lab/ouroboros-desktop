@@ -119,10 +119,11 @@ function contextModeMarkup() {
  *
  * Hover is an accelerator only (`(hover: hover) and (pointer: fine)`): a press pins the strip
  * open and unpins it; touch and keyboard use the press. Hover never opens a capsule while
- * another one is open, since closing it would move this one under a still pointer.
+ * another one is open, since closing it would move this one under a still pointer. A capsule's
+ * `note` (Subagents' lines under the row) is its own: a press, the pointer or focus there is in it.
  */
 function createCapsule({
-    el, row, kind, strip, segs, render, focusTarget, padMax = SEG_PAD.max,
+    el, row, kind, strip, segs, render, focusTarget, padMax = SEG_PAD.max, note = null,
     busy = () => false, onClosed = () => {}, afterOpen = () => {}, afterOverflow = afterOpen,
     onLayout = () => {}, onSettled = () => {}, win, doc,
 }) {
@@ -145,16 +146,19 @@ function createCapsule({
     // Focus keeps a hover-opened strip open only when the keyboard put it there: browsers report
     // a handle focused after a mouse press as :focus-visible, so the last input decides instead.
     let keyboardFocus = false;
+    const own = (node) => el.contains(node) || Boolean(note?.contains?.(node));
     const stillHere = () => {
-        try { return Boolean(el.matches(':hover') || (keyboardFocus && el.contains(doc.activeElement))); } catch { return false; }
+        try { return Boolean(el.matches(':hover') || note?.matches?.(':hover') || (keyboardFocus && own(doc.activeElement))); } catch { return false; }
     };
     // The open strip forgives a mouse that drifts a little: inside the zone (the control plus a
     // margin) it stays; outside, it closes after the delay unless the mouse comes back first. A
     // pinned strip, a drag and keyboard focus keep it open regardless.
     function inZone(point) {
-        const r = point && typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
-        return Boolean(r) && point.x >= r.left - HOVER_ZONE_PX && point.x <= r.right + HOVER_ZONE_PX
-            && point.y >= r.top - HOVER_ZONE_PX && point.y <= r.bottom + HOVER_ZONE_PX;
+        return [el, note].some((node) => {
+            const r = point && node && !node.hidden && typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : null;
+            return Boolean(r) && point.x >= r.left - HOVER_ZONE_PX && point.x <= r.right + HOVER_ZONE_PX
+                && point.y >= r.top - HOVER_ZONE_PX && point.y <= r.bottom + HOVER_ZONE_PX;
+        });
     }
     function closeSoon() {
         clearTimeout(leaveTimer);
@@ -271,7 +275,7 @@ function createCapsule({
     // before anything moves under the pointer.
     const onDocPointerDown = (event) => {
         keyboardFocus = false;
-        if (state.open && !el.contains(event.target) && !api.peers.some((peer) => peer.el.contains(event.target))) {
+        if (state.open && !own(event.target) && !api.peers.some((peer) => peer.el.contains(event.target))) {
             state.pinned = false;
             setOpen(false);
         }

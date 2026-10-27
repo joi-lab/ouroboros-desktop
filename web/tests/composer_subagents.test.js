@@ -97,6 +97,10 @@ test('Settings-off: Off with a lock, only Off can be chosen, the reason and Open
     assert.deepEqual([shown(m.subNote, '.chat-subagents-meaning'), shown(m.subNote, '.chat-subagents-rule'),
         shown(m.subNote, '.chat-subagents-locked')], [false, false, true]);
     assert.equal(m.subNote.querySelector('.chat-subagents-reason').textContent, 'Subagents are turned off in Settings › Agents');
+    // A press comes before its click (a browser's order): the lines under the row are the capsule's own, so a press on
+    // Open Settings leaves the strip and its button there for the click.
+    m.docDown(m.subNote.querySelector('.chat-subagents-settings'));
+    assert.deepEqual([el.dataset.open, m.subNote.hidden], ['true', false], 'a press under the row is not an outside press');
     m.subNote.querySelector('.chat-subagents-settings').click();
     assert.deepEqual(m.settingsOpened, ['agents']);
     assert.equal(el.dataset.open, 'false', 'the way to Settings closes the strip');

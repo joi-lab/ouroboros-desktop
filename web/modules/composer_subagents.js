@@ -224,7 +224,7 @@ export function createSubagentsControl({
     };
     control = createCapsule({
         el, row, kind: 'subagents', strip: choice.strip, segs: choice.segs, render, focusTarget: choice.chosen,
-        padMax: 11, onLayout, onSettled, win, doc,
+        note: choice.note, padMax: 11, onLayout, onSettled, win, doc,
         afterOpen: revealChosen,
         afterOverflow: () => revealChosen(),
     });
