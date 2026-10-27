@@ -18,6 +18,7 @@ from ouroboros._outcome_tool_errors import (
     _BLOCKING_TOOL_STATUSES,
     _NON_BLOCKING_READONLY_BLOCK_STATUSES,
     _NON_BLOCKING_RECOVERABLE_STATUSES,
+    _NON_EFFECT_OBSERVATION_STATUSES,
     _OK_TOOL_STATUSES,
     _POLICY_DENIAL_STATUSES,
     _UNPARTITIONED_BUCKETS,
@@ -469,8 +470,9 @@ CURRENT_PRODUCER_CONTRACTS = {"WORLD_SIZE_NOTICE": (False, "ok"),  # the map's s
     # refusal changes nothing and is its peers' answer, asserted live.
     "INTEGRATE_DELEGATED_INVESTIGATION_EVIDENCE": (True, "integration_blocked"),
     # #1969: an apply that had to prepare the capture returns it for inspection;
-    # nothing is applied, recorded or released, so it is its peers' answer.
-    "INTEGRATE_DELEGATED_INSPECT_CAPTURE": (True, "integration_blocked"),
+    # nothing is applied, recorded or released. The protocol worked, so the call is
+    # no error, and its own bucket keeps it out of the success set (no effect).
+    "INTEGRATE_DELEGATED_INSPECT_CAPTURE": (False, "inspection_required"),
     # #2070: named evidence that could not all be retained keeps its surviving copy;
     # apply and reject record nothing and change nothing, so it is its peers' answer.
     "INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED": (True, "integration_blocked"),
@@ -927,6 +929,7 @@ def test_every_outcome_bucket_is_partitioned() -> None:
         | set(_NON_BLOCKING_RECOVERABLE_STATUSES)
         | set(_NON_BLOCKING_READONLY_BLOCK_STATUSES)
         | set(_OK_TOOL_STATUSES)
+        | set(_NON_EFFECT_OBSERVATION_STATUSES)
         | set(_UNPARTITIONED_BUCKETS)
     )
     unhomed = sorted({spec.outcome_bucket for spec in TOOL_CODE_SPECS.values()} - known)

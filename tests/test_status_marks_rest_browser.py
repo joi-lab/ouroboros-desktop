@@ -234,22 +234,17 @@ def test_context_low_is_neutral_ink(subscription_ui, theme):
     page.wait_for_selector('#chat-context-mode .chat-context-arc[data-arc="low"]', state="attached")
     painted = page.evaluate("""() => {
         const el = document.querySelector('#chat-context-mode');
-        const head = el.querySelector('.chat-capsule-head');
-        head.click();  // the thumb stands in the capsule's panel
-        const panel = document.getElementById(head.getAttribute('aria-controls'));
-        const thumb = panel.querySelector('.chat-context-thumb');
-        const saved = [el.dataset.contextMode, panel.dataset.mode];
+        const thumb = el.querySelector('.chat-context-thumb');
+        const saved = el.dataset.contextMode;
         thumb.style.transition = 'none';  // the colour, not its 0.2s fade, is what this reads
         const out = {};
         for (const mode of ['low', 'max', 'nano']) {
             el.dataset.contextMode = mode;
-            panel.dataset.mode = mode;
             out[mode] = { arc: getComputedStyle(el.querySelector(`.chat-context-arc[data-arc="${mode}"]`)).stroke,
                 thumb: getComputedStyle(thumb).backgroundColor };
         }
-        [el.dataset.contextMode, panel.dataset.mode] = saved;
+        el.dataset.contextMode = saved;
         thumb.style.transition = '';
-        head.click();
         return out;
     }""")
     assert painted["low"] == {"arc": page.evaluate("__probe('var(--status-neutral-fg)')"),

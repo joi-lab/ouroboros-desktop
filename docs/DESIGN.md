@@ -441,45 +441,41 @@ Until the room's values arrive the ring stays unlit and the value secondary,
 never a faded capsule. Closed, Effort names only the primary level; its ring (a 300°
 arc: band minimum..maximum, dot primary) and the button's name carry the range.
 Context's ring is three arcs, the chosen one lit: one of three modes, never a fill
-level or capacity. Subagents' ring is a rail with three helper dots: none lit for Off, one for Auto, three for Swarm.
+level or capacity. Subagents' mark is a small network (owner 27.10, G): Ouroboros joined by threads to three helpers; Off lights none, Auto one helper and its thread, Swarm every helper and the threads between them.
 
-**A capsule opens a panel, never inline, one at a time** (owner 26.10, 7A): on a desk a float panel above it, its
-leading edge on the capsule's and inside the composer's column (the object radius, the float shadow, glass in dark);
-on a phone a bottom sheet over a light scrim (the sheet radius on top, `--ease-sheet`, `--motion-open` in,
-`--motion-close` out). The row never moves: nothing steps aside, grows or wraps, and the open capsule keeps showing
-its value, taking only its hover fill. A panel holds the capsule's ring and name, its strip at a finger's size (every
-option at least 44 × 44 px; a word too long for its option takes two lines, never smaller type), one line for the
-chosen value (as tall as the longest, so a choice never changes the
-panel's height) and one note on how a change applies. An outside press, Escape, the capsule again or, on a phone, the
-scrim or a swipe down closes it; a press on another capsule switches at once.
-
-Context's strip is Nano · Low · Max under a glass thumb (about 85K tokens, about 250K, everything the model's window
-holds; «Applies to new work in this chat; running work keeps its context.»); a choice posts at once and the strip
-waits for the answer. Subagents' is Off · Auto · Swarm the same way: what the value means and «Applies to new steps in
-this chat; running helpers finish.» When Settings turns subagents off or they are not set up yet, the capsule says
-`Off` with a lock; its panel shows the lock by the name, Auto and Swarm disabled, and the reason with `Open Settings`
-in place of the two lines; the room keeps its own value. Effort's seven levels carry a primary pill and two helper
-bounds; the primary may lie outside them, and the line says both («Primary X-High; helpers Medium–Max.»). A segment
-is its word with the same air a side and never narrower than a finger; a strip with less room (a phone, a narrow
-Project pane) reads its levels a step smaller with less air, and where seven fingers do not fit (a 320 px phone) the
-levels share the strip evenly. The pill covers its segment; band, pill and brackets share one vertical inset. The
-primary and helper bounds never move each other; the brackets cannot cross. A level tap sets primary; each bracket has
-its own handle. A drag keeps its grab offset on whole levels. A stored `minimal` shows at Low until its handle moves.
+**A capsule opens inline, in the row, never as a dropdown or a panel, one at a time** (owner 11.10; the panels tried
+on 26.10 were withdrawn on 27.10); its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
+choice posts at once and the strip waits for the answer. Subagents' is Off · Auto · Swarm the same way, and while it
+is open its lines stand under the row: what the value means and «Applies to new steps in this chat; running helpers
+finish.» When Settings turns subagents off or they are not set up yet, it says `Off` with a lock; open, Auto and Swarm
+are disabled and the reason and `Open Settings` stand under the row instead; the room keeps its own value. Effort's seven levels carry
+a primary pill and two helper bounds; the primary may lie outside them. A
+segment is its word plus `--capsule-seg-pad` a side; the pill covers its segment;
+band, pill and brackets share one vertical inset. The primary and helper bounds never
+move each other; the brackets cannot cross. A level tap sets primary; each bracket
+has its own handle. A drag keeps its grab offset on whole levels. A stored `minimal` shows at Low until its handle moves.
 
 **A mark keeps from a rounded end the clearance it keeps from the straight edges.**
-A pill (the thumb, the recommended pill) is concentric with the strip's end, so the
-band inset suffices; a square bracket at the last level would graze the curve, so
-Effort's end gutter also clears it, at rest and mid-drag.
+A pill (the thumb, the recommended pill) is concentric with the capsule, so the band
+inset suffices; a square bracket at the last level would graze the curve, so
+Effort's end gutter also clears it. The gutter is measured into the fit and outlasts
+scrolling and dragging.
 
-**A narrow line drops the names, then ellipsizes the longest values, never rings**;
-the panel and the button's name keep the whole word. All is measured, so no breakpoint.
+**The open strip stays on the composer's line**: beside the others when it fits
+(padding down to `--space-1`), else alone while they step aside (down to 3 px, the
+pill's corners tightening; the name and divider yield first), last scrolling inside
+itself, faded where levels hide. A closed line too narrow drops the names, then
+ellipsizes the longest values, never rings. All is measured, so no breakpoint
+(`web/modules/capsule_fit.js`).
 
-**A panel comes and goes from its capsule.** A float panel fades in from the capsule and
-eases out; a sheet rises and falls on the sheet curve and follows a finger down its
-grabber. A sheet closes on the scrim's own click, so nothing under it is pressed.
-Reduced motion shows and removes it at once (`web/modules/capsule_panel.js`). Inside
-Telegram a level the finger reaches, and another level or mode pressed, ticks (§10,
-Haptics).
+**It opens in place.** Beside the others the strip grows by its width. Alone, its
+glass grows from the closed capsule to the whole line in 300 ms on the iOS sheet
+curve, the ring riding on the glass's leading end, while the controls that step
+aside fade where they stood (110 ms) and the levels appear one after another;
+closing runs back in 220 ms. Only opacity, a clip and the ring's offset move, so no
+frame wraps (`web/modules/capsule_morph.js`); reduced motion shows the strip at once.
+Inside Telegram a level the finger reaches, and another level or mode pressed, ticks
+(§10, Haptics).
 
 **On a phone the row folds while the owner reads back.** Scrolling back through a
 room's history folds the row of capsules away: its line collapses, the capsules
@@ -492,11 +488,14 @@ begun in a card's frame, which the feed never sees, or the app's own jump (the
 waiting pill to a question, which keeps the pill under the finger for the next one)
 (`web/modules/composer_fold.js`; owner 19.10).
 
-**The press opens; hover opens nothing.** Focus goes into the panel, onto the
-recommended handle or the chosen mode when Enter or Space opened it, and back to the
-capsule when Escape, the capsule or a swipe closes it; arrows step a handle
-(PageUp/PageDown too) or choose the next mode, Home/End reach the ends. Handles are
-sliders naming their level; closed, they leave the tab order. An effort change saves when the gesture ends, saves run in order (last wins),
+**Hover is an accelerator; the press always works.** With a hovering fine pointer a
+capsule opens ~160 ms after arrival (not while the other is open) and closes a
+second after it leaves a 32 px zone unless a press pinned it; the press unpins.
+Touch and keyboard use the press: Enter or Space opens onto the recommended handle
+or the chosen mode; arrows step a handle (PageUp/PageDown too) or choose the next
+mode, Home/End reach the ends; Esc closes and returns focus to the head; an outside
+press closes. Handles are sliders naming their level; closed, they leave the tab
+order. An effort change saves when the gesture ends, saves run in order (last wins),
 and Send waits for every pending capsule save; a refused
 save keeps the draft, says why and returns to the saved value — unsaved values are
 never shown as saved.
@@ -515,7 +514,7 @@ still attach, and a pointer that opens it from the field leaves the focus in the
 The dictation mic has a slot between the field and Send that takes no room until an
 engine is chosen. Contributed chips have a slot at the end of the capsule row that takes
 only the room the capsules leave (never a second line: the chips that do not fit fold
-into one "+N" whose list holds them).
+into one "+N" whose list holds them) and steps aside with them.
 
 ### The composer field
 
@@ -1989,7 +1988,9 @@ lifecycle.
 A task that ends with a cause states it on the collapsed line in the
 owner's words (the sentence of the durable row and the expanded body), so a
 `Done with warnings` chip never stands beside an unrelated last action; a clean
-ending keeps the last narration. Successful tool calls are not rows: they fold
+ending keeps the last narration. Residual tool errors name the first recorded
+failure in plain words (a noun for the step and what happened, never a tool
+name, its result text or a path) and count the rest (`tool_error_words`). Successful tool calls are not rows: they fold
 into ONE evidence row per block (`N tool calls`, `N tool calls · M errors` once
 a call failed) at the first call's position and time, patched in place; Expand
 shows per-tool counts (`read_file ×3 · web_search`), and the phase (`calling`
@@ -2074,7 +2075,12 @@ host jobs (routing, census `kind`, Stop custody, terminal rows); the client
 draws no chrome or status from it. A block that existed only for open attention leaves when that attention
 closes: a wait-only block disappears when the wait resolves, and the resolved
 episode's no-reopen ledger survives with the record, so a stale revision cannot
-bring it back.
+bring it back. A host wait (accounting access, control storage: the typed
+`usage_lock_wait`/`control_store_wait` episodes) is how the host ran, not the
+turn's work: a block's episodes of one kind are one receipt row, live while one
+is open, then their count and the longest measured one, so a wait never makes or
+keeps a block, live or on reload; Logs keep every phase, and the model's progress
+window folds them the same way (`checkpoint_waits`).
 
 An addressing call (`start_task`, `move_to_project`, `tell_task`: the
 routing-verb family `ouroboros/tool_capabilities.py::ROUTING_VERBS` owns) is
@@ -2723,8 +2729,9 @@ under it with a little parallax. Nothing darkens. The quarter of the room left
 showing is the way back: a tap or a sideways finger on it closes the drawer. A
 Project open over Main is the room then, and moves the same way; on the desk the
 column stays docked and nothing changes (owner 19.10). In a room (Main, an open Project) ☰
-is the first control of the composer's row, beside Subagents and under the thumb; on a
-page without a composer it sits in the leading slot of the header. While the drawer is
+is the first control of the composer's row, beside Subagents and under the thumb, and
+steps aside with the others while an open capsule has the line alone; on a page
+without a composer it sits in the leading slot of the header. While the drawer is
 closed ☰ carries one 7 px dot for Main and the Projects, the room on screen
 included: amber while one of them waits for the owner, else crimson while one has
 unread messages; its accessible name says which. The

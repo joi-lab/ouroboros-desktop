@@ -68,35 +68,38 @@ def record_observation(root, route_fp: str, *, accepted: int = 0, refused: int =
 
     if not route_fp or not (accepted > 0 or refused > 0):
         return
-    with ce._STORE_LOCK:
-        data = ce._load(root)
-        record = data.setdefault("main_windows", {}).setdefault(route_fp, {})
-        rows = record.setdefault("observations", [])
-        prior = list(rows)
-        # Retain immutable frontier observations, including a later acceptance
-        # below a historic maximum that nevertheless supersedes a newer refusal.
-        last_refusal = next((row for row in reversed(rows) if row.get("refused")), {})
-        high = max((row.get("accepted", 0) for row in rows), default=0)
-        supersedes = accepted > last_refusal.get("refused", accepted) and not any(
-            row.get("accepted", 0) > last_refusal.get("refused", 0)
-            for row in rows[rows.index(last_refusal) + 1:]) if last_refusal else False
-        if refused or accepted > high or supersedes:
-            rows.append({"accepted": accepted, "refused": refused, "kind": "input" if accepted else kind,
-                         "reserve": reserve, "transmitted": transmitted, "ts": ce.utc_now_iso()})
-        keep = set()
-        largest = max(range(len(rows)), key=lambda i: rows[i].get("accepted", 0), default=None)
-        if largest is not None and rows[largest].get("accepted"):
-            keep.add(largest)
-        newest = next((i for i in reversed(range(len(rows))) if rows[i].get("refused")), None)
-        if newest is not None:
-            keep.add(newest)
-            later = next((i for i in range(newest + 1, len(rows))
-                          if rows[i].get("accepted", 0) > rows[newest]["refused"]), None)
-            if later is not None:
-                keep.add(later)
-        record["observations"] = [rows[i] for i in sorted(keep)]
-        if record["observations"] != prior:
-            ce._save(root, data)
+    try:
+        with ce._store_transaction(root):
+            data = ce._load(root)
+            record = data.setdefault("main_windows", {}).setdefault(route_fp, {})
+            rows = record.setdefault("observations", [])
+            prior = list(rows)
+            # Retain immutable frontier observations, including a later acceptance
+            # below a historic maximum that nevertheless supersedes a newer refusal.
+            last_refusal = next((row for row in reversed(rows) if row.get("refused")), {})
+            high = max((row.get("accepted", 0) for row in rows), default=0)
+            supersedes = accepted > last_refusal.get("refused", accepted) and not any(
+                row.get("accepted", 0) > last_refusal.get("refused", 0)
+                for row in rows[rows.index(last_refusal) + 1:]) if last_refusal else False
+            if refused or accepted > high or supersedes:
+                rows.append({"accepted": accepted, "refused": refused, "kind": "input" if accepted else kind,
+                             "reserve": reserve, "transmitted": transmitted, "ts": ce.utc_now_iso()})
+            keep = set()
+            largest = max(range(len(rows)), key=lambda i: rows[i].get("accepted", 0), default=None)
+            if largest is not None and rows[largest].get("accepted"):
+                keep.add(largest)
+            newest = next((i for i in reversed(range(len(rows))) if rows[i].get("refused")), None)
+            if newest is not None:
+                keep.add(newest)
+                later = next((i for i in range(newest + 1, len(rows))
+                              if rows[i].get("accepted", 0) > rows[newest]["refused"]), None)
+                if later is not None:
+                    keep.add(later)
+            record["observations"] = [rows[i] for i in sorted(keep)]
+            if record["observations"] != prior:
+                ce._save(root, data)
+    except OSError:  # a busy or unwritable store skips this observation; the send it saw stands
+        return
 
 
 def observation_scope(plan) -> str:

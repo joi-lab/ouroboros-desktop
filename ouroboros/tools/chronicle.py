@@ -827,7 +827,15 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
     for ref in record.get("source_refs") or []:
         sections.append("retained source: memory_read(source_ref=" + json.dumps(ref, ensure_ascii=False, sort_keys=True) + ")")
     if kind == "mark":
-        sections.append(f"target: {json.dumps(record.get('target_ref'), ensure_ascii=False, sort_keys=True)}")
+        target = record.get("target_ref")
+        source = isinstance(target, dict) and target.get("kind") == "task_source"
+        if source:  # the author's own read recipe resolves in the author's drive only
+            target = {key: value for key, value in target.items() if key != "read"}
+        sections.append(f"target: {json.dumps(target, ensure_ascii=False, sort_keys=True)}")
+        if source:
+            from ouroboros.memory_view import source_reader
+
+            sections.append("source: " + source_reader(target, (record.get("review") or {}).get("source_read")))
         if record.get("quote"):
             sections.append(f"quote: {record['quote']}")
     if revision:
@@ -918,8 +926,10 @@ def _memory_read(ctx: Any, node_id: str = "", room_id: Any = None, after_seq: in
     limit = tool_result_limit("memory_read")
     try:
         root = _root(ctx)
-        store = _activated(root)
-        if str(room_id) == "*":
+        store = None if source_ref else _activated(root)  # a retained source is verified on read, without the chronicle
+        if source_ref:
+            text = _read_source(root, source_ref, start, limit)
+        elif str(room_id) == "*":
             text = _read_rooms(root, store, start, limit)
         elif str(room_id) == "candidates":
             candidates = store.pending_candidates()
@@ -928,8 +938,6 @@ def _memory_read(ctx: Any, node_id: str = "", room_id: Any = None, after_seq: in
                 for r in candidates)
             text = _window(f"Drafts awaiting a decision: {len(candidates)}", body, start, limit,
                            lambda n: f"memory_read(room_id='candidates', start={n})")
-        elif source_ref:
-            text = _read_source(root, source_ref, start, limit)
         elif node_id:
             text = _read_node(root, str(node_id), start, limit, str(revision or ""))
         elif rows:

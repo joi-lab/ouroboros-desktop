@@ -33,6 +33,7 @@ from ouroboros.observability import _json_bytes, new_call_id, new_execution_id, 
 from ouroboros.pricing import emit_llm_usage_event, infer_model_category, normalize_usage_cost as _normalize_usage_cost
 from ouroboros.send_clock import main_send_scope
 from ouroboros.task_pacing import main_loop_wire_options
+from ouroboros.task_custody import canonical_owner_root
 from ouroboros.transport_custody import attempt_custody_event_fields, is_pre_dispatch_transport_failure, is_retryable_transport_death, outcome_unknown_on_chain
 from ouroboros._usage_response import OUTPUT_LIMIT_FINISH_REASONS, output_exhaustion_facts, response_finish_reason
 from ouroboros.usage_accounting import PhysicalAttemptContext, UsageAccountingError, bind_physical_attempt_context, current_usage_scope, last_physical_attempt_capture
@@ -947,6 +948,8 @@ def _record_llm_call_error(
     }
     if not append_jsonl(ctx.drive_logs / "events.jsonl", error_event) or not has_log_sink():
         emit_log_event(ctx.event_queue, error_event, log_label="LLM call error")
+    if (owner := canonical_owner_root(ctx.drive_logs.parent)) != ctx.drive_logs.parent.resolve(strict=False):
+        append_jsonl(owner / "logs" / "events.jsonl", error_event, live=False)  # REPLICA_RULE: the drive goes, the charge stays
     failure = {"error": _short_error_text(display_error), "resource_refusal": model_wait_reason(error),
         **{key: error_event[key] for key in ("ts", "llm_call_id", "model", "requested_profile", "observed_route", "status_code", "provider_code")},
         "failure_code": classification.kind, "reset_at": classification.reset_at, **{key: value for key, value in custody_fields.items()

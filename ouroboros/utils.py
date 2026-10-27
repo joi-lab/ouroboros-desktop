@@ -408,6 +408,29 @@ def json_snapshot(path: pathlib.Path, *, strict: bool = False) -> Optional[Dict[
     return held[1]
 
 
+@contextlib.contextmanager
+def json_update_lock(path: pathlib.Path, *, timeout_sec: float = 4.0, stale_sec: float = 90.0) -> Iterator[None]:
+    """Hold the sidecar ``<file>.lock`` that serializes the locked writers of the JSON file ``path``.
+
+    Never the file itself, whose inode each atomic write replaces. ``update_json_locked`` holds it
+    around its read-modify-write; a store with its own load and save holds it around those. Raises
+    ``TimeoutError`` past ``timeout_sec``: proceeding unlocked would reopen the lost update.
+    """
+    from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
+
+    path = pathlib.Path(path)
+    lock_path = path.with_name(path.name + ".lock")
+    lock_fd = acquire_exclusive_file_lock(
+        lock_path, timeout_sec=timeout_sec, stale_sec=stale_sec, owner_aware_stale=True,
+    )
+    if lock_fd is None:
+        raise TimeoutError(f"could not acquire {lock_path} within {timeout_sec}s")
+    try:
+        yield
+    finally:
+        release_exclusive_file_lock(lock_path, lock_fd)
+
+
 def update_json_locked(
     path: pathlib.Path,
     mutator: Any,
@@ -420,7 +443,7 @@ def update_json_locked(
 ) -> Dict[str, Any]:
     """Locked read-modify-write of a durable JSON dict file.
 
-    Acquires a sidecar ``<file>.lock``, re-reads the CURRENT on-disk JSON
+    Acquires the sidecar ``<file>.lock`` (``json_update_lock``), re-reads the CURRENT on-disk JSON
     inside the lock (so the mutator always sees the latest state, closing the
     lost-update window of unlocked load→merge→write sequences), applies
     ``mutator(current) -> dict | None`` (``None`` aborts: the file is left
@@ -435,21 +458,8 @@ def update_json_locked(
     from an existing empty object for schema-bearing callers: only absence may
     initialize a new schema.
     """
-    from ouroboros.platform_layer import (
-        acquire_exclusive_file_lock,
-        release_exclusive_file_lock,
-    )
-
     path = pathlib.Path(path)
-    lock_path = path.with_name(path.name + ".lock")
-    lock_fd = acquire_exclusive_file_lock(
-        lock_path, timeout_sec=timeout_sec, stale_sec=stale_sec, owner_aware_stale=True,
-    )
-    if lock_fd is None:
-        raise TimeoutError(
-            f"update_json_locked: could not acquire {lock_path} within {timeout_sec}s"
-        )
-    try:
+    with json_update_lock(path, timeout_sec=timeout_sec, stale_sec=stale_sec):
         existed = path.exists()
         current = read_json_dict(path)
         if current is None:
@@ -469,8 +479,6 @@ def update_json_locked(
         if after_write is not None:
             after_write(updated)  # still under the writer lock; a crash leaves extra debt
         return updated
-    finally:
-        release_exclusive_file_lock(lock_path, lock_fd)
 
 
 def jsonl_append_lock_path(path: pathlib.Path) -> pathlib.Path:
@@ -513,7 +521,7 @@ def assert_test_data_path(path: pathlib.Path) -> None:
 
 def append_jsonl(
     path: pathlib.Path, obj: Dict[str, Any], *, ensure_record_boundary: bool = False,
-    require_lock: bool = False, lock_timeout_sec: float = 2.0,
+    require_lock: bool = False, lock_timeout_sec: float = 2.0, live: bool = True,
 ) -> bool:
     """Append a JSON object as a line to a JSONL file (concurrent-safe).
 
@@ -527,7 +535,8 @@ def append_jsonl(
     shutdown callers whose grace has expired; unlocked fallback is unchanged.
     Runtime ``logs/*.jsonl`` rows are streamed to the ``set_log_sink`` sink, minus
     types with a dedicated live owner (``WORKER_LOG_SINK_SUPPRESSED_TYPES``, server
-    superset ``SERVER_LOG_SINK_SUPPRESSED_TYPES``): one event, one live frame.
+    superset ``SERVER_LOG_SINK_SUPPRESSED_TYPES``): one event, one live frame, so a
+    durable replica of a row its writer already streamed passes ``live=False``.
     Returns ``True`` on successful write, ``False`` when all retries
     failed (which is also logged at WARNING). Important events
     (``task_done``, ``llm_round``, escalation messages) need that signal
@@ -636,6 +645,7 @@ def append_jsonl(
         # and state/memory/receipt stores are durable data, not a log feed.
         if (
             _written
+            and live
             and _log_sink is not None
             and path.parent.name == "logs"
             and path.suffix == ".jsonl"

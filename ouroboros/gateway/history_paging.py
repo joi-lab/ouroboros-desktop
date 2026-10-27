@@ -28,6 +28,7 @@ import pathlib
 from typing import Any, Dict, NamedTuple, Tuple
 
 from ouroboros import dialogue_store as ds
+from ouroboros.checkpoint_waits import wait_episode
 from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
 from ouroboros.dialogue_positions import skipped_between
 from ouroboros.project_dialogue import (
@@ -86,7 +87,9 @@ log = logging.getLogger(__name__)
 
 def progress_quota_predicate(row_matches_thread, stored_chat_id):
     def counts(entry):
-        if not isinstance(entry, dict) or entry.get("type") in {"review_reference", "task_model_wait"}:
+        # A host wait row rides along in the page without spending its quota (``checkpoint_waits``).
+        if (not isinstance(entry, dict) or entry.get("type") in {"review_reference", "task_model_wait"}
+                or wait_episode(entry) is not None):
             return False
         if is_a2a_chat_id(entry.get("chat_id", 1)):
             return False

@@ -172,11 +172,15 @@ def test_the_model_has_no_argument_that_could_widen_the_profile():
     # D2 exposes ask/plan/agent and explicit readiness override; the retained ceiling still governs.
     # `workspace` (owner 25.10, Q2-A) names WHERE a Git writer works inside the task's own write root,
     # a private copy (default) or that root in place; it is never a path and never wider access.
+    # `attachment_paths`/`attachment_import` only select this task's own retained inputs (exact manifest
+    # relpaths) to attach as engine documents and whether to reuse their import; never a path or access.
     assert properties == {
         "prompt", "subagent_id", "max_seconds", "retry_of", "continue_from", "continue_carrier", "root",
         "bucket", "skill_name", "directory_strategy", "scope_paths", "access", "effort", "mode",
-        "override_plan_readiness", "workspace",
+        "override_plan_readiness", "workspace", "attachment_paths", "attachment_import",
     }
+    assert entry.schema["parameters"]["properties"]["attachment_import"]["enum"] == ["reuse", "new"]
+    assert entry.schema["parameters"]["properties"]["attachment_paths"]["items"] == {"type": "string"}
     assert entry.schema["parameters"]["properties"]["workspace"]["enum"] == ["copy", "in_place"]
     from ouroboros.settings_scales import EFFORT_SCALE
     assert entry.schema["parameters"]["properties"]["effort"]["enum"] == ["auto", *EFFORT_SCALE]
