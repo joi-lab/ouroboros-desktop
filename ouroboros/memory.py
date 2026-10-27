@@ -173,6 +173,16 @@ def _chat_history_snapshot_id(
     return hashlib.sha256(encoded).hexdigest()
 
 
+
+def _ok_answer_mark(bucket: Any) -> str:
+    """✓ for an ordinary success. A typed code that answers ok yet names another outcome
+    (an inspection before apply, a review block) shows its bucket: the code table decides."""
+    from ouroboros._outcome_tool_errors import _OK_TOOL_STATUSES
+    from ouroboros.tools.tool_result import TOOL_CODE_SPECS
+
+    named = {spec.outcome_bucket for spec in TOOL_CODE_SPECS.values() if spec.status == "ok"} - _OK_TOOL_STATUSES
+    return str(bucket) if bucket in named else "✓"
+
 class Memory:
     def __init__(self, drive_root: pathlib.Path, repo_dir: Optional[pathlib.Path] = None):
         self.drive_root = drive_root
@@ -823,7 +833,7 @@ class Memory:
                 note = (" (wait ended; no result recorded)" if "wait_ended" in call else
                         " (started; no outcome recorded)")
             elif isinstance(settled.get("is_error"), bool):
-                status = "·" if settled["is_error"] else "✓"
+                status = "·" if settled["is_error"] else _ok_answer_mark(settled.get("status"))
             elif settled.get("status"):
                 if settled["status"] == "ok":
                     status = "✓"
