@@ -429,7 +429,7 @@ def _run_memory_fallback_draft(env: Any, task: Dict[str, Any], llm: Any, drive_l
             append_jsonl(pathlib.Path(drive_logs) / "events.jsonl", {
                 "ts": utc_now_iso(), "type": "memory_fallback_draft", "task_id": str(task.get("id") or ""),
                 "unit": run.unit.describe() if run.unit else None, "outcome": run.outcome, "kind": run.kind or None,
-                "record_id": run.record_id or None, "input_tokens": run.input_tokens,
+                "record_id": run.record_id or None, "input_tokens": run.input_tokens, "effect": run.effect or None,
                 "accounted_upper_bound_usd": round(float(usage["cost"]), 6) if usage.get("cost") is not None else None,
                 "route": observed_route_stamp(usage) if usage else None})
         except Exception:

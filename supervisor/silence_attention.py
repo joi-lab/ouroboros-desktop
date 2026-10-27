@@ -323,6 +323,9 @@ def _admit(queue, task_id, task, meta, fact) -> None:
                 **presence_binding_authority_metadata(task.get("metadata"), task_contract=contract),
                 **{k: v for k, v in (task.get("metadata") or {}).items()
                    if k in {"work_kind", "initiator", "consciousness_autonomy", "runtime_mode_cap"}}}
+    origin = task.get("metadata") or {}
+    if task.get("type") == "evolution" or origin.get("evolution_root_task_id") or origin.get("evolution_transaction"):
+        metadata["evolution_root_task_id"] = origin.get("evolution_root_task_id") or root_id
     label = _source_label(task)
     diagnostic = {"id": diagnostic_id, "type": "task", "parent_task_id": task_id,
         "root_task_id": root_id, "delegation_role": "subagent", "depth": int(task.get("depth") or 0) + 1,
@@ -361,9 +364,13 @@ def _admit(queue, task_id, task, meta, fact) -> None:
     if str(queue.DRIVE_ROOT) != str(count_roots[0]):
         count_roots.append(queue.DRIVE_ROOT)
 
+    room_mode, room_refusal = delegation._subagent_room_mode(queue, task)
+
     def delegation_refusal(count, *, early=False):
         # Frozen source rights; the schedule owner's current registered limits.
-        rights = check_delegation_admission(contract["delegation_budget"], direct_child_count=count)
+        if room_refusal:
+            return room_refusal
+        rights = check_delegation_admission(contract["delegation_budget"], direct_child_count=count, room_mode=room_mode)
         if not rights.ok and not (early and rights.reason_code == "delegation_rights_child_count_unknown"):
             return rights.reason_code, rights.detail
         cap = admitted_depth_cap(contract, delegation._events().get_max_subagent_depth())
@@ -419,13 +426,20 @@ def _admit(queue, task_id, task, meta, fact) -> None:
         return
     write_task_result(queue.DRIVE_ROOT, diagnostic_id, "requested", create_only=True, **fields)
 
+    def durable_child_count():
+        # Read the room again outside Q before the interlocked admission.
+        nonlocal room_mode, room_refusal
+        room_mode, room_refusal = delegation._subagent_room_mode(queue, task)
+        if room_refusal:
+            return direct_child_count
+        return delegation._direct_child_count(count_roots, task_id, diagnostic_id, propagate_contention=True)
+
     def admit(preparation):
         admitted, refusal, detail, reject = enqueue_subagent_with_scheduled_result(
             queue, diagnostic, result_fields=fields, preparation=preparation,
             admitted_task_contract=diagnostic["task_contract"], admitted_depth_provenance=depth_provenance,
             direct_child_count=direct_child_count, pending_ref=queue.PENDING, recheck_child_admission=recheck,
-            durable_child_count=partial(delegation._direct_child_count, count_roots, task_id, diagnostic_id,
-                                        propagate_contention=True),
+            durable_child_count=durable_child_count,
             transition_id=diagnostic_id)
         fact["attention_wait"] = refusal or admitted.get("_admission_blocked") or "diagnostic_queued"
         if admitted.get("_admission_blocked"):

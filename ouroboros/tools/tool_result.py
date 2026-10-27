@@ -138,6 +138,15 @@ TOOL_CODE_SPECS: Mapping[str, ToolCodeSpec] = MappingProxyType(
             "warning",
             "inspect the version-control refusal",
         ),
+        # #1969: an apply that had to prepare its capture returns it for inspection
+        # and applies nothing. The protocol worked, so the call is no error; its own
+        # bucket stays outside the success set, so no integration effect is claimed.
+        "INTEGRATION_INSPECTION_REQUIRED": _code_spec(
+            "ok",
+            "inspection_required",
+            "info",
+            "read the retained capture, then decide it with a later apply",
+        ),
         "LEGACY_WARNING": _code_spec(
             "ok",
             "ok",
@@ -962,6 +971,7 @@ _EXACT_IDENTIFIER_CODES = MappingProxyType(
         "RUN_SCRIPT_BLOCKED": "RUN_SCRIPT_BLOCKED",
         "REVIEW_BLOCKED": "REVIEW_BLOCKED",
         "GIT_ERROR": "GIT_ERROR",
+        "INTEGRATE_DELEGATED_INSPECT_CAPTURE": "INTEGRATION_INSPECTION_REQUIRED",
         # #1657: source-confirmed refusals/failures with invariant meanings.
         # These reuse existing codes; no suffix rule or custody/completion fact
         # is inferred from text. In particular, conflict/partial/overflow and

@@ -1,4 +1,6 @@
 /** Historical rows enrich the existing timeline without acquiring live authority. */
+import { foldWaitRow } from './task_checkpoints.js';
+
 export function compareHistoryPosition(left, right) {
     if (!left || !right) return 0;
     const stream = String(left.source || '').localeCompare(String(right.source || ''));
@@ -22,6 +24,11 @@ export function mergeHistoricalTimelineItem(record, summary, row, ts) {
     if (summary.visible === false || !(summary.headline || summary.body)) return false;
     const identity = String(row?.history_id || '');
     if (!identity) return false;
+    if (summary.waitEpisode) {  // the same one row per wait kind as live
+        const { changed, index, moved } = foldWaitRow(record, summary, { ts, sourceTs: row.ts || '', earliest: true });
+        if (index === -1 || moved) sortBySource(record);
+        return changed;
+    }
     // A child's lifecycle is one evolving status, just as it is live. Its
     // authored progress keeps every source record, even when text and time match;
     // so does each delegated observation (`activity`), projected per seq at render.
@@ -91,12 +98,16 @@ export function mergeHistoricalTimelineItem(record, summary, row, ts) {
                 : `history-${identity.replace(/[^A-Za-z0-9_-]/g, '-')}`,
         });
     }
+    sortBySource(record);
+    return true;
+}
+
+function sortBySource(record) {
     record.items.sort((a, b) => {
         const first = Date.parse(a.sourceTs || ''), second = Date.parse(b.sourceTs || '');
         return (Number.isFinite(first) && Number.isFinite(second) ? first - second : 0)
             || compareHistoryPosition(a.historyPosition, b.historyPosition);
     });
-    return true;
 }
 
 /** Each mounted node a released id removes, as [id, node]: the rows it renders

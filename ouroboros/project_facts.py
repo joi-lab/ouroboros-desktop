@@ -47,6 +47,21 @@ def sanitize_project_id(value: Any) -> str:
     return pid.casefold()
 
 
+_MINTED_PROJECT_ID = re.compile(r"proj_[0-9a-f]+")
+
+
+def project_display_name(name: Any, project_id: Any) -> str:
+    """The Project's own name, or "" for a row that was never named.
+
+    A never-named row carries its minted ``proj_<hex>`` id as the name (the two
+    minters below); only that shape is a non-name. An owner's own ``blog`` has
+    the id ``blog`` too, and it IS the name (DESIGN "References and actions";
+    the browser twin is ``project_reference.js`` ``MINTED_ID``).
+    """
+    text = " ".join(str(name or "").split())
+    return "" if not text or (text == str(project_id or "") and _MINTED_PROJECT_ID.fullmatch(text)) else text
+
+
 def project_id_from_display_name(value: Any) -> str:
     """Derive a filesystem-clean project id from a human DISPLAY name, ALWAYS
     yielding a usable id for any non-blank name. The sanitized slug is used when it

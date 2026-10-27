@@ -38,10 +38,8 @@ from ouroboros.context_fit import (
 from ouroboros.context_input_selection import (
     _capture_declared_context_core,
     _explicit_self_body_docs_flag as _explicit_self_body_docs_flag,
-    _task_requires_development_context,
-    _task_requires_self_body_docs,
-    _task_uses_external_context,
     _validate_declared_input_task,
+    development_resident,
 )
 from ouroboros.context_health import (
     _iter_recent_jsonl as _iter_recent_jsonl,
@@ -58,7 +56,7 @@ from ouroboros.context_health import (
 from ouroboros.context_health import (
     safe_read as safe_read,
 )
-from ouroboros.contracts.task_contract import normalize_bool, task_input_sources
+from ouroboros.contracts.task_contract import task_input_sources
 from ouroboros.memory import Memory, render_scratchpad_markdown
 from ouroboros.update_letter import official_update_projection  # contract: never raises
 from ouroboros.i18n_memory import current_language as _ui_language_tag
@@ -93,30 +91,6 @@ def build_user_content(task: Dict[str, Any]) -> Any:
         text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
                 "not spoken by the owner. The owner's words retain their own source. "
                 "[/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
-    if metadata.get("force_plan"):
-        source = str(metadata.get("force_plan_source") or "operator").strip() or "operator"
-        from ouroboros.config import get_review_enforcement
-
-        review_enforcement = get_review_enforcement()
-        plan_notice = (
-            "[SWARM_INITIATIVE]\n"
-            f"Source: {source}.\n"
-            f"Resolved review enforcement: {review_enforcement}.\n"
-            "Plan review applies to this work (BIBLE P3); whether to ask, explore or plan first is "
-            "your judgment. Under blocking, continue analysis, evidence gathering, and "
-            "non-mutating preparation while review is open, but begin implementation only after review closes "
-            "or a real task-wide rail fires. Under advisory, you may proceed by judgment with explicit "
-            "disclosure. When the work decomposes into independent parts, fan out subagents within the "
-            "configured caps and reconcile them. State the chosen execution shape explicitly in the plan's "
-            "decisions or acceptance claims — delegation required, optional, or intentionally not used — so "
-            "reviewers can judge it. Parallel children each work from your base snapshot and cannot see each "
-            "other's edits; their patches integrate independently, so two children writing the same region of "
-            "the same file conflict at integration — expected mechanics, not a failure. Give children disjoint "
-            "write regions, or explicitly plan the parent-synthesis step that resolves the expected overlap. "
-            "Planning or reviewer unavailability must not replace useful work with a terminal planning error.\n"
-            "[/SWARM_INITIATIVE]\n\n"
-        )
-        text = plan_notice + str(text or "")
     image_b64 = task.get("image_base64")
     if not image_b64 and task.get("image_source_ref"):
         # A prestart Pause has original input, but no checkpointed transcript.
@@ -1105,18 +1079,9 @@ def _capture_context_core(
 
     # Max keeps the full capability/WHY map even for external work: binding a
     # folder changes tools' default target, not the mind's knowledge of its body.
-    # Its handbook follows the active self-body binding, with explicit task
-    # requirements taking precedence. Low/Nano and children instead receive both
-    # books' authored orientation through the same captured-source projection.
-    explicit_dev = task.get("context_requires_development")
-    if explicit_dev is not None:
-        docs_need_development = normalize_bool(explicit_dev)
-    elif _task_requires_self_body_docs(task):
-        docs_need_development = True
-    elif _task_uses_external_context(task):
-        docs_need_development = False
-    else:
-        docs_need_development = _task_requires_development_context(task)
+    # Its handbook follows the subject of the work (BIBLE P1); Low/Nano and children
+    # receive both books' authored orientation through the same captured-source projection.
+    docs_need_development = development_resident(task, design_ctx)
 
     semi_stable_parts, subagent_catalog = [], None
     try:
@@ -1162,7 +1127,7 @@ def _capture_context_core(
     from ouroboros.delegate_supervision import _attempt_key
     attempt_key = _attempt_key(ctx if ctx is not None else SimpleNamespace(task_attempt=task.get("_attempt")))
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
-                                             active_root=active_root, attempt_key=attempt_key)
+                                             active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
     dynamic_parts = [health_section] if health_section else []
     try:
         from ouroboros.subagent_runtime import review_records_block, subagent_supervision_fact_line

@@ -341,6 +341,7 @@
  * @property {string=} sender_label
  * @property {string=} sender_session_id
  * @property {string=} client_message_id  // correlation id, not proof of owner authorship; use role
+ * @property {"swarm"=} subagents_mode  // effective mode at acceptance; preserved on replay
  * @property {boolean=} ingress_accepted
  * @property {boolean=} ingress_dispatched
  * @property {boolean=} ingress_pending
@@ -511,6 +512,12 @@
  * @property {string} min
  * @property {string} recommended
  * @property {string} max
+ * @property {string=} project_id
+ */
+
+/**
+ * @typedef {Object} OwnerSubagentsModeRequest
+ * @property {"off"|"auto"|"swarm"} mode
  * @property {string=} project_id
  */
 

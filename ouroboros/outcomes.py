@@ -39,6 +39,7 @@ from ouroboros._outcome_tool_errors import (  # explicit re-exports, one stateme
     _is_ignored_readonly_block as _is_ignored_readonly_block,
     _NON_BLOCKING_READONLY_BLOCK_STATUSES as _NON_BLOCKING_READONLY_BLOCK_STATUSES,
     _NON_BLOCKING_RECOVERABLE_STATUSES as _NON_BLOCKING_RECOVERABLE_STATUSES,
+    _NON_EFFECT_OBSERVATION_STATUSES as _NON_EFFECT_OBSERVATION_STATUSES,
     _OK_TOOL_STATUSES as _OK_TOOL_STATUSES,
     _POLICY_DENIAL_STATUSES as _POLICY_DENIAL_STATUSES,
     _RECOVERY_TOOL_NAMES as _RECOVERY_TOOL_NAMES,
@@ -276,7 +277,7 @@ _LEDGER_NON_FAILURE_STATUSES = (
     | frozenset({"refused_out_of_scope"})
     # tool_reported_failure: the tool RAN and answered honestly ({"ok": false} — a
     # diagnostic reporting what it was called to find). A finding, not a failure.
-    | frozenset({"tool_reported_failure"})
+    | frozenset({"tool_reported_failure"}) | _NON_EFFECT_OBSERVATION_STATUSES
 )
 
 
@@ -1154,7 +1155,7 @@ def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[
     # The planning gate holds or releases the final answer; it names no objective of its
     # own (plans have no cycle cap, no quorum and no author stop: the stop path is the
     # task's). Its open objections and pending asks ride ``execution.plan_review`` below.
-    plan_gate = _trace_mapping(llm_trace, "force_plan_decision")
+    plan_gate = _trace_mapping(llm_trace, "plan_gate") or _trace_mapping(llm_trace, "force_plan_decision")
     if deferred_child_count and objective.get("status") != OBJECTIVE_FAIL:
         objective.update({
             "status": OBJECTIVE_BEST_EFFORT,

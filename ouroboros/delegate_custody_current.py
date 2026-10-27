@@ -26,12 +26,14 @@ from dataclasses import fields
 from typing import Any, Callable, Dict, List, Optional
 
 from ouroboros import store
+from ouroboros.delegate_documents import DOCUMENT_IMPORT_TYPES, fold_document_import
 from ouroboros.utils import append_jsonl
 
 log = logging.getLogger(__name__)
 
 HELD, CLOSED = "held", "closed"
-MARK_TYPES = ("delegate_run_patch_verdict",)  # task-scoped rows kept whole on the marks row
+# Task-scoped rows on the marks row: patch verdicts kept whole, document imports folded by input.
+MARK_TYPES = ("delegate_run_patch_verdict", *DOCUMENT_IMPORT_TYPES)
 # Task-scoped attempt facts without a run: the evidence reader's ``nanny_nudge_recorded`` and
 # ``delegate_start_attempted`` (the constants live beside that reader).
 _NUDGE = "delegate_run_nanny_nudge_injected"
@@ -365,6 +367,8 @@ def _mark(mark: Dict[str, Any], event: Dict[str, Any]) -> None:
     elif kind in _ATTEMPTS:
         if not c.review_owned_source(event.get("source")):
             mark["start_attempted"] = True
+    elif kind in DOCUMENT_IMPORT_TYPES:
+        fold_document_import(mark, event)
     elif kind in MARK_TYPES:
         verdicts = list(mark.get("patch_verdicts", []))
         verdicts.append({key: value for key, value in event.items() if key != "event_id"})

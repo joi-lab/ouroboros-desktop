@@ -37,7 +37,7 @@ def test_finalization_catches_up_legacy_once_and_new_event_ids_are_not_doubled(t
     swarm_rollup.record_swarm_fanout(tmp_path, event("swarm:z-first", "first", "one"))
     append_jsonl(path, event("swarm:z-first", "first", "one"))
     result = build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "parent", "metadata": {"force_plan_source": "swarm"}})
+        "id": "parent", "metadata": {"subagents_mode": "swarm"}})
     assert result is not None
     assert result["fanout_count"] == result["requested_count"] == result["subagent_count"] == 3
     assert result["fanout_interval_sec_total"] == 2.5
@@ -47,7 +47,7 @@ def test_finalization_catches_up_legacy_once_and_new_event_ids_are_not_doubled(t
     path.write_text("broken\n", encoding="utf-8")
     monkeypatch.setattr(swarm_rollup, "JsonlChainSnapshot", lambda *_: pytest.fail("v2 reopened history"))
     assert build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "parent", "metadata": {"force_plan_source": "swarm"}}) == result
+        "id": "parent", "metadata": {"subagents_mode": "swarm"}}) == result
 
 
 def test_rollup_first_read_repairs_legacy_before_receipt_snapshot(tmp_path, monkeypatch):
