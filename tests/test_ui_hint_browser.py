@@ -2,8 +2,9 @@
 
 In Chromium and WebKit on the real composer: words that grow after the hint stood (the translation overlay rewrites
 them in place) move it back inside a 1000 px window, where the docked sidebar leaves Effort's capsule far enough to
-the right for its hint to pass the window's edge; and in a 320 x 300 phone window with a long draft, Subagents' longest hint never
+the right for its hint to pass the window's edge; and in a 320 x 280 phone window with a long draft, Subagents' longest hint never
 starts above the window: it stands below the capsule or scrolls inside itself where neither side has the room.
+(A phone in landscape with its keyboard up leaves about that much.)
 """
 from __future__ import annotations
 
@@ -29,6 +30,13 @@ WHERE = """(sel) => {
 }"""
 # A translation the overlay could write: longer than the English, written after the hint stood.
 LONGER = "Gilt für neue Schritte in diesem Chat; laufende Arbeit wird ohne Unterbrechung zu Ende geführt."
+# The overlay translates every write: whatever the composer writes there again, it puts the translation back.
+TRANSLATE = """([sel, words]) => {
+    const rule = document.querySelector(sel).querySelector('.ui-hint-rule');
+    const translate = () => { if (rule.textContent !== words) rule.textContent = words; };
+    new MutationObserver(translate).observe(rule, { childList: true, characterData: true, subtree: true });
+    translate();
+}"""
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
@@ -47,9 +55,8 @@ def test_words_that_grow_after_the_hint_stood_keep_it_inside_the_window(direct_s
             _settle(page)
             seen["before"] = page.evaluate(WHERE, EFFORT)
             assert not seen["before"]["hidden"] and seen["before"]["right"] <= seen["before"]["width"] - 7, seen
-            page.evaluate("([sel, words]) => { document.querySelector(sel).querySelector('.ui-hint-rule').textContent = words; }",
-                          [EFFORT, LONGER])
-            page.wait_for_timeout(250)
+            page.evaluate(TRANSLATE, [EFFORT, LONGER])
+            page.wait_for_timeout(400)
             seen["after"] = after = page.evaluate(WHERE, EFFORT)
             assert after["right"] > seen["before"]["right"] or after["left"] < seen["before"]["left"], \
                 ("the words grew the hint", seen)
@@ -61,18 +68,18 @@ def test_words_that_grow_after_the_hint_stood_keep_it_inside_the_window(direct_s
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_a_short_phone_window_never_puts_the_hint_above_it(direct_server_with_data, engine, tmp_path):  # noqa: F811
+def test_a_short_phone_window_never_puts_the_hint_out_of_it(direct_server_with_data, engine, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
     url = direct_server_with_data["url"]
     seen = {}
     with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 320, "height": 300}, is_mobile=True, has_touch=True)
+        browser, page = _launch(pw, engine, viewport={"width": 320, "height": 280}, is_mobile=True, has_touch=True)
         try:
             _hold(page, {"subagents_mode": "off", "subagents_availability": "available"})
-            _open_chat(page, url, width=320, height=300)
-            page.fill("#chat-input", "\n".join(f"A line of the draft, number {n}" for n in range(1, 7)))
+            _open_chat(page, url, width=320, height=280)
+            page.fill("#chat-input", "\n".join(f"A line of the draft, number {n}" for n in range(1, 15)))
             page.tap(f"{SUBAGENTS} .chat-capsule-head")
             page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=SUBAGENTS)
             _settle(page)
