@@ -23,7 +23,7 @@ def test_nano_child_can_select_only_its_existing_capabilities(tmp_path, monkeypa
     registry = ToolRegistry(repo_dir=repo, drive_root=data)
     registry.set_context(ctx)
     names = set(registry.available_tools())
-    assert ("enable_tools" in names) is (mode == "nano")
+    assert "enable_tools" in names  # every mode: on-demand MCP and route ceilings (#1860)
     assert ("compact_context" in names) is (mode == "nano")
     assert ("run_command" in names) is (profile == "acting_subagent")
     assert "commit_reviewed" not in names

@@ -25,7 +25,7 @@ def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkey
     )
 
     assert registry.get_schema_by_name("write_file") is None
-    assert registry.get_schema_by_name("enable_tools") is None
+    assert registry.get_schema_by_name("enable_tools") is not None  # loads schemas, grants nothing (#1860)
     assert registry.get_schema_by_name("schedule_subagent") is not None
     # switch_model changes COGNITIVE POWER, not authority: a child that started cheap and
     # found the work harder raises its own strength, and nothing about its sandbox moves.
@@ -52,7 +52,6 @@ def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkey
         "preflight_review",
         "skill_review",
         "request_restart",
-        "enable_tools",
         "run_command",
         "skill_exec",
         "list_skills",

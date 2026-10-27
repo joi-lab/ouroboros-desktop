@@ -273,15 +273,8 @@ class ContextFitPlan:
                 (projection.estimated_tokens + tool_schema_tokens(tools))
                 * projection.calibration_ratio
             )
-        return int(
-            estimate_context_prompt_tokens(
-                self.messages_for(mode),
-                tools,
-                provider=provider,
-                reasoning_effort=reasoning_effort,
-            )
-            * projection.calibration_ratio
-        )
+        return int(estimate_context_prompt_tokens(self.messages_for(mode), tools, provider=provider,
+                                                  reasoning_effort=reasoning_effort) * projection.calibration_ratio)
 
 @dataclass(frozen=True)
 class ContextCore:
@@ -305,6 +298,8 @@ class ContextCore:
     memory_view_json: str = ""
     # Captured source rows follow the assignment, outside the immutable system view.
     supplementary_messages_json: str = "[]"
+    # The connections map (``tool_connections.connection_views``): the Low/Max text, then the Nano text.
+    connections: Tuple[str, str] = ("", "")
 
 
 def _render_context_system_content(
@@ -320,7 +315,7 @@ def _render_context_system_content(
     ``story`` and ``room`` are the memory view rendered for this projection's mode and
     selected forms; empty without a view.
     """
-    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room)
+    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode=mode)
 
 
 def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, ...]:
@@ -339,10 +334,11 @@ def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, 
     return ("\n\n".join(static_parts), development)
 
 
-def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "") -> List[Dict[str, Any]]:
-    # All stable items precede C, including D only when the captured core calls
-    # for the full handbook. Never create an empty cache boundary.
-    stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, story) if part))
+def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "",
+                   mode: str = "max") -> List[Dict[str, Any]]:
+    # All stable items precede C, including D only when the captured core calls for the full
+    # handbook; the mode picks the connections map's form. Never create an empty cache boundary.
+    stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, core.connections[mode == "nano"], story) if part))
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [
         {"type": "text", "text": "\n\n".join(part for part in (core.dynamic_head_text, room, core.dynamic_text) if part)},
@@ -776,7 +772,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
 
     def frame(selected):
         sent = select_tool_schemas(tool_schemas or [], context_mode=selected, schema_names=names)
-        fixed = _request_tokens(_system_blocks(core, governance[form[selected]]), user_content_json,
+        fixed = _request_tokens(_system_blocks(core, governance[form[selected]], mode=selected), user_content_json,
             supplementary_messages_json=core.supplementary_messages_json, current_messages=current_messages)
         fixed += tool_schema_tokens(list(sent.schemas))
         target, reserve = context_budget.context_mode_limits(selected, preferred, output_reserve)
@@ -835,7 +831,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
         receipt = floor.view_receipt(snapshot, story, room, facts)
     else:
         story, room, receipt = "", "", {}
-    return {m: (_system_blocks(core, governance[form[m]], story, room), receipt) for m in floor.MODES}, mode
+    return {m: (_system_blocks(core, governance[form[m]], story, room, mode=m), receipt) for m in floor.MODES}, mode
 
 
 def build_context_fit_plan(
@@ -886,7 +882,7 @@ def build_context_fit_plan(
     from ouroboros.memory_view import render_story, render_room, snapshot_from_json
     snapshot = snapshot_from_json(core.memory_view_json) if core.memory_view_json else None
     full = _system_blocks(core, governance["low" if preferred == "nano" else preferred],
-                          render_story(snapshot) if snapshot else "", render_room(snapshot) if snapshot else "")
+                          render_story(snapshot) if snapshot else "", render_room(snapshot) if snapshot else "", mode=preferred)
     ratio = _route_calibration_ratio(None, str(evidence.route_fp or ""), str(route["model"] or ""),
         estimate_context_prompt_tokens([{"role": "system", "content": full}, {"role": "user", "content": user_content},
             *json.loads(core.supplementary_messages_json)],
@@ -935,6 +931,7 @@ def build_context_fit_plan(
             "dynamic_head_text": core.dynamic_head_text,
             "dynamic_text": core.dynamic_text,
             "memory_view_json": core.memory_view_json,
+            **({"connections": list(core.connections)} if any(core.connections) else {}),
             **({"supplementary_messages": json.loads(core.supplementary_messages_json)}
                if json.loads(core.supplementary_messages_json) else {}),
             "user_content": user_content,

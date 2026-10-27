@@ -1,8 +1,10 @@
 """Task-local schema residency over the registry's permitted capability envelope.
 
-Low/Max start complete. Nano selects canonical schemas while retaining the
-existing discovery/reclaim transport. A route whose provider caps the schemas in
-one request leaves the overflow unloaded (``fit_tool_schemas_to_limit``).
+Low/Max start complete except MCP servers the owner did not pin: their call schemas load
+on demand (``enable_tools``) while the connections map (``tool_connections``) keeps
+their tools known. Nano selects canonical schemas while retaining the existing
+discovery/reclaim transport. A route whose provider caps the schemas in one request
+leaves the overflow unloaded (``fit_tool_schemas_to_limit``).
 Residency never grants execution authority.
 The tool namespaces and the bounded catalog/name-miss renderings live here too.
 """
@@ -92,28 +94,36 @@ def initial_tool_schemas(
     delegated-child, repair, credential, resource, and contract
     filters narrow independently. A parent suggestion is an initial Nano view,
     not an allowlist; the actor can request any other permitted schema later.
+    In every mode the tools of an unpinned MCP server start without schemas
+    (``on_demand_schema_names``) unless named in ``schema_names``.
     """
-    return list(select_tool_schemas(registry.schemas(), context_mode=context_mode,
-                                    schema_names=schema_names).schemas)
+    on_demand = getattr(registry, "on_demand_schema_names", frozenset)()
+    requested = set(_schema_names(schema_names))
+    return [schema for schema in select_tool_schemas(registry.schemas(), context_mode=context_mode,
+                                                     schema_names=schema_names).schemas
+            if schema["function"]["name"] not in on_demand or schema["function"]["name"] in requested]
 
 
 def fit_tool_schemas_to_limit(
     schemas: Sequence[Dict[str, Any]], limit: int | None, *, keep: Iterable[str] = (),
+    first: Iterable[str] = (), protect: Iterable[str] = (),
 ) -> tuple[List[Dict[str, Any]], tuple[str, ...]]:
     """Fit one request's schemas under a route's physical ceiling: ``(kept, left_out)``.
 
     Under the ceiling (or without one) the list is unchanged. Above it, core and meta
-    schemas stay first, then ``keep`` (names the actor loaded on purpose), then the
-    rest in their own order; the tail beyond the ceiling is left out. Kept schemas
-    retain their order, so the request's prefix is stable. Nothing is withdrawn from
-    the registry: a left-out schema stays callable and ``enable_tools`` loads it.
+    schemas stay first, then ``protect`` (names this task's history already called),
+    then ``first`` (the load being made now), then ``keep`` (names the actor loaded on
+    purpose before), then the rest in their own order; the tail beyond the ceiling is
+    left out. Kept schemas retain their order, so the request's prefix is stable.
+    Nothing is withdrawn from the registry: a left-out schema stays callable and
+    ``enable_tools`` loads it.
     """
     if limit is None or len(schemas) <= limit:
         return list(schemas), ()
-    keep = frozenset(keep)
+    keep, first, protect = frozenset(keep), frozenset(first), frozenset(protect)
     names = [str(schema["function"]["name"]) for schema in schemas]
-    rank = [0 if name in CORE_TOOL_NAMES or name in META_TOOL_NAMES else 1 if name in keep else 2
-            for name in names]
+    rank = [0 if name in CORE_TOOL_NAMES or name in META_TOOL_NAMES else 1 if name in protect
+            else 2 if name in first else 3 if name in keep else 4 for name in names]
     kept = set(sorted(range(len(names)), key=lambda index: (rank[index], index))[:max(0, limit)])
     return ([schema for index, schema in enumerate(schemas) if index in kept],
             tuple(name for index, name in enumerate(names) if index not in kept))
@@ -188,13 +198,11 @@ def list_non_core_tools(
     registry: ToolSchemaProvider, context_mode: str = "max",
     schema_names: Iterable[str] | None = None,
 ) -> List[Dict[str, Any]]:
-    """Compatibility discovery view: only Nano has intentionally unloaded tools."""
-    if context_mode != "nano":
-        return []
+    """The permitted tools a task starts without schemas for: Nano's unselected ones, unpinned MCP servers'."""
     canonical = registry.schemas()
-    selected = select_tool_schemas(canonical, context_mode=context_mode, schema_names=schema_names)
-    return [row for row in compact_tool_catalog(canonical, schema_names=selected.chosen)
-            if row["residency"] == "not_loaded"]
+    resident = [schema["function"]["name"]
+                for schema in initial_tool_schemas(registry, context_mode=context_mode, schema_names=schema_names)]
+    return [row for row in compact_tool_catalog(canonical, schema_names=resident) if row["residency"] == "not_loaded"]
 
 
 BUILTIN_NAMESPACE = "builtin"
@@ -233,6 +241,8 @@ def catalog_row_lines(rows: Sequence[Mapping[str, Any]], *, include_purpose: boo
         line = f"- {row['raw_name']!r} → {name}" if row.get("raw_name") else f"- {name}"
         if "loaded" in row:
             line += " [loaded]" if row["loaded"] else " [not loaded]"
+            if include_purpose and row.get("marks"):
+                line += f" {row['marks']}"
             if (include_purpose or not row["loaded"]) and row.get("description"):
                 purpose = repr(row["description"]) if row.get("raw_name") else row["description"]
                 line += f": {purpose}" + ("…" if row.get("description_truncated") else "")

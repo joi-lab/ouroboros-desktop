@@ -113,7 +113,7 @@ def test_a_schema_the_actor_enabled_stays_though_no_fit_left_it_out_before(tmp_p
     resident = [schema for schema in catalog if schema["function"]["name"] != chosen]
     monkeypatch.setitem(provider_models.PROVIDER_TOOL_SCHEMA_LIMITS, "openai", len(resident))  # at the ceiling
     loop._setup_dynamic_tools(registry, resident, [])
-    assert "registered late" in registry.execute("enable_tools", {"tools": chosen})
+    assert "Call schemas loaded" in registry.execute("enable_tools", {"tools": chosen})
     ctx = _round_ctx(resident)
     ctx.tools = registry
     loop_model_call._fit_route_tool_ceiling(ctx)

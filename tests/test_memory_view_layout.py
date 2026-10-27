@@ -308,10 +308,9 @@ def test_the_tool_schemas_count_in_the_floor_of_every_mode(tmp_path):
 @pytest.mark.parametrize("actor,owner", [("child", "max"), ("child", "nano"), ("root", "max")])
 def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkeypatch, actor, owner):
     """The real path: the schemas come from the task's registry under the owner's mode, as the agent
-    passes them (``initial_tool_schemas``), and the plan's Nano projection is the request. A Nano
-    the window chose for the owner's Max sends a child list_available_tools alone: its floor names
-    that and the parent, never enable_tools or chronicle_write. The owner's Nano sends the child enable_tools, and a
-    root always: their floor says memory_read is reachable through it."""
+    passes them (``initial_tool_schemas``), and the plan's Nano projection is the request. Every role
+    holds the schema selectors in every mode (#1860), so a Nano the window chose sends a child, like a
+    root, enable_tools: its floor says memory_read is reachable through it."""
     from types import SimpleNamespace
 
     from ouroboros import context
@@ -354,12 +353,7 @@ def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkey
     assert "memory_read" not in sent and ("enable_tools" in floor) == ("enable_tools" in sent), (sent, floor)
     # Sealing is offered only to a request that can call chronicle_write (sent, or loaded by enable_tools).
     assert ("chronicle_write kind=page" in floor) == bool({"chronicle_write", "enable_tools"} & set(sent)), floor
-    if (actor, owner) == ("child", "max"):
-        assert sent == ("list_available_tools",)
-        assert floor.rstrip().endswith("list_available_tools shows what this task can call, and my parent task can "
-                                       "read any address I name to it)")
-    else:
-        assert "enable_tools" in sent and floor.rstrip().endswith("(memory_read is reachable through enable_tools)")
+    assert "enable_tools" in sent and floor.rstrip().endswith("(memory_read is reachable through enable_tools)")
 
 
 def test_the_task_trace_keeps_the_view_fact_of_its_request(tmp_path, monkeypatch):

@@ -165,12 +165,10 @@ def test_history_check_is_after_the_route_ceiling(tmp_path, monkeypatch, enabled
     # Restore will restore this route too.
     prepared[1]["route"]["active_model"] = tools._ctx.active_model
     resident = restore(prepared)
-    if enabled:
-        assert len(resident) == 128 and tail in _names(resident)
-        assert not any("saved tool set was kept" in str(row.get("content")) for row in messages)
-    else:
-        assert resident == frozen
-        assert tail in messages[-1]["content"] and "after route fitting" in messages[-1]["content"]
+    # A name this task's history already called is kept first within the ceiling (#2332), enabled or not:
+    # the fitted set represents its history, so the current set is adopted.
+    assert len(resident) == 128 and tail in _names(resident)
+    assert not any("saved tool set was kept" in str(row.get("content")) for row in messages)
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -206,7 +204,7 @@ def test_nano_extras_use_current_definitions_and_current_policy(tmp_path, monkey
     assert enabled == {"chosen"}
     assert "~changed chosen" in messages[-1]["content"]
     assert trace["continuation_tools"][0]["removed"] == ["forbidden"]
-    assert tools.handlers["enable_tools"](ctx=tools._ctx, tools="chosen").endswith("chosen (already active)")
+    assert tools.handlers["enable_tools"](ctx=tools._ctx, tools="chosen") == "Already loaded: chosen"
 
 
 @pytest.mark.parametrize("omissions", [False, True])

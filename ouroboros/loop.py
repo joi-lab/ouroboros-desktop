@@ -176,23 +176,15 @@ from ouroboros.nanny_pacing import (
 
 
 def _setup_dynamic_tools(tools_registry, tool_schemas, messages, context_mode="max"):
-    """Bind the one discovery implementation to this loop's resident schema list."""
+    """Bind the one discovery implementation to this loop's resident schema list.
+
+    The tools a task starts without schemas for are named by the connections map in the
+    system view (``tool_connections``), not by a per-task notice.
+    """
     from ouroboros.tools.tool_discovery import bind_resident_schemas
 
     enabled_extra = bind_resident_schemas(tools_registry, tool_schemas)
     tools_registry._ctx._actor_loaded_tool_names = enabled_extra  # a route's schema ceiling keeps these
-    non_core_count = len(list_non_core_tools(tools_registry, context_mode=context_mode))
-    if non_core_count > 0:
-        _append_or_merge_user_message(
-            messages,
-            (
-                "[SYSTEM NOTICE]\n"
-                f"You have {len(tool_schemas)} core tools loaded. "
-                f"There are {non_core_count} additional tools available "
-                f"(use `list_available_tools` to see them, `enable_tools` to activate). "
-                f"Core tools cover most tasks. Enable extras only when needed."
-            ),
-        )
     omissions = (
         tools_registry.capability_omissions()
         if hasattr(tools_registry, "capability_omissions")

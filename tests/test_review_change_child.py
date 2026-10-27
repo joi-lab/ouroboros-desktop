@@ -377,9 +377,11 @@ def test_review_grants_no_commit_control_or_self_approval(tree):
     _, child, _ = tree
     reg = _registry(child)
     for tool in ('commit_reviewed', 'vcs_commit_reviewed', 'request_restart',
-                 'promote_to_stable', 'enable_tools', 'skill_review'):
+                 'promote_to_stable', 'skill_review'):
         assert reg.get_schema_by_name(tool) is None, tool
         assert 'BLOCKED' in reg.execute(tool, {}), tool
+    # The schema selector rides every role (#1860) and loads nothing the role lacks.
+    assert 'commit_reviewed' not in reg.execute('enable_tools', {'tools': 'commit_reviewed'}).split('Hidden by policy')[0]
     assert not _starts()
 
 

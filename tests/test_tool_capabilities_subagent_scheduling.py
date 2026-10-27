@@ -154,7 +154,7 @@ def test_local_readonly_subagent_initial_schemas_are_allowlisted(tmp_path):
     assert aliases == {"ocr_pdf"}
     assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES - aliases <= names
     assert not aliases & names and {registry._entries[name].alias_for for name in aliases} <= names
-    assert "enable_tools" not in names
+    assert "enable_tools" in names  # the selector loads schemas and grants nothing (#1860)
     assert "schedule_subagent" in names
     assert "verify_and_record" not in names
     assert "write_file" not in names
