@@ -61,14 +61,14 @@ export function createComposerFold({ feed, wrap, row, win = globalThis.window, d
     }
     const atLatest = () => feed.scrollHeight - feed.clientHeight - feed.scrollTop < FOLD.latest;
     // While the owner writes or works a capsule the row stays: the keyboard is up (app.js's keyboard-open), the field
-    // holds the focus (with or without a keyboard), or a capsule is focused or has its panel open. ☰ stays in sight
-    // folded, so its focus (the drawer gives it back on closing) keeps nothing.
+    // holds the focus (with or without a keyboard), or a capsule is open, focused or has the line alone. ☰ stays in
+    // sight folded, so its focus (the drawer gives it back on closing) keeps nothing.
     const busy = () => {
         const focused = doc?.activeElement;
         const menu = row.querySelector?.(':scope > .composer-menu');
         return Boolean(doc?.body?.classList?.contains?.('keyboard-open'))
             || Boolean(focused && (focused === field || (row.contains?.(focused) && !menu?.contains?.(focused))))
-            || Boolean(row.querySelector?.('[data-open="true"]'));
+            || Boolean(row.dataset?.ownerSolo) || Boolean(row.querySelector?.('[data-open="true"]'));
     };
 
     // Folded, the line starts where what lay between it and the field does (the wrap's gap goes with the line), and ☰
