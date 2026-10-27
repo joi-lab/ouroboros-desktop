@@ -554,9 +554,8 @@ def append_jsonl(
     _written = False
 
     try:
-        # One owner-aware lock primitive for both lanes: a live holder (e.g. the
-        # memory-journal compactor) is waited out, never displaced; the
-        # non-required lane then appends unlocked.
+        # Both lanes wait out a live lock holder, never displacing it;
+        # the non-required lane then appends unlocked.
         lock_fd = acquire_exclusive_file_lock(
             lock_path,
             timeout_sec=lock_timeout_sec,
