@@ -1,4 +1,4 @@
-import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, joinMarkdownHeadings, plainCauseText, savedTerminalRowNote } from './utils.js';
+import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, plainCauseText, projectMarkdownLines, savedTerminalRowNote } from './utils.js';
 import { cancelCauseClauses, ownerStopEnding } from './cancel_presentation.js';
 import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
@@ -75,15 +75,17 @@ function shortText(text, maxLen = 180) {
     return s.length > maxLen ? s.slice(0, maxLen - 3) + '...' : s;
 }
 
-// For markdown narration, headings are projected (markers off, ` — ` before the
-// text under them) BEFORE the newlines collapse into the one-line preview:
-// afterwards no line-anchored rule could tell a heading from prose. Typed text
-// (shell commands, errors, traces) is never markdown: a `# comment` stays one.
-// `full` stays the source text either way.
+// For markdown narration, the line-anchored markers (headings with ` — ` before
+// the text under them, bullets, table rows) are projected BEFORE the newlines
+// collapse into the one-line preview: afterwards no line-anchored rule could tell
+// a heading or a list item from prose. Typed text (shell commands, errors, traces)
+// is never markdown: a `# comment` stays one. Marker-only text keeps its source,
+// and `full` stays the source text either way.
 function describeText(text, maxLen = 180, { markdown = false } = {}) {
     const full = String(text || '').trim();
     if (!full) return { preview: '', full: '' };
-    const previewSource = (markdown ? joinMarkdownHeadings(full) : full).replace(/\s+/g, ' ');
+    const lined = markdown ? projectMarkdownLines(full) : full;
+    const previewSource = (lined.trim() ? lined : full).replace(/\s+/g, ' ');
     return {
         preview: previewSource.length > maxLen ? previewSource.slice(0, maxLen - 3) + '...' : previewSource,
         full,
