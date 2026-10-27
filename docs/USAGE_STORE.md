@@ -163,6 +163,21 @@ recent waves on its current model is shown with its count and range, no
 history reads `cost unknown`, and one process keeps the table for half an hour
 so `## Review` never waits on the ledger.
 
+From money to the round and its cause: a task result's `[SUBTASK_OUTCOME]`
+carries its `swarm_receipt`, whose `cost.attempts[]` names every physical
+attempt of the tree by `attempt_id` (one released before dispatch has no
+`accounted_upper_bound_usd`) and whose `supervisor_context_pressure[]` gives
+the task's own attempts their `physical_context.round_id`. The `attempts` row
+(`query_data(op="sql", db="money")`) is the authority: its state, and in
+`extra` the release `reason`, `physical_context.round_id`, the sent request's
+`candidate_manifest_ref` and `physical_failure.evidence_ref`, the complete
+failure source in the observability CAS (`query_data(op="blob", sha256=...)`).
+The worker's `llm_api_error` row names the same attempts
+(`physical_attempt_id`, `ledger_attempt_ids`) with the classification the loop
+acted on; a task with its own drive writes it there and in the installation's
+`logs/events.jsonl`, so it outlives the drive that retention or the owner's
+storage run deletes (`docs/PERSISTENCE.md`), as the attempt row and its blob do.
+
 ## 5. Lock tiers
 
 One configuration per installation, decided by the import with
@@ -419,6 +434,13 @@ application of fetch-only previews. Explicit use on live history requires the
 operator's separate authorization; installation alone changes no old money.
 
 ## 10. Residuals
+
+- A subscription session's input axes are its harness's normalized split from
+  2026-10-27 (unknown where the split is), the harness's own counters kept in
+  `extra.harness_tokens`; older session rows hold those counters (Claude Code:
+  the uncached rest), so token sums spanning the change mix the two. A sum no
+  row reported stays null in the ledger, task totals, `/status` and Logs; the
+  `/api/cost-breakdown` compatibility token fields, typed as integers, show 0.
 
 - Durability on a name-tier mount is best effort, as it was for the journal:
   the store relies on the mount's own write and rename semantics.

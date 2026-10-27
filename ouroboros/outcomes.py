@@ -39,6 +39,7 @@ from ouroboros._outcome_tool_errors import (  # explicit re-exports, one stateme
     _is_ignored_readonly_block as _is_ignored_readonly_block,
     _NON_BLOCKING_READONLY_BLOCK_STATUSES as _NON_BLOCKING_READONLY_BLOCK_STATUSES,
     _NON_BLOCKING_RECOVERABLE_STATUSES as _NON_BLOCKING_RECOVERABLE_STATUSES,
+    _NON_EFFECT_OBSERVATION_STATUSES as _NON_EFFECT_OBSERVATION_STATUSES,
     _OK_TOOL_STATUSES as _OK_TOOL_STATUSES,
     _POLICY_DENIAL_STATUSES as _POLICY_DENIAL_STATUSES,
     _RECOVERY_TOOL_NAMES as _RECOVERY_TOOL_NAMES,
@@ -276,7 +277,7 @@ _LEDGER_NON_FAILURE_STATUSES = (
     | frozenset({"refused_out_of_scope"})
     # tool_reported_failure: the tool RAN and answered honestly ({"ok": false} — a
     # diagnostic reporting what it was called to find). A finding, not a failure.
-    | frozenset({"tool_reported_failure"})
+    | frozenset({"tool_reported_failure"}) | _NON_EFFECT_OBSERVATION_STATUSES
 )
 
 

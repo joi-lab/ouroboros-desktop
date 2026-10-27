@@ -707,6 +707,11 @@ def delegate_payload_binding_refusal(ctx: Any, exc: Exception) -> ToolResult:
                  "workspace delegation.", definitely_unrun=True)
 
 
+_VCS_READ_ROOTS = (" vcs_read itself takes root='active_workspace' or 'system_repo' only. A delegated run's private copy "
+                   "is read with read_file/list_files by its path; after the run, its saved result through the run "
+                   "result's patch_read/manifest_read, or vcs_read(action='diff', base=<baseline_id>, head=<result_commit>).")
+
+
 def _binding_error_text(name: str, root: str, exc: Exception) -> str | ToolResult:
     detail = str(exc)
     if detail.startswith("SKILL_REDIRECT_BLOCKED:"):
@@ -747,8 +752,8 @@ def _binding_error_text(name: str, root: str, exc: Exception) -> str | ToolResul
     text = f"⚠️ {prefixes.get(name, 'TOOL_ERROR')}: {type(exc).__name__}: {detail}"
     if name == "query_code":
         return ToolResult(status="error", code="TOOL_ARG_ERROR", text=text)
-    if name == "vcs_read":
-        return ToolResult(status="ok", code="GIT_ERROR", text=text)
+    if name == "vcs_read":  # the profile's vcs roots above are wider than this reader's own two
+        return ToolResult(status="ok", code="GIT_ERROR", text=text + _VCS_READ_ROOTS)
     if name not in prefixes:
         return ToolResult(status="error", code="TOOL_ERROR", text=text)
     return text

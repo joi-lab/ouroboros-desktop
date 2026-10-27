@@ -94,8 +94,10 @@ def test_apply_prepares_a_finished_runs_capture_returns_it_then_applies_that_cap
         custody._CUSTODY.clear()
 
 
-def test_the_inspection_answer_is_a_typed_refusal_not_an_integration_effect(tmp_path, monkeypatch):
-    from ouroboros.outcomes import reviewable_effect_projection
+def test_the_inspection_answer_is_no_error_and_no_integration_effect(tmp_path, monkeypatch):
+    from ouroboros._outcome_tool_errors import _classify_tool_errors
+    from ouroboros.loop_tool_execution import _typed_execution_failure, _typed_result_metadata
+    from ouroboros.outcomes import build_verification_ledger, reviewable_effect_projection
     from ouroboros.tools.registry import ToolRegistry
 
     # Either work kind may integrate; this test isolates the capture-inspection guard.
@@ -105,9 +107,19 @@ def test_the_inspection_answer_is_a_typed_refusal_not_an_integration_effect(tmp_
         registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
         registry.set_context(ctx)
         shown = registry.execute_result("integrate_delegated_patch", {"run_id": rid})  # the public tool boundary
-        assert (shown.status, shown.code) == ("blocked", "INTEGRATION_BLOCKED") and INSPECT in shown.text
-        call = {"tool": "integrate_delegated_patch", "args": {"run_id": rid}, "status": shown.status, "is_error": False}
-        assert reviewable_effect_projection({"tool_calls": [call]}) == []  # nothing was integrated
+        assert (shown.status, shown.code) == ("ok", "INTEGRATION_INSPECTION_REQUIRED") and INSPECT in shown.text
+        # The execution adapter's own reading: the protocol step is no error, and its bucket
+        # stays outside the success set, so nothing counts as integrated or as a failure.
+        is_error = _typed_execution_failure(True, shown)
+        meta = _typed_result_metadata("integrate_delegated_patch", shown.text, is_error, shown)
+        assert (is_error, meta["status"]) == (False, "inspection_required")
+        call = {"tool": "integrate_delegated_patch", "args": {"run_id": rid}, "is_error": is_error, **meta}
+        trace = {"tool_calls": [call]}
+        assert reviewable_effect_projection(trace) == []  # nothing was integrated
+        assert not any(_classify_tool_errors(trace).values())  # no error, recovery or denial to account for
+        ledger = build_verification_ledger(task={"id": "inspect"}, loop_outcome={"outcome_axes": {}},
+                                           llm_trace=trace, artifact_bundle={})
+        assert ledger["summary"]["has_failures"] is False
     finally:
         custody._CUSTODY.clear()
 

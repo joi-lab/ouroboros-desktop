@@ -38,6 +38,7 @@ from ouroboros import dialogue_store as ds
 from ouroboros.dialogue_import import coverage as dialogue_coverage, pending_segments
 from ouroboros.dialogue_positions import ordinals_of, skipped_between
 from ouroboros.gateway._helpers import coerce_int, request_drive_root, run_sync_to_completion
+from ouroboros.gateway.logs import replica_key
 from ouroboros.headless import ARTIFACT_STATUS_FINALIZING, ARTIFACT_STATUS_PENDING
 from ouroboros.outcomes import public_task_result
 from ouroboros.task_results import load_task_result, validate_task_id
@@ -291,6 +292,7 @@ class _TaskEventFollower:
         self.result: Dict[str, Any] = {}
         self.suppress_task_done = False
         self.filter_grew = False
+        self.replicas: set = set()  # REPLICA_RULE rows already emitted on this connection, by natural key
         self._queue_snapshot_mtime: Any = None
         # A lineage notice is raised when the store cannot answer the lineage query (a
         # migration window); it clears once the query answers again. The last answered
@@ -519,6 +521,10 @@ class _TaskEventFollower:
                 event.pop("line")  # unknown while the archive import settles the counts (disclosed once)
             if self.suppress_task_done and event.get("type") == "task_done":
                 continue
+            if (key := replica_key(entry)) is not None:
+                if key in self.replicas:
+                    continue
+                self.replicas.add(key)
             rows.append(event)
         return rows
 
@@ -526,6 +532,7 @@ class _TaskEventFollower:
         """Full archive-aware merge; rebuilds ALL follow state from scratch."""
         self.logs = {}
         self.roots = []
+        self.replicas = set()
         self.task_filter_ids = {self.task_id}
         # The process-local stat memo survives a connection/replay rebuild.
         # A replay rebuilds log positions, not the live follower's prior proof.
@@ -638,6 +645,7 @@ class _TaskEventCursorFollower(_TaskEventFollower):
         """
         for notice in self.take_notices():
             yield self.envelope(notice, delivery=False)
+        skipped = False  # a skipped replica's position, which only a frame carries to the client
         for root in self.roots:
             for source, parts in _LOG_SOURCES:
                 if source in _DIALOGUE_SOURCES:
@@ -705,9 +713,17 @@ class _TaskEventCursorFollower(_TaskEventFollower):
                         event.pop("line")
                         if self.suppress_task_done and event["type"] == "task_done":
                             continue
+                        if (key := replica_key(entry)) is not None:  # one per connection; a cursor resumed between
+                            if key in self.replicas:                   # the two copies' frames shows both (disclosed)
+                                skipped = True
+                                continue
+                            self.replicas.add(key)
+                        skipped = False
                         yield self.envelope(event, identity=identity)
                     if position == before:
                         break
+        if skipped:  # a cut in the idle window after the pass would otherwise re-read the copy it skipped
+            yield self.envelope({"type": "cursor_checkpoint", "task_id": self.task_id}, delivery=False)
 
     def _read_dialogue_events(self, root: pathlib.Path, source: str):
         """One pass over a dialogue stream from the cursor's coordinate: the task tree's rows and

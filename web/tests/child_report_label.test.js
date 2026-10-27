@@ -29,6 +29,17 @@ test('a completed child labels its report before the preview and over the full t
     assert.equal(view.model, 'x-ai/grok-4.7');
 });
 
+test('the collapsed preview of a report is plain text: list and table markers go, the full report keeps them', () => {
+    const report = '## summary\n\n- first finding\n- second finding\n\n| check | result |\n|---|---|\n| tests | passed |';
+    const view = summarizeChatLiveEvent(child({ result: report }));
+    assert.equal(view.activityPreview, 'summary — first finding second finding check result tests passed');
+    assert.ok(view.fullBody.endsWith(report), view.fullBody);
+    // A fenced list is code and keeps its marker; the words of the report stay the face.
+    const fenced = summarizeChatLiveEvent(child({ result: 'Ran:\n```sh\n- not a bullet\n```\n- done' }));
+    assert.match(fenced.activityPreview, /- not a bullet/);
+    assert.match(fenced.activityPreview, /``` done$/);
+});
+
 test('another ending, or a child whose line states a stop cause, keeps the neutral marker and no label', () => {
     const failed = summarizeChatLiveEvent(child({ subagent_event: 'failed', status: 'failed',
         result: '⚠️ The task could not finish.', error: 'executor unavailable' }));

@@ -85,6 +85,18 @@ def test_docker_backend_paths_map_to_the_workspace_for_every_action(world):
     assert registry.execute_result("vcs_read", {"action": "file", "path": "/app/note.txt"}).text.startswith("first")
 
 
+def test_a_root_refusal_names_vcs_reads_own_roots_and_the_readers_of_a_delegated_copy(world):
+    """A refusal listed the profile's vcs roots, which vcs_read never takes, and nothing that reads a
+    delegated run's private copy; the readers now ride the refusal, never a working read."""
+    registry, _ctx, _, project = world
+    refused = registry.execute_result("vcs_read", {"action": "status", "repository": str(project.parent / "dlg_copy")})
+    assert refused.code == "GIT_ERROR" and "outside selected root" in refused.text, refused.text
+    assert "root='active_workspace' or 'system_repo' only" in refused.text and "patch_read/manifest_read" in refused.text
+    (project / "note.txt").write_text("changed\n")
+    working = registry.execute_result("vcs_read", {"action": "status"})
+    assert working.status == "ok" and "note.txt" in working.text and "patch_read" not in working.text
+
+
 def test_protected_history_is_judged_on_the_entry_git_reads_not_a_symlinks_target(world):
     registry, ctx, _, project = world
     (project / "private").mkdir()
