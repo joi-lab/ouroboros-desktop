@@ -372,6 +372,7 @@ def test_the_collapse_is_remembered_on_this_device_and_only_there(nav_ui, tmp_pa
         page.locator('#nav-projects-toggle').click()
         settle(page)
         facts['collapsed'] = [page.evaluate(expanded), page.evaluate(rows)]
+        ui['errors'].watch(page)  # the reload may cut off this page's own reads; the other pages stay strict
         page.reload()
         page.wait_for_selector('#nav-projects-list [data-project-id]', state='attached')
         settle(page)
@@ -401,7 +402,7 @@ def test_the_collapse_is_remembered_on_this_device_and_only_there(nav_ui, tmp_pa
     assert facts['collapsed'] == facts['reloaded'] == ['false', len(pins)], facts
     assert facts['other'] == ['true', everything], facts
     assert facts['locked'] == ['true', everything] and facts['locked_collapsed'] == ['false', len(pins)], facts
-    assert not ui['errors'], ui['errors']
+    assert not ui['errors'].unexpected(), ui['errors'].report()
 
 
 STATUS = """menu => {
