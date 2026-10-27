@@ -3,11 +3,17 @@
 Prunes report their earliest retained item's age eligibility. Producers schedule
 new artifacts; startup and explicit repair discover legacy ones. Directory times
 and unrelated completions never wake a sweep. Age grants no deletion authority.
+Source removers (a retired copy, snapshot or drive) schedule the ``bytecode`` step
+at once; a step that stops at its unlink budget owes the rest through ``next_due``.
 """
 from __future__ import annotations
 
+import errno
 import logging
+import os
 import pathlib
+import stat
+import sys
 import uuid
 
 from ouroboros import maintenance_jobs, store
@@ -16,6 +22,7 @@ from ouroboros.retention import get_gc_retention_days, time
 log = logging.getLogger(__name__)
 JOB = "runtime_retirement"
 STARTUP = "startup_recovery"
+BYTECODE_UNLINKS_PER_RUN = 20_000  # removals of one run; the rest is owed to the next (FSEvents pacing)
 
 
 def record_startup(root, *, gaps):
@@ -40,7 +47,8 @@ def schedule_in(txn, eligible_at):
 
 
 def artifact_changed(root, *, timestamp=None, immediate=False):
-    """Call after publishing disposable bytes. A missed notification waits for startup/repair."""
+    """Call after publishing disposable bytes, or (``immediate``) after removing a source tree whose
+    bytecode mirror is owed now. A missed notification waits for startup/repair."""
     try:
         stamp = time.time() if timestamp is None else float(timestamp)
         with store.acquisition_budget(0), store.open_store(root, write=True) as txn:
@@ -88,7 +96,8 @@ def run(root, should_stop):
     before = maintenance_jobs.job(root, JOB) or {}
     steps = [("delegate_state", sweep_settled_delegate_state),
              ("skill_state", sweep_uninstalled_skill_state), ("code_intel", prune_stale_code_intel_roots),
-             ("failed_reconcile", prune_failed_reconcile_markers), ("agent_media", prune_agent_media_uploads)]
+             ("failed_reconcile", prune_failed_reconcile_markers), ("agent_media", prune_agent_media_uploads),
+             ("bytecode", prune_stale_bytecode)]
     # Read the durable gate again immediately before source retirement. A fresh child
     # must never substitute its empty memory for the server's recovery result.
     with store.open_store(root, write=False) as txn:
@@ -177,5 +186,153 @@ def prune_agent_media_uploads(
             except OSError:
                 report["errors"] += 1
     return report
+
+
+def prune_stale_bytecode(root, *, budget=None, sources=None) -> dict:
+    """Retire bytecode mirrors whose source directory is gone (``state/pycache``, the
+    ``PYTHONPYCACHEPREFIX`` pool workers write; ``state/python-userbase`` holds real installs and
+    is never read here). Under a prefix CPython writes ``<prefix>/<source directory without its
+    root>/<name>.<tag>.pyc`` (``importlib`` ``cache_from_source``), so a mirror directory names its
+    source: ``"/" + relative`` on POSIX; on Windows the drive is stripped, so a mirror is stale only
+    when that path is missing on every drive present now (``_source_roots``). Top-down: a stale
+    mirror goes whole and is never descended; an unreadable source (access denied, a drive not
+    answering) keeps its mirror; links are neither followed nor removed. At most ``budget`` unlinks
+    a run, the rest owed through ``next_due``. A pure cache: a wrong removal costs a recompile."""
+    prefix = pathlib.Path(root) / "state" / "pycache"
+    report = {"removed": 0, "unlinked": 0, "unknown": 0, "errors": 0}
+    try:
+        if not stat.S_ISDIR(os.lstat(prefix).st_mode):  # a link is not our prefix
+            return report
+    except OSError:
+        return report
+    roots = _source_roots() if sources is None else [os.fspath(path) for path in sources]
+    left = [BYTECODE_UNLINKS_PER_RUN if budget is None else int(budget)]
+
+    def source(parts) -> str:
+        """``present``, ``gone`` or ``unknown`` over every root; any root that has it keeps it."""
+        unknown = not roots
+        for base in roots:
+            try:
+                if stat.S_ISDIR(os.stat(os.path.join(base, *parts)).st_mode):
+                    return "present"
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError:
+                unknown = True
+        return "unknown" if unknown else "gone"
+
+    def walk(directory, parts) -> bool:
+        """False once the budget is spent."""
+        try:
+            with os.scandir(directory) as listing:
+                entries = sorted((entry for entry in listing if _plain_directory(entry)), key=lambda entry: entry.name)
+        except OSError:
+            report["unknown"] += 1
+            return True
+        for entry in entries:
+            here = (*parts, entry.name)
+            verdict = source(here)
+            if verdict == "present":
+                if not walk(entry.path, here):
+                    return False
+            elif verdict == "unknown":
+                report["unknown"] += 1
+            else:
+                removed = _remove_mirror(entry.path, left, report)
+                if removed is None:
+                    return False
+                report["removed"] += removed
+        return True
+
+    if not walk(prefix, ()):
+        report["next_due"] = time.time()  # owed: the next run of the job continues the walk
+    return report
+
+
+def _link(entry) -> bool:
+    """A symlink or a Windows junction (a reparse point): never followed, never removed."""
+    return entry.is_symlink() or (os.name == "nt" and bool(entry.stat(follow_symlinks=False).st_file_attributes & 0x400))
+
+
+def _plain_directory(entry) -> bool:
+    try:
+        return entry.is_dir(follow_symlinks=False) and not _link(entry)
+    except OSError:
+        return False
+
+
+def _remove_mirror(path, left: list, report: dict):
+    """Unlink PATH bottom-up within the budget LEFT: True once it is gone, False when something stays
+    (a link inside, a refusal, a recompile landing meanwhile), None when the budget ran out."""
+    whole = True
+    try:
+        with os.scandir(path) as listing:
+            entries = list(listing)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        report["errors"] += 1
+        return False
+    for entry in entries:
+        if left[0] <= 0:
+            return None
+        if _plain_directory(entry):
+            outcome = _remove_mirror(entry.path, left, report)
+            if outcome is None:
+                return None
+            whole = whole and outcome
+            continue
+        try:
+            if _link(entry):
+                whole = False
+                continue
+            os.unlink(entry.path)
+            left[0] -= 1
+            report["unlinked"] += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            whole = False
+            report["errors"] += 1
+    if not whole:
+        return False
+    if left[0] <= 0:
+        return None
+    try:
+        os.rmdir(path)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):  # not a recompile that landed meanwhile
+            report["errors"] += 1
+        return False
+    left[0] -= 1
+    report["unlinked"] += 1
+    return True
+
+
+def _source_roots() -> list:
+    """Where a mirror's source can be: ``/`` on POSIX; on Windows every drive present now
+    (``os.listdrives`` on 3.12+, else the ``GetLogicalDrives`` bitmask, never a probe of each
+    letter), each root asked once a run so a drive without media or a lost network share is no
+    place a source can be."""
+    if sys.platform != "win32":
+        return [os.sep]
+    if hasattr(os, "listdrives"):
+        listed = list(os.listdrives())
+    else:
+        import ctypes
+
+        mask = int(ctypes.windll.kernel32.GetLogicalDrives())  # type: ignore[attr-defined]
+        listed = [f"{chr(ord('A') + bit)}:\\" for bit in range(26) if mask >> bit & 1]
+    return [drive for drive in listed if _answers(drive)]
+
+
+def _answers(path) -> bool:
+    try:
+        os.stat(path)
+    except OSError:
+        return False
+    return True
 
 

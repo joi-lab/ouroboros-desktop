@@ -394,7 +394,7 @@ def test_the_real_child_process_runs_the_due_jobs_and_reports(data):
 
     dialogue_import.cutover(data)  # as the boot does before the dialogue opens: the archive is planned
     assert maintenance.due(data) == ["subagent_metrics", "pending_invocations", "dialogue_import",
-                                     "ended_plan_asks", "runtime_retirement", "custody_trash"]
+                                     "ended_plan_asks", "custody_trash", "runtime_retirement"]
     unit = maintenance.MaintenanceChild()
     assert unit.tick(data, REPO)
     unit._thread.join(240)

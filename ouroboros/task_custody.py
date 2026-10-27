@@ -1455,4 +1455,8 @@ def remove_custody_trash(canonical_root: Any, *, stop: Optional[Callable[[], boo
             report["removed"] += 1
         except OSError as exc:
             report["stuck"][entry.name] = [type(exc).__name__]
+    if report["removed"]:  # the bytecode the removed sources left is owed to retirement now
+        from ouroboros.maintenance_retirement import artifact_changed
+
+        artifact_changed(canonical_root, immediate=True)
     return report

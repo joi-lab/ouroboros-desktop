@@ -337,9 +337,9 @@ JOBS: Dict[str, tuple] = {
     "memory_tail": (_tail_due, _tail_run),  # after the import: the tail's positions are settled
     "hot_facts": (_hot_facts_due, _hot_facts_run),
     "ended_plan_asks": (plan_collection_job.due, plan_collection_job.run),
+    "custody_trash": (_trash_due, _trash_run),  # before retirement: a removed drive's bytecode goes in the same pass
     "runtime_retirement": (maintenance_retirement.due, maintenance_retirement.run),
     "child_ref_promotion": (_promotion_due, _promotion_run),
-    "custody_trash": (_trash_due, _trash_run),
     "temp_sweep": (_temp_due, _temp_run),
     "sqlite_analyze": (_analyze_due, _analyze_run),
     "evidence_packing": (_packing_due, _packing_run),  # last: its quiet fact follows every other write
