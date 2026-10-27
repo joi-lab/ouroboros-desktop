@@ -22,7 +22,7 @@ tools:
     effect: read
 when_to_use: The user asks Ouroboros to inspect a desktop, take a screenshot, act in a named application (click/type/press keys there), drag, or operate a local/explicitly configured remote GUI under human or benchmark supervision.
 model_experience:
-  what_model_sees: Two dozen desktop tools (screenshot, click/type/key/scroll input with an optional app= target, activate_app, window_list with the frontmost app, ax_tree as bounded text, capabilities with the grants the local process holds, connection registry) join the tool list; each screenshot auto-attaches a WXGA-bounded image to the conversation in the same round, and every input answers with who was in front when it was dispatched, on every backend.
+  what_model_sees: Two dozen desktop tools (screenshot, click/type/key/scroll input with an optional app= target, activate_app, window_list with the frontmost app, ax_tree as bounded text, capabilities with the grants the local process holds, connection registry) join the tool list; each screenshot auto-attaches a WXGA-bounded image to the conversation in the same round, and every input receipt says whether its helper ran and who was in front when it was dispatched (where a reader answered), on every backend.
   token_effect: The tool schemas add a moderate fixed cost to every round while the skill is enabled; each screenshot adds one image attachment (the dominant per-use cost), each input receipt about a hundred tokens of place facts, and an ax_tree read grows with the nodes it returns (bounded by max_nodes).
 ---
 
@@ -109,12 +109,16 @@ Acting in a named application (`app=`):
   before every later step, reads the front again: when the named application
   (or window) has left the front (a `cmd+tab` in the sequence, the owner
   switching away, a sibling window of the same process coming forward for a
-  title-named target) the remaining steps are not sent (`target_lost`,
+  title-named target, a window of the class that was not listed with a
+  class-named target, such as a dialog a step opened) the remaining steps are
+  not sent (`target_lost`,
   `steps_done` says how many ran); a switch that ran before a step that could
   not be sent keeps its mark (`activation_done`). Without `app=` every step
   goes to whatever is in front at that moment, and the receipt names each
   step's recipient when they differ (`steps_delivered_to`, `"unknown"` for a
-  step whose front could not be read).
+  step whose front could not be read). A tool's registered budget covers one
+  input's worst case (`type_text` 180 s, the other inputs 90 s), not a long
+  sequence: when the host's budget ends a call, no receipt comes back.
 - `move` and `mouse_up` never change which application is in front: a drag
   must end where it started.
 - Keyboard focus follows the switch and stays there, as if the owner had
@@ -141,7 +145,9 @@ Coordinate contract:
   display's own CoreGraphics bounds (a second display no longer stretches the
   scale), including a negative origin for a display left of or above the main
   one (cliclick then receives `=`-prefixed absolute coordinates, locally and
-  on a Mac over SSH; on a Mac negative raw coordinates are valid input). Without those bounds the Finder
+  on a Mac over SSH; on a Mac negative raw coordinates are valid input, while
+  an X11/Wayland desktop and an OSWorld guest, which have no screen space left
+  of or above their origin, refuse them before any call). Without those bounds the Finder
   desktop size is used (the union of all displays) and the transform is always
   flagged `approx`; an SSH Mac's transform is always `approx` for the same
   reason.
@@ -152,12 +158,15 @@ Input receipts (the same contract on every backend):
   ran and reported success. It proves dispatch, not that the screen changed or
   that the task's goal was met; the host's task result review reads it as
   work the task produced.
-- Beside it every input receipt carries the place: `delivered_to` (the
+- Beside it an input receipt carries the place, each field where it is known
+  (a refusal carries `target`, `reason` and the front it read, no
+  `dispatched`: nothing ran): `delivered_to` (the
   application or window in front when the input was dispatched: app, pid,
   bundle id or class, window id and title where the backend knows them;
   `"unknown"` when no reader answered), `dispatched` (whether the input helper
   ran at all: `false` for a refused combo or a failed clipboard write, `true`
-  for a helper that ran, whatever it reported), `front_before` (only when the
+  for a helper that ran, whatever it reported, `null` with `transport_failed`
+  when a remote call did not answer, so whether it ran is unknown), `front_before` (only when the
   tool switched applications first), `front_after` (who was in front when the tool
   read again after the input: present when that is another place than
   `delivered_to` (another window where the backend knows windows, else another
@@ -186,13 +195,16 @@ Input receipts (the same contract on every backend):
   when a character has no key code in the active keyboard layout (nothing is
   typed; measured 27.10.2026 under a Cyrillic layout). Such receipts are
   `ok: false` with `reason: permission_denied` / `untypable_characters` and no
-  mark; the hint names the method that failed (typing, a shortcut, the paste
-  chord).
+  input mark (a completed clipboard write or switch before it keeps its own,
+  `clipboard_done` / `activation_done`); the hint names the method that failed
+  (typing, a shortcut, the paste chord).
 - A switch that happened before a failed or dropped input keeps the mark
   (`activation_done`): the front changed, which is an observed effect.
 - An input of several steps that fails after earlier steps succeeded returns
   `ok: false` with `steps_done` and keeps the mark. A failed or timed-out first
-  step, a refusal, reads, `wait` and `remote_exec` carry none. `activate_app`
+  step, a refusal, reads, `wait` and `remote_exec` carry no input mark (a
+  switch or clipboard write that completed before keeps its own). A helper the
+  OS could not start (`helper_not_launched`) never ran: `dispatched: false`. `activate_app`
   carries the mark only when the front actually changed to the target; already
   in front is `activated: false` without a mark.
 
@@ -209,7 +221,9 @@ Observation without images (`ax_tree`, `window_list`):
   `truncated_by`: a node's children are requested up to the remaining node
   budget plus one, so a wide list is cut by `max_nodes` (named whenever
   children were left unrequested, whether or not the visited count reached the
-  budget) and the node records `children_unread`; web content (`AXWebArea`)
+  budget) and the node records `children_unread`; a node or a children list
+  the application failed to answer is a cut too (`read_errors`: that subtree
+  is not requested, `errors` counts the failures by attribute); web content (`AXWebArea`)
   is skipped unless `include_web=true`. Nodes carry role, label, value (capped,
   with `value_len`), and bounds; an attribute the application failed to answer
   (an error other than ordinary absence) is counted in `errors` by attribute,
@@ -224,7 +238,8 @@ Observation without images (`ax_tree`, `window_list`):
   reads it in 1.6 s cold and 50 ms warm.
 - `window_list` never renders an unread fact as `false` or `[]`: a window list
   the Accessibility API refused says `windows_unread` (a window attribute it
-  refused is listed in that window's `unread`, never shown as `false`), an
+  refused is listed in that window's `unread`, never shown as `false`; a window
+  nothing of which could be read has `unread: {window: <error>}`), an
   unread front leaves the per-row `frontmost` out and says `front_unread`
   (on every backend), a listing that failed is `ok: false`. On X11 and OSWorld
   a row is `frontmost` when it is the active window, not merely a window of
@@ -271,6 +286,10 @@ Backend matrix (honest limitations):
   between dots never does), the window title or `pid:<n>`/`0x<id>`; a class
   is every window of that class, `pid:` every window of the process, a title
   or id that one window, and a window the X server has no pid for is itself.
+  A class that is not in front is brought forward through its first-listed
+  window (`wmctrl` lists the oldest first): name a window by its title to
+  choose one. Window rows are parsed from `wmctrl` text, so a title that
+  contains a newline can forge a row (a web page title cannot).
   Function keys and case-sensitive keysyms are supported (`f5`→`F5`,
   `XF86AudioPlay` as-is).
 - Linux Wayland: `ydotool` (pointer + typing; requires a running `ydotoold`)
@@ -287,15 +306,17 @@ Backend matrix (honest limitations):
   exact matching as local X11), activated by window id (`wmctrl -i -a`) and
   verified by polling `xdotool getactivewindow` up to `wait_ms`; every input's
   guest program reads the active window (`id|pid|title`, two `xdotool` calls
-  per read, the title base64-encoded so that nothing a window is called can
+  per read, a third for a window without a pid, the title base64-encoded so that nothing a window is called can
   look like a marker) before and after the action in the same call and withholds a targeted input
   when the active window is not one of the target's windows (`target_lost`)
   or could not be read (`front_unread`); a switch observed earlier in the call
   keeps its mark. The probe cannot raise: for an untargeted input a probe
   failure leaves the place unknown and never fails the action. A targeted
   `type_text` makes one switch for the whole call; a withheld or refused paste
-  is final (never retried by typing); a clipboard program that ran and failed,
-  or whose transport failed, falls back to `typewrite` as before. With `app=""` the action, its exit-code
+  is final (never retried by typing); a clipboard program that ran and failed
+  (`pyperclip` or `xclip` absent) falls back to `typewrite` once with the same
+  switch; a remote call that did not answer (`transport_failed`: the paste may
+  have run) is final, nothing is retyped. With `app=""` the action, its exit-code
   reading and the clipboard/typewrite routing are unchanged; what changed on
   the benchmark path is the probe around the action (markers are stripped from
   the returned output), `activate_app` in the tool list, `app` in the input
@@ -317,10 +338,13 @@ Backend matrix (honest limitations):
   through System Events (only the integer pid enters the remote command, never
   the name), verified by polling `lsappinfo front` up to `wait_ms`; an input
   cliclick cannot express is refused before any switch; a transport failure
-  after a switch still reports the switch. cliclick's stderr is read the same
+  after a switch still reports the switch; an ssh call that failed before the
+  remote wrapper ran (connection refused, authentication: `ssh_failed`) sent
+  nothing, `dispatched: false`. cliclick's stderr is read the same
   way as locally. `type_text` with `via=paste` writes the Mac's clipboard
   (`pbcopy`) and pastes, and the receipt says whether the clipboard stage
-  completed. `window_list` lists applications and the frontmost one (no window
+  completed (a failed write sends nothing: `clipboard_failed`, `dispatched:
+  false`). `window_list` lists applications and the frontmost one (no window
   titles over SSH); a listing that failed or named nothing is `apps_unread`,
   an unread front says `front_unread`. The remote Mac must have
   Screen Recording, Accessibility and (for activation) Automation grants

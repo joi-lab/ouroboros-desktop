@@ -348,7 +348,7 @@ class _AX:
                 e, vals = self.multi(win, ["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"])
                 row: dict[str, Any] = {}
                 if e != 0:
-                    row["unread"] = AX_ERR.get(e, str(e))  # nothing of this window could be read
+                    row["unread"] = {"window": AX_ERR.get(e, str(e))}  # nothing of this window could be read
                 else:
                     vals, failed = split_attr_errors(["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"], vals)
                     title, minimized, pos, size, main = (vals + [None] * 5)[:5]
@@ -409,7 +409,9 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
 
     ``read_node(el)`` -> (err, [role, subrole, title, description, value, position, size]); ``children_of(el, n)`` ->
     (err, [children]) or (err, [children], total). Stops at ``max_nodes`` visited nodes or at the deadline and
-    SAYS which (``truncated_by``). A node's children are requested up to the remaining node budget plus one, so a
+    SAYS which (``truncated_by``); a node or a children list the application failed to answer is a cut too
+    (``read_errors``: that subtree is never requested, and ``errors`` counts the failures by attribute). A node's
+    children are requested up to the remaining node budget plus one, so a
     node wider than the budget is cut by ``max_nodes`` and records ``children_unread``; children of
     ``skip_children`` roles (web content) are not fetched unless the caller clears the tuple. Owns ``root`` and
     every child it fetched: each is released exactly once, on every exit.
@@ -443,11 +445,13 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 err, vals = read_node(el)
                 if err != 0:
                     count(AX_ERR.get(err, str(err)))
+                    cut("read_errors")  # its subtree is never requested: the tree is incomplete, and says so
                     continue
                 vals, failed = split_attr_errors(_WALK_ATTRS, list(vals))
                 for name, reason in failed.items():
                     count(f"{name}:{reason}")
                 if failed and all(v is None for v in vals):
+                    cut("read_errors")
                     continue  # not one attribute of this element could be read: a failed read, not an empty node
                 visited += 1
                 role, subrole, title, desc, value, pos, size = (list(vals) + [None] * 7)[:7]
@@ -474,6 +478,7 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 total = answer[2] if len(answer) > 2 else None
                 if cerr not in (0, -25212, -25205):
                     count("children:" + AX_ERR.get(cerr, str(cerr)))
+                    cut("read_errors")
                 if total is not None and total > len(kids):
                     node["children_unread"] = total - len(kids)
                     if cerr == 0:

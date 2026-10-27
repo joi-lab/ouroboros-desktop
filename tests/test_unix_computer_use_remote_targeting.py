@@ -7,9 +7,13 @@ fake pyautogui/xdotool, every exit keeps the facts it observed, and nothing a wi
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import urllib.request
+
+import pytest
 
 from tests.test_unix_computer_use_targeting import API, KEYNOTE, SAFARI, load_plugin, receipt
 
@@ -134,7 +138,6 @@ def test_osworld_untargeted_input_names_the_front_and_tolerates_a_silent_probe(t
     out = receipt(api.tools["key"](keys="return"))
     assert out["ok"] is True and out["delivered_to"] == {"window_id": "0x00000001", "pid": 4242, "title": "Browser"} and "front_after" not in out
     assert len(guest.commands) == 1 and "pyautogui.press('enter')" in guest.commands[0][2], "no activation without app="
-    assert "except Exception" in guest.commands[0][2], "the probe cannot raise: a probe failure is never a failed input"
     rows = receipt(api.tools["window_list"]())
     assert rows["ok"] is True and rows["frontmost"]["pid"] == 4242 and [r["frontmost"] for r in rows["windows"]] == [True, False, False]
     # No markers at all (an older guest image): the action's exit code still governs, the place is unknown.
@@ -293,8 +296,15 @@ def run_guest_program(command: list[str], *, fronts: list[str], raise_probe: boo
         if argv[1] == "getwindowpid" and "getwindowname" in argv:
             wid, pid, title = reads[0].split("|", 2)
             assert argv[2] == wid and argv[4] == wid, argv
+            if not pid:
+                return FakeRun("")  # xdotool: getwindowpid fails for a window without _NET_WM_PID and ends the chain
             reads.pop(0) if len(reads) > 1 else None
             return FakeRun(pid + "\n" + title + "\n")
+        if argv[1] == "getwindowname":
+            wid, pid, title = reads[0].split("|", 2)
+            assert argv[2] == wid and not pid, argv
+            reads.pop(0) if len(reads) > 1 else None
+            return FakeRun(title + "\n")
         raise AssertionError(argv)
     fake_sp = types.SimpleNamespace(run=fake_run)
     buf = io.StringIO()
@@ -482,3 +492,88 @@ def test_ssh_negative_coordinates_are_absolute_points_on_the_remote_mac(tmp_path
     module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI))
     out = receipt(api.tools["click"](x=-250, y=200, raw=True))
     assert out["ok"] is True and "cliclick c:=-250,200" in calls[-1][-1]
+
+
+def test_osworld_a_lost_answer_after_a_paste_is_not_retyped_and_negative_points_are_refused_for_a_guest(tmp_path, monkeypatch):
+    def lost(code, index):
+        if "wmctrl -lpxG" in code:
+            return 0, listing(FIREFOX_FRONT)
+        if "wmctrl -i -a" in code:
+            return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
+        raise TimeoutError("the guest did not answer")
+    module, api, guest = osworld(tmp_path, monkeypatch, lost)
+    out = receipt(api.tools["type_text"](text="<b>x</b>", app="Keynote"))
+    assert out["ok"] is False and out["transport_failed"] is True and "unknown" in out["note"], out
+    assert not any("typewrite" in c[-1] for c in guest.commands), "a paste whose answer was lost may have run: never retyped"
+    assert out["activation_done"] is True
+    # A guest desktop has no screen space left of or above its origin: a negative point is refused before any call.
+    guest.commands.clear()
+    refused = receipt(api.tools["click"](x=-5, y=20, raw=True))
+    assert refused["ok"] is False and "negative" in refused["error"] and guest.commands == []
+
+
+def test_osworld_a_pid_less_window_keeps_its_title_in_the_probe(tmp_path, monkeypatch):
+    """xdotool ends a command chain at its first failure, so a window without _NET_WM_PID gets its name read alone."""
+    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__FRONT_AFTER__{FIREFOX_FRONT}\n"))
+    receipt(api.tools["key"](keys="return"))
+    from skills.unix_computer_use import place, remote as remote_mod
+    actions, out, code = run_guest_program(guest.commands[-1], fronts=["7||Old Java App", "7||Old Java App"])
+    before, after, stop = remote_mod.parse_markers(out, place.parse_x11_front)
+    assert actions == ["press enter"] and code == 0 and stop == "", out
+    assert before == {"window_id": "0x00000007", "title": "Old Java App"} and after == before, out
+
+
+@pytest.mark.skipif(not (shutil.which("bash") and shutil.which("base64")), reason="the guest shell reader runs under bash")
+def test_the_guest_shell_reader_encodes_the_exact_title_and_survives_a_pid_less_window(tmp_path):
+    """The shell reader (activation, listing, capabilities) and the python probe agree on a title: no trailing newline."""
+    from skills.unix_computer_use import place, remote as remote_mod
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "xdotool"
+    fake.write_text("\n".join(["#!/bin/sh", 'case "$1" in', "  getactivewindow) echo 7 ;;",
+                                '  getwindowpid) [ -n "$XPID" ] && echo "$XPID" || exit 1 ;;',
+                                "  getwindowname) printf '%s\\n' \"$XTITLE\" ;;", "esac", ""]), encoding="utf-8")
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "XTITLE": "Draft __ACTIVE__ - Keynote", "XPID": "5151"}
+    out = subprocess.run(["bash", "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
+    assert place.parse_x11_front(out) == {"window_id": "0x00000007", "pid": 5151, "title": "Draft __ACTIVE__ - Keynote"}, out
+    env["XPID"] = ""
+    out = subprocess.run(["bash", "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
+    assert place.parse_x11_front(out) == {"window_id": "0x00000007", "title": "Draft __ACTIVE__ - Keynote"}, out
+
+
+def test_ssh_a_failed_clipboard_write_sends_nothing_and_says_so(tmp_path, monkeypatch):
+    def write_failed(command):
+        if "pbcopy" in command:  # the `&&` chain stops at pbcopy: no marker, no chord
+            return 1, f"__FRONT_BEFORE__{info_line(SAFARI)}\n__FRONT_AFTER__{info_line(SAFARI)}\n", "pbcopy: command not found"
+        return mac_over_ssh(SAFARI)(command)
+    module, api, calls = ssh(tmp_path, monkeypatch, write_failed)
+    out = receipt(api.tools["type_text"](text="x", via="paste"))
+    assert out["ok"] is False and out["reason"] == "clipboard_failed" and out["dispatched"] is False, out
+    assert out["clipboard_replaced"] is False and "observed_effect" not in out and "not sent" in out["note"]
+
+
+def test_osworld_a_lost_reply_after_a_key_is_an_unknown_outcome_never_a_withheld_input(tmp_path, monkeypatch):
+    """The guest program may have pressed the key before the host's read died: the aggregate says so and withholds the rest."""
+    def lost(code, index):
+        if "pyautogui.press" in code:
+            raise TimeoutError("reply lost after guest input")
+        return 0, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__FRONT_AFTER__{FIREFOX_FRONT}\n"
+    module, api, guest = osworld(tmp_path, monkeypatch, lost)
+    out = receipt(api.tools["key"](keys="right down"))
+    assert out["ok"] is False and out["dispatched"] is None and out["transport_failed"] is True and out["steps_done"] == 0, out
+    assert "outcome unknown" in out["error"] and "not sent" not in out["error"]
+    assert sum("pyautogui.press" in c[-1] for c in guest.commands) == 1, "the second step is withheld after an unknown outcome"
+
+
+def test_ssh_a_connection_that_never_ran_the_wrapper_is_not_a_dispatched_input(tmp_path, monkeypatch):
+    def refused(command):
+        if "cliclick" in command:  # ssh failed before the wrapper printed its first marker
+            return 255, "", "ssh: connect to host mac.invalid port 22: Connection refused"
+        return mac_over_ssh(SAFARI, KEYNOTE)(command)  # the switch itself succeeds
+    module, api, calls = ssh(tmp_path, monkeypatch, refused)
+    out = receipt(api.tools["key"](keys="right"))
+    assert out["ok"] is False and out["dispatched"] is False and out["reason"] == "ssh_failed", out
+    assert "not sent" in out["note"] and "observed_effect" not in out and "Connection refused" in out["error"]
+    ran = receipt(api.tools["key"](keys="right", app="Keynote"))  # a switch that ran before it keeps its mark
+    assert ran["ok"] is False and ran["dispatched"] is False and ran["activation_done"] is True and ran["observed_effect"] is True, ran

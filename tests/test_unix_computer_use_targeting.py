@@ -636,6 +636,7 @@ def test_native_walk_is_bounded_and_says_which_bound_cut_it():
         return (-25204, []) if el == "a" else read(el)
     partial = native.walk("root", busy, children, max_nodes=100, deadline_s=10, now=lambda: next(clock))
     assert partial["errors"] == {"CannotComplete": 1} and partial["visited"] == 3, "a busy node is counted, not walked"
+    assert partial["truncated_by"] == ["read_errors", "web_content_skipped"], "its unrequested subtree is a named cut"
 
 
 def test_native_walk_names_a_wide_node_it_could_not_finish_and_releases_every_element_once():
@@ -778,8 +779,8 @@ LIBRE = ("0x00000001  0 4242 10 20 800 600 navigator.Firefox host Browser - Docs
 def test_x11_a_class_is_its_own_windows_not_every_window_of_its_process(tmp_path, monkeypatch):
     """LibreOffice Writer and Calc share one process: naming Writer with Calc in front is a switch, never 'already front'."""
     monkeypatch.setattr(sys.modules[__name__], "WMCTRL", LIBRE)
-    PIDS.update({"4": "7000", "5": "7000", "6": "0", "7": "0"})
-    TITLES.update({"4": "Letter - LibreOffice Writer", "5": "Sheet - LibreOffice Calc", "6": "xterm", "7": "Old Java App"})
+    monkeypatch.setattr(sys.modules[__name__], "PIDS", {**PIDS, "4": "7000", "5": "7000", "6": "0", "7": "0"})
+    monkeypatch.setattr(sys.modules[__name__], "TITLES", {**TITLES, "4": "Letter - LibreOffice Writer", "5": "Sheet - LibreOffice Calc", "6": "xterm", "7": "Old Java App"})
     module, api, state = x11(tmp_path, monkeypatch, active="5", switch_to="4")
     out = receipt(api.tools["key"](keys="ctrl+v", app="libreoffice-writer"))
     assert out["ok"] is True and ["wmctrl", "-i", "-a", "0x00000004"] in state["calls"], out
@@ -873,6 +874,7 @@ def test_native_reads_say_which_attributes_failed_and_never_render_a_failed_read
         return 0, kids[:n], len(kids)
     out = native.walk("root", read, children, max_nodes=10, deadline_s=5)
     assert out["visited"] == 2 and out["errors"] == {name + ":CannotComplete": 1 for name in native._WALK_ATTRS}
+    assert out["truncated"] is True and out["truncated_by"] == ["read_errors"], "a subtree never requested is a named cut"
     # A node wider than the budget whose fetched children all fail is still a cut, named.
     wide = {"root": [f"row{i}" for i in range(100)]}
 
@@ -883,13 +885,13 @@ def test_native_reads_say_which_attributes_failed_and_never_render_a_failed_read
         kids = wide.get(el, [])
         return 0, kids[:n], len(kids)
     cut = native.walk("root", read_failing_rows, children_wide, max_nodes=5, deadline_s=5)
-    assert cut["visited"] == 1 and cut["nodes"][0]["children_unread"] == 95 and cut["truncated_by"] == ["max_nodes"]
-    # A children read the app refused is an error, never a budget cut.
+    assert cut["visited"] == 1 and cut["nodes"][0]["children_unread"] == 95 and cut["truncated_by"] == ["max_nodes", "read_errors"]
+    # A children read the app refused is a read error, named as such, never a budget cut.
 
     def children_refused(el, n):
         return (-25204, [], 10) if el == "root" else (0, [], 0)
     refused = native.walk("root", read_failing_rows, children_refused, max_nodes=150, deadline_s=5)
-    assert refused["truncated"] is False and refused["nodes"][0]["children_unread"] == 10 and refused["errors"] == {"children:CannotComplete": 1}
+    assert refused["truncated_by"] == ["read_errors"] and refused["nodes"][0]["children_unread"] == 10 and refused["errors"] == {"children:CannotComplete": 1}
 
 
 def test_native_activation_rules_without_a_desktop(monkeypatch):

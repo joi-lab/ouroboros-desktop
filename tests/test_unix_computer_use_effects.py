@@ -247,6 +247,32 @@ def test_x11_reads_and_refusals_carry_no_mark(tmp_path, monkeypatch):
         assert not marked(receipt(text)), text
 
 
+def test_a_multi_process_input_reports_which_step_ran_and_a_helper_that_never_started(tmp_path, monkeypatch):
+    """`dispatched` is the fact that a helper ran: a failing later step is dispatched (its outcome unknown), a
+    failing first step too, and a helper the OS could not start is not."""
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "wayland", tools=("ydotool",), answer=fail_at(1))
+    out = receipt(tools["click"](x=10, y=20, raw=True))
+    assert out["ok"] is False and out["steps_done"] == 1 and out["dispatched"] is True and out["observed_effect"] is True, out
+    assert "dispatched and did not report success" in out["note"] and "not sent" not in out["error"]
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "wayland", tools=("ydotool",), answer=fail_at(0))
+    first = receipt(tools["click"](x=10, y=20, raw=True))
+    assert first["ok"] is False and first["steps_done"] == 0 and first["dispatched"] is True and "unknown" in first["note"], first
+    assert "not sent" not in first["note"] and "observed_effect" not in first
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "x11", tools=("xdotool",), answer=fail_at(1))
+    held = receipt(tools["hold_key"](keys="a", duration_ms=50))
+    assert held["ok"] is False and held["steps_done"] == 1 and held["dispatched"] is True and "dispatched and did not report success" in held["note"], held
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "wayland", tools=("ydotool",))
+    assert receipt(tools["click"](x=10, y=20, raw=True))["dispatched"] is True, "a successful multi-process input says its helpers ran"
+    missing = FileNotFoundError(2, "No such file or directory", "cliclick")
+    tools, transport = desktop(tmp_path, monkeypatch, "macos", tools=MAC, answer=fail_at(0, outcome=missing))
+    never = receipt(tools["click"](x=10, y=20, raw=True))
+    assert never["ok"] is False and never["dispatched"] is False and never["reason"] == "helper_not_launched", never
+    assert "not sent" in never["note"] and "returncode" not in never and "observed_effect" not in never
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "wayland", tools=("ydotool",), answer=fail_at(1, outcome=missing))
+    step = receipt(tools["click"](x=10, y=20, raw=True))
+    assert step["dispatched"] is False and step["steps_done"] == 1 and "the next step was not sent" in step["note"], step
+
+
 @pytest.mark.parametrize("tool, args, steps", [
     ("click", {"x": 3, "y": 4, "raw": True}, 2),
     ("left_click_drag", {"start_x": 1, "start_y": 2, "end_x": 3, "end_y": 4, "raw": True}, 4),
@@ -330,6 +356,9 @@ def test_ssh_reads_refusals_and_remote_exec_carry_no_mark(tmp_path, monkeypatch)
             return 0, "0, 0, 1440, 900"
         if "background only" in command:
             return 0, "Finder, Safari"
+        if "lsappinfo list" in command:  # an inventory that names nothing is apps_unread; a read names one application
+            return 0, (' 1) "Finder" ASN:0x0-0x1: \n    bundleID="com.apple.finder"\n    pid = 100 type="Foreground" flavor=3\n'
+                       '__FRONT__"pid"=100 "CFBundleIdentifier"="com.apple.finder" "LSDisplayName"="Finder" ')
         return (0, "host=mac\nuser=owner\n/usr/sbin/screencapture\n/opt/homebrew/bin/cliclick") if "hostname" in command else 0
     tools, transport = ssh_mac(tmp_path, monkeypatch, answer=answer)
     refused = [tools["scroll"](clicks=2), tools["click"](x=1, y=1, button="middle", raw=True),

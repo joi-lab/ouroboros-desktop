@@ -89,7 +89,7 @@ _PYAUTOGUI_BASE_ALIASES = {
 # The title travels base64-encoded: whatever a window is called, it can never look like a marker or add a line.
 _X11_FRONT_SH = ("W=$(xdotool getactivewindow 2>/dev/null); if [ -n \"$W\" ]; then "
                  "printf '%s|%s|b64:%s' \"$W\" \"$(xdotool getwindowpid \"$W\" 2>/dev/null)\" "
-                 "\"$(xdotool getwindowname \"$W\" 2>/dev/null | base64 | tr -d '\\n')\"; fi")
+                 "\"$(printf '%s' \"$(xdotool getwindowname \"$W\" 2>/dev/null)\" | base64 | tr -d '\\n')\"; fi")
 # The same reader inside the guest python that runs an input: it cannot raise (a probe failure is an unknown
 # place, never a failed input), prints the markers the receipt is read from (each on its own line, the title
 # base64-encoded), and withholds a targeted input when the expected window is not in front (``__TARGET_LOST__``)
@@ -102,7 +102,9 @@ _OSWORLD_PROBE = (
     "        if not w:\n"
     "            return ''\n"
     "        pn = _sp.run(['xdotool', 'getwindowpid', w, 'getwindowname', w], capture_output=True, text=True, errors='replace', timeout=3).stdout\n"
-    "        p, _, n = pn.partition(chr(10))\n"
+    "        p, sep, n = pn.partition(chr(10))\n"
+    "        if not sep:\n"  # xdotool ends a chain at its first failing command: a window without a pid keeps its name
+    "            p, n = '', _sp.run(['xdotool', 'getwindowname', w], capture_output=True, text=True, errors='replace', timeout=3).stdout\n"
     "        return w + '|' + p.strip() + '|b64:' + _b64.b64encode(n.rstrip(chr(10)).encode('utf-8', 'replace')).decode('ascii')\n"
     "    except Exception:\n"
     "        return ''\n"
@@ -330,16 +332,27 @@ class RemoteBackends:
                 before, after, stop = parse_markers(stdout, _info_or_none)
                 if stop:
                     return self._stopped(ctx, shared, before, backend, stop)
-                payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout), "dispatched": True}
+                # The wrapper prints its first marker before the input runs: no marker means ssh itself failed
+                # (connection refused, authentication) and the input never reached the Mac.
+                ran = bool(re.search(r"^__FRONT_BEFORE__", stdout, re.M)) if input_effect else True
+                payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout), "dispatched": ran}
                 if rc != 0:
                     payload["error"] = stderr.strip() or strip_markers(stdout) or f"exit {rc}"
+                    if not ran:
+                        payload["reason"] = "ssh_failed"
                 if note and "clipboard_replaced" in note:
                     # The clipboard stage reports itself; the paste chord may still have failed after it.
                     payload["clipboard_replaced"] = bool(re.search(r"^__CLIPBOARD_WRITTEN__$", stdout, re.M))
+                    if rc != 0 and not payload["clipboard_replaced"]:
+                        # The `&&` chain stops at the clipboard write: the paste chord never ran.
+                        payload.update({"dispatched": False, "reason": "clipboard_failed",
+                                        "error": f"the clipboard write failed on the remote Mac ({payload.get('error')}); nothing was pasted"})
             else:
                 return {"ok": False, "error": f"unsupported remote backend {backend!r}"}
         except Exception as exc:  # noqa: BLE001 - the transport failed; an earlier observed switch is still a fact
-            failed: dict[str, Any] = {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}", "code": code}
+            failed: dict[str, Any] = {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}", "code": code,
+                                      "transport_failed": True, "dispatched": None,
+                                      "note": "the remote call did not answer: whether the input ran is unknown (do not assume it did not)"}
             if ctx.get("target"):
                 failed["target"] = ctx["target"]
             if ctx.get("front_before") is not None:
@@ -848,8 +861,9 @@ class RemoteBackends:
             )
             try:
                 parsed = json.loads(out)
-                if parsed.get("ok") or parsed.get("reason"):
-                    # Done, or withheld/refused (target lost, front unread): a refusal is never retried by typing.
+                if parsed.get("ok") or parsed.get("reason") or parsed.get("transport_failed"):
+                    # Done, withheld/refused (target lost, front unread), or the answer was lost after the program may
+                    # have pasted: none of these is retried by typing.
                     return out
             except Exception:
                 pass

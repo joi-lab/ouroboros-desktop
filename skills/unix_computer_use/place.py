@@ -276,6 +276,11 @@ class PlaceMixin:
         if reason == "front_unread":
             return f"{app!r}: the switch was requested but who is in front could not be read ({res.get('error')}); nothing was sent"
         if reason == "target_lost":
+            resolved = res.get("resolved") or {}
+            if resolved.get("window_ids") and front.get("app") and front.get("app") == resolved.get("app"):
+                # The same class is in front through a window that is not the target's (a sibling, or a dialog a step opened).
+                return (f"{app!r} is no longer in front: another window of its class, {front.get('title')!r} ({front.get('window_id')}), "
+                        f"is in front and is not one of the target's windows ({', '.join(resolved.get('window_ids') or [])}); nothing more was sent")
             return f"{app!r} is no longer in front{where}; nothing more was sent"
         if reason == "unsupported":
             return f"application targeting is unavailable here: {res.get('error') or 'no window manager access'}; nothing was sent"
@@ -350,7 +355,7 @@ class PlaceMixin:
             # An X11/OSWorld target is its matched windows; a macOS/SSH application is its pid.
             still = x11_same(front, target) if target.get("window_ids") else front.get("pid") == target.get("pid")
             if not still:
-                res = {"reason": "target_lost", "front": front}
+                res = {"reason": "target_lost", "front": front, "resolved": target}
                 return {"ok": False, "reason": "target_lost", "error": self._target_error(app, res), "target": ctx["target"], "front": front}, step
         return None, step
 
