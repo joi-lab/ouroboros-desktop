@@ -88,7 +88,7 @@ const capsuleHead = (glyph, name, headClass, valueAttrs = '') => `<button type="
 
 function effortRangeMarkup() {
     const segments = EFFORT_OPTIONS.map((option) =>
-        `<span class="chat-effort-seg" data-effort-seg="${option.value}"><span class="chat-effort-seg-text">${option.label}</span></span>`).join('');
+        `<span class="chat-effort-seg" data-effort-seg="${option.value}"><span class="chat-effort-seg-text" data-i18n-skip>${option.label}</span></span>`).join('');
     const ring = `<path class="chat-effort-glyph-rail" data-ring-rail d="${ringArc(RING.a0, RING.a0 + RING.sweep)}" fill="none" stroke-width="22" stroke-linecap="round"></path><path class="chat-effort-glyph-band" data-ring-band fill="none" stroke-width="26" stroke-linecap="round"></path><circle class="chat-effort-glyph-dot" data-ring-rec r="22"></circle>`;
     // The value is a tier word read through the catalog seam (effortText): the overlay leaves it alone.
     return capsuleHead(ring, 'Effort', 'chat-effort-head', ' data-i18n-skip')
@@ -378,6 +378,9 @@ export function createEffortRangeControl({
     const band = q('[data-effort-band]');
     const ring = { band: q('[data-ring-band]'), rec: q('[data-ring-rec]') };
     const segs = Array.from(el.querySelectorAll('.chat-effort-seg'));
+    // Each level says the word the capsule's value says (the catalog seam), written before the marks are measured: the
+    // overlay would translate the strip's words later, after the marks had landed under them.
+    const words = Array.from(el.querySelectorAll('.chat-effort-seg-text'));
     const handles = { min: q('.chat-effort-min'), rec: q('.chat-effort-rec'), max: q('.chat-effort-max') };
     // After the context capsule.
     const before = row.querySelector('.chat-context-mode');
@@ -428,6 +431,7 @@ export function createEffortRangeControl({
     /* --- rendering: every mark sits on whole levels, a drag included (the pill always covers
        the word it names independently of the helper brackets) --- */
     function render() {
+        OWNER_TIERS.forEach((tier, i) => { const word = effortText(tier); if (words[i].textContent !== word) words[i].textContent = word; });
         const s = snapRange(state.view || state.shown);
         const dir = scaleDir();
         const e = edges(dir);
