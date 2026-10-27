@@ -969,7 +969,7 @@ textarea.ui-control { resize: vertical; }
     cursor: pointer;
 }
 .ui-hint-action:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; border-radius: var(--radius-sm); }
-.ui-hint:not([hidden]) { animation: ui-hint-in var(--motion-fade) var(--ease-sheet) both; }
+.ui-hint:not([hidden]) { animation: ui-hint-in var(--motion-fade) var(--ease-sheet); }
 @keyframes ui-hint-in { from { opacity: 0; transform: translateY(3px); } }
 @media (prefers-reduced-motion: reduce) {
     .ui-hint:not([hidden]) { animation: none; }
