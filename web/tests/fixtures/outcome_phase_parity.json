@@ -1053,6 +1053,90 @@
     {"name": "Provider control absent, reason provider_unavailable, policy immediate", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": ""}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"},
     {"name": "Provider control deadline_local, reason provider_unavailable, policy immediate", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": "deadline_local"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"},
     {"name": "Provider control owner_stopped_direct_chat_turn, reason worker_crash_signal, policy immediate", "record": {"status": "failed", "reason_code": "worker_crash_signal", "cancel_origin": {"source": "http_single", "stop_policy": "immediate", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "worker_crash_signal"}}}, "phase": "error", "headline": "Failed"},
-    {"name": "Provider control owner_stopped_direct_chat_turn, reason provider_unavailable, policy finalize_then_cancel", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "finalize_then_cancel", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"}
+    {"name": "Provider control owner_stopped_direct_chat_turn, reason provider_unavailable, policy finalize_then_cancel", "record": {"status": "failed", "reason_code": "provider_unavailable", "cancel_origin": {"source": "http_single", "stop_policy": "finalize_then_cancel", "control_reason": "owner_stopped_direct_chat_turn"}, "outcome_axes": {"execution": {"status": "infra_failed", "reason_code": "provider_unavailable"}}}, "phase": "error", "headline": "Failed"},
+    {
+      "name": "a residual warning names the failed data query, never its tool name or text",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "query_data", "status": "error", "exit_code": null, "signal": null, "result": "{\"code\":\"query_failed\",\"message\":\"selected bytes exceed max_bytes\"}"}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A data query failed; the result has not been evaluated."
+    },
+    {
+      "name": "a cosmetic script exit is the subject when nothing stayed unresolved",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [], "cosmetic_tool_errors": [{"tool": "run_script", "status": "non_zero_exit", "exit_code": 1, "signal": null, "result": "Traceback (most recent call last):"}]}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A script returned exit code 1; the result has not been evaluated."
+    },
+    {
+      "name": "an unresolved error is named before cosmetic ones, and the rest are counted",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "read_file", "status": "error", "exit_code": null, "signal": null, "result": ""}, {"tool": "list_files", "status": "error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": [{"tool": "run_command", "status": "non_zero_exit", "exit_code": 2, "signal": null, "result": ""}]}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A file read failed, plus 2 more tool errors; the result has not been evaluated."
+    },
+    {
+      "name": "one more error reads in the singular",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [], "cosmetic_tool_errors": [{"tool": "run_command", "status": "non_zero_exit", "exit_code": 2, "signal": null, "result": ""}, {"tool": "run_command", "status": "non_zero_exit", "exit_code": 1, "signal": null, "result": ""}]}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A command returned exit code 2, plus 1 more tool error; the result has not been evaluated."
+    },
+    {
+      "name": "a full list of twenty claims no exact count",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}, {"tool": "run_command", "status": "timeout", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A command timed out, plus more tool errors; the result has not been evaluated."
+    },
+    {
+      "name": "a command stopped by a signal names the signal",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [], "cosmetic_tool_errors": [{"tool": "run_command", "status": "non_zero_exit", "exit_code": null, "signal": 9, "result": ""}]}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A command was stopped by signal 9; the result has not been evaluated."
+    },
+    {
+      "name": "a tool outside the noun table reads as a tool step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "mcp_gitlab__get_commit", "status": "mcp_error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A tool step failed; the result has not been evaluated."
+    },
+    {
+      "name": "an invalid call names what was called",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "finish_task", "status": "argument_error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A finish request was called with invalid arguments; the result has not been evaluated."
+    },
+    {
+      "name": "the list_files noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "list_files", "status": "error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A folder listing failed; the result has not been evaluated."
+    },
+    {
+      "name": "the github_read noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "github_read", "status": "error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A GitHub read failed; the result has not been evaluated."
+    },
+    {
+      "name": "the query_code noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "query_code", "status": "argument_error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A code search was called with invalid arguments; the result has not been evaluated."
+    },
+    {
+      "name": "the search_code noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "search_code", "status": "timeout", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A code search timed out; the result has not been evaluated."
+    },
+    {
+      "name": "the pr_merge noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "pr_merge", "status": "error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A pull request merge failed; the result has not been evaluated."
+    },
+    {
+      "name": "the review_change noun names its failed step",
+      "record": {"status": "completed", "reason_code": "final_message", "outcome_axes": {"execution": {"status": "ok", "reason_code": "final_message", "unresolved_tool_errors": [{"tool": "review_change", "status": "argument_error", "exit_code": null, "signal": null, "result": ""}], "cosmetic_tool_errors": []}, "objective": {"status": "not_evaluated", "warning": "residual_tool_errors_without_review"}, "review": {"status": "skipped"}}},
+      "phase": "warn", "headline": "Done with warnings",
+      "acceptance_clause": "A review request was called with invalid arguments; the result has not been evaluated."
+    }
   ]
 }

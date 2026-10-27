@@ -1989,7 +1989,9 @@ lifecycle.
 A task that ends with a cause states it on the collapsed line in the
 owner's words (the sentence of the durable row and the expanded body), so a
 `Done with warnings` chip never stands beside an unrelated last action; a clean
-ending keeps the last narration. Successful tool calls are not rows: they fold
+ending keeps the last narration. Residual tool errors name the first recorded
+failure in plain words (a noun for the step and what happened, never a tool
+name, its result text or a path) and count the rest (`tool_error_words`). Successful tool calls are not rows: they fold
 into ONE evidence row per block (`N tool calls`, `N tool calls · M errors` once
 a call failed) at the first call's position and time, patched in place; Expand
 shows per-tool counts (`read_file ×3 · web_search`), and the phase (`calling`
@@ -2074,7 +2076,12 @@ host jobs (routing, census `kind`, Stop custody, terminal rows); the client
 draws no chrome or status from it. A block that existed only for open attention leaves when that attention
 closes: a wait-only block disappears when the wait resolves, and the resolved
 episode's no-reopen ledger survives with the record, so a stale revision cannot
-bring it back.
+bring it back. A host wait (accounting access, control storage: the typed
+`usage_lock_wait`/`control_store_wait` episodes) is how the host ran, not the
+turn's work: a block's episodes of one kind are one receipt row, live while one
+is open, then their count and the longest measured one, so a wait never makes or
+keeps a block, live or on reload; Logs keep every phase, and the model's progress
+window folds them the same way (`checkpoint_waits`).
 
 An addressing call (`start_task`, `move_to_project`, `tell_task`: the
 routing-verb family `ouroboros/tool_capabilities.py::ROUTING_VERBS` owns) is
