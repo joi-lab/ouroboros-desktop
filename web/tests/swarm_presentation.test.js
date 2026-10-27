@@ -10,6 +10,11 @@ import { installDom, restoreDom, walkCard } from './chat_dom_fixture.js';
 const TS = '2026-10-25T00:31:00Z';
 const swarmRoot = (extra = {}) => ({ task_id: 'root-1', status: 'completed', metadata: { subagents_mode: 'swarm' }, ...extra });
 const attempt = (task_id, model, kind = 'attempt', extra = {}) => ({ attempt_id: `${task_id}-${model}-${kind}`, task_id, model, kind, ...extra });
+// The receipt's actors as the host folds them (ouroboros/swarm_receipt_sources.py): the root a supervisor, a child a
+// task, a delegated run on the task that owns it; `start` is the recorded start, null before one.
+const actor = (id, kind, task_id, start = TS, extra = {}) => ({ id, kind, task_id, start, ...extra });
+const children = (count, root = 'root-1') => [actor(`task:${root}`, 'supervisor', root),
+    ...Array.from({ length: count }, (_, at) => actor(`task:child-${at + 1}`, 'task', `child-${at + 1}`, TS, { parent_task_id: root }))];
 const FORBIDDEN = /mind|wave|famil|peak|parallel|%|\$0\.00/i;
 
 test('the receipt line says helpers, models, known money + not final, and subscription sessions; nothing else', () => {
@@ -18,23 +23,52 @@ test('the receipt line says helpers, models, known money + not final, and subscr
         ...['s1', 's2', 's3', 's4', 's5', 's6', 's7'].map((id) => attempt(id, 'gpt-6', 'subscription_session')),
         attempt('s1', 'gpt-6', 'subscription_session', { attempt_id: 's1-resumed' }),
     ];
-    const full = swarmRoot({ swarm_efficiency: { subagent_count: 5, fanout_count: 2 },
-        swarm_receipt: { state: 'closed', cost: { known_final_usd: 2.3, unknown_attempts: 2, total_usd: null, attempts } } });
+    const full = swarmRoot({ swarm_efficiency: { subagent_count: 5, fanout_count: 2 }, swarm_receipt: { state: 'closed',
+        actor_intervals: children(5), cost: { known_final_usd: 2.3, unknown_attempts: 2, total_usd: null, attempts } } });
     assert.equal(swarmReceiptText(full), 'Swarm · 5 helpers started · 3 models · $2.30 known + 2 not final · 7 subscription sessions');
-    const one = swarmRoot({ swarm_efficiency: { subagent_count: 1 }, swarm_receipt: { cost: { known_final_usd: 0.4,
-        unknown_attempts: 0, attempts: [attempt('child-1', 'gpt-6', 'subscription_session')] } } });
+    const one = swarmRoot({ swarm_efficiency: { subagent_count: 1 }, swarm_receipt: { actor_intervals: children(1),
+        cost: { known_final_usd: 0.4, unknown_attempts: 0, attempts: [attempt('child-1', 'gpt-6', 'subscription_session')] } } });
     assert.equal(swarmReceiptText(one), 'Swarm · 1 helper started · 1 model · $0.40 known · 1 subscription session');
     // An amount nobody knows yet is a word, never $0; a free tree has no money part at all.
-    const unknown = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { cost: { known_final_usd: 0,
-        unknown_attempts: 3, attempts: [attempt('child-1', 'gpt-6')] } } });
+    const unknown = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { actor_intervals: children(2),
+        cost: { known_final_usd: 0, unknown_attempts: 3, attempts: [attempt('child-1', 'gpt-6')] } } });
     assert.equal(swarmReceiptText(unknown), 'Swarm · 2 helpers started · 1 model · 3 not final');
-    const free = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { cost: { known_final_usd: 0, unknown_attempts: 0 } } });
+    const free = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { actor_intervals: children(2),
+        cost: { known_final_usd: 0, unknown_attempts: 0 } } });
     assert.equal(swarmReceiptText(free), 'Swarm · 2 helpers started');
     // No helper started: said so, with no reason the record does not hold.
     const solo = swarmRoot({ swarm_efficiency: { intent_source: 'swarm', planned: null, observed_started: 0, status: 'no_fanout_observed' },
         swarm_receipt: { cost: { known_final_usd: 0.12, unknown_attempts: 0, attempts: [attempt('root-1', 'claude-opus-5-5')] } } });
     assert.equal(swarmReceiptText(solo), 'Swarm requested · no helpers started');
     for (const detail of [full, one, unknown, free, solo]) assert.doesNotMatch(swarmReceiptText(detail), FORBIDDEN);
+});
+
+test('a start is said only from a start fact: a request the host refused is no helper that started', () => {
+    // Emitted, then refused before it started (the room went Off): the request is counted, the child never started.
+    const refused = swarmRoot({ swarm_efficiency: { subagent_count: 1, fanout_count: 1 }, swarm_receipt: { actor_intervals: [
+        actor('task:root-1', 'supervisor', 'root-1'), actor('task:child-1', 'task', 'child-1', null, { parent_task_id: 'root-1' })],
+    cost: { known_final_usd: 0.1, unknown_attempts: 0, attempts: [attempt('root-1', 'claude-opus-5-5')] } } });
+    assert.equal(swarmReceiptText(refused), 'Swarm requested · no helpers started');
+    // Each helper once: a child's waits split its actor, its own runs are that child; the root's own run is a helper of
+    // its own; the root, a review and a start still pending are none.
+    const started = swarmRoot({ swarm_efficiency: { subagent_count: 4 }, swarm_receipt: { actor_intervals: [
+        actor('task:root-1', 'supervisor', 'root-1'), actor('task:root-1:before:w1', 'supervisor', 'root-1'),
+        actor('task:child-1', 'task', 'child-1'), actor('task:child-1:before:w2', 'task', 'child-1'),
+        actor('run:r1', 'delegated_run', 'child-1', 1798162260.5),
+        actor('task:child-2', 'task', 'child-2', null), actor('run:r2', 'delegated_run', 'child-2', '2026-10-25T00:32:00+00:00'),
+        actor('task:child-3', 'task', 'child-3', null),
+        actor('run:r3', 'delegated_run', 'root-1'),
+        actor('invocation:i1', 'delegated_start', 'root-1', null, { state: 'pending' }),
+        actor('review:o1', 'review', 'root-1'), actor('review_operation:op1', 'review_custody', 'root-1', null)],
+    cost: { known_final_usd: 0.6, unknown_attempts: 0, attempts: [attempt('child-1', 'gpt-6')] } } });
+    assert.equal(swarmReceiptText(started), 'Swarm · 3 helpers started · 1 model · $0.60 known',
+        'child-1 once, child-2 by its run, the root\'s run; never child-3, the root, the review or the pending start');
+    // No start recorded yet (a receipt without actors, or none at all): the requests are what is known.
+    const requested = swarmRoot({ swarm_efficiency: { subagent_count: 3 },
+        swarm_receipt: { cost: { known_final_usd: 0.2, unknown_attempts: 1, attempts: [attempt('child-1', 'gpt-6')] } } });
+    assert.equal(swarmReceiptText(requested), 'Swarm · 3 helpers requested · 1 model · $0.20 known + 1 not final');
+    assert.equal(swarmReceiptText(swarmRoot({ swarm_efficiency: { subagent_count: 1 } })), 'Swarm · 1 helper requested');
+    for (const detail of [refused, started, requested]) assert.doesNotMatch(swarmReceiptText(detail), FORBIDDEN);
 });
 
 test('only a Swarm root with recorded facts has a line', () => {
@@ -55,7 +89,8 @@ test('the card takes the line first in its foot, keeps it through frames without
         footEl.append(meta);
         root.append(footEl);
         const record = { root, footEl };
-        const detail = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { cost: { known_final_usd: 1.5, unknown_attempts: 1 } } });
+        const detail = swarmRoot({ swarm_efficiency: { subagent_count: 2 }, swarm_receipt: { actor_intervals: children(2),
+            cost: { known_final_usd: 1.5, unknown_attempts: 1 } } });
         assert.equal(syncSwarmReceipt(record, detail), true);
         const line = footEl.children[0];
         assert.equal(line.className, 'chat-live-swarm-receipt');
@@ -145,8 +180,8 @@ test('chat: history and live owner rows carry the label by their own fact; my ow
 
 test('chat: a Swarm root\'s card shows the receipt line once Details reads its detail', async () => {
     const id = 'swarm-root';
-    const detail = swarmRoot({ task_id: id, swarm_efficiency: { subagent_count: 4 },
-        swarm_receipt: { cost: { known_final_usd: 0.85, unknown_attempts: 1, attempts: [attempt(id, 'claude-opus-5-5'), attempt('c1', 'gpt-6')] } } });
+    const detail = swarmRoot({ task_id: id, swarm_efficiency: { subagent_count: 4 }, swarm_receipt: { actor_intervals: children(4, id),
+        cost: { known_final_usd: 0.85, unknown_attempts: 1, attempts: [attempt(id, 'claude-opus-5-5'), attempt('c1', 'gpt-6')] } } });
     const f = chatFixture([], detail);
     try {
         await settle();

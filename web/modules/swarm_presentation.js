@@ -1,12 +1,35 @@
 // What a Swarm message says and what its root did (docs/DESIGN.md "Composer owner controls"). The quiet
 // `Swarm` in an owner message's time line is the room's Subagents value when the host accepted that message: a request,
 // never proof that helpers ran. One line on a Swarm root's card says only what the root's receipt records (SYN2 A.8:
-// helpers started, models, the money known and what is not final yet, subscription sessions), never minds, waves,
-// families, peaks, percentages or one sum the facts do not make; an unknown amount is a word, never $0.
+// helpers started — requested, while no start is recorded —, models, the money known and what is not final yet,
+// subscription sessions), never minds, waves, families, peaks, percentages or one sum the facts do not make; an
+// unknown amount is a word, never $0.
 import { SUBAGENTS_RING } from './composer_subagents.js';
 import { formatUsd2 } from './utils.js';
 
 const counted = (count, one) => `${count} ${one}${count === 1 ? '' : 's'}`;
+const recorded = (value) => (typeof value === 'number' && Number.isFinite(value))
+    || (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Date.parse(value)));
+
+/* The helpers that started, from the receipt's own actors (ouroboros/swarm_receipt_sources.py): a child task or a
+ * delegated run with a recorded start, a child's own runs counted with that child; never the root or another
+ * supervisor, never a review. null while the receipt holds no actors: then no start is known. */
+function startedHelpers(receipt, rootId) {
+    if (!Array.isArray(receipt?.actor_intervals)) return null;
+    const actors = receipt.actor_intervals.filter((actor) => actor && typeof actor === 'object');
+    const supervisors = new Set([String(receipt.root_task_id || rootId || ''),
+        ...actors.filter((actor) => actor.kind === 'supervisor').map((actor) => String(actor.task_id || ''))]);
+    const helpers = new Set();
+    for (const actor of actors) {
+        if (!recorded(actor.start)) continue;
+        const task = String(actor.task_id || '');
+        const child = Boolean(task) && !supervisors.has(task);
+        if (actor.kind === 'task' && child) helpers.add(`task:${task}`);
+        else if (actor.kind === 'delegated_run') helpers.add(child ? `task:${task}` : String(actor.id || ''));
+    }
+    helpers.delete('');
+    return helpers.size;
+}
 
 function ownBubble(feed, row) {
     const cmid = String(row?.client_message_id || '');
@@ -42,8 +65,12 @@ export function swarmReceiptText(detail) {
     const efficiency = detail.swarm_efficiency && typeof detail.swarm_efficiency === 'object' ? detail.swarm_efficiency : null;
     const cost = detail.swarm_receipt?.cost && typeof detail.swarm_receipt.cost === 'object' ? detail.swarm_receipt.cost : null;
     if (!efficiency && !cost) return '';
-    const helpers = Math.max(0, Math.trunc(Number(efficiency?.subagent_count) || 0));
-    if (efficiency && !helpers) return 'Swarm requested · no helpers started';
+    // A start is said only from a start fact: the receipt's actors, or the host's own observation that nothing fanned
+    // out. Without one, what is known is the requests (`subagent_count` counts emitted children, refused ones too).
+    const started = startedHelpers(detail.swarm_receipt, detail.task_id);
+    if (started === 0 || (started === null && efficiency?.observed_started === 0)) return 'Swarm requested · no helpers started';
+    const requested = Math.max(0, Math.trunc(Number(efficiency?.subagent_count) || 0));
+    const helpers = started ? `${counted(started, 'helper')} started` : requested ? `${counted(requested, 'helper')} requested` : '';
     const attempts = (Array.isArray(cost?.attempts) ? cost.attempts : []).filter((attempt) => attempt && typeof attempt === 'object');
     const models = new Set(attempts.map((attempt) => String(attempt.model || '')).filter(Boolean)).size;
     // A session is its task: a resumed session is one more attempt of the same session.
@@ -51,7 +78,7 @@ export function swarmReceiptText(detail) {
         .map((attempt) => String(attempt.task_id || attempt.attempt_id || ''))).size;
     const known = Number(cost?.known_final_usd) > 0 ? `${formatUsd2(cost.known_final_usd)} known` : '';
     const open = Math.trunc(Number(cost?.unknown_attempts) || 0);
-    return ['Swarm', helpers && `${counted(helpers, 'helper')} started`, models && counted(models, 'model'),
+    return ['Swarm', helpers, models && counted(models, 'model'),
         [known, open > 0 ? `${open} not final` : ''].filter(Boolean).join(' + '),
         sessions && counted(sessions, 'subscription session')].filter(Boolean).join(' · ');
 }

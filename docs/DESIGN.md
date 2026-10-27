@@ -503,7 +503,8 @@ never shown as saved.
 
 **What Swarm leaves behind.** An owner message the host accepted while its room was on Swarm says `Swarm`
 before its time: a request, never proof that helpers ran. A Swarm root's card says one line, first in its foot,
-from its receipt: helpers started, models, `$X known + N not final`, subscription sessions, or
+from its receipt: helpers started (counted from recorded starts; while none is recorded, the helpers requested),
+models, `$X known + N not final`, subscription sessions, or
 `Swarm requested · no helpers started`; never minds, waves, families, peaks, percentages or one sum the facts
 do not make, and an unknown amount is a word, never $0 (`web/modules/swarm_presentation.js`).
 
