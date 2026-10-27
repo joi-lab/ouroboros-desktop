@@ -3,6 +3,7 @@ on producer/deadline/startup facts, with task sources behind the recovery gate. 
 stay on the custody pass; the memory-journal observation stays once per generation."""
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -47,13 +48,13 @@ def _reconcile_pass(monkeypatch):
 
 
 def test_the_age_only_retirers_run_again_on_a_later_pass_and_trees_wait_out_a_recovery_gap(root, monkeypatch):
-    from ouroboros import maintenance_jobs, maintenance_retirement, memory_journal_compaction, subagent_worktrees
+    from ouroboros import maintenance_jobs, maintenance_retirement, subagent_worktrees
     from ouroboros.retention import get_gc_retention_days
 
-    observations = []
-    observe = memory_journal_compaction.compact_memory_journal_snapshots
-    monkeypatch.setattr(memory_journal_compaction, "compact_memory_journal_snapshots",
-                        lambda drive: observations.append(drive) or observe(drive))
+    def observations():
+        rows = (root / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        return sum(json.loads(row).get("type") == "memory_journal_observation" for row in rows)
+
     for name in ("prune_orphans", "prune_execution_snapshots"):
         monkeypatch.setattr(subagent_worktrees, name, lambda *a, **k: pytest.fail("working copies on a reconcile pass"))
     write_task_result(root, "settled", "completed", result="done", ts="2000-01-01T00:00:00+00:00")
@@ -65,7 +66,7 @@ def test_the_age_only_retirers_run_again_on_a_later_pass_and_trees_wait_out_a_re
              _aged(root / "state" / "delegate_supervision" / "settled.json", "{}")]
 
     sm._startup_prune_sweeps(preserve_task_sources=True, recovery_report={"errors": ["ownership unknown"]})
-    assert observations == [root] and all(path.exists() for path in first), "boot observes and prunes nothing"
+    assert observations() == 1 and all(path.exists() for path in first), "boot observes and prunes nothing"
     _reconcile_pass(monkeypatch)
     assert not any(path.exists() for path in first)
     assert tree.exists() and service.exists(), "a startup recovery gap keeps task trees and service logs"
@@ -88,12 +89,12 @@ def test_the_age_only_retirers_run_again_on_a_later_pass_and_trees_wait_out_a_re
         _reconcile_pass(monkeypatch)
     assert not any(path.exists() for path in later), "the recorded deadline wakes retirement in the same process"
     assert tree.exists() and service.exists()
-    assert observations == [root], "the journal observation is boot's, never a pass's"
+    assert observations() == 1, "the journal observation is boot's, never a pass's"
 
     sm._startup_prune_sweeps()  # the next generation, its recovery complete
     _reconcile_pass(monkeypatch)
     assert not tree.exists() and not service.exists()
-    assert observations == [root, root]
+    assert observations() == 2
 
 
 def test_a_generation_closed_between_two_reconcile_prunes_starts_no_further_one(root, monkeypatch):
