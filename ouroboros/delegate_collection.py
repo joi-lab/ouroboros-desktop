@@ -469,6 +469,13 @@ class BodyRuntime:
         # Each held run's latest dated execution fact, as the last observation read it.
         self.observed: dict[str, dict] = {}
         self.observation_gaps: dict[str, tuple] = {}
+        # The engine's attention token each held run was last fetched at: echoed as ``seen`` so an
+        # unchanged question or terminal does not wake the pass again; set only AFTER the fetch.
+        self.seen: dict[str, str] = {}
+        self._watched: set[str] = set()
+        # Whether the observed engine serves the compact wait, learned from its catalog on the
+        # first read; until then (and on engines without it) every held run is read as before.
+        self._compact_wait = False
         self._observing = None
         self._connecting = None
         self.thread = threading.Thread(target=self._drive, name="delegated-body", daemon=True)
@@ -556,27 +563,39 @@ class BodyRuntime:
         if gateway is not None:
             gateway.close()
 
+    _WATCH, _PRIME = "*watch", "*prime"  # the compact passes, keyed beside the per-run reads
+
     def _observe(self, entry):
+        """One run's full detail: the addressed read a wake, a fallback beat or a problem row earns."""
+        from ouroboros.gateways import claudexor_observation as observation
         from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
         gateway = self._observer_gateway()
+        with self.lock:
+            self._compact_wait = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         try:
             detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         except BaseException as exc:
-            self._remember(entry, None, error=exc)
-            entry = current.run(self.root, entry.run_id) or entry
-            if c.daemon_says_absent(exc) and entry.terminal_source:
-                return  # Retention loss cannot erase a terminal fact, including an in-flight publication.
-            if c.daemon_says_absent(exc, gateway=gateway, run=entry):
-                c.close_absent_run(self.root, gateway, entry, "body_observation_absent")
-                return
-            if c.daemon_says_absent(exc):
-                c.record_containment_fault(self.root, entry, "run_absence_identity_unproven",
-                    "The daemon returned 404, but ownership by this store is unproven; run outcome remains unknown.")
-                with self.lock:
-                    self.observation_gaps[entry.run_id] = self._observation_key(entry)
-            if not getattr(exc, "status_code", 0) and not getattr(exc, "observation_answered", False):
-                self._drop_observer_gateway(gateway)
+            self._absorb_refusal(entry, gateway, exc)
             raise
+        self._absorb_detail(entry, gateway, detail)
+
+    def _absorb_refusal(self, entry, gateway, exc):
+        self._remember(entry, None, error=exc)
+        entry = current.run(self.root, entry.run_id) or entry
+        if c.daemon_says_absent(exc) and entry.terminal_source:
+            return  # Retention loss cannot erase a terminal fact, including an in-flight publication.
+        if c.daemon_says_absent(exc, gateway=gateway, run=entry):
+            c.close_absent_run(self.root, gateway, entry, "body_observation_absent")
+            return
+        if c.daemon_says_absent(exc):
+            c.record_containment_fault(self.root, entry, "run_absence_identity_unproven",
+                "The daemon returned 404, but ownership by this store is unproven; run outcome remains unknown.")
+            with self.lock:
+                self.observation_gaps[entry.run_id] = self._observation_key(entry)
+        if not getattr(exc, "status_code", 0) and not getattr(exc, "observation_answered", False):
+            self._drop_observer_gateway(gateway)
+
+    def _absorb_detail(self, entry, gateway, detail):
         with self.lock:
             self.observation_gaps.pop(entry.run_id, None)
         # A late valid source fact remains evidence; it grants no wait.
@@ -587,14 +606,76 @@ class BodyRuntime:
                                         expected_reason="run_absence_identity_unproven")
         self._remember(entry, detail)
 
-    def _remember(self, entry, detail, *, error=None):
+    def _watch(self, entries, *, hold=True):
+        """One pass over the watched runs through the observation adapter.
+
+        An engine with the compact wait holds the call (its own default window; ``hold=False``
+        reads the present state at once, for runs held since the pass in flight began) and
+        names the runs whose addressed detail is now due: a question or a terminal, not yet
+        fetched under the token echoed as ``seen``. The detail is read, its facts published,
+        and only then the token acknowledged, so a question is never acknowledged unfetched.
+        An engine without the wait keeps today's beat: one detail read per run per tick.
+        """
+        from ouroboros.gateways import claudexor_observation as observation
+        from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
+        gateway = self._observer_gateway()
+        supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
+        with self.lock:
+            self._compact_wait = supported
+            targets = [(entry.run_id, self.seen.get(entry.run_id)) for entry in entries]
+        if not supported:
+            return  # the next tick reads each run as before
+        wake = observation.wait_attention(gateway, targets, wait_sec=None if hold else 0.0,
+                                          timeout_sec=SHORT_POLL_TIMEOUT_SEC)
+        if wake.source == "detail":
+            with self.lock:
+                self._compact_wait = False  # the route vanished: this pass read details, the next ticks read as before
+        if wake.hole is not None:
+            for entry in entries:
+                self._remember(entry, None, error=wake.hole)
+            if not getattr(wake.hole, "status_code", 0) and not getattr(wake.hole, "observation_answered", False):
+                self._drop_observer_gateway(gateway)
+            return
+        for index, (entry, row) in enumerate(zip(entries, wake.rows)):
+            if not self.active:
+                return
+            if row.detail is not None:  # the route vanished under us: this pass read details, as before
+                self._absorb_detail(entry, gateway, row.detail)
+                continue
+            if row.problem == "not_found" or row.error is not None:
+                # The engine could not place the run in this pass; only the addressed read, with
+                # its store identity, may say the run is absent (``daemon_says_absent``).
+                try:
+                    self._observe(entry)
+                except Exception:
+                    log.debug("Body observation of %s remains owed after a problem row", entry.run_id, exc_info=True)
+                continue
+            if row.problem is not None:
+                continue  # snapshot_unavailable / not_observed: unknown until the next pass
+            if not wake.needs_attention(index):
+                self._remember(entry, None, row=row)
+                c.bind_daemon_store(self.root, gateway, entry)
+                continue
+            try:
+                detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
+            except BaseException as exc:
+                self._absorb_refusal(entry, gateway, exc)
+                continue
+            self._absorb_detail(entry, gateway, detail)
+            with self.lock:
+                self.seen[entry.run_id] = row.token
+
+    def _remember(self, entry, detail, *, error=None, row=None):
         """Keep this read's execution fact for readers that must not poll the engine themselves
-        (``gateway/reply_preparation.py``), including a received HTTP refusal."""
+        (``gateway/reply_preparation.py``), including a received HTTP refusal; ``row`` is the
+        compact wait's answer for a run whose detail this pass did not need."""
         from ouroboros.delegate_supervision import run_activity
 
         summary = c.summary_of(detail) if detail is not None else {}
+        if row is not None:
+            summary = {"state": row.status or "", "waitingOnUser": bool(row.pending)}
         fact = {"run_id": entry.run_id, "task_id": entry.task_id, "invocation_id": entry.invocation_id,
-                "answered": detail is not None or bool(getattr(error, "status_code", 0)),
+                "answered": detail is not None or row is not None or bool(getattr(error, "status_code", 0)),
                 "error_code": str(getattr(error, "code", "")), "http_status": getattr(error, "status_code", 0),
                 "run_state": str(summary.get("state") or ""),
                 "waiting_on_user": bool(summary.get("waitingOnUser") or (detail or {}).get("pendingInteractions")),
@@ -634,22 +715,44 @@ class BodyRuntime:
             for rid in set(self.observed) - set(entries):
                 del self.observed[rid]  # a run no longer held has no current execution fact
                 self.observation_gaps.pop(rid, None)
+                self.seen.pop(rid, None)
+                self._watched.discard(rid)
         with self.lock:
             for rid in list(self.collection_failures):
                 if rid not in self.collections and not collection_pending(entries.get(rid)):
                     self.collection_failures.pop(rid, None)
+        watch = []
+        with self.lock:
+            compact = self._compact_wait
         for entry in entries.values():
             if entry.review_owned or not self.active:
                 continue
             with self.lock:
                 if not entry.terminal_source and (not entry.settled or entry.terminal_state):
-                    previous = self.reads.get(entry.run_id)
-                    if (previous is None or previous.done()) and self.observation_gaps.get(entry.run_id) != self._observation_key(entry):
-                        self.reads[entry.run_id] = self.observers.submit(self._observe, entry)
+                    if self.observation_gaps.get(entry.run_id) != self._observation_key(entry):
+                        if compact:
+                            watch.append(entry)
+                        else:
+                            previous = self.reads.get(entry.run_id)
+                            if previous is None or previous.done():
+                                self.reads[entry.run_id] = self.observers.submit(self._observe, entry)
                 if self.collection_ready() and collection_due(entry, generation=self.runtime_id):
                     previous = self.collections.get(entry.run_id)
                     if previous is None or previous.done():
                         self.collections[entry.run_id] = self.observers.submit(self._collect, entry.run_id)
+        with self.lock:
+            pass_ = self.reads.get(self._WATCH)
+            if watch and (pass_ is None or pass_.done()):
+                self._watched = {entry.run_id for entry in watch}
+                self.reads[self._WATCH] = self.observers.submit(self._watch, watch)
+            elif watch:
+                # A hold is in flight: a run held since it began gets its present state now,
+                # not after the engine's window, so its first observation keeps today's beat.
+                fresh = [entry for entry in watch if entry.run_id not in self._watched]
+                prime = self.reads.get(self._PRIME)
+                if fresh and (prime is None or prime.done()):
+                    self._watched.update(entry.run_id for entry in fresh)
+                    self.reads[self._PRIME] = self.observers.submit(self._watch, fresh, hold=False)
 
     def _drive(self):
         from ouroboros.delegate_supervision import _TICK_SEC
@@ -665,8 +768,10 @@ class BodyRuntime:
             self.stop.set()
             # Actual jobs remain owned until their physical return; a caller of
             # close(wait=False) neither joins on the control loop nor forgets them.
-            self.observers.shutdown(wait=True, cancel_futures=True)
+            # The observer transport closes first so a compact wait the engine still
+            # holds ends now, as a hole, instead of being joined to its window's end.
             self._drop_observer_gateway()
+            self.observers.shutdown(wait=True, cancel_futures=True)
             with _RUNTIME_LOCK:
                 if _RUNTIMES.get(str(self.root)) is self:
                     del _RUNTIMES[str(self.root)]

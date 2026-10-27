@@ -52,18 +52,20 @@ _SUPPORT_LOCK = threading.Lock()
 class ClaudexorObservationGateway:
     """The compact attention wait, as the owned HTTP client speaks it (mixed into the gateway)."""
 
-    def wait_run_attention(self, targets: List[Dict[str, Any]], *, wait_ms: int,
+    def wait_run_attention(self, targets: List[Dict[str, Any]], *, wait_ms: Optional[int],
                            timeout_sec: Optional[float]) -> Dict[str, Any]:
         """``POST /v2/runs/wait-many``: the engine's own result object, unprojected.
 
-        The read bound covers the engine's hold (``wait_ms``) plus the caller's transport
-        allowance: a completed pass may overrun the nominal window by itself.
+        ``wait_ms=None`` leaves the hold to the engine's default. The read bound covers the
+        hold plus the caller's transport allowance: a completed pass may overrun the nominal
+        window by itself.
         """
         from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
-        bound = None if timeout_sec is None else float(timeout_sec) + wait_ms / 1000.0
-        body = self._request("POST", "/v2/runs/wait-many",
-                             json_body={"targets": targets, "waitMs": int(wait_ms)}, timeout_sec=bound)
+        hold = WAIT_MANY_MAX_WAIT_SEC if wait_ms is None else wait_ms / 1000.0
+        bound = None if timeout_sec is None else float(timeout_sec) + hold
+        request = {"targets": targets, **({} if wait_ms is None else {"waitMs": int(wait_ms)})}
+        body = self._request("POST", "/v2/runs/wait-many", json_body=request, timeout_sec=bound)
         if not isinstance(body, dict):
             raise ClaudexorUnavailable("malformed_response", "Claudexor wait-many returned no object")
         return body
@@ -162,10 +164,11 @@ def detail_attention(run_id: str, detail: Dict[str, Any]) -> RunAttention:
 
 
 def wait_attention(gateway: Any, targets: Sequence[Tuple[str, Optional[str]]], *,
-                   wait_sec: float, timeout_sec: Optional[float]) -> AttentionWake:
+                   wait_sec: Optional[float], timeout_sec: Optional[float]) -> AttentionWake:
     """Observe ``targets`` (``(run_id, seen_token)`` pairs) once.
 
-    On a supporting engine the call is held up to ``wait_sec`` (the engine caps it) and
+    On a supporting engine the call is held up to ``wait_sec`` (the engine caps it; ``None``
+    leaves the hold to the engine's default) and
     returns the engine's rows and attention; ``timeout_sec`` bounds the transport beyond
     that hold. Elsewhere every target's detail is read once under ``timeout_sec`` and the
     rows are derived from those details (``waited`` is False: the consumer keeps its own
@@ -181,7 +184,7 @@ def wait_attention(gateway: Any, targets: Sequence[Tuple[str, Optional[str]]], *
     if wait_many_supported(gateway, timeout_sec=timeout_sec):
         request = [{"runId": run_id, **({"seen": seen} if isinstance(seen, str) and _ENGINE_TOKEN.match(seen) else {})}
                    for run_id, seen in pairs]
-        wait_ms = int(max(0.0, min(float(wait_sec), WAIT_MANY_MAX_WAIT_SEC)) * 1000)
+        wait_ms = None if wait_sec is None else int(max(0.0, min(float(wait_sec), WAIT_MANY_MAX_WAIT_SEC)) * 1000)
         try:
             body = gateway.wait_run_attention(request, wait_ms=wait_ms, timeout_sec=timeout_sec)
         except ClaudexorUnavailable as exc:
