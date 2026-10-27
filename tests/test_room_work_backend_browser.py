@@ -556,7 +556,7 @@ _SHADE_RECORDER = """(ms) => {
     window.__rwShade = [];
     const start = performance.now();
     const tick = () => {
-        const shade = document.querySelector('#project-panel .rw-shade');
+        const shade = document.querySelector('#project-panel .rw-shade:not(.cx-shade)');
         const note = shade?.querySelector('.rw-note');
         window.__rwShade.push({ t: Math.round(performance.now() - start),
             note: note && !note.hidden ? note.textContent : '',

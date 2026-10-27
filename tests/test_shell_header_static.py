@@ -2,8 +2,8 @@
 
 Docked: no visible title where the sidebar names the page (the h2 stays); the page's tabs or location take its place
 and its actions the end; the Project keeps its name, and a header with nothing to show renders no bar. Stack: one
-row of at most 56px, `☰ · title · status … Panic · ⋯`, tabs under it, the title one line and ellipsized; Restart and
-the budget inside ⋯. No icon anywhere."""
+row of at most 56px, `title · status · consciousness … Panic`, tabs under it, the title one line and ellipsized first;
+Restart and the budget in the status Shade. No ⋯, no More, no icon for a place."""
 from __future__ import annotations
 
 import re
@@ -33,7 +33,7 @@ def test_docked_header_hides_a_title_the_sidebar_names_and_an_empty_bar():
     assert ".app-page-lede" not in css, "a page has no caption line"
 
 
-def test_stack_header_is_one_row_of_at_most_56px_with_restart_and_budget_inside_the_menu():
+def test_stack_header_is_one_row_of_at_most_56px_with_restart_and_budget_in_the_status_shade():
     css = _read("web/style.css")
     row = _rule(css, 'html[data-layout="stack"] .app-page-header {')
     # 44px controls plus the 5px chrome inset above and below: 54, held at 56 by the min-height.
@@ -41,11 +41,11 @@ def test_stack_header_is_one_row_of_at_most_56px_with_restart_and_budget_inside_
     assert "var(--inset-top)" in row
     assert "flex-wrap: nowrap" in _rule(css, 'html[data-layout="stack"] .chat-page-header {')
     assert "flex-wrap: nowrap" in _rule(css, 'html[data-layout="stack"] .chat-header-actions {')
-    summary = _rule(css, 'html[data-layout="stack"] .chat-header-more > summary {')
-    assert "width: 44px" in summary and "height: 44px" in summary
-    assert 'html[data-layout="stack"] .chat-header-more-word { display: none; }' in css
-    assert '.chat-header-menu > .chat-budget-pill {' in css
-    # The note is a floating sibling under the bar, never a second row of it; the move into ⋯ follows the
+    assert "chat-header-more" not in css and "chat-header-menu" not in css, "no More, no ⋯"
+    room_work = _read("web/room_work.css")
+    assert ".rw-extras:empty { display: none; }" in room_work
+    assert ":root[data-theme] .rw-extras > :is(.chat-header-btn, .chat-budget-pill).ui-chrome-control {" in room_work
+    # The note is a floating sibling under the bar, never a second row of it; the move into the Shade follows the
     # bar's measured width as well as the layout (page_header.js), so a narrow docked column keeps one row too.
     assert '.chat-page-note {' in css and "top: var(--chat-header-bar, 56px)" in _rule(css, ".chat-page-note {")
     assert re.search(r"createHistoryControls\(messagesDiv, pageNote \|\| page\.querySelector\('\.chat-panel-statusbar'\)[,)]",

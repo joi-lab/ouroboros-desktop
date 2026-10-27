@@ -841,7 +841,7 @@ def test_promote_success_relocates_pre_admitted_attachment_to_child_drive(
     ).exists()
 
 
-def test_promote_worker_persists_swarm_intent_on_managed_root(tmp_path, monkeypatch):
+def test_promote_worker_ignores_legacy_swarm_flags(tmp_path, monkeypatch):
     import supervisor.workers as workers
 
     monkeypatch.setattr(workers, "DRIVE_ROOT", tmp_path)
@@ -862,8 +862,7 @@ def test_promote_worker_persists_swarm_intent_on_managed_root(tmp_path, monkeypa
     }, ctx)
 
     assert outcome["status"] == "scheduled"
-    assert enqueued[0]["metadata"]["force_plan"] is True
-    assert enqueued[0]["metadata"]["force_plan_source"] == "swarm"
+    assert "force_plan" not in enqueued[0].get("metadata", {})
 
 
 def test_route_to_project_event_emits_route_receipt_action(tmp_path, monkeypatch):
@@ -2498,16 +2497,19 @@ def test_promote_provisioning_failure_loud_fails_not_silent_fileless(tmp_path, m
 
 def test_swarm_intent_survives_admission_to_the_finalization_read(swarm_host):  # noqa: F811 -- imported fixture
     """Host-admitted Swarm intent survives through the actual efficiency reader."""
-    import server
+    from supervisor.events import _handle_promote_chat_to_task
     from ouroboros.agent_task_pipeline import _build_swarm_efficiency
-    from tests.test_swarm_host_admission import incoming_case
+    from tests.test_swarm_host_admission import incoming_case, promotion_event
 
+    swarm_host.monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "swarm")
     case = incoming_case(swarm_host, "main")
-    server._route_owner_message(swarm_host.bridge, swarm_host.ctx, case.incoming)
+    _handle_promote_chat_to_task(promotion_event(case), swarm_host.ctx)
     assert swarm_host.attempts == []
     assert len(swarm_host.pending) == 1
     task = swarm_host.pending[0]
-    assert task["metadata"]["force_plan_source"] == "swarm"
+    assert "force_plan_source" not in task.get("metadata", {})
+    assert task["metadata"]["subagents_mode"] == "swarm"
+    swarm_host.monkeypatch.setenv("OUROBOROS_SUBAGENTS_MODE", "off")  # telemetry keeps admission, runtime reads live
     block = _build_swarm_efficiency(types.SimpleNamespace(drive_root=str(swarm_host.root)), task)
     assert block == {
         "intent_source": "swarm",

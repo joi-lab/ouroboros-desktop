@@ -921,7 +921,6 @@ D20 = "Presence"
 "supervisor/subagent_task_truth.py" = "D08"
 "supervisor/task_admission.py" = "D08"
 "supervisor/workspace_preparation.py" = "D08"
-"supervisor/plan_obligation.py" = "D08"  # the promoter half of the admission transaction that stamps force_plan
 "supervisor/task_dispatch.py" = "D08"
 "supervisor/task_lifecycle.py" = "D09"
 "supervisor/task_reaper.py" = "D09"

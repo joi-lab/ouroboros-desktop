@@ -87,7 +87,7 @@ def test_invalidated_witness_with_lost_history_is_unknown(tmp_path, monkeypatch,
     else:
         monkeypatch.setattr(swarm_rollup, "JsonlChainSnapshot", lambda *_: (_ for _ in ()).throw(OSError("denied")))
     assert build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "parent", "metadata": {"force_plan_source": "swarm"}}) is None
+        "id": "parent", "metadata": {"subagents_mode": "swarm"}}) is None
     coverage = tree_inputs(tmp_path, "parent")["coverage"]
     assert coverage["tree"] == "unknown" and "fanout_history_unavailable" in coverage["gaps"]
     after = row(tmp_path)
@@ -109,7 +109,7 @@ def test_finalization_then_public_copyback_preserves_expected_children(tmp_path,
         append_jsonl(observed / "logs/events.jsonl", {"type": "swarm_fanout",
             "parent_task_id": "parent", "task_ids": ["missing-child"], "requested_count": 1})
     task = {"id": "parent", "root_task_id": "parent", "child_drive_root": str(replica),
-            "budget_drive_root": str(canonical), "metadata": {"force_plan_source": "swarm"}}
+            "budget_drive_root": str(canonical), "metadata": {"subagents_mode": "swarm"}}
     summary = build_swarm_efficiency(SimpleNamespace(drive_root=replica), task)
     assert row(canonical)["swarm_fanout_rollup"]["version"] == 2
     task_results.write_task_result(replica, "parent", "completed", result="child answer", swarm_efficiency=summary)

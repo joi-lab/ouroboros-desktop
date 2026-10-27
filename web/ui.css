@@ -5,7 +5,6 @@
     --neutral-rgb: 255, 255, 255;
     --shell-rgb: 15, 15, 17;
     --composer-rgb: 26, 27, 28;
-    --composer-hover-rgb: 31, 31, 33;
     --modal-rgb: 20, 21, 22;
     --menu-rgb: 17, 18, 19;
     --media-rgb: 9, 9, 10;
@@ -328,7 +327,7 @@
        sidebar's resize handle, the Project panel over the content area (its scrim beneath it; the stack layout's
        full-width Project a step above), the reply mark of a message being swiped, a sent draft rising into its feed
        (send_flight.js), the drawer's way back (its clear
-       scrim over the room's visible quarter), the chat header's menu; popovers (.ui-popup) stay the top of everything. */
+       scrim over the room's visible quarter); popovers (.ui-popup) stay the top of everything. */
     --z-page-header: 5;
     --z-sidebar: 10;
     --z-room: 15;
@@ -339,7 +338,6 @@
     --z-row-reply-mark: 62;
     --z-send-flight: 64;
     --z-drawer-scrim: 68;
-    --z-header-menu: 90;
     --z-popover: 1200;
     /* Quote panel glass (DESIGN "Replies"): the shell colour at one alpha, so a quote reads lighter than the bubble it sits in. */
     --quote-glass: rgba(var(--shell-rgb), 0.7);
@@ -350,7 +348,6 @@
     --neutral-rgb: 32, 35, 43;
     --shell-rgb: 255, 255, 255;
     --composer-rgb: 244, 245, 248;
-    --composer-hover-rgb: 248, 237, 239;
     --modal-rgb: 255, 255, 255;
     --menu-rgb: 250, 251, 253;
     --media-rgb: 244, 245, 248;
