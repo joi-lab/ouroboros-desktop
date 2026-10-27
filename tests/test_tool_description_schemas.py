@@ -86,7 +86,7 @@ _SQL_ONLY = "db, query, max_rows, snapshot and timeout_sec are op=sql only"
 # without those two the structure is the earlier c4263da7232644b1 / 1aa885fc9a0c37ff.
 # query_data: + state_file "context_snapshot" (the current skill snapshot reader, #2333); before it 6ddb5645e6aecb12.
 _STRUCTURE = {
-    "query_data": {"full": "d8a614064e6c47a1", "readonly": "d8a614064e6c47a1", "acting": "d8a614064e6c47a1"},
+    "query_data": {"full": "f790f964764d75b7", "readonly": "f790f964764d75b7", "acting": "f790f964764d75b7"},
     "delegate_start": {"full": "5e25716838978044", "readonly": "1326e91ef42b3cea", "acting": "1326e91ef42b3cea"},
     "delegate_wait": {"full": "60ab2c0f421da812", "readonly": "60ab2c0f421da812", "acting": "60ab2c0f421da812"},
     "wait_tasks": {"full": "c806a86311a0a965", "readonly": "c806a86311a0a965", "acting": "c806a86311a0a965"},
