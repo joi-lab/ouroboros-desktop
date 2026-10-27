@@ -34,6 +34,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
+from ouroboros.gateways.claudexor_observation import ClaudexorObservationGateway
 from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
 from ouroboros.gateways import claudexor_metadata as metadata
 from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
@@ -56,17 +57,11 @@ _CONNECT_TIMEOUT_SEC = 5.0
 # purpose: most calls here would rather wait than fail, and a run start can take a while
 # to answer.
 _READ_TIMEOUT_SEC = 60.0
-# The FLOOR under non-strict bounded wait/admission asks. Owned-daemon startup also
-# imports it as the CEILING for each fast loopback liveness probe. Every ordinary
-# `delegate_wait` poll asks for what its window has left; this is where that narrowing
-# stops, because a nearly spent window asking for its own 0.2s turns a healthy daemon
-# into a timeout, while the 60s default would outrun the very deadline the wait clamps
-# itself to (measured, 4.51s of wall against a 4.2s window, and that was a fast daemon).
-# Five seconds is a real answer from a healthy loopback daemon and a rounding error
-# against the finalization grace the clamp reserves. It bounds the READ phase only:
-# `_request` applies the caller bound to every HTTPX phase. Strict review polls add
-# their total wall-clock bound outside this phase-local adapter.
-# Passed per request via ``_request(timeout_sec=...)``; it never changes the default.
+# The FLOOR under non-strict bounded wait/admission asks and the CEILING of each fast
+# loopback liveness probe (owned-daemon startup, passive sweeps): a real answer from a
+# healthy loopback daemon, a rounding error against the finalization grace a clamped
+# window reserves. It bounds the READ phase only (`_request` applies a caller bound to
+# every HTTPX phase); passed per request, it never changes the client default.
 SHORT_POLL_TIMEOUT_SEC = 5.0
 # The httpx failures a READ-ONLY observer may retry as the same unresolved read: the
 # socket delivered no daemon answer, so nothing is known about the run and nothing
@@ -431,7 +426,7 @@ def run_message_supported(operations: list[dict]) -> bool:
     )
 
 
-class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway):
+class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway, ClaudexorObservationGateway):
     """Thin typed client over the Claudexor ``/v2`` control API."""
 
     def __init__(self, endpoint: Optional[DaemonEndpoint] = None, *, home: Optional[pathlib.Path] = None):

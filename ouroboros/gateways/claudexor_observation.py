@@ -1,0 +1,259 @@
+"""Ordinary observation of delegated runs: ONE adapter over two engine surfaces.
+
+Transport only, beside ``gateways/claudexor.py`` (docs/DEVELOPMENT.md "Gateway Boundary
+Pattern"). A host watching a run needs three facts between the moments it must act: the
+lifecycle state, whether a question is pending, and an opaque token that says "nothing of
+that changed since you last looked". The engine's compact wait, ``POST /v2/runs/wait-many``,
+answers exactly those for up to a thousand runs in one body-free read and holds the call
+until something needs attention or its window ends; the full run detail (events, timeline,
+artifacts) is an addressed read a consumer takes on a reason — attention, terminal, a person
+opening the run — never as the heartbeat.
+
+The engine listed that route from 4.8.0 but served it repaired only from 4.8.1 (claudexor
+#513–#515: shutdown, deadline passes, problem rows), so support is the version floor AND the
+catalog, remembered per exact engine identity like the event stream's. Below the floor, or
+when the route is missing (a 404 on the route is the engine's answer about the ROUTE, never
+about a run), ``wait_attention`` reads each run's detail once, as the old pollers did, and
+hands those details back so a consumer keeps today's behaviour without a second code path.
+No probe reads a timeout as "unsupported": a transport hole is reported as one.
+
+Tokens are the engine's; a consumer echoes a row's token as ``seen`` only after it fetched
+what the attention was about (pending rows, terminal detail), so an unfetched question can
+never be acknowledged away. Fallback rows carry a local token (``local:`` prefix) that is
+never sent to an engine.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+WAIT_MANY_OPERATION = ("POST", "/v2/runs/wait-many")
+# The first release whose wait-many carries the repaired contract (#513–#515).
+WAIT_MANY_MIN_VERSION = "4.8.1"
+# The engine's own bounds (packages/schema/src/run-observation.ts): targets per call,
+# wait window and the shape of a token it minted.
+WAIT_MANY_MAX_TARGETS = 1000
+WAIT_MANY_MAX_WAIT_SEC = 50.0
+_ENGINE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_LOCAL_TOKEN = "local:"
+PROBLEMS = frozenset({"not_found", "snapshot_unavailable", "not_observed"})
+WAKE_REASONS = frozenset({"attention", "problems", "timeout", "aborted"})
+# Catalog answers per exact engine identity (version, build sha): a route cannot appear or
+# vanish without the engine changing, so one catalog read per identity per process.
+_SUPPORT: Dict[Tuple[str, str], bool] = {}
+_SUPPORT_LOCK = threading.Lock()
+
+
+class ClaudexorObservationGateway:
+    """The compact attention wait, as the owned HTTP client speaks it (mixed into the gateway)."""
+
+    def wait_run_attention(self, targets: List[Dict[str, Any]], *, wait_ms: int,
+                           timeout_sec: Optional[float]) -> Dict[str, Any]:
+        """``POST /v2/runs/wait-many``: the engine's own result object, unprojected.
+
+        The read bound covers the engine's hold (``wait_ms``) plus the caller's transport
+        allowance: a completed pass may overrun the nominal window by itself.
+        """
+        from ouroboros.gateways.claudexor import ClaudexorUnavailable
+
+        bound = None if timeout_sec is None else float(timeout_sec) + wait_ms / 1000.0
+        body = self._request("POST", "/v2/runs/wait-many",
+                             json_body={"targets": targets, "waitMs": int(wait_ms)}, timeout_sec=bound)
+        if not isinstance(body, dict):
+            raise ClaudexorUnavailable("malformed_response", "Claudexor wait-many returned no object")
+        return body
+
+
+@dataclass
+class RunAttention:
+    """One observed run: the engine's row, or the fallback's reading of its detail."""
+
+    run_id: str
+    status: Optional[str] = None
+    pending: Optional[bool] = None
+    token: Optional[str] = None
+    problem: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None  # the fallback's detail read, for the consumer's own projection
+    error: Optional[BaseException] = None  # the fallback's received refusal for this run (a 404, a 5xx)
+
+    @property
+    def observed(self) -> bool:
+        return self.problem is None and self.error is None
+
+    @property
+    def terminal(self) -> bool:
+        from ouroboros.delegate_custody import TERMINAL_STATES
+
+        return self.status in TERMINAL_STATES
+
+
+@dataclass
+class AttentionWake:
+    """What one observation call learned. ``attention`` indexes ``rows``."""
+
+    reason: str  # attention | problems | timeout | aborted | polled | unobserved
+    rows: List[RunAttention]
+    attention: List[int] = field(default_factory=list)
+    source: str = "wait_many"  # wait_many | detail
+    waited: bool = False  # the engine held the call for the window; a consumer sleeps nothing
+    hole: Optional[BaseException] = None  # unobserved: the typed hole nothing was learned through
+
+    def needs_attention(self, index: int) -> bool:
+        return index in self.attention
+
+
+def wait_many_supported(gateway: Any, *, timeout_sec: Optional[float]) -> bool:
+    """Does the handshaken engine behind ``gateway`` serve the repaired compact wait?
+
+    An unhandshaken transport, a test double without the seam, or an engine below the
+    floor is answered ``False`` without a request; at or above it, the catalog decides.
+    """
+    from ouroboros.gateways.claudexor import engine_at_least
+
+    version = str(getattr(gateway, "engine_version", "") or "")
+    if not version or not callable(getattr(gateway, "wait_run_attention", None)):
+        return False
+    if not engine_at_least(version, WAIT_MANY_MIN_VERSION):
+        return False
+    key = (version, str(getattr(gateway, "engine_build_sha", "") or ""))
+    with _SUPPORT_LOCK:
+        if key in _SUPPORT:
+            return _SUPPORT[key]
+    method, path = WAIT_MANY_OPERATION
+    supported = any(row.get("method") == method and row.get("path") == path
+                    for row in gateway.operations(timeout_sec=timeout_sec) if isinstance(row, dict))
+    with _SUPPORT_LOCK:
+        _SUPPORT[key] = supported
+    return supported
+
+
+def _forget_support(gateway: Any) -> None:
+    key = (str(getattr(gateway, "engine_version", "") or ""), str(getattr(gateway, "engine_build_sha", "") or ""))
+    with _SUPPORT_LOCK:
+        _SUPPORT[key] = False
+
+
+def is_observation_hole(exc: BaseException) -> bool:
+    """A read the daemon did not answer, or answered that it cannot serve now (its own
+    typed busy/stopping/recovery 503s): nothing is known about the runs, nothing was claimed."""
+    from ouroboros.gateways.claudexor import DAEMON_BUSY_CODES
+
+    code = str(getattr(exc, "code", "") or "")
+    return bool(getattr(exc, "observation_timeout", False)) or code in DAEMON_BUSY_CODES or code == "daemon_stopping"
+
+
+def detail_attention(run_id: str, detail: Dict[str, Any]) -> RunAttention:
+    """The compact facts of one full detail, with a local token over exactly those facts."""
+    from ouroboros.delegate_custody_usage import summary_of
+    from ouroboros.gateways.claudexor import pending_interactions
+
+    summary = summary_of(detail)
+    status = str(summary.get("state") or "") or None
+    ids = sorted(str(row.get("interaction_id") or "") for row in pending_interactions(detail))
+    pending = bool(ids) or bool(summary.get("waitingOnUser"))
+    digest = hashlib.sha256(json.dumps(["ouroboros.detail-observation", 1, run_id, status, pending, ids],
+                                       sort_keys=True).encode("utf-8")).hexdigest()
+    return RunAttention(run_id=run_id, status=status, pending=pending, token=_LOCAL_TOKEN + digest, detail=detail)
+
+
+def wait_attention(gateway: Any, targets: Sequence[Tuple[str, Optional[str]]], *,
+                   wait_sec: float, timeout_sec: Optional[float]) -> AttentionWake:
+    """Observe ``targets`` (``(run_id, seen_token)`` pairs) once.
+
+    On a supporting engine the call is held up to ``wait_sec`` (the engine caps it) and
+    returns the engine's rows and attention; ``timeout_sec`` bounds the transport beyond
+    that hold. Elsewhere every target's detail is read once under ``timeout_sec`` and the
+    rows are derived from those details (``waited`` is False: the consumer keeps its own
+    beat). A typed hole (transport, busy, stopping) is returned as an ``unobserved`` wake,
+    never raised, so a consumer treats it as the quiet hole it already knows; a received
+    refusal about the READ itself (a schema or auth refusal) propagates.
+    """
+    from ouroboros.gateways.claudexor import ClaudexorUnavailable
+
+    pairs = [(str(run_id), seen) for run_id, seen in targets]
+    if not pairs:
+        return AttentionWake("timeout", [], waited=False)
+    if wait_many_supported(gateway, timeout_sec=timeout_sec):
+        request = [{"runId": run_id, **({"seen": seen} if isinstance(seen, str) and _ENGINE_TOKEN.match(seen) else {})}
+                   for run_id, seen in pairs]
+        wait_ms = int(max(0.0, min(float(wait_sec), WAIT_MANY_MAX_WAIT_SEC)) * 1000)
+        try:
+            body = gateway.wait_run_attention(request, wait_ms=wait_ms, timeout_sec=timeout_sec)
+        except ClaudexorUnavailable as exc:
+            if int(getattr(exc, "status_code", 0) or 0) == 404:
+                _forget_support(gateway)  # the ROUTE is absent on this engine; no run was named absent
+                return _detail_wake(gateway, pairs, timeout_sec)
+            if is_observation_hole(exc):
+                return _unobserved(pairs, exc, "wait_many")
+            raise
+        return _engine_wake(pairs, body)
+    return _detail_wake(gateway, pairs, timeout_sec)
+
+
+def _unobserved(pairs: List[Tuple[str, Optional[str]]], hole: BaseException, source: str) -> AttentionWake:
+    """Nothing reached any row: every row is ``not_observed``, the hole rides the wake."""
+    return AttentionWake("unobserved", [RunAttention(run_id, problem="not_observed") for run_id, _ in pairs],
+                         source=source, hole=hole)
+
+
+def _engine_wake(pairs: List[Tuple[str, Optional[str]]], body: Dict[str, Any]) -> AttentionWake:
+    from ouroboros.gateways.claudexor import ClaudexorUnavailable
+
+    def malformed(what: str) -> ClaudexorUnavailable:
+        return ClaudexorUnavailable("malformed_response", f"Claudexor wait-many answered with {what}")
+
+    reason = body.get("wakeReason")
+    summaries = body.get("summaries")
+    attention = body.get("attention")
+    if reason not in WAKE_REASONS or not isinstance(summaries, list) or len(summaries) != len(pairs):
+        raise malformed("an unknown wake reason or a summary batch of the wrong size")
+    if not isinstance(attention, list) or any(not isinstance(i, int) or isinstance(i, bool)
+                                              or not 0 <= i < len(pairs) for i in attention):
+        raise malformed("attention indexes outside the batch")
+    rows: List[RunAttention] = []
+    for (run_id, _seen), row in zip(pairs, summaries):
+        if not isinstance(row, dict):
+            raise malformed("a summary that is not an object")
+        problem = row.get("problem")
+        if problem is None:
+            status, pending, token = row.get("status"), row.get("pending"), row.get("token")
+            if not isinstance(status, str) or not isinstance(pending, bool) \
+                    or not isinstance(token, str) or not _ENGINE_TOKEN.match(token):
+                raise malformed("a summary without lifecycle, pending flag or token")
+            rows.append(RunAttention(run_id=run_id, status=status, pending=pending, token=token))
+        elif problem in PROBLEMS:
+            rows.append(RunAttention(run_id=run_id, problem=str(problem)))
+        else:
+            raise malformed("an unknown problem kind")
+    return AttentionWake(str(reason), rows, attention=sorted(set(attention)), waited=True)
+
+
+def _detail_wake(gateway: Any, pairs: List[Tuple[str, Optional[str]]],
+                 timeout_sec: Optional[float]) -> AttentionWake:
+    """The engines without the compact wait: one detail read per target, rows derived from it."""
+    from ouroboros.gateways.claudexor import ClaudexorUnavailable
+
+    rows: List[RunAttention] = []
+    attention: List[int] = []
+    for index, (run_id, seen) in enumerate(pairs):
+        try:
+            detail = gateway.get_run(run_id, **({"timeout_sec": timeout_sec} if timeout_sec is not None else {}))
+        except ClaudexorUnavailable as exc:
+            if is_observation_hole(exc):
+                return _unobserved(pairs, exc, "detail")
+            if int(getattr(exc, "status_code", 0) or 0) >= 400:
+                rows.append(RunAttention(run_id=run_id, problem="not_found" if exc.status_code == 404 else None,
+                                         error=exc))
+                continue
+            raise
+        row = detail_attention(run_id, detail if isinstance(detail, dict) else {})
+        rows.append(row)
+        if (row.pending or row.terminal) and row.token != seen:
+            attention.append(index)
+    reason = "attention" if attention else ("problems" if any(not row.observed for row in rows) else "polled")
+    return AttentionWake(reason, rows, attention=attention, source="detail", waited=False)
