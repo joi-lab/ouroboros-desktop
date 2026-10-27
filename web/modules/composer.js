@@ -347,7 +347,7 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
     const ownerControls = createComposerOwnerControls({ row: page.querySelector('.chat-toolbar-row'), box: page, byId, apiFetch, showToast,
         projectId, saveEffortRange: apiClient.ownerEffortRange,
         saveSubagentsMode: apiClient.ownerSubagentsMode,
-        openSettings: () => openSettings?.('agents'), refreshState, readingBack });
+        openSettings: () => openSettings?.('agents'), refreshState, onLayout, readingBack });
 
     // Rooms outside the bounded sidebar still read their settings.
     async function refreshProjectCognition() {

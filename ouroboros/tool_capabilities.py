@@ -503,7 +503,20 @@ def substantive_tool_calls(calls: object) -> list:
             and not (call.get("completion_control") and not call.get("is_error"))]
 
 
+# Writes whose successful result is only a receipt of the write: the page, notes, marks and
+# addressed messages a finishing response carries with its answer (owner decision 27.10, "answer
+# first, then chronicle and forwards"). Any other answer from them, and every other tool, is read
+# before a finish; ``update_identity``/``update_world`` stay out: their ok answers can report an
+# edit that did not apply.
+COMPLETION_RECEIPT_TOOLS = frozenset({
+    "chronicle_write", "knowledge_write", "memory_mark", "update_scratchpad", "journal_write",
+    "workpad_write", "update_focus", "tree_note", "tell_task", "forward_to_worker",
+})
+
+
 def completion_observation_calls(calls: object) -> list:
-    """Results a finish must observe; only successful schema bookkeeping is exempt."""
-    return [call for call in substantive_tool_calls(calls)
-            if call.get("is_error") or call.get("tool") not in {"enable_tools", "list_available_tools"}]
+    """Results a finish must observe. Exempt: successful schema bookkeeping, and a receipt
+    write that answered exactly ``OK`` (a warning or a partial write is read first)."""
+    return [call for call in substantive_tool_calls(calls) if call.get("is_error") or not (
+        call.get("tool") in {"enable_tools", "list_available_tools"}
+        or (call.get("tool") in COMPLETION_RECEIPT_TOOLS and call.get("tool_result_code") == "OK"))]

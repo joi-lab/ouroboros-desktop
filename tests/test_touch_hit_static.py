@@ -10,7 +10,8 @@ FORMULA = "--ui-hit-inset: min(0px, calc((100% - var(--touch-target-min)) / 2));
 INSET = "inset: var(--ui-hit-inset);"
 CARRIERS = {
     "web/modules/composer.js": ('class="chat-plus-btn ui-hit-area"', 'class="chat-send-inline ui-hit-area"'),
-    "web/modules/composer_subagents.js": ('class="chat-capsule-head ui-hit-area chat-subagents-head"',),
+    "web/modules/composer_subagents.js": ('class="chat-capsule-head ui-hit-area chat-subagents-head"',
+                                          'class="btn btn-default btn-sm chat-subagents-settings ui-hit-area"'),
     "web/modules/voice_controls.js": ("className: 'voice-btn voice-mic ui-hit-area'",),
     "web/modules/message_actions.js": ("button.className = 'chat-message-action ui-hit-area';",),
     "web/modules/composer_chips.js": ("button.className = 'chat-composer-chip ui-hit-area';",

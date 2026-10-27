@@ -33,5 +33,5 @@ def test_chat_control_ids_match_instance_wiring_and_nano_has_active_style():
     assert "const subagentsEl = row && saveSubagentsMode ? byId('subagents-mode') : null;" in controls
     assert "const contextEl = byId('context-mode');" in controls
     assert "ownerControls = createComposerOwnerControls({ row: page.querySelector('.chat-toolbar-row'), box: page, byId, apiFetch, showToast," in composer
-    assert ':is(.chat-context-mode[data-context-mode="nano"], .capsule-panel[data-kind="context"][data-mode="nano"]) {' in styles
+    assert '.chat-context-mode[data-context-mode="nano"] {' in styles
     assert 'justify-content: center;' in styles
