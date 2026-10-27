@@ -5,15 +5,15 @@ Doc matrix (D-ARCH unification, owner 2026-08-08):
        (self-body, project tasks with or without a folder, evolution, external
        surfaces); navigation map in low. It is Ouroboros's capability/tools/
        access map — never dropped per-task in max.
-  DEVELOPMENT is MODE-INDEPENDENT per task class, keyed by D-DEV (owner
-       2026-08-08) on the ACTIVE REPO BINDING — the handbook loads exactly when
-       the work targets Ouroboros's own body, a path fact and never a guess from
-       message text (P5). On-demand pointer for the EXTERNAL-SURFACE class (a
-       bound workspace incl. an auto-provisioned genesis tree, a subagent, an
-       api/cli/scheduled surface); full for everything still bound to the system
-       repo — including a direct-chat turn in a PROJECT ROOM, which binds no
-       workspace. Project MEMBERSHIP is deliberately NOT the signal. Explicit
-       context_requires_development / context_requires_self_body_docs win.
+  DEVELOPMENT follows the SUBJECT OF THE WORK (D-DEV 2026-08-08, 6A 2026-10-27,
+       BIBLE P1; `context_input_selection.development_resident`): an explicit
+       context_requires_development wins either way (absent is not false); a
+       subagent or an api/cli/scheduled surface gets its chapter map unless the
+       task asks for the handbook; self-body work keeps it; a bound tree that
+       body_fact proves foreign gets the map; an unbound task (a direct-chat
+       turn in a PROJECT ROOM included) or a tree whose body fact is unknown
+       keeps it — a path fact, never a guess from message text (P5). Project
+       MEMBERSHIP is deliberately NOT the signal.
   README/CHECKLISTS: on-demand pointer in all modes.
 SYSTEM + BIBLE are tier-0 and always full.
 """
