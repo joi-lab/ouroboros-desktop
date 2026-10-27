@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ouroboros import config, context, fallback_cooldown, loop
+from ouroboros import config, context, fallback_cooldown, loop, model_wait
 from ouroboros import memory_floor as floor
 from ouroboros.model_slots import MODEL_ACCOUNTS_KEY
 from ouroboros.primary_route_observation import hold_selection, record_round_route_result
@@ -167,6 +167,30 @@ def test_the_primary_model_on_another_account_is_another_route(tmp_path, monkeyp
     _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=model, use_local=False,
                                                      model_role="main", start_mode=mode, tool_schemas=[])
     assert back_mode == "max" and messages[0] == shown
+
+
+@pytest.mark.parametrize("pin,same_model", [("", False), ("account-a", False), ("account-a", True)],
+                         ids=["auto", "pinned", "account-only"])
+def test_a_wait_card_choosing_the_primary_resumes_its_view(tmp_path, monkeypatch, pin, same_model):
+    primary = "claudexor::codex=gpt-main"
+    reserve = primary if same_model else "claudexor::codex=gpt-reserve"
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": pin, "fallback": ["account-b" if same_model else pin]}))
+    waiter = SimpleNamespace(overrides={})
+    monkeypatch.setattr(model_wait, "current_model_wait", lambda: waiter)
+    key, windows = (("model_role", {"main": 1_000_000, "fallback:0": 65_537}) if same_model
+                    else ("model", {primary: 1_000_000, reserve: 65_537}))
+    _windows_by(monkeypatch, key, windows)
+    plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
+    shown = messages[0]
+    away, mode = loop._rebind_context_fit_plan(plan, registry, messages, model=reserve, use_local=False,
+                                              model_role="fallback:0", start_mode="max", tool_schemas=[])
+    registry._ctx.active_model = reserve
+    # The fallback's wait card picks the primary: the card writes its choice for the waiting role before the rebind.
+    waiter.overrides["fallback:0"] = {"model": primary, "use_local": False, "model_account_override": pin}
+    windows["fallback:0"] = 1_000_000  # under that choice the waiting role is served by the primary's account
+    _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=primary, use_local=False,
+                                                     model_role="fallback:0", start_mode=mode, tool_schemas=[])
+    assert mode != "max" and back_mode == "max" and messages[0] == shown
 
 
 def test_a_primary_account_changed_meanwhile_is_a_new_route(tmp_path, monkeypatch):

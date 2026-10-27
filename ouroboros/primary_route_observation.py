@@ -292,8 +292,9 @@ def held_primary_view(owner, plan, start_mode, *, model: str, use_local: bool, r
 
     overrides = getattr(current_model_wait(), "overrides", None)
     home = route_binding(str(primary["model"]), bool(primary["use_local"]), primary["role"], overrides=overrides)
+    # The view's own route, without a wait card's choice for its role: a card writes that choice before this rebind.
     acting = route_binding(str(getattr(owner, "active_model", "") or ""), bool(getattr(owner, "active_use_local", False)),
-                           str(getattr(plan, "model_role", "") or ""), overrides=overrides)  # the view's own role
+                           str(getattr(plan, "model_role", "") or ""))
     target, held = route_binding(str(model or ""), bool(use_local), role, overrides=overrides), getattr(owner, "_primary_view", None)
     if held is not None and (held[0] != home or held[1].core_sha256 != plan.core_sha256):
         held = owner._primary_view = None  # another primary or core: that view is no longer the primary's own
