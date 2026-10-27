@@ -2,9 +2,11 @@
 // and the worker readiness frames state the fields they carry (#1073). Both are
 // projections of already-typed producer facts — no name substrings, no taxonomy.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { updateLiveTimelineItem } from '../modules/chat_render_batch.js';
 import { mergeHistoricalTimelineItem } from '../modules/chat_history_replay.js';
+import { foldWaitRow, waitEpisode } from '../modules/task_checkpoints.js';
 
 import {
     summarizeChatLiveEvent,
@@ -128,6 +130,19 @@ test('#1073 the worker readiness frames render their own fields in Logs', () => 
 });
 
 
+test('host wait folds word the shared Python/browser cases', () => {
+    const { cases } = JSON.parse(readFileSync(new URL('./fixtures/wait_fold_parity.json', import.meta.url), 'utf8'));
+    for (const { kind, rows, line } of cases) {
+        const record = { items: [] };
+        for (const [episode_id, phase, elapsed_sec] of rows) {
+            const evt = { checkpoint_kind: kind, episode_id, phase, elapsed_sec };
+            foldWaitRow(record, { waitEpisode: waitEpisode(evt), dedupeKey: `wait:${kind}` });
+        }
+        assert.equal(record.items.length, 1);
+        assert.equal(record.items[0].headline, line, JSON.stringify(rows));
+    }
+});
+
 for (const [kind, labels] of [
     ['usage_lock_wait', ['Waiting for accounting access', 'Accounting wait ended']],
     ['control_store_wait', ['Waiting for control storage', 'Control storage wait ended']],
@@ -146,20 +161,28 @@ for (const [kind, labels] of [
         }
     });
 
-    test(`${kind} episodes survive live delivery, redelivery, history and reconnect`, () => {
-        const events = ['first', 'second'].flatMap(episode_id => ['entered', 'ended'].map(phase => ({
-            type: 'task_checkpoint', task_id: 't1', checkpoint_kind: kind, episode_id, phase,
+    test(`${kind} episodes fold into one receipt row through live delivery, redelivery, history and reconnect`, () => {
+        // A host wait is how the host ran, not the turn's work: one row per kind, live while an
+        // episode is open, then the count and the longest closed one; it never makes a block.
+        const [waiting, ended] = labels;
+        const plural = ended.replace(' wait ended', ' waits');
+        const events = [['first', 0.3], ['second', 0.5]].flatMap(([episode_id, elapsed_sec]) => ['entered', 'ended'].map(phase => ({
+            type: 'task_checkpoint', task_id: 't1', checkpoint_kind: kind, episode_id, phase, elapsed_sec,
         }))).map((event, index) => ({ ...event, ts: `2026-09-27T01:00:0${index}Z` }));
         const live = { items: [] }, replay = { items: [] };
+        const seen = [];
         const deliver = event => {
             const summary = summarizeChatLiveEvent(event);
+            assert.equal(summary.receipt, true);
             updateLiveTimelineItem(live, summary, { ts: event.ts, rawTs: event.ts,
                 syntheticKey: summary.dedupeKey, headline: summary.headline, inPlaceByKey: false });
+            seen.push(live.items.map(row => row.headline));
         };
         events.forEach(deliver);
-        assert.deepEqual(live.items.map(row => row.headline), [...labels, ...labels]);
+        assert.deepEqual(seen, [[waiting], [`${ended} · 0.3 s`], [`${waiting} · ${ended} · 0.3 s`], [`${plural} ×2 · longest 0.5 s`]]);
         events.forEach(deliver);
-        assert.equal(live.items.length, 4, 'redelivery adds no rows');
+        assert.deepEqual(live.items.map(row => [row.headline, row.receipt]), [[`${plural} ×2 · longest 0.5 s`, true]],
+            'redelivery counts each episode once');
         events.forEach((event, index) => {
             const summary = summarizeChatLiveEvent(event);
             const row = { ...event, history_id: `progress:${index}`,
@@ -167,8 +190,12 @@ for (const [kind, labels] of [
             mergeHistoricalTimelineItem(replay, summary, row, event.ts);
             mergeHistoricalTimelineItem(live, summary, row, event.ts);
         });
-        assert.deepEqual(replay.items.map(row => row.headline), [...labels, ...labels]);
+        assert.deepEqual(replay.items.map(row => [row.headline, row.receipt]), [[`${plural} ×2 · longest 0.5 s`, true]]);
         assert.deepEqual(live.items.map(row => row.headline), replay.items.map(row => row.headline));
+        // An episode still open after the others closed keeps the row live.
+        const open = { type: 'task_checkpoint', task_id: 't1', checkpoint_kind: kind, episode_id: 'third', phase: 'entered' };
+        deliver(open);
+        assert.equal(live.items[0].headline, `${waiting} · ${plural} ×2 · longest 0.5 s`);
     });
 }
 

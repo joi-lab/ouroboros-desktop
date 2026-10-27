@@ -2,7 +2,7 @@ import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, plain
 import { cancelCauseClauses, ownerStopEnding } from './cancel_presentation.js';
 import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
-import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow } from './task_checkpoints.js';
+import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow, waitEpisode } from './task_checkpoints.js';
 export { taskCheckpointLabel } from './task_checkpoints.js';
 import { coordinatorRouteClause, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { acceptanceIncidentClauses } from './acceptance_incident_presentation.js';
@@ -1094,11 +1094,13 @@ function chatView({
     model = '',
     receipt = false,
     toolCall = null,
+    waitEpisode = null,
 } = {}) {
     const out = { phase, headline, body, visible, promote, terminal, human, dedupeKey };
     // Receipt rows render inside existing blocks but cannot create one.
     if (receipt) out.receipt = true;
     if (toolCall) out.toolCall = toolCall;  // folded into the block's one evidence row
+    if (waitEpisode) out.waitEpisode = waitEpisode;  // folded into the block's one row per wait kind
     if (fullBody) out.fullBody = fullBody;
     if (fullHeadline) out.fullHeadline = fullHeadline;
     // Explicit emptiness is part of the presentation contract: a review-only
@@ -1411,13 +1413,16 @@ function summarizeChatLiveEventView(evt) {
     }
 
     if (t === 'task_checkpoint' || t === 'context_reclaim') {
-        // Visible in the expanded timeline, with no narration/title promotion.
+        // Visible in the expanded timeline, with no narration/title promotion; a host wait's
+        // episodes fold into one receipt row per kind (task_checkpoints.foldWaitRow).
         const lowRetry = evt.checkpoint_kind === 'context_fit_low_retry';
+        const wait = waitEpisode(evt);
         return chatView({
             phase: lowRetry || evt.checkpoint_kind === 'service_finalization_error' ? 'warn' : 'thinking',
             headline: taskCheckpointLabel(evt),
             visible: !checkpointHasProgressRow(evt) && !(evt.checkpoint_kind === 'prompt_prefix_break' && evt.reasoning_retired),
-            dedupeKey: key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
+            dedupeKey: wait ? key('wait', wait.kind) : key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
+            receipt: Boolean(wait), waitEpisode: wait,
         });
     }
 
