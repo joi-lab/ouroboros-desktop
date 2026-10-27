@@ -1,0 +1,160 @@
+"""The Subagents capsule in the real composer's row (DESIGN "Composer owner controls"; owner 11.10, again 27.10).
+
+On a real server in Chromium and WebKit, at 1280 and 390, light and dark: the capsule opens in the row as
+`Subagents | Off Auto Swarm`, beside the other capsules on a desk and alone on a phone (the others step aside and the
+strip takes the line); while it is open its lines stand under the row and above the field (what the chosen value
+means and how a change applies), and a choice saves at once while the meaning follows it. With Settings › Agents off
+it says Off with a lock, Auto and Swarm cannot be chosen, the reason and Open Settings stand under the row, and Open
+Settings closes the strip and opens Settings › Agents. The room's subagents facts are the test's on every state read.
+"""
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+
+from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat, _shot
+from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
+
+pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
+
+SUBAGENTS = "#page-chat .chat-subagents-mode"
+RULE = "Applies to new steps in this chat; running helpers finish."
+# The page's state read: the first `/api/state` and every `?bindings_since=` read after it (chat_activity.js).
+STATE_READS = re.compile(r"/api/state(\?|$)")
+# The capsule, the capsules shown on its line, its values and the lines under the row.
+FACTS = """() => {
+    const row = document.querySelector('#page-chat .chat-toolbar-row');
+    const el = row.querySelector('.chat-subagents-mode');
+    const note = row.querySelector('.chat-subagents-note');
+    const rect = (node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+    const shown = (node) => Boolean(node) && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
+    const kind = (node) => ['context', 'effort', 'menu'].find((k) => node.matches(`.chat-${k}-mode, .chat-${k}-range, .composer-${k}`)) || '';
+    const text = (selector) => (shown(note?.querySelector(selector)) ? note.querySelector(selector).textContent : '');
+    const segs = [...el.querySelectorAll('.chat-seg')];
+    return {
+        open: el.dataset.open, fit: el.dataset.fit || '', locked: el.dataset.locked, mode: el.dataset.mode,
+        lock: shown(el.querySelector('.chat-subagents-lock')), capsule: rect(el),
+        beside: [...row.children].filter((kid) => kid !== el && shown(kid) && kind(kid)).map(kind),
+        values: segs.map((seg) => [seg.dataset.mode, seg.getAttribute('aria-checked'), seg.getAttribute('aria-disabled') || '']),
+        inCapsule: segs.every((seg) => shown(seg) && seg.getBoundingClientRect().top >= el.getBoundingClientRect().top - 1
+            && seg.getBoundingClientRect().bottom <= el.getBoundingClientRect().bottom + 1),
+        note: shown(note) ? rect(note) : null, field: rect(document.getElementById('chat-input')),
+        meaning: text('.chat-subagents-meaning'), rule: text('.chat-subagents-rule'), reason: text('.chat-subagents-reason'),
+        settings: shown(note?.querySelector('.chat-subagents-settings')),
+        docScroll: document.documentElement.scrollWidth > innerWidth + 1,
+    };
+}"""
+
+
+def _hold(page, facts: dict) -> dict:
+    """Every state read answers the room's subagents facts the test holds; a save lands in them (routed once: the test
+    changes them in place)."""
+    page.route(STATE_READS, lambda route: route.fulfill(json={**route.fetch().json(), **facts}))
+
+    def save(route):
+        facts["subagents_mode"] = route.request.post_data_json["mode"]
+        route.fulfill(json={"ok": True, "project_id": "", "subagents_mode": facts["subagents_mode"]})
+    page.route("**/api/owner/subagents-mode", save)
+    return facts
+
+
+def _settle(page) -> None:
+    # The opening's own motion (capsule_morph.js, the strip's transitions) ends before anything is measured.
+    page.wait_for_function("""() => { const row = document.querySelector('#page-chat .chat-toolbar-row');
+        return !('ownerLeaving' in row.dataset) && row.getAnimations({subtree: true})
+            .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+            .every((a) => !a.pending && a.playState !== 'running'); }""", timeout=10_000)
+    page.wait_for_timeout(150)
+
+
+def _open(page, press) -> dict:
+    press(f"{SUBAGENTS} .chat-capsule-head")
+    page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=SUBAGENTS)
+    _settle(page)
+    return page.evaluate(FACTS)
+
+
+def _assert_in_the_row(facts: dict, *, phone: bool) -> None:
+    """Open in the row: its values inside the capsule on the composer's line, beside the others on a desk and alone on
+    a phone; its lines under the row and above the field; nothing scrolls sideways."""
+    assert facts["open"] == "true" and facts["inCapsule"], facts
+    if phone:
+        assert facts["beside"] == [], ("on a phone the strip takes the line: the others step aside", facts)
+    else:
+        assert facts["fit"] == "inline" and {"context", "effort"} <= set(facts["beside"]), ("beside the others", facts)
+    note = facts["note"]
+    assert note and note["top"] >= facts["capsule"]["bottom"] - 1 and note["bottom"] <= facts["field"]["top"] + 1, \
+        ("its lines stand under the row, above the field", facts)
+    assert not facts["docScroll"], facts
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 1280), ("webkit", 1280), ("chromium", 390), ("webkit", 390)])
+def test_subagents_opens_in_the_row_with_its_lines_under_it(
+        direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    phone = width < 720
+    context = {"viewport": {"width": width, "height": 860}}
+    if phone:
+        context.update(is_mobile=True, has_touch=True)
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, **context)
+        press = page.tap if phone else page.click
+        try:
+            held = _hold(page, {})
+            for theme in ("light", "dark"):
+                held.update(subagents_mode="auto", subagents_availability="available")
+                _open_chat(page, url, width=width, height=860, theme=theme)
+                facts = seen[f"{theme}-auto"] = _open(page, press)
+                _shot(page, tmp_path, f"subagents-inline-auto-{engine}-{width}-{theme}")
+                _assert_in_the_row(facts, phone=phone)
+                assert facts["meaning"] == "Ouroboros decides when helpers are worth it.", facts
+                assert facts["rule"] == RULE, facts
+                assert not facts["reason"] and not facts["settings"] and not facts["lock"], facts
+                # A choice saves at once; the strip stays open and the meaning follows it.
+                with page.expect_response(lambda r: r.url.endswith("/api/owner/subagents-mode"), timeout=30_000):
+                    press(f'{SUBAGENTS} .chat-seg[data-mode="swarm"]')
+                page.wait_for_function("sel => document.querySelector(sel).dataset.mode === 'swarm'", arg=SUBAGENTS)
+                _settle(page)
+                facts = seen[f"{theme}-swarm"] = page.evaluate(FACTS)
+                _shot(page, tmp_path, f"subagents-inline-swarm-{engine}-{width}-{theme}")
+                _assert_in_the_row(facts, phone=phone)
+                assert facts["meaning"].startswith("Don't economise") and facts["rule"] == RULE, facts
+                assert [value[1] for value in facts["values"]] == ["false", "false", "true"], facts
+                page.keyboard.press("Escape")
+                page.wait_for_function("sel => document.querySelector(sel).dataset.open === 'false'", arg=SUBAGENTS)
+            # Settings › Agents turns subagents off: Off with a lock, only Off can be chosen, the reason and Open
+            # Settings under the row; Open Settings closes the strip and goes to Settings › Agents.
+            for theme in ("light", "dark"):
+                held.update(subagents_mode="swarm", subagents_availability="disabled")
+                _open_chat(page, url, width=width, height=860, theme=theme)
+                page.wait_for_function("sel => document.querySelector(sel)?.dataset.locked === 'true'", arg=SUBAGENTS,
+                                       timeout=30_000)
+                assert page.locator(f"{SUBAGENTS} .chat-capsule-value").inner_text() == "Off"
+                facts = seen[f"{theme}-settings-off"] = _open(page, press)
+                _shot(page, tmp_path, f"subagents-inline-settings-off-{engine}-{width}-{theme}")
+                _assert_in_the_row(facts, phone=phone)
+                assert facts["locked"] == "true" and facts["lock"], facts
+                assert facts["values"] == [["off", "true", ""], ["auto", "false", "true"],
+                                           ["swarm", "false", "true"]], facts
+                assert not facts["meaning"] and not facts["rule"], ("the reason stands in their place", facts)
+                assert facts["reason"] == "Subagents are turned off in Settings › Agents" and facts["settings"], facts
+                # A press on a value Settings rules out (aria-disabled, so the press is forced) chooses nothing.
+                locked = page.locator(f'{SUBAGENTS} .chat-seg[data-mode="swarm"]')
+                (locked.tap if phone else locked.click)(force=True)
+                page.wait_for_timeout(300)
+                assert page.locator(SUBAGENTS).get_attribute("data-mode") == "off"
+            press("#page-chat .chat-subagents-settings")
+            page.wait_for_selector('.settings-panel.active[data-settings-panel="agents"]', state="visible",
+                                   timeout=20_000)
+            assert page.locator(SUBAGENTS).get_attribute("data-open") == "false"
+        finally:
+            (_evidence_dir(tmp_path) / f"subagents-inline-{engine}-{width}.json").write_text(
+                json.dumps(seen, indent=1), encoding="utf-8")
+            page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
+            browser.close()

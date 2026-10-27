@@ -267,27 +267,28 @@ _FP_SETTINGS = {
     "GIGACHAT_BASE_URL": "https://giga.example/v1",
 }
 # model: (provider, window base_url, window fingerprint, response-limit fingerprint, observation scope, image scope)
+# The image scope alone carries a key digest (#1520); OpenRouter's public catalog scope keeps its value.
 _FP_GOLDEN = {
     "anthropic/claude-opus-5.5": ("openrouter", "", "f9face48876fd1cfaaed1fbb", "f9face48876fd1cfaaed1fbb",
                                   "880659b3d40f1ac984485bdb", "7495836c9654e2b823b949c9"),
     "anthropic::claude-opus-5-5": ("anthropic", "", "26f7e223f41e6e5c29406723", "26f7e223f41e6e5c29406723",
-                                   "507f94d68a1ba37f3c4503b5", "a2f89fd2b00c6117725bbb03"),
+                                   "507f94d68a1ba37f3c4503b5", "32e01f936f89d9c57ef48d93"),
     "cloudru::zai-org/GLM-4.7": ("cloudru", "https://cloudru.example/v1", "e67857d121332e835b33969a",
-                                 "e67857d121332e835b33969a", "cb57a7ccbd3559661d0b8f7f", "e0e65be9ab9d855b1272cc15"),
+                                 "e67857d121332e835b33969a", "cb57a7ccbd3559661d0b8f7f", "ca24bc8f99bbd5e697ca340e"),
     "deepseek::deepseek-v4-pro": ("deepseek", "", "06c8178656b2010301309144", "06c8178656b2010301309144",
-                                  "f139a13d97f5a4b3ff047644", "737bc6d9c38808cc11d7cd0a"),
+                                  "f139a13d97f5a4b3ff047644", "59c2499f92bb95025681fe3c"),
     "gigachat::GigaChat-2-Max": ("gigachat", "https://giga.example/v1", "ed4fcddf4e7e7114fc2230ca",
-                                 "ed4fcddf4e7e7114fc2230ca", "580638b7991b1b383d7b11ca", "d47f675a970d6c0f00967045"),
+                                 "ed4fcddf4e7e7114fc2230ca", "580638b7991b1b383d7b11ca", "609ef62dac8cf86ddb9072ff"),
     "minimax::MiniMax-M3": ("minimax", "https://api.minimaxi.com/v1", "84eecf31c2f34bf77918a567",
-                            "84eecf31c2f34bf77918a567", "ce686cf9a23d0ef34098d339", "5032df825db24a5f784a81ea"),
+                            "84eecf31c2f34bf77918a567", "ce686cf9a23d0ef34098d339", "b7cbb3bdbb4d40e4573fc4ae"),
     "openai-compatible::llama-4": ("openai-compatible", "https://compat.example/v1", "59206c9bfcd807e33a1dfc9c",
-                                   "59206c9bfcd807e33a1dfc9c", "78d9fed8f81e63eb5f7bb8aa", "604e9ba88188183924a9fb39"),
+                                   "59206c9bfcd807e33a1dfc9c", "78d9fed8f81e63eb5f7bb8aa", "f13e1125ecc0a9b594b5b459"),
     "openai::gpt-5.6-sol": ("openai", "https://legacy.example/v1", "6c0f0194c5d44fbb5a8aa070",
-                            "32920fef79c6106d7f0e30fc", "cd38281dd7f0d4530a064ea6", "3c9d13c8b7f52125b4554e57"),
+                            "32920fef79c6106d7f0e30fc", "cd38281dd7f0d4530a064ea6", "9e0d2b9d6c2d25a5fd42202d"),
     "openrouter::x-ai/grok-4.5": ("openrouter", "", "79986dee8ec98673e36a2502", "5183382b85782e5de61c6d0b",
                                   "6105dd529302b832a65426e0", "7495836c9654e2b823b949c9"),
     "zai::glm-5.3": ("zai", "https://api.z.ai/api/coding/paas/v4", "fdd75086685edf2a53a87426",
-                     "fdd75086685edf2a53a87426", "3eb97e07521d4b5f5d6048d3", "d251864f1cf3e5991fd9b7a0"),
+                     "fdd75086685edf2a53a87426", "3eb97e07521d4b5f5d6048d3", "8a607aa6a7e6b5528864fc8a"),
 }
 
 

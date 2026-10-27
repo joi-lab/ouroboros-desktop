@@ -1,14 +1,17 @@
 """The effort range control in the real composer (DECISIONS v3 §6; DESIGN "Composer owner controls").
 
-On a real server in Chromium and WebKit: the capsule `Effort <recommended level>` after Subagents and Context (no
-range in words) opens its panel, never inline: a press opens a float panel above it on a desk, a bottom sheet on a
-phone; hover opens nothing. The panel holds the ring and the name, the seven levels at a finger's size, the line that
-says the range and how a change applies; Escape closes and returns focus, an outside press closes, the same capsule
-closes. The row never moves; the strip stays whole inside the panel (seven finger-wide levels on a 360 px phone, shared
-evenly on a 320 px one); the pill covers its word and the band meets the brackets. A drag and the keyboard save the full
-triple through the owner endpoint, with primary independent from helper bounds. Each composer reads only its room; a
-change made just before Send lands before the message; Settings → Behavior has no effort section and ends with Startup
-& background, whose host fact reads as one plain note; Settings → Agents says Auto or the level in the model name.
+On a real server in Chromium and WebKit: the capsule `Effort <recommended level>` after Subagents and Context
+and the context capsule (closed, no range in words) opens inline into the strip — by hover (an
+accelerator) and by press (which pins) on a desktop with a mouse, by press alone on a phone; the
+mouse may drift within 32 px and the strip closes a second after it leaves that zone; Esc closes
+and returns focus, an outside press closes. The open strip never takes a second line and stays
+inside its row: beside the others on a wide screen, alone while they step aside on a 390 px phone
+and in a ~440 px Project pane, scrolling inside itself on a 320 px phone; the pill covers its word
+and the band meets the brackets. A drag and the keyboard save the full triple through
+the owner endpoint, with primary independent from helper bounds. Each composer
+reads only its room; a change made just before Send lands before the
+message; Settings → Behavior has no effort section and ends with Startup & background, whose
+host fact reads as one plain note; Settings → Agents says Auto or the level in the model name.
 """
 from __future__ import annotations
 
@@ -28,60 +31,54 @@ role_ui = roles.role_ui
 
 CONTROL = "#page-chat .chat-effort-range"
 HEAD = f"{CONTROL} .chat-effort-head"
-# The capsule, its row and, while it is open, its panel (in the document only then; the head names it). Closed, the
-# three levels are read from the button's name.
+HOVER_MEDIA = "(hover: hover) and (pointer: fine)"
 FACTS = """sel => {
     const el = document.querySelector(sel);
     const rect = (node) => node.getBoundingClientRect();
     const r = rect(el);
     const head = el.querySelector('.chat-effort-head');
-    const panel = document.getElementById(head.getAttribute('aria-controls'));
-    const strip = panel?.querySelector('.chat-effort-strip');
     const row = el.parentElement;
     const sub = row.querySelector('.chat-subagents-mode');
     const page = el.closest('#page-chat, .chat-instance-panel');
     const area = page.querySelector('#chat-input-area, .chat-input-area');
     const wrap = area.querySelector('.chat-input-wrap');
     const input = page.querySelector('#chat-input, .chat-input');
-    const said = head.title.match(/^Primary effort: (.+?); helpers (.+?)–(.+?)\\./) || [];
-    const text = (which, i) => (strip ? strip.querySelector('.chat-effort-' + which).getAttribute('aria-valuetext') : said[i]);
-    const box = (node) => { const b = node ? rect(node) : null; return b && { left: b.left, right: b.right, top: b.top, bottom: b.bottom, width: b.width, height: b.height }; };
-    // A word's glyphs, not its element: a word too wide for its level overflows its own box.
-    const glyphs = (node) => { if (!node) return null; const range = document.createRange(); range.selectNodeContents(node); return box(range); };
-    const recSeg = strip?.querySelector('.chat-effort-seg[data-rec="true"]');
+    const text = (which) => el.querySelector('.chat-effort-' + which).getAttribute('aria-valuetext');
+    const box = (node) => { const b = node ? rect(node) : null; return b && { left: b.left, right: b.right, top: b.top, bottom: b.bottom }; };
+    const recSeg = el.querySelector('.chat-effort-seg[data-rec="true"]');
+    const strip = el.querySelector('.chat-effort-strip');
+    const shown = (node) => Boolean(node) && getComputedStyle(node).display !== 'none';
     return {
         open: el.dataset.open, known: el.dataset.known, saving: el.dataset.saving || 'false',
         expanded: head.getAttribute('aria-expanded'), title: head.title,
         top: r.top, left: r.left, right: r.right, width: r.width, height: r.height,
         headWidth: rect(head).width, headHeight: rect(head).height,
-        subTop: rect(sub).top, subHeight: rect(sub).height, rowRight: rect(row).right,
+        subTop: rect(sub).top, subBottom: rect(sub).bottom, rowRight: rect(row).right,
+        subHeight: rect(row.querySelector('.chat-subagents-mode')).height,
         sendHeight: rect(page.querySelector('.chat-send-inline')).height,
-        inputTop: rect(input).top, view: { width: innerWidth, height: innerHeight },
-        docScroll: document.documentElement.scrollWidth > innerWidth + 1,
+        inputTop: rect(input).top,
+        docScroll: document.documentElement.scrollWidth > window.innerWidth + 1,
         areaScroll: area.scrollWidth > area.clientWidth + 1 || wrap.scrollWidth > wrap.clientWidth + 1,
         areaHeight: area.offsetHeight,
-        headFocused: document.activeElement === head, panelFocused: Boolean(panel) && document.activeElement === panel,
-        recFocused: Boolean(strip) && document.activeElement === strip.querySelector('.chat-effort-rec'),
-        recTabIndex: strip ? strip.querySelector('.chat-effort-rec').tabIndex : -1,
-        min: text('min', 2), rec: text('rec', 1), max: text('max', 3),
-        name: el.querySelector('.chat-capsule-name').textContent, value: el.querySelector('.chat-capsule-value').textContent,
-        headText: head.textContent, rowHeight: rect(row).height,
-        place: panel?.dataset.place || '', panel: box(panel), column: box(wrap), capsule: box(el),
-        title2: panel?.querySelector('.capsule-panel-title')?.textContent || '',
-        ring: Boolean(panel?.querySelector('.capsule-panel-glyph svg')),
-        line: panel?.querySelector('.capsule-panel-line[data-on="true"]')?.textContent || '',
-        rule: panel?.querySelector('.capsule-panel-rule')?.textContent || '',
-        scrim: Boolean(document.querySelector('.capsule-panel-scrim')),
-        extras: panel ? panel.querySelectorAll('.chat-effort-label, .chat-effort-sep, .chat-effort-reset').length : 0,
-        pill: box(strip?.querySelector('.chat-effort-rec')), seg: box(recSeg), word: glyphs(recSeg?.querySelector('.chat-effort-seg-text')),
-        band: box(strip?.querySelector('.chat-effort-band')), minCap: box(strip?.querySelector('.chat-effort-min')),
-        maxCap: box(strip?.querySelector('.chat-effort-max')), strip: box(strip),
-        segs: strip ? [...strip.querySelectorAll('.chat-effort-seg')].map(box) : [],
-        words: strip ? [...strip.querySelectorAll('.chat-effort-seg-text')].map(glyphs) : [],
-        segBoxes: strip ? [...strip.querySelectorAll('.chat-effort-seg')].map((seg) => [box(seg), glyphs(seg.querySelector('.chat-effort-seg-text'))]) : [],
-        stripScrolls: Boolean(strip) && strip.scrollWidth > strip.clientWidth + 1,
+        reserve: parseFloat(getComputedStyle(page).getPropertyValue('--chat-input-reserve')) || 0,
+        headFocused: document.activeElement === head,
+        recFocused: document.activeElement === el.querySelector('.chat-effort-rec'),
+        recTabIndex: el.querySelector('.chat-effort-rec').tabIndex,
+        min: text('min'), rec: text('rec'), max: text('max'),
+        hoverMedia: matchMedia('%s').matches,
+        fit: el.dataset.fit || '', solo: row.dataset.ownerSolo || '', subShown: shown(sub),
+        contextShown: shown(row.querySelector('.chat-context-mode')), label: el.dataset.label || '',
+        name: el.querySelector('.chat-capsule-name').textContent, nameShown: shown(el.querySelector('.chat-capsule-name')),
+        value: el.querySelector('.chat-capsule-value').textContent, headText: head.textContent,
+        rowHeight: rect(row).height, rowTop: rect(row).top,
+        extras: el.querySelectorAll('.chat-effort-label, .chat-effort-sep, .chat-effort-reset').length,
+        pill: box(el.querySelector('.chat-effort-rec')), seg: box(recSeg), word: box(recSeg?.querySelector('.chat-effort-seg-text')),
+        band: box(el.querySelector('.chat-effort-band')), minCap: box(el.querySelector('.chat-effort-min')),
+        maxCap: box(el.querySelector('.chat-effort-max')),
+        strip: box(strip), body: box(el.querySelector('.chat-capsule-body')),
+        stripScrolls: strip.scrollWidth > strip.clientWidth + 1, stripScroll: strip.dataset.scroll || '',
     };
-}"""
+}""" % HOVER_MEDIA
 
 
 def _evidence_dir(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -112,77 +109,20 @@ def _wait(page, predicate: str, selector: str = CONTROL, timeout: int = 5_000) -
                            arg=selector, timeout=timeout)
 
 
-def _panel(page, selector: str = CONTROL) -> str:
-    """The capsule's panel, as a selector (its head names it)."""
-    return "#" + page.get_attribute(f"{selector} .chat-capsule-head", "aria-controls")
-
-
-def _at_rest(page, selector: str = CONTROL) -> None:
-    """The capsule's row has settled: the capsule's box is the same on three frames in a row (the row's fit runs in a
-    frame after its first layout, and the names may give way then)."""
-    page.evaluate("""sel => new Promise((resolve) => {
-        const el = document.querySelector(sel);
-        let last = '', same = 0;
-        const tick = () => {
-            const r = el.getBoundingClientRect(), now = [r.left, r.top, r.width].join();
-            same = now === last ? same + 1 : 0;
-            last = now;
-            if (same >= 3) resolve(true); else requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-    })""", selector)
-
-
-def _settled(page, selector: str = CONTROL) -> None:
-    """The capsule's panel is open and its entrance has played."""
-    _wait(page, "el.dataset.open === 'true'", selector)
-    page.wait_for_function("sel => { const p = document.querySelector(sel); return p && !p.getAnimations({subtree: true})"
-                           ".some(a => a.playState === 'running' || a.pending); }", arg=_panel(page, selector), timeout=5_000)
-
-
 def _segment_center(page, level: str, selector: str = CONTROL) -> tuple[float, float]:
-    box = page.locator(f'{_panel(page, selector)} [data-effort-seg="{level}"]').bounding_box()
+    box = page.locator(f'{selector} [data-effort-seg="{level}"]').bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
 
-def _assert_strip_geometry(facts: dict, *, air: float = 1.5) -> None:
+def _assert_strip_geometry(facts: dict) -> None:
     """The pill covers its whole segment and its word with air on both sides; the band, the
     pill and the brackets share one vertical box, and the band's ends are the brackets."""
     pill, seg, word, band = facts["pill"], facts["seg"], facts["word"], facts["band"]
     assert abs(pill["left"] - seg["left"]) <= 0.6 and abs(pill["right"] - seg["right"]) <= 0.6, facts
-    assert pill["left"] <= word["left"] - air and pill["right"] >= word["right"] + air, facts
+    assert pill["left"] <= word["left"] - 1.5 and pill["right"] >= word["right"] + 1.5, facts
     for cap in (facts["minCap"], facts["maxCap"], pill):
         assert abs(cap["top"] - band["top"]) <= 0.6 and abs(cap["bottom"] - band["bottom"]) <= 0.6, facts
     assert abs(facts["minCap"]["left"] - band["left"]) <= 0.6 and abs(facts["maxCap"]["right"] - band["right"]) <= 0.6, facts
-    # Every word stands inside its own level (a long one takes two lines where levels share a narrow strip).
-    for seg, text in facts["segBoxes"]:
-        assert seg["left"] - 0.5 <= text["left"] and text["right"] <= seg["right"] + 0.5, ("a word outgrew its level", seg, text)
-    # A bracket's bar (its outer 2 px; its arms run along the band's top and bottom) keeps its air from every word.
-    bars = ((facts["minCap"]["left"], facts["minCap"]["left"] + 2), (facts["maxCap"]["right"] - 2, facts["maxCap"]["right"]))
-    for low, high in bars:
-        assert all(word["right"] <= low - 1 or word["left"] >= high + 1 for word in facts["words"]), ((low, high), facts["words"])
-
-
-def _assert_in_its_panel(facts: dict, *, phone: bool, finger: bool = True) -> None:
-    """A float panel stands above the capsule inside the composer's column, its leading edge on the capsule's; a sheet
-    spans the bottom of the screen. The strip stays whole inside it, every level a finger wide (unless `finger` is off),
-    and nothing scrolls sideways."""
-    panel, strip, view = facts["panel"], facts["strip"], facts["view"]
-    if phone:
-        assert facts["place"] == "sheet" and facts["scrim"], facts
-        assert abs(panel["left"]) <= 0.5 and abs(panel["right"] - view["width"]) <= 0.5, facts
-        assert abs(panel["bottom"] - view["height"]) <= 0.5, facts
-    else:
-        column, capsule = facts["column"], facts["capsule"]
-        assert facts["place"] == "float" and not facts["scrim"], facts
-        assert abs(panel["bottom"] - (capsule["top"] - 8)) <= 1, ("8 px above the capsule", facts)
-        assert panel["left"] >= column["left"] - 0.5 and panel["right"] <= column["right"] + 0.5, ("inside the column", facts)
-        edge = max(column["left"], min(capsule["left"], column["right"] - panel["width"]))
-        assert abs(panel["left"] - edge) <= 1, ("its leading edge on the capsule's", facts)
-    assert panel["left"] <= strip["left"] and strip["right"] <= panel["right"], facts
-    assert strip["height"] >= 44 - 0.5 and not facts["stripScrolls"] and not facts["docScroll"], facts
-    if finger:
-        assert all(seg["width"] >= 44 - 0.5 for seg in facts["segs"]), ("every level a finger wide", facts["segs"])
 
 
 def _launch(pw, engine: str, **context):
@@ -195,103 +135,129 @@ def _launch(pw, engine: str, **context):
     return browser, browser.new_page(**context)
 
 
-# A finger drawn down a sheet from its grabber, `share` of the sheet's height, in ten steps 30 ms apart (pointer events,
-# as a touch delivers them; both engines).
-SWIPE = """({ sel, share }) => new Promise((resolve) => {
-    const panel = document.querySelector(sel);
-    const grab = panel.querySelector('.capsule-panel-grab');
-    const g = grab.getBoundingClientRect();
-    const x = g.left + g.width / 2, y0 = g.top + g.height / 2;
-    const dy = panel.getBoundingClientRect().height * share;
-    const at = (y) => ({ bubbles: true, cancelable: true, pointerId: 7, pointerType: 'touch', isPrimary: true,
-        clientX: x, clientY: y, button: 0 });
-    grab.dispatchEvent(new PointerEvent('pointerdown', at(y0)));
-    let i = 0;
-    const step = () => {
-        i += 1;
-        panel.dispatchEvent(new PointerEvent('pointermove', at(y0 + dy * i / 10)));
-        if (i < 10) setTimeout(step, 30);
-        else { panel.dispatchEvent(new PointerEvent('pointerup', at(y0 + dy))); resolve(); }
-    };
-    setTimeout(step, 30);
-})"""
-ROW_KEYS = ("top", "left", "width", "height", "rowHeight", "areaHeight")
-
-
-def _assert_row_still(opened: dict, closed: dict) -> None:
-    for key in ROW_KEYS:
-        assert opened[key] == closed[key], ("the row never moves", key, opened, closed)
-
-
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_desk_press_opens_a_float_panel_and_escape_outside_or_the_capsule_closes_it(direct_server_with_data, engine, tmp_path):  # noqa: F811
+def test_desktop_hover_opens_press_pins_escape_and_outside_close(direct_server_with_data, engine, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
     url = direct_server_with_data["url"]
     with sync_playwright() as pw:
-        browser, page = _launch(pw, engine, viewport={"width": 1280, "height": 900})
+        browser, page = _launch(pw, engine, viewport={"width": 1440, "height": 900})
         try:
-            _open_chat(page, url, width=1280)
-            _at_rest(page)
+            _open_chat(page, url, width=1440)
             closed = _facts(page)
-            assert closed["open"] == "false" and closed["expanded"] == "false" and closed["panel"] is None, closed
+            assert closed["hoverMedia"] is True, closed
+            assert closed["open"] == "false" and closed["expanded"] == "false", closed
             # A labelled capsule of the other capsules' height on their row: ring, Effort and the recommended
             # level, and no range in words (the ring and the button's name carry it).
             assert abs(closed["height"] - 32) <= 1 and closed["headHeight"] >= 29, closed
             assert (closed["name"], closed["value"], closed["headText"]) == ("Effort", "Medium", "EffortMedium"), closed
             assert abs(closed["top"] - closed["subTop"]) <= 2, closed
+            assert closed["recTabIndex"] == -1, "closed handles are out of the tab order"
             assert closed["title"] == "Primary effort: Medium; helpers Low–High. Applies to new participants in this room.", closed
-            assert (closed["min"], closed["rec"], closed["max"]) == ("Low", "Medium", "High"), closed
-            _shot(page, tmp_path, f"effort-closed-{engine}-dark")
-            # Hover opens nothing: a press is the way in.
+            assert closed["extras"] == 0, "no title word of the strip's own, no separator element, no reset"
+            _shot(page, tmp_path, f"composer-closed-{engine}-dark")
+            # Hover opens after ~160 ms; at this width the strip stays beside the other capsules.
             page.hover(HEAD)
-            page.wait_for_timeout(400)
-            assert _facts(page)["open"] == "false", "hover opens nothing"
-            page.click(HEAD)
-            _settled(page)
-            opened = _facts(page)
-            assert opened["expanded"] == "true" and opened["panelFocused"], ("focus goes into the panel", opened)
-            assert (opened["title2"], opened["ring"]) == ("Effort", True), ("the ring and the name head it", opened)
-            assert opened["line"] == "Primary Medium; helpers Low–High.", opened
-            assert opened["rule"] == "Applies to new work in this chat; running work keeps its level.", opened
-            assert opened["extras"] == 0, "no title word of the strip's own, no separator element, no reset"
-            assert opened["recTabIndex"] == 0, opened
-            _assert_row_still(opened, closed)
-            _assert_in_its_panel(opened, phone=False)
-            _assert_strip_geometry(opened)
-            _shot(page, tmp_path, f"effort-open-{engine}-dark")
-            # The same capsule again closes it, focus back on the capsule.
-            page.click(HEAD)
-            _wait(page, "el.dataset.open === 'false'")
-            assert _facts(page)["headFocused"] is True
-            # Enter opens onto the primary handle; Escape closes and returns focus.
-            page.keyboard.press("Enter")
             _wait(page, "el.dataset.open === 'true'")
-            assert _facts(page)["recFocused"] is True
+            page.wait_for_timeout(500)  # the open animation
+            opened = _facts(page)
+            assert opened["fit"] == "inline" and opened["solo"] == "" and opened["subShown"] and opened["contextShown"], opened
+            assert opened["label"] == "true" and opened["nameShown"], "a wide row keeps the name beside the strip"
+            assert abs(opened["top"] - opened["subTop"]) <= 2, opened
+            # Contained: inside its row, on the row's one line, nothing scrolls the page.
+            assert opened["right"] <= opened["rowRight"] + 1 and not opened["docScroll"] and not opened["areaScroll"], opened
+            assert abs(opened["rowHeight"] - closed["rowHeight"]) <= 1, (opened, closed)
+            assert opened["recTabIndex"] == 0, opened
+            _assert_strip_geometry(opened)
+            _shot(page, tmp_path, f"composer-open-{engine}-dark")
+            # The mouse may drift within the 32 px zone: the strip stays open.
+            page.mouse.move(opened["right"] + 20, opened["top"] + opened["height"] / 2)
+            page.wait_for_timeout(1300)
+            assert _facts(page)["open"] == "true", "the zone keeps the strip open"
+            # Leaving the zone closes it about a second later, not at once.
+            page.mouse.move(20, 200)
+            page.wait_for_timeout(500)
+            assert _facts(page)["open"] == "true", "not before the delay"
+            _wait(page, "el.dataset.open === 'false'", timeout=3_000)
+            # A mouse press on a level of a hover-opened strip does not hold it open afterwards.
+            page.hover(HEAD)
+            _wait(page, "el.dataset.open === 'true'")
+            page.wait_for_timeout(450)
+            x, y = _segment_center(page, "medium")
+            page.mouse.click(x, y)
+            page.mouse.move(20, 200)
+            _wait(page, "el.dataset.open === 'false'", timeout=3_000)
+            # Hover again, then a press pins it: leaving no longer closes.
+            page.hover(HEAD)
+            _wait(page, "el.dataset.open === 'true'")
+            page.click(HEAD)
+            page.mouse.move(20, 200)
+            page.wait_for_timeout(1300)  # longer than the 1 s close an unpinned strip would get
+            assert _facts(page)["open"] == "true", "pinned: leaving does not close"
+            # Esc closes and returns focus to the button.
             page.keyboard.press("Escape")
             _wait(page, "el.dataset.open === 'false'")
             assert _facts(page)["headFocused"] is True
-            # An outside press closes.
-            page.click(HEAD)
+            # Enter opens and focuses the recommended handle; an outside press closes.
+            page.keyboard.press("Enter")
             _wait(page, "el.dataset.open === 'true'")
+            assert _facts(page)["recFocused"] is True
             page.mouse.click(400, 300)
             _wait(page, "el.dataset.open === 'false'")
-            _assert_row_still(_facts(page), closed)
             # Light theme, for the eye.
             page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'light'); } catch (e) {}")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{CONTROL}')?.dataset.known === 'true'", timeout=30_000)
-            _shot(page, tmp_path, f"effort-closed-{engine}-light")
+            _shot(page, tmp_path, f"composer-closed-{engine}-light")
             page.click(HEAD)
-            _settled(page)
-            _shot(page, tmp_path, f"effort-open-{engine}-light")
+            _wait(page, "el.dataset.open === 'true'")
+            page.wait_for_timeout(450)
+            _shot(page, tmp_path, f"composer-open-{engine}-light")
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_a_tight_row_keeps_one_line_while_the_strip_closes(direct_server_with_data, engine, tmp_path):  # noqa: F811
+    """A row just wide enough for the strip beside the other capsules at a tighter padding (a narrow
+    window, a Project pane): closing animates the strip away without ever wrapping the row."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, viewport={"width": 1440, "height": 900})
+        try:
+            _open_chat(page, url, width=1440)
+            # Narrow the composer row until the strip only fits beside the other capsules below full padding.
+            for width in range(1120, 820, -8):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.click(HEAD)
+                _wait(page, "el.dataset.open === 'true'")
+                pad = page.evaluate(f"() => parseFloat(document.querySelector('{CONTROL}').style.getPropertyValue('--capsule-seg-pad'))")
+                fit = _facts(page)["fit"]
+                if fit == "inline" and pad < 8:
+                    break
+                page.keyboard.press("Escape")
+                _wait(page, "el.dataset.open === 'false'")
+            else:
+                pytest.fail("no viewport between 1120 and 828 px gave an inline strip below full padding")
+            closed_height = page.evaluate(f"() => document.querySelector('{CONTROL}').parentElement.getBoundingClientRect().height")
+            heights = page.evaluate(f"""() => new Promise((resolve) => {{
+                const row = document.querySelector('{CONTROL}').parentElement;
+                const seen = [];
+                const sample = () => {{ seen.push(row.getBoundingClientRect().height); if (seen.length < 40) requestAnimationFrame(sample); else resolve(seen); }};
+                document.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Escape' }}));
+                requestAnimationFrame(sample);
+            }})""")
+            assert max(heights) <= closed_height + 1, (closed_height, heights)
         finally:
             browser.close()
 
 
 @pytest.mark.parametrize("engine,width", [("chromium", 390), ("webkit", 390), ("chromium", 360)])
-def test_phone_press_opens_a_bottom_sheet_that_a_swipe_down_closes(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+def test_phone_press_opens_alone_on_the_line_while_the_others_step_aside(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
@@ -300,39 +266,47 @@ def test_phone_press_opens_a_bottom_sheet_that_a_swipe_down_closes(direct_server
         browser, page = _launch(pw, engine, viewport={"width": width, "height": 800}, is_mobile=True, has_touch=True)
         try:
             _open_chat(page, url, width=width, height=800)
-            _at_rest(page)
             closed = _facts(page)
+            assert closed["hoverMedia"] is False, closed
             assert abs(closed["subHeight"] - closed["sendHeight"]) <= 1, closed
             assert abs(closed["height"] - closed["sendHeight"]) <= 1, "the round button keeps the capsules' height"
             assert closed["top"] < closed["inputTop"] and not closed["docScroll"] and not closed["areaScroll"], closed
-            _shot(page, tmp_path, f"effort-phone-{width}-closed-{engine}")
+            _shot(page, tmp_path, f"composer-phone-{width}-closed-{engine}")
             page.tap(HEAD)
-            _settled(page)
+            _wait(page, "el.dataset.open === 'true'")
+            # The opening frame already has every mark on its word: nothing slides into place.
+            _assert_strip_geometry(_facts(page))
+            page.wait_for_timeout(300)
             opened = _facts(page)
-            _assert_row_still(opened, closed)
-            _assert_in_its_panel(opened, phone=True)
+            # Alone on one line; wider platform fonts may require internal scrolling even at
+            # 360 px. DESIGN's fit is measured, never a viewport breakpoint.
+            assert opened["fit"] in ("solo", "overflow") and opened["solo"] == "effort", opened
+            assert not opened["subShown"] and not opened["contextShown"], opened
+            assert abs(opened["rowHeight"] - closed["rowHeight"]) <= 1, (opened, closed)
+            assert abs(opened["areaHeight"] - closed["areaHeight"]) <= 1, (opened, closed)
+            assert opened["right"] <= opened["rowRight"] + 1, opened
+            assert not opened["docScroll"] and not opened["areaScroll"], opened
+            assert opened["stripScrolls"] is (opened["fit"] == "overflow"), opened
+            assert opened["word"]["left"] >= max(opened["strip"]["left"], opened["body"]["left"]) - 0.5, opened
+            assert opened["word"]["right"] <= min(opened["strip"]["right"], opened["body"]["right"]) + 0.5, opened
+            assert opened["top"] < opened["inputTop"], opened
             _assert_strip_geometry(opened)
-            _shot(page, tmp_path, f"effort-phone-{width}-open-{engine}")
-            # A tap on the scrim closes it.
-            page.touchscreen.tap(width / 2, 120)
-            _wait(page, "el.dataset.open === 'false'")
-            # A short swipe from the grabber springs back; past a third of the sheet's height it goes, and focus
-            # comes back to the capsule.
-            page.tap(HEAD)
-            _settled(page)
-            page.evaluate(SWIPE, {"sel": _panel(page), "share": 0.1})
-            page.wait_for_timeout(450)
-            assert _facts(page)["open"] == "true", "a short swipe springs back"
-            page.evaluate(SWIPE, {"sel": _panel(page), "share": 0.5})
+            _shot(page, tmp_path, f"composer-phone-{width}-open-{engine}")
+            # A tap outside closes and brings the others back at once.
+            page.tap("#chat-messages")
             _wait(page, "el.dataset.open === 'false'")
             back = _facts(page)
-            assert back["headFocused"] is True, back
-            _assert_row_still(back, closed)
+            assert back["subShown"] and back["contextShown"] and back["solo"] == "" and back["fit"] == "", back
+            assert abs(back["rowHeight"] - closed["rowHeight"]) <= 1, (back, closed)
+            page.tap(HEAD)
+            _wait(page, "el.dataset.open === 'true'")
+            page.tap(HEAD)
+            _wait(page, "el.dataset.open === 'false'")
         finally:
             browser.close()
 
 
-def test_project_pane_panel_stays_in_its_column_and_keeps_its_own_value(direct_server_with_data, tmp_path):  # noqa: F811
+def test_project_pane_strip_stands_alone_and_keeps_its_own_value(direct_server_with_data, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
@@ -340,41 +314,50 @@ def test_project_pane_panel_stays_in_its_column_and_keeps_its_own_value(direct_s
 
     url = direct_server_with_data["url"]
     create_project(direct_server_with_data["data_dir"], "pane", name="Pane")
-    pane = "#panel-pchat-pane .chat-effort-range"
+    panel = "#panel-pchat-pane .chat-effort-range"
     with sync_playwright() as pw:
         browser, page = _launch(pw, "chromium", viewport={"width": 1440, "height": 900})
         try:
             _open_chat(page, url, width=1440)
             page.click('.nav-project-row[data-project-id="pane"]')
             page.wait_for_selector("#project-panel:not([hidden])", timeout=30_000)
-            page.wait_for_function(f"() => document.querySelector('{pane}')?.dataset.known === 'true'", timeout=30_000)
-            _at_rest(page, pane)
-            main, closed = _facts(page), _facts(page, pane)
-            assert (main["min"], main["rec"], main["max"]) == (closed["min"], closed["rec"], closed["max"]), (main, closed)
+            page.wait_for_function(f"() => document.querySelector('{panel}')?.dataset.known === 'true'", timeout=30_000)
+            main, pane = _facts(page), _facts(page, panel)
+            assert (main["min"], main["rec"], main["max"]) == (pane["min"], pane["rec"], pane["max"]), (main, pane)
             width = page.locator("#project-panel").bounding_box()["width"]
             assert 340 <= width <= 440.5, width
-            # The press opens the pane's own panel, inside the pane's column; opening saves nothing.
+            closed = _facts(page, panel)
+            # The strip would stand alone here, so hovering does not open it under a still mouse:
+            # the press opens it (pinned), and that press saves nothing.
             saves = []
             page.on("request", lambda r: saves.append(r.url) if r.url.endswith("/api/owner/effort-range") else None)
-            page.click(f"{pane} .chat-effort-head")
-            _settled(page, pane)
-            opened = _facts(page, pane)
+            page.hover(f"{panel} .chat-effort-head")
+            page.wait_for_timeout(450)
+            assert _facts(page, panel)["open"] == "false", "no hover-open where the others would step aside"
+            page.mouse.down()
+            page.mouse.up()
+            _wait(page, "el.dataset.open === 'true'", panel)
+            page.wait_for_timeout(300)
             assert saves == [], saves
-            _assert_row_still(opened, closed)
-            _assert_in_its_panel(opened, phone=False)
+            page.wait_for_timeout(300)
+            opened = _facts(page, panel)
+            assert opened["fit"] == "solo" and not opened["subShown"] and not opened["contextShown"], opened
+            assert abs(opened["rowHeight"] - closed["rowHeight"]) <= 1, (opened, closed)
+            assert opened["right"] <= opened["rowRight"] + 1 and not opened["areaScroll"] and not opened["docScroll"], opened
+            assert opened["top"] < opened["inputTop"], opened
             _assert_strip_geometry(opened)
-            _shot(page, tmp_path, "effort-project-pane-open-chromium")
+            _shot(page, tmp_path, "composer-project-pane-open-chromium")
             # A change in the pane remains there after authoritative readback.
-            page.focus(f"{_panel(page, pane)} .chat-effort-max")
+            page.focus(f"{panel} .chat-effort-max")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range") and r.status == 200, timeout=30_000):
                 page.keyboard.press("ArrowRight")
-            _wait(page, "el.getAttribute('aria-valuetext') !== 'High'", f"{_panel(page, pane)} .chat-effort-max")
+            _wait(page, "el.getAttribute('aria-valuetext') !== 'High'", f"{panel} .chat-effort-max")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{CONTROL}')?.dataset.known === 'true'")
             assert _facts(page)["max"] == "High"
             page.click('.nav-project-row[data-project-id="pane"]')
-            page.wait_for_function(f"() => document.querySelector('{pane}')?.dataset.known === 'true'")
-            assert _facts(page, pane)["max"] == "X-High"
+            page.wait_for_function(f"() => document.querySelector('{panel}')?.dataset.known === 'true'")
+            assert _facts(page, panel)["max"] == "X-High"
         finally:
             browser.close()
 
@@ -389,16 +372,18 @@ def test_drag_and_keyboard_save_the_full_triple_and_reload_reads_it_back(direct_
         try:
             _open_chat(page, url, width=1440)
             page.click(HEAD)
-            _settled(page)
-            panel = _panel(page)
+            _wait(page, "el.dataset.open === 'true'")
+            page.wait_for_timeout(450)
             before = _facts(page)
             assert (before["min"], before["rec"], before["max"]) == ("Low", "Medium", "High"), before
             # Drag the max bracket up to Ultra: the full triple is posted once the pointer lifts.
-            cap = page.locator(f"{panel} .chat-effort-max").bounding_box()
+            cap = page.locator(f"{CONTROL} .chat-effort-max").bounding_box()
             x, y = _segment_center(page, "ultra")
             page.mouse.move(cap["x"] + cap["width"] / 2, cap["y"] + cap["height"] / 2)
             page.mouse.down()
             page.mouse.move(x, y, steps=8)
+            saved = []
+            page.on("response", lambda r: saved.append(r) if r.url.endswith("/api/owner/effort-range") else None)
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
                 page.mouse.up()
             assert waited.value.status == 200, waited.value.text()
@@ -406,8 +391,6 @@ def test_drag_and_keyboard_save_the_full_triple_and_reload_reads_it_back(direct_
             _wait(page, "(el.dataset.saving || 'false') === 'false'")
             after = _facts(page)
             assert (after["min"], after["rec"], after["max"]) == ("Low", "Medium", "Ultra"), after
-            assert after["line"] == "Primary Medium; helpers Low–Ultra.", ("the line says the new range", after)
-            assert after["panel"]["height"] == before["panel"]["height"], ("a choice never changes the panel's height", after, before)
             # A level tap sets primary both inside and outside the helper range.
             x, y = _segment_center(page, "xhigh")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
@@ -418,22 +401,22 @@ def test_drag_and_keyboard_save_the_full_triple_and_reload_reads_it_back(direct_
                 page.mouse.click(x, y)
             assert json.loads(waited.value.request.post_data) == {"min": "low", "recommended": "none", "max": "ultra"}
             # Keyboard: primary and helper bounds move independently.
-            page.focus(f"{panel} .chat-effort-rec")
+            page.focus(f"{CONTROL} .chat-effort-rec")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
                 page.keyboard.press("ArrowRight")
             assert json.loads(waited.value.request.post_data) == {"min": "low", "recommended": "low", "max": "ultra"}
-            page.focus(f"{panel} .chat-effort-min")
+            page.focus(f"{CONTROL} .chat-effort-min")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
                 page.keyboard.press("End")
             assert json.loads(waited.value.request.post_data) == {"min": "ultra", "recommended": "low", "max": "ultra"}
-            _shot(page, tmp_path, "effort-open-changed-chromium")
+            _shot(page, tmp_path, "composer-open-changed-chromium")
             # Moving primary below the helper interval leaves both brackets at Ultra.
-            pill = page.locator(f"{panel} .chat-effort-rec").bounding_box()
+            pill = page.locator(f"{CONTROL} .chat-effort-rec").bounding_box()
             page.mouse.move(pill["x"] + pill["width"] / 2, pill["y"] + pill["height"] / 2)
             page.mouse.down()
             x, y = _segment_center(page, "none")
             page.mouse.move(x, y, steps=10)
-            _wait(page, "el.querySelector('.chat-effort-min').getAttribute('aria-valuetext') === 'Ultra'", panel)
+            _wait(page, "el.querySelector('.chat-effort-min').getAttribute('aria-valuetext') === 'Ultra'")
             x, y = _segment_center(page, "medium")
             page.mouse.move(x, y, steps=6)
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
@@ -447,24 +430,22 @@ def test_drag_and_keyboard_save_the_full_triple_and_reload_reads_it_back(direct_
             reloaded = _facts(page)
             assert (reloaded["min"], reloaded["rec"], reloaded["max"]) == ("Ultra", "Medium", "Ultra"), reloaded
             page.click(HEAD)
-            _settled(page)
-            panel = _panel(page)
+            _wait(page, "el.dataset.open === 'true'")
             # A refused save: the server's sentence, the control back at the server's value.
             page.route("**/api/owner/effort-range", lambda route: route.fulfill(
                 status=400, content_type="application/json",
                 body=json.dumps({"error": "Effort range refused by the test.", "saved": False, "code": "effort_range_invalid"})))
-            page.focus(f"{panel} .chat-effort-min")
+            page.focus(f"{CONTROL} .chat-effort-min")
             page.keyboard.press("ArrowLeft")
             page.wait_for_selector(".toast", timeout=10_000)
             assert "Effort range refused by the test." in page.locator(".toast").first.inner_text()
-            _wait(page, "el.querySelector('.chat-effort-max').getAttribute('aria-valuetext') === 'Ultra'", panel)
+            _wait(page, "el.querySelector('.chat-effort-max').getAttribute('aria-valuetext') === 'Ultra'")
         finally:
             browser.close()
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_a_320_px_phone_sheet_shares_the_strip_evenly(direct_server_with_data, engine, tmp_path):  # noqa: F811
-    """Seven finger-wide levels do not fit a 320 px phone: the levels share the sheet's strip evenly, whole, unscrolled."""
+def test_a_320_px_phone_scrolls_the_strip_inside_the_control(direct_server_with_data, engine, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
@@ -473,20 +454,24 @@ def test_a_320_px_phone_sheet_shares_the_strip_evenly(direct_server_with_data, e
         browser, page = _launch(pw, engine, viewport={"width": 320, "height": 640}, is_mobile=True, has_touch=True)
         try:
             _open_chat(page, url, width=320, height=640)
-            _at_rest(page)
             closed = _facts(page)
             page.tap(HEAD)
-            _settled(page)
+            _wait(page, "el.dataset.open === 'true'")
+            _assert_strip_geometry(_facts(page))
+            # The siblings fade out during the morph. Its completion, not 300 ms on the test runner,
+            # decides when their resting display/overflow can be measured (especially in WebKit).
+            _wait(page, "!el.hasAttribute('data-morph')")
             opened = _facts(page)
-            _assert_row_still(opened, closed)
-            _assert_in_its_panel(opened, phone=True, finger=False)
-            # A word on two lines in a shared level (WebKit hyphenates "Medi-um") may come within a pixel of its pill.
-            _assert_strip_geometry(opened, air=0.5)
-            widths = [seg["width"] for seg in opened["segs"]]
-            assert max(widths) - min(widths) <= 1, ("the levels share it evenly", widths)
+            assert opened["fit"] == "overflow" and not opened["subShown"], opened
+            assert opened["stripScrolls"] and opened["stripScroll"] in ("start", "middle"), opened
+            assert not opened["docScroll"] and not opened["areaScroll"], opened
+            assert abs(opened["rowHeight"] - closed["rowHeight"]) <= 1, (opened, closed)
             assert opened["headWidth"] > 20, "the ring stays"
-            _shot(page, tmp_path, f"effort-phone-320-open-{engine}")
-            # A tap sets primary without moving bounds.
+            _assert_strip_geometry(opened)
+            _shot(page, tmp_path, f"composer-phone-320-open-{engine}")
+            # The hidden end is reached by scrolling; a tap sets primary without moving bounds.
+            page.evaluate(f"() => {{ const s = document.querySelector('{CONTROL} .chat-effort-strip'); s.scrollLeft = s.scrollWidth; }}")
+            _wait(page, "el.querySelector('.chat-effort-strip').dataset.scroll === 'end'")
             x, y = _segment_center(page, "ultra")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range"), timeout=30_000) as waited:
                 page.touchscreen.tap(x, y)
@@ -525,7 +510,7 @@ def test_a_change_made_before_send_lands_before_the_message(direct_server_with_d
             page.route("**/api/owner/effort-range", lambda route: held.append(route))
             page.click(HEAD)
             _wait(page, "el.dataset.open === 'true'")
-            page.focus(f"{_panel(page)} .chat-effort-rec")
+            page.focus(f"{CONTROL} .chat-effort-rec")
             page.keyboard.press("ArrowRight")
             page.wait_for_function("() => true")  # let the request reach the route
             deadline = time.time() + 10
@@ -668,16 +653,15 @@ def test_room_cognition_is_independent_and_survives_project_switch(direct_server
                 page.set_viewport_size({"width": 390, "height": 844})
             context = f"{panel} .chat-context-mode"
             page.locator(f"{context} .chat-capsule-head").tap() if touch else page.click(f"{context} .chat-capsule-head")
-            low = f'{_panel(page, context)} .chat-seg[data-mode="low"]'
             with page.expect_response(lambda r: r.url.endswith("/api/owner/context-mode")) as changed:
-                page.locator(low).tap() if touch else page.click(low)
+                page.locator(f'{context} [data-mode="low"]').tap() if touch else page.click(f'{context} [data-mode="low"]')
             assert changed.value.status == 200, changed.value.text()
             assert json.loads(changed.value.request.post_data) == {"mode": "low", "project_id": alpha["id"]}
             page.keyboard.press("Escape")
             effort = f"{panel} .chat-effort-range"
             page.focus(f"{effort} .chat-effort-head")
             page.keyboard.press("Enter")
-            page.focus(f"{_panel(page, effort)} .chat-effort-rec")
+            page.focus(f"{effort} .chat-effort-rec")
             with page.expect_response(lambda r: r.url.endswith("/api/owner/effort-range")) as changed:
                 page.keyboard.press("Home")
             assert changed.value.status == 200, changed.value.text()

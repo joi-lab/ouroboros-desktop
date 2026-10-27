@@ -221,8 +221,8 @@ def test_inside_telegram_each_moment_plays_its_one_haptic(chromium_ui, tmp_path)
         page.route('**/api/owner/subagents-mode', lambda route: route.fulfill(json={
             'ok': True, 'project_id': '', 'subagents_mode': route.request.post_data_json['mode']}))
         page.locator('#page-chat .chat-subagents-head').click()
-        page.locator('.capsule-panel .chat-subagents-strip .chat-seg[data-mode="swarm"]').click()  # in the capsule's panel
-        page.locator('.capsule-panel .chat-subagents-strip .chat-seg[data-mode="off"]').click()
+        page.locator('#page-chat .chat-subagents-strip .chat-seg[data-mode="swarm"]').click()
+        page.locator('#page-chat .chat-subagents-strip .chat-seg[data-mode="off"]').click()
         facts['mode'] = played()
         page.keyboard.press('Escape')
         clear()

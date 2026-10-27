@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import contextlib
 import hashlib
 import json
 from pathlib import Path
@@ -169,15 +170,78 @@ def inventory_problem(selection, inventory):
     return "floor modules collected no tests: " + ", ".join(missing) if missing else ""
 
 
-def record_failed_attempt(ctx, selection, subject, inventory):
-    """Keep partial execution visible without granting it any proof authority."""
-    if ctx is None or selection is None or getattr(ctx, "_preflight_tests_passed", False):
+def note_lane_process(exc: BaseException, container, proc) -> None:
+    """What a contained lane that raised had acquired, for ``launching``: ``True`` once
+    ``spawn`` returned its process, ``False`` while the container never created one,
+    ``None`` (unknown) when it created one but raised before handing it over, or cannot
+    say. Never raises: the lane's own exception is what propagates."""
+    created = getattr(container, "root_created", None)
+    try:
+        exc.preflight_lane_process = True if proc is not None else False if created is False else None
+    except (AttributeError, TypeError):  # an exception that takes no attributes stays unknown
+        pass
+
+
+@contextlib.contextmanager
+def launching(evidence: dict):
+    """One contained lane's launch in the runner, keeping its ``execution`` true to what it
+    acquired: ``attempted`` while the lane runs, ``executed`` once it returns (a pytest pass
+    returns only after its spawn did; the node lane then states its own phase). A lane that
+    raises leaves ``executed`` once its process was acquired, the earlier phase when it
+    never created one, and ``attempted`` (unknown) otherwise."""
+    before, evidence["execution"] = evidence.get("execution", "not_run"), "attempted"
+    try:
+        yield
+    except BaseException as exc:
+        acquired = getattr(exc, "preflight_lane_process", None)
+        evidence["execution"] = "executed" if acquired is True else before if acquired is False else "attempted"
+        raise
+    evidence["execution"] = "executed"
+
+
+def attempt_outcome(run) -> str:
+    """What a run that minted no green proof observed, read from the runner's own
+    execution phase and lane exits (its evidence dict, or the ``result.json`` it wrote):
+    ``not_started`` (no lane process was created), ``failed`` (a lane exited red),
+    ``interrupted`` (a lane process was acquired but the run stopped before an accepted
+    verdict: a timeout, a containment, worker, inventory or empty-collection refusal, or
+    a later lane that never started) or ``start_unknown`` (the first lane raised before
+    the runner could tell whether its process was created). The phase says ``executed``
+    only for an acquired process (``launching``); a recorded lane is
+    one that returned. A missing terminal is the reader's ``no_terminal``, never
+    ``running``."""
+    from ouroboros.preflight_runner import _PYTEST_EXIT_NO_TESTS
+
+    execution = str(run.get("execution") or "not_run")
+    if execution == "not_run":
+        return "not_started"
+    lanes = [lane for lane in run.get("lanes") or [] if isinstance(lane, dict)]
+    red = [lane for lane in lanes if lane.get("returncode") not in (0, _PYTEST_EXIT_NO_TESTS, None)
+           and not lane.get("containment_error")]
+    return "failed" if red else "interrupted" if execution == "executed" or lanes else "start_unknown"
+
+
+def record_failed_attempt(ctx, selection, subject, inventory, evidence=None):
+    """Keep a run that minted no green proof visible without granting it any proof authority.
+
+    Both tiers: ``subject`` is the tested checkout when the run bound one (a full run's
+    too), ``evidence`` the runner's own record of its path, execution phase and lanes.
+    The row stays on the ctx as the reviewer exhibit's holder (``preflight_receipts``)."""
+    if ctx is None or getattr(ctx, "_preflight_tests_passed", False):
         return
+    from ouroboros.commit_admission import workload_fingerprint
     from ouroboros.preflight_receipts import canonical_data_root
     from ouroboros.utils import append_jsonl, utc_now_iso
 
+    run = evidence if isinstance(evidence, dict) else {}
     event = {"type": "preflight_test_attempt", "ts": utc_now_iso(), "status": "failed",
-             **(scope_record(subject, inventory) if subject else selection.record())}
+             "outcome": attempt_outcome(run),
+             **(scope_record(subject, inventory) if subject else selection.record() if selection else {}),
+             **({"workload_fingerprint": workload_fingerprint(subject.workload)} if subject else {}),
+             "lanes": [{key: lane.get(key) for key in ("lane", "pass", "returncode") if key in lane}
+                       | ({"containment_error": lane["containment_error"]} if lane.get("containment_error") else {})
+                       for lane in run.get("lanes") or [] if isinstance(lane, dict)],
+             "evidence": str(run["path"]) if run.get("path") else None}
     ctx._preflight_test_disclosure = event
     try:
         root = canonical_data_root(ctx)

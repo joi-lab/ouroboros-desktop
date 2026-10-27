@@ -137,9 +137,9 @@ LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     "web_search", "browse_page", "browser_action", "analyze_screenshot", "vlm_query", "view_image",
     # Bounded media projection: writes derived frames only under artifact_store/video_frames.
     "ocr_pdf", "extract_pdf_text", "youtube_transcript", "extract_video_frames",
-    # Reads this child's own callable catalog (the name-miss answer points here);
-    # it grants nothing, unlike enable_tools, which stays Nano schema selection.
-    "list_available_tools", "list_image_models",
+    # This child's own callable catalog (the name-miss answer points here) and the loader
+    # of a permitted schema a route's ceiling or Nano left out; neither grants a tool.
+    "list_available_tools", "enable_tools", "list_image_models",
 })
 
 # A host-minted silence diagnostic (#1376, ``ouroboros/work_diagnostics.py``) reads
@@ -159,9 +159,10 @@ ACTING_SUBAGENT_MODE: str = "acting_subagent"
 # Mutative ("acting") subagents may write inside their assigned write root
 # (isolated self_worktree / shared external_workspace) and run shell/services there.
 # They explicitly CANNOT commit the live body (commit_reviewed /
-# vcs_commit_reviewed), run runtime control, touch the skills lifecycle, enable
-# tools, or write identity, the world map or scratchpad (update_identity /
-# update_world / update_scratchpad).
+# vcs_commit_reviewed), run runtime control, touch the skills lifecycle, grant
+# themselves tools (enable_tools only loads a schema they may already call), or
+# write identity, the world map or scratchpad (update_identity / update_world /
+# update_scratchpad).
 # Knowledge notes and memory marks they may write in their own name: the host
 # signs both with the child's focus. chronicle_write publishes only their drafts of
 # pages and parts, which the integrating mind accepts or rejects; a note, correction
@@ -203,7 +204,7 @@ ACTING_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     "integrate_delegated_patch",
     "web_search", "browse_page", "browser_action", "analyze_screenshot", "vlm_query", "view_image",
     "ocr_pdf", "extract_pdf_text", "youtube_transcript", "extract_video_frames",
-    "list_available_tools", "list_image_models", "generate_image", "recover_image",
+    "list_available_tools", "enable_tools", "list_image_models", "generate_image", "recover_image",
 })
 
 def schema_selection_tools_for_context(ctx: object) -> frozenset[str]:
@@ -498,7 +499,20 @@ def substantive_tool_calls(calls: object) -> list:
             and not (call.get("completion_control") and not call.get("is_error"))]
 
 
+# Writes whose successful result is only a receipt of the write: the page, notes, marks and
+# addressed messages a finishing response carries with its answer (owner decision 27.10, "answer
+# first, then chronicle and forwards"). Any other answer from them, and every other tool, is read
+# before a finish; ``update_identity``/``update_world`` stay out: their ok answers can report an
+# edit that did not apply.
+COMPLETION_RECEIPT_TOOLS = frozenset({
+    "chronicle_write", "knowledge_write", "memory_mark", "update_scratchpad", "journal_write",
+    "workpad_write", "update_focus", "tree_note", "tell_task", "forward_to_worker",
+})
+
+
 def completion_observation_calls(calls: object) -> list:
-    """Results a finish must observe; only successful schema bookkeeping is exempt."""
-    return [call for call in substantive_tool_calls(calls)
-            if call.get("is_error") or call.get("tool") not in {"enable_tools", "list_available_tools"}]
+    """Results a finish must observe. Exempt: successful schema bookkeeping, and a receipt
+    write that answered exactly ``OK`` (a warning or a partial write is read first)."""
+    return [call for call in substantive_tool_calls(calls) if call.get("is_error") or not (
+        call.get("tool") in {"enable_tools", "list_available_tools"}
+        or (call.get("tool") in COMPLETION_RECEIPT_TOOLS and call.get("tool_result_code") == "OK"))]

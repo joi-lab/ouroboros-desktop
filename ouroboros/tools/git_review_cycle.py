@@ -562,7 +562,7 @@ def _reset_commit_review_state(ctx):
     ctx._commit_review_status = "unknown"
     ctx._commit_preflight = None
     ctx._commit_review_panel = None
-    ctx._preflight_execution = None
+    ctx._preflight_execution, ctx._review_since = None, ""
     ctx._review_detached_operations = []  # what THIS call's author left (``review_pause.watch_left_review``)
 
 

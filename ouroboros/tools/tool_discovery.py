@@ -24,6 +24,7 @@ from ouroboros.tool_policy import (
     format_capability_omissions as _format_omissions,
     select_tool_schemas,
     tool_namespace,
+    usable_selectors,
 )
 
 if TYPE_CHECKING:
@@ -123,7 +124,7 @@ def list_available_tools(
         groups.setdefault(tool_namespace(row["name"]), []).append(row)
     selected = str(namespace or "").strip()
     header = ("Current callable catalog (MCP rows from published listings); [loaded] = the schema is already in "
-              "your tool list, enable_tools loads a not-loaded one.")
+              "your tool list" + (", enable_tools loads a not-loaded one." if "enable_tools" in callable_rows else "."))
     if selected:
         chosen = groups.get(selected, [])
         if chosen:
@@ -188,7 +189,7 @@ def enable_tools(
         parts.append("🚫 Hidden by policy (the tool exists but this task cannot use it): " + "; ".join(hidden))
     if not_found:
         pointer = (" list_available_tools shows the current callable names."
-                   if registry.get_schema_by_name("list_available_tools") is not None else "")
+                   if "list_available_tools" in usable_selectors(registry) else "")
         parts.append(f"❌ Not found: {', '.join(not_found)}.{pointer}")
     text = "\n".join(parts)
     if not enabled:

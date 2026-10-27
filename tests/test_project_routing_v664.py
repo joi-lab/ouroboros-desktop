@@ -919,14 +919,15 @@ def test_task_presentation_snapshot_prefers_human_names_and_keeps_machine_ids(tm
     }
 
 
-def test_task_presentation_snapshot_rejects_id_only_project_name_and_is_neutral(tmp_path):
+def test_task_presentation_snapshot_reads_project_for_a_never_named_row_and_keeps_readable_ids(tmp_path):
     from ouroboros.projects_registry import (
         bind_task_to_project,
         create_project,
         task_presentation_snapshot,
     )
 
-    project = create_project(tmp_path, "opaque-project-id", name="opaque-project-id")
+    # A row that was never named carries its minted id as the name: that shape reads Project.
+    project = create_project(tmp_path, "proj_0a1b2c3d4e5f", name="proj_0a1b2c3d4e5f")
     bind_task_to_project(
         tmp_path,
         "opaque-task-id",
@@ -940,6 +941,49 @@ def test_task_presentation_snapshot_rejects_id_only_project_name_and_is_neutral(
     assert snapshot["project_name"] == "Project"
     assert snapshot["task_name"] == "Task"
     assert snapshot["target_label"] == "Project › Task"
+    # An owner's own readable id is the name, as the sidebar and the Project reference show it.
+    readable = create_project(tmp_path, "community-watch", name="community-watch")
+    bind_task_to_project(tmp_path, "watch-task", readable["id"], readable["chat_id"],
+                         origin={"absent": "system"})
+    assert task_presentation_snapshot(tmp_path, "watch-task")["target_label"] == "community-watch › Task"
+
+
+def test_project_display_name_shares_the_never_named_rule_with_the_reference():
+    import json
+    from pathlib import Path
+
+    from ouroboros.project_facts import project_display_name
+
+    fixture = Path(__file__).resolve().parents[1] / "web" / "tests" / "fixtures" / "project_display_name_parity.json"
+    for case in json.loads(fixture.read_text(encoding="utf-8"))["cases"]:
+        assert project_display_name(case["name"], case["id"]) == case["expected"], case
+
+
+def test_a_request_without_a_title_is_named_by_its_first_line_not_a_cut_of_the_whole_request():
+    from ouroboros.projects_registry import task_presentation_name
+
+    request = ("# Community watch — one six-hourly GitHub pass\n\nThe owner renewed this workflow in Main: "
+               "resume it now and every six hours.")
+    assert task_presentation_name({"description": request}) == "Community watch — one six-hourly GitHub pass"
+    # An authored title still wins over the request, whole.
+    assert task_presentation_name({"title": "Watch", "description": request}) == "Watch"
+
+
+def test_a_scheduled_run_takes_the_schedule_name_as_its_authored_name():
+    from supervisor import queue as squeue
+
+    named = squeue._task_from_schedule({
+        "id": "community-watch-6h", "name": "Community watch — GitHub every six hours",
+        "task": {"text": "# Community watch — one six-hourly GitHub pass\n\nRead the knowledge first."},
+    })
+    assert (named["title"], named["suggested_name"]) == ("Community watch — GitHub every six hours",) * 2
+    unnamed = squeue._task_from_schedule({"id": "plain", "task": {"text": "# Nightly check\n\nRun the battery."}})
+    assert "title" not in unnamed  # a derived name never outranks one coined later (admission_names)
+    assert unnamed["suggested_name"] == "Nightly check"
+    # The host's placeholder for an unnamed follow-up names no work: the run reads its request.
+    followup = squeue._task_from_schedule({"id": "followup-0dac19ae-1", "name": "Follow-up of task 0dac19ae",
+                                           "task": {"text": "Check whether CI on the PR passed\nIf green, report it."}})
+    assert "title" not in followup and followup["suggested_name"] == "Check whether CI on the PR passed"
 
 
 def test_task_presentation_snapshot_reads_existing_title_from_durable_live_queue(tmp_path):

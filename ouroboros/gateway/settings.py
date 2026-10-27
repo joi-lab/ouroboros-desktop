@@ -772,6 +772,8 @@ async def api_acknowledge_capability(request: Request) -> JSONResponse:
             return JSONResponse({"ok": True, "ack": record})
         except (ValueError, TypeError) as exc:
             return json_error(str(exc), 400)
+        except OSError as exc:  # a busy or unwritable store: nothing saved or audited, said as JSON
+            return json_exception(exc)
     try:
         window_tokens = int(body.get("window_tokens", -1))
     except (TypeError, ValueError):

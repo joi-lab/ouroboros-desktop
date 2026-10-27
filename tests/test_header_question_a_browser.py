@@ -722,6 +722,7 @@ def test_answered_question_keeps_its_choice_and_words_after_reload_without_the_h
         page.locator('#chat-messages .chat-quiz-card[data-quiz-id="q-words"]').wait_for()
         for attempt in ('live', 'reload'):
             if attempt == 'reload':
+                engine_ui['errors'].watch(page)  # the reload may cut off its own reads (tests/ui_console_errors.py)
                 page.reload()
                 page.locator('#chat-messages .chat-quiz-card[data-quiz-id="q-words"]').wait_for()
             views = {view['id']: view for view in page.evaluate(CHOICE_VIEW)}

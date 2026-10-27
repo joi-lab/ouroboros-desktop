@@ -1,8 +1,8 @@
-import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, joinMarkdownHeadings, plainCauseText, savedTerminalRowNote } from './utils.js';
+import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, plainCauseText, projectMarkdownLines, savedTerminalRowNote } from './utils.js';
 import { cancelCauseClauses, ownerStopEnding } from './cancel_presentation.js';
-import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
+import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote, residualToolErrorsPhrase } from './task_reason_words.js';
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
-import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow } from './task_checkpoints.js';
+import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow, waitEpisode } from './task_checkpoints.js';
 export { taskCheckpointLabel } from './task_checkpoints.js';
 import { coordinatorRouteClause, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { acceptanceIncidentClauses } from './acceptance_incident_presentation.js';
@@ -75,15 +75,17 @@ function shortText(text, maxLen = 180) {
     return s.length > maxLen ? s.slice(0, maxLen - 3) + '...' : s;
 }
 
-// For markdown narration, headings are projected (markers off, ` — ` before the
-// text under them) BEFORE the newlines collapse into the one-line preview:
-// afterwards no line-anchored rule could tell a heading from prose. Typed text
-// (shell commands, errors, traces) is never markdown: a `# comment` stays one.
-// `full` stays the source text either way.
+// For markdown narration, the line-anchored markers (headings with ` — ` before
+// the text under them, bullets, table rows) are projected BEFORE the newlines
+// collapse into the one-line preview: afterwards no line-anchored rule could tell
+// a heading or a list item from prose. Typed text (shell commands, errors, traces)
+// is never markdown: a `# comment` stays one. Marker-only text keeps its source,
+// and `full` stays the source text either way.
 function describeText(text, maxLen = 180, { markdown = false } = {}) {
     const full = String(text || '').trim();
     if (!full) return { preview: '', full: '' };
-    const previewSource = (markdown ? joinMarkdownHeadings(full) : full).replace(/\s+/g, ' ');
+    const lined = markdown ? projectMarkdownLines(full) : full;
+    const previewSource = (lined.trim() ? lined : full).replace(/\s+/g, ' ');
     return {
         preview: previewSource.length > maxLen ? previewSource.slice(0, maxLen - 3) + '...' : previewSource,
         full,
@@ -321,17 +323,21 @@ export function formatLogDuration(sec) {
     return `${num < 10 ? num.toFixed(1) : Math.round(num)}s`;
 }
 
+// task_done ledger totals: a sum no row reported (null) is '?', never 0.
 function formatLogTokens(evt) {
-    const prompt = Number(evt.prompt_tokens || 0);
-    const completion = Number(evt.completion_tokens || 0);
-    if (!prompt && !completion) return '';
+    const count = (n) => (n === null ? '?' : Number(n || 0));
+    const prompt = count(evt.prompt_tokens), completion = count(evt.completion_tokens);
+    if (![prompt, completion].some((n) => n !== '?' && n)) return '';
     return `${prompt}\u2192${completion} tok`;
 }
 
 // Usage rows only (#1578): v2 null = not reported, 0 = a reported zero; an unstamped/v1 zero stays ambiguous (LEGACY_RULE).
+// A session's input_token_usage total is its whole input, as a direct call's prompt_tokens; its harness's own
+// prompt_tokens may count only the uncached rest, so a split without a total shows the input as unknown.
 function formatUsageTokens(evt) {
     const count = (n) => (!Number.isSafeInteger(n) || n < 0 ? '?' : n === 0 && evt.record_contract_version !== 2 ? '0?' : String(n));
-    const prompt = count(evt.prompt_tokens), completion = count(evt.completion_tokens);
+    const split = evt.input_token_usage && typeof evt.input_token_usage === 'object' ? evt.input_token_usage : null;
+    const prompt = count(split ? split.total_tokens : evt.prompt_tokens), completion = count(evt.completion_tokens);
     if (prompt === '?' && completion === '?') return 'tokens not reported';
     return `${prompt}\u2192${completion} tok${[prompt, completion].includes('0?') ? ' (legacy 0 may be unreported)' : ''}`;
 }
@@ -559,7 +565,9 @@ export function taskReasonDetail(evt, codes = []) {
     if (reviewCause && (reason === reviewCause || bypass[reason] === reviewCause)) clause = '';
     const excluded = ['', 'delegated_custody_unreconciled', 'terminal_delivery_unknown', 'terminal_delivery_exhausted'];
     const warnings = [...(Array.isArray(objective?.warnings) ? objective.warnings : []), objective?.warning || ''];
-    const warningClauses = warnings.filter(w => !excluded.includes(w)).map(taskReasonPhrase);
+    const named = residualToolErrorsPhrase(record.outcome_axes?.execution);  // the failure the record holds, in owner words
+    const warningClauses = warnings.filter(w => !excluded.includes(w))
+        .map(w => (w === 'residual_tool_errors_without_review' && named) || taskReasonPhrase(w));
     const artifacts = record.artifact_bundle?.status || record.artifact_status || record.outcome_axes?.artifacts?.status;
     if (['failed', 'missing'].includes(artifacts)) warningClauses.push(taskReasonPhrase('artifacts_unavailable'));
     if (decision?.open_obligations?.length) warningClauses.push(taskReasonPhrase('open_obligations'));
@@ -1092,11 +1100,13 @@ function chatView({
     model = '',
     receipt = false,
     toolCall = null,
+    waitEpisode = null,
 } = {}) {
     const out = { phase, headline, body, visible, promote, terminal, human, dedupeKey };
     // Receipt rows render inside existing blocks but cannot create one.
     if (receipt) out.receipt = true;
     if (toolCall) out.toolCall = toolCall;  // folded into the block's one evidence row
+    if (waitEpisode) out.waitEpisode = waitEpisode;  // folded into the block's one row per wait kind
     if (fullBody) out.fullBody = fullBody;
     if (fullHeadline) out.fullHeadline = fullHeadline;
     // Explicit emptiness is part of the presentation contract: a review-only
@@ -1409,13 +1419,16 @@ function summarizeChatLiveEventView(evt) {
     }
 
     if (t === 'task_checkpoint' || t === 'context_reclaim') {
-        // Visible in the expanded timeline, with no narration/title promotion.
+        // Visible in the expanded timeline, with no narration/title promotion; a host wait's
+        // episodes fold into one receipt row per kind (task_checkpoints.foldWaitRow).
         const lowRetry = evt.checkpoint_kind === 'context_fit_low_retry';
+        const wait = waitEpisode(evt);
         return chatView({
             phase: lowRetry || evt.checkpoint_kind === 'service_finalization_error' ? 'warn' : 'thinking',
             headline: taskCheckpointLabel(evt),
             visible: !checkpointHasProgressRow(evt) && !(evt.checkpoint_kind === 'prompt_prefix_break' && evt.reasoning_retired),
-            dedupeKey: key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
+            dedupeKey: wait ? key('wait', wait.kind) : key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
+            receipt: Boolean(wait), waitEpisode: wait,
         });
     }
 

@@ -14,7 +14,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D04 | Tool execution: registry, access & typed results | 23 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 45 | 0 |
 | D06 | Review stack | 95 | 0 |
-| D07 | Delegation, subagents & Claudexor | 90 | 0 |
+| D07 | Delegation, subagents & Claudexor | 92 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 73 | 0 |
 | D09 | Cancellation, owner control & process custody | 25 | 0 |
 | D10 | Git, update & release machinery | 40 | 0 |
@@ -22,13 +22,13 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D12 | Settings & configuration | 26 | 0 |
 | D13 | Safety, guards & runtime mode | 11 | 0 |
 | D14 | Skills & extensions | 70 | 0 |
-| D15 | Memory, knowledge, consciousness & self-evolution | 33 | 0 |
-| D16 | Observability, usage accounting & cost | 24 | 0 |
-| D17 | Projects, workspaces & task results | 50 | 0 |
+| D15 | Memory, knowledge, consciousness & self-evolution | 32 | 0 |
+| D16 | Observability, usage accounting & cost | 25 | 0 |
+| D17 | Projects, workspaces & task results | 51 | 0 |
 | D18 | Launcher, packaging, platform & shared substrate | 36 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 20 | 0 |
-| **total** | | **903** | **0** |
+| **total** | | **906** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -525,6 +525,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/delegate_custody_reconcile.py`
 - `ouroboros/delegate_custody_usage.py`
 - `ouroboros/delegate_directory.py`
+- `ouroboros/delegate_documents.py`
 - `ouroboros/delegate_evidence.py`
 - `ouroboros/delegate_hold.py`
 - `ouroboros/delegate_interactions.py`
@@ -558,6 +559,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateways/claudexor_metadata.py`
 - `ouroboros/gateways/claudexor_routing.py`
 - `ouroboros/gateways/claudexor_run_events.py`
+- `ouroboros/gateways/claudexor_uploads.py`
 - `ouroboros/harness_maintenance.py`
 - `ouroboros/nanny_pacing.py`
 - `ouroboros/owner_stop_receipt.py`
@@ -990,7 +992,6 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/memory.py`
 - `ouroboros/memory_fallback.py`
 - `ouroboros/memory_inventory.py`
-- `ouroboros/memory_journal_compaction.py`
 - `ouroboros/memory_nomination_receipts.py`
 - `ouroboros/memory_publication.py`
 - `ouroboros/memory_sealing.py`
@@ -1012,6 +1013,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/_usage_response.py`
 - `ouroboros/_usage_rows.py`
 - `ouroboros/_usage_wait.py`
+- `ouroboros/checkpoint_waits.py`
 - `ouroboros/cost_projection.py`
 - `ouroboros/event_token_totals.py`
 - `ouroboros/event_usage.py`
@@ -1076,6 +1078,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/task_store.py`
 - `ouroboros/terminal_projection.py`
 - `ouroboros/terminal_time.py`
+- `ouroboros/tool_error_words.py`
 - `ouroboros/tools/project_journal.py`
 - `ouroboros/workspace_admission.py`
 - `ouroboros/workspace_executor.py`

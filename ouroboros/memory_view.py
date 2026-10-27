@@ -744,16 +744,21 @@ def _mark_target(target: Any) -> str:
     return f"source {target.get('path') or target.get('kind') or 'not recorded'}{location}"
 
 
+def source_reader(target: Mapping[str, Any], source_read: Any = None) -> str:
+    """The reader a retained-source target names to every focus: the writer's explicit reader, else
+    ``memory_read`` over the compact ref, verified on read. An author's own ``read`` recipe resolves in
+    the author's drive only, so it never travels (BIBLE P1: a source this actor can actually resolve)."""
+    if isinstance(source_read, Mapping):
+        return f"{source_read.get('tool')}({json.dumps(source_read.get('arguments') or {}, ensure_ascii=False, sort_keys=True)})"
+    ref = {key: target[key] for key in ("kind", "root", "path", "size", "sha256", "task_id") if key in target}
+    return f"memory_read(source_ref={json.dumps(ref, ensure_ascii=False, sort_keys=True)})"
+
+
 def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str], *, own_room: bool = True) -> Dict[str, Any]:
     """A host-kept late review (``late_review_marks``): its words, when it settled, its full source and its release."""
     review, target = _mapping(mark.get("review")), _mapping(mark.get("target_ref"))
-    read = review.get("source_read")
-    ref = {key: target[key] for key in ("kind", "root", "path", "size", "sha256", "task_id") if key in target}  # verified on read
-    reader = (f"{read.get('tool')}({json.dumps(read.get('arguments') or {}, ensure_ascii=False, sort_keys=True)})"
-              if isinstance(read, Mapping) else
-              f"memory_read(source_ref={json.dumps(ref, ensure_ascii=False, sort_keys=True)})")
-    if not own_room:
-        reader = f"memory_read(node_id={json.dumps(mark['id'])})"  # the full mark carries its retained source reader
+    reader = (source_reader(target, review.get("source_read")) if own_room
+              else f"memory_read(node_id={json.dumps(mark['id'])})")  # the full mark names the same reader
     return {"id": mark["id"], "scope": "room", "room": label(mark.get("room_id")),
             "text": str(mark.get("text") or "") if own_room else "",
             "by": "host", "date": _minute(mark.get("ts")).split(" ")[0], "target": _mark_target(target), "quote": "",
