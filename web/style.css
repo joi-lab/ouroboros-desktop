@@ -4682,6 +4682,17 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     max-width: var(--capsule-body-width, none);
     opacity: 1;
 }
+/* Under a finger the strip's values keep the touch minimum (ui.css .ui-hit-area): each of Context's and Subagents'
+   values, and Effort's strip, reaches above and below the line, never sideways, since values abut. The body then
+   clips only sideways where the engine can (else it hides them, as before), and a strip that scrolls clips them
+   itself, so it has none. */
+@media (pointer: coarse) {
+    @supports (overflow: clip) {
+        .chat-capsule-body { overflow-x: clip; overflow-y: visible; }
+    }
+    .chat-capsule .chat-seg.ui-hit-area::after { inset-inline: 0; }
+    .chat-capsule[data-fit="overflow"] :is(.chat-seg, .chat-effort-strip).ui-hit-area::after { content: none; }
+}
 /* Alone, the strip appears and disappears at once, together with the controls it replaces; a
    capsule the other one closes collapses at once too (data-snap). */
 .chat-capsule:is([data-fit="solo"], [data-fit="overflow"], [data-snap="true"]) :is(.chat-capsule-body, .chat-capsule-value) {

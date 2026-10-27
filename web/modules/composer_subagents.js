@@ -64,7 +64,7 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
     strip.setAttribute('aria-label', 'Subagents');
     strip.dataset.scroll = 'none';
     strip.innerHTML = '<span class="chat-context-thumb" aria-hidden="true"></span>' + SUBAGENT_MODES.map((mode) =>
-        `<button class="chat-seg" type="button" role="radio" tabindex="-1" aria-checked="false" data-mode="${mode}">`
+        `<button class="chat-seg ui-hit-area" type="button" role="radio" tabindex="-1" aria-checked="false" data-mode="${mode}">`
         + `<span class="chat-seg-text">${WORDS[mode]}</span></button>`).join('');
     const segs = Array.from(strip.querySelectorAll('.chat-seg'));
 
