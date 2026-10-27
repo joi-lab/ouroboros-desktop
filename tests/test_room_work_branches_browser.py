@@ -125,7 +125,7 @@ ROWS_RECORDER = """([scope, ms]) => {
     const root = scope === 'main' ? '#page-chat' : '#project-panel';
     let last = '';
     const tick = () => {
-        const surface = document.querySelector(`${root} .rw-surface`);
+        const surface = document.querySelector(`${root} .rw-surface:not(.cx-shade)`);  // the work Shade, not the chip's
         const note = surface?.querySelector('.rw-note');
         const menu = document.querySelector('body > .task-control-menu');
         const state = { hidden: surface ? surface.hidden : null, note: note && !note.hidden ? note.textContent : '',
@@ -218,7 +218,7 @@ LEAKS = r"""(scope) => {
     };
     const shown = (el) => Boolean(el) && !el.hidden && el.getClientRects().length > 0;
     const trigger = root?.querySelector('.rw-trigger');
-    const surface = root?.querySelector('.rw-surface');
+    const surface = trigger ? document.getElementById(trigger.getAttribute('aria-controls')) : null;  // the room's work Shade, never the chip's
     const waitNote = trigger?.querySelector('.rw-sr');
     if (waitNote && !waitNote.hidden) note('trigger .rw-sr (wait note)', waitNote.textContent);
     note('surface[aria-label]', surface?.getAttribute('aria-label'));
@@ -276,11 +276,11 @@ NAMES = """(scope) => {
 
 SHADE_GEOMETRY = """() => { const box = s => { const r = document.querySelector(s).getBoundingClientRect();
         return {x: r.x, y: r.y, right: r.right, bottom: r.bottom}; };
-    const shade = document.querySelector('#project-panel .rw-shade');
+    const shade = document.querySelector('#project-panel .rw-shade:not(.cx-shade)');
     const reachable = [...shade.querySelectorAll('.rw-more, .rw-main[tabindex="0"], .rw-pill')].filter((el) => el.getClientRects().length)
         .every((el) => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
             return Boolean(hit) && (hit === el || el.contains(hit)); });
-    return {bar: box('#project-panel .project-panel-bar'), shade: box('#project-panel .rw-shade'),
+    return {bar: box('#project-panel .project-panel-bar'), shade: box('#project-panel .rw-shade:not(.cx-shade)'),
             capsule: box('#project-panel .app-page-title-row'),
             panel: box('#project-panel'), vw: innerWidth, vh: innerHeight, reachable,
             overflow: document.documentElement.scrollWidth - innerWidth}; }"""
@@ -474,7 +474,7 @@ def test_open_sheet_repaints_translated_chrome_without_replacing_focus(branch_ui
         page.wait_for_function('(label) => document.querySelector("#page-chat .rw-pill-question").textContent === label', arg=question)
         assert page.evaluate('() => document.activeElement === window.__languageFocusNode'), 'language repaint replaced focus'
         expected = '‹Work in this chat›' if language == 'ru' else 'Work in this chat'
-        assert page.locator('#page-chat .rw-surface').get_attribute('aria-label') == expected
+        assert page.locator('#page-chat .rw-surface:not(.cx-shade)').get_attribute('aria-label') == expected
         assert page.locator('#page-chat .rw-pill-resume').inner_text() == ('‹Resume›' if language == 'ru' else 'Resume')
     record('language-switch', {'focus': page.evaluate(ACTIVE), 'posts': transport.posts})
     assert transport.posts == [] and transport.decision_posts() == []

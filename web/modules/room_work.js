@@ -72,6 +72,27 @@ export function workCard(work, records) {
  * Mount the status control and its list for one chat instance. The caller passes its own owners by their
  * names; `update()` repaints on the next frame after any of them changed.
  */
+/**
+ * A list hung under a bar's capsules (room_work.css): from the status capsule's left edge to the right edge of the
+ * bar's last visible control (a toolbar's own box reaches past its capsules), below the capsule. Measured where the bar
+ * really laid them out and written as three custom properties on the list's anchor. A control inside a list (this
+ * room's work, or the consciousness chip's) is never the bar's edge.
+ */
+export function hangUnderCapsules(bar, anchor) {
+    const titleRow = bar?.querySelector('.app-page-title-row');
+    if (!titleRow || !anchor?.isConnected) return;
+    const edge = anchor.getBoundingClientRect();
+    const capsule = titleRow.getBoundingClientRect();
+    const ends = [...bar.querySelectorAll('button, summary')]
+        .filter((node) => node.getClientRects().length && !titleRow.contains(node) && !node.closest('.rw-shade-anchor'))
+        .map((node) => node.getBoundingClientRect().right);
+    const end = ends.length ? Math.max(...ends) : edge.right;
+    const px = (value) => `${Math.round(value)}px`;
+    anchor.style.setProperty('--rw-left', px(Math.max(0, capsule.left - edge.left)));
+    anchor.style.setProperty('--rw-right', px(Math.max(0, edge.right - end)));
+    anchor.style.setProperty('--rw-top', px(capsule.bottom - edge.top));
+}
+
 export function createRoomWork({
     page, asPanel = false, ws = null, statusBadge, messagesDiv, reading, stateSnapshots = null, revealQuestion = null,
     works = () => null, liveCardRecords: records = new Map(),
@@ -131,7 +152,9 @@ export function createRoomWork({
     const list = element('div', 'rw-list');
     const note = element('p', 'rw-note');
     note.hidden = true;
-    surface.append(list, note);
+    // The commands a narrow bar keeps in its list (Main's Restart and budget: page_header.js); empty, it takes no room.
+    const extras = element('div', 'rw-extras');
+    surface.append(list, note, extras);
     // A zero-height anchor under the bar: the list follows the bar's real height at every width. Main's
     // header floats over the transcript, so its anchor is the header's own last child at its bottom edge.
     const shadeAnchor = element('div', 'rw-shade-anchor');
@@ -142,23 +165,9 @@ export function createRoomWork({
     // The element that says "open" for CSS: the Project panel, or Main's header.
     const openHost = panel || (asPanel ? null : bar);
 
-    // The list hangs under the bar's capsules (room_work.css): from the status capsule's left edge to the right edge
-    // of the bar's last visible control (a toolbar's own box reaches past its capsules), below the capsule. Measured
-    // where the bar really laid them out, written as three custom properties on the anchor, and measured again
-    // whenever the open list paints.
+    // The list hangs under the bar's capsules, measured again whenever the open list paints.
     function placeSurface() {
-        if (!bar || !titleRow || !shadeAnchor.isConnected) return;
-        const edge = shadeAnchor.getBoundingClientRect();
-        const capsule = titleRow.getBoundingClientRect();
-        const ends = [...bar.querySelectorAll('button, summary')]
-            .filter((node) => node.getClientRects().length && !titleRow.contains(node) && !shadeAnchor.contains(node)
-                && !node.closest('.chat-header-menu'))
-            .map((node) => node.getBoundingClientRect().right);
-        const end = ends.length ? Math.max(...ends) : edge.right;
-        const px = (value) => `${Math.round(value)}px`;
-        shadeAnchor.style.setProperty('--rw-left', px(Math.max(0, capsule.left - edge.left)));
-        shadeAnchor.style.setProperty('--rw-right', px(Math.max(0, edge.right - end)));
-        shadeAnchor.style.setProperty('--rw-top', px(capsule.bottom - edge.top));
+        if (bar) hangUnderCapsules(bar, shadeAnchor);
     }
 
     // ---- Back to reading: one explicit return to the passage a navigation left
@@ -721,7 +730,7 @@ export function createRoomWork({
 
     function paintTrigger() {
         const text = [clean(statusBadge.textContent), clean(statusBadge.dataset.step)].filter(Boolean).join(' · ');
-        const listed = rows.length > 0;
+        const listed = rows.length > 0 || extras.children.length > 0;
         // Word, tone, mark and what waits for the owner come together from the chat's producer
         // (work_status.roomStatusView via setStatus); the control paints them and never ranks row tones or reads a
         // class name for a second opinion. Before the producer's first answer the room is not online yet: an unknown
@@ -952,6 +961,8 @@ export function createRoomWork({
         }
     });
     listen(back, 'click', goBack);
+    // A command chosen in the Shade is the end of this look (Restart asks its own question, the budget opens Costs).
+    listen(extras, 'click', () => close({ restoreFocus: false }));
     listen(doc, 'pointerdown', (event) => {
         // A press lasts until the click its release makes (a touch's mouse events follow its pointerup), so a
         // focus move inside it, its own or a closing menu handing focus back, folds nothing under the pointer.
@@ -1065,6 +1076,7 @@ export function createRoomWork({
     render();
     return {
         update: schedule,
+        extras,
         close: () => close({ restoreFocus: false }),
         // The room leaves the screen: the list closes and the saved passage no longer applies.
         leave() {

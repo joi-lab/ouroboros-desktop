@@ -886,8 +886,9 @@ def _runtime_reason_code_literals() -> dict[str, str]:
     return found
 
 
-# Historical outcomes remain classified even after their producing rail is retired.
-_RETIRED_TRUNCATION_CODES = {"children_unabsorbed"}
+# Historical reason codes keep their recorded decision, truncating or not, after their producing rail is retired:
+# old records still carry them.
+_RETIRED_REASON_CODES = {"children_unabsorbed", "delegated_custody_unreconciled"}
 
 
 def test_truncation_vocabulary_is_derived_from_the_runtime_not_restated():
@@ -907,8 +908,8 @@ def test_truncation_vocabulary_is_derived_from_the_runtime_not_restated():
     assert {"round_limit", "deadline_local"} <= RUNTIME_TRUNCATION_REASON_CODES
 
     emitted = _runtime_reason_code_literals()
-    assert _RETIRED_TRUNCATION_CODES.isdisjoint(emitted)
-    for code in sorted(RUNTIME_TRUNCATION_REASON_CODES - _RETIRED_TRUNCATION_CODES):
+    assert _RETIRED_REASON_CODES.isdisjoint(emitted)
+    for code in sorted(RUNTIME_TRUNCATION_REASON_CODES - _RETIRED_REASON_CODES):
         assert code in emitted, f"{code} is published but no line in ouroboros/ emits it"
 
 
@@ -921,8 +922,10 @@ def test_every_runtime_reason_code_has_a_recorded_truncation_decision():
     assert not undecided, "new runtime reason code(s) with no recorded decision in _TRUNCATION_DECISIONS: " + ", ".join(
         f"{code} ({emitted[code]})" for code in undecided
     )
-    stale = sorted(set(_TRUNCATION_DECISIONS) - set(emitted) - _RETIRED_TRUNCATION_CODES)
+    stale = sorted(set(_TRUNCATION_DECISIONS) - set(emitted) - _RETIRED_REASON_CODES)
     assert not stale, f"decision recorded for code(s) the runtime no longer emits: {stale}"
+    forgotten = sorted(_RETIRED_REASON_CODES - set(_TRUNCATION_DECISIONS))
+    assert not forgotten, f"retired code(s) whose old records lost their decision: {forgotten}"
 
     decided_truncating = {c for c, (yes, _why) in _TRUNCATION_DECISIONS.items() if yes}
     assert decided_truncating == set(RUNTIME_TRUNCATION_REASON_CODES)
