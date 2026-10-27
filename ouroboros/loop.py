@@ -57,6 +57,7 @@ from ouroboros.loop_tool_execution import (
     reclaim_trace_refs,  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 )
 from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY, TRANSPORT_DEATHS_KEY, call_llm_with_retry, emit_llm_usage_event, forced_response_is_incomplete, forced_response_parts, provider_no_call_source  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
+from ouroboros.loop_llm_call import TRANSPORT_WAIT_REDIAL_KEY
 from ouroboros.preflight_receipts import canonical_data_root
 from ouroboros.transcript_prefix import count_history_change, observe_send as _observe_transcript_send
 from ouroboros.transcript_prefix import retire_main_reasoning as _retire_main_reasoning  # noqa: F401 -- shared send boundary
@@ -677,6 +678,7 @@ def run_llm_loop(
                         event_queue=event_queue, accumulated_usage=accumulated_usage, task_type=task_type,
                         active_use_local=active_use_local, active_context_mode=active_context_mode,
                         drive_root=drive_root, emit_progress=emit_progress)
+                    accumulated_usage[TRANSPORT_WAIT_REDIAL_KEY] = transport_wait is not None  # an open episode paces it
                     with receiver_abandonable(), working_checkpoint.model_call_scope(limit_ctx):
                         msg, cost, active_context_mode = _call_round_model(model_call)
                     active_model, active_use_local = model_call.active_model, model_call.active_use_local

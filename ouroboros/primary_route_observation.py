@@ -113,7 +113,7 @@ def route_facts_text(tool_ctx, *, model: str, use_local: bool, role: str, failed
         ("status_code", "HTTP {}"), ("provider_code", "code {}"), ("resource_refusal", "resource refusal {}"))
         if failure.get(key))
     meaning = {"provider_outcome_unknown": " That attempt's outcome and cost stay unknown.",
-               "transport_unavailable": " That request never left this host."}.get(code, "")
+               "transport_unavailable": " The complete request did not reach the provider; generation did not start."}.get(code, "")
     error = (f" Recorded error text: {json.dumps(str(failure['error']), ensure_ascii=False)}."
              if failure.get("error") else "")
     return (f"[ROUTE FACTS] This task's primary route is {label(target, primary['role'])}; "
