@@ -96,6 +96,15 @@ test('a question reference opens that exact question; any other layout or a stat
     });
 });
 
+test('the host and the reference share one never-named rule (project_display_name_parity.json)', () => {
+    const { cases } = JSON.parse(fs.readFileSync(path.join(WEB, 'tests/fixtures/project_display_name_parity.json'), 'utf8'));
+    withDom(() => {
+        for (const { id, name, expected } of cases) {
+            assert.equal(projectReference({ id, name }).children[1].textContent, expected || 'Project', `${id}/${name}`);
+        }
+    });
+});
+
 test('a Project that was never named reads Project, and a name that arrives later reaches text, speech and the press', () => {
     withDom((sent) => {
         // The registry names an unnamed row by its minted id; that shape alone is a non-name.

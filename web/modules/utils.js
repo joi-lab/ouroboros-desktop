@@ -512,16 +512,19 @@ export const MARKDOWN_FENCED_CODE = new RegExp(FENCE_START + '\\n([\\s\\S]*?)```
 const FENCE_CLOSE = /```/;
 
 /**
- * Plain-text projection of ATX headings for one-line previews: the markers go,
- * and a heading (by the renderer's own visible-length rule) followed by text keeps
- * ` — ` as its separator, so a collapsed preview reads `summary — …` rather than
- * gluing the label to the sentence. A marker-led line the renderer treats as prose
- * loses only its markers; a heading already ending in a dash or colon gets no
- * second one; lines inside a code fence are code and stay untouched. CRLF and
+ * Plain-text projection of the line-anchored markers for one-line previews, run
+ * while the newlines still exist (a flattened preview can no longer tell a line
+ * start from prose). ATX headings lose their markers, and a heading (by the
+ * renderer's own visible-length rule) followed by text keeps ` — ` as its
+ * separator, so a collapsed preview reads `summary — …` rather than gluing the
+ * label to the sentence. A marker-led line the renderer treats as prose loses only
+ * its markers; a heading already ending in a dash or colon gets no second one.
+ * Bullets lose their `- `, a table row reads as its cells and a divider row
+ * disappears. Lines inside a code fence are code and stay untouched. CRLF and
  * trailing blanks are normalized. Line-by-line on purpose: a regex over the whole
  * text with a lazy or trailing-blank tail is quadratic on long whitespace runs.
  */
-export function joinMarkdownHeadings(text) {
+export function projectMarkdownLines(text) {
     const raw = String(text || '').split('\n');
     const lines = raw.map((line) => line.trimEnd());
     // Index of the next non-blank line and "a closer exists below" for every line:
@@ -539,7 +542,13 @@ export function joinMarkdownHeadings(text) {
         if (fenced) { if (FENCE_CLOSE.test(raw[index])) fenced = false; return line; }
         if (opensFence(index)) { fenced = true; return line; }
         const heading = /^#{1,6} (.*\S)$/.exec(line);
-        if (!heading) return line;
+        if (!heading) {
+            const bullet = /^- (.+)$/.exec(line);
+            if (bullet) return bullet[1];
+            const row = /^\|(.+)\|$/.exec(line);
+            const cells = row ? row[1].split('|').map((cell) => cell.trim()).join(' ') : line;
+            return /^[\s\-:|]+$/.test(cells) ? '' : cells;
+        }
         const next = nextIndex[index];
         // A visibly dash- or colon-terminated heading (`**Steps:**` included) needs no second separator.
         const visible = visibleHeadingText(heading[1], false);
