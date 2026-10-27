@@ -11,13 +11,15 @@ INSET = "inset: var(--ui-hit-inset);"
 CARRIERS = {
     "web/modules/composer.js": ('class="chat-plus-btn ui-hit-area"', 'class="chat-send-inline ui-hit-area"'),
     "web/modules/composer_subagents.js": ('class="chat-capsule-head ui-hit-area chat-subagents-head"',
+                                          'class="chat-seg ui-hit-area"',
                                           'class="btn btn-default btn-sm chat-subagents-settings ui-hit-area"'),
     "web/modules/voice_controls.js": ("className: 'voice-btn voice-mic ui-hit-area'",),
     "web/modules/message_actions.js": ("button.className = 'chat-message-action ui-hit-area';",),
     "web/modules/composer_chips.js": ("button.className = 'chat-composer-chip ui-hit-area';",
                                      "more.className = 'chat-composer-chip chat-chip-more ui-hit-area';"),
     "web/modules/chat_render_batch.js": ("button.className = 'chat-load-older-btn ui-hit-area';",),
-    "web/modules/composer_owner_controls.js": ('class="chat-capsule-head ui-hit-area ${headClass}"',),
+    "web/modules/composer_owner_controls.js": ('class="chat-capsule-head ui-hit-area ${headClass}"',
+                                               'class="chat-seg ui-hit-area"', 'class="chat-effort-strip ui-hit-area"'),
     # A question's × and Send (no inset of their own: the × once reached 10px out, over the Project capsule above it).
     "web/modules/question_presentation.js": ("closeButton.className = 'chat-quiz-close ui-hit-area';",
                                              "send.className = 'chat-quiz-send ui-hit-area';"),
