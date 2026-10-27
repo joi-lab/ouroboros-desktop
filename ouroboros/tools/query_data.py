@@ -8,9 +8,9 @@ JSON reconstructions; single file/blob records retain their original bytes.
 Every result names its data plane: ``caller`` (the task's drive), ``child`` (an
 owned descendant's drive, selected through the caller's lineage), ``canonical``
 (the installation owner) or a native reviewer's pinned ``native_pin``, which never
-resolves to live data. The owner's default queue files and the owner fallback of a
-blob read need the same actor's existing resource read admission of each exact
-loose or pack file; tool availability is separate. Refusal grants nothing. Task documents, review
+resolves to live data. The owner's default queue files, its money ledger and the
+owner fallback of a blob read need the same actor's existing resource read
+admission of each exact loose or pack file; tool availability is separate. Refusal grants nothing. Task documents, review
 records, skill state and retained runs are read from the owner's state without
 that check.
 """
@@ -410,7 +410,10 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
             if db == "current" and not use_snapshot and timeout_sec > sql.CURRENT_HOLD_SEC:
                 raise ValueError(f"a direct db=current read stops at {sql.CURRENT_HOLD_SEC:g} s because task writes wait "
                                  "on it; use snapshot=true for a longer query")
-            path = _path(ctx, root, sql.database_path(root, db).relative_to(root))
+            local = root
+            if db == "money" and not child_task_id and root != canonical:  # one ledger, the owner's (USAGE_STORE §4)
+                root, plane = canonical, owner
+            path = _plane_path(ctx, plane, root, sql.database_path(root, db).relative_to(root), local)
             absent = not any(path.parent.glob("*.members.json")) if db == "packs" else not path.is_file()
             if absent:
                 result = {"status": "unavailable", "code": "no_packs" if db == "packs" else "not_found", "source": {"db": db}}
@@ -544,7 +547,7 @@ def get_tools():
         "format=text saves one selected string exactly. Complete tool output is retained before any delivery cut. "
         "kind=knowledge_history lists global knowledge writes (when, topic, mode, writer, focus, task, summary, sizes, "
         "change delta) without the note bodies, about 1 KB a row (raise max_bytes or lower tail); knowledge_read gives the current text. "
-        "Results name their data plane; the owner's default queue files and blob fallback need the caller's existing read of each file."),
+        "Results name their data plane; the owner's default queue files, money ledger and blob fallback need the caller's existing read of each file."),
         "parameters": {"type": "object", "required": ["op"], "properties": {
             "op": {"enum": ["sql", "json", "jsonl", "blob"], "type": "string"},
             "db": {"enum": ["current", "money", "packs"], "type": "string", "default": "current",

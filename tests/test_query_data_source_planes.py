@@ -252,6 +252,25 @@ def test_blobs_fall_back_to_the_owner_only_after_a_proven_local_miss(planes, mon
     assert owner_path.read_bytes() == owner_bytes  # reads never touch the owner's bytes
 
 
+def test_money_sql_reads_the_installations_one_ledger_from_any_focus(planes):
+    """A drive of its own holds no money ledger, so a helper's db=money answered not_found while the
+    installation's ledger stood; it reads the owner's, named as such, and the owner still reads its own."""
+    from ouroboros import usage_accounting as ua
+
+    ua.record_subscription_session("sess-1", drive_root=planes["canonical"], route="codex", task_id="helper",
+                                   prompt_tokens=None, completion_tokens=None, cached_tokens=None, spend_usd=0.0)
+    query = dict(op="sql", db="money", query="SELECT task_id FROM attempts")
+    contexts = _contexts(planes)
+    for name in ("forked_root", "helper"):
+        status, result = _query(_registry(contexts[name]), **query)
+        assert status == "ok" and result["data"]["rows"] == [["helper"]], (name, result)
+        assert result["source"]["plane"] == "canonical"
+    status, own = _query(_registry(contexts["root"]), **query)
+    assert status == "ok" and own["source"]["plane"] == "caller"
+    _status, current = _query(_registry(contexts["helper"]), op="sql", query="SELECT count(*) AS n FROM tasks")
+    assert "caller" in (current.get("plane"), current["source"].get("plane"))  # the task facts store stays the caller's
+
+
 def test_packed_blobs_need_the_actors_read_of_the_pack_file_itself(planes, monkeypatch):
     """Packed bytes are read from the pack, never the digest's loose name: each file the reader
     opens is admitted like read_file of that file, so a protected pack refuses the blob too."""
