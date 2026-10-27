@@ -2108,7 +2108,7 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 .msg-time-full {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-/* A message the host accepted while its room was on Swarm: the quiet word before its time, the Subagents ring in the
+/* A message the host accepted while its room was on Swarm: the quiet word before its time, the Subagents mark in the
    time line's own ink (DESIGN "Composer owner controls"). */
 .msg-swarm { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: -2px; }
 .msg-swarm > svg { width: 13px; height: 13px; flex: none; }
