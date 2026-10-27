@@ -257,7 +257,7 @@ def test_filled_slots_keep_the_capsules_line_and_step_aside_with_the_capsules(di
                     assert after["overflow"] <= 0 and not after["outside"], (where, after)
                     page.screenshot(path=str(_evidence_dir(tmp_path) / f"composer-slots-{engine}-{width}-{count}.png"),
                                     animations="disabled")
-                    # An owner capsule open alone: the chips step aside with the pills.
+                    # An owner capsule open alone: the chips step aside with the other controls.
                     page.evaluate("() => { document.querySelector('#page-chat .chat-toolbar-row').dataset.ownerSolo = 'effort'; }")
                     assert page.evaluate(ROW)["slot"]["display"] == "none", where
         finally:
