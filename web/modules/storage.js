@@ -310,9 +310,9 @@ const removerHtml = (row) => (row.remover
 function memberHtml(row) {
     return `<li class="storage-place is-member" data-storage-place="${attr(row.id)}">
             <span class="storage-place-label">${text(row.label)}</span>${sizeCells(row)}
-            ${whyLine(row)}${removerHtml(row)}
+            ${whyLine(row)}
             ${row.split ? `<span class="storage-place-split" data-i18n-fmt="storage.split">${text(row.split)}</span>` : ''}
-            ${partsHtml(row)}
+            ${removerHtml(row)}${partsHtml(row)}
         </li>`;
 }
 
@@ -323,9 +323,9 @@ function groupHtml(group) {
     if (group.members.length === 1) {
         const row = group.members[0];
         return `<li class="storage-group" data-storage-group="${attr(group.id)}" data-storage-place="${attr(row.id)}">${head}
-            <div class="storage-group-body">${whyLine(row)}${removerHtml(row)}
+            <div class="storage-group-body">${whyLine(row)}
             ${row.split ? `<span class="storage-place-split" data-i18n-fmt="storage.split">${text(row.split)}</span>` : ''}
-            ${partsHtml(row)}</div></li>`;
+            ${removerHtml(row)}${partsHtml(row)}</div></li>`;
     }
     return `<li class="storage-group" data-storage-group="${attr(group.id)}">${head}
         <ul class="storage-group-places">${group.members.map(memberHtml).join('')}</ul></li>`;
