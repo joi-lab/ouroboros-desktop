@@ -34,7 +34,6 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
     // words need more than that room it scrolls inside itself. It starts where its control starts and moves back where
     // it would pass the far edge, never past the near one (right to left, the start is the right edge).
     const win = doc.defaultView;
-    const set = (name, value) => { if (el.style.getPropertyValue?.(name) !== value) el.style.setProperty(name, value); };
     function place() {
         const width = Number(doc.documentElement?.clientWidth);
         if (!Number.isFinite(width) || width <= 0 || el.hidden) return;
@@ -50,14 +49,14 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
         const room = Math.max(0, Math.floor(side === 'below' ? below : above));
         const cramped = String(natural > room);
         if (el.dataset.cramped !== cramped) el.dataset.cramped = cramped;
-        set('--ui-hint-room', cramped === 'true' ? `${room}px` : 'none');
-        set('--ui-hint-shift', '0px');
+        el.style.setProperty('--ui-hint-room', cramped === 'true' ? `${room}px` : 'none');
+        el.style.setProperty('--ui-hint-shift', '0px');
         const box = el.getBoundingClientRect();
         let dx = 0;
         if (box.right > width - EDGE_PX) dx = width - EDGE_PX - box.right;
         if (box.left + dx < EDGE_PX) dx = EDGE_PX - box.left;
         const rtl = win?.getComputedStyle?.(el)?.direction === 'rtl';
-        if (dx) set('--ui-hint-shift', `${Math.round(rtl ? -dx : dx)}px`);
+        if (dx) el.style.setProperty('--ui-hint-shift', `${Math.round(rtl ? -dx : dx)}px`);
     }
     // Its words can grow after they are written (the translation overlay), and the window can change under it. A size
     // it reports is placed on the next frame, outside the observer's delivery, so placing never feeds the observer.
