@@ -205,6 +205,34 @@ def test_a_primary_account_changed_meanwhile_keeps_its_view(tmp_path, monkeypatc
     assert away_mode != "max" and back_mode == "max" and messages[0] == shown
 
 
+def test_a_fallback_slot_a_card_moved_off_the_primary_model_is_not_the_primary(tmp_path, monkeypatch):
+    primary, card, reserve = "claudexor::codex=gpt-main", "claudexor::codex=gpt-card", "claudexor::codex=gpt-reserve"
+    waiter = SimpleNamespace(overrides={})
+    monkeypatch.setattr(model_wait, "current_model_wait", lambda: waiter)
+    _windows_by(monkeypatch, "model", {primary: 1_000_000, card: 1_000_000, reserve: 65_537})
+    plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
+    away, mode = _leave(plan, registry, messages, reserve, "max")
+    acting_view = messages[0]
+    # A slot configured with the primary's model, sent to another model by an earlier card: the walk still names it P.
+    waiter.overrides["fallback:0"] = {"model": card, "use_local": False}
+    _slot, slot_mode = loop._rebind_context_fit_plan(away, registry, messages, model=primary, use_local=False,
+                                                     model_role="fallback:0", start_mode=mode, tool_schemas=[])
+    assert mode != "max" and slot_mode == mode and messages[0] == acting_view
+
+
+def test_a_card_moving_main_to_another_model_drops_the_hold(tmp_path, monkeypatch):
+    primary, card, reserve = "claudexor::codex=gpt-main", "claudexor::codex=gpt-card", "claudexor::codex=gpt-reserve"
+    waiter = SimpleNamespace(overrides={})
+    monkeypatch.setattr(model_wait, "current_model_wait", lambda: waiter)
+    _windows_by(monkeypatch, "model", {primary: 1_000_000, card: 1_000_000, reserve: 65_537})
+    plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
+    away, mode = _leave(plan, registry, messages, reserve, "max")
+    waiter.overrides["main"] = {"model": card, "use_local": False}  # the owner moved Main to another model
+    _row, row_mode = loop._rebind_context_fit_plan(away, registry, messages, model=primary, use_local=False,
+                                                   model_role="main", start_mode=mode, tool_schemas=[])
+    assert mode != "max" and row_mode == mode and registry._ctx._primary_view is None
+
+
 def test_forms_i_select_away_hold_on_the_primary_view():
     held, snap = synthetic_plan()
     owner = SimpleNamespace(_primary_view=(("primary", False), held))

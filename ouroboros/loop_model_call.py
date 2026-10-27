@@ -573,7 +573,7 @@ def _rebind_context_fit_plan(
     from ouroboros.provider_models import parse_claudexor_model
 
     role = model_role or getattr(plan, "model_role", "main")
-    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local)
+    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local, role=role)
     metadata = getattr(tools._ctx, "task_metadata", {})
     metadata = metadata if isinstance(metadata, dict) else {}
     task = {
