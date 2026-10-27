@@ -118,7 +118,7 @@ class ClaudexorModelError(RuntimeError):
         context = self.problem.get("context") or {}
         fields = (("stage", "stage"), ("errorCode", "cause"))
         if self.code != "model_outcome_unknown":
-            fields += (("vendorCode", "provider_code"), ("parameter", "parameter"))
+            fields += (("vendorCode", "provider_error_type"), ("parameter", "parameter"))  # the event field it fills
         details = [
             f"{label}={value.strip()}"
             for key, label in fields

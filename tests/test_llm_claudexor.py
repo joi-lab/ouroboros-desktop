@@ -45,7 +45,7 @@ def test_display_diagnostics_preserve_exception_and_private_problem(unknown):
     assert error.reset_at == original["context"]["resetsAt"]
     assert error.model_role == "main" and error.operation_id == "op-1" and error.route == ROUTE
     display = error.display_message
-    assert ("provider_code=string_above_max_length, parameter=instructions" in display[:220]) is (not unknown)
+    assert ("provider_error_type=string_above_max_length, parameter=instructions" in display[:220]) is (not unknown)
     assert "private provider body" not in display and "private-request" not in display
     if unknown:
         assert display == generic
@@ -519,7 +519,7 @@ def test_field_refusal_retains_then_acknowledges_once_with_display(setup, asynch
     assert error.problem == problem and error.body == problem and error.code == code and error.type == vendor
     assert error.status_code == 400 and error.retryable is False
     assert error.operation_id == "op-0" and error.model_role == "main" and error.route == ROUTE
-    assert f"provider_code={vendor}, parameter=input" in error.display_message[:220]
+    assert f"provider_error_type={vendor}, parameter=input" in error.display_message[:220]
     assert error.physical_attempt_capture.state == "settled"
     assert error.usage["claudexor"]["result_custody"]["state"] == "acknowledged"
     assert len(gateway.accepted_operations) == len(gateway.creates) == len(gateway.acks) == 1

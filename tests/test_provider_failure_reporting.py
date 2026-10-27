@@ -841,7 +841,8 @@ def test_claudexor_display_reaches_error_and_terminal_without_retry(tmp_path, mo
     assert ("remote_context_overflow" in [row["type"] for row in rows]) is (kind == "context_overflow")
     hint = _provider_failure_hint(usage)
     assert f'The provider reported error code "{vendor}" and parameter "{parameter}"' in hint
-    assert "The provider said" not in hint and "provider_code=" not in hint and "private-body" not in hint
+    assert "The provider said" not in hint and "provider_error_type=" not in hint and "private-body" not in hint
+    assert event["provider_error_type"] == vendor and event["error"].startswith(f"provider_error_type={vendor}")
     assert provider_recovery_hint(usage) == provider_recovery_hint({**usage, "_last_llm_error": repr(error)})
 
 
