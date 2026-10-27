@@ -9,7 +9,7 @@
 // a second Continue — new work goes through the conversation).
 
 import { continueTask, fetchTaskDetail } from './api_client.js';
-import { heldWorkFacts } from './task_control_menu.js';
+import { announceMembershipGap, heldWorkFacts } from './task_control_menu.js';
 import { ensureLiveActionsEl, ownLiveActionsEl } from './chat_activity.js';
 import { fmt, tr, tx } from './i18n.js';
 import { taskDoneIsTerminal, taskReasonPhrase } from './log_events.js';
@@ -76,6 +76,7 @@ export async function continueTaskAction(taskId, { request = continueTask, stora
             ? `Continue accepted; it starts by itself when the earlier attempt's work finishes: ${
                 heldWorkFacts(ack.blockers) || 'earlier work is not proven settled'}.`
             : 'Continue accepted.', 'ok');
+        announceMembershipGap(ack.membership_gaps, 'continue', toast);  // a replay answers its admission's gap too
         return successor;
     } catch (exc) {
         const body = exc?.body || {};

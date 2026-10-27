@@ -312,7 +312,9 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
     unknown keeps the tree ``requested`` exactly as it keeps that member's
     Resume refused (#1562; the settle tick re-reads it). Only the owner's one
     exception is disclosed instead of waited for: reviewers already launched,
-    their delegated runs and their own model sends (``finishing_reviews``).
+    their delegated runs and their own model sends (``finishing_reviews``). A
+    damaged old row no surviving link ties to this tree is named on the fence
+    (``membership_gaps``), never waited for; a tied one holds it.
     Returns the fence state after the check (``""`` when no fence).
     """
     from ouroboros.owner_pause import (
@@ -387,7 +389,8 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
         return str(fence.get("state") or "")
     from supervisor.continuation_admission import conflicting_writers
 
-    blockers = conflicting_writers(q, root_task_id, drive_root=root_drive, owner_pause_fence_id=fence_id)
+    gaps: List[Dict[str, str]] = []
+    blockers = conflicting_writers(q, root_task_id, drive_root=root_drive, owner_pause_fence_id=fence_id, gaps=gaps)
     if [b for b in blockers if not review_finishing(b)]:
         return str(fence.get("state") or "")
     reviews = {str(b.get("task_id") or b.get("attempt_id") or "") for b in blockers if review_finishing(b)}
@@ -399,6 +402,10 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
             log.debug("Live review operations of %s unreadable at the Pause census", task_id, exc_info=True)
     facts = {"parked_members": [str(item.get("id") or "") for item in parked] + warm,
              "warm_members": list(warm), "finishing_reviews": sorted(reviews - {""})}
+    if gaps or fence.get("membership_gaps"):
+        # Rows no surviving link ties to this tree: named, never a member, never what holds it.
+        from ouroboros.pause_notices import gap_fact
+        facts["membership_gaps"] = gap_fact(gaps)
     if str(fence.get("state") or "") == FENCE_PAUSED:
         if all(fence.get(key) == value for key, value in facts.items()):
             return FENCE_PAUSED

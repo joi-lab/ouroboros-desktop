@@ -18,8 +18,10 @@ function getStack(host = null) {
 /**
  * One toast; a press anywhere on it dismisses it. `ttl` 0 keeps it until then. `action` ({label, run}) adds one
  * button that dismisses the toast and runs (a recovery notice's way back, host_modules.js). `dismissLabel` adds an
- * accessible close button; hover or focus pauses the auto-dismiss timer. An error toast answers the owner's own
- * action and plays Telegram's error haptic (haptics.js); a notice the owner did not cause passes `{ haptic: false }`.
+ * accessible close button; hover or focus pauses the auto-dismiss timer. Beside it the words get their own box, which
+ * the page's stack ends above the screen's bottom: longer words scroll there, a keyboard region (style.css). An error
+ * toast answers the owner's own action and plays Telegram's error haptic (haptics.js); a notice the owner did not
+ * cause passes `{ haptic: false }`.
  * Optional `host` confines the stack above a room's composer. Its owner calls the returned node's `dispose()` on teardown.
  */
 export function showToast(message, tone = 'info', { ttl = 6000, action = null, haptic: felt = true, dismissLabel = '', host = null } = {}) {
@@ -29,7 +31,12 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
     if (felt && cleanTone === 'danger') haptic('error');
     toast.className = `toast toast-${cleanTone}`;
     toast.setAttribute('role', cleanTone === 'danger' ? 'alert' : 'status');
-    toast.textContent = message || '';
+    const words = dismissLabel ? document.createElement('span') : toast;
+    if (words !== toast) {
+        words.className = 'toast-words';
+        toast.append(words);
+    }
+    words.textContent = message || '';
     let timer = 0;
     let removalTimer = 0;
     let hovered = false;
@@ -90,6 +97,12 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
         toast.append(close);
     }
     stack.appendChild(toast);
+    if (words !== toast && words.scrollHeight > words.clientHeight) {
+        // Words cut at the screen's edge are reached by keyboard too, as a wide table is (docs/DESIGN.md).
+        words.tabIndex = 0;
+        words.setAttribute('role', 'region');
+        words.setAttribute('aria-label', 'Scrollable notice');
+    }
     if (ttl > 0) {
         toast.addEventListener('pointerenter', () => { hovered = true; clear(); });
         toast.addEventListener('pointerleave', () => { hovered = false; arm(); });

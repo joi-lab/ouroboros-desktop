@@ -720,6 +720,10 @@ class TaskResumeResponse(TypedDict, total=False):
     held_siblings: List[str]
     rebound_held_siblings: List[str]
     released_hold: str
+    # The still-closed Pause's census settled without these unreadable rows nothing ties to the task:
+    # {"rows": [{"task_id", "reason"}] (at most 20), "count"}; ``message`` words them.
+    membership_gaps: Dict[str, Any]
+    message: str
 
 
 # Last, not first: ``contracts.py`` imports ServedUiState from this module, so the shared

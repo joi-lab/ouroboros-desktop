@@ -1304,6 +1304,8 @@ class TaskContinueResponse(TypedDict, total=False):
     unconfirmed: bool
     state: Literal["bound", "admitted"]
     action_nonce: str
+    # Unreadable rows nothing ties to the predecessor, not waited for: {"rows": [{"task_id", "reason"}], "count"}.
+    membership_gaps: Dict[str, Any]
 
 
 class ContinuationOffer(TypedDict, total=False):
