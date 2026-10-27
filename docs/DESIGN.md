@@ -2852,8 +2852,10 @@ applies only where a pointer can hover (`@media (hover: hover)`).
 **Touch and containment.** Under a coarse pointer every target is at least 44 px
 (`--touch-target-min`); a control whose look is smaller keeps its look and gains
 the invisible hit area of the one `.ui-hit-area` recipe in `web/ui.css`, which a
-link inside a sentence takes too so the sentence keeps its lines. Nothing that
-acts is hidden until hover there (a Project row's menu is reached by its long press).
+link inside a sentence takes too so the sentence keeps its lines. Inside a strip
+that scrolls (a capsule's open levels on a narrow phone) a value keeps only its drawn
+height, since the strip clips that reach. Nothing that acts is hidden until hover
+there (a Project row's menu is reached by its long press).
 No page scrolls sideways at any width; only code, tables, tab strips and a bar's
 Files location scroll sideways, inside themselves, with a fade where content
 hides. Text wraps before it widens a column. A pinch only magnifies (owner 23.10): while it
