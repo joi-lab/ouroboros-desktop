@@ -8,12 +8,15 @@ on the same route, or to a primary changed meanwhile, never raises the mode.
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from ouroboros import context, loop
+from ouroboros import config, context, fallback_cooldown, loop
 from ouroboros import memory_floor as floor
+from ouroboros.model_slots import MODEL_ACCOUNTS_KEY
 from ouroboros.primary_route_observation import hold_selection, record_round_route_result
 from ouroboros.tools.registry import ToolRegistry
 from tests.test_memory_view_lever import plan as synthetic_plan
@@ -110,12 +113,79 @@ def test_a_switch_on_the_same_route_never_raises_the_mode(tmp_path, monkeypatch,
     assert getattr(registry._ctx, "_primary_view", None) is None
 
 
+def _windows_by(monkeypatch, key, windows):
+    """Route evidence whose window follows one task field: the model, or the role whose account serves it."""
+    monkeypatch.setattr(context, "_context_fit_route", lambda task, **_kw: (
+        {"model": task["model"], "provider": "openrouter", "base_url": "", "use_local": False},
+        SimpleNamespace(status="confirmed", stale=False, window_tokens=windows[task[key]], route_fp=task[key])))
+
+
+def _primary_on(model, tmp_path, monkeypatch):
+    _core, build = _built(tmp_path, monkeypatch, ratio=1, page_chars=400_000)
+    plan = replace(build(1_000_000), model=model, model_role="main")
+    registry = _registry(tmp_path)
+    registry._ctx.primary_route["model"] = registry._ctx.active_model = model
+    return plan, registry, plan.messages_for("max")
+
+
+@pytest.mark.parametrize("reserve", ["openai/gpt-reserve", "anthropic/claude-reserve"])
+def test_a_failed_primary_row_leaves_the_acting_view(tmp_path, monkeypatch, reserve):
+    primary = "openai/gpt-primary"  # the same family as the first reserve: both rows share one transcript list
+    _windows_by(monkeypatch, "model", {primary: 1_000_000, reserve: 65_537})
+    monkeypatch.setattr(config, "fallback_candidate_targets", lambda **_kw: [])
+    fallback_cooldown.reset_for_tests()
+    plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
+    shown = messages[0]
+    away, away_mode = _leave(plan, registry, messages, reserve, "max")
+    acting_view, sent = messages[0], {}
+
+    def failing_round(call):
+        sent["view"] = call.messages[0]
+        call.accumulated_usage["_last_llm_error_kind"] = "transport_unavailable"
+        return None, 0.0, call.active_context_mode
+
+    monkeypatch.setattr(loop, "_call_round_model", failing_round)
+    msg, model, _local, plan_after, mode_after = loop._run_cross_model_fallback_chain(
+        llm=SimpleNamespace(), ctx=registry._ctx, tools=registry, messages=messages, active_model=reserve,
+        active_use_local=False, tool_schemas=[], active_effort="medium", max_retries=3, drive_logs=tmp_path,
+        task_id="k04", round_idx=2, event_queue=None, accumulated_usage={"_last_llm_error_kind": "transport_unavailable"},
+        task_type="", emit_progress=lambda *_a, **_kw: None, context_fit_plan=away, active_context_mode=away_mode)
+    assert sent["view"] == shown  # the primary row was offered its own view
+    assert (msg, model, plan_after, mode_after) == (None, reserve, away, away_mode)
+    assert messages[0] == acting_view  # the reserve keeps showing its own view, not the primary's Max
+
+
+def test_the_primary_model_on_another_account_is_another_route(tmp_path, monkeypatch):
+    model = "claudexor::codex=gpt-test"
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a", "fallback": ["account-b"]}))
+    _windows_by(monkeypatch, "model_role", {"main": 1_000_000, "fallback:0": 65_537})
+    plan, registry, messages = _primary_on(model, tmp_path, monkeypatch)
+    shown = messages[0]
+    away, mode = loop._rebind_context_fit_plan(plan, registry, messages, model=model, use_local=False,
+                                              model_role="fallback:0", start_mode="max", tool_schemas=[])
+    assert mode != "max"  # the other account's window narrowed every book
+    _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=model, use_local=False,
+                                                     model_role="main", start_mode=mode, tool_schemas=[])
+    assert back_mode == "max" and messages[0] == shown
+
+
+def test_a_primary_account_changed_meanwhile_is_a_new_route(tmp_path, monkeypatch):
+    model = "claudexor::codex=gpt-test"
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a"}))
+    _windows_by(monkeypatch, "model", {model: 1_000_000, "other/model": 65_537})
+    plan, registry, messages = _primary_on(model, tmp_path, monkeypatch)
+    away, away_mode = _leave(plan, registry, messages, "other/model", "max")
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-b"}))  # the owner moves Main to another account
+    _new, new_mode = _switch(away, registry, messages, model, away_mode)
+    assert new_mode == away_mode != "max" and registry._ctx._primary_view is None
+
+
 def test_forms_i_select_away_hold_on_the_primary_view():
     held, snap = synthetic_plan()
-    owner = SimpleNamespace(_primary_view=(("primary", False), held))
+    owner = SimpleNamespace(_primary_view=(("primary", False, ""), held))
     hold_selection(owner, ["F5:page-000"], owner_note=False)
     home, view = owner._primary_view
-    assert home == ("primary", False) and "Page 0." in held.projection("max").system_content_json
+    assert home == ("primary", False, "") and "Page 0." in held.projection("max").system_content_json
     assert "Page 0." not in view.projection("max").system_content_json
     assert dict(floor.kept_level(snap, view.projection("max").memory_facts).addressed)["F5"] == ("page-000",)
     hold_selection(owner, ["core:BIBLE"], owner_note=False)  # a form the held view refuses releases the hold

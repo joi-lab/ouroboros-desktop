@@ -334,12 +334,7 @@ def _run_cross_model_fallback_chain(
                               and waiter is not None and waiter.waits_allowed)
         if msg is not None or (not recovering_output and accumulated_usage.get("_last_llm_error_kind") == output_recovery.KIND
                                and not accumulated_usage.get("_pending_transport_outcome")):
-            (
-                active_model,
-                active_use_local,
-                context_fit_plan,
-                active_context_mode,
-            ) = _adopt_fallback_route(
+            (active_model, active_use_local, context_fit_plan, active_context_mode) = _adopt_fallback_route(
                 ctx,
                 tools,
                 candidate_call.active_model,
@@ -373,6 +368,11 @@ def _run_cross_model_fallback_chain(
         tools._ctx.context_fit_plan = context_fit_plan
         tools._ctx.messages = messages
         tools._ctx.active_context_mode = active_context_mode
+        if context_fit_plan is not None:  # a failed candidate's view leaves with it (the primary row's resumed one too)
+            if fallback_messages is messages:  # a same-family candidate rebound the shared transcript
+                messages[:] = context_fit_plan.reproject_transcript(messages, active_context_mode)
+                invalidate_task_cache_splits(task_id)
+            _adopt_view_facts(tools._ctx, context_fit_plan, active_context_mode)
         _restore_context_fit_usage(accumulated_usage, primary_context_usage)
         if (resident[0] is not None and resident[0] != tool_schemas and fallback_messages is not messages
                 and deferred_candidate is not candidate_call):
@@ -572,7 +572,8 @@ def _rebind_context_fit_plan(
                                        estimate_context_prompt_tokens, main_output_reserve_tokens)
     from ouroboros.provider_models import parse_claudexor_model
 
-    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local)
+    role = model_role or getattr(plan, "model_role", "main")
+    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local, role=role)
     metadata = getattr(tools._ctx, "task_metadata", {})
     metadata = metadata if isinstance(metadata, dict) else {}
     task = {
@@ -580,7 +581,7 @@ def _rebind_context_fit_plan(
         "use_local_model": use_local,
         "task_metadata": metadata,
         "delegation_role": metadata.get("delegation_role"),
-        "model_role": model_role or getattr(plan, "model_role", "main"),
+        "model_role": role,
         "model_route": model_route if model_route is not None else getattr(plan, "model_route", {}),
         "credential_profile_id": credential_profile_id,
     }

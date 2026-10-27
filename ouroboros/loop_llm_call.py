@@ -168,7 +168,7 @@ _TRANSPORT_DEATH_BACKOFF_SEC = (4.0, 8.0)
 # Round-keyed repeat counter on the shared usage dict ({"round_id", "count"}): the wait episode's free
 # redial re-enters call_llm_with_retry with the SAME round id, so the budget must not re-arm per invocation.
 TRANSPORT_DEATHS_KEY = "_transport_deaths"
-# Stamped by the round gate before each send: an open wait episode paces its own redials, so its send is one attempt.
+# Stamped by the round gate before each round call: an open wait episode paces its own redials, so its call sends once.
 TRANSPORT_WAIT_REDIAL_KEY = "_transport_wait_redial"
 # A local pre-dispatch refusal's own candidate facts (``LocalContextTooLargeError.refused_candidate``), for the
 # round's one strict-shrink retry; a wait's reprepare rebinds the physical context of the remaining attempts.
@@ -989,9 +989,9 @@ def _record_llm_call_error(
 
 
 def _stop_after_llm_error(ctx: _LlmErrorContext) -> bool:
-    """Retry decision for the exception path: ``True`` stops the attempt loop, and every stop except a
-    wait episode's redial, an unknown outcome and a granted timeout repeat's own failure stamps the OB-01
-    marker — permanent classes stopped earlier, so a stop here means "the same-model wall is spent"."""
+    """Retry decision for the exception path: ``True`` stops the attempt loop. Every stop except a one-attempt
+    transport stop, an unknown outcome and a granted timeout repeat's own failure stamps the OB-01 marker (a spent
+    not-delivered burst does): permanent classes stopped earlier, so a stop here means "the same-model wall is spent"."""
     accumulated_usage = ctx.accumulated_usage
     error_kind = str(accumulated_usage.get("_last_llm_error_kind") or "")
     if TIMEOUT_REPEAT_KEY in accumulated_usage:

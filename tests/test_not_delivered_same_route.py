@@ -155,7 +155,8 @@ def test_a_recovered_repeat_never_dials_the_configured_route(tmp_path, monkeypat
     assert _read_network_wait_events(tmp_path) == []
 
 
-def test_a_spent_burst_walks_the_configured_route_without_a_cooldown(tmp_path, monkeypatch, loop_env, slept):
+def test_a_spent_burst_walks_the_configured_route(tmp_path, monkeypatch, loop_env, slept):
+    # No cooldown follows: `transport_unavailable` stays outside `_COOLDOWN_ERROR_KINDS` (test_loop_transport_wait).
     chain, chain_calls = _counting_chain(answer_on=1)
     monkeypatch.setattr(loop_mod, "_run_cross_model_fallback_chain", chain)
     monkeypatch.setenv("OUROBOROS_MODEL_FALLBACKS", "other/model")
@@ -164,7 +165,6 @@ def test_a_spent_burst_walks_the_configured_route_without_a_cooldown(tmp_path, m
         **_loop_kwargs(tmp_path, ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path), [], llm=llm))
     assert result == "fallback-ok"
     assert llm.calls == 3 and chain_calls["n"] == 1
-    assert not fallback_cooldown._cooldown  # the primary is not parked: no «pause» follows a non-delivery
 
 
 def test_an_episode_redial_is_one_attempt_after_the_burst(tmp_path, loop_env, slept):
