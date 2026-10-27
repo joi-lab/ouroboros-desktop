@@ -2,8 +2,8 @@
  * The Subagents capsule (docs/DESIGN.md "Composer owner controls"): the composer's third capsule beside Context and
  * Effort, saving its room's subagents mode, Off · Auto · Swarm, through the owner endpoint. Each room keeps its own
  * value (a new Project copies Main's once); a change applies to new steps in this chat while running helpers finish.
- * Its ring is the family's rail with Ouroboros at the centre and the helpers it may call on the rail: none lit for Off,
- * one for Auto, three for Swarm. Closed, it says the value: Swarm in the switched-on capsule's soft crimson, Off muted,
+ * Its mark is a small network (owner 27.10, G): Ouroboros joined by threads to three helpers; none lit for Off, one
+ * helper and its thread for Auto, every helper and the threads between them for Swarm. Closed, it says the value: Swarm in the switched-on capsule's soft crimson, Off muted,
  * Auto plain. When Settings › Agents has subagents off, or they are not set up yet, it says Off with a lock: only Off
  * can be chosen, the reason is said and Open Settings goes there; the room's own value is kept for when they are on.
  *
@@ -29,12 +29,15 @@ export const SUBAGENT_LOCKS = Object.freeze({
 });
 const modeOf = (mode) => (SUBAGENT_MODES.includes(mode) ? mode : 'auto');
 
-/* The ring: the rail, Ouroboros at its centre, three helpers on the rail (only lit ones take a colour). */
-export const SUBAGENTS_RING = '<circle class="chat-subagents-rail" cx="92" cy="92" r="70" fill="none" stroke-width="20"></circle>'
-    + '<circle class="chat-subagents-core" cx="92" cy="92" r="25"></circle>'
-    + '<circle class="chat-subagents-helper" data-helper="1" cx="152.6" cy="127" r="22"></circle>'
-    + '<circle class="chat-subagents-helper" data-helper="2" cx="92" cy="22" r="22"></circle>'
-    + '<circle class="chat-subagents-helper" data-helper="3" cx="31.4" cy="127" r="22"></circle>';
+/* The mark: Ouroboros (the large node), each helper with the thread to it, and the threads between helpers, which
+   only Swarm lights (there helpers talk to each other). Every part paints with currentColor; style.css colours it. */
+const helperMark = (n, x, y, r) => `<g class="chat-subagents-helper" data-helper="${n}">`
+    + `<path d="M66 110 L${x} ${y}" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"></path>`
+    + `<circle cx="${x}" cy="${y}" r="${r}" fill="currentColor"></circle></g>`;
+const helperLink = (d) => `<path class="chat-subagents-link" d="${d}" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"></path>`;
+export const SUBAGENTS_MARK = helperLink('M144 120 L122 40') + helperLink('M122 40 L42 46')
+    + helperMark(1, 144, 120, 19) + helperMark(2, 122, 40, 17) + helperMark(3, 42, 46, 15)
+    + '<circle class="chat-subagents-core" cx="66" cy="110" r="28" fill="currentColor"></circle>';
 const LOCK = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" '
     + 'stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2.5"></rect>'
     + '<path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>';
@@ -161,7 +164,7 @@ export function createSubagentsControl({
     el.setAttribute('aria-label', 'Subagents');
     el.dataset.known = 'false';
     el.innerHTML = '<button type="button" class="chat-capsule-head ui-hit-area chat-subagents-head" aria-expanded="false">'
-        + `<span class="chat-capsule-glyph" aria-hidden="true"><svg viewBox="0 0 184 184">${SUBAGENTS_RING}</svg></span>`
+        + `<span class="chat-capsule-glyph" aria-hidden="true"><svg viewBox="0 0 184 184">${SUBAGENTS_MARK}</svg></span>`
         + '<span class="chat-capsule-name">Subagents</span><span class="chat-capsule-value" data-i18n-skip></span>'
         + `<span class="chat-subagents-lock" aria-hidden="true">${LOCK}</span></button>`
         + '<div class="chat-capsule-body"></div>';

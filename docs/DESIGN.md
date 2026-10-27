@@ -441,7 +441,7 @@ Until the room's values arrive the ring stays unlit and the value secondary,
 never a faded capsule. Closed, Effort names only the primary level; its ring (a 300°
 arc: band minimum..maximum, dot primary) and the button's name carry the range.
 Context's ring is three arcs, the chosen one lit: one of three modes, never a fill
-level or capacity. Subagents' ring is a rail with three helper dots: none lit for Off, one for Auto, three for Swarm.
+level or capacity. Subagents' mark is a small network (owner 27.10, G): Ouroboros joined by threads to three helpers; Off lights none, Auto one helper and its thread, Swarm every helper and the threads between them.
 
 **A capsule opens inline, in the row, never as a dropdown or a panel, one at a time** (owner 11.10; the panels tried
 on 26.10 were withdrawn on 27.10); its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a

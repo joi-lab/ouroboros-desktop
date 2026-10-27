@@ -2112,8 +2112,7 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
    time line's own ink (DESIGN "Composer owner controls"). */
 .msg-swarm { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: -2px; }
 .msg-swarm > svg { width: 13px; height: 13px; flex: none; }
-.msg-swarm .chat-subagents-rail { stroke: currentColor; stroke-opacity: 0.32; }
-.msg-swarm :is(.chat-subagents-core, .chat-subagents-helper) { fill: currentColor; }
+.msg-swarm :is(.chat-subagents-core, .chat-subagents-helper, .chat-subagents-link) { color: currentColor; }
 .msg-swarm-sep { margin-inline: var(--space-1); }
 
 .chat-bubble:hover .msg-time {
@@ -4836,9 +4835,9 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 }
 
 /* Subagents: Off · Auto · Swarm on the same strip, the chosen one in its tone (Off the neutral ink, Auto the accent,
-   Swarm the soft crimson of a switched-on capsule); a value Settings rules out is disabled ink. The ring is the rail with
-   Ouroboros at its centre and the helpers it may call on it, lit by the mode: none, one, three (only lit ones are
-   coloured). Closed on Swarm the whole capsule takes the soft crimson; Off is muted; Settings-off adds a small lock.
+   Swarm the soft crimson of a switched-on capsule); a value Settings rules out is disabled ink. The mark is a small network:
+   Ouroboros in meta ink, its helpers and their threads in the rail's ink until the mode lights them: none, the first,
+   every helper and the threads between them (Swarm). Closed on Swarm the whole capsule takes the soft crimson; Off is muted; Settings-off adds a small lock.
    Open, the line under the strip says what the value means (composer_subagents.js), and the row grows upward. */
 .chat-subagents-mode {
     --mode-ink: var(--accent-light);
@@ -4855,12 +4854,11 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .chat-subagents-strip .chat-context-thumb { left: var(--thumb-left, 0); width: var(--thumb-width, 0); }
 .chat-subagents-mode .chat-seg { justify-content: center; min-width: var(--touch-target-min); box-sizing: border-box; }
 .chat-subagents-mode .chat-seg[data-disabled="true"] { color: var(--text-disabled); cursor: default; }
-.chat-subagents-rail { stroke: rgba(var(--neutral-rgb), 0.16); }
-.chat-subagents-core { fill: var(--text-meta); }
-.chat-subagents-helper { fill: transparent; }
+.chat-subagents-core { color: var(--text-meta); }
+.chat-subagents-helper, .chat-subagents-link { color: rgba(var(--neutral-rgb), 0.28); }
 .chat-subagents-mode[data-mode="auto"] .chat-subagents-helper[data-helper="1"],
-.chat-subagents-mode[data-mode="swarm"] .chat-subagents-helper { fill: var(--accent); }
-.chat-subagents-mode[data-known="false"] .chat-subagents-helper { fill: transparent; }
+.chat-subagents-mode[data-mode="swarm"] :is(.chat-subagents-helper, .chat-subagents-link) { color: var(--accent); }
+.chat-subagents-mode[data-known="false"] :is(.chat-subagents-helper, .chat-subagents-link) { color: rgba(var(--neutral-rgb), 0.28); }
 .chat-subagents-lock { display: none; align-items: center; flex: none; margin-inline-end: var(--space-3); color: var(--text-meta); }
 .chat-subagents-mode[data-locked="true"] .chat-subagents-lock { display: inline-flex; }
 .chat-subagents-mode[data-locked="true"]:not([data-open="true"]) .chat-capsule-value { margin-inline-end: 5px; }
@@ -10576,11 +10574,8 @@ body.keyboard-open .project-panel {
 :root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-capsule-name, .chat-capsule-value) {
     color: var(--tone-crimson-soft-ink);
 }
-:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-subagents-core, .chat-subagents-helper) {
-    fill: var(--tone-crimson-soft-ink);
-}
-:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) .chat-subagents-rail {
-    stroke: var(--tone-crimson-soft-ink); stroke-opacity: 0.24;
+:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-subagents-core, .chat-subagents-helper, .chat-subagents-link) {
+    color: var(--tone-crimson-soft-ink);
 }
 @media (hover: hover) {
     :root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) .chat-capsule-head:hover { background: var(--tone-crimson-hover); }
