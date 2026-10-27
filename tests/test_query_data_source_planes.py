@@ -247,7 +247,8 @@ def test_blobs_fall_back_to_the_owner_only_after_a_proven_local_miss(planes, mon
     status, packed = _query(helper, op="blob", sha256=packed_digest)
     assert status == "ok" and packed["data"] == {"packed": "owner pack"} and packed["source"]["plane"] == "canonical"
     status, missing = _query(helper, op="blob", sha256="0" * 64)
-    assert status == "unavailable" and missing["message"] == "blob not found in the caller or canonical plane"
+    assert status == "unavailable" and missing["message"].startswith("blob not found in the caller or canonical plane;")
+    assert "memory_read(source_ref=" in missing["message"]  # the miss names the task-source reader, not another plane
     assert owner_path.read_bytes() == owner_bytes  # reads never touch the owner's bytes
 
 
@@ -292,7 +293,7 @@ def test_packed_blobs_need_the_actors_read_of_the_pack_file_itself(planes, monke
     assert status == "blocked" and "escapes" in escaped["message"], escaped
     pack_path.unlink()  # an indexed pack that is gone stays absence, not a refusal
     status, missing = _query(helper, op="blob", sha256=digest)
-    assert status == "unavailable" and missing["message"] == "blob not found in the caller or canonical plane", missing
+    assert status == "unavailable" and missing["message"].startswith("blob not found in the caller or canonical plane;"), missing
 
 
 @pytest.mark.parametrize("mode", ["light", "advanced", "pro", "cyber_pro"])
@@ -369,7 +370,7 @@ def test_native_reviewers_stay_on_their_pinned_plane(planes, monkeypatch):
             status, blob = _query(registry, op="blob", sha256=pinned)  # the pin is this reviewer's own drive
             assert status == "ok" and blob["data"] == expected and blob["source"]["plane"] == "caller", blob
         status, blob = _query(registry, op="blob", sha256=digest)
-        assert status == "unavailable" and blob["message"] == "blob not found in the caller plane", blob
+        assert status == "unavailable" and blob["message"].startswith("blob not found in the caller plane;"), blob
         (pin / "state/queue_snapshot.json").unlink()
         status, gone = _query(registry, op="json", kind="queue_snapshot")
         assert status == "unavailable" and gone["plane"] == "native_pin" and "data" not in gone

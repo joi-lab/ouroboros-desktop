@@ -35,6 +35,11 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
 _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification_receipts"}
+# op=blob reads the observability CAS by digest. The digest in a task-source handle's name is that file's own
+# hash, read through the source's reader; a miss names that reader instead of another plane (BIBLE P1).
+_BLOB_KIND_HINT = ("; op=blob reads observability CAS blobs only. A digest in a task-source handle name "
+                   "(source_handles/...-<sha256>.<ext>) is read with memory_read(source_ref={\"kind\": \"task_source\", "
+                   "\"root\": \"artifact_store\", \"path\": ..., \"size\": ..., \"sha256\": ..., \"task_id\": ...})")
 _STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
 # Each knowledge history row holds both complete versions of its note, so the ordinary
 # 8 MiB log window would cover hours of writes; this read budget covers far more of them.
@@ -433,7 +438,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 except PermissionError as exc:
                     raise PermissionError("".join(f"blob not found in the {p} plane; " for p in missed) + str(exc)) from None
             else:
-                raise FileNotFoundError("blob not found in the " + " or ".join(missed) + " plane")
+                raise FileNotFoundError("blob not found in the " + " or ".join(missed) + " plane" + _BLOB_KIND_HINT)
             value = json.loads(raw) if blob_kind == "json" else {"hex": raw.hex()} if blob_kind == "bin" else raw.decode("utf-8")
             source.update(sha256=sha256, blob_kind=blob_kind)
         else:
