@@ -6,7 +6,7 @@
 // Wakes say when they are not reported; unknown money is never zero.
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { statusMarkHtml } from './status_mark.js';
-import { strokeIcon } from './page_icons.js';
+import { controlIcon } from './page_icons.js';
 import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { tr, fmt } from './i18n.js';
@@ -19,8 +19,8 @@ import { connectPlaceButtonHtml, openConnectPlace } from './place_connect.js';
 
 const SEP = ' · ';
 const REFRESH_MS = 20000;
-// Its own time: the house brain glyph (Lucide geometry), beside the words that say it.
-const OWN_GLYPH = strokeIcon('<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>', 14);
+// Its own time: the house brain glyph, beside the words that say it.
+const OWN_GLYPH = controlIcon('brain', 14);
 // Work running now: the house status mark's moving dots, in the surface's own ink.
 const dots = () => statusMarkHtml('consciousness-mark', { shape: 'moving', hue: 'ink' });
 const facts = (parts) => parts.filter(Boolean).map((part) => `<span class="consciousness-fact">${part}</span>`).join(SEP);

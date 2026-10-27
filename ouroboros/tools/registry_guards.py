@@ -157,7 +157,7 @@ def _subagent_and_update_guard_result(
             "external tools and may write knowledge notes, memory marks and "
             "chronicle page drafts in its own name, but may not call first-party "
             f"local tool {name!r}. Parent tasks must perform other writes, commits, "
-            "review gates, tool expansion, runtime control, shell, and skills. "
+            "review gates, tool grants, runtime control, shell, and skills. "
             "Nested readonly delegation is allowed only through schedule_subagent "
             "within configured depth/cap limits."
         ))
@@ -169,8 +169,8 @@ def _subagent_and_update_guard_result(
             "⚠️ ACTING_SUBAGENT_BLOCKED: this mutative subagent may read and "
             "write inside its assigned write root and run shell/services "
             f"there, but may not call first-party tool {name!r}. It cannot "
-            "commit the live body, run review gates/runtime/skills lifecycle, enable "
-            "tools, or write identity or scratchpad (chronicle pages and parts only "
+            "commit the live body, run review gates/runtime/skills lifecycle, grant "
+            "itself tools, or write identity or scratchpad (chronicle pages and parts only "
             "as its own drafts); the parent applies isolated patches "
             "or verifies shared external files and is the sole live-body committer."
         ))

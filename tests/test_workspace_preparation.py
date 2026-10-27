@@ -760,22 +760,36 @@ def test_busy_store_at_entry_is_typed_and_starts_no_preparation(env, monkeypatch
 
 
 @pytest.mark.parametrize("change", ["rebind", "deletion"])
-def test_project_change_during_copy_is_revalidated_at_admission(env, change):
-    from ouroboros import projects_registry as registry
+@pytest.mark.parametrize("phase", ["copy", "admission"])
+def test_project_change_during_copy_is_revalidated_at_admission(env, monkeypatch, change, phase):
+    from ouroboros import projects_registry as registry, settings_integrity
     from ouroboros.startup_migrations import prepare_startup_state
 
     prepare_startup_state(env.data)
     registry.create_project(env.data, "proj", name="Proj")
     event = env.request("projchild", root="proj-root")
     event["project_id"] = "proj"  # the parent's Project, frozen when the request is read
-    with env.copy_blocked():
-        assert env.dispatch_returns(event)
-        env.wait_phase("projchild", "copying")
+    def change_project():
         if change == "rebind":
             registry.update_project(env.data, "proj", working_dir=str(env.data.parent / "elsewhere"))
         else:
             registry.begin_project_deletion(env.data, "proj")
+
+    original_read, reads = settings_integrity.live_subagents_mode, []
+    def read(**kwargs):
+        reads.append(kwargs)
+        if phase == "admission" and len(reads) == 2:
+            change_project()
+        return original_read(**kwargs)
+    monkeypatch.setattr(settings_integrity, "live_subagents_mode", read)
+    with env.copy_blocked():
+        assert env.dispatch_returns(event)
+        env.wait_phase("projchild", "copying")
+        if phase == "copy":
+            change_project()
     assert env.gen.wait_idle(_WAIT_SEC)
+    if phase == "admission":
+        assert len(reads) == 2
     row = env.row("projchild")
     marker = row["workspace_preparation"]
     if change == "rebind":

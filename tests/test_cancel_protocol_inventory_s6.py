@@ -153,10 +153,6 @@ TERMINAL_WRITERS = {
     ('ouroboros/working_checkpoint.py::adopt_registered_answer', 'STATUS_FAILED'): 'terminal',
     ('supervisor/cancel_publication.py::_finalize_cancel_intent_on_miss', 'STATUS_CANCELLED'): 'terminal',
     ('supervisor/events_project_routing.py::_persist_promote_rejection', 'STATUS_FAILED'): 'terminal',
-    # The promoter's force_plan transfer is a locked field projection like its
-    # review-evidence sibling above: it preserves the status it reads (possibly
-    # terminal) and only records where the planning obligation went.
-    ('supervisor/events_project_routing.py::_record_obligation_transfer', '"running"'): 'dynamic',
     ('supervisor/events_schedule_task.py::_reject_schedule_task', 'status'): 'dynamic',
     ('supervisor/events_task_done.py::_finish_task_done_dispatch', 'STATUS_FAILED'): 'terminal',
     ('supervisor/events_task_done.py::_resolve_lifecycle_fault', 'STATUS_FAILED'): 'terminal',

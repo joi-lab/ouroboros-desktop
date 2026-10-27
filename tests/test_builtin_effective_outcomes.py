@@ -282,6 +282,7 @@ def test_tool_enablement_distinguishes_total_refusal_from_partial_effect(invoke,
     catalog = SimpleNamespace(
         get_schema_by_name=lambda name: {"function": {"name": name}} if name == "known" else None,
         policy_hidden_reason=lambda name: "restricted" if name == "hidden" else "",
+        callable_rows=lambda namespace="": [],
     )
     resident = []
     result = invoke(lambda ctx: enable_tools(catalog, ctx, names, resident))

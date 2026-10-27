@@ -1004,7 +1004,7 @@ def _plan_review_only_awaited(llm_trace: Dict[str, Any]) -> bool:
 
     The finalization notice and this fact read the SAME decision, so an only-awaited
     wave keeps its loud notice and is a gap, never a degradation of the task."""
-    plan_gate = llm_trace.get("force_plan_decision")
+    plan_gate = llm_trace.get("plan_gate", llm_trace.get("force_plan_decision"))
     return isinstance(plan_gate, dict) and plan_gate.get("review_only_awaited") is True
 
 
@@ -1113,7 +1113,7 @@ def _no_tool_final_answer(
 
     stopping = (getattr(tools._ctx, "_completion_selected", None) or {}).get("action") == "stop"
     if not stopping:
-        if _loop()._enforce_swarm_actions(
+        if _loop()._enforce_plan_gate(
             str(content or ""), messages, tools, llm_trace, emit_progress,
         ):
             return held()
@@ -1195,7 +1195,7 @@ def _no_tool_final_answer(
             return held()
 
     _loop()._project_child_result_dispositions(limit_ctx, llm_trace)
-    plan_suffix = _loop()._force_plan_disclosure(tools._ctx, llm_trace)
+    plan_suffix = _loop()._plan_gate_disclosure(tools._ctx, llm_trace)
     # The forced rails already type this fact; the single degraded_reason slot below
     # cannot hold it beside an unsettled child, so the normal rail types it too.
     if plan_suffix:  # absent = not open: a clean result carries no key (pinned usage shapes)

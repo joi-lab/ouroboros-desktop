@@ -387,7 +387,7 @@ data: {"seq":12,"type":"task_result","task_id":"…","data":{…}}
 
 - **GET, legacy replay:** `cursor` is a nonnegative integer, the last processed SSE `id` / `seq`, not `TaskEvent.event_id`. `wait` defaults to 30 seconds, clamped to 0–120; `0` replays the available view without waiting for future work. The deadline can emit `: heartbeat` and close.
 - **POST, v2 replay:** start with `{"v":2,"wait":30}` or a null cursor. Return the complete cursor from the last processed frame unchanged to resume. `wait` must be an integer 0–120. `cursor.view` and `cursor.positions` are opaque; this cursor cannot be exchanged with GET's integer.
-- A v2 deadline emits `cursor_checkpoint`; changed lineage/view emits `cursor_replay` and may replay stored events. Diagnostics/checkpoints can reuse `seq`; replayed stored events can get a new `seq`. Process their cursor and diagnostic information even when that sequence was seen. Deduplicate stored v2 events by nonempty `event_id`; replace `task_result` snapshots with the latest snapshot. Do not assume v2 delivery is timestamp-sorted or `seq` identifies the same stored event across replay.
+- A v2 deadline emits `cursor_checkpoint`, as does a pass that skipped the second copy of a row the record passport writes twice (`REPLICA_RULE`): one connection delivers such a row once, and a cursor resumed between its two copies' frames may bring the other copy with another `event_id`. Changed lineage/view emits `cursor_replay` and may replay stored events. Diagnostics/checkpoints can reuse `seq`; replayed stored events can get a new `seq`. Process their cursor and diagnostic information even when that sequence was seen. Deduplicate stored v2 events by nonempty `event_id`; replace `task_result` snapshots with the latest snapshot. Do not assume v2 delivery is timestamp-sorted or `seq` identifies the same stored event across replay.
 
 **Schedules** start ordinary tasks later or repeatedly:
 - **List:** `GET /api/schedules` (`ScheduledTasksResponse`). Each row's `status` is `active`, `disabled`, `consumed`, `held`, `waiting` or `delete_pending` (a withdrawn row). Rows also carry `display_name`, `kind` (`note` or `task`), `timezone`, `destination`, `waiting_detail` and, once the schedule has run, the last run's `outcome` (`state`, `quiet`, `notice`, `ended_at`, `line`; `state` is `pending_observation` until the settled result is read). `previous_run_open` appears while the host sees the previous run still open; a withdrawn row carries `withdrawal` (`at`, `by`, `reason`, `work_in_flight`: true, false or null when unknown, `restorable`). An unreadable table answers 503, never an empty list.
@@ -444,22 +444,22 @@ Private Presence contacts carry `presence_contact` source facts separately from 
 
 ## 9. Settings
 
-**Reading.** `GET /api/settings` (`SettingsReadResponse`) returns every setting with its value, plus `_meta` (`SettingsMeta`):
+**Reading.** `GET /api/settings` (`SettingsReadResponse`) returns all settings and `_meta` (`SettingsMeta`):
 - **Network facts:** `bind_host` and `recommended_url`.
-- **`restart_state`:** which saved settings are waiting for a restart.
+- **`restart_state`:** saved settings awaiting restart.
 - **`setup_contract`:** the same vocabulary as setup.
-- **Other information:** the policy and agent roster.
+- **Other facts:** policy and agent roster.
 
-Secrets are masked. A password-type secret reads as the configured placeholder; others read as a short prefix followed by `...`.
+Secrets are masked: password types use the configured placeholder; others a short prefix plus `...`.
 
-**Saving.** `POST /api/settings` takes only the keys you change (a document of setting keys, so its body is published as plain `json`):
-- **Masked values:** sending a masked value back means "unchanged". `""` clears a value.
+**Saving.** `POST /api/settings` takes changed keys only (plain `json`):
+- **Masked values:** mean "unchanged"; `""` clears.
 - **Settings with their own writer:**
-  - The interface language is changed only through `POST /api/ui/i18n/language`; the settings save reports it in `ignored_keys`.
+  - Language uses only `POST /api/ui/i18n/language`; settings saves report it in `ignored_keys`.
   - The access, context and safety controls go through `POST /api/owner/*`.
-- **On success:** the answer is `SettingsSaveResponse`. `restart_state.restart_keys` lists settings that apply only after a restart; `OUROBOROS_UI_DIR` is one of them.
+- **Success:** `SettingsSaveResponse`; `restart_state.restart_keys` lists settings awaiting restart, including `OUROBOROS_UI_DIR`.
 
-Every settings writer (Settings, setup, owner controls, language, desktop background) reports failures as `SettingsWriteRefusal`, and `saved` says what happened:
+All settings writers (Settings, setup, owner controls, language, desktop background) report `SettingsWriteRefusal` failures; `saved` records the effect:
 
 | `saved` | Meaning | What to do |
 |---|---|---|
@@ -467,14 +467,17 @@ Every settings writer (Settings, setup, owner controls, language, desktop backgr
 | `true` | the settings were written; a later step (`post_commit_failed`) failed | retry that step; never save the same settings again |
 | `null` | unknown; the writer outlived the wait | read `GET /api/settings` again before deciding (setup: read the attempt back, §4); an unknown outcome is never a reason to retry |
 
-`ignored_keys` is an optional object mapping each skipped key to its own writer, not an array. Unknown ordinary settings keys can be ignored rather than rejected. `immediate_changed` and `next_task_changed` are optional true flags for at least one key in that effect bucket, not lists. Budget-field names, types and minimums come from `setup_contract.budgetFields`. There is no public request intended to induce post-commit failure or an unknown save outcome.
+`ignored_keys` optionally maps skipped keys to their writers (object, not array). Unknown ordinary keys may be ignored. `immediate_changed` and `next_task_changed` optionally flag any change in that bucket (`true`, not lists). `setup_contract.budgetFields` owns budget names, types and minimums. No public request is intended to induce a post-commit failure or unknown save outcome.
 
-**Owner controls.** Each saves one setting through the same writer:
+**Owner controls.** Each saves through the same writer; room controls default to Main when `project_id` is omitted:
 - `POST /api/owner/runtime-mode` `{mode}`: `light`, `advanced`, `pro` or `cyber_pro`; applies when the core next starts.
-- `POST /api/owner/context-mode` `{mode, project_id?}`: `nano`, `low` or `max`; applies to new participants in that room, including while others run. Omitted `project_id` means Main.
+- `POST /api/owner/context-mode` `{mode, project_id?}`: `nano`, `low` or `max`; applies to new participants in that room, including while others run.
 - `POST /api/owner/safety-mode` `{mode}`: `full`, `light` or `off`.
 - `POST /api/owner/auto-grant` `{enabled}`.
-- `POST /api/owner/effort-range` `{min, recommended, max, project_id?}`: effort tiers (`none` to `ultra`), min ≤ max; primary `recommended` is independent. Omitted `project_id` means Main. Both endpoints return `project_id` and the saved `cognition` (`context_mode`, `effort_range`); project summaries carry the same object. Main state fields remain Main's.
+- `POST /api/owner/effort-range` `{min, recommended, max, project_id?}`: effort tiers (`none` to `ultra`), min ≤ max; primary `recommended` is independent. Context/Effort keep actor snapshots.
+- `POST /api/owner/subagents-mode` `{mode, project_id?}`: `off|auto|swarm`. Response: `{ok, project_id, subagents_mode, cognition}`; invalid choice `400:subagents_mode_invalid`, missing room `404:project_unavailable`, errors carry `saved:false` through the effort writer's `unsaved_error` path.
+
+Room writers return saved `cognition` (`context_mode`, `effort_range`, `subagents_mode`), also in project summaries. Rooms copy Main once; legacy missing Subagents defaults to Auto. `/api/state` reports Main's stored `subagents_mode` and `subagents_availability` (`available|disabled|unsaved`). Settings › Agents, when off or unsaved, withholds the catalog and locks effective Off without losing the saved choice. Off refuses new helpers, `continue_from` and plan answers (`subagents_off_in_room`): each starts a run. Running helpers finish; reviews run. Off→on reaches running tasks' next admissions and round facts at once; their catalog, built with context like other entry settings, arrives with the next task. The host's silence diagnostic uses no catalog: Settings-off leaves it running; room Off stops it there. Presence turns and descendants, consciousness and Evolve keep their own controls. Send waits for room saves. Accepted owner rows' `subagents_mode:"swarm"` labels echo/history only for effective Swarm; retries preserve it. Roots record effective mode too (disabled/unsaved means Off). `ChatInbound.force_plan` is deprecated, accepted and ignored for one release; clients omit it. Sending creates no project or plan obligation.
 
 `POST /api/owner/capability-ack` (`CapabilityAckRequest`) vouches for one exact route's maximum response or context window. It writes acknowledgement evidence, never settings; a repeat overwrites it and zero revokes that exact route's acknowledgement with an audit.
 
