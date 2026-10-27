@@ -1039,6 +1039,32 @@ def _observe_session(gateway: Any, run_id: str, remaining: float, streak: Any) -
         return {}, exc
 
 
+def _await_session_attention(gateway: Any, run_id: str, seen: Optional[str], remaining: float) -> tuple:
+    """Hold on the engine's compact wait until the run needs attention or the slot's remaining
+    window ends: ``(due, token, held)``. ``due`` says the detail read is now owed (a question,
+    a terminal, or an engine without the wait, where every beat reads the detail as before);
+    ``token`` is the engine's, echoed as ``seen`` only after that read; ``held`` says the engine
+    waited, so the loop sleeps nothing. A hole leaves the run unobserved for this beat."""
+    from ouroboros.gateways import claudexor_observation as observation
+    from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
+    if not observation.wait_many_supported(gateway, timeout_sec=min(remaining, SHORT_POLL_TIMEOUT_SEC)):
+        return True, None, False
+    try:
+        wake = observation.wait_attention(gateway, [(run_id, seen)], wait_sec=remaining,
+                                          timeout_sec=min(remaining, SHORT_POLL_TIMEOUT_SEC))
+    except ClaudexorUnavailable as exc:
+        if 400 <= exc.status_code < 500:
+            raise
+        log.warning("delegated review session %s attention wait refused (%s); the detail read decides", run_id, exc)
+        return True, None, False
+    if wake.hole is not None or wake.source == "detail":
+        return True, None, False  # unobserved this beat, or an engine that read details: the old path decides
+    row = wake.rows[0]
+    if row.problem is not None:
+        return True, None, wake.waited  # the engine could not place the run: the addressed read says what it is
+    return wake.needs_attention(0), row.token, wake.waited
+
+
 def _poll_session_terminal(gateway: Any, custody: Any, custody_drive: Any, entry: Any,
                            run_id: str, seconds: float) -> Dict[str, Any]:
     """Poll a delegated review run on the slot clock; verified cancel and
@@ -1046,6 +1072,7 @@ def _poll_session_terminal(gateway: Any, custody: Any, custody_drive: Any, entry
     from ouroboros.gateways.claudexor import pending_interactions as _cx_pending
     deadline = time.monotonic() + max(0.0, float(seconds))
     detail, unobserved = _observe_session(gateway, run_id, max(0.0, deadline - time.monotonic()), None)
+    seen: Optional[str] = None
     while not custody.is_terminal(detail):
         pending = _cx_pending(detail)
         first = pending[0] if pending else {}
@@ -1088,9 +1115,15 @@ def _poll_session_terminal(gateway: Any, custody: Any, custody_drive: Any, entry
         remaining = max(0.0, deadline - time.monotonic())
         if remaining <= 0:
             continue
-        time.sleep(min(_SESSION_POLL_SEC, remaining))
+        due, token, held = _await_session_attention(gateway, run_id, seen, remaining)
+        if not held:
+            time.sleep(min(_SESSION_POLL_SEC, remaining))
+        if not due:
+            continue  # the engine held the call and nothing needs the detail yet
         detail, unobserved = _observe_session(
             gateway, run_id, max(0.0, deadline - time.monotonic()), unobserved)
+        if unobserved is None and token is not None:
+            seen = token  # acknowledged only once the rows it stands for were fetched
     return detail
 def _full_session_text(gateway: Any, run_id: str, detail: Dict[str, Any]) -> str:
     """The session's final answer from the verified FULL primary output (D7).
