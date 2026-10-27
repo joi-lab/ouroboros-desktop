@@ -163,10 +163,14 @@ def test_record_binds_runtime_provider_endpoint_and_surface(catalog, monkeypatch
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://elsewhere.invalid/v1")
     assert_auto("openai-compatible::exact-model", None)
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://compat.invalid/v1")
-    # Producer and reader currently omit API account identity; no one-sided binding.
+    # #1520: the statement belongs to the key that read it. Another key at the same endpoint is
+    # unknown (pixels go) without a new request; returning to the key that read it restores it.
     monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "another-fixture-key")
+    assert_auto("openai-compatible::exact-model", None)
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", SETTINGS["openai-compatible"]["OPENAI_COMPATIBLE_API_KEY"])
     assert_auto("openai-compatible::exact-model", False)
     assert len(catalog.requests) == 1
+    assert "fixture-key" not in evidence._store_path(catalog.root).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("draft,provider", [

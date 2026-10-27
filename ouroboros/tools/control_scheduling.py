@@ -56,7 +56,7 @@ from ouroboros.tools.control_subagent_spec import (
     _validated_schedule_fields,
     schedule_subagent_param_names,
 )
-from ouroboros.tool_access import folderless_scratch_dir
+from ouroboros.tool_access import canonical_data_root, folderless_scratch_dir
 from ouroboros.tools.registry import ToolContext, active_repo_dir_for, system_repo_dir_for
 from ouroboros.utils import append_jsonl, utc_now_iso
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
@@ -804,14 +804,12 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
     if arg_error:
         return _publish_scheduling_refusal(
             ctx, "error", "TOOL_ARG_ERROR", arg_error, reason=fields.get("reason", ""))
-    deadline_at = fields["deadline_at"]
     objective = fields["objective"]
     expected_output = fields["expected_output"]
     role = fields["role"]
     context = fields["context"]
     constraints = fields["constraints"]
     memory_mode = fields["memory_mode"]
-    may_mutate = fields["may_mutate"]
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     execution_left = _inherited_execution_allowance(ctx)
     if execution_left is not None and execution_left <= 0:
@@ -838,6 +836,11 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         return _publish_scheduling_refusal(ctx, "error", "TOOL_ARG_ERROR",
             "⚠️ delegated_mode_unsupported: mode requires an agent_session row; API children keep their ordinary task execution.",
             reason="delegated_mode_unsupported")
+    if ("attachment_paths" in fields or "attachment_import" in fields) and route.get("kind") != "agent_session":
+        return _publish_scheduling_refusal(ctx, "error", "TOOL_ARG_ERROR",
+            "⚠️ attachment_paths_unsupported: engine document attachment needs an agent_session row; API children "
+            "read inherited inputs through read_file(root='artifact_store'). Omit attachment_paths.",
+            reason="attachment_paths_unsupported")
     if (fields.get("directory_strategy") == "copy" or fields.get("workspace") == "in_place") and route.get("kind") != "agent_session":
         return _publish_scheduling_refusal(
             ctx, "error", "TOOL_ARG_ERROR",
@@ -930,11 +933,11 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
     if _drive_err:
         return _publish_scheduling_refusal(ctx, "error", "TOOL_ERROR", _drive_err)
     child_attachment_authority, attachment_error = ({"attachment_manifest": []}, "")
-    if fields.get("input_sources") != "declared":
+    if fields.get("input_sources") != "declared" or fields.get("attachment_paths"):  # selected documents are declared material
         child_attachment_authority, attachment_error = _materialize_child_attachment_manifest(
-            parent_contract, child_drive or status_drive_root, tid,
-            owner_drive=Path(ctx.drive_root), owner_task_id=parent_task_id,
-        )
+            parent_contract, child_drive or status_drive_root, tid, owner_drive=Path(ctx.drive_root),
+            owner_task_id=parent_task_id, custody_drive=canonical_data_root(ctx), selected=fields.get("attachment_paths"),
+            declared=fields.get("input_sources") == "declared")
     if attachment_error:
         shutil.rmtree(task_state_dir(status_drive_root, tid), ignore_errors=True)
         return f"⚠️ SUBTASK_ATTACHMENT_ERROR: {attachment_error}"
@@ -943,7 +946,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
     child_delegation_budget = child_budget_for_schedule(
         parent_contract,
         current_depth=current_depth, new_depth=new_depth, max_depth=max_depth,
-        may_mutate=delegation_may_mutate(may_mutate, caller_profile), may_fan_out=params.get("may_fan_out", True),
+        may_mutate=delegation_may_mutate(fields["may_mutate"], caller_profile), may_fan_out=params.get("may_fan_out", True),
         max_children=params.get("max_children", 0),
         intent_note=params.get("delegation_intent", ""),
         requested_depth=params.get("requested_depth", 0),
@@ -954,7 +957,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "workspace_root": workspace_root, "workspace_mode": workspace_mode, "parent_project_id": parent_project_id,
         "allowed_resources": allowed_resources, "parent_contract": parent_contract,
         "parent_task_id": parent_task_id, "root_task_id": root_task_id, "session_id": session_id,
-        "child_delegation_budget": child_delegation_budget, "deadline_at": str(deadline_at or ""),
+        "child_delegation_budget": child_delegation_budget, "deadline_at": str(fields["deadline_at"] or ""),
         "acceptance_claims": fields["acceptance_claims"], "resource_policy": fields["resource_policy"],
         "context": context,
         **({"input_sources": fields["input_sources"]} if "input_sources" in fields else {}),
@@ -983,7 +986,8 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "requested_effort": fields["requested_effort"],
         "configured_subagent": configured_subagent,
         "parent_cognitive_route": parent_cognitive_route,
-        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode", "workspace") if key in fields},
+        **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode", "workspace", "attachment_paths",
+                                        "attachment_import", "document_import_intent") if key in fields},
     }
     owner_origin = governing_words_for_schedule(ctx)  # the owner's words that caused this tree, by value
     child_facts = {
@@ -1092,11 +1096,19 @@ def _context_task_depth(ctx: ToolContext) -> tuple[int, str]:
 
 def _materialize_child_attachment_manifest(
     parent_contract: Dict[str, Any], target_root: Path, task_id: str,
-    *, owner_drive: Optional[Path] = None, owner_task_id: str = "",
+    *, owner_drive: Optional[Path] = None, owner_task_id: str = "", custody_drive: Optional[Path] = None,
+    selected: Optional[list] = None, declared: bool = False,
 ) -> tuple[dict, str]:
-    """Copy inherited task inputs into the child's own artifact store."""
+    """Copy inherited task inputs into the child's own artifact store.
+
+    ``selected`` (``attachment_paths``) must name staged, non-image inputs of the owner; a
+    ``declared`` child receives only those, its declared material (the caller copies nothing
+    for a declared child without a selection). Each copy carries the owner's ready document
+    imports (``engine_imports``), so the child reuses those resourceIds.
+    """
 
     from ouroboros.artifacts import materialize_inherited_attachment_manifest, remove_staged_attachments
+    from ouroboros.delegate_documents import DocumentSelectionError, carry_owner_receipts, select_inputs
 
     copied = []
     try:
@@ -1107,10 +1119,18 @@ def _materialize_child_attachment_manifest(
             from ouroboros.owner_mailbox import owner_attachment_manifest
 
             inherited.extend(owner_attachment_manifest(owner_drive, owner_task_id))
+        if selected:
+            chosen = {row["relpath"] for row in select_inputs(inherited, selected)}
+            if declared:
+                inherited = [row for row in inherited if row.get("status") == "staged" and row.get("relpath") in chosen]
+        if custody_drive is not None and owner_task_id:
+            carry_owner_receipts(custody_drive, owner_task_id, inherited)
         copied, error = materialize_inherited_attachment_manifest(inherited, target_root, task_id)
         if error:
             return {}, error
         return attachment_manifest_projection(target_root, task_id, copied), ""
+    except DocumentSelectionError as exc:
+        return {}, f"{exc.code}: {exc.detail}"
     except (OSError, ValueError, TypeError) as exc:
         remove_staged_attachments(copied)
         return {}, f"{type(exc).__name__}: {exc}"

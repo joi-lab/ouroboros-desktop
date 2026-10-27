@@ -21,6 +21,8 @@ log = logging.getLogger(__name__)
 
 _SCRATCHPAD_MAX_BLOCKS = 10
 _DIALOGUE_LOGS = frozenset({"chat.jsonl", "progress.jsonl"})  # their rows live in state/dialog.sqlite
+# The rows one recent window reads at most, host waits included: a read bound, not a quota.
+_RECENT_ROWS_CEILING = 2000
 
 
 def render_scratchpad_markdown(
@@ -172,6 +174,16 @@ def _chat_history_snapshot_id(
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
+
+
+def _ok_answer_mark(bucket: Any) -> str:
+    """✓ for an ordinary success. A typed code that answers ok yet names another outcome
+    (an inspection before apply, a review block) shows its bucket: the code table decides."""
+    from ouroboros._outcome_tool_errors import _OK_TOOL_STATUSES
+    from ouroboros.tools.tool_result import TOOL_CODE_SPECS
+
+    named = {spec.outcome_bucket for spec in TOOL_CODE_SPECS.values() if spec.status == "ok"} - _OK_TOOL_STATUSES
+    return str(bucket) if bucket in named else "✓"
 
 class Memory:
     def __init__(self, drive_root: pathlib.Path, repo_dir: Optional[pathlib.Path] = None):
@@ -627,13 +639,25 @@ class Memory:
         """
         if log_name in _DIALOGUE_LOGS:
             from ouroboros import dialogue_store as ds
+            from ouroboros.checkpoint_waits import wait_episode
 
             stream, wanted, limit = log_name[:-6], str(task_id or "").strip(), max(1, int(want))
             upper = ds.stream_end(self.drive_root, stream)
-            records = (ds.probe_rows(self.drive_root, stream, [("task_id", wanted)], before=upper, limit=limit + 1)
-                       if wanted else list(reversed(ds.newest(self.drive_root, stream, limit=limit + 1, before=upper))))
-            bounded = len(records) > limit
-            records = records[:limit]
+            # A host wait row rides along without spending the quota (``checkpoint_waits``): a burst
+            # of accounting waits never pushes the task's own rows out of its window.
+            records, own, before, bounded = [], 0, upper, False
+            while not bounded:
+                batch = (ds.probe_rows(self.drive_root, stream, [("task_id", wanted)], before=before, limit=limit + 1)
+                         if wanted else list(reversed(ds.newest(self.drive_root, stream, limit=limit + 1, before=before))))
+                for record in batch:
+                    bounded = own >= limit or len(records) >= _RECENT_ROWS_CEILING
+                    if bounded:
+                        break
+                    records.append(record)
+                    own += wait_episode(record.row) is None
+                if len(batch) <= limit:
+                    break
+                before = batch[-1].seq
             lower = records[-1].seq if bounded else 0
             imported = ds.range_coverage(self.drive_root, stream, lower=lower, upper=upper)
             gaps = (["history is still importing"] if imported["pending"] else [])
@@ -643,7 +667,8 @@ class Memory:
                 gaps.append("recorded invalid intervals")
             coverage = {"task_id": wanted, "source": f"state/dialog.sqlite ({stream})", "dialogue": True,
                         "lower": lower, "upper": upper, "shown": len(records), "matched": len(records),
-                        "quota_met": len(records) >= limit, "older_available": bounded, "gaps": gaps,
+                        "host_waits": len(records) - own,
+                        "quota_met": own >= limit, "older_available": bounded, "gaps": gaps,
                         "archives_bounded": False, "archives": 0, "archives_available": 0,
                         "live_size": upper, "live_window": upper - lower}
             return [entry.row for entry in reversed(records)], coverage
@@ -759,7 +784,8 @@ class Memory:
                     f"task drive logs/{log_name}" + (
                         " (worker rows; host-side rows such as waits stay in the canonical log)"
                         if log_name == "events.jsonl" else ""))
-            shown = int(coverage.get("shown") or 0)  # tools: logical calls, never rows (#1316)
+            # tools: logical calls, never rows (#1316); progress: the task's own rows, waits ride along
+            shown = int(coverage.get("shown") or 0) - int(coverage.get("host_waits") or 0)
             if note(shown):
                 coverage["rendered"] = note(shown)
             summary = formatter(entries)
@@ -790,12 +816,18 @@ class Memory:
                 remembered_listing(self.logs_path(log_name))(self.drive_root / "archive", log_name[:-len(".jsonl")])
 
     def summarize_progress(self, entries: List[Dict[str, Any]], limit: int = 15) -> str:
-        if not entries:
-            return ""
-        return "\n".join(
-            f"⚙️ {str(e.get('ts', ''))[11:16] if len(str(e.get('ts', ''))) >= 16 else ''} {short(str(e.get('text', '')), 800)}"
-            for e in entries[-limit:]
-        )
+        """The newest ``limit`` progress rows, oldest first; each run of host waits among them is
+        one line that does not count against ``limit`` (``checkpoint_waits.fold_progress``)."""
+        from ouroboros.checkpoint_waits import fold_progress
+
+        lines, own = [], 0
+        for e in reversed(fold_progress(entries or [])):
+            own += not e.get("host_waits")
+            if own > limit:
+                break
+            ts = str(e.get('ts', ''))
+            lines.append(f"⚙️ {ts[11:16] if len(ts) >= 16 else ''} {short(str(e.get('text', '')), 800)}")
+        return "\n".join(reversed(lines))
 
     def summarize_tools(self, entries: List[Dict[str, Any]]) -> str:
         """One line per LOGICAL call (#1316): a start with no later row is an
@@ -823,7 +855,7 @@ class Memory:
                 note = (" (wait ended; no result recorded)" if "wait_ended" in call else
                         " (started; no outcome recorded)")
             elif isinstance(settled.get("is_error"), bool):
-                status = "·" if settled["is_error"] else "✓"
+                status = "·" if settled["is_error"] else _ok_answer_mark(settled.get("status"))
             elif settled.get("status"):
                 if settled["status"] == "ok":
                     status = "✓"

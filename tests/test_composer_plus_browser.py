@@ -6,8 +6,8 @@ field's focus, and Attach file opens the file chooser and stages the chosen file
 menu onto Attach file, Esc closes it and returns focus to "+", Tab leaves it; a drop on the room and an image
 pasted into the field still stage files, and the menu fits a 320 px phone. The voice and chips slots take no
 room while empty; chips put into the capsule row stay on its one line, taking only the room the host capsules
-leave (one chip or six, at 320 and 360 px: no wrap, no horizontal page scroll), and stay where they are while a
-capsule's panel is open (the row never moves).
+leave (one chip or six, at 320 and 360 px: no wrap, no horizontal page scroll), and step aside with the other
+controls while an owner capsule stands alone.
 """
 from __future__ import annotations
 
@@ -214,7 +214,7 @@ ROW = """() => {
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_filled_slots_keep_the_capsules_line_while_a_panel_opens(direct_server_with_data, engine, tmp_path):  # noqa: F811
+def test_filled_slots_keep_the_capsules_line_and_step_aside_with_the_capsules(direct_server_with_data, engine, tmp_path):  # noqa: F811
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import sync_playwright
 
@@ -257,14 +257,9 @@ def test_filled_slots_keep_the_capsules_line_while_a_panel_opens(direct_server_w
                     assert after["overflow"] <= 0 and not after["outside"], (where, after)
                     page.screenshot(path=str(_evidence_dir(tmp_path) / f"composer-slots-{engine}-{width}-{count}.png"),
                                     animations="disabled")
-                    # A capsule's panel open: the row, its chips included, stays as it was.
-                    page.locator('#page-chat .chat-context-head').click()
-                    page.wait_for_selector('.capsule-panel[data-kind="context"]:not([data-leaving])', state="visible", timeout=5_000)
-                    opened = page.evaluate(ROW)
-                    assert opened["hosts"] == after["hosts"] and opened["slot"] == after["slot"], (where, after, opened)
-                    assert opened["rowHeight"] == after["rowHeight"] and opened["lines"] == 1, (where, after, opened)
-                    page.keyboard.press("Escape")
-                    page.wait_for_selector('.capsule-panel:not([data-leaving])', state="detached", timeout=5_000)
+                    # An owner capsule open alone: the chips step aside with the other controls.
+                    page.evaluate("() => { document.querySelector('#page-chat .chat-toolbar-row').dataset.ownerSolo = 'effort'; }")
+                    assert page.evaluate(ROW)["slot"]["display"] == "none", where
         finally:
             (_evidence_dir(tmp_path) / f"composer-slots-{engine}.json").write_text(json.dumps(evidence, indent=1),
                                                                                   encoding="utf-8")

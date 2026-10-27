@@ -698,6 +698,9 @@ def _prepare_unified_review(ctx: ToolContext, commit_message: str,
         )
         if result is not None:
             return None, result, True
+        from ouroboros.preflight_receipts import with_preparation_finding  # the seats see what the wave continued past
+        ctx._preflight_execution = with_preparation_finding(getattr(ctx, "_preflight_execution", None), preflight_err,
+            continued_under="Advisory enforcement" if review_enforcement_blocks("blocking") else "Cyber Pro")
 
     rebuttal_section = build_rebuttal_section(review_rebuttal)
 

@@ -16,7 +16,7 @@ import { formatMsgTime } from './utils.js';
 import { hostRowDisplayText } from './host_notice_text.js';
 export { bootPhase, startingStatus, supervisorReady } from './host_starting_status.js';
 import {
-    joinMarkdownHeadings, MARKDOWN_FENCED_CODE, accountedUpperBound,
+    projectMarkdownLines, MARKDOWN_FENCED_CODE, accountedUpperBound,
     accountedUpperBoundWithChildren,
     escapeHtmlAttr,
     escapeHtmlText as escapeHtml,
@@ -846,6 +846,7 @@ export function clearStickyCardState(record) {
     // The folded evidence is cycle state too: a recycled slot must not count
     // the previous cycle's invocations.
     record.toolFold = null;
+    record.waitFolds = null;
     record.durationSec = null;
     record.historicalUnavailable = false;
     record.historicalUnconfirmed = false;
@@ -873,24 +874,22 @@ export const COLLAPSED_ACTIVITY_MAX = 240;
  * strikethrough, headings, bullets, links, table pipes. It strips line by line
  * without the renderer's block context, so a stray pipe row or list marker the
  * timeline would show literally is dropped here too: over-stripping is the
- * accepted side of that trade, a leaked marker is not. Headings follow the
- * renderer's own rule (`joinMarkdownHeadings`: markers off, ` — ` before the
- * text under a real heading). A headline that is nothing but markers keeps its
- * source text: an empty projection would flip the reserved activity band's
+ * accepted side of that trade, a leaked marker is not. The line-anchored markers
+ * (headings with ` — ` before the text under a real heading, bullets, table rows)
+ * go through `projectMarkdownLines`, the one projection `describeText` also runs
+ * before a preview loses its newlines. A headline that is nothing but markers keeps
+ * its source text: an empty projection would flip the reserved activity band's
  * `:empty` rules.
  */
 export function plainActivityText(text = '') {
     const source = String(text || '');
-    const plain = joinMarkdownHeadings(source)
+    const plain = projectMarkdownLines(source)
         .replace(MARKDOWN_FENCED_CODE, '$1')
         .replace(/(``|`)(.+?)\1/g, '$2')
         .replace(/\*\*(.+?)\*\*/g, '$1')
         .replace(/\*(.+?)\*/g, '$1')
         .replace(/~~(.+?)~~/g, '$1')
-        .replace(/^- (.+)$/gm, '$1')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
-        .replace(/^\|(.+)\|$/gm, (_, row) => row.split('|').map((cell) => cell.trim()).join(' '))
-        .replace(/^[\s\-:|]+$/gm, '');
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
     const trimmed = plain.trim();
     return trimmed || source;
 }

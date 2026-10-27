@@ -32,7 +32,7 @@ from ouroboros.runtime_mode_policy import (
     protected_paths_in,
     protected_write_block_message,
 )
-from ouroboros.tool_policy import name_miss_guidance, tool_namespace
+from ouroboros.tool_policy import name_miss_guidance, tool_namespace, usable_selectors
 from ouroboros.tool_capabilities import (
     ACTING_SUBAGENT_MODE,
     acting_tool_names_for_context,
@@ -994,7 +994,7 @@ class ToolRegistry:
 
             identity = naming_rule_matches(requested, rows)
         guidance = name_miss_guidance(requested or name, namespace, rows, identity=identity,
-                                      discovery="list_available_tools" in self.available_tools())
+                                      discovery="list_available_tools" in usable_selectors(self))
         return _replace_tool_result(reason, text="\n".join([reason.text, *guidance]))
 
     @staticmethod

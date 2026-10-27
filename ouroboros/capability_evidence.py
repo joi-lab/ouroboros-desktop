@@ -36,14 +36,16 @@ import logging
 import pathlib
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from ouroboros.deadline_utils import parse_deadline_ts, utc_now
 from ouroboros.utils import (
     atomic_write_json,
     is_credential_header_name,
     json_snapshot,
+    json_update_lock,
     read_json_dict,
     utc_now_iso,
 )
@@ -51,10 +53,11 @@ from ouroboros.context_budget import _parse_ctx_limit_number  # noqa: F401 — s
 
 log = logging.getLogger(__name__)
 
-# Serialises the load->mutate->save of the two owner-only writers (probe cache +
-# owner-ack) within the process so neither loses the other's update; atomic_write_json
-# additionally prevents torn/corrupt files across processes (durable-state SSOT).
+# Every whole-store load->mutate->save (``_store_transaction``) runs under this RLock for the
+# process's threads and a stable sidecar lock for other processes; atomic_write_json alone only
+# prevents torn files, so a stale snapshot could otherwise erase or resurrect a newer record.
 _STORE_LOCK = threading.RLock()
+_STORE_LOCK_WAIT_SEC = 4.0  # the platform lock's established bounded wait
 
 STATUS_CONFIRMED = "confirmed"
 STATUS_ASSERTED = "asserted"
@@ -303,7 +306,7 @@ def _load(drive_root: Any) -> Dict[str, Any]:
 
 def _read(drive_root: Any) -> Dict[str, Any]:
     """The store as readers share it: one parse per file identity (``json_snapshot``), never
-    mutated; a writer's ``_load`` takes its own fresh copy under ``_STORE_LOCK``."""
+    mutated; a writer's ``_load`` takes its own fresh copy inside ``_store_transaction``."""
     return json_snapshot(_store_path(drive_root)) or {}
 
 
@@ -317,19 +320,36 @@ def _save(drive_root: Any, data: Dict[str, Any]) -> bool:
         return False
 
 
-def _store_evidence(drive_root: Any, kind: str, fp: str, value: Dict[str, Any]) -> None:
-    """Locked, atomic read-modify-write of one evidence entry (``probes`` or
-    ``owner_acks``). The lock re-reads the CURRENT file inside the critical section
-    so a concurrent owner-ack and probe never clobber each other; the network probe
-    itself runs OUTSIDE this lock. Never raises."""
+@contextmanager
+def _store_transaction(drive_root: Any) -> Iterator[None]:
+    """Hold the store for one fresh load -> mutation -> atomic save, across threads and processes.
+
+    Threads of this process queue on ``_STORE_LOCK``; other processes on the store's sidecar
+    ``capability_evidence.json.lock``, the one ``update_json_locked`` would take (``json_update_lock``).
+    Not re-entrant per store: a nested transaction on the same store waits out the bounded wait.
+    Raises ``TimeoutError`` when another process keeps the sidecar past that wait: a best-effort
+    observation skips its write, an owner action reports the failure. Network reads stay outside.
+    """
+    with _STORE_LOCK, json_update_lock(_store_path(drive_root), timeout_sec=_STORE_LOCK_WAIT_SEC):
+        yield
+
+
+def _store_evidence(drive_root: Any, kind: str, fp: str, value: Dict[str, Any]) -> bool:
+    """One ``_store_transaction`` writing one evidence entry of namespace ``kind``.
+
+    It re-reads the CURRENT file inside the transaction, so no writer in any process saves a
+    stale snapshot over another's record; the network read runs OUTSIDE it. Returns whether
+    the entry was saved and never raises: a write that fails or finds the store busy leaves
+    the previous file as it was, including an older record of this key."""
     try:
-        with _STORE_LOCK:
+        with _store_transaction(drive_root):
             data = _load(drive_root)
             _drop_expired_probes(data)
             data.setdefault(kind, {})[fp] = value
-            _save(drive_root, data)
+            return _save(drive_root, data)
     except Exception:
         log.debug("capability evidence store failed (%s)", kind, exc_info=True)
+        return False
 
 
 def _drop_expired_probes(data: Dict[str, Any]) -> None:
@@ -395,7 +415,7 @@ def record_effort_ceiling(drive_root: Any, fingerprint: str, ceiling: str) -> No
     if not fp or not ceil:
         return
     try:
-        with _STORE_LOCK:
+        with _store_transaction(drive_root):
             data = _load(drive_root)
             entry = data.setdefault("effort_ceilings", {}).get(fp) or {}
             data["effort_ceilings"][fp] = {
@@ -445,7 +465,7 @@ def record_effort_floor(drive_root: Any, fingerprint: str, floor: str) -> None:
     if not fp or not value:
         return
     try:
-        with _STORE_LOCK:
+        with _store_transaction(drive_root):
             data = _load(drive_root)
             store = data.setdefault("effort_floors", {})
             entry = store.get(fp) or {}
@@ -502,7 +522,7 @@ def record_rejected_params(drive_root: Any, fingerprint: str, params: Any) -> No
     if not fp or not values:
         return
     try:
-        with _STORE_LOCK:
+        with _store_transaction(drive_root):
             data = _load(drive_root)
             store = data.setdefault("rejected_params", {})
             entry = store.get(fp) or {}
@@ -631,7 +651,7 @@ def record_token_density(
     ):
         return
     try:
-        with _STORE_LOCK:
+        with _store_transaction(drive_root):
             data = _load(drive_root)
             store = data.setdefault("token_density", {})
             entry = store.get(fp) or {}
@@ -833,7 +853,9 @@ def record_owner_ack(
     note: str = "",
     expected_route_fp: str = "",
 ) -> Dict[str, Any]:
-    """Persist a route-fingerprinted owner acknowledgement of a context window."""
+    """Persist a route-fingerprinted owner acknowledgement of a context window.
+
+    Returns the record only once it is saved; a busy or unwritable store raises ``OSError``."""
     fp = route_fingerprint(provider=provider, base_url=base_url, model=model, headers=headers, options=options)
     if expected_route_fp and expected_route_fp != fp:
         raise ValueError("Capability acknowledgement route fingerprint mismatch")
@@ -862,7 +884,8 @@ def record_owner_ack(
     }
     if binding_evidence is not None:
         record["binding_evidence"] = binding_evidence.to_json()
-    _store_evidence(drive_root, "owner_acks", fp, record)
+    if not _store_evidence(drive_root, "owner_acks", fp, record):
+        raise OSError("Could not persist the capability acknowledgement")
     return record
 
 
@@ -879,11 +902,13 @@ def list_owner_acks(drive_root: Any) -> List[Dict[str, Any]]:
 
 
 def revoke_owner_ack(drive_root: Any, route_fp: str) -> bool:
-    with _STORE_LOCK:
+    """Remove one acknowledgement; a busy or unwritable store raises, never reporting a removal."""
+    with _store_transaction(drive_root):
         data = _load(drive_root)
         if route_fp in data.get("owner_acks", {}):
             del data["owner_acks"][route_fp]
-            _save(drive_root, data)
+            if not _save(drive_root, data):
+                raise OSError("Could not persist the capability acknowledgement removal")
             return True
     return False
 
@@ -991,7 +1016,9 @@ def _openai_compatible_metadata_window(
         items = payload.get("data") if isinstance(payload, dict) else payload
         if provider == "openai-compatible":  # MiniMax /models carries no modality field
             from ouroboros.vision_routing import record_catalog_image_input
-            record_catalog_image_input(provider, base_url, items, source="the OpenAI-compatible gateway's /models")
+            # Scoped to the key this request sent ("" = none), never one resolved after the response.
+            record_catalog_image_input(provider, base_url, items, source="the OpenAI-compatible gateway's /models",
+                                       api_key=api_key)
         # The saved model is normally route-prefixed (e.g. ``openai-compatible::llama-3``)
         # while /models lists the BARE id — match either spelling.
         from ouroboros.provider_models import parse_model_route

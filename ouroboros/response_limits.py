@@ -89,27 +89,34 @@ def record_metadata_limit(drive_root, **observation) -> ResponseLimit:
 
 
 def record_catalog_limits(drive_root, rows, *, provider, base_url, field, source):
-    """Persist one catalog observation atomically, without one file write per model."""
-    from ouroboros.capability_evidence import _load, _save, _STORE_LOCK
+    """Persist one catalog observation atomically, without one file write per model.
+
+    Best-effort: a busy or unwritable store (``OSError``, the lock's ``TimeoutError`` included)
+    skips this write and keeps its previous records, so the catalog read it observed stands."""
+    from ouroboros.capability_evidence import _load, _save, _store_transaction
     from ouroboros.utils import utc_now_iso
 
     stamp = utc_now_iso()
-    with _STORE_LOCK:
-        data = _load(drive_root)
-        records = data.setdefault("response_limits", {})
-        for model, maximum in rows:
-            if not model:
-                continue
-            fp = _response_fingerprint(provider=provider, model=model, base_url=base_url)
-            value = positive_limit(maximum)
-            records[fp] = asdict(ResponseLimit(value, "confirmed" if value else "unprobeable",
-                                               source + " " + field, stamp, route_fp=fp))
-        _save(drive_root, data)
+    try:
+        with _store_transaction(drive_root):
+            data = _load(drive_root)
+            records = data.setdefault("response_limits", {})
+            for model, maximum in rows:
+                if not model:
+                    continue
+                fp = _response_fingerprint(provider=provider, model=model, base_url=base_url)
+                value = positive_limit(maximum)
+                records[fp] = asdict(ResponseLimit(value, "confirmed" if value else "unprobeable",
+                                                   source + " " + field, stamp, route_fp=fp))
+            _save(drive_root, data)
+    except OSError:
+        import logging
+        logging.getLogger(__name__).debug("catalog response limits not recorded", exc_info=True)
 
 
 def record_response_ack(drive_root, *, provider, model, base_url="", options=None,
                         max_output_tokens=0, expected_route_fp=""):
-    from ouroboros.capability_evidence import (_load, _save, _STORE_LOCK,
+    from ouroboros.capability_evidence import (_load, _save, _store_transaction,
                                               _claudexor_metadata_evidence)
     from ouroboros.utils import utc_now_iso
 
@@ -126,7 +133,7 @@ def record_response_ack(drive_root, *, provider, model, base_url="", options=Non
         if ev is None or ev.stale or not ev.account_fingerprint:
             raise ValueError("Refresh the exact subscription account before acknowledging its maximum")
     record = asdict(ResponseLimit(maximum, "asserted", "owner_ack", utc_now_iso(), route_fp=fp))
-    with _STORE_LOCK:
+    with _store_transaction(drive_root):  # a busy store raises TimeoutError: never reported as saved
         data = _load(drive_root)
         acks = data.setdefault("response_acks", {})
         if maximum:

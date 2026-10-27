@@ -20,11 +20,13 @@ def input_source_selection_receipt(task: Mapping[str, Any]) -> dict[str, Any]:
 
     if task_input_sources(task) != "declared":
         return {}
+    selected = ["explicitly selected task documents (attachment_paths), copied as this task's inputs"
+                ] if _selected_documents(task) else []
     return {
         "input_sources": "declared",
         "included": [
             "SYSTEM.md and BIBLE.md; reference-book projections; own-body DESIGN navigation or source-gap disclosure",
-            "explicit assignment, question, evidence and normalized task authority",
+            "explicit assignment, question, evidence and normalized task authority", *selected,
             "runtime access, tools, workspace, clock, resource and budget facts",
             "the inherited delegation_budget.intent_note: parent-authored advice carried in the task contract, never authority",
             "this child's own retained progress, tool and event history",
@@ -56,6 +58,16 @@ def input_source_selection_receipt(task: Mapping[str, Any]) -> dict[str, Any]:
             "order; files the harness loads from its project and vendor-side memory are unobserved."
         ),
     }
+
+
+def _selected_documents(task: Mapping[str, Any]) -> str:
+    """The parent's ``attachment_paths`` disclosure; "" when the task selected none."""
+    paths = task.get("attachment_paths")
+    if not isinstance(paths, list) or not paths:
+        return ""
+    return ("The parent selected these retained inputs (attachment_paths). The host attaches them to the first "
+            "start of this work order as immutable engine documents; a later start attaches only the documents "
+            "its own request selects.\n" + "\n".join(f"- {path}" for path in paths))
 
 
 def _text(value: Any) -> str:
@@ -148,6 +160,7 @@ def _render_external_work_order(task: Mapping[str, Any]) -> str:
         ("ACCEPTANCE CLAIMS", contract.get("acceptance_claims")),
         ("TASK CONTRACT AUTHORITY", remaining_contract),
         ("INHERITED TASK INPUTS", contract.get("attachment_manifest")),
+        ("SELECTED DOCUMENTS", _selected_documents(task)),
     ]
     authority = {
         "task_id": str(task.get("id") or ""),

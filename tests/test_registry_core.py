@@ -609,6 +609,8 @@ def test_binding_failures_cut_over_only_the_exact_native_families(
         "task-binding",
     )
 
+    if tool_name == "vcs_read":  # its refusal also names the two roots vcs_read takes
+        text += tool_resolution._VCS_READ_ROOTS
     assert row["tool_result"] == ToolResult(status=status, code=code, text=text)
     assert row["result"] == text
     assert row["is_error"] is is_error
