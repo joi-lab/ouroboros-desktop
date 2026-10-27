@@ -278,6 +278,25 @@ def test_a_held_seat_lock_keeps_the_home_waiting_until_it_is_free(data, recorded
     assert maintenance_jobs.job(data, job.JOB)["waiting"] == []
 
 
+def test_an_unreadable_listing_fails_the_run_and_marks_nothing_covered(data, recorded, monkeypatch):
+    _evidence(data, "done", live_files=False)
+    real, refused = os.scandir, data / "task_results" / "artifacts"
+
+    def scandir(path="."):
+        if pathlib.Path(path) == refused:
+            raise PermissionError(13, "listing refused")
+        return real(path)
+
+    monkeypatch.setattr(maintenance, "JOBS", {job.JOB: maintenance.JOBS[job.JOB]})
+    monkeypatch.setattr(os, "scandir", scandir)
+    assert maintenance.run(data)["status"] == "failed"
+    row = maintenance_jobs.job(data, job.JOB)
+    assert row.get("counter") is None and row.get("state") != "done", "the backlog is still owed"
+    assert row["last_error"]["class"] == "PermissionError" and not recorded
+    monkeypatch.setattr(os, "scandir", real)
+    assert _run(data)["state"] == "done" and len(recorded) == 3
+
+
 def test_unsupported_platforms_record_it_once_and_walk_nothing(data, monkeypatch):
     _evidence(data, "done", live_files=False)
     monkeypatch.setattr(artifact_storage, "compression_supported", lambda: False)

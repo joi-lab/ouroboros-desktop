@@ -149,10 +149,10 @@ class _Run:
             return None
         self.census = True
         if self.row.get("counter") is None:  # the backlog: every task folder, by name
-            try:
+            try:  # an unreadable listing raises: the pass stays owed, never marked covered
                 with os.scandir(artifacts) as listing:
                     names = sorted(entry.name for entry in listing if entry.is_dir(follow_symlinks=False))
-            except OSError:
+            except FileNotFoundError:
                 names = []
         else:
             from ouroboros.task_store import terminal_writes_since
@@ -177,12 +177,17 @@ class _Run:
 
         seats, since = self.root / _SEATS, self.row.get("since")
         waiting = set(self.row.get("waiting") or ())
-        try:
+        present: Dict[str, float] = {}
+        try:  # an unreadable listing raises (the pass stays owed); a home gone meanwhile is skipped
             with os.scandir(seats) as listing:
-                present = {entry.name: entry.stat(follow_symlinks=False).st_mtime for entry in listing
-                           if entry.is_dir(follow_symlinks=False) and not entry.name.startswith(".")}
-        except OSError:
-            present = {}
+                for entry in listing:
+                    try:
+                        if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                            present[entry.name] = entry.stat(follow_symlinks=False).st_mtime
+                    except FileNotFoundError:
+                        continue
+        except FileNotFoundError:
+            pass
         wanted = set((self.row.get("owed") or {}).get("seats") or ()) | waiting
         wanted = (set(present) if since is None else wanted | {name for name, at in present.items() if at >= since}) & set(present)
         resume = self.row.get("cursor") or {}  # the backlog resumes by name; a later pass owes its rest by name
