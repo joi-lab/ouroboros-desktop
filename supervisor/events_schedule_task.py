@@ -13,6 +13,7 @@ import functools
 import logging
 from typing import Any, Dict, Optional
 from ouroboros.headless_status import ARTIFACT_STATUS_FAILED
+from ouroboros.dialogue_provenance import PRESENCE_BINDING_AUTHORITY_KEY
 from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE
 from ouroboros.task_results import (
     STATUS_FAILED,
@@ -467,7 +468,8 @@ def _handle_schedule_task(evt: Dict[str, Any], ctx: Any, preparation: Any = None
         direct_child_count = _direct_child_count(count_roots, parent_id, tid)
         room_mode, room_refusal = _subagent_room_mode(ctx, {
             "id": parent_id, "root_task_id": root_task_id, "project_id": project_id, "chat_id": chat_id,
-            "metadata": evt.get("origin_metadata")})
+            "metadata": {**(evt.get("origin_metadata") or {}),
+                         **{key: evt[key] for key in (PRESENCE_BINDING_AUTHORITY_KEY,) if key in evt}}})
         if room_refusal:
             reject(ctx, tid=tid, chat_id=chat_id, delegation_role=delegation_role,
                    parent_id=parent_id, root_task_id=root_task_id, role=role, result_fields=result_fields,

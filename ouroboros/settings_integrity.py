@@ -296,12 +296,13 @@ def live_effort_range() -> dict[str, str]:
     return read_cognition(root, _actor_project(snapshot.actor_scope), settings=settings)["effort_range"]
 
 
-def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None = None) -> str:
+def live_subagents_mode(*, task: Mapping | None = None, drive_root: Path | None = None,
+                        settings: Mapping | None = None) -> str:
     """Live room choice from explicit or bound actor facts; autonomous work keeps its controls."""
     from ouroboros import config
     from ouroboros.composer_cognition import read_cognition
 
-    settings = config.load_settings()
+    settings = config.load_settings() if settings is None else settings
     snapshot = _TASK_SETTINGS.get()
     scope = _actor_scope(task, drive_root or config.DATA_DIR) if task is not None else (snapshot.actor_scope if snapshot else None)
     if scope is None:
@@ -315,6 +316,7 @@ def record_subagents_admission(task: dict, drive_root: Path, *, settings: Mappin
                               project: Mapping | None = None) -> None:
     """Root telemetry. Queue callers supply settings and the admitted row (None for Main), without more IO."""
     if settings is not None:
+        # Restate effective_subagents_mode from admitted facts, without IO under the queue lock.
         from ouroboros.settings_scales import normalize_subagents_mode
         from ouroboros.subagent_runtime import subagents_availability
 

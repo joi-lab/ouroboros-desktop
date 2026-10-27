@@ -67,6 +67,45 @@ def test_unannotated_legacy_history_is_readable_and_has_no_inferred_label():
     assert "subagents_mode" not in replay
 
 
+@pytest.mark.parametrize("room_state", ["readable", "deleting", "registry", "bindings", "settings"])
+@pytest.mark.parametrize("surface", ["round", "message"])
+def test_room_annotations_survive_unavailable_project(room_state, surface, monkeypatch, tmp_path):
+    from ouroboros.loop_messages import append_context_facts
+    from ouroboros.settings_integrity import live_subagents_mode, task_settings_scope
+    from tests.test_project_cognition_runtime import snapshot
+    from tests.test_round_facts_line import _facts_ctx
+
+    save_owner(mode_settings("swarm", "available"))
+    room = projects.create_project(config.DATA_DIR, "alpha")
+    actor = snapshot({"id": "parent", "project_id": "alpha", "chat_id": room["chat_id"]})
+    ctx = _facts_ctx(tmp_path, monkeypatch)
+    if room_state == "deleting":
+        projects.begin_project_deletion(config.DATA_DIR, "alpha")
+    elif room_state in {"registry", "bindings"}:
+        path = projects._registry_path if room_state == "registry" else projects._bindings_path
+        path(config.DATA_DIR).write_text("{unreadable", encoding="utf-8")
+    elif room_state == "settings":
+        def unreadable():
+            raise OSError("settings unavailable")
+        monkeypatch.setattr(config, "load_settings", unreadable)
+
+    with task_settings_scope(actor):
+        if room_state != "readable":
+            with pytest.raises((ValueError, OSError)):
+                live_subagents_mode()  # only annotations degrade; admission reads remain strict
+        if surface == "round":
+            assert append_context_facts(ctx, money={})
+            fact = ctx.messages[-1]["content"]
+            assert "[CONTEXT_FACTS]" in fact and "own cost" in fact
+            assert ("Subagents: Swarm" if room_state == "readable" else "Subagents: unknown") in fact
+        else:
+            row = message_ingress.log_chat("in", room["chat_id"], 1, "Owner words",
+                drive_root=config.DATA_DIR, source="web", client_message_id="annotation")
+            assert row is not None and row["text"] == "Owner words"
+            assert row.get("subagents_mode") == ("swarm" if room_state == "readable" else None)
+            assert message_ingress.accepted_chat_message(config.DATA_DIR, room["chat_id"], "annotation") == row
+
+
 @pytest.mark.parametrize("mode", ["off", "auto", "swarm"])
 @pytest.mark.parametrize("availability", ["available", "disabled", "unsaved"])
 @pytest.mark.parametrize("project", [False, True])

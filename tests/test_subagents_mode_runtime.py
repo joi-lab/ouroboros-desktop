@@ -132,8 +132,10 @@ def test_both_context_builders_omit_only_the_off_catalog(mode, inputs, monkeypat
 
 
 @pytest.mark.parametrize("mode", ["off", "auto", "swarm"])
-def test_host_rechecks_room_mode_on_delayed_admission(mode):
-    from supervisor import events
+@pytest.mark.parametrize("presence", [False, True], ids=["owner", "presence"])
+def test_host_rechecks_room_mode_on_delayed_admission(mode, presence, monkeypatch):
+    from supervisor import events, events_schedule_task
+    from ouroboros.dialogue_provenance import PRESENCE_BINDING_AUTHORITY_KEY
     from tests.test_nested_rights_depth import _fake_ctx, _schedule_event
     from ouroboros.task_results import load_task_result
 
@@ -142,12 +144,37 @@ def test_host_rechecks_room_mode_on_delayed_admission(mode):
     save_owner(values)
     enqueued = []
     ctx = _fake_ctx(config.DATA_DIR, enqueued)
-    events._handle_schedule_task(_schedule_event("new-child", "parent", drive_root=config.DATA_DIR), ctx)
-    if mode == "off":
+    event = _schedule_event("new-child", "parent", drive_root=config.DATA_DIR)
+    carrier = {PRESENCE_BINDING_AUTHORITY_KEY: {"binding_id": "place"}} if presence else {}
+    event.update(carrier)
+    event["origin_metadata"] = {"work_kind": "owner"}
+    refused = mode == "off" and not presence
+    with task_settings_scope(snapshot({"id": "parent", "metadata": {**event["origin_metadata"], **carrier}})):
+        if refused:
+            with pytest.raises(runtime.SubagentSelectionError, match="Subagents are off in this chat"):
+                runtime._require_room_subagents()
+        else:
+            runtime._require_room_subagents()
+
+    checks = []
+    read_mode = events_schedule_task._subagent_room_mode
+
+    def observe(host, task):
+        result = read_mode(host, task)
+        checks.append(result)
+        return result
+
+    monkeypatch.setattr(events_schedule_task, "_subagent_room_mode", observe)
+    events._handle_schedule_task(event, ctx)
+    if refused:
+        assert checks == [("off", None)]
         assert not enqueued
         assert load_task_result(config.DATA_DIR, "new-child")["reason_code"] == "subagents_off_in_room"
     else:
+        assert checks == [("auto" if presence else mode, None)] * 2
         assert len(enqueued) == 1
+        if presence:
+            assert enqueued[0]["metadata"][PRESENCE_BINDING_AUTHORITY_KEY] == carrier[PRESENCE_BINDING_AUTHORITY_KEY]
 
 
 def test_global_settings_off_withholds_new_admission_from_running_actor():
