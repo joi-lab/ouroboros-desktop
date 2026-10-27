@@ -371,6 +371,7 @@ def _retire_superseded_host_state(messages, ctx):
     """Superseded host rows leave where this send already departs from the last one, before the
     producers append, so a standing note whose full text left comes back current
     (``context_source_view.retire_superseded_at_departure``)."""
+    from ouroboros import context_compaction  # noqa: F401 -- the public facade loads its source-view leaf first
     from ouroboros.context_source_view import retire_superseded_at_departure
 
     tool_ctx = ctx.tools._ctx

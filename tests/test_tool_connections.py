@@ -211,8 +211,12 @@ def test_a_namespace_listing_is_complete_with_the_server_facts(registry):
     overview = registry.execute("list_available_tools", {})
     assert "- mcp_gitlab: 2 tools, 0 loaded" in overview
     # Built-in purposes stay bounded there: their complete text arrives with the loaded schema.
+    from ouroboros.tool_policy import BUILTIN_NAMESPACE, tool_namespace
+
     builtin = registry.execute("list_available_tools", {"namespace": "builtin"})
-    assert "…" in builtin and "…" not in listing
+    long = max((" ".join(str(s["function"].get("description") or "").split()) for s in registry.schemas()
+                if tool_namespace(s["function"]["name"]) == BUILTIN_NAMESPACE), key=len)
+    assert len(long) > 400 and long[:100] in builtin and long[200:300] not in builtin
 
 
 @pytest.mark.parametrize("profile", ["local_readonly_subagent", "acting_subagent"])
