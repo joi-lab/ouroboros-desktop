@@ -603,6 +603,7 @@ def test_recovery_cas_loser_requires_durable_accounting_before_whole_ack(
         monkeypatch.setattr(usage, "reserve_attempt", no_new_attempt_or_history)
         attempts = usage_store.Txn.attempts
         monkeypatch.setattr(usage_store.Txn, "attempts", no_new_attempt_or_history)
+        monkeypatch.setattr(usage_store.Txn, "attempt_rows", no_new_attempt_or_history)
         monkeypatch.setattr(usage_store.Txn, "open_attempts", no_new_attempt_or_history)
         result = registry.execute_result("recover_image", {"request_id": request_id})
     finally:

@@ -395,8 +395,9 @@ def reconcile_abandoned_usage(drive_root: pathlib.Path) -> None:
     from ouroboros import usage_store
 
     root = pathlib.Path(drive_root).resolve()
-    with usage_store.read(root) as txn:
-        rows = txn.attempts(f"{usage_store._OPEN_PREDICATE} AND {_RECOVERABLE}")
+    with usage_store.read(root) as txn:  # captured in one step, decoded after the read closed
+        captured = txn.attempt_rows(f"{usage_store._OPEN_PREDICATE} AND {_RECOVERABLE}")
+    rows = usage_store.decode_attempts(captured)
     reads, eligible, observations, faults = TaskOwnershipRead(root), {}, {}, {}
     # A task proven absent or not settled yet cannot be eligible: one statement, not 3-4 reads per task per pass.
     ids, facts = _present_facts(root, {str(row.get("task_id") or "") for row in rows})

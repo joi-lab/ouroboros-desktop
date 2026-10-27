@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 from decimal import Decimal, InvalidOperation
 
 from ouroboros.usage_ledger import _number
@@ -519,7 +519,7 @@ _VIEW_LEGACY_UNATTRIBUTED = frozenset({"legacy_metadata", "legacy_delta"})
 
 
 # ---- read views: the historical projection/breakdown shapes from summary rows
-# (``txn`` is a usage-store transaction: ``bucket``/``buckets``/``attempts``) ----
+# (``txn``: a usage-store transaction, or the rows it captured: ``bucket``/``buckets``/``attempts``) ----
 
 def _rendered(bucket: Bucket, degraded: bool, *, decorate: bool) -> Dict[str, Any]:
     rendered = bucket.render_breakdown()
@@ -562,6 +562,38 @@ def breakdown_view(txn: Any, *, root_task_id: str = "", task_id: str = "", inclu
     result["unattributed"] = {axis: _rendered(axes[axis].get("") or empty, degraded, decorate=False)
                               for axis in ("model", "provider", "category", "task", "root")}
     return result
+
+
+class _Reads:
+    """A dry run's ``txn``: it records which summary rows ``breakdown_view`` asks for and reads nothing."""
+
+    def __init__(self) -> None:
+        self.reads: list = []
+
+    def bucket(self, scope: str, key: str = "") -> Bucket:
+        self.reads.append((scope, str(key), "key"))
+        return Bucket()
+
+    def buckets(self, scope: str, prefix: Optional[str] = None) -> Dict[str, Bucket]:
+        self.reads.append((scope, "" if prefix is None else str(prefix), "scope" if prefix is None else "prefix"))
+        return {}
+
+
+def breakdown_read(txn: Any, *, root_task_id: str = "", task_id: str = "",
+                   include_owners: bool = False) -> Callable[[bool], Dict[str, Any]]:
+    """``breakdown_view``'s rows captured inside the caller's read in one step (``store_capture``); the returned
+    ``render(degraded)`` decodes and renders after that read closed. The summary rows captured are the ones a
+    dry run of the view asks for, so the capture and the view cannot disagree."""
+    from ouroboros import usage_store
+
+    if root_task_id and task_id:
+        rows = txn.attempt_rows("root_task_id=? AND task_id=?", (root_task_id, task_id))
+        return lambda degraded: breakdown_of_rows(usage_store.decode_attempts(rows), degraded)
+    shape = {"root_task_id": root_task_id, "task_id": task_id, "include_owners": include_owners}
+    wanted = _Reads()
+    breakdown_view(wanted, **shape)
+    captured = txn.summary_rows(wanted.reads)
+    return lambda degraded: breakdown_view(usage_store.SummaryRows(captured), degraded=degraded, **shape)
 
 
 def breakdown_of_rows(rows: Sequence[Dict[str, Any]], degraded: bool) -> Dict[str, Any]:

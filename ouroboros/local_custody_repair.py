@@ -175,7 +175,8 @@ def retire_ended_owner(root: Any, task_id: str, root_task_id: str, *, pid: int, 
         from ouroboros import usage_store
 
         with usage_store.read(pathlib.Path(root)) as txn:  # this task's rows only (task index)
-            rows = txn.attempts("task_id = ?", (str(task_id),))
+            captured = txn.attempt_rows("task_id = ?", (str(task_id),))
+        rows = usage_store.decode_attempts(captured)
         consumers = {row["local_answer_consumer_id"]: attempt for row in rows
                      if row.get("task_id") == task_id and row.get("root_task_id") == root_task_id
                      and row.get("local_answer_owner_pid") == pid and row.get("local_answer_owner_birth") == birth
@@ -273,8 +274,8 @@ def _repair_absent_receivers(root: Any, members: set, root_task_id: str) -> List
 
     try:  # the tree's own open rows (root index), never the whole open census
         with usage_store.read(pathlib.Path(root)) as txn:
-            rows = [row for row in txn.open_attempts(root_task_id=root_task_id)
-                    if str(row.get("task_id") or "") in members]
+            captured = txn.open_attempt_rows(root_task_id=root_task_id)
+        rows = [row for row in usage_store.decode_attempts(captured) if str(row.get("task_id") or "") in members]
     except Exception:
         log.warning("Open attempts unreadable; receivers stay held", exc_info=True)
         return []

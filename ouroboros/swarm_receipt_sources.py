@@ -103,7 +103,8 @@ def _usage(root, root_id, measurements):
         # A receipt consumes existing money facts. Creating an empty ledger can
         # append an import event to previously absent fan-out history.
         with usage_store.hold(root, write=False, migrate=False, timeout_sec=USAGE_DISPLAY_LOCK_TIMEOUT_SEC) as txn:
-            rows = txn.attempts("root_task_id=? OR task_id=?", (root_id, root_id))
+            captured = txn.attempt_rows("root_task_id=? OR task_id=?", (root_id, root_id))
+        rows = usage_store.decode_attempts(captured)
         return [{**row, **accounts.get(row["attempt_id"], {}),
                  **({"actor_id": bindings[row["attempt_id"]]} if row["attempt_id"] in bindings else {})}
                 for row in rows], "unknown" if usage_store.integrity_degraded(root) else "complete"
