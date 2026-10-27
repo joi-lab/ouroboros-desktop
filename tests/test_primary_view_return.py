@@ -155,31 +155,13 @@ def test_a_failed_primary_row_leaves_the_acting_view(tmp_path, monkeypatch, rese
     assert messages[0] == acting_view  # the reserve keeps showing its own view, not the primary's Max
 
 
-def test_the_primary_model_on_another_account_is_another_route(tmp_path, monkeypatch):
-    model = "claudexor::codex=gpt-test"
-    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a", "fallback": ["account-b"]}))
-    _windows_by(monkeypatch, "model_role", {"main": 1_000_000, "fallback:0": 65_537})
-    plan, registry, messages = _primary_on(model, tmp_path, monkeypatch)
-    shown = messages[0]
-    away, mode = loop._rebind_context_fit_plan(plan, registry, messages, model=model, use_local=False,
-                                              model_role="fallback:0", start_mode="max", tool_schemas=[])
-    assert mode != "max"  # the other account's window narrowed every book
-    _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=model, use_local=False,
-                                                     model_role="main", start_mode=mode, tool_schemas=[])
-    assert back_mode == "max" and messages[0] == shown
-
-
-@pytest.mark.parametrize("pin,same_model", [("", False), ("account-a", False), ("account-a", True)],
-                         ids=["auto", "pinned", "account-only"])
-def test_a_wait_card_choosing_the_primary_resumes_its_view(tmp_path, monkeypatch, pin, same_model):
-    primary = "claudexor::codex=gpt-main"
-    reserve = primary if same_model else "claudexor::codex=gpt-reserve"
-    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": pin, "fallback": ["account-b" if same_model else pin]}))
+@pytest.mark.parametrize("pin", ["", "account-a"], ids=["auto", "pinned"])
+def test_a_wait_card_choosing_the_primary_resumes_its_view(tmp_path, monkeypatch, pin):
+    primary, reserve = "claudexor::codex=gpt-main", "claudexor::codex=gpt-reserve"
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": pin, "fallback": [pin]}))
     waiter = SimpleNamespace(overrides={})
     monkeypatch.setattr(model_wait, "current_model_wait", lambda: waiter)
-    key, windows = (("model_role", {"main": 1_000_000, "fallback:0": 65_537}) if same_model
-                    else ("model", {primary: 1_000_000, reserve: 65_537}))
-    _windows_by(monkeypatch, key, windows)
+    _windows_by(monkeypatch, "model", {primary: 1_000_000, reserve: 65_537})
     plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
     shown = messages[0]
     away, mode = loop._rebind_context_fit_plan(plan, registry, messages, model=reserve, use_local=False,
@@ -187,29 +169,48 @@ def test_a_wait_card_choosing_the_primary_resumes_its_view(tmp_path, monkeypatch
     registry._ctx.active_model = reserve
     # The fallback's wait card picks the primary: the card writes its choice for the waiting role before the rebind.
     waiter.overrides["fallback:0"] = {"model": primary, "use_local": False, "model_account_override": pin}
-    windows["fallback:0"] = 1_000_000  # under that choice the waiting role is served by the primary's account
     _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=primary, use_local=False,
                                                      model_role="fallback:0", start_mode=mode, tool_schemas=[])
     assert mode != "max" and back_mode == "max" and messages[0] == shown
 
 
-def test_a_primary_account_changed_meanwhile_is_a_new_route(tmp_path, monkeypatch):
-    model = "claudexor::codex=gpt-test"
+def test_an_earlier_main_account_choice_keeps_the_hold_on_the_primary_view(tmp_path, monkeypatch):
+    primary, reserve = "claudexor::codex=gpt-main", "claudexor::codex=gpt-reserve"
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a", "fallback": ["account-b"]}))
+    waiter = SimpleNamespace(overrides={"main": {"model_account_override": "account-b"}})  # an earlier card for Main
+    monkeypatch.setattr(model_wait, "current_model_wait", lambda: waiter)
+    _windows_by(monkeypatch, "model", {primary: 1_000_000, reserve: 65_537})
+    plan, registry, messages = _primary_on(primary, tmp_path, monkeypatch)
+    shown = messages[0]
+    # The walk candidate's rebind, then its observed account's rebind, both before the walk adopts it.
+    away, mode = loop._rebind_context_fit_plan(plan, registry, messages, model=reserve, use_local=False,
+                                              model_role="fallback:0", start_mode="max", tool_schemas=[])
+    away, mode = loop._rebind_context_fit_plan(away, registry, messages, model=reserve, use_local=False,
+                                              model_role="fallback:0", start_mode=mode, tool_schemas=[])
+    registry._ctx.active_model = reserve
+    _back, back_mode = loop._rebind_context_fit_plan(away, registry, messages, model=primary, use_local=False,
+                                                     model_role="main", start_mode=mode, tool_schemas=[])
+    assert mode != "max" and back_mode == "max" and messages[0] == shown  # never the candidate's view
+
+
+def test_a_primary_account_changed_meanwhile_keeps_its_view(tmp_path, monkeypatch):
+    model = "claudexor::codex=gpt-test"  # one model shows one view; the new account's window still fits it
     monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-a"}))
     _windows_by(monkeypatch, "model", {model: 1_000_000, "other/model": 65_537})
     plan, registry, messages = _primary_on(model, tmp_path, monkeypatch)
+    shown = messages[0]
     away, away_mode = _leave(plan, registry, messages, "other/model", "max")
     monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"main": "account-b"}))  # the owner moves Main to another account
-    _new, new_mode = _switch(away, registry, messages, model, away_mode)
-    assert new_mode == away_mode != "max" and registry._ctx._primary_view is None
+    _back, back_mode = _switch(away, registry, messages, model, away_mode)
+    assert away_mode != "max" and back_mode == "max" and messages[0] == shown
 
 
 def test_forms_i_select_away_hold_on_the_primary_view():
     held, snap = synthetic_plan()
-    owner = SimpleNamespace(_primary_view=(("primary", False, ""), held))
+    owner = SimpleNamespace(_primary_view=(("primary", False), held))
     hold_selection(owner, ["F5:page-000"], owner_note=False)
     home, view = owner._primary_view
-    assert home == ("primary", False, "") and "Page 0." in held.projection("max").system_content_json
+    assert home == ("primary", False) and "Page 0." in held.projection("max").system_content_json
     assert "Page 0." not in view.projection("max").system_content_json
     assert dict(floor.kept_level(snap, view.projection("max").memory_facts).addressed)["F5"] == ("page-000",)
     hold_selection(owner, ["core:BIBLE"], owner_note=False)  # a form the held view refuses releases the hold

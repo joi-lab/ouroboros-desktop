@@ -272,30 +272,26 @@ def record_round_route_result(ctx, role: str, *, accepted: bool) -> None:
         owner._execution_trace.setdefault("accepted_routes", []).append(row)
 
 
-def held_primary_view(owner, plan, start_mode, *, model: str, use_local: bool, role: str):
+def held_primary_view(owner, plan, start_mode, *, model: str, use_local: bool):
     """The plan and start mode a route switch rebinds from.
 
-    Routes are complete bindings (``model_slots.route_binding``: model, locality, account). The first departure
-    from the task's primary holds the view it showed there, keyed to that binding: rebinds before adoption (a walk
-    candidate, its observed account, a wait card's account) still read the primary as acting and never replace it.
-    A return to that binding resumes the held view, so the narrowing another route's window wrote into every book
-    leaves with that route, while the primary's own lowering (its start fit, a real overflow before it left) and
-    my forms selected meanwhile (``hold_selection``) stay, and its window may narrow the view again. A switch on
-    the same route (account rotation, a wait's reprepare) or to a primary changed meanwhile never raises the mode.
-    The hold is in memory only; after a restart a return keeps the acting view.
+    The first departure from the task's primary holds the view it showed there, keyed to the primary's model and
+    locality: rebinds before adoption (a walk candidate, its observed account, a wait card's choice) still read the
+    primary as acting and never replace it. A return to the primary resumes the held view, so the narrowing another
+    route's window wrote into every book leaves with that route, while the primary's own lowering (its start fit, a
+    real overflow before it left) and my forms selected meanwhile (``hold_selection``) stay, and the window of the
+    account now serving it may narrow the view again. Accounts are not part of this identity: one model shows one
+    view, and an account is not reliably known while a walk or a wait card is still switching. So a fallback on the
+    primary's model with another account keeps the view it is shown, as before. A switch on the same route (account
+    rotation, a wait's reprepare) or to a primary whose model changed meanwhile never raises the mode. The hold is
+    in memory only; after a restart a return keeps the acting view.
     """
     primary = getattr(owner, "primary_route", None)
     if not isinstance(primary, dict) or not primary.get("model"):
         return plan, start_mode
-    from ouroboros.model_slots import route_binding
-    from ouroboros.model_wait import current_model_wait
-
-    overrides = getattr(current_model_wait(), "overrides", None)
-    home = route_binding(str(primary["model"]), bool(primary["use_local"]), primary["role"], overrides=overrides)
-    # The view's own route, without a wait card's choice for its role: a card writes that choice before this rebind.
-    acting = route_binding(str(getattr(owner, "active_model", "") or ""), bool(getattr(owner, "active_use_local", False)),
-                           str(getattr(plan, "model_role", "") or ""))
-    target, held = route_binding(str(model or ""), bool(use_local), role, overrides=overrides), getattr(owner, "_primary_view", None)
+    home = (str(primary["model"]), bool(primary["use_local"]))
+    acting = (str(getattr(owner, "active_model", "") or ""), bool(getattr(owner, "active_use_local", False)))
+    target, held = (str(model or ""), bool(use_local)), getattr(owner, "_primary_view", None)
     if held is not None and (held[0] != home or held[1].core_sha256 != plan.core_sha256):
         held = owner._primary_view = None  # another primary or core: that view is no longer the primary's own
     if held is None and acting == home != target:
