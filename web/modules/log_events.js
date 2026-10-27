@@ -1,6 +1,6 @@
 import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, plainCauseText, projectMarkdownLines, savedTerminalRowNote } from './utils.js';
 import { cancelCauseClauses, ownerStopEnding } from './cancel_presentation.js';
-import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
+import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote, residualToolErrorsPhrase } from './task_reason_words.js';
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
 import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow, waitEpisode } from './task_checkpoints.js';
 export { taskCheckpointLabel } from './task_checkpoints.js';
@@ -561,7 +561,9 @@ export function taskReasonDetail(evt, codes = []) {
     if (reviewCause && (reason === reviewCause || bypass[reason] === reviewCause)) clause = '';
     const excluded = ['', 'delegated_custody_unreconciled', 'terminal_delivery_unknown', 'terminal_delivery_exhausted'];
     const warnings = [...(Array.isArray(objective?.warnings) ? objective.warnings : []), objective?.warning || ''];
-    const warningClauses = warnings.filter(w => !excluded.includes(w)).map(taskReasonPhrase);
+    const named = residualToolErrorsPhrase(record.outcome_axes?.execution);  // the failure the record holds, in owner words
+    const warningClauses = warnings.filter(w => !excluded.includes(w))
+        .map(w => (w === 'residual_tool_errors_without_review' && named) || taskReasonPhrase(w));
     const artifacts = record.artifact_bundle?.status || record.artifact_status || record.outcome_axes?.artifacts?.status;
     if (['failed', 'missing'].includes(artifacts)) warningClauses.push(taskReasonPhrase('artifacts_unavailable'));
     if (decision?.open_obligations?.length) warningClauses.push(taskReasonPhrase('open_obligations'));

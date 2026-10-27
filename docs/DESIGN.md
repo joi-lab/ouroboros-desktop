@@ -1989,7 +1989,9 @@ lifecycle.
 A task that ends with a cause states it on the collapsed line in the
 owner's words (the sentence of the durable row and the expanded body), so a
 `Done with warnings` chip never stands beside an unrelated last action; a clean
-ending keeps the last narration. Successful tool calls are not rows: they fold
+ending keeps the last narration. Residual tool errors name the first recorded
+failure in plain words (a noun for the step and what happened, never a tool
+name, its result text or a path) and count the rest (`tool_error_words`). Successful tool calls are not rows: they fold
 into ONE evidence row per block (`N tool calls`, `N tool calls · M errors` once
 a call failed) at the first call's position and time, patched in place; Expand
 shows per-tool counts (`read_file ×3 · web_search`), and the phase (`calling`

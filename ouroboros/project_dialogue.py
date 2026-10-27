@@ -1219,9 +1219,10 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     of ``taskReasonDetail`` and ``taskReasonCodes``.
     """
     from ouroboros.outcomes import (
-        ACCEPTANCE_ACCEPTED, ACCEPTANCE_BYPASS_REASON_BY_RAIL, REASON_FINAL_MESSAGE,
-        REASON_OWNER_REQUESTED_FINALIZATION, WARN_DELEGATED_CUSTODY_UNRECONCILED, plan_review_awaiting,
+        ACCEPTANCE_ACCEPTED, ACCEPTANCE_BYPASS_REASON_BY_RAIL, REASON_FINAL_MESSAGE, REASON_OWNER_REQUESTED_FINALIZATION,
+        WARN_DELEGATED_CUSTODY_UNRECONCILED, WARN_RESIDUAL_TOOL_ERRORS_WITHOUT_REVIEW, plan_review_awaiting,
     )
+    from ouroboros.tool_error_words import residual_tool_errors_phrase
 
     decision: Dict[str, Any] = {}
     veto: Dict[str, Any] = {}
@@ -1303,7 +1304,9 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     excluded = {"", "delegated_custody_unreconciled", "terminal_delivery_unknown", "terminal_delivery_exhausted"}
     if not include_review_details:
         excluded.add("receipt_absent")
-    warning_clauses = [TASK_CAUSE_PHRASES.get(str(w), str(w)) for w in warnings if str(w) not in excluded]
+    named = residual_tool_errors_phrase(execution)  # the failure the record holds, in owner words
+    warning_clauses = [(str(w) == WARN_RESIDUAL_TOOL_ERRORS_WITHOUT_REVIEW and named) or TASK_CAUSE_PHRASES.get(str(w), str(w))
+                       for w in warnings if str(w) not in excluded]
     record = {**event, **result}
     bundle = record.get("artifact_bundle") if isinstance(record.get("artifact_bundle"), dict) else {}
     artifact_status = bundle.get("status") or record.get("artifact_status") or artifacts.get("status")
