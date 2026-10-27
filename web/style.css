@@ -4089,8 +4089,9 @@ html[data-layout="stack"] #content {
 html[data-layout="stack"] #content > .page:not(#page-chat) {
     padding-bottom: var(--inset-bottom);
 }
-/* The stack layout's header is one row of at most 56px at normal scale: `☰ · title · status … Panic · ⋯`
-   (owner Q4=A). Nothing wraps: the title ellipsizes, Restart and the budget are inside ⋯ (chat.js places them). */
+/* The stack layout's header is one row of at most 56px at normal scale: `☰ · title · status … chip · Panic`
+   (owner Q4=A; no ⋯, owner 25.10). Nothing wraps: the title ellipsizes, Restart and the budget are rows of the room
+   status's Shade (page_header.js places them). */
 html[data-layout="stack"] .page-header,
 html[data-layout="stack"] .app-page-header {
     min-height: 56px;
