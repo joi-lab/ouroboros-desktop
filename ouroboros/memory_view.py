@@ -620,14 +620,18 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
                   lineage: Mapping[str, Any], story: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """The current room: its head and standing facts, page (retold records, pages under parts, notes), origin words, lanes.
 
-    Retold records already whole in my story are not repeated. A selected account carries its records;
-    their detail stays at their source readers rather than reappearing in this room.
+    Retold records already whole in my story are not repeated. A selected account carries its records, a part
+    it tells its members too; their detail stays at their source readers rather than reappearing in this room.
+    A standing part (the mind's, or a helper's draft not pending as a candidate) stands for its members here
+    as in the story: they keep their period and address (``standing``), a viewer with a story only.
     """
     room = str(spec.room_id)
     records = store.room_records(room)
     whole = {e["id"] for e in story if e.get("kind") == "legacy" and e.get("text") and not e.get("told_by")}
-    told = {e["id"]: {**e, "part": None} for e in story if e.get("kind") in ("page", "part") and e.get("told_by")
-            and e["room_id"] == room}
+    told = set(told_map([e for e in story if e.get("kind") == "account"]))  # the latest shown selections
+    told |= {member for record in records if record["kind"] == "part" and record["id"] in told
+             for member in store.folded_members(record["id"])}
+    standing = {record["id"] for record in records if record["kind"] == "part"}  # room_records: no candidate or rejected
     sample = next((meta for _address, meta, _pos in reversed(entries)
                    if meta.get("transport") or meta.get("presence_provenance")), None)
     facts: Dict[str, Any] = {"room_id": room, "label": label(room, sample), "head": store.room_head(room),
@@ -648,11 +652,12 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
                                     "legacy_range_text")}, getattr(unit, "ts_span", None)),
                             "of": LEGACY_ROOM_LABEL if str(record.get("room_id")) == LEGACY_ROOM_ID else ""}
                            for record in retold if not getattr(unit := units.get(record["id"]), "folded", False)
-                           and record["id"] not in whole]
+                           and record["id"] not in whole and record["id"] not in told]
         own = {} if spec.story else {e["id"]: {**e, "part": None} for e in _story_pages(store, label, units, room)
                                       if e["room_id"] == room and e["kind"] != "account"}  # story order: the floor takes the oldest first
         facts["under_parts"] = [own.get(record["id"]) or {"id": record["id"], "kind": record["kind"], "part": record["folded_into"],
-                                 "period": _period((p := memory_inventory.record_period(store, record, units)).span, p.note()), "text": str(record.get("current_text") or "")}
+                                 "period": _period((p := memory_inventory.record_period(store, record, units)).span, p.note()), "text": str(record.get("current_text") or ""),
+                                 **({"standing": True} if spec.story and record["folded_into"] in standing else {})}
                                 for record in (records if spec.story else store.pages_of_room(room)) if record["kind"] in ("page", "part") and record["id"] not in told and (record.get("folded_into") or record["id"] in own)]
         facts["notes"] = list(notes.get(room, ()))
     if spec.origin_words and room.lstrip("-").isdigit() and int(room) in memory_inventory.membership_facts(
@@ -1125,7 +1130,8 @@ def _room_text(room: Mapping[str, Any], gone: Mapping[str, List[str]]) -> str:
         lines += ["", "### Retold before the update (helper retelling, not lived)"]
         lines += [_retold(item, item["id"] in retold) for item in room["legacy"]]
     lines += (["", "### Pages under my parts" if all(i["part"] for i in room["under_parts"]) else "### Pages of this room",
-               *(_retold(item, item["id"] in retold) for item in room["under_parts"])] if room["under_parts"] else [])
+               *(_retold(item, item["id"] in retold or item.get("standing", False)) for item in room["under_parts"])]
+              if room["under_parts"] else [])
     if room["origins"]:
         lines += ["", "### Words that started this work (retention-proof)"]
         lines += [f"[{item['ts'] or 'time not recorded'}; owner; {item['ref']}] " + _indented(item["text"]).lstrip()

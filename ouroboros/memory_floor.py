@@ -54,7 +54,8 @@ def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str,
         "F3": [(rid, "\n".join(map(legacy.retold_record, group)), legacy.room_pointer(group))
                for rid, group in legacy.pointer_rooms(snapshot.story).items()],
         "F2": [(i["address"], i["line"], mv._row_pointer(i, "my reply")) for i in mine],
-        "F4": [(i["id"], mv._retold(i), mv._retold(i, True)) for i in [*room.get("legacy", ()), *room.get("under_parts", ())]],
+        "F4": [(i["id"], mv._retold(i, i.get("standing", False)), mv._retold(i, True))  # a standing part's members: short already
+               for i in [*room.get("legacy", ()), *room.get("under_parts", ())]],
         "F7p": [(i["address"], i["line"], mv._row_pointer(i, "words")) for i in lane1
                 if i["kind"] != "ouroboros" and not i.get("owner_side", i["kind"] == "human")],
         "F7": [(i["address"], i["line"], mv._row_pointer(i, "words")) for i in lane1
