@@ -212,6 +212,7 @@ D20 = "Presence"
 "ouroboros/context_mode_compat.py" = "D03"
 "ouroboros/memory_view.py" = "D03"  # the acting mind's resident memory view: roles, capture, story and live part
 "ouroboros/memory_floor.py" = "D03"  # the memory view's physical floor: what a window shows only by address
+"ouroboros/memory_max.py" = "D03"  # the lost-Max episode: one obligation row, its two Main lines and a Health line
 "ouroboros/memory_view_legacy.py" = "D03"  # how my story names a retold old record: what its address holds
 "ouroboros/memory_view_account.py" = "D03"  # common-view account rendering and retained source addresses
 "ouroboros/contracts/__init__.py" = "D19"

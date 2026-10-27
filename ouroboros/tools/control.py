@@ -225,6 +225,7 @@ def get_tools() -> List[ToolEntry]:
                     "workspace_root": {"type": "string", "description": "Absolute ordinary folder or Git worktree root outside Ouroboros repo/data, validated at admission. File/process work supports ordinary folders; Git operations need a worktree. Omit for the Project's registered working_dir or, in Main, Ouroboros's own repo.", "default": ""},
                     "workspace": {"type": "string", "description": "'none' opts out of the Project's default folder; empty otherwise.", "default": ""},
                     "context_requires_self_body_docs": {"type": "boolean", "description": "True for work on Ouroboros code, including copies elsewhere: this task gets the full development handbook in Max. Low/Nano and helpers keep their usual book maps.", "default": False},
+                    "context_requires_development": {"type": "boolean", "description": "Omit unless the work's subject is clear: true keeps docs/DEVELOPMENT.md whole in Max, false gives its chapter map."},
                     "source": {"type": "string", "description": "Attach an existing folder or clone a git URL (https://... or git@host:path) server-side into the projects root; private auth failures are typed auth_required. Registers the folder with provenance + trusted_at as the Project/task workspace. Use for work on a supplied repo/folder.", "default": ""},
                     "reasoning_effort": _ROOT_EFFORT_PARAM,
                 },
