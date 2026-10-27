@@ -496,6 +496,13 @@ TOOL_CODE_SPECS: Mapping[str, ToolCodeSpec] = MappingProxyType(
             "error",
             "select a registered visible tool",
         ),
+        # A route's physical ceiling on schemas per request: the tools stay callable.
+        "TOOL_SCHEMA_LIMIT": _code_spec(
+            "unavailable",
+            "resource_constraint_blocked",
+            "warning",
+            "load fewer schemas at once, or work on a route without the ceiling",
+        ),
         "TOOL_ERROR": _code_spec(
             "error",
             "error",
@@ -894,6 +901,7 @@ _EXACT_IDENTIFIER_CODES = MappingProxyType(
         "COGNITIVE_TOOL_REQUIRED": "COGNITIVE_TOOL_REQUIRED",
         "RESOURCE_CONSTRAINT_BLOCKED": "RESOURCE_CONSTRAINT_BLOCKED",
         "RESOURCE_POLICY_BLOCKED": "RESOURCE_POLICY_BLOCKED",
+        "TOOL_SCHEMA_LIMIT": "TOOL_SCHEMA_LIMIT",
         "DATA_READ_BLOCKED": "DATA_BLOCKED",
         "DATA_LIST_BLOCKED": "DATA_BLOCKED",
         "WORKSPACE_MODE_BLOCKED": "WORKSPACE_BLOCKED",

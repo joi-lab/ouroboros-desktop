@@ -10,8 +10,8 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 |---|---|---:|---:|
 | D01 | Agent core & main loop | 54 | 0 |
 | D02 | LLM client, routing & providers | 44 | 0 |
-| D03 | Context assembly, fit & compaction | 25 | 0 |
-| D04 | Tool execution: registry, access & typed results | 23 | 0 |
+| D03 | Context assembly, fit & compaction | 26 | 0 |
+| D04 | Tool execution: registry, access & typed results | 24 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 45 | 0 |
 | D06 | Review stack | 95 | 0 |
 | D07 | Delegation, subagents & Claudexor | 92 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 36 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 20 | 0 |
-| **total** | | **906** | **0** |
+| **total** | | **908** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **123**
+- lazy-only cross-domain pairs: **125**
   - D01->D10
   - D01->D11
   - D02->D05
@@ -82,6 +82,8 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D03->D16
   - D03->D20
   - D04->D01
+  - D04->D02
+  - D04->D03
   - D04->D06
   - D04->D07
   - D04->D09
@@ -323,6 +325,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/density_probe.py`
 - `ouroboros/main_context_authority.py`
 - `ouroboros/memory_floor.py`
+- `ouroboros/memory_max.py`
 - `ouroboros/memory_view.py`
 - `ouroboros/memory_view_account.py`
 - `ouroboros/memory_view_legacy.py`
@@ -341,6 +344,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/tool_access_types.py`
 - `ouroboros/tool_access_user_files.py`
 - `ouroboros/tool_capabilities.py`
+- `ouroboros/tool_connections.py`
 - `ouroboros/tool_effects.py`
 - `ouroboros/tool_policy.py`
 - `ouroboros/tools/__init__.py`

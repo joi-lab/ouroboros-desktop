@@ -6,6 +6,8 @@ strip takes the line); while it is open its lines stand under the row and above 
 means and how a change applies), and a choice saves at once while the meaning follows it. With Settings › Agents off
 it says Off with a lock, Auto and Swarm cannot be chosen, the reason and Open Settings stand under the row, and Open
 Settings closes the strip and opens Settings › Agents. The room's subagents facts are the test's on every state read.
+On a phone a value keeps its look and a finger's target: a tap a few px above or below it chooses it, on Context's and
+Effort's strips too.
 """
 from __future__ import annotations
 
@@ -20,6 +22,8 @@ from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 SUBAGENTS = "#page-chat .chat-subagents-mode"
+CONTEXT = "#page-chat .chat-context-mode"
+EFFORT = "#page-chat .chat-effort-range"
 RULE = "Applies to new steps in this chat; running helpers finish."
 # The page's state read: the first `/api/state` and every `?bindings_since=` read after it (chat_activity.js).
 STATE_READS = re.compile(r"/api/state(\?|$)")
@@ -67,6 +71,14 @@ def _settle(page) -> None:
             .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
             .every((a) => !a.pending && a.playState !== 'running'); }""", timeout=10_000)
     page.wait_for_timeout(150)
+
+
+# A target's centre and its drawn top and bottom.
+SPOT = "(node) => { const r = node.getBoundingClientRect(); return { x: r.left + r.width / 2, top: r.top, bottom: r.bottom }; }"
+# Where Effort's brackets stand and which level is the primary.
+BRACKETS = """(el) => ({ caps: [...el.querySelectorAll('.chat-effort-cap')].map((cap) => {
+    const r = cap.getBoundingClientRect(); return [r.left, r.right]; }),
+    rec: el.querySelector('.chat-effort-seg[data-rec="true"]')?.dataset.effortSeg || '' })"""
 
 
 def _open(page, press) -> dict:
@@ -157,4 +169,78 @@ def test_subagents_opens_in_the_row_with_its_lines_under_it(
             (_evidence_dir(tmp_path) / f"subagents-inline-{engine}-{width}.json").write_text(
                 json.dumps(seen, indent=1), encoding="utf-8")
             page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
+            browser.close()
+
+
+@pytest.mark.parametrize("engine,width", [("chromium", 390), ("webkit", 390), ("chromium", 320), ("webkit", 320)])
+def test_a_tap_just_outside_a_value_chooses_it_on_a_phone(direct_server_with_data, engine, width, tmp_path):  # noqa: F811
+    """Under a finger every target is at least the touch minimum (DESIGN "Touch and containment"): the open strip's
+    values keep their look and reach above and below the line, so a tap 4 px under or over a value, outside what is
+    drawn, chooses it and the strip stays open; Subagents' Auto and Swarm, Context's mode, and Effort's level where its
+    strip does not scroll (a strip that scrolls clips that reach). WebKit hit-tests a touch at its exact point, so
+    without the reach the tap lands beside the capsule there and closes it."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, viewport={"width": width, "height": 860}, is_mobile=True, has_touch=True)
+
+        def tap_off(target: str, edge: str, dy: int, endpoint: str) -> dict:
+            spot = page.locator(target).evaluate(SPOT)
+            with page.expect_response(lambda r: r.url.endswith(endpoint), timeout=30_000):
+                page.touchscreen.tap(spot["x"], spot[edge] + dy)
+            return spot
+
+        def open_capsule(sel: str) -> None:
+            page.tap(f"{sel} .chat-capsule-head")
+            page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=sel)
+            _settle(page)
+
+        def close_capsule(sel: str) -> None:
+            page.keyboard.press("Escape")
+            page.wait_for_function("sel => document.querySelector(sel).dataset.open === 'false'", arg=sel)
+            _settle(page)
+
+        try:
+            _hold(page, {"subagents_mode": "off", "subagents_availability": "available"})
+            _open_chat(page, url, width=width, height=860, theme="light")
+            open_capsule(SUBAGENTS)
+            for mode, edge, dy in (("auto", "bottom", 4), ("swarm", "top", -4)):
+                spot = tap_off(f'{SUBAGENTS} .chat-seg[data-mode="{mode}"]', edge, dy, "/api/owner/subagents-mode")
+                page.wait_for_function("([sel, mode]) => document.querySelector(sel).dataset.mode === mode",
+                                       arg=[SUBAGENTS, mode])
+                facts = seen[f"subagents-{mode}"] = {**page.evaluate(FACTS), "spot": spot}
+                assert facts["open"] == "true", (f"{dy:+d} px off {mode}: chosen, and the strip stays open", facts)
+            _shot(page, tmp_path, f"subagents-edge-tap-{engine}-{width}")
+            close_capsule(SUBAGENTS)
+            # Context's strip is the same mode strip.
+            open_capsule(CONTEXT)
+            mode = "low" if page.locator(CONTEXT).get_attribute("data-context-mode") != "low" else "max"
+            spot = tap_off(f'{CONTEXT} .chat-seg[data-mode="{mode}"]', "bottom", 4, "/api/owner/context-mode")
+            page.wait_for_function("([sel, mode]) => document.querySelector(sel).dataset.contextMode === mode",
+                                   arg=[CONTEXT, mode])
+            seen["context"] = {"mode": mode, "spot": spot, "open": page.locator(CONTEXT).get_attribute("data-open")}
+            assert seen["context"]["open"] == "true", seen["context"]
+            close_capsule(CONTEXT)
+            # Effort: a level tapped 4 px under it becomes the primary, clear of the brackets' own reach.
+            open_capsule(EFFORT)
+            fit = page.locator(EFFORT).get_attribute("data-fit") or ""
+            seen["effort"] = {"fit": fit}
+            if fit != "overflow":
+                level = f'{EFFORT} .chat-effort-seg[data-effort-seg="xhigh"]'
+                before = page.locator(EFFORT).evaluate(BRACKETS)
+                x = page.locator(level).evaluate(SPOT)["x"]
+                clear = all(x < left - 16 or x > right + 16 for left, right in before["caps"])
+                assert before["rec"] != "xhigh" and clear, before
+                spot = tap_off(level, "bottom", 4, "/api/owner/effort-range")
+                page.wait_for_function("""sel => document.querySelector(sel)
+                    .querySelector('.chat-effort-seg[data-rec="true"]')?.dataset.effortSeg === 'xhigh'""", arg=EFFORT)
+                seen["effort"].update(spot=spot, open=page.locator(EFFORT).get_attribute("data-open"))
+                assert seen["effort"]["open"] == "true", seen["effort"]
+        finally:
+            (_evidence_dir(tmp_path) / f"subagents-edge-tap-{engine}-{width}.json").write_text(
+                json.dumps(seen, indent=1), encoding="utf-8")
+            page.unroute_all(behavior="ignoreErrors")
             browser.close()

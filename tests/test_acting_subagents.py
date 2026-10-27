@@ -14,7 +14,7 @@ from ouroboros.contracts.task_constraint import (
     normalize_task_constraint,
 )
 from ouroboros.tool_access import active_tool_profile
-from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE, ACTING_SUBAGENT_TOOL_NAMES
+from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE, ACTING_SUBAGENT_TOOL_NAMES, META_TOOL_NAMES
 from ouroboros.runtime_mode_policy import mode_allows_protected_write
 from ouroboros.tools.registry import ToolContext, ToolRegistry
 from ouroboros import subagent_worktrees as sw
@@ -275,7 +275,8 @@ def test_shrink_guard_covers_redundant_root_prefix(tmp_path, monkeypatch):
 def test_acting_tool_visibility_is_acting_set(tmp_path):
     reg, _ctx, _wt = _acting_registry(tmp_path)
     names = set(reg.initial_tool_names())
-    assert names == set(ACTING_SUBAGENT_TOOL_NAMES)
+    # The schema selectors ride every role (#1860): they load schemas and grant nothing.
+    assert names == set(ACTING_SUBAGENT_TOOL_NAMES) | META_TOOL_NAMES
     assert "commit_reviewed" not in names
     assert "integrate_subagent_patch" in names
 
@@ -632,8 +633,8 @@ def test_mode_allows_protected_write_matrix():
 def test_acting_schemas_subset_of_acting_set(tmp_path):
     reg, _ctx, _wt = _acting_registry(tmp_path, grants=("mcp_foo",))
     names = {s["function"]["name"] for s in reg.schemas()}
-    # No first-party tool outside the acting set; ungranted ext/MCP never leak.
-    assert names <= set(ACTING_SUBAGENT_TOOL_NAMES)
+    # No first-party tool outside the acting set and its selectors; ungranted ext/MCP never leak.
+    assert names <= set(ACTING_SUBAGENT_TOOL_NAMES) | META_TOOL_NAMES
     assert reg._acting_tool_grants() == {"mcp_foo"}
 
 

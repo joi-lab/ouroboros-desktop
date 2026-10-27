@@ -33,6 +33,7 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "verification_receipts": "task_results/artifacts/{id}/verification_receipts.jsonl",
           "storage": "state/storage_measurement.json",  # the last two finished storage counts (installation-wide)
           "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
+          "update_letter": "state/update_letter.json",  # the letter with its whole range qualification
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
 _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification_receipts"}
 # op=blob reads the observability CAS by digest. The digest in a task-source handle's name is that file's own
@@ -40,7 +41,8 @@ _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification
 _BLOB_KIND_HINT = ("; op=blob reads observability CAS blobs only. A digest in a task-source handle name "
                    "(source_handles/...-<sha256>.<ext>) is that file's own hash: open it with the reader its mark or "
                    "result names, memory_read(source_ref={kind, root, path, size, sha256, task_id})")
-_STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
+# ``context_snapshot``: the skill's current declared context snapshot, the address its outdated note names.
+_STATES = ("review", "review_job", "health", "enabled", "deps", "grants", "context_snapshot")
 # Each knowledge history row holds both complete versions of its note, so the ordinary
 # 8 MiB log window would cover hours of writes; this read budget covers far more of them.
 _HISTORY_SCAN_BYTES = 256 * 1024 * 1024
@@ -322,6 +324,13 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if root is None:
         raise FileNotFoundError("owned child drive is unavailable")
     relative = _FILES[kind].format(id=identity, child=child, state_file=state_file)
+    if kind == "skill_state" and state_file == "context_snapshot":
+        from ouroboros.extension_liveness import live_context_publishers
+
+        descriptor = live_context_publishers(root).get(identity)
+        if not descriptor or not descriptor.get("eligible"):
+            raise FileNotFoundError(f"{identity} publishes no live context snapshot")
+        relative = (Path(descriptor["state_dir"]).resolve() / descriptor["path"]).relative_to(Path(root).resolve()).as_posix()
     if kind == "run" and root.parts[-2:] == ("task_drives", child):
         relative = f"delegated_runs/{identity}.json"
     path = _path(ctx, root, relative)
@@ -386,8 +395,8 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 hint = f"; {rows} bounds rows for op={op}" if rows and {"tail", "max_rows"} & {n for n, _ in named} else ""
                 raise ValueError(f"{', '.join(_arg(*item) for item in named)} {'applies' if len(named) == 1 else 'apply'} "
                                  f"only to {owner}; omit {'it' if len(named) == 1 else 'them'}{hint}")
-        if kind == "storage" and child_task_id:
-            raise ValueError("storage is installation-wide; it has no child selector")
+        if kind in {"storage", "update_letter"} and child_task_id:
+            raise ValueError(f"{kind} is installation-wide; it has no child selector")
         if kind == "knowledge_history" and child_task_id:
             raise ValueError("knowledge_history is the installation's global knowledge; it has no child selector")
         native = (ctx.task_metadata or {}).get("native_data_root")
@@ -467,7 +476,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 # The installation queue lives with its owner; child_task_id keeps child-local meaning.
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
-            elif kind in {"storage", "knowledge_history"}:
+            elif kind in {"storage", "knowledge_history", "update_letter"}:
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
             values, remaining, retained = {}, sql.MAX_BYTES, 0

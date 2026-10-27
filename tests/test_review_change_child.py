@@ -390,6 +390,9 @@ def test_review_grants_no_commit_control_or_self_approval(tree):
         assert selected.status in ('blocked', 'error') and '✅' not in selected.text, (tool, selected.text)
         assert reg.get_schema_by_name(tool) is None and 'BLOCKED' in reg.execute(tool, {}), tool
     assert not resident
+    allowed = reg.schemas()[0]['function']['name']  # and a schema the role may call does load
+    assert 'Call schemas loaded' in reg.execute('enable_tools', {'tools': allowed})
+    assert [schema['function']['name'] for schema in resident] == [allowed]
     assert not _starts()
 
 

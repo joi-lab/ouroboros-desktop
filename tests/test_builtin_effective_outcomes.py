@@ -289,7 +289,7 @@ def test_tool_enablement_distinguishes_total_refusal_from_partial_effect(invoke,
     assert result.code == code
     assert len(resident) == int("known" in names)
     if "known,missing" == names:
-        assert "registered late" in result.text and "Not found: missing" in result.text
+        assert "Call schemas loaded" in result.text and "Not found: missing" in result.text
 
 
 @pytest.mark.parametrize("handler", ["_list_available_tools", "_enable_tools"])

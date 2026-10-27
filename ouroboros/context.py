@@ -38,10 +38,8 @@ from ouroboros.context_fit import (
 from ouroboros.context_input_selection import (
     _capture_declared_context_core,
     _explicit_self_body_docs_flag as _explicit_self_body_docs_flag,
-    _task_requires_development_context,
-    _task_requires_self_body_docs,
-    _task_uses_external_context,
     _validate_declared_input_task,
+    development_resident,
 )
 from ouroboros.context_health import (
     _iter_recent_jsonl as _iter_recent_jsonl,
@@ -58,7 +56,7 @@ from ouroboros.context_health import (
 from ouroboros.context_health import (
     safe_read as safe_read,
 )
-from ouroboros.contracts.task_contract import normalize_bool, task_input_sources
+from ouroboros.contracts.task_contract import task_input_sources
 from ouroboros.memory import Memory, render_scratchpad_markdown
 from ouroboros.update_letter import official_update_projection  # contract: never raises
 from ouroboros.i18n_memory import current_language as _ui_language_tag
@@ -993,15 +991,34 @@ def _drive_state_section(env: Any) -> str:
             + "\n\n" + note)
 
 
+def _connections(tool_registry: Any, task: Dict[str, Any]) -> Tuple[str, str]:
+    """This actor's connections map (``tool_connections``): Low/Max form, then Nano form."""
+    if tool_registry is None:
+        return "", ""
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    helper = str(task.get("delegation_role") or metadata.get("delegation_role") or "") == "subagent"
+    try:
+        from ouroboros.tool_connections import connection_views
+
+        return connection_views(tool_registry, helper=helper)
+    except Exception as exc:
+        log.warning("Failed to build the connections map", exc_info=True)
+        text = (f"## Connections\n\nThe connections map could not be built ({type(exc).__name__}; its cause is in "
+                "the log); list_available_tools lists every tool I can call.")
+        return text, text
+
+
 def _capture_context_core(
     env: Any,
     memory: Memory,
     task: Dict[str, Any],
     review_context_builder: Optional[Any],
     ctx: Any,
+    tool_registry: Any = None,
 ) -> _ContextCore:
     """Read each context source once before producing route-specific views."""
     declared = task_input_sources(task) == "declared"
+    connections = _connections(tool_registry, task)
     if declared:
         _validate_declared_input_task(task)
     captured_at = utc_now_iso()  # one capture instant for the runtime fact and every snapshot label
@@ -1045,7 +1062,7 @@ def _capture_context_core(
             env, memory, task, ctx, runtime_builder=build_runtime_section,
             user_builder=build_user_content, captured_at=captured_at, base_prompt=base_prompt,
             bible_md=bible_md, architecture_md=architecture_md, development_md=development_md,
-            books=books, book_errors=book_errors, design_nav=design_nav,
+            books=books, book_errors=book_errors, design_nav=design_nav, connections=connections,
         )
 
     # A fork is an execution boundary, not a second mind.  Keep the agent's
@@ -1081,18 +1098,9 @@ def _capture_context_core(
 
     # Max keeps the full capability/WHY map even for external work: binding a
     # folder changes tools' default target, not the mind's knowledge of its body.
-    # Its handbook follows the active self-body binding, with explicit task
-    # requirements taking precedence. Low/Nano and children instead receive both
-    # books' authored orientation through the same captured-source projection.
-    explicit_dev = task.get("context_requires_development")
-    if explicit_dev is not None:
-        docs_need_development = normalize_bool(explicit_dev)
-    elif _task_requires_self_body_docs(task):
-        docs_need_development = True
-    elif _task_uses_external_context(task):
-        docs_need_development = False
-    else:
-        docs_need_development = _task_requires_development_context(task)
+    # Its handbook follows the subject of the work (BIBLE P1); Low/Nano and children
+    # receive both books' authored orientation through the same captured-source projection.
+    docs_need_development = development_resident(task, design_ctx)
 
     semi_stable_parts, subagent_catalog = [], None
     try:
@@ -1138,7 +1146,7 @@ def _capture_context_core(
     from ouroboros.delegate_supervision import _attempt_key
     attempt_key = _attempt_key(ctx if ctx is not None else SimpleNamespace(task_attempt=task.get("_attempt")))
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
-                                             active_root=active_root, attempt_key=attempt_key)
+                                             active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
     dynamic_parts = [health_section] if health_section else []
     try:
         from ouroboros.subagent_runtime import review_records_block, subagent_supervision_fact_line
@@ -1241,6 +1249,7 @@ def _capture_context_core(
         dynamic_head_text="\n\n".join(head_parts),
         memory_view_json=view_json,
         supplementary_messages_json=json.dumps(supplementary_messages, ensure_ascii=False, sort_keys=True),
+        connections=connections,
     )
 
 
@@ -1303,9 +1312,10 @@ def build_context_fit_plan(
     preferred_mode: Optional[str] = None,
     ctx: Any = None,
     tool_schemas: Optional[List[Dict[str, Any]]] = None,
+    tool_registry: Any = None,
 ) -> ContextFitPlan:
     """Compatibility wrapper over the cohesive context-fit implementation."""
-    core = _capture_context_core(env, memory, task, review_context_builder, ctx)
+    core = _capture_context_core(env, memory, task, review_context_builder, ctx, tool_registry)
     return _build_context_fit_plan(
         env,
         core,
@@ -1341,7 +1351,7 @@ def build_llm_messages(
     task: Dict[str, Any],
     review_context_builder: Optional[Any] = None,
     ctx: Any = None,
-    *, tool_schemas: Optional[List[Dict[str, Any]]] = None,
+    *, tool_schemas: Optional[List[Dict[str, Any]]] = None, tool_registry: Any = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """The first request of a task: the plan's projection for its starting mode, and the cap info.
 
@@ -1359,6 +1369,7 @@ def build_llm_messages(
         preferred_mode=get_context_mode(),
         ctx=ctx,
         tool_schemas=tool_schemas,
+        tool_registry=tool_registry,
     )
     if ctx is not None:
         ctx.context_fit_plan = plan

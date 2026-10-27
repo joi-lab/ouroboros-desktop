@@ -90,21 +90,23 @@ def capture_terminal_rows(root, records):
 
 
 def terminal_links(root, record, cache=None):
-    """Only this page writer's later typed terminal rows, as separately attributed addresses."""
+    """This page writer's later typed terminal rows as one separately attributed line: each row's kind,
+    status and recorded finality (its authority stays in the row), and one reader over their span."""
     task_id = _terminal_writer(record)
     if not task_id:
         return []
-    end, links = _terminal_after(record), []
+    end = _terminal_after(record)
     cache = capture_terminal_rows(root, (record,)) if cache is None else cache
-    for address, row, pos in cache.get((str(record["room_id"]), task_id), ()):
-        if pos <= end:
-            continue
-        addr = chat_chain.format_address(address)
+    rows = [(address, row) for address, row, pos in cache.get((str(record["room_id"]), task_id), ()) if pos > end]
+    if not rows:
+        return []
+    items = []
+    for _address, row in rows:
         speaker = "host summary" if row.get("type") in ("task_summary", "project_completion_summary") else "task final report"
-        status = row.get("status") or row.get("task_terminal_status") or "status not recorded"
         finality = recorded_finality(row.get("outcome_final"), row.get("outcome_authority"),
-                                     host_facts=row.get("summary_kind") == "host_task_facts")
-        status += f"; {finality}" if finality else ""
-        links.append(f"- Linked {speaker} of task {task_id} ({status}); not page coverage; "
-                     f"memory_read(room_id='{record['room_id']}', rows=true, from='{addr}', to='{addr}')")
-    return links
+                                     host_facts=row.get("summary_kind") == "host_task_facts").partition(";")[0]
+        status = row.get("status") or row.get("task_terminal_status") or "status not recorded"
+        items.append(f"{speaker} ({status}{', ' + finality if finality else ''})")
+    first, last = (chat_chain.format_address(rows[index][0]) for index in (0, -1))
+    return [f"- Later terminal rows of task {task_id} (host-linked, not page coverage): {'; '.join(items)}; "
+            f"memory_read(room_id='{record['room_id']}', rows=true, from='{first}', to='{last}')"]

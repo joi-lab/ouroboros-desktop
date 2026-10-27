@@ -177,23 +177,15 @@ from ouroboros.nanny_pacing import (
 
 
 def _setup_dynamic_tools(tools_registry, tool_schemas, messages, context_mode="max"):
-    """Bind the one discovery implementation to this loop's resident schema list."""
+    """Bind the one discovery implementation to this loop's resident schema list.
+
+    The tools a task starts without schemas for are named by the connections map in the
+    system view (``tool_connections``), not by a per-task notice.
+    """
     from ouroboros.tools.tool_discovery import bind_resident_schemas
 
     enabled_extra = bind_resident_schemas(tools_registry, tool_schemas)
     tools_registry._ctx._actor_loaded_tool_names = enabled_extra  # a route's schema ceiling keeps these
-    non_core_count = len(list_non_core_tools(tools_registry, context_mode=context_mode))
-    if non_core_count > 0:
-        _append_or_merge_user_message(
-            messages,
-            (
-                "[SYSTEM NOTICE]\n"
-                f"You have {len(tool_schemas)} core tools loaded. "
-                f"There are {non_core_count} additional tools available "
-                f"(use `list_available_tools` to see them, `enable_tools` to activate). "
-                f"Core tools cover most tasks. Enable extras only when needed."
-            ),
-        )
     omissions = (
         tools_registry.capability_omissions()
         if hasattr(tools_registry, "capability_omissions")
@@ -535,6 +527,9 @@ def run_llm_loop(
     if not saved and not saved_pause and not saved_working:
         accumulated_usage["initial_model_request"] = {"model": active_model, "use_local": active_use_local}
         _emit_physical_mode(event_queue, task_id, drive_logs, context_fit_plan, active_context_mode)
+        from ouroboros.memory_max import observe_task_start  # every fresh start: the lost-Max episode
+        observe_task_start(ctx, context_fit_plan, active_context_mode, task_id=task_id or str(getattr(ctx, "task_id", "") or ""),
+                           event_queue=event_queue)
     cost_ceiling = _resolve_task_cost_ceiling(ctx, budget_remaining_usd)
     if cost_ceiling.root_cap_usd is not None:
         # Resumed/late-started members see tree spend before their first pacing surface.
