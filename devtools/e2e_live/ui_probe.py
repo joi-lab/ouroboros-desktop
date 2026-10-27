@@ -55,8 +55,7 @@ class UIProbe:
         room, saved before the send and kept after it), then send."""
         if swarm:
             self.page.click("#chat-subagents-mode .chat-subagents-head")
-            # The capsule opens its panel (capsule_panel.js), one on the page, appended to the document's body.
-            self.page.click('.capsule-panel[data-kind="subagents"] .chat-seg[data-mode="swarm"]')
+            self.page.click('#chat-subagents-mode .chat-seg[data-mode="swarm"]')
             self.page.wait_for_selector('#chat-subagents-mode[data-mode="swarm"][data-disabled="false"]', timeout=30_000)
             self.page.keyboard.press("Escape")
         self.page.fill("#chat-input", text)
