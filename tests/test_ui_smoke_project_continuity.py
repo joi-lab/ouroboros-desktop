@@ -96,9 +96,10 @@ def _install_task_detail_gate(page):
 _CLICK_CONTEXT_MODE = """() => {
     const control = document.querySelector('#chat-context-mode');
     const next = control.dataset.contextMode === 'low' ? 'max' : 'low';
-    // The owner's path: the capsule opens into its modes, then one is chosen.
-    if (control.dataset.open !== 'true') control.querySelector('.chat-capsule-head').click();
-    control.querySelector(`[data-mode="${next}"]`).click();
+    // The owner's path: the capsule opens its panel of modes, then one is chosen.
+    const head = control.querySelector('.chat-capsule-head');
+    if (control.dataset.open !== 'true') head.click();
+    document.getElementById(head.getAttribute('aria-controls')).querySelector(`.chat-seg[data-mode="${next}"]`).click();
 }"""
 
 
@@ -428,8 +429,8 @@ def test_ui_smoke_reversed_state_responses_do_not_resurrect_main_root(
                 page.wait_for_function("() => window.__stateResponsePending.length === 2")
                 assert page.locator('[data-project-id="stale-project"]').count() == 0
                 assert page.evaluate("() => !window.__ouroTaskBindings['stale-binding']")
-                assert not page.locator('[data-chat-command="evolve"]').evaluate(
-                    "(node) => node.classList.contains('on')"
+                assert page.locator("#page-chat .cx-chip").evaluate(
+                    "(node) => node.dataset.evolving !== 'true'"
                 )
                 assert page.locator(f"{card} [data-cancel-run]").count() == 1
 
@@ -488,7 +489,7 @@ def test_ui_smoke_reversed_state_responses_do_not_resurrect_main_root(
                     success_index,
                 )
                 page.wait_for_function(
-                    "() => document.querySelector('[data-chat-command=evolve]').classList.contains('on')"
+                    "() => document.querySelector('#page-chat .cx-chip')?.dataset.evolving === 'true'"
                 )
                 # The chat's own forced read (or a header poll that beat it to the
                 # free gate: both are chat reads) is held, then made stale by the
@@ -504,8 +505,8 @@ def test_ui_smoke_reversed_state_responses_do_not_resurrect_main_root(
                     "(index) => window.__failStateResponse(index)", failed_index
                 )
                 page.wait_for_timeout(100)
-                assert page.locator('[data-chat-command="evolve"]').evaluate(
-                    "(node) => node.classList.contains('on')"
+                assert page.locator("#page-chat .cx-chip").evaluate(
+                    "(node) => node.dataset.evolving === 'true'"
                 )
                 # The failure released the gate: the coalesced follow-up starts
                 # and a current read applies as usual.
@@ -518,8 +519,8 @@ def test_ui_smoke_reversed_state_responses_do_not_resurrect_main_root(
                         window.__stateResponsePending.length - 1, [], {evolution_enabled: true})"""
                 )
                 page.wait_for_timeout(100)
-                assert page.locator('[data-chat-command="evolve"]').evaluate(
-                    "(node) => node.classList.contains('on')"
+                assert page.locator("#page-chat .cx-chip").evaluate(
+                    "(node) => node.dataset.evolving === 'true'"
                 )
             finally:
                 browser.close()

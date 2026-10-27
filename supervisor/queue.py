@@ -300,6 +300,11 @@ def enqueue_task(
         t.pop("_consciousness_continuation", None)  # never a caller-supplied marker
         if continuation:
             t["_consciousness_continuation"] = True
+    subagents_settings = None
+    if (not restoring_snapshot and not (t.get("parent_task_id") or metadata.get("parent_task_id"))
+            and "subagents_mode" not in metadata):
+        from ouroboros.config import load_settings
+        subagents_settings = load_settings()
     attach_task_contract(apply_consciousness_authority(t))
     from ouroboros.tool_access_roots import freeze_tool_profile
     freeze_tool_profile(t)
@@ -478,17 +483,18 @@ def enqueue_task(
                 if not allowed:
                     t["_admission_blocked"] = "followup_control_wait"
                     return t
-                if project_id:
-                    with project_admission_guard(DRIVE_ROOT, project_admission):
+                with (project_admission_guard(DRIVE_ROOT, project_admission) if project_id else nullcontext(None)) as project:
+                    if project_id:
                         # Recovery keeps the resource actually admitted, without a
                         # transient derived-selection census or current-folder substitution.
                         t["_project_admission"] = {key: value for key, value in project_admission.items()
                                                    if key != "workspace_claims"}
                         t["_project_admission"]["frozen"] = True
-                        PENDING.append(t)
-                else:
-                    if not restoring_snapshot and not has_project_admission:
+                    elif not restoring_snapshot and not has_project_admission:
                         t["_project_scope_none"] = True
+                    if subagents_settings is not None:
+                        from ouroboros.settings_integrity import record_subagents_admission
+                        record_subagents_admission(t, DRIVE_ROOT, settings=subagents_settings, project=project)
                     PENDING.append(t)
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
             from supervisor.schedule_occurrence import contention

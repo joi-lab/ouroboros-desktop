@@ -200,10 +200,10 @@ test('while the owner writes, the field holds the focus or a capsule is worked t
     r.listeners.get('wrap:focusin')({ target: r.input });
     assert.equal(r.fold.folded(), false, 'the field\'s focus brings it back');
     r.doc.activeElement = null;
-    r.row.dataset.ownerSolo = 'effort';
+    r.row.open = true;
     for (let i = 0; i < 4; i += 1) r.scroll(true);
-    assert.equal(r.fold.folded(), false, 'a strip open alone: the row stays');
-    delete r.row.dataset.ownerSolo;
+    assert.equal(r.fold.folded(), false, 'a capsule\'s panel open: the row stays');
+    r.row.open = false;
     for (let i = 0; i < 4; i += 1) r.scroll(true);
     assert.equal(r.fold.folded(), true);
 });

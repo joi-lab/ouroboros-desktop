@@ -524,7 +524,6 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
                 and str(receipt.get("status") or "") == "scheduled"
                 else "unconfirmed"
             )
-            transfer = outcome.pop("force_plan_transfer", None)
             carrier = presence_root_carrier(evt, task_contract=evt.get("task_contract"))
             stored = write_task_result(
                 ctx.DRIVE_ROOT,
@@ -550,7 +549,6 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
                     "routing_receipt_required": bool(str(evt.get("client_message_id") or "")),
                     "routing_receipt_status": str(receipt.get("annotation_status") or ""),
                     "source_note": str(outcome.get("source_note") or ""),
-                    **({"force_plan_transfer": dict(transfer)} if isinstance(transfer, dict) and transfer else {}),
                 },
                 result=(
                     "Task accepted and durably scheduled."
@@ -570,8 +568,6 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
             ):
                 raise RuntimeError("scheduled promotion result was not persisted")
             supervisor_queue.release_task_admission(task_id, routing_token)
-            if isinstance(transfer, dict) and transfer:
-                _record_obligation_transfer(ctx, transfer)
             if admission_status != "scheduled":
                 return {
                     **outcome,
@@ -731,23 +727,6 @@ def _handle_promote_chat_to_task(evt: Dict[str, Any], ctx: Any) -> Dict[str, Any
     outcome = _promote_chat_to_task_outcome(evt, ctx)
     _notify_host_initiated_refusal(ctx, evt, outcome)
     return outcome
-
-
-def _record_obligation_transfer(ctx: Any, transfer: Dict[str, Any]) -> None:
-    """The promoter's task details name where its planning obligation went."""
-    promoter = str(transfer.get("from") or "")
-    if not promoter:
-        return
-    try:
-        write_task_result(
-            ctx.DRIVE_ROOT, promoter, "running",
-            _field_projector=lambda current, _patch: {
-                "status": str(current.get("status") or "running"),
-                "force_plan_transfer": dict(transfer),
-            },
-        )
-    except Exception:
-        log.warning("force_plan transfer record failed for %s", promoter, exc_info=True)
 
 
 def _handle_ensure_project_scope(evt: Dict[str, Any], ctx: Any) -> None:

@@ -803,11 +803,11 @@ def _collect_chat_rows(
                 "client_message_id": str(entry.get("client_message_id", "")),
                 "task_id": str(entry.get("task_id", "")),
                 **_history_identity(entry),
-                # ABI-3: the deprecated ``telegram_chat_id`` twin is no longer
-                # re-emitted; legacy chat.jsonl rows carrying it stay readable
-                # (the key is simply ignored), and ``transport`` is the
-                # provenance surface.
+                # ABI-3: the deprecated ``telegram_chat_id`` twin is no longer re-emitted; legacy chat.jsonl rows
+                # carrying it stay readable (the key is simply ignored), and ``transport`` is the provenance surface.
             }
+            if role == "user" and entry.get("subagents_mode") == "swarm":
+                rec["subagents_mode"] = "swarm"
             if role == "user" and entry.get("ingress_accepted") is True:
                 rec["ingress_accepted"] = True
                 # Proven undispatched, entered, or this live process's and pending; an ended process's: nothing.

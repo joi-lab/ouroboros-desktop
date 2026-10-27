@@ -426,48 +426,60 @@ Enter as a line break.
 
 ### Composer owner controls
 
-Each composer saves its room's **Context** and **Effort** through the owner endpoints.
-Main supplies a one-time copy to new Projects; later changes stay in their room.
+Each composer saves its room's **Subagents**, **Context** and **Effort** through the owner endpoints,
+in that order after ☰. Main supplies a one-time copy to new Projects; later changes stay in their room.
 Readback comes from Main state or the named Project, never another room. Saves apply
 to new participants; running work retains its choices through Resume. A refusal
 keeps the saved value and says why. No scope selector or extra settings row.
 
-Each is a neutral **capsule** of the pills' height — ring, name, value: `Context Max`,
+Each is a neutral **capsule** of the pills' height — ring, name, value: `Subagents Auto`, `Context Max`,
 `Effort X-High`; the name in secondary ink at 500, the value in meta ink at 600,
 and only the ring's lit arc coloured (crimson; Low neutral ink, Nano the Project's): a level is never amber.
+One exception: closed on Swarm, Subagents rests in the soft crimson tone (Off is muted, Auto plain), since
+Swarm asks Ouroboros not to economise (owner 24.10).
 Until the room's values arrive the ring stays unlit and the value secondary,
 never a faded capsule. Closed, Effort names only the primary level; its ring (a 300°
 arc: band minimum..maximum, dot primary) and the button's name carry the range.
 Context's ring is three arcs, the chosen one lit: one of three modes, never a fill
-level or capacity. A capsule opens **inline**, never as a dropdown, one at a time;
-its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
-choice posts at once and the strip waits for the answer. Effort's seven levels carry
-a primary pill and two helper bounds; the primary may lie outside them. A
-segment is its word plus `--capsule-seg-pad` a side; the pill covers its segment;
-band, pill and brackets share one vertical inset. The primary and helper bounds never
-move each other; the brackets cannot cross. A level tap sets primary; each bracket
-has its own handle. A drag keeps its grab offset on whole levels. A stored `minimal` shows at Low until its handle moves.
+level or capacity. Subagents' ring is a rail with three helper dots: none lit for Off, one for Auto, three for Swarm.
+
+**A capsule opens a panel, never inline, one at a time** (owner 26.10, 7A): on a desk a float panel above it, its
+leading edge on the capsule's and inside the composer's column (the object radius, the float shadow, glass in dark);
+on a phone a bottom sheet over a light scrim (the sheet radius on top, `--ease-sheet`, `--motion-open` in,
+`--motion-close` out). The row never moves: nothing steps aside, grows or wraps, and the open capsule keeps showing
+its value, taking only its hover fill. A panel holds the capsule's ring and name, its strip at a finger's size (every
+option at least 44 × 44 px; a word too long for its option takes two lines, never smaller type), one line for the
+chosen value (as tall as the longest, so a choice never changes the
+panel's height) and one note on how a change applies. An outside press, Escape, the capsule again or, on a phone, the
+scrim or a swipe down closes it; a press on another capsule switches at once.
+
+Context's strip is Nano · Low · Max under a glass thumb (about 85K tokens, about 250K, everything the model's window
+holds; «Applies to new work in this chat; running work keeps its context.»); a choice posts at once and the strip
+waits for the answer. Subagents' is Off · Auto · Swarm the same way: what the value means and «Applies to new steps in
+this chat; running helpers finish.» When Settings turns subagents off or they are not set up yet, the capsule says
+`Off` with a lock; its panel shows the lock by the name, Auto and Swarm disabled, and the reason with `Open Settings`
+in place of the two lines; the room keeps its own value. Effort's seven levels carry a primary pill and two helper
+bounds; the primary may lie outside them, and the line says both («Primary X-High; helpers Medium–Max.»). A segment
+is its word with the same air a side and never narrower than a finger; a strip with less room (a phone, a narrow
+Project pane) reads its levels a step smaller with less air, and where seven fingers do not fit (a 320 px phone) the
+levels share the strip evenly. The pill covers its segment; band, pill and brackets share one vertical inset. The
+primary and helper bounds never move each other; the brackets cannot cross. A level tap sets primary; each bracket has
+its own handle. A drag keeps its grab offset on whole levels. A stored `minimal` shows at Low until its handle moves.
 
 **A mark keeps from a rounded end the clearance it keeps from the straight edges.**
-A pill (the thumb, the recommended pill) is concentric with the capsule, so the band
-inset suffices; a square bracket at the last level would graze the curve, so
-Effort's end gutter also clears it. The gutter is measured into the fit and outlasts
-scrolling and dragging.
+A pill (the thumb, the recommended pill) is concentric with the strip's end, so the
+band inset suffices; a square bracket at the last level would graze the curve, so
+Effort's end gutter also clears it, at rest and mid-drag.
 
-**The open strip stays on the composer's line**: beside the others when it fits
-(padding down to `--space-1`), else alone while they step aside (down to 3 px, the
-pill's corners tightening; the name and divider yield first), last scrolling inside
-itself, faded where levels hide. A closed line too narrow drops the names, then
-ellipsizes the longest values, never rings. All is measured, so no breakpoint.
+**A narrow line drops the names, then ellipsizes the longest values, never rings**;
+the panel and the button's name keep the whole word. All is measured, so no breakpoint.
 
-**It opens in place.** Beside the others the strip grows by its width. Alone, its
-glass grows from the closed capsule to the whole line in 300 ms on the iOS sheet
-curve, the ring riding on the glass's leading end, while the controls that step
-aside fade where they stood (110 ms) and the levels appear one after another;
-closing runs back in 220 ms. Only opacity, a clip and the ring's offset move, so no
-frame wraps (`web/modules/capsule_morph.js`); reduced motion shows the strip at once.
-Inside Telegram a level the finger reaches, and another level or mode pressed, ticks
-(§10, Haptics).
+**A panel comes and goes from its capsule.** A float panel fades in from the capsule and
+eases out; a sheet rises and falls on the sheet curve and follows a finger down its
+grabber. A sheet closes on the scrim's own click, so nothing under it is pressed.
+Reduced motion shows and removes it at once (`web/modules/capsule_panel.js`). Inside
+Telegram a level the finger reaches, and another level or mode pressed, ticks (§10,
+Haptics).
 
 **On a phone the row folds while the owner reads back.** Scrolling back through a
 room's history folds the row of capsules away: its line collapses, the capsules
@@ -480,17 +492,21 @@ begun in a card's frame, which the feed never sees, or the app's own jump (the
 waiting pill to a question, which keeps the pill under the finger for the next one)
 (`web/modules/composer_fold.js`; owner 19.10).
 
-**Hover is an accelerator; the press always works.** With a hovering fine pointer a
-capsule opens ~160 ms after arrival (not while the other is open) and closes a
-second after it leaves a 32 px zone unless a press pinned it; the press unpins.
-Touch and keyboard use the press: Enter or Space opens onto the recommended handle
-or the chosen mode; arrows step a handle (PageUp/PageDown too) or choose the next
-mode, Home/End reach the ends; Esc closes and returns focus to the head; an outside
-press closes. Handles are sliders naming their level; closed, they leave the tab
-order. An effort change saves when the gesture ends, saves run in order (last wins),
-and Send waits for both pending Context and Effort saves; a refused
+**The press opens; hover opens nothing.** Focus goes into the panel, onto the
+recommended handle or the chosen mode when Enter or Space opened it, and back to the
+capsule when Escape, the capsule or a swipe closes it; arrows step a handle
+(PageUp/PageDown too) or choose the next mode, Home/End reach the ends. Handles are
+sliders naming their level; closed, they leave the tab order. An effort change saves when the gesture ends, saves run in order (last wins),
+and Send waits for every pending capsule save; a refused
 save keeps the draft, says why and returns to the saved value — unsaved values are
 never shown as saved.
+
+**What Swarm leaves behind.** An owner message the host accepted while its room was on Swarm says `Swarm`
+before its time: a request, never proof that helpers ran. A Swarm root's card says one line, first in its foot,
+from its receipt: helpers started (counted from recorded starts; while none is recorded, the helpers requested),
+models, `$X known + N not final`, subscription sessions, or
+`Swarm requested · no helpers started`; never minds, waves, families, peaks, percentages or one sum the facts
+do not make, and an unknown amount is a word, never $0 (`web/modules/swarm_presentation.js`).
 
 **"+" holds the composer's actions.** Where the paperclip stood, "+" (More actions, a
 finger-sized target that keeps the row's height) opens a menu sheet above itself: Attach
@@ -499,7 +515,7 @@ still attach, and a pointer that opens it from the field leaves the focus in the
 The dictation mic has a slot between the field and Send that takes no room until an
 engine is chosen. Contributed chips have a slot at the end of the capsule row that takes
 only the room the capsules leave (never a second line: the chips that do not fit fold
-into one "+N" whose list holds them) and steps aside with them.
+into one "+N" whose list holds them).
 
 ### The composer field
 
@@ -829,7 +845,7 @@ status sentence's or a composer chip's dot is its tone, §4).
 - **Amber is the owner's attention and nothing else:** (1) the owner's move — a
   question, or what only the owner can do: sign in, a spending limit, Resume after a
   restart, crash or Panic, grant access, a skill review that must run first, local
-  changes before an update, an Evolution chip or Consciousness sentence that needs the owner
+  changes before an update, an Evolution chip, the consciousness chip or a Consciousness sentence that needs the owner
   or was stopped by the spending limit; (2) a warning worth reading — warn toasts and sentences,
   Settings and onboarding notes, warnings inside task timelines, reviews and Logs
   events, account quota; (3) the System voice (a pale tint in the light theme, its name
@@ -2081,7 +2097,7 @@ states the cause in the owner's words, the failed call stays the error row
 inside the block, and the tool result carries the typed reason (with the cause
 and repair in `detail` where the producer holds one) so the model narrates; no
 host bubble interrupts a narrating turn. When the host itself issued the act (a
-Swarm message, a skill-card repair, a picker click), or a refused owner steer
+skill-card repair, a picker click), or a refused owner steer
 carries no owner-message receipt, the host states the refusal as ONE typed
 System row (`task_not_started`, `task_start_unconfirmed` for unconfirmed
 admission, or `steer_not_delivered` for steering) in the issuing chat, keyed to
@@ -2707,9 +2723,8 @@ under it with a little parallax. Nothing darkens. The quarter of the room left
 showing is the way back: a tap or a sideways finger on it closes the drawer. A
 Project open over Main is the room then, and moves the same way; on the desk the
 column stays docked and nothing changes (owner 19.10). In a room (Main, an open Project) ☰
-is the first control of the composer's row, beside Swarm and under the thumb, and
-steps aside with the others while an open capsule has the line alone; on a page
-without a composer it sits in the leading slot of the header. While the drawer is
+is the first control of the composer's row, beside Subagents and under the thumb; on a
+page without a composer it sits in the leading slot of the header. While the drawer is
 closed ☰ carries one 7 px dot for Main and the Projects, the room on screen
 included: amber while one of them waits for the owner, else crimson while one has
 unread messages; its accessible name says which. The
@@ -2762,7 +2777,7 @@ while it reconnects: the room's bar says Reconnecting….
 
 **Haptics.** Inside Telegram, and only there (its HapticFeedback; a browser and the
 desktop app have none), a few moments are felt, one meaning each: the drawer,
-released, latches open or closed (a light impact); a level steps or Swarm flips (a
+released, latches open or closed (a light impact); a level steps or a mode is chosen (a
 selection tick); a long press opens a row's menu, a swipe on a message reaches its
 reply point (again after pulling back under it) or a widget is picked up to be moved
 (a medium impact); Stop on a work is pressed (a rigid impact, once); the owner's own
@@ -2791,15 +2806,28 @@ and in the macOS window its empty parts still move the window. A header with not
 no bar, and its page starts at the window's top edge: the band under the macOS title bar stays the
 window's (owner 22.10), the page's first row starts below it, and the Widgets board's cards pass under it with
 crisp edges (owner 20.10), as a room's feed does (owner 21.10), while a plain press in the empty band still moves the window. A Project shows its name. In the stack
-layout the row is at most 56 px: ☰, the place's name, its status, then Panic and
-⋯, with the page's tabs, or Files' location and its actions, under it
+layout the row is at most 56 px: ☰, the place's name, its status, then a room's
+consciousness chip and Panic, with the page's tabs, or Files' location and its actions, under it
 (`bindPageHeader` moves those nodes); the name wins over the status word, which a short row
-drops whole after its start step, keeping its mark. Navigation sharing a toolbar also returns below the bar when the
+drops whole after its start step, keeping its mark, and a room's title ellipsizes before its chip or Panic yields.
+Navigation sharing a toolbar also returns below the bar when the
 content column is too narrow, including while the sidebar is resized; the toolbar wraps in its
-own row. Files' location and actions return above the list, folder names fit and actions wrap. Whenever the bar itself is narrow, on a phone or in a narrow window,
-Restart and the budget move into ⋯ — the same controls, placed by the bar's
-width. While a mode it holds is on (Evolve, Consciousness), ⋯ takes its tone,
-with no corner dot. In Main and Project, the bar has no continuous backing strip:
+own row. Files' location and actions return above the list, folder names fit and actions wrap.
+
+**A room's bar is the law of places** (owner 24.10): it holds what has a state and the emergency exit, and a
+command lives under the capsule of the state it changes; there is no ⋯ and no More. Main's bar holds its status,
+the consciousness chip, Restart, Panic and the budget; whenever the bar itself is narrow, on a phone or in a
+narrow window, Restart and the budget are the work list's last rows `Restart` and `Budget` — the same controls,
+placed by the bar's width. A Project's bar holds its name and status, the same chip and Panic
+(`web/modules/chat_header.js`); the chip leads the end group, so a status word never moves it. The chip is
+the brain and the next wake's time; `Evolving` while an evolution campaign runs, even with consciousness off;
+grey with `Off` while it is off. Awake it shows the moving dots,
+never a breathing glyph; an unconfirmed state shows a ring, a failed wake the outcome's red dot, and amber only
+the owner's move (§4). A press opens its own sheet of the work list's material, hung under the capsules, and
+switches nothing: the host's state sentence, Start or Stop, `$X of $Y in the
+last 24 hours`, the three last wakes, `Dashboard ›`, and `Evolution ›` while a campaign runs
+(`web/modules/consciousness_status.js`). Evolve and Review live in Dashboard › Evolution (`Run review…` opens
+`/review`'s picker). In Main and Project, the bar has no continuous backing strip:
 the title and status share one floating capsule (`--chip-float`, non-shrinking
 mark and caret with inline inset), and each command is its own floating capsule
 (owner 21.10). A failure or approximation note hangs under the bar; a page

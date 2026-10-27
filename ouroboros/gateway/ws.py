@@ -416,18 +416,15 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                                 "level": "warning", "message": "Panic emergency owner is unavailable."}}))
                         continue  # Never enter ordered chat acceptance or ordinary command admission.
                     if msg_type == "chat":
-                        force_plan = bool(msg.get("force_plan"))
                         client_surface = normalize_client_surface(msg.get("client_surface"))
                         task_metadata: dict[str, Any] = {
-                            "force_plan": force_plan,
-                            "force_plan_source": "swarm" if force_plan else "",
                             "reply_to": msg.get("reply_to", ""),
                         }
                         # Attachment inspection belongs to the ordered acceptance
                         # worker, so this socket can receive Panic during disk I/O.
                         if client_surface is not None:
                             # Sending-surface observables ride task_metadata
-                            # (the force_plan rail): they pass the bus whitelist
+                            # through the bus whitelist
                             # nested, reach direct/ephemeral/queued turns, and
                             # land in chat.jsonl at the canonical-row writer.
                             client_surface["received_at"] = utc_now_iso()

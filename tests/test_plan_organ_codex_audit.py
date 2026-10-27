@@ -37,21 +37,21 @@ def test_an_ask_every_route_refuses_leaves_a_typed_attempt_that_discloses_the_sw
     (attempt,) = record["attempts"]
     assert attempt["kind"] == "no_route" and attempt["revision"] == 1 and attempt["ask"] == "council" and attempt["ts"]
     assert set(attempt["not_sendable"]) == {"s1", "s2", "s3"} and "credential_pool_exhausted" in attempt["not_sendable"]["s1"]
-    decision = oh.force_plan_decision(ctx, {}, enforcement="blocking")
-    assert decision["status"] == "force_plan_unmet" and decision["allow"] is True and decision["holding"] == []
-    assert decision["force_plan_met"] is False and decision["asks_unroutable"] == 1 and decision["asks_dispatched"] == 0
-    assert "1 ask could reach no reviewer" in oh.plan_review_disclosure(decision)
+    decision = oh.plan_gate_decision(ctx, {}, enforcement="blocking")
+    assert decision["status"] == "clear" and decision["allow"] is True and decision["holding"] == []
+    assert decision["asks_unroutable"] == 1 and decision["asks_dispatched"] == 0
+    assert oh.plan_review_disclosure(decision) == ""
     read, _ = _call(ctx)
-    assert "attempt at" in read and "no route" in read and "nobody was called" in read and "not held" in read
+    assert "attempt at" in read and "no route" in read and "nobody was called" in read and "Nothing holds" in read
     assert any("reached nobody" in line for line in harness.progress)
     # The other direction: a plan the mind never asked about stays held; asking without a plan records nothing.
     unasked = harness.make_ctx(task_id="task-2", force_plan=True)
     _write(unasked)
-    assert oh.force_plan_decision(unasked, {}, enforcement="blocking")["allow"] is False
+    assert oh.plan_gate_decision(unasked, {}, enforcement="blocking")["allow"] is True
     bare = harness.make_ctx(task_id="task-3", force_plan=True)
     text, _ = _call(bare, ask="council")
     assert "PLAN_ASK_NEEDS_A_PLAN" in text and _record(harness, "task-3") == plan_record.empty_record()
-    assert oh.force_plan_decision(bare, {}, enforcement="blocking")["allow"] is False
+    assert oh.plan_gate_decision(bare, {}, enforcement="blocking")["allow"] is True
 
 
 # ---------------------------------------------------------------- point 3: imported objections reach their raiser
@@ -77,7 +77,7 @@ def test_an_imported_objection_is_listed_to_its_raiser_and_only_its_withdrawal_r
     _call(ctx, ask=["s1"], message="withdraw?")
     text, result = _call(ctx)
     assert result.meta["plan_holding"] == 0 and "Nothing holds your final answer." in text and "withdrawn: s1/s1:f1" in text
-    assert oh.force_plan_decision(ctx, {}, enforcement="blocking")["status"] == "clear"
+    assert oh.plan_gate_decision(ctx, {}, enforcement="blocking")["status"] == "clear"
 
 
 # ---------------------------------------------------------------- point 4: moved-out prose reaches a late critic

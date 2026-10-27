@@ -17,8 +17,6 @@ from ouroboros.utils import utc_now_iso
 from supervisor.queue import _queue_lock
 
 
-
-
 log = logging.getLogger(__name__)
 
 
@@ -175,13 +173,6 @@ def _promote_duplicate_reason(task_id: str, ctx: Any, *, admission_token: str) -
         log.warning("promote: duplicate-id lookup failed for %s", task_id, exc_info=True)
         return "task_id_lookup_failed"
     return "duplicate_task_id" if live_duplicate or stored_duplicate else ""
-
-
-def _promoted_force_plan_metadata(evt: dict) -> dict:
-    if evt.get("force_plan") is not True:
-        return {}
-    source = str(evt.get("force_plan_source") or "operator").strip() or "operator"
-    return {"metadata": {"force_plan": True, "force_plan_source": source}}
 
 
 def _presence_promotion(evt: dict) -> bool:
@@ -451,7 +442,6 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
         "_require_worker_pool": True,
         "_admission_token": admission_token,
         "promotion_admission_token": admission_token,
-        **_promoted_force_plan_metadata(evt),
     }
     origin = consciousness_origin_metadata({"origin_message_ref": evt.get("source_ref"), **evt})
     if origin:
@@ -518,7 +508,7 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
         task["predecessor_authority_source"] = dict(evt["predecessor_authority_source"])
     # Owner Surface Fact: the promoting turn's sending-surface fact lands in
     # METADATA (the renderer reads task["metadata"]["client_surface"]), never a
-    # top-level key — and metadata may not exist yet (only force_plan creates it).
+    # top-level key — and metadata may not exist yet.
     if isinstance(evt.get("client_surface"), dict) and evt.get("client_surface"):
         task.setdefault("metadata", {})["client_surface"] = dict(evt["client_surface"])
     pid = str(evt.get("project_id") or "").strip()
@@ -577,12 +567,6 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
         }, attachment_manifest)
     if announce_project is not None:
         _pool()._announce_created_project(announce_project, tid, task=task)
-    # Owner 3=A: the promoter's unmet planning obligation now belongs to this root
-    # (stamped by _promoted_force_plan_metadata above); release it on the promoter's
-    # live row BEFORE the snapshot persist below, so one persist shows both facts.
-    from supervisor.plan_obligation import transfer_promoter_obligation
-
-    obligation_transfer = transfer_promoter_obligation(ctx, evt, tid)
     # A positive promote confirmation is allowed only after the durable queue
     # projection exists.  The event handler writes the scheduled task result
     # after the routing receipt; keeping that last step outside this function
@@ -629,8 +613,6 @@ def promote_chat_to_task(evt: dict, ctx: Any) -> dict:
         outcome["project_id"] = effective_pid
     if source_note:
         outcome["source_note"] = source_note
-    if obligation_transfer:
-        outcome["force_plan_transfer"] = obligation_transfer
     return outcome
 
 

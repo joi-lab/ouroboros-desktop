@@ -1154,7 +1154,7 @@ def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[
     # The planning gate holds or releases the final answer; it names no objective of its
     # own (plans have no cycle cap, no quorum and no author stop: the stop path is the
     # task's). Its open objections and pending asks ride ``execution.plan_review`` below.
-    plan_gate = _trace_mapping(llm_trace, "force_plan_decision")
+    plan_gate = _trace_mapping(llm_trace, "plan_gate") or _trace_mapping(llm_trace, "force_plan_decision")
     if deferred_child_count and objective.get("status") != OBJECTIVE_FAIL:
         objective.update({
             "status": OBJECTIVE_BEST_EFFORT,
