@@ -41,7 +41,7 @@ from typing import Any
 from .place import PlaceMixin
 from .remote import (  # noqa: F401 - re-exported names the tests and the key/hold_key remote branches use
     _MAX_REMOTE_SHOT_BYTES, _OSWORLD_PKGS_PREFIX, _PYAUTOGUI_BASE_ALIASES, _PYAUTOGUI_MODS, RemoteBackends,
-    _osworld_result_ok,
+    _osworld_result_ok, cliclick_point,
 )
 
 _TIMEOUT_SEC = 10
@@ -190,10 +190,7 @@ def _coerce_point(x: Any, y: Any) -> tuple[int, int]:
     raise ValueError(f"cannot parse coordinates from x={x!r}, y={y!r}")
 
 
-def _cc(x: int, y: int) -> str:
-    """A cliclick point: an absolute negative coordinate (a display left of or above the main one) takes the ``=``
-    prefix, because a bare ``-`` means a move relative to the pointer."""
-    return f"{'=' if int(x) < 0 else ''}{int(x)},{'=' if int(y) < 0 else ''}{int(y)}"
+_cc = cliclick_point  # the same cliclick point format locally and on a Mac over SSH
 
 
 def _run(cmd: list[str], *, timeout: int = _TIMEOUT_SEC) -> tuple[int, str, str]:
@@ -815,7 +812,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             x, y = _coerce_point(x, y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        if plat != "macos" and (int(x) < 0 or int(y) < 0):
+        if plat != "macos" and not self._is_remote() and (int(x) < 0 or int(y) < 0):
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
         repeat = 3 if triple else (2 if double else 1)
@@ -857,7 +854,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             x, y = _coerce_point(x, y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        if plat != "macos" and (int(x) < 0 or int(y) < 0):
+        if plat != "macos" and not self._is_remote() and (int(x) < 0 or int(y) < 0):
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
         if self._is_remote():
@@ -881,7 +878,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             end_x, end_y = _coerce_point(end_x, end_y)
         except ValueError as exc:
             return _json({"ok": False, "error": str(exc)})
-        if plat != "macos" and any(int(v) < 0 for v in (start_x, start_y, end_x, end_y)):
+        if plat != "macos" and not self._is_remote() and any(int(v) < 0 for v in (start_x, start_y, end_x, end_y)):
             return _json({"ok": False, "error": "negative coordinates not allowed"})
         sx_, sy_, note = self._map_xy(start_x, start_y, raw=raw)
         ex_, ey_, _ = self._map_xy(end_x, end_y, raw=raw)
@@ -938,7 +935,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 x, y = _coerce_point(x, y)
             except ValueError as exc:
                 return _json({"ok": False, "error": str(exc)})
-            has_xy = plat == "macos" or (int(x) >= 0 and int(y) >= 0)
+            has_xy = plat == "macos" or self._is_remote() or (int(x) >= 0 and int(y) >= 0)
         ix = iy = 0
         note: dict[str, Any] = {}
         if has_xy:
@@ -1098,12 +1095,12 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                       for r in results if "delivered_to" in r or "front_at_dispatch" in r]  # the dispatched steps
         last = results[-1]
         if last.get("ok"):
-            payload: dict[str, Any] = {"ok": True, "sequence": steps, "steps": len(steps), "keys": combo}
+            payload: dict[str, Any] = {"ok": True, "sequence": steps, "steps": len(steps), "keys": combo, "dispatched": True}
         else:
             done = len(results) - 1
-            dispatched = "delivered_to" in last or "front_at_dispatch" in last  # a demoted or failed helper ran
+            dispatched = bool(last.get("dispatched"))  # the failing step's helper ran (its outcome may be partial)
             payload = {"ok": False, "error": f"step {steps[done]!r} {'failed' if dispatched else 'not sent'}: {last.get('error')}",
-                       "steps_done": done, "steps_total": len(steps), "keys": combo}
+                       "steps_done": done, "steps_total": len(steps), "keys": combo, "dispatched": dispatched}
             for key in ("reason", "candidates", "front", "cmd", "returncode", "permission", "untyped"):
                 if key in last:
                     payload[key] = last[key]
@@ -1120,6 +1117,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             ctx["delivered_to"] = results[0]["delivered_to"]  # a remote probe read it in the first step
         stderr = "\n".join(r.get("helper_stderr") or "" for r in results).strip()
         payload = self._finish(payload, ctx, stderr, after=ctx.get("front_last"))
+        if not last.get("ok") and last.get("reason") in ("permission_denied", "untypable_characters") and last.get("note"):
+            payload["note"] = last["note"]  # a demoted step keeps its own explanation
         if len({json.dumps(r, sort_keys=True) if isinstance(r, dict) else "unknown" for r in recipients}) > 1:
             payload["steps_delivered_to"] = recipients
         return _json(payload)
@@ -1328,7 +1327,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             except Exception as exc:  # noqa: BLE001 - a failed preparation cancels the input, with a receipt
                 problem = f"{type(exc).__name__}: {exc}"
             if problem:
-                payload: dict[str, Any] = {"ok": False, "error": problem, "cmd": cmd, "not_sent": True,
+                payload: dict[str, Any] = {"ok": False, "error": problem, "cmd": cmd, "dispatched": False,
                                            "reason": "clipboard_failed" if (extra or {}).get("method") == "paste" else "preparation_failed"}
                 if activated:
                     payload["observed_effect"] = True  # the switch ran before the input was cancelled
@@ -1336,15 +1335,20 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 return self._finish(payload, step)
         rc, stdout, stderr = self._try(cmd, timeout=timeout)
         if rc != 0:
-            payload = {"ok": False, "error": stderr.strip() or stdout.strip() or f"exit {rc}", "cmd": cmd, "returncode": rc}
+            payload = {"ok": False, "error": stderr.strip() or stdout.strip() or f"exit {rc}", "cmd": cmd, "returncode": rc,
+                       "dispatched": True}
             if activated:
                 payload["observed_effect"] = True  # the switch ran before the input failed
                 payload["activation_done"] = True
             if before is not None and extra:
-                # The preparation (the clipboard write) completed; only the helper after it failed.
+                # The preparation (the clipboard write) completed; only the helper after it failed. A replaced
+                # clipboard is an observed external effect of its own.
                 payload.update({k: extra[k] for k in ("method", "clipboard_replaced", "chars") if k in extra})
+                if extra.get("clipboard_replaced"):
+                    payload["observed_effect"] = True
+                    payload["clipboard_done"] = True
         else:
-            payload = {"ok": True, "cmd": cmd, "observed_effect": True}
+            payload = {"ok": True, "cmd": cmd, "observed_effect": True, "dispatched": True}
             if extra:
                 payload.update(extra)
         payload = self._finish(payload, step, stderr)

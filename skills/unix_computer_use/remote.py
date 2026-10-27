@@ -141,6 +141,12 @@ _SSH_PASTE = "printf %s {text} | pbcopy && echo __CLIPBOARD_WRITTEN__ && cliclic
 _MARKER_LINE = re.compile(r"^__(FRONT_BEFORE|FRONT_AFTER|TARGET_LOST|FRONT_UNREAD|CLIPBOARD_WRITTEN)__.*$\n?", re.M)
 
 
+def cliclick_point(x: int, y: int) -> str:
+    """A cliclick point: an absolute negative coordinate (a display left of or above the main one) takes the ``=``
+    prefix, because a bare ``-`` means a move relative to the pointer."""
+    return f"{'=' if int(x) < 0 else ''}{int(x)},{'=' if int(y) < 0 else ''}{int(y)}"
+
+
 def parse_markers(text: str, parse: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     """Marker LINES (``__FRONT_BEFORE__…``, ``__FRONT_AFTER__…``, ``__TARGET_LOST__``, ``__FRONT_UNREAD__``) ->
     (before, after, stop) where ``stop`` is ``"target_lost"``, ``"front_unread"`` or ``""``. Only a whole line is a
@@ -215,28 +221,28 @@ class RemoteBackends:
     def _ssh_macos_cliclick_for_pyautogui(self, code: str) -> tuple[list[str], str]:
         """Translate the pyautogui snippets this skill emits into cliclick args."""
         text = str(code or "").strip()
-        m = re.search(r"pyautogui\.click\((\d+),\s*(\d+),\s*clicks=(\d+).*button=([\"'])([^\"']+)\4", text)
+        m = re.search(r"pyautogui\.click\((-?\d+),\s*(-?\d+),\s*clicks=(\d+).*button=([\"'])([^\"']+)\4", text)
         if m:
             x, y, clicks, button = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(5)
             if button == "right":
-                return [f"rc:{x},{y}"], ""
+                return [f"rc:{cliclick_point(x, y)}"], ""
             if button == "middle":
                 return [], "middle-click unsupported by cliclick"
             op = "tc" if clicks >= 3 else ("dc" if clicks == 2 else "c")
-            return [f"{op}:{x},{y}"], ""
-        m = re.search(r"pyautogui\.moveTo\((\d+),\s*(\d+)\).*pyautogui\.dragTo\((\d+),\s*(\d+)", text)
+            return [f"{op}:{cliclick_point(x, y)}"], ""
+        m = re.search(r"pyautogui\.moveTo\((-?\d+),\s*(-?\d+)\).*pyautogui\.dragTo\((-?\d+),\s*(-?\d+)", text)
         if m:
             sx, sy, ex, ey = map(int, m.groups())
-            return [f"dd:{sx},{sy}", f"dm:{ex},{ey}", f"du:{ex},{ey}"], ""
-        m = re.search(r"pyautogui\.moveTo\((\d+),\s*(\d+)\)", text)
+            return [f"dd:{cliclick_point(sx, sy)}", f"dm:{cliclick_point(ex, ey)}", f"du:{cliclick_point(ex, ey)}"], ""
+        m = re.search(r"pyautogui\.moveTo\((-?\d+),\s*(-?\d+)\)", text)
         if m:
-            return [f"m:{int(m.group(1))},{int(m.group(2))}"], ""
-        m = re.search(r"pyautogui\.(mouseDown|mouseUp)\(x=(\d+),\s*y=(\d+),\s*button=([\"'])([^\"']+)\4", text)
+            return [f"m:{cliclick_point(int(m.group(1)), int(m.group(2)))}"], ""
+        m = re.search(r"pyautogui\.(mouseDown|mouseUp)\(x=(-?\d+),\s*y=(-?\d+),\s*button=([\"'])([^\"']+)\4", text)
         if m:
             fn, x, y, button = m.group(1), int(m.group(2)), int(m.group(3)), m.group(5)
             if button != "left":
                 return [], "mouseDown/mouseUp supports only left button via cliclick"
-            return [f"{'dd' if fn == 'mouseDown' else 'du'}:{x},{y}"], ""
+            return [f"{'dd' if fn == 'mouseDown' else 'du'}:{cliclick_point(x, y)}"], ""
         m = re.search(r"pyautogui\.(mouseDown|mouseUp)\(button=([\"'])([^\"']+)\2", text)
         if m:
             fn, button = m.group(1), m.group(3)
@@ -310,7 +316,8 @@ class RemoteBackends:
                 ok, err = _osworld_result_ok(out)
                 if isinstance(result, dict) and input_effect:
                     result = {**result, "output": strip_markers(text)}
-                payload: dict[str, Any] = {"ok": ok, "backend": backend, "status": out["status"], "execute_result": result}
+                payload: dict[str, Any] = {"ok": ok, "backend": backend, "status": out["status"], "execute_result": result,
+                                           "dispatched": True}
                 if not ok:
                     payload["error"] = err
                 stderr = ""
@@ -323,7 +330,7 @@ class RemoteBackends:
                 before, after, stop = parse_markers(stdout, _info_or_none)
                 if stop:
                     return self._stopped(ctx, shared, before, backend, stop)
-                payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout)}
+                payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout), "dispatched": True}
                 if rc != 0:
                     payload["error"] = stderr.strip() or strip_markers(stdout) or f"exit {rc}"
                 if note and "clipboard_replaced" in note:
@@ -347,9 +354,13 @@ class RemoteBackends:
             return payload
         if payload["ok"]:
             payload["observed_effect"] = True
-        elif activated:
-            payload["observed_effect"] = True  # the switch ran before the input failed
-            payload["activation_done"] = True
+        else:
+            if activated:
+                payload["observed_effect"] = True  # the switch ran before the input failed
+                payload["activation_done"] = True
+            if payload.get("clipboard_replaced"):
+                payload["observed_effect"] = True  # the clipboard write completed before the paste chord failed
+                payload["clipboard_done"] = True
         ctx["delivered_to"] = before
         ctx.setdefault("front_before", before)
         payload = self._finish(payload, ctx, stderr, after=after)
@@ -378,18 +389,25 @@ class RemoteBackends:
 
     def _guest_windows(self, conn: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
         """OSWorld guest: (wmctrl rows, front window, error). One /execute call."""
-        script = f"export DISPLAY=:0; wmctrl -lpxG 2>/dev/null; RC=$?; echo __ACTIVE__; {_X11_FRONT_SH}; echo; exit $RC"
+        # The listing travels base64-encoded as one line: a window title can never look like the separator.
+        script = (f"export DISPLAY=:0; L=$(wmctrl -lpxG 2>/dev/null); RC=$?; printf '%s' \"$L\" | base64 | tr -d '\\n'; echo; "
+                  f"echo __ACTIVE__; {_X11_FRONT_SH}; echo; exit $RC")
         try:
             out = self._osworld_execute(conn, ["bash", "-lc", script], timeout=20)
         except Exception as exc:  # noqa: BLE001
             return [], None, f"{type(exc).__name__}: {exc}"
         ok, err = _osworld_result_ok(out)
         text = str((out.get("result") or {}).get("output") if isinstance(out.get("result"), dict) else "")
-        listing, sep, active = text.partition("__ACTIVE__")
+        m = re.search(r"^__ACTIVE__$", text, re.M)
+        if not m:
+            return [], None, "the guest printed no window listing (the script did not run as written)"
+        encoded, active = text[:m.start()].strip(), text[m.end():].strip()
+        try:
+            listing = base64.b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8", "replace") if encoded else ""
+        except (ValueError, UnicodeError):
+            listing = ""
         rows = parse_wmctrl_rows(listing)
-        front = parse_x11_front(active.strip(), rows)
-        if not sep:
-            return rows, front, "the guest printed no window listing (the script did not run as written)"
+        front = parse_x11_front(active.splitlines()[0] if active else "", rows)
         return rows, front, ("" if ok else (strip_markers(err) or "wmctrl failed in the guest"))
 
     def _remote_front(self, conn: dict[str, Any]) -> dict[str, Any] | None:
@@ -514,15 +532,19 @@ class RemoteBackends:
                                         "error": f"lsappinfo list failed on the remote Mac ({err.strip() or strip_markers(out) or f'exit {rc}'})"})
             listing, _sep, front_text = out.partition("__FRONT__")
             front = _info_or_none(front_text)
+            apps = parse_list(listing)
+            if not apps:
+                return self._json_text({"ok": False, "backend": backend, "reason": "apps_unread",
+                                        "error": "lsappinfo list named no application on the remote Mac"})
             rows = [{"app": a["app"], "pid": a["pid"], "app_id": a["app_id"], **({"frontmost": a["pid"] == front["pid"]} if front else {})}
-                    for a in parse_list(listing)]
+                    for a in apps]
             if query:
                 rows = [r for r in rows if query in r["app"].lower() or query == r["app_id"].lower() or query == f"pid:{r['pid']}"]
             payload = {"ok": True, "backend": backend, "frontmost": front, "windows": rows[:limit], "titles_available": False,
                        "truncated": len(rows) > limit, "limit": limit,
                        "note": "window titles are not read over SSH; app names and the frontmost app are"}
-            if not listing.strip():
-                payload["warning"] = "lsappinfo list printed nothing"
+            if front is None:
+                payload["front_unread"] = "lsappinfo named no frontmost application on the remote Mac"
             return self._json_text(payload)
         return self._json_text({"ok": False, "backend": backend, "error": f"unsupported remote backend {backend!r}"})
 

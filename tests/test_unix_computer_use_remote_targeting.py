@@ -15,6 +15,15 @@ from tests.test_unix_computer_use_targeting import API, KEYNOTE, SAFARI, load_pl
 
 # --- remote targets: OSWorld guest and a Mac over SSH ------------------------------------------
 
+import base64
+
+
+def listing(front: str, rows: str | None = None) -> str:
+    """What the guest's listing script prints: the base64 rows on one line, `__ACTIVE__` on its own, then the front."""
+    rows = GUEST_ROWS if rows is None else rows
+    return base64.b64encode(rows.encode()).decode() + "\n__ACTIVE__\n" + front + "\n"
+
+
 GUEST_ROWS = ("0x00000001  0 4242 10 20 800 600 navigator.Firefox vm Browser\n"
               "0x00000002  0 5151 0 0 1024 768 keynote.Keynote vm Deck - Keynote\n"
               "0x00000003  0 5151 0 0 300 200 keynote.Keynote vm Inspector - Keynote\n")
@@ -67,15 +76,15 @@ def osworld(tmp_path, monkeypatch, answer):
 def test_osworld_targeted_input_resolves_from_the_guest_rows_activates_by_window_id_and_reads_the_front(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
     module, api, guest = osworld(tmp_path, monkeypatch, answer)
     out = receipt(api.tools["key"](keys="right", app="Keynote"))
     assert out["ok"] is True and out["observed_effect"] is True, out
-    listing, activate, action = guest.commands
-    assert listing[:2] == ["bash", "-lc"] and "wmctrl -lpxG" in listing[2]
+    inventory, activate, action = guest.commands
+    assert inventory[:2] == ["bash", "-lc"] and "wmctrl -lpxG" in inventory[2]
     assert "wmctrl -i -a 0x00000002" in activate[2] and "Keynote" not in activate[2], "activation by window id, never by name"
     assert "pyautogui.press('right')" in action[2] and "__TARGET_LOST__" in action[2] and "['2', '3']" in action[2], "the guest checks the active window against every Keynote window"
     assert out["target"]["activated"] is True and out["target"]["resolved"]["matched_by"] == "class"
@@ -87,7 +96,7 @@ def test_osworld_targeted_input_resolves_from_the_guest_rows_activates_by_window
 def test_osworld_refuses_when_the_guest_window_did_not_come_forward_or_does_not_exist(tmp_path, monkeypatch):
     def stays(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         return 0, "__FRONT_AFTER__" + FIREFOX_FRONT + "\n"
     module, api, guest = osworld(tmp_path, monkeypatch, stays)
     out = receipt(api.tools["key"](keys="right", app="Keynote"))
@@ -102,7 +111,7 @@ def test_osworld_refuses_when_the_guest_window_did_not_come_forward_or_does_not_
 def test_osworld_already_front_and_same_process_windows(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + KEYNOTE_FRONT + "\n"
+            return 0, listing(KEYNOTE_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__3|5151|Inspector - Keynote\n"
         return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
@@ -120,7 +129,7 @@ def test_osworld_untargeted_input_names_the_front_and_tolerates_a_silent_probe(t
     def answer(code, index):
         if "pyautogui" in code:
             return 0, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__FRONT_AFTER__{FIREFOX_FRONT}\n"
-        return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+        return 0, listing(FIREFOX_FRONT)
     module, api, guest = osworld(tmp_path, monkeypatch, answer)
     out = receipt(api.tools["key"](keys="return"))
     assert out["ok"] is True and out["delivered_to"] == {"window_id": "0x00000001", "pid": 4242, "title": "Browser"} and "front_after" not in out
@@ -139,7 +148,7 @@ def test_osworld_untargeted_input_names_the_front_and_tolerates_a_silent_probe(t
 def test_osworld_guest_precheck_withholds_an_input_when_the_target_left_the_front(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         return 3, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__TARGET_LOST__\n"
@@ -151,7 +160,7 @@ def test_osworld_guest_precheck_withholds_an_input_when_the_target_left_the_fron
 
 
 def test_osworld_window_list_failure_is_not_an_empty_desktop(tmp_path, monkeypatch):
-    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (127, "bash: wmctrl: command not found"))
+    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (127, "\n__ACTIVE__\n"))
     rows = receipt(api.tools["window_list"]())
     assert rows["ok"] is False and rows["reason"] == "unsupported" and "wmctrl" in rows["error"]
     assert receipt(api.tools["key"](keys="right", app="Keynote"))["reason"] == "unsupported"
@@ -313,7 +322,7 @@ def run_guest_program(command: list[str], *, fronts: list[str], raise_probe: boo
 def test_the_generated_guest_program_reads_titles_safely_and_withholds_a_targeted_input(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
@@ -348,7 +357,7 @@ def test_the_generated_guest_program_reads_titles_safely_and_withholds_a_targete
 def test_osworld_an_unread_front_before_a_targeted_input_is_front_unread_not_lost(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         return 3, "\n__FRONT_BEFORE__\n__FRONT_UNREAD__\n"
@@ -361,7 +370,7 @@ def test_osworld_an_unread_front_before_a_targeted_input_is_front_unread_not_los
 def test_osworld_a_withheld_paste_is_never_retyped_and_a_real_clipboard_failure_reuses_the_switch(tmp_path, monkeypatch):
     def withheld(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         return 3, f"\n__FRONT_BEFORE__{FIREFOX_FRONT}\n__TARGET_LOST__\n"
@@ -372,7 +381,7 @@ def test_osworld_a_withheld_paste_is_never_retyped_and_a_real_clipboard_failure_
 
     def clipboard_broken(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
         if "pyperclip" in code:
@@ -387,14 +396,14 @@ def test_osworld_a_withheld_paste_is_never_retyped_and_a_real_clipboard_failure_
 def test_osworld_activation_with_an_unread_after_read_is_front_unread_and_reports_its_wait(tmp_path, monkeypatch):
     def answer(code, index):
         if "wmctrl -lpxG" in code:
-            return 0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n"
+            return 0, listing(FIREFOX_FRONT)
         if "wmctrl -i -a" in code:
             return 0, "\n__FRONT_AFTER__\n"
         return 0, ""
     module, api, guest = osworld(tmp_path, monkeypatch, answer)
     out = receipt(api.tools["activate_app"](app="Keynote"))
     assert out["ok"] is False and out["reason"] == "front_unread" and "observed_effect" not in out, out
-    good = osworld(tmp_path, monkeypatch, lambda code, index: (0, GUEST_ROWS + "__ACTIVE__" + FIREFOX_FRONT + "\n") if "wmctrl -lpxG" in code
+    good = osworld(tmp_path, monkeypatch, lambda code, index: (0, listing(FIREFOX_FRONT)) if "wmctrl -lpxG" in code
                    else (0, "\n__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"))
     switched = receipt(good[1].tools["activate_app"](app="Keynote"))
     assert switched["ok"] is True and isinstance(switched["target"]["waited_ms"], int)
@@ -436,3 +445,40 @@ def test_ssh_paste_reports_the_clipboard_stage_truthfully(tmp_path, monkeypatch)
     module, api, calls = ssh(tmp_path, monkeypatch, chord_failed)
     out = receipt(api.tools["type_text"](text="x", via="paste"))
     assert out["ok"] is False and out["clipboard_replaced"] is True and "__CLIPBOARD" not in out["output"]
+
+
+# --- cycle 3: encoded inventory, clipboard effects, dispatched facts, SSH negatives ------------------
+
+def test_a_marker_shaped_title_in_the_guest_inventory_forges_nothing(tmp_path, monkeypatch):
+    rows = ("0x00000002  0 5151 0 0 1024 768 keynote.Keynote vm Draft __ACTIVE__1|100|b64:QnJvd3Nlcg==\n"
+            "0x00000001  0 4242 10 20 800 600 navigator.Firefox vm Browser\n")
+    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, listing("2|5151|b64:RHJhZnQ=", rows)))
+    out = receipt(api.tools["window_list"]())
+    assert out["ok"] is True and out["frontmost"]["window_id"] == "0x00000002"
+    assert [r["title"] for r in out["windows"]][0] == "Draft __ACTIVE__1|100|b64:QnJvd3Nlcg==", "the title is data"
+    again = receipt(api.tools["activate_app"](app="Keynote"))
+    assert again["ok"] is True and again["activated"] is False and "observed_effect" not in again, "already in front: no invented switch"
+
+
+def test_ssh_a_failed_paste_chord_keeps_the_clipboard_effect_without_a_switch(tmp_path, monkeypatch):
+    def chord_failed(command):
+        return 1, f"__FRONT_BEFORE__{info_line(SAFARI)}\n__CLIPBOARD_WRITTEN__\n__FRONT_AFTER__{info_line(SAFARI)}\n", "cliclick died"
+    module, api, calls = ssh(tmp_path, monkeypatch, chord_failed)
+    out = receipt(api.tools["type_text"](text="x", via="paste"))
+    assert out["ok"] is False and out["clipboard_replaced"] is True and out["observed_effect"] is True and out["clipboard_done"] is True
+    assert out["dispatched"] is True and "activation_done" not in out
+
+
+def test_ssh_window_list_says_when_the_inventory_or_the_front_is_unread(tmp_path, monkeypatch):
+    module, api, calls = ssh(tmp_path, monkeypatch, lambda command: (0, "__FRONT__" + info_line(SAFARI)))
+    empty = receipt(api.tools["window_list"]())
+    assert empty["ok"] is False and empty["reason"] == "apps_unread"
+    module, api, calls = ssh(tmp_path, monkeypatch, lambda command: (0, LISTING + "__FRONT__"))
+    rows = receipt(api.tools["window_list"]())
+    assert rows["ok"] is True and rows["frontmost"] is None and "front_unread" in rows and all("frontmost" not in r for r in rows["windows"])
+
+
+def test_ssh_negative_coordinates_are_absolute_points_on_the_remote_mac(tmp_path, monkeypatch):
+    module, api, calls = ssh(tmp_path, monkeypatch, mac_over_ssh(SAFARI))
+    out = receipt(api.tools["click"](x=-250, y=200, raw=True))
+    assert out["ok"] is True and "cliclick c:=-250,200" in calls[-1][-1]

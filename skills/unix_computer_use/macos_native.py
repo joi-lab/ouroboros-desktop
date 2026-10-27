@@ -475,9 +475,11 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 if cerr not in (0, -25212, -25205):
                     count("children:" + AX_ERR.get(cerr, str(cerr)))
                 if total is not None and total > len(kids):
-                    # The budget left children unrequested: that is a cut, whether or not the visited count reaches it.
                     node["children_unread"] = total - len(kids)
-                    cut("max_nodes")
+                    if cerr == 0:
+                        # The budget left children unrequested: a cut, whether or not the visited count reaches it.
+                        cut("max_nodes")
+                    # A failed children read is counted above, not laundered into a budget cut.
                 for kid in kids:
                     queue.append((kid, depth + 1))
             finally:

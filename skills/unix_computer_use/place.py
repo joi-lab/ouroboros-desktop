@@ -376,26 +376,32 @@ class PlaceMixin:
         if after is not None and not same_place(after, delivered):
             payload["front_after"] = after
         steps_done = int(payload.get("steps_done") or 0)
+        dispatched = bool(payload.get("dispatched"))  # the helper ran at all (an explicit fact, never inferred)
+        switched = f"; the switch to {target.get('requested')} ran before it" if payload.get("activation_done") else ""
         if not payload.get("ok") and not steps_done:
+            if isinstance(before, dict) and (not known or not same_place(before, delivered)):
+                payload["front_before"] = before
+            if not dispatched:
+                # Nothing was dispatched (a refused combo, a failed clipboard write): a known fact, not an unknown outcome.
+                if known:
+                    payload["front"] = delivered
+                payload["note"] = "the input was not sent" + switched
+                return payload
             if known:
                 payload["front_at_dispatch"] = delivered
-            if payload.pop("not_sent", False):
-                # The preparation before the input failed (the clipboard write): nothing was dispatched.
-                payload["note"] = "the input was not sent" + (f"; the switch to {target.get('requested')} ran before it"
-                                                              if payload.get("activation_done") else "")
-                return payload
-            # The input helper did not report success: whether anything reached the screen is unknown.
+            # The input helper ran and did not report success: whether anything reached the screen is unknown.
             payload["note"] = ("the input helper did not report success, so whether anything reached "
-                               f"{where or 'the front application'} is unknown"
-                               + (f"; the switch to {target.get('requested')} ran before it" if payload.get("activation_done") else ""))
+                               f"{where or 'the front application'} is unknown" + switched)
             return payload
         payload["delivered_to"] = delivered if known else "unknown"
         if isinstance(before, dict) and known and not same_place(before, delivered):
             payload["front_before"] = before
         if not payload.get("ok"):
-            # Some steps of one call were dispatched before it stopped (``error`` says why).
-            payload["note"] = (f"{steps_done} of {payload.get('steps_total')} step(s) dispatched while {where or 'an unknown application'} "
-                               "was in front, the rest not sent; this tool observed no UI change")
+            # Some steps of one call completed before it stopped (``error`` says why); the failing step may have been
+            # dispatched (its outcome is unknown) or withheld.
+            payload["note"] = (f"{steps_done} of {payload.get('steps_total')} step(s) completed while {where or 'an unknown application'} "
+                               "was in front; " + ("the next step was dispatched and did not report success, " if dispatched
+                                                   else "the next step was not sent, ") + "the rest were not sent; this tool observed no UI change")
             return payload
         dropped = "accessibility" in text.lower() and "not enabled" in text.lower()
         untyped = re.findall(r"Unable to get key code for (\S+)", text)
@@ -419,12 +425,17 @@ class PlaceMixin:
                                 "permission": {"accessibility": "untrusted", "source": "helper stderr"},
                                 "error": "macOS drops synthetic input from a process without the Accessibility grant: "
                                          "the helper exited 0 but nothing reached the screen"})
+            effects = []
             if target.get("activated"):
                 payload["observed_effect"] = True  # the switch before it was observed
                 payload["activation_done"] = True
-                payload["note"] = f"the switch to {target.get('requested')} ran; the input after it was dropped (see error)"
-            else:
-                payload["note"] = "the input was dropped (see error); this tool observed no UI change"
+                effects.append(f"the switch to {target.get('requested')}")
+            if payload.get("clipboard_replaced"):
+                payload["observed_effect"] = True  # the clipboard write before it completed
+                payload["clipboard_done"] = True
+                effects.append("the clipboard write")
+            payload["note"] = ((" and ".join(effects) + " ran; the input after it was dropped (see error)") if effects
+                               else "the input was dropped (see error); this tool observed no UI change")
             return payload
         if payload.get("observed_effect"):
             payload["note"] = ((f"dispatched while {where} was in front" if where else "dispatched; who was in front is unknown")

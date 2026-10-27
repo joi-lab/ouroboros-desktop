@@ -687,7 +687,16 @@ def test_a_failed_paste_helper_still_reports_the_clipboard_write(tmp_path, monke
     module, api, state = mac(tmp_path, monkeypatch, cliclick=(1, "", "boom"))
     out = receipt(api.tools["type_text"](text="secret", via="paste", app="Keynote"))
     assert out["ok"] is False and out["clipboard_replaced"] is True and out["method"] == "paste" and state["clipboard"] == "secret"
-    assert out["observed_effect"] is True and out["activation_done"] is True and "unknown" in out["note"]
+    assert out["observed_effect"] is True and out["activation_done"] is True and out["clipboard_done"] is True and "unknown" in out["note"]
+    # Without a switch the completed clipboard write is still an observed effect of its own.
+    module, api, state = mac(tmp_path, monkeypatch, cliclick=(1, "", "boom"))
+    out = receipt(api.tools["type_text"](text="secret", via="paste"))
+    assert out["ok"] is False and out["observed_effect"] is True and out["clipboard_done"] is True and "activation_done" not in out
+    warning = "WARNING: Accessibility privileges not enabled. Many actions may fail.\n"
+    module, api, state = mac(tmp_path, monkeypatch, cliclick=(0, "", warning))
+    dropped = receipt(api.tools["type_text"](text="secret", via="paste"))
+    assert dropped["reason"] == "permission_denied" and dropped["clipboard_done"] is True and dropped["observed_effect"] is True
+    assert "clipboard write" in dropped["note"]
 
 
 def test_a_failed_clipboard_write_sends_nothing_and_says_so(tmp_path, monkeypatch):
@@ -702,6 +711,7 @@ def test_a_failed_clipboard_write_sends_nothing_and_says_so(tmp_path, monkeypatc
     out = receipt(api.tools["type_text"](text="x", via="paste", app="Keynote"))
     assert out["ok"] is False and "TimeoutExpired" in out["error"] and inputs(state) == [], out
     assert out["note"].startswith("the input was not sent") and out["activation_done"] is True and out["reason"] == "clipboard_failed"
+    assert out["dispatched"] is False and "front_at_dispatch" not in out and out["front"]["app"] == "Keynote"
 
 
 def test_a_demoted_step_inside_a_sequence_is_reported_as_dispatched_with_its_facts(tmp_path, monkeypatch):
@@ -710,6 +720,30 @@ def test_a_demoted_step_inside_a_sequence_is_reported_as_dispatched_with_its_fac
     out = receipt(api.tools["key"](keys="down return"))
     assert out["ok"] is False and out["reason"] == "permission_denied" and out["steps_done"] == 0
     assert "failed" in out["error"] and "not sent" not in out["error"] and out["permission"]["accessibility"] == "untrusted"
+    assert out["dispatched"] is True and "dropped" in out["note"], "the demoted step keeps its own explanation"
+
+
+def test_a_failed_helper_with_an_unread_front_is_still_a_dispatched_input(tmp_path, monkeypatch):
+    """The reader going silent is not proof that nothing was sent: the helper ran, its outcome is unknown."""
+    module, api, state = mac(tmp_path, monkeypatch, cliclick=(1, "", "boom"), lsappinfo=False)
+    out = receipt(api.tools["key"](keys="right down"))
+    assert out["ok"] is False and out["steps_done"] == 0 and out["dispatched"] is True
+    assert "failed" in out["error"] and "unknown" in out["note"] and "not sent" not in out["note"]
+    module, api, state = mac(tmp_path, monkeypatch, lsappinfo=False)
+    calls = {"n": 0}
+    original = module.subprocess.run
+
+    def second_fails(cmd, *a, **k):
+        argv = [str(p) for p in cmd]
+        if argv[0] == "cliclick":
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return subprocess.CompletedProcess(argv, 1, "", "boom")
+        return original(cmd, *a, **k)
+    monkeypatch.setattr(module.subprocess, "run", second_fails)
+    out = receipt(api.tools["key"](keys="right down return"))
+    assert out["steps_done"] == 1 and out["dispatched"] is True and calls["n"] == 2, "the second helper ran and failed; the third was not sent"
+    assert "dispatched and did not report success" in out["note"] and "the rest were not sent" in out["note"]
 
 
 def test_cliclick_gets_absolute_negative_coordinates_for_a_display_left_of_the_main_one(tmp_path, monkeypatch):
@@ -850,6 +884,12 @@ def test_native_reads_say_which_attributes_failed_and_never_render_a_failed_read
         return 0, kids[:n], len(kids)
     cut = native.walk("root", read_failing_rows, children_wide, max_nodes=5, deadline_s=5)
     assert cut["visited"] == 1 and cut["nodes"][0]["children_unread"] == 95 and cut["truncated_by"] == ["max_nodes"]
+    # A children read the app refused is an error, never a budget cut.
+
+    def children_refused(el, n):
+        return (-25204, [], 10) if el == "root" else (0, [], 0)
+    refused = native.walk("root", read_failing_rows, children_refused, max_nodes=150, deadline_s=5)
+    assert refused["truncated"] is False and refused["nodes"][0]["children_unread"] == 10 and refused["errors"] == {"children:CannotComplete": 1}
 
 
 def test_native_activation_rules_without_a_desktop(monkeypatch):

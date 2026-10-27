@@ -87,7 +87,9 @@ Acting in a named application (`app=`):
   `pid:<n>` copied from `window_list`; on X11 and OSWorld also a window's exact
   title or its `0x…` id. Resolution is exact: no prefix or substring guessing
   (on X11 and OSWorld a substring hit is returned as a candidate, so the exact
-  name can be given; macOS and SSH answer with the running list).
+  name can be given; macOS and SSH answer with the running list; the one
+  looser form is the WM_CLASS rule in the X11 row below, where `wmctrl` joins
+  instance and class with a dot).
   On X11 and OSWorld the target is a set of windows: the one window for a
   title or id, every window of that WM_CLASS for a class (a process may host
   several classes, as LibreOffice's Writer and Calc do), every window of the
@@ -138,8 +140,8 @@ Coordinate contract:
   the stored transform folds the Retina scale in, computed from the captured
   display's own CoreGraphics bounds (a second display no longer stretches the
   scale), including a negative origin for a display left of or above the main
-  one (cliclick then receives `=`-prefixed absolute coordinates; on macOS
-  negative raw coordinates are valid input). Without those bounds the Finder
+  one (cliclick then receives `=`-prefixed absolute coordinates, locally and
+  on a Mac over SSH; on a Mac negative raw coordinates are valid input). Without those bounds the Finder
   desktop size is used (the union of all displays) and the transform is always
   flagged `approx`; an SSH Mac's transform is always `approx` for the same
   reason.
@@ -153,8 +155,10 @@ Input receipts (the same contract on every backend):
 - Beside it every input receipt carries the place: `delivered_to` (the
   application or window in front when the input was dispatched: app, pid,
   bundle id or class, window id and title where the backend knows them;
-  `"unknown"` when no reader answered), `front_before` (only when the tool
-  switched applications first), `front_after` (who was in front when the tool
+  `"unknown"` when no reader answered), `dispatched` (whether the input helper
+  ran at all: `false` for a refused combo or a failed clipboard write, `true`
+  for a helper that ran, whatever it reported), `front_before` (only when the
+  tool switched applications first), `front_after` (who was in front when the tool
   read again after the input: present when that is another place than
   `delivered_to` (another window where the backend knows windows, else another
   application) or when `delivered_to` is unknown; an observation, not proof
@@ -166,11 +170,17 @@ Input receipts (the same contract on every backend):
   read), `helper_stderr` when the input helper printed anything, and one
   `note` saying that no UI change was observed by this tool.
 - An input whose helper did not report success (non-zero exit, timeout) is
-  `ok: false` without the mark; it carries `front_at_dispatch` instead of
-  `delivered_to`, because whether anything reached the screen is unknown. An
-  input that was never dispatched (the clipboard write before a paste failed)
-  says so in its note. A `via=paste` receipt says whether the clipboard was
-  replaced, also when the paste chord after it failed.
+  `ok: false` without the input's mark; it carries `front_at_dispatch` instead
+  of `delivered_to`, because whether anything reached the screen is unknown.
+  An input that was never dispatched (a refused combo, the clipboard write
+  before a paste failed: `reason: clipboard_failed`) says "not sent" in its
+  note and carries `dispatched: false`. A `via=paste` receipt says whether the
+  clipboard was replaced, also when the paste chord after it failed; a
+  completed clipboard write is an observed effect of its own and keeps the
+  mark (`clipboard_done`), as a switch does (`activation_done`). The fields a
+  receipt carries follow what happened: a refusal has `target`, `reason` and
+  who is in front; a failed helper has `front_at_dispatch`; a dispatched input
+  has `delivered_to`.
 - On a local or SSH Mac, `cliclick` exits 0 and only warns on stderr when the
   posting process lacks the Accessibility grant (the OS drops the event) or
   when a character has no key code in the active keyboard layout (nothing is
@@ -245,7 +255,8 @@ Backend matrix (honest limitations):
   combos the base key is tapped while modifiers are held (`cmd+s` = hold cmd,
   tap s). `type_text` with `via=paste` writes the clipboard (`pbcopy`) and
   pastes with `cmd+v`, after the target was verified in front (a refusal leaves
-  the clipboard alone; the receipt says the clipboard was replaced); use it for
+  the clipboard alone; the receipt says whether the clipboard was replaced,
+  also when the paste chord after it failed); use it for
   long or non-ASCII text, which `cliclick t:` types slowly. `via` accepts
   `type` or `paste`; anything else is refused.
 - Linux X11: `xdotool` (input and the active window), `gnome-screenshot`/`scrot`
@@ -283,13 +294,14 @@ Backend matrix (honest limitations):
   keeps its mark. The probe cannot raise: for an untargeted input a probe
   failure leaves the place unknown and never fails the action. A targeted
   `type_text` makes one switch for the whole call; a withheld or refused paste
-  is final (never retried by typing), only a clipboard program that ran and
-  failed falls back to `typewrite`. With `app=""` the action, its exit-code
+  is final (never retried by typing); a clipboard program that ran and failed,
+  or whose transport failed, falls back to `typewrite` as before. With `app=""` the action, its exit-code
   reading and the clipboard/typewrite routing are unchanged; what changed on
   the benchmark path is the probe around the action (markers are stripped from
   the returned output), `activate_app` in the tool list, `app` in the input
-  schemas and `window_list` answering parsed rows (`ok: false` when the guest
-  printed no listing). Honesty guarantees on this
+  schemas and `window_list` answering parsed rows from a base64-encoded
+  listing (`ok: false` when the guest printed no listing); no text a window
+  shows can reach the readers as a separator or a marker. Honesty guarantees on this
   backend: `scroll` clicks are 1:1 wheel detents (not multiplied); non-ASCII,
   angle brackets, multi-line or long `type_text` (or `via=paste`) is pasted via
   the in-VM clipboard (`pyperclip` + `ctrl+v`, ASCII `typewrite` fallback) so
@@ -309,7 +321,8 @@ Backend matrix (honest limitations):
   way as locally. `type_text` with `via=paste` writes the Mac's clipboard
   (`pbcopy`) and pastes, and the receipt says whether the clipboard stage
   completed. `window_list` lists applications and the frontmost one (no window
-  titles over SSH); a listing that failed or named nothing is `apps_unread`. The remote Mac must have
+  titles over SSH); a listing that failed or named nothing is `apps_unread`,
+  an unread front says `front_unread`. The remote Mac must have
   Screen Recording, Accessibility and (for activation) Automation grants
   configured by the owner. This skill does not install or store private SSH
   keys.
