@@ -290,7 +290,7 @@ deployment connects a destination of its own.
 - File collectors (OpenTelemetry Collector, Vector, Fluent Bit) can ship durable
   JSONL under `logs/` and task drives without changing Ouroboros (`docs/PERSISTENCE.md`).
   The record passport, `ouroboros/contracts/record_contract.py`, defines guaranteed
-  anchors/fields, correlation, content, rotation, tools replicas, child-drive retention
+  anchors/fields, correlation, content, rotation, tool and model-error replicas, child-drive retention
   (`OUROBOROS_GC_RETENTION_DAYS`) and money's source: accounting views, never summed
   `llm_usage`. Its `LEGACY_RULE` explains v2 nullable tokens: retain the stamp and nulls;
   old zeros stay ambiguous. `docs/examples/log_collector/` is a verified metadata-only

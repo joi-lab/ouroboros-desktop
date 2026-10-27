@@ -145,7 +145,7 @@ the same thing sit together: when your diff adds a row, read its neighbours.
 | Open in Main ↗ | `consciousness-inline-link ui-hit-area` | modules/consciousness_dashboard.js | 1 |
 | Open in new tab | `(no class)` | modules/chat_media.js | 1 |
 | Open Ouroboros in the current mode | `btn btn-primary` | modules/onboarding_wizard.js | 1 |
-| Open Settings | `btn btn-default btn-sm chat-subagents-settings` | modules/composer_subagents.js | 1 |
+| Open Settings | `btn btn-default btn-sm chat-subagents-settings ui-hit-area` | modules/composer_subagents.js | 1 |
 | Open the conversation ↗ | `consciousness-inline-link ui-hit-area` | modules/consciousness_dashboard.js | 1 |
 | Panic | `chat-header-btn danger ui-chrome-control` | modules/chat_header.js | 1 |
 | Paste | `btn btn-default` | modules/files.js | 1 |

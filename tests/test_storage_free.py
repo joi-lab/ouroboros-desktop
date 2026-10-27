@@ -281,6 +281,23 @@ def test_the_run_frees_a_folder_inside_the_wait_that_the_ordinary_pass_keeps(tmp
     assert [(row["type"], row["phase"], row["selected"]) for row in rows] == [("storage_free", "done", 1)]
 
 
+def test_the_run_names_the_folders_it_freed_in_its_event(tmp_path, monkeypatch):
+    """A drive freed by the owner's run left only counts, so a task's missing folder had no remover on record;
+    the event names each folder by its preview id, and a kept folder is never named among them."""
+    root = tmp_path / "data"
+    probes = _drives(root, [("gone", "direct", "completed", OLD), ("busy", "direct", "completed", OLD)])
+    monkeypatch.setattr("ouroboros.server_maintenance.DATA_DIR", root)
+    _fake_sizer(monkeypatch)
+    owner = _owner(probes)
+    _preview(owner, root, tmp_path)
+    probes["busy"] = True  # in use again between preview and run
+    _run(owner, root, tmp_path)
+    rows = [json.loads(line) for line in (root / "logs" / "events.jsonl").read_text().splitlines()]
+    report, = [row["report"] for row in rows if row["type"] == "storage_free"]
+    assert report["removed_ids"] + report["deleting_ids"] == ["direct:gone"] and report["stuck_ids"] == []
+    assert report["removed"] + report["deleting"] == 1 and report["kept"] == [{"reason": "in_use", "count": 1}]
+
+
 def test_a_folder_not_previewed_is_untouched_and_a_task_live_again_is_kept(tmp_path, monkeypatch):
     root = tmp_path / "data"
     probes = _drives(root, [("first", "direct", "completed", OLD), ("second", "direct", "completed", OLD)])

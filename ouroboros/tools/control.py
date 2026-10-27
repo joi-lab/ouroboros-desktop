@@ -122,7 +122,7 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "Start a child task on one objective; it reports its result back to you (start_task starts separate "
     "independent work instead). Returns task_id. Default native READ-ONLY children inspect "
     "local repo/data/history and web/browser. Each returns findings; apart from knowledge notes, memory marks "
-    "and chronicle drafts in its own name, it cannot write local state, commit, enable tools, or run "
+    "and chronicle drafts in its own name, it cannot write local state, commit, grant itself tools, or run "
     "shell/review/runtime/skills. write_surface selects a MUTATIVE (acting) child; you alone commit "
     "the live Ouroboros body. workspace_root selects the starting folder or inherits yours. "
     "self_worktree copies that Git source's current eligible files, including uncommitted work, into an isolated tree; "
@@ -142,7 +142,7 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "Runtime data, including installed skill payloads, is never a write_surface. For skill mutation, "
     "call delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
     "yourself; children cannot open payload delegation and may only design/review it read-only. "
-    "Mutative children cannot commit or enable tools; children may write knowledge notes and memory marks "
+    "Mutative children cannot commit or grant themselves tools; children may write knowledge notes and memory marks "
     "in their own name and publish chronicle pages and parts only as drafts, which the integrating mind "
     "accepts or rejects (chronicle_write kind=decision); identity and scratchpad stay with the parent. Cyber-effective "
     "children inherit selected review/skill/runtime tools, subject to explicit task restrictions. "
@@ -180,7 +180,7 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("finish_task", {"name": "finish_task",
             "description": "Select the complete answer and request completion of your current task. "
                 "Use finish after considering the observed work, or stop with a rationale naming unfinished work. "
-                "Select exactly one of answer or a host-offered answer_sha256. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
+                "Select exactly one of answer or a host-offered answer_sha256. Successful page, note, mark and addressed-message writes may ride in the same response; any other result is read before the finish. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["finish", "stop"]}, "answer": {"type": "string", "description": "The complete answer, including a short correction; a root's owner reads it as your reply, a child's parent as your report."},
                 "answer_sha256": {"type": "string", "description": "Exact offered retained or whole held response hash."},
@@ -225,6 +225,7 @@ def get_tools() -> List[ToolEntry]:
                     "workspace_root": {"type": "string", "description": "Absolute ordinary folder or Git worktree root outside Ouroboros repo/data, validated at admission. File/process work supports ordinary folders; Git operations need a worktree. Omit for the Project's registered working_dir or, in Main, Ouroboros's own repo.", "default": ""},
                     "workspace": {"type": "string", "description": "'none' opts out of the Project's default folder; empty otherwise.", "default": ""},
                     "context_requires_self_body_docs": {"type": "boolean", "description": "True for work on Ouroboros code, including copies elsewhere: this task gets the full development handbook in Max. Low/Nano and helpers keep their usual book maps.", "default": False},
+                    "context_requires_development": {"type": "boolean", "description": "Omit unless the work's subject is clear: true keeps docs/DEVELOPMENT.md whole in Max, false gives its chapter map."},
                     "source": {"type": "string", "description": "Attach an existing folder or clone a git URL (https://... or git@host:path) server-side into the projects root; private auth failures are typed auth_required. Registers the folder with provenance + trusted_at as the Project/task workspace. Use for work on a supplied repo/folder.", "default": ""},
                     "reasoning_effort": _ROOT_EFFORT_PARAM,
                 },

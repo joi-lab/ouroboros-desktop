@@ -107,11 +107,9 @@ def _adopt_fallback_route(
     handover_reason: str = "fallback",
     tool_calls_at_handover: Optional[int] = None,
 ) -> tuple:
-    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback as the active route for the rest of
-    the loop, with its sanitized transcript: otherwise a later round replays THIS fallback's
-    reasoning back to the primary family with no switch sanitizer firing (the cross-family
-    signature replay, in reverse). The caller already rebound the context-fit plan to this exact
-    route. Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
+    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback for the rest of the loop with its sanitized transcript, so a
+    later round never replays THIS fallback's reasoning to the primary family unsanitized; the caller already rebound the
+    context-fit plan to this route. Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
     ctx.active_model = fallback_model
     ctx.active_use_local = fallback_use_local
     messages[:] = fallback_messages
@@ -292,7 +290,7 @@ def _run_cross_model_fallback_chain(
             tool_schemas=tool_schemas,
             model_role=fallback_role,
             model_route={},
-            start_mode=active_context_mode,  # the shown mode: a fallback or the primary may lower it, never raise it
+            start_mode=active_context_mode,  # the shown mode: a fallback may lower it; the primary row resumes its held view
         )
         candidate_call = _loop()._RoundModelCallContext(
                 llm=llm,
@@ -336,12 +334,7 @@ def _run_cross_model_fallback_chain(
                               and waiter is not None and waiter.waits_allowed)
         if msg is not None or (not recovering_output and accumulated_usage.get("_last_llm_error_kind") == output_recovery.KIND
                                and not accumulated_usage.get("_pending_transport_outcome")):
-            (
-                active_model,
-                active_use_local,
-                context_fit_plan,
-                active_context_mode,
-            ) = _adopt_fallback_route(
+            (active_model, active_use_local, context_fit_plan, active_context_mode) = _adopt_fallback_route(
                 ctx,
                 tools,
                 candidate_call.active_model,
@@ -375,6 +368,11 @@ def _run_cross_model_fallback_chain(
         tools._ctx.context_fit_plan = context_fit_plan
         tools._ctx.messages = messages
         tools._ctx.active_context_mode = active_context_mode
+        if context_fit_plan is not None:  # a failed candidate's view leaves with it (the primary row's resumed one too)
+            if fallback_messages is messages:  # a same-family candidate rebound the shared transcript
+                messages[:] = context_fit_plan.reproject_transcript(messages, active_context_mode)
+                invalidate_task_cache_splits(task_id)
+            _adopt_view_facts(tools._ctx, context_fit_plan, active_context_mode)
         _restore_context_fit_usage(accumulated_usage, primary_context_usage)
         if (resident[0] is not None and resident[0] != tool_schemas and fallback_messages is not messages
                 and deferred_candidate is not candidate_call):
@@ -559,7 +557,7 @@ def _rebind_context_fit_plan(
     model_role: str = "",
     model_route: Optional[Dict[str, Any]] = None,
     credential_profile_id: Optional[str] = None,
-    start_mode: Optional[str] = None,  # the mode the task runs in: a new route may lower it, never raise it
+    start_mode: Optional[str] = None,  # the task's mode: a new route may lower it; a return to the primary resumes its held view
 ) -> Tuple[Any, str]:
     if plan is None or not all(
         hasattr(plan, name) for name in ("max_projection", "low_projection", "core_sha256")
@@ -569,10 +567,13 @@ def _rebind_context_fit_plan(
         )
     from ouroboros.context import _context_fit_route
     from ouroboros.context_anchor import main_input_anchor
+    from ouroboros.primary_route_observation import held_primary_view
     from ouroboros.context_fit import (_failed_route_evidence, _route_calibration_ratio,
                                        estimate_context_prompt_tokens, main_output_reserve_tokens)
     from ouroboros.provider_models import parse_claudexor_model
 
+    role = model_role or getattr(plan, "model_role", "main")
+    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local, role=role)
     metadata = getattr(tools._ctx, "task_metadata", {})
     metadata = metadata if isinstance(metadata, dict) else {}
     task = {
@@ -580,7 +581,7 @@ def _rebind_context_fit_plan(
         "use_local_model": use_local,
         "task_metadata": metadata,
         "delegation_role": metadata.get("delegation_role"),
-        "model_role": model_role or getattr(plan, "model_role", "main"),
+        "model_role": role,
         "model_route": model_route if model_route is not None else getattr(plan, "model_route", {}),
         "credential_profile_id": credential_profile_id,
     }
@@ -1323,7 +1324,7 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
     Called by every Main round and by a wait's reprepare; True when the list changed.
     """
     from ouroboros.provider_models import tool_schema_limit
-    from ouroboros.tool_policy import fit_tool_schemas_to_limit, route_tool_limit_notice
+    from ouroboros.tool_policy import fit_tool_schemas_to_limit, route_tool_limit_notice, usable_selectors
 
     schemas, limit = ctx.tool_schemas, tool_schema_limit(ctx.active_model, use_local=ctx.active_use_local)
     if limit is None or schemas is None or len(schemas) <= limit:
@@ -1334,8 +1335,8 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
     schemas[:], left_out = fit_tool_schemas_to_limit(schemas, limit, keep=earlier | loaded)
     ctx.tools._ctx._route_left_out_tool_names = earlier | set(left_out)
     invalidate_task_cache_splits(ctx.task_id)
-    _loop()._append_or_merge_user_message(
-        ctx.messages, route_tool_limit_notice(ctx.active_model, limit, total, left_out))
+    _loop()._append_or_merge_user_message(ctx.messages, route_tool_limit_notice(
+        ctx.active_model, limit, total, left_out, selectors=usable_selectors(ctx.tools, schemas)))
     return True
 
 
