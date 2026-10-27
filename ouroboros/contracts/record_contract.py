@@ -159,7 +159,9 @@ ANCHOR_ROWS: tuple[AnchorRow, ...] = (
         "llm_usage", "events", "canonical",
         "A compatibility projection of a model call's usage as the supervisor received it: main-loop, review "
         "and tool-model calls (COVERAGE_GAPS names calls that write none); accounting_authority names the "
-        "ledger. Never a money source (ACCOUNTING_RULE).",
+        "ledger. Never a money source (ACCOUNTING_RULE). A delegated session's prompt_tokens and cached_tokens "
+        "are its harness's own counters (Claude Code counts the uncached rest); its input_token_usage "
+        "total_tokens, when known, is the whole input, as a direct call's prompt_tokens.",
         _fields("ts type record_contract_version task_id root_task_id parent_task_id delegation_role category model provider "
                 "prompt_tokens completion_tokens cached_tokens cache_write_tokens accounting_authority "
                 "ledger_attempt_ids"),
@@ -168,7 +170,8 @@ ANCHOR_ROWS: tuple[AnchorRow, ...] = (
             "task_group_id requested_model_lane effective_model_lane api_key_type model_category source "
             "cost_estimated cost cost_known prompt_cache_ttl projection_update_status llm_call_id execution_id "
             "round_id round chat_id effort request_wire effort_resolution claudexor reasoning_pin "
-            "reasoning_effort_clamped web_search_sources review_skill review_wave_id review_slot_id session_id"),
+            "reasoning_effort_clamped web_search_sources review_skill review_wave_id review_slot_id session_id "
+            "input_token_usage"),
         content=_fields("web_search_sources claudexor"), natural_key=("ledger_attempt_ids",),
     ),
     AnchorRow(

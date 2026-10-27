@@ -141,10 +141,10 @@ def test_a_bucket_whose_rows_disclosed_no_token_counts_reports_absence_not_zero(
     # The row itself is still counted — absence of TOKENS is not absence of the row.
     assert silent["subscription_sessions"] == 1
 
-    ua.record_subscription_session(
+    ua.record_subscription_session(  # a session's input axes are its normalized split
         "sess-reporting", drive_root=data_root, route="codex", task_id="t1",
-        prompt_tokens=120, completion_tokens=None, cached_tokens=None,
-        spend_usd=0.0, spend_estimated=False,
+        prompt_tokens=120, completion_tokens=None, cached_tokens=None, spend_usd=0.0, spend_estimated=False,
+        input_token_usage={"total_tokens": 120, "cache_read_tokens": None, "cache_write_tokens": None},
     )
     mixed = ua.usage_breakdown(data_root)
     assert mixed["prompt_tokens"] == 120           # the one that reported
@@ -154,8 +154,8 @@ def test_a_bucket_whose_rows_disclosed_no_token_counts_reports_absence_not_zero(
     # And a MEASURED zero stays a zero: the fix must not turn every 0 into absence.
     ua.record_subscription_session(
         "sess-real-zero", drive_root=data_root, route="codex", task_id="t1",
-        prompt_tokens=0, completion_tokens=0, cached_tokens=0,
-        spend_usd=0.0, spend_estimated=False,
+        prompt_tokens=0, completion_tokens=0, cached_tokens=0, spend_usd=0.0, spend_estimated=False,
+        input_token_usage={"total_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
     )
     measured = ua.usage_breakdown(data_root)
     assert measured["completion_tokens"] == 0

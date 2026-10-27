@@ -434,6 +434,11 @@ operator's separate authorization; installation alone changes no old money.
 
 ## 10. Residuals
 
+- A subscription session's input axes are its harness's normalized split from
+  2026-10-28 (unknown where the split is), the harness's own counters kept in
+  `extra.harness_tokens`; older session rows hold those counters (Claude Code:
+  the uncached rest), so token sums spanning the change mix the two.
+
 - Durability on a name-tier mount is best effort, as it was for the journal:
   the store relies on the mount's own write and rename semantics.
 - Two hosts sharing one data directory are not a supported configuration (the

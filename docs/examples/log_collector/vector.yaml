@@ -43,7 +43,7 @@ transforms:
                  "cache_write_tokens", "duration_ms", "duration_sec", "tool_calls", "tool_errors", "error_kind",
                  "status_code", "retry_same_request", "provider_code", "provider_error_type", "phase", "exitcode",
                  "busy_task_id", "signal",
-                 "stalled_sec", "session_id", "review_wave_id", "review_slot_id"]
+                 "stalled_sec", "session_id", "review_wave_id", "review_slot_id", "input_token_usage"]
       . = filter(row) -> |key, _value| { includes(allowed, key) }
       if row.type == "task_received" && !exists(row.task_id) { .task_id = row.task.id }  # legacy nested id only
       .log = replace(replace(replace(path, r'^.*/', ""), r'\.jsonl$', ""), r'_.*$', "")  # archive/<log>_<stamp>
