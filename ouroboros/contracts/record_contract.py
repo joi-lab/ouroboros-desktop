@@ -327,8 +327,9 @@ COVERAGE_GAPS = (
     "llm_round covers a task's main loop only: review, search, vision and memory calls appear only as "
     "llm_usage, without a duration. A round that never settles has no llm_round: its failed attempts are "
     "llm_api_error rows or the non-anchor rows named below.",
-    "Skill reviews started from the Skills page write no llm_usage row; their usage is in the accounting "
-    "views only.",
+    "A review outside any task (the Skills page, an install) writes its llm_usage rows, at chat_id 0, only "
+    "through an attached server event bus; one run where none is attached writes none, without retry, and "
+    "its usage is in the accounting views only.",
     "A terminal whose supervisor handler failed has no task_done: supervisor.jsonl worker_event_handler_error "
     "records it, and the task's store row (get_task_result / query_data) stays the authority.",
     "tools rows carry no chat_id. Optional lineage appears only when the producer knows it; readers must "

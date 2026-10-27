@@ -124,17 +124,34 @@ def test_custody_nested_receipts_survive_fresh_current_read(tmp_path, settled):
     assert [receipt["interaction_id"] for receipt in actual] == ["first", "second"]
 
 
+@pytest.mark.parametrize("debt", ["cost-owed", "cost-paid", "later-receipt"])
 @pytest.mark.parametrize("writer_first", [True, False])
-def test_custody_ack_serializes_with_result_membership(tmp_path, monkeypatch, writer_first):
-    """The acknowledgement reads the result row and retires the closing receipts in ONE store
-    transaction: a debt the result shows (``delegated_runs_unreconciled``) is never removed."""
+def test_custody_ack_serializes_with_result_membership(tmp_path, monkeypatch, writer_first, debt):
+    """The acknowledgement reads the result row and retires the closing receipts it observed in ONE
+    store transaction: a debt the result shows (``delegated_runs_unreconciled``), a receipt closed
+    after the observation and an unpaid ``cost_revision`` each survive it. Only the money owner
+    retires a revision, the one it observed: a revision raised while it publishes stays owed."""
     from ouroboros import delegate_custody as custody, delegate_terminal, store
     from ouroboros.delegate_custody_current import snapshot
+    from supervisor import events_task_done as done, queue
+
+    def owed():
+        with store.open_store(tmp_path, write=False) as txn:
+            return txn.get_row("delegated_runs", "task")
+
+    monkeypatch.setattr(queue, "task_has_live_ownership", lambda *a, **kw: False)
     migrations.prepare_startup_state(tmp_path)
     results.write_task_result(tmp_path, "task", "completed")
     custody.emit(tmp_path, custody.STARTED, {"run_id": "old", "task_id": "task"})
     custody.emit(tmp_path, custody.SETTLED, {"run_id": "old", "task_id": "task", "state": "succeeded"})
+    if debt == "cost-paid":
+        delegate_terminal._refresh_custody_cost(tmp_path, "task")
+    assert set(owed()["closed_runs"]) == {"old"} and ("cost_revision" in owed()) is (debt != "cost-paid")
     observed = snapshot(tmp_path)
+    if debt == "later-receipt":  # every custody change owes money; this receipt closed after the observation
+        custody.emit(tmp_path, custody.STARTED, {"run_id": "late", "task_id": "task"})
+        custody.emit(tmp_path, custody.SETTLED, {"run_id": "late", "task_id": "task", "state": "succeeded"})
+    before = owed()
     if writer_first:
         results.write_task_result(tmp_path, "task", "completed", delegated_runs_unreconciled=["new"])
     opened = []
@@ -144,14 +161,34 @@ def test_custody_ack_serializes_with_result_membership(tmp_path, monkeypatch, wr
         with real_open(root, **kwargs) as txn:
             opened.append(kwargs.get("write"))
             yield txn
-    monkeypatch.setattr(store, "open_store", tracked)
-    delegate_terminal._ack_current_receipts(tmp_path, "task", observed)
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "open_store", tracked)
+        delegate_terminal._ack_current_receipts(tmp_path, "task", observed)
     assert opened == [True], "one write transaction covers the row read and the retirement"
-    monkeypatch.undo()
+    unobserved = {rid: raw for rid, raw in before["closed_runs"].items() if rid != "old"}
+    if debt == "cost-paid" and not writer_first:
+        assert owed() is None, "nothing left to owe: the row retires"
+    else:
+        assert owed() == {**before, "closed_runs": unobserved}, "the exact revision and later receipts survive"
     if not writer_first:
-        assert "task" not in o.members(tmp_path, "delegated_runs")
+        assert ("task" in o.members(tmp_path, "delegated_runs")) is (debt != "cost-paid")
         results.write_task_result(tmp_path, "task", "completed", delegated_runs_unreconciled=["new"])
     assert "task" in o.members(tmp_path, "delegated_runs")
+    if debt != "cost-paid":
+        refresh, raced = done._refresh_terminal_task_cost, []
+
+        def racing(*args, **kwargs):
+            published = refresh(*args, **kwargs)
+            if not raced:
+                raced.append(custody.emit(tmp_path, custody.STARTED, {"run_id": "racer", "task_id": "task"}))
+            return published
+
+        monkeypatch.setattr(done, "_refresh_terminal_task_cost", racing)
+        delegate_terminal._refresh_custody_cost(tmp_path, "task")
+        assert owed()["cost_revision"] > before["cost_revision"], "the revision raised meanwhile stays owed"
+        delegate_terminal._refresh_custody_cost(tmp_path, "task")
+        assert "cost_revision" not in (owed() or {})
+        assert set((owed() or {}).get("closed_runs", {})) == set(unobserved)
 
 
 def test_unavailable_recovery_sets_do_not_escape_a_boot_door(tmp_path, monkeypatch):
