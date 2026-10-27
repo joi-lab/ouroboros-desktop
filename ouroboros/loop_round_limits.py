@@ -344,7 +344,8 @@ def _run_round_compaction(
     publish_pending_owner_dialogue(ctx.tools._ctx, messages)
     pending = getattr(ctx.tools._ctx, "_pending_compaction", None)
     selected_names = getattr(ctx.tools._ctx, "_pending_tool_schema_names", None)
-    if isinstance(pending, dict) or (pending is None and selected_names is not None):
+    authored = isinstance(pending, dict) or (pending is None and selected_names is not None)
+    if authored:
         messages = _run_authored_context_view(messages, ctx, pending, selected_names)
     elif pending is not None:
         # A count-only request saved by an earlier version named a helper summarizer that no longer exists.
@@ -358,10 +359,31 @@ def _run_round_compaction(
         updates, _ = review_context_updates(ctx.tools._ctx, messages=messages)
         messages = [*messages, *updates]
         ctx.tools._ctx._pending_review_context = {}
+    if not authored:  # an authored view retires host rows in its own checkpointed fold
+        messages = _retire_superseded_host_state(messages, ctx)
     maybe_append_roster_note(ctx.tools._ctx, messages, ctx.drive_root)
     from ouroboros.skill_context_snapshot import maybe_append_skill_snapshots
     maybe_append_skill_snapshots(ctx.tools._ctx, messages, ctx.drive_root)
     return messages
+
+
+def _retire_superseded_host_state(messages, ctx):
+    """Superseded host rows leave where this send already departs from the last one, before the
+    producers append, so a standing note whose full text left comes back current
+    (``context_source_view.retire_superseded_at_departure``)."""
+    from ouroboros.context_source_view import retire_superseded_at_departure
+
+    tool_ctx = ctx.tools._ctx
+    root = getattr(tool_ctx, "budget_drive_root", None) or ctx.drive_root
+    if ctx.tool_schemas is None or root is None:
+        return messages
+    rebuilt, fact = retire_superseded_at_departure(tool_ctx, messages, ctx.tool_schemas, drive_root=root,
+                                                   task_id=ctx.task_id)
+    if fact:
+        invalidate_task_cache_splits(ctx.task_id)
+        _loop()._emit_checkpoint_event(ctx.event_queue, ctx.task_id, ctx.drive_logs,
+                                       {"checkpoint_kind": "host_state_retired", "round": ctx.round_idx, **fact})
+    return rebuilt
 
 
 def _run_authored_context_view(messages, ctx, pending, selected_names):

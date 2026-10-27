@@ -680,6 +680,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     ``measured=False`` reports unmeasured input rather than stale numbers.
     """
     from ouroboros.context_runtime_facts import round_clock_fact
+    from ouroboros.context_source_view import superseded_host_fact
     from ouroboros.nanny_pacing import nanny_burn_fact
     from ouroboros.transcript_prefix import previous_cache_fact, reasoning_retirement_fact
 
@@ -727,7 +728,6 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     if components:
         parts.append("largest " + ", ".join(f"{label} ~{tokens:,}" for label, tokens in components))
     from ouroboros.context_compaction import _capsule_metadata
-
     # The mind's own folds stay countable to it (17.10.2026: after 42 folds it told the owner it never folded).
     parts.append(f"own notes in view {sum(1 for row in ctx.messages if (_capsule_metadata(row)[1] or {}).get('authorship') == 'actor')}")
     parts.append(previous_cache_fact(usage))
@@ -747,7 +747,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
             log.debug("time/nanny facts unavailable for the facts line", exc_info=True)
             parts.append("time and nanny facts unavailable")
     parts.append(_tool_results_fact(usage))
-    parts.extend(filter(None, [focus_fact, reasoning_retirement_fact(usage, ctx.round_idx)]))
+    parts.extend(filter(None, [focus_fact, reasoning_retirement_fact(usage, ctx.round_idx), superseded_host_fact(ctx.messages)]))
     mode_fact = subagents_fact_line() if subagents_fact is None else subagents_fact
     return f"{CONTEXT_FACTS_HEADER} " + " | ".join(parts) + ("\n" + mode_fact if mode_fact else "")
 

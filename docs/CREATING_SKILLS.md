@@ -222,13 +222,14 @@ claim. Main, project roots and consciousness receive a labelled UNTRUSTED tail
 note after compaction; children and Presence do not. No callback, model, network,
 refresh or scheduler is run by prompt preparation. Current enablement, review,
 grants, dependencies and publication must remain eligible. Revocation/expiry emits
-one withdrawal; it does not resend old facts. A changed material value appends a
-full note; timestamp-only renewal waits until the visible lease expires, then
-references that exact full text's source/text hashes with new dates. No delta
-chain or hidden memo is authority: reclaim keeps the visible base; its absence
-causes a full current note. Exact sources are retained. Full notes and renewals
-append; old copies leave through compaction, size recovery or view renewal.
-Earlier notes are historical, never current authority.
+one withdrawal; it does not resend old facts. The full text is shown once. When it
+changes, or the dates in view run out, one outdated note says so and names where the
+current text is read (`query_data` kind `skill_state`, state_file `context_snapshot`);
+later changes add nothing until the conversation is next rebuilt (a fold, a tool
+load, a resume). There superseded notes leave with their exact rows retained, and the
+current text is shown in full again. So how often you publish cannot multiply what the
+context holds; figures that move on every poll belong behind your skill's own tool.
+Exact sources are retained. Earlier notes are historical, never current authority.
 
 Manifest refusals teach: every `SkillManifestError` carries the problem plus,
 where the parser knows the repair, a `fix_hint` rendered into the message
