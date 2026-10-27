@@ -937,6 +937,7 @@ textarea.ui-control { resize: vertical; }
     width: max-content;
     max-width: min(28rem, calc(100vw - 4 * var(--space-2)));
     max-width: min(28rem, 100cqi);
+    max-height: var(--ui-hint-room, none);
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-lg);
@@ -954,6 +955,8 @@ textarea.ui-control { resize: vertical; }
     white-space: normal;
 }
 .ui-hint[hidden], .ui-hint [hidden] { display: none; }
+.ui-hint[data-side="below"] { bottom: auto; top: calc(100% + var(--space-2)); }
+.ui-hint[data-cramped="true"] { overflow-y: auto; overscroll-behavior: contain; }
 .ui-hint-line, .ui-hint-rule { margin: 0; }
 .ui-hint-word { margin-inline-end: var(--space-2); color: var(--text-primary); font-weight: 600; }
 .ui-hint-rule { margin-top: 2px; color: var(--text-secondary); }

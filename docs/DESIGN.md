@@ -446,10 +446,11 @@ level or capacity. Subagents' mark is a small network (owner 27.10, G): Ouroboro
 **A capsule opens inline, in the row, never as a dropdown or a panel, one at a time** (owner 11.10; the panels tried
 on 26.10 were withdrawn on 27.10); its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
 choice posts at once and the strip waits for the answer. Subagents' is Off · Auto · Swarm the same way. While any
-capsule is open, the one hint ("Hints") stands above it (owner 28.10): the value's word and what it means, a mouse
-resting on another value previewing that one's, and «Applies to new steps; running work finishes.» When Settings
-turns subagents off or they are not set up yet, Subagents says `Off` with a lock; open, Auto and Swarm are disabled
-and the hint says why with `Open Settings`, right after the strip for Tab; the room keeps its own value. Effort's seven levels carry
+capsule is open, the one hint ("Hints") stands above it (owner 28.10): the value's word and what it means (a mouse
+resting on another of Subagents' or Context's modes previews that one's) and «Applies to new steps; running work
+finishes.» When Settings turns subagents off or they are not set up yet, Subagents says `Off` with a lock; open, Auto
+and Swarm are disabled and the hint says why with `Open Settings`, the keyboard's next stop after the strip; the room
+keeps its own value. Effort's seven levels carry
 a primary pill and two helper bounds; the primary may lie outside them. A
 segment is its word plus `--capsule-seg-pad` a side; the pill covers its segment;
 band, pill and brackets share one vertical inset. The primary and helper bounds never
@@ -2865,14 +2866,15 @@ of moving the drawer.
 
 **Hints.** What a control says about itself on the spot (what a value means, why it is
 locked, when a change applies) is shown by the one hint (`web/modules/ui_hint.js`): the
-popups' floating material, above its control and over the page, never in the flow, the
-same for a mouse, a finger and the keyboard. It lives inside its control, so Tab reaches
-its one action right after the control. A hover-only `title` reaches neither a phone nor
-a keyboard, so it never carries what the hint says. Nothing a press opens moves the
-composer: a surface anchored to the bottom never grows to explain, since a line added
-under its row lifts the row (owner 28.10); `tests/test_composer_stability_browser.py`
-presses every control the composer opens and holds the field, the row and the pressed
-control still.
+popups' floating material, above its control and over the page (below it where the window
+has no room above), never in the flow, the same for a mouse, a finger and the keyboard (a
+mouse also previews the value it rests on). It lives inside its control, so the keyboard
+reaches its one action right after the control (Tab, or Option+Tab in Safari as for every
+button). A hover-only `title` reaches neither a phone nor a keyboard, so it never carries
+what the hint says. Nothing a press opens moves the composer: a surface anchored to the
+bottom never grows to explain, since a line added under its row lifts the row (owner
+28.10); `tests/test_composer_stability_browser.py` presses every control the composer
+opens and holds the field, the row and the pressed control still.
 
 **Telegram.** Inside the Telegram Mini App the page tells Telegram it is ready,
 fills the screen, turns off Telegram's swipe-down so lists scroll, shows

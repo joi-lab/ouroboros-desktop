@@ -9,6 +9,7 @@
  */
 let made = 0;
 const EDGE_PX = 8;
+const GAP_PX = 8;  // ui.css: the hint stands var(--space-2) from its control
 
 export function createHint(host, { doc = host.ownerDocument, onAction = () => {} } = {}) {
     const el = doc.createElement('div');
@@ -29,19 +30,43 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
     parts.action.addEventListener('click', onClick);
     host.append(el);
 
-    // It starts where its control starts; where it would pass the window's far edge it moves back, never past the
-    // near one. Right to left, the start is the control's right edge.
+    // Above its control while it fits there, else on the side with more room, and never past the window: where its
+    // words need more than that room it scrolls inside itself. It starts where its control starts and moves back where
+    // it would pass the far edge, never past the near one (right to left, the start is the right edge).
+    const win = doc.defaultView;
+    const set = (name, value) => { if (el.style.getPropertyValue?.(name) !== value) el.style.setProperty(name, value); };
     function place() {
         const width = Number(doc.documentElement?.clientWidth);
-        if (!Number.isFinite(width) || width <= 0) return;
-        el.style.setProperty('--ui-hint-shift', '0px');
+        if (!Number.isFinite(width) || width <= 0 || el.hidden) return;
+        const view = win?.visualViewport;
+        const top = Number(view?.offsetTop) || 0;
+        const bottom = top + (Number(view?.height) || Number(doc.documentElement.clientHeight) || 0);
+        const anchor = host.getBoundingClientRect();
+        const natural = Number(el.scrollHeight) + 2;  // its words' height, whatever room it was given; plus the border
+        const above = anchor.top - GAP_PX - EDGE_PX - top;
+        const below = bottom - EDGE_PX - GAP_PX - anchor.bottom;
+        const side = natural > above && below > above ? 'below' : 'above';
+        if (el.dataset.side !== side) el.dataset.side = side;
+        const room = Math.max(0, Math.floor(side === 'below' ? below : above));
+        const cramped = String(natural > room);
+        if (el.dataset.cramped !== cramped) el.dataset.cramped = cramped;
+        set('--ui-hint-room', cramped === 'true' ? `${room}px` : 'none');
+        set('--ui-hint-shift', '0px');
         const box = el.getBoundingClientRect();
         let dx = 0;
         if (box.right > width - EDGE_PX) dx = width - EDGE_PX - box.right;
         if (box.left + dx < EDGE_PX) dx = EDGE_PX - box.left;
-        const rtl = doc.defaultView?.getComputedStyle?.(el)?.direction === 'rtl';
-        if (dx) el.style.setProperty('--ui-hint-shift', `${Math.round(rtl ? -dx : dx)}px`);
+        const rtl = win?.getComputedStyle?.(el)?.direction === 'rtl';
+        if (dx) set('--ui-hint-shift', `${Math.round(rtl ? -dx : dx)}px`);
     }
+    // Its words can grow after they are written (the translation overlay), and the window can change under it. A size
+    // it reports is placed on the next frame, outside the observer's delivery, so placing never feeds the observer.
+    let frame = 0;
+    const later = () => { if (!frame) frame = win.requestAnimationFrame(() => { frame = 0; place(); }); };
+    const resized = typeof win?.ResizeObserver === 'function' ? new win.ResizeObserver(later) : null;
+    resized?.observe(el);
+    win?.addEventListener?.('resize', place);
+    win?.visualViewport?.addEventListener?.('resize', place);
 
     return {
         el,
@@ -60,6 +85,10 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
         hide() { el.hidden = true; },
         destroy() {
             parts.action.removeEventListener('click', onClick);
+            resized?.disconnect();
+            if (frame) win.cancelAnimationFrame(frame);
+            win?.removeEventListener?.('resize', place);
+            win?.visualViewport?.removeEventListener?.('resize', place);
             el.remove();
         },
     };
