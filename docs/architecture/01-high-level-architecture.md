@@ -374,7 +374,7 @@ ouroboros/ — agent core and shared runtime (§6)
   icon_geometry.py — connector icons reduced to bounded geometry and drawn by the host in currentColor
   browser_policy.py — The browser tool's target and control-request policy: task-granted concrete origins, metadata/private/reserved refusals, the three-valued `runtime_service_kind` (§6 MCP and browser-facing external tools)
   skill_payload_binding.py — Skill payload targeting: `.seed-origin` distinguishes native from external; read/list/search only for read profiles
-  utils.py — SSOT for atomic JSON, timestamps, hashes, sanitization, subprocess helpers, `truncate_review_artifact`
+  utils.py — atomic/locked JSON, timestamps, hashes, sanitization, subprocess helpers, `truncate_review_artifact`
   jsonl_tail.py — `JsonlChainSnapshot` (captured byte reads of a file chain; the swarm rollup) and the bounded filtered tail over the rotated file logs
   markdown_source.py — byte-preserving Markdown structure shared by books and knowledge notes; physical ranges tied to source SHA; `MarkdownSourceError` keeps a missing grammar or malformed YAML visible
   world_profiler.py — WORLD.md's fenced measured block, refreshed each start; the rest is the mind's map (`update_world`) (§6)

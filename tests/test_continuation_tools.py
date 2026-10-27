@@ -33,6 +33,9 @@ class Registry:
     def capability_omissions(self):
         return self.omissions
 
+    def callable_rows(self, namespace=""):
+        return [{"name": row["function"]["name"]} for row in self.current]
+
     def override_handler(self, name, handler):
         self.handlers[name] = handler
 
