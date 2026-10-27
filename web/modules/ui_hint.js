@@ -58,10 +58,14 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
         const rtl = win?.getComputedStyle?.(el)?.direction === 'rtl';
         if (dx) el.style.setProperty('--ui-hint-shift', `${Math.round(rtl ? -dx : dx)}px`);
     }
-    // Its words can grow after they are written (the translation overlay), and the window can change under it. A size
-    // it reports is placed on the next frame, outside the observer's delivery, so placing never feeds the observer.
+    // Its words can grow after they are written (the translation overlay rewrites every write in place), and the window
+    // can change under it. A size it reports is placed on the next frame, outside the observer's delivery, so placing
+    // never feeds the observer; so is every write, since a write and its translation can leave the size the observer
+    // last saw while the place was measured in between.
     let frame = 0;
-    const later = () => { if (!frame) frame = win.requestAnimationFrame(() => { frame = 0; place(); }); };
+    const later = () => {
+        if (!frame && typeof win?.requestAnimationFrame === 'function') frame = win.requestAnimationFrame(() => { frame = 0; place(); });
+    };
     const resized = typeof win?.ResizeObserver === 'function' ? new win.ResizeObserver(later) : null;
     resized?.observe(el);
     win?.addEventListener?.('resize', place);
@@ -74,12 +78,13 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
             write(parts.text, text);
             write(parts.rule, rule);
             write(parts.action, action);
-            if (!el.hidden) place();
+            if (!el.hidden) { place(); later(); }
         },
         show() {
             if (!el.hidden) return;
             el.hidden = false;
             place();
+            later();
         },
         hide() { el.hidden = true; },
         destroy() {
