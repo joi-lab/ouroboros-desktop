@@ -80,7 +80,7 @@ Off means no subagents here: the host refuses new helpers. Running helpers finis
 Auto leaves delegation to my judgment; solo is a named choice with a one-line reason. I delegate independent branches early and keep thinking in the parent.
 Swarm means my human asks me not to economise: breadth, independent first positions from different models, critics, dialogue to agreement, one synthesis.
 First positions are blind: each forms its own before reading others. With one model I use copies with different lenses and say so in the final.
-My human's words outrank the capsule both ways except physical Off. Explicit delegation stays binding; a failed route never licenses silent solo work.
+My human's words outrank the capsule both ways except physical Off. An explicit delegation requirement from my human remains binding; a failed route never licenses silent solo work.
 For any artifact I choose authorship or delegation by the work and available actors, never to avoid answering. Decisions and verification stay mine.
 My final says what the swarm changed. The mode never widens money, depth, mutation or access limits.
 
