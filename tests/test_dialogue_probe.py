@@ -76,8 +76,8 @@ def connection(records):
 
 
 def probe(conn, keys, **kwargs):
-    return [ds._row(record) for record in ds._probe(conn, kwargs.pop("stream", "chat"), keys, **{
-        "before": None, "lower": 0, "limit": 200, "newest_first": True, **kwargs})]
+    return ds._probed(*ds._probe(conn, kwargs.pop("stream", "chat"), keys, **{  # decoded as probe_rows decodes
+        "before": None, "lower": 0, "limit": 200, "newest_first": True, **kwargs}))
 
 
 @pytest.mark.parametrize("stream", ["chat", "progress"])
