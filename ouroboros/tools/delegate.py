@@ -104,6 +104,7 @@ from ouroboros.delegate_directory import (
     blocked_geometry_refusal, git_directory_options_refusal, in_place_refusal, in_place_start, is_in_place_run,
     prepare_directory_execution, snapshot_checkout, started_receipt)
 from ouroboros.delegate_registration_policy import resolve_registration
+from ouroboros.delegate_documents import NO_DOCUMENTS, attach_selected_documents, attachment_parameters
 from ouroboros.subagent_worktrees import registered_checkout
 from ouroboros.delegate_shared import (  # noqa: F401
     _emit,
@@ -401,11 +402,10 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                     directory_strategy: Optional[str] = None, scope_paths: Optional[list] = None,
                     continue_from: Optional[str] = None, continue_carrier: Optional[str] = None,
                     workspace: Optional[str] = None, _resolved_binding: Any = None,
-                    _canonical_work_order_fingerprint: str = "",
-                    _work_order_source_request: Any = None,
-                    _coordination_context: str = "",
-                    _initial_bootstrap: bool = False, mode: Optional[str] = None,
-                    override_plan_readiness: Optional[bool] = None, _plan_answers: Any = None) -> ToolResult:
+                    _canonical_work_order_fingerprint: str = "", _work_order_source_request: Any = None,
+                    _coordination_context: str = "", _initial_bootstrap: bool = False, mode: Optional[str] = None,
+                    override_plan_readiness: Optional[bool] = None, _plan_answers: Any = None,
+                    attachment_paths: Optional[list] = None, _document_intent: str = "", _document_first_start: bool = False) -> ToolResult:
     from ouroboros.claudexor_daemon import ensure_owned_gateway
     from ouroboros.delegate_evidence import record_start_blocked
     from ouroboros.gateways.claudexor import ClaudexorUnavailable
@@ -432,7 +432,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
     invocation_id = snapshot_id = baseline_sha = target_root = authority_source = ""
     binding_fingerprint = ""
     processing_info: Dict[str, Any] = {}
-    resource_ref, directory_options, continuation = {}, {}, NO_CONTINUATION
+    resource_ref, directory_options, continuation, documents = {}, {}, NO_CONTINUATION, NO_DOCUMENTS
     if recovering:  # the owned recorded request is validated before any fingerprint (#1614)
         binding, refusal = _resolve_retry_invocation(
             ctx, drive, retry_token, text, max_seconds=max_seconds, geometry=(directory_strategy, scope_paths))
@@ -581,11 +581,12 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
             if authority.access == "full":
                 gateway.ensure_full_access(scope_root)
             seconds = bound.seconds
+            documents = attach_selected_documents(ctx, gateway, route.route_id, attachment_paths, _document_intent, _document_first_start)
             instructions += session_host_references(ctx, target_root=record_auth["target_root"], source_root=root, private_copy=snapshot is not None, payload_skill=payload_skill, service=service)
             request_body = _start_request(ctx, route, authority, scope_root, continuation.prompt or text,
                                           seconds, instructions, execution_root, continuation=continuation.request, ephemeral=ephemeral, service_roots=service.roots,
                                           **({"directory_options": directory_options} if directory_options else {}))
-            request_body, processing_info = _processing_start_request(request_body, actor, gateway, route)
+            request_body, processing_info = _processing_start_request({**request_body, **documents.request}, actor, gateway, route)
             continuation = bind_start(gateway, request_body, route, invocation_id, continuation, authority,
                                       ceiling_authority, actor_facts, target_root, root if snapshot else "")
             project_persistent = project_persistent or bool(continuation.custody.get("thread_id"))
@@ -611,7 +612,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
             # Recovery proves the original actor and compiled brief before adoption.
             **actor_facts,
             processing=processing_info,
-            prompt_cache_ttl=ttl_info,
+            prompt_cache_ttl=ttl_info, **documents.custody,
         )
         if not requested and not claim_refusal:
             claim_refusal = {"reason": "start_request_row_unwritable", "detail":
@@ -692,7 +693,7 @@ def _delegate_start(ctx: ToolContext, prompt: str, max_seconds: Optional[int] = 
                             continuation=continuation.facts, plan=plan_facts(continuation.custody),
                             max_seconds=seconds, max_seconds_basis=seconds_basis,
                             engine_version=str(getattr(gateway, "engine_version", "") or ""),
-                            snapshot_facts=_snapshot_facts(snapshot),
+                            snapshot_facts=_snapshot_facts(snapshot), documents=documents.facts,
                             effort_fact=({} if recovering else actor.get("effort_fact")))
 
 
@@ -701,7 +702,7 @@ def _started_payload(handle: Dict[str, Any], run_id: str, route: Any, access: st
                      recovering: bool, invocation_id: str, snapshot_id: str, target_root: str,
                      baseline_sha: str, engine_version: str = "", resource_ref=None, processing=None,
                      prompt_cache_ttl=None, continuation=None, max_seconds: int = 0, max_seconds_basis: str = "",
-                     snapshot_facts=None, effort_fact=None, plan=None) -> ToolResult:
+                     snapshot_facts=None, effort_fact=None, plan=None, documents=None) -> ToolResult:
     """The one author of delegate_start's started result (note + payload).
 
     The AUTHORITY guidance and the CUSTODY warning are independent facts about the same
@@ -765,7 +766,7 @@ def _started_payload(handle: Dict[str, Any], run_id: str, route: Any, access: st
     # Optional receipts expose the captured processing, continuation and snapshot
     # facts; copy the continuation binding before publishing it to the nanny.
     for key, value in (("processing", processing), ("prompt_cache_ttl", prompt_cache_ttl),
-                       ("continuation", dict(continuation or {})), ("snapshot", snapshot_facts)):
+                       ("continuation", dict(continuation or {})), ("snapshot", snapshot_facts), ("documents", documents)):
         if value:
             payload[key] = value
     if snapshot_id:
@@ -1406,10 +1407,11 @@ def get_tools() -> List[ToolEntry]:
                     "be empty. For resumable pool_exhausted or a limit with resetsAt, use "
                     "await_messages(wake_at=resetsAt) before continuing. Needs an observed terminal (not settled "
                     "money), not superseded, no ambiguous apply. Ordinary continuations never widen; plan implementation requires the starter's recorded ceiling. "
-                    "Select subagent_id as for a start; configured sessions omit it. Never combine with retry_of."},
+                    "Select subagent_id as for a start; configured sessions omit it. Never combine with retry_of. A continuation inherits no attached documents: pass attachment_paths again."},
                 "continue_carrier": {"type": "string", "enum": ["auto", "packet"], "description":
                     "With continue_from: auto (default) reuses the session where possible; packet starts a new "
                     "session with retained evidence when the old session has gone astray. Omit for plan threads."},
+                **attachment_parameters("Until a scheduled child's first run starts, omitted attachment_paths keep its parent's selection. A continuation or replacement inherits none: pass them again. Omit both with retry_of."),
                 "retry_of": {"type": "string", "description":
                     "pending_invocation_id from an unknown start outcome (transport failure/lost response). "
                     "Replays that invocation's recorded request byte-identically under its original key to retrieve "

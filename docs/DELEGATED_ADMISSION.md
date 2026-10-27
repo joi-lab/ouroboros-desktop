@@ -204,6 +204,68 @@ retain readonly/ask. Scoped HOME and
 actual-access receipts remain separate facts, and scoped trust grants persist
 without an automatic cleanup policy.
 
+## 3a. Selected task documents
+
+Owner: `ouroboros/delegate_documents.py`, transport `ouroboros/gateways/claudexor_uploads.py`.
+A task's retained inputs reach a delegated run as engine documents only when a start names
+them: `attachment_paths` on `delegate_start`, or on an agent-session `schedule_subagent`
+for the first start of that child's work order. Each entry is an exact manifest relpath
+(`attachments/<name>`) of a staged, non-image row of the task's own inputs; images, rejected
+or unknown rows refuse typed. Omission keeps the work order's input paths and readonly
+copies and a byte-identical run body; `[]` adds none. API children refuse the selection. A
+`declared` child receives only its selected inputs, disclosed in its work order.
+
+A scheduled selection, its `attachment_import` and the new-import intent saved for `new`
+are scheduling intent (`SUBAGENT_INTENT_FIELDS`): they cross admission, the queue snapshot
+and the worker payload to the host's first start. When that start is refused unrun with an
+unknown, in-flight or busy import, the child is woken with the refusal instead of ending
+unrun, and its route stays available. Until a physical start exists (in that episode or a
+restored one), a start without `attachment_paths` of its own is still the work order's first
+start: it carries the saved selection, and the saved choice and intent unless it names its
+own `attachment_import`. The saved intent begins only the first import of an input the task
+holds no import record for; an input already imported, under that intent or by one of the
+child's own starts (its explicit `new` included), keeps its current key, so a start that does
+not ask for `new` itself never mints a second key for an input.
+
+What crosses into the engine: the retained staged copy's bytes, read only for a fresh
+intent or while the engine reports the upload `open` and verified against the manifest's
+size and sha256, never the owner's original or any host path. The request names the file
+by its manifest leaf and an opaque `ouroboros-task-input:<task>/<relpath>` source. Byte
+acceptance is not parsing, OCR or understanding; the route's own `attachmentInputs`
+(MIME, size, count) decide admission, and a missing keyed-import catalog descriptor
+(`POST /v2/uploads/imports`), an unknown handshake `storeId` or a non-admitting route refuses
+the start typed before any import or run. The canonical body then carries `attachments:
+[{resourceId}]`; `retry_of` replays it and never reselects files.
+
+Identity is one current host-minted random key per input, bound to the engine store it was
+minted in: written with that store id, the input's manifest identity and the exact request
+(including `expectedStoreId`) to the task's custody marks before any network call; a
+possibly-sent mark precedes the first full declaration. Every later attempt, another run
+included, replays lookup-only first, before any source read; the answer's `storeId`, bound
+digest, kind, MIME and name must equal the recorded ones. An answer naming another store or
+other bytes refuses as such; one too malformed to compare leaves the outcome unknown, so a
+later start replays the same key. A default start never changes
+store: an intent or inherited receipt bound to another store refuses typed
+(`document_import_store_mismatch`) before any source read or import call, keeping its key.
+A lookup 404 is a retained-binding gap and a cancelled, conflicting or content-rejected key
+is finished: all refuse typed and never mint a key on their own. `attachment_import='new'`
+is the explicit decision to begin another import in the serving store (another resource may
+result); one new key per invocation, kept across a restarted host first start; earlier
+records stay on the marks row and in the chain. A child's copied rows carry the parent's
+ready receipts (`engine_imports`, kept only when their request declares exactly the row's
+bytes, kind, MIME and name), so the child replays the parent's key and reuses its
+resourceId. Every schedule that copies a staged non-image input therefore reads the parent's
+custody marks once, whether or not it selects anything, and refuses typed
+(`document_import_custody_unavailable`) before the child exists when they cannot be read,
+rather than letting a copy mint a fresh import; copies of images alone read nothing.
+Scheduling still copies each inherited input's retained staged copy, so a gone copy refuses
+the schedule (`SUBTASK_ATTACHMENT_ERROR`) even when its ready receipt could serve the child;
+only a direct `delegate_start` replays a ready receipt without that copy. Continuations
+inherit no documents: a successor selects again. New stagings get the same Markdown and
+DOCX labels on every interpreter; rows recorded earlier with an unprovable MIME (for example
+Markdown staged as `application/octet-stream`) keep their label and refuse on routes that do
+not declare it.
+
 ## 4. Compatibility floors and applied evidence
 
 The constants in `ouroboros/config.py` answer request-compatibility questions:
