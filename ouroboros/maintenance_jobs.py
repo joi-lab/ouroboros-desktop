@@ -11,7 +11,8 @@ maintenance child and the tests read the same rows.
 
 Row fields are the job's own; the ones every job keeps are ``state`` (one of ``STATES``),
 ``updated_at`` and, while it advances, ``cursor``/``done``/``total`` (``total`` is
-``None`` when the job cannot know its denominator), plus ``error`` for a failed run. A job
+``None`` when the job cannot know its denominator), plus ``error`` for a failed run and ``last_error``
+``{class, at}`` while its last run threw (``maintenance.run``: the state is left as it was). A job
 that cannot proceed records ``failed`` with its reason and the inputs it waits on; it is
 retried when those inputs change, never by an elapsed-time or attempt-count rule.
 """

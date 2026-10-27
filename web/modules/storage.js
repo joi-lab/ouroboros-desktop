@@ -57,6 +57,60 @@ const PLACE_WORDS = {
 
 const words = (place) => PLACE_WORDS[place?.id] || { label: String(place?.id || ''), why: '' };
 
+// Who removes or shrinks what a place holds, and how its last pass ended (server `removers`, read fresh
+// on every answer): one plain line; unknown, unavailable and unsupported are said as such, never as zero.
+const JOB_WORDS = {
+    runtime_retirement: 'Retirement',
+    custody_trash: 'Deleting moved folders',
+    evidence_packing: 'Evidence packing',
+    record_compression: 'Compression',
+};
+const JOB_STATES = {
+    done: '{job}: done',
+    pending: '{job}: in progress',
+    running: '{job}: running',
+    failed: '{job}: failed',
+    never: '{job}: not run yet',
+    unsupported: '{job}: not supported on this system',
+    unavailable: '{job}: unknown, its record could not be read',
+};
+
+function engineLine(fact, now) {
+    const head = fmt('Removed by engine retention');
+    if (fact.state === 'none') return `${head} · ${fmt('no pass yet')}`;
+    if (fact.state === 'unsupported') return `${head} · ${fmt('last pass unknown: this engine does not report it')}`;
+    if (!['completed', 'held', 'truncated', 'failed'].includes(fact.state)) return `${head} · ${fmt('last pass unknown: the engine is not answering')}`;
+    const when = whenLabel(fact.at, now);
+    const parts = [head, fact.state === 'failed' ? fmt('last pass {when} failed', { when })
+        : fact.state === 'truncated' ? fmt('last pass {when} stopped early', { when }) : fmt('last pass {when}', { when })];
+    if (isSize(fact.freed_bytes)) parts.push(fmt('{size} freed', { size: formatBytes(fact.freed_bytes) }));
+    if (fact.held > 0) {
+        parts.push(fact.held_since ? fmt('holding {n} folders since {when}', { n: number(fact.held), when: whenLabel(fact.held_since, now) })
+            : fmt('holding {n} folders', { n: number(fact.held) }));
+    }
+    if (fact.errors > 0) parts.push(plural(fact.errors, '{n} error', '{count} errors'));
+    return parts.join(' · ');
+}
+
+function jobPhrase(fact, now) {
+    const job = fmt(JOB_WORDS[fact.id] || String(fact.id));
+    if (fact.last_error) {
+        return fmt('{job}: stopped by an error ({error}, {when})', { job, error: fact.last_error.class, when: whenLabel(fact.last_error.at, now) });
+    }
+    if (fact.id === 'record_compression' && fact.state !== 'unsupported' && fact.compressed > 0) {
+        const files = plural(fact.compressed, '{n} file compressed', '{count} files compressed');
+        return isSize(fact.saved_bytes) ? fmt('{job}: {files}, {size} saved', { job, files, size: formatBytes(fact.saved_bytes) })
+            : fmt('{job}: {files}', { job, files });
+    }
+    return fmt(JOB_STATES[fact.state] || '{job}: {state}', { job, state: String(fact.state || '') });
+}
+
+/** One place's removers as one line ('' when nothing removes it). */
+export function removerLine(removers, now = new Date()) {
+    const facts = Array.isArray(removers) ? removers.filter((fact) => fact && fact.id) : [];
+    return facts.map((fact) => (fact.id === 'engine' ? engineLine(fact, now) : jobPhrase(fact, now))).join(' · ');
+}
+
 function engineSplit(place) {
     const part = (name) => place.parts.find((row) => row.name === name)?.bytes || 0;
     const history = part('projects');
@@ -68,9 +122,10 @@ function engineSplit(place) {
     ].join(' · ');
 }
 
-/** The count's places as rows in server order (absent places omitted), each with its words, growth and
- *  the parts its disclosure lists. `days` is the server's retention for the two temporary rows. */
-export function placeRows(count, days = 7) {
+/** The count's places as rows in server order (absent places omitted), each with its words, growth, its
+ *  removers' line (`removers`: the server's per-place facts) and the parts its disclosure lists. `days` is
+ *  the server's retention for the two temporary rows. */
+export function placeRows(count, days = 7, removers = {}, now = new Date()) {
     return (Array.isArray(count?.places) ? count.places : []).filter((place) => place && place.present !== false).map((place) => {
         const said = words(place);
         const parts = Array.isArray(place.parts) ? place.parts : [];
@@ -85,6 +140,7 @@ export function placeRows(count, days = 7) {
             caveat: place.growth_flag === 'unreadable',
             otherDisk: place.same_volume === false,
             split: said.split && parts.length ? engineSplit({ ...place, parts }) : '',
+            remover: removerLine(removers?.[place.id], now),
             parts: said.parts ? parts.filter((row) => isSize(row?.bytes)) : [],
             rest: said.parts && place.rest && place.rest.count > 0 ? place.rest : null,
         };
@@ -248,10 +304,13 @@ function partsHtml(row) {
         </details>`;
 }
 
+const removerHtml = (row) => (row.remover
+    ? `<span class="storage-place-remover" data-i18n-fmt="storage.remover">${text(row.remover)}</span>` : '');
+
 function memberHtml(row) {
     return `<li class="storage-place is-member" data-storage-place="${attr(row.id)}">
             <span class="storage-place-label">${text(row.label)}</span>${sizeCells(row)}
-            ${whyLine(row)}
+            ${whyLine(row)}${removerHtml(row)}
             ${row.split ? `<span class="storage-place-split" data-i18n-fmt="storage.split">${text(row.split)}</span>` : ''}
             ${partsHtml(row)}
         </li>`;
@@ -264,7 +323,7 @@ function groupHtml(group) {
     if (group.members.length === 1) {
         const row = group.members[0];
         return `<li class="storage-group" data-storage-group="${attr(group.id)}" data-storage-place="${attr(row.id)}">${head}
-            <div class="storage-group-body">${whyLine(row)}
+            <div class="storage-group-body">${whyLine(row)}${removerHtml(row)}
             ${row.split ? `<span class="storage-place-split" data-i18n-fmt="storage.split">${text(row.split)}</span>` : ''}
             ${partsHtml(row)}</div></li>`;
     }
@@ -272,7 +331,7 @@ function groupHtml(group) {
         <ul class="storage-group-places">${group.members.map(memberHtml).join('')}</ul></li>`;
 }
 
-function placesHtml(response) {
+function placesHtml(response, now) {
     const count = response?.count;
     if (!count) return '';
     const days = response.retention_days ?? 7;
@@ -281,7 +340,7 @@ function placesHtml(response) {
     const segments = barSegments(count, days).map((segment) => `<span class="storage-bar-seg" data-group="${attr(segment.group)}" data-share="${segment.share}"></span>`);
     const bar = segments.length ? `<div class="storage-bar" role="img" aria-label="Share of each group; sizes are listed below">${segments.join('')}</div>` : '';
     return `<h3 class="storage-card-title">Where it is</h3>${bar}
-        <ul class="storage-groups">${groupRows(placeRows(count, days)).map(groupHtml).join('')}</ul>`;
+        <ul class="storage-groups">${groupRows(placeRows(count, days, response.removers, now)).map(groupHtml).join('')}</ul>`;
 }
 
 export const freeOf = (response) => response?.free || { state: 'idle', groups: [], run: null, error: null, done: 0, total: 0 };
@@ -297,7 +356,7 @@ export function renderStorage(response, { pending = false, readFailed = false, n
         state,
         summary: summaryHtml(response, { readFailed, now }),
         announce: announceSentence(response, { readFailed, now, tray }),
-        places: placesHtml(response),
+        places: placesHtml(response, now),
         tray: response ? trayHtml(freeOf(response), tray || { checked: new Set(), dismissed: false }, response.retention_days ?? 7) : '',
         measure: { label, busy },
         stop: Boolean(response?.counting),

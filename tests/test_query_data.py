@@ -652,14 +652,23 @@ def test_storage_kind_reads_the_saved_count_from_the_installation_root_and_refus
     table = [{"id": "model_calls", "group": "records", "roots": [(str(ctx.drive_root), ("observability",))]}]
     record = storage.measure(ctx.drive_root, places=table, sleep=lambda _s: None)
     storage.save_count(ctx.drive_root, record)
+    from ouroboros import maintenance_jobs
+    from ouroboros.storage_removers import place_removers
+
+    maintenance_jobs.record(ctx.drive_root, "runtime_retirement", state="done", last_error={"class": "OSError", "at": "T"})
     result = call(ctx, op="json", kind="storage")
-    assert result["status"] == "ok" and result["source"]["kind"] == "storage"
+    assert result["status"] == "ok" and result["source"]["kind"] == "storage" and result["reconstructed"] is True
     assert result["data"]["latest"]["finished_at"] == record["finished_at"] and result["data"]["previous"] is None
+    assert result["data"]["removers"] == place_removers(ctx.drive_root), "the facts the Storage page and the runtime fact read"
+    assert result["data"]["removers"]["app_state"][0]["last_error"] == {"class": "OSError", "at": "T"}
     assert call(ctx, op="json", kind="storage", select="latest.places[*].id")["data"] == ["model_calls"]
     monkeypatch.setattr("ouroboros.tools.query_data._child_root", lambda *_a: pytest.fail("storage must not resolve a child"))
     refused = call(ctx, op="json", kind="storage", child_task_id="second")
     assert refused["status"] == "error" and "installation-wide" in refused["message"]
     assert call(ctx, op="json", kind="storage", ids=["x"])["status"] == "error"
+    (ctx.drive_root / "state" / "storage_measurement.json").unlink()
+    uncounted = call(ctx, op="json", kind="storage")
+    assert uncounted["status"] == "ok" and set(uncounted["data"]) == {"removers"}, "the removers come before any count"
 
 
 def test_knowledge_history_lists_writes_without_bodies_from_the_installation_root(ctx, monkeypatch):

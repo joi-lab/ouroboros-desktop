@@ -54,6 +54,7 @@ except ImportError:  # pragma: no cover - CI supports Python 3.10.
     from typing_extensions import NotRequired, TypedDict  # type: ignore[assignment]
 
 from ouroboros.storage_free import StorageFree  # the tray's envelope, homed with its owner; resolved for the contract schema
+from ouroboros.storage_removers import StorageRemover  # each place's removers, homed with their reader
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ class StorageResponse(TypedDict):
     volume: StorageVolume
     retention_days: int
     free: "StorageFree"
+    removers: Dict[str, List["StorageRemover"]]  # place id -> its removers, read fresh (``storage_removers``)
     started: NotRequired[bool]
     reason: NotRequired[str]
 
@@ -650,10 +652,10 @@ class StorageCounter:
 
     def projection(self, data_root: Any, *, count_token: Optional[str] = None,
                    free: Optional[Any] = None) -> StorageResponse:
-        """Passive: the saved count with growth, the running count, the last error, fresh free space
-        and the free-space tray (``free``: a ``storage_free.FreeSpace``, the module's own by default);
-        ``count_token`` equal to the latest ``finished_at`` omits the unchanged count."""
-        from ouroboros import storage_free
+        """Passive: the saved count with growth, the running count, the last error, fresh free space,
+        the free-space tray (``free``: a ``storage_free.FreeSpace``, the module's own by default) and
+        each place's removers; ``count_token`` equal to the latest ``finished_at`` omits the unchanged count."""
+        from ouroboros import storage_free, storage_removers
 
         saved = self.saved(data_root)
         latest = with_growth(saved["latest"], saved["previous"]) if saved else None
@@ -663,6 +665,7 @@ class StorageCounter:
         response: StorageResponse = {  # type: ignore[typeddict-item]
             "counting": counting, "error": error, "volume": _volume(data_root),
             "retention_days": _retention_days(), "free": (free or storage_free.free).projection(data_root),
+            "removers": storage_removers.place_removers(data_root),
         }
         if not (latest and count_token and count_token == latest["finished_at"]):
             response["count"] = latest

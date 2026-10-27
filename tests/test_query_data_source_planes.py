@@ -159,7 +159,7 @@ def test_storage_uses_the_installation_or_native_pin_with_existing_read_authorit
     helper = _registry(ctx)
     assert _read_admitted(helper, target)
     status, result = _query(helper, op="json", kind="storage")
-    assert status == "ok" and result["data"] == {"plane": "installation"}
+    assert status == "ok" and result["data"]["plane"] == "installation" and "removers" in result["data"]
     assert result["source"]["plane"] == "canonical"
 
     ctx.task_contract = {"resource_policy": {"protected_artifacts": [
@@ -175,10 +175,10 @@ def test_storage_uses_the_installation_or_native_pin_with_existing_read_authorit
                                   budget_drive_root=str(planes["canonical"]),
                                   task_metadata={"native_data_root": str(planes["pin"])}))
     status, result = _query(native, op="json", kind="storage")
-    assert status == "ok" and result["source"]["plane"] == "native_pin" and result["data"] == {"plane": "retained"}
+    assert status == "ok" and result["source"]["plane"] == "native_pin" and result["data"]["plane"] == "retained"
     pin.unlink()
-    status, missing = _query(native, op="json", kind="storage")
-    assert status == "unavailable" and missing["plane"] == "native_pin" and "data" not in missing
+    status, missing = _query(native, op="json", kind="storage")  # no count there: its removers alone
+    assert status == "ok" and missing["source"]["plane"] == "native_pin" and set(missing["data"]) == {"removers"}
 
 
 def test_explicit_child_queue_logs_and_sql_keep_their_local_planes(planes, monkeypatch):

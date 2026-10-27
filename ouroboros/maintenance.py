@@ -371,6 +371,20 @@ def run_job(root: Any, name: str, *, should_stop: Optional[Callable[[], bool]] =
     return run_one(root, should_stop or (lambda: False))
 
 
+def _last_error(root: pathlib.Path, name: str, exc: Optional[BaseException]) -> None:
+    """A job that threw keeps its ``state`` (several due rules read it: a transient exception must not
+    park a resumable job) and gains ``last_error`` ``{class, at}``; its next normal return clears it.
+    The facts stay readable beside the place the job serves (``storage_removers``)."""
+    try:
+        if exc is not None:
+            maintenance_jobs.record(root, name, last_error={"class": type(exc).__name__, "at": _now()})
+        elif "last_error" in (maintenance_jobs.job(root, name) or {}):
+            with store.open_store(root, write=True) as txn:
+                maintenance_jobs.forget_in(txn, name, "last_error")
+    except Exception:
+        log.debug("Maintenance job %s outcome not recorded", name, exc_info=True)
+
+
 def run(root: Any, *, should_stop: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
     """The child's pass: every due job in order; one job's failure never skips the next."""
     root, stop = pathlib.Path(root), should_stop or (lambda: False)
@@ -384,7 +398,11 @@ def run(root: Any, *, should_stop: Optional[Callable[[], bool]] = None) -> Dict[
             if not _contention(exc):
                 log.warning("Maintenance job %s failed", name, exc_info=True)
                 report["status"] = "failed"
+                _last_error(root, name, exc)
             outcome = {"state": "pending" if _contention(exc) else "failed", "items": 0}
+        else:
+            if outcome is not None:
+                _last_error(root, name, None)
         if outcome is not None:
             report["jobs"][name] = {"state": str(outcome.get("state") or "unknown"),
                                     "items": int(outcome.get("items") or 0)}
