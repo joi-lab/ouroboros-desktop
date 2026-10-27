@@ -603,6 +603,11 @@ def _task_from_schedule(record: Dict[str, Any], *, task_id: str = "") -> Dict[st
     for key in ("attachments", "context", "expected_output", "constraints", "deadline_at", "project_id"):
         if key in template:
             task[key] = template[key]
+    # The schedule's name is the run's authored name, as a caller's title is for any admitted run;
+    # an unnamed schedule's run is named by its request's first line (project_naming.admission_names).
+    from ouroboros.project_naming import admission_names
+    title, coined = admission_names({"title": record.get("name")}, task["description"])
+    task.update({key: value for key, value in (("title", title), ("suggested_name", coined)) if value})
     from ouroboros.settings_scales import EFFORT_SCALE
 
     # The explicit start the upsert checked; a hand-edited unknown tier keeps the default.

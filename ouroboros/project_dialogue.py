@@ -549,12 +549,12 @@ def routing_target_label(
     if not target:
         return ""
     try:
+        from ouroboros.project_facts import project_display_name
         from ouroboros.projects_registry import get_reserved_project, task_presentation_snapshot
 
         if action == "project_route":
             project = get_reserved_project(drive_root, target) or {}
-            name = str(project.get("name") or "").strip()
-            return name if name and name != target else "Project"
+            return project_display_name(project.get("name"), target) or "Project"
         return task_presentation_snapshot(
             drive_root, target, task=task, project_id=project_id,
         )["target_label"]
