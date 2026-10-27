@@ -153,8 +153,13 @@ def maybe_append_skill_snapshots(ctx, messages, drive_root) -> bool:
                    {"skill": name, "revision": prior.get("revision", ""),
                     "state": "unknown", "reason": "publisher_not_live"})
         shown = [(index, key, text) for key, (index, text) in bases.items() if key[0] == name]
-        if prior.get("state") in _INVALIDATED and (shown or current["state"] != "fresh"):
-            continue  # the note in view covers every later change, expiry and recovery until the next rebuild
+        eligible = bool(descriptor and descriptor.get("eligible"))
+        # The note in view covers every later change, expiry and recovery until the next rebuild. A note
+        # without the reader (an older body's, or a withdrawal) yields once to one that names it, when there is
+        # a current text to read.
+        if prior.get("state") in _INVALIDATED and (shown or current["state"] != "fresh") and (
+                "current_text" in prior or not (shown and eligible)):
+            continue
         reader = f'query_data(op="json", kind="skill_state", ids=["{name}"], state_file="context_snapshot")'
         if current["state"] == "fresh" and shown:
             _index, (_name, base_revision, _source, _sha), base_text = max(shown, key=lambda row: row[0])
@@ -168,7 +173,7 @@ def maybe_append_skill_snapshots(ctx, messages, drive_root) -> bool:
             current = {"skill": name, "revision": current["revision"], "state": "outdated",
                        "since": datetime.fromtimestamp(now, timezone.utc).isoformat(),
                        "reason": "validity_ended" if unchanged else "text_changed", "current_text": reader}
-        elif shown:
+        elif shown and eligible:
             current["current_text"] = reader  # the full text above is no longer dated
         if "_raw" in current:
             from ouroboros.observability import write_blob

@@ -210,6 +210,9 @@ def test_a_namespace_listing_is_complete_with_the_server_facts(registry):
     assert " ".join(GITLAB[2]["description"].split()) in listing  # uncut
     overview = registry.execute("list_available_tools", {})
     assert "- mcp_gitlab: 2 tools, 0 loaded" in overview
+    # Built-in purposes stay bounded there: their complete text arrives with the loaded schema.
+    builtin = registry.execute("list_available_tools", {"namespace": "builtin"})
+    assert "…" in builtin and "…" not in listing
 
 
 @pytest.mark.parametrize("profile", ["local_readonly_subagent", "acting_subagent"])

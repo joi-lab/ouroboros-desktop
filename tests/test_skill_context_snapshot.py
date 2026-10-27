@@ -205,7 +205,30 @@ def test_readiness_revocation_withdraws_once_without_rehashing(publisher, monkey
     assert maybe_append_skill_snapshots(ctx, messages, root)
     current = visible_snapshots(messages)[skill.name][1]
     assert current["state"] == "unknown" and "text" not in current
+    assert "current_text" not in current  # a withdrawal names no reader that would refuse
     assert not maybe_append_skill_snapshots(ctx, messages, root)
+
+
+def test_an_older_bodys_withdrawal_yields_once_to_a_note_that_names_the_reader(publisher):
+    from ouroboros.context_budget import bound_host_row
+    from ouroboros.skill_context_snapshot import _RENEWAL_SNAPSHOT_HEADER
+
+    root, skill, ctx, path = publisher
+    messages = []
+    _write(path)
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    base = visible_snapshots(messages)[skill.name][1]
+    older = {"skill": skill.name, "revision": base["revision"], "state": "unknown", "reason": "snapshot_missing"}
+    messages.append(bound_host_row(SNAPSHOT_KIND, _RENEWAL_SNAPSHOT_HEADER + "\n" + json.dumps(older)))
+    assert maybe_append_skill_snapshots(ctx, messages, root)  # readable again: one note names where to read it
+    assert 'state_file="context_snapshot"' in visible_snapshots(messages)[skill.name][1]["current_text"]
+    expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    for text in ("B", "C", "D"):
+        _write(path, valid=expired)
+        maybe_append_skill_snapshots(ctx, messages, root)
+        _write(path, text)
+        maybe_append_skill_snapshots(ctx, messages, root)
+    assert len(messages) == 3
 
 
 @pytest.mark.parametrize("failure", ["expired", "future", "malformed", "oversized", "missing", "symlink"])
