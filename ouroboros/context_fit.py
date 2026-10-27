@@ -334,15 +334,15 @@ def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, 
         development_text=core.development_md,
         books=core.reference_books,
     )
-    static_parts.extend(sections)
-    static_parts.extend(core.reference_book_errors)
+    static_parts.extend([*sections, *core.reference_book_errors])
     return ("\n\n".join(static_parts), development)
 
 
 def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "") -> List[Dict[str, Any]]:
-    # All stable items precede C, including D only when the captured core calls
-    # for the full handbook. Never create an empty cache boundary.
-    stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, story) if part))
+    # All stable items precede C; D is its own block only for the full handbook: Max without it carries the
+    # handbook's chapter map at the head of B, spending no breakpoint. Never create an empty cache boundary.
+    stable = (governance[0], *(governance[1:] if core.docs_need_development else ()), "\n\n".join(part for part in (
+        *(() if core.docs_need_development else governance[1:]), core.semi_stable_text, story) if part))
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [
         {"type": "text", "text": "\n\n".join(part for part in (core.dynamic_head_text, room, core.dynamic_text) if part)},

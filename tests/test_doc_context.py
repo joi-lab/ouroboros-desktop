@@ -64,6 +64,17 @@ def _make_env_and_memory(tmpdir: pathlib.Path):
     return env, memory
 
 
+def foreign_tree(path: pathlib.Path) -> pathlib.Path:
+    """A git tree whose only remote is someone else's repository: body_fact proves it foreign."""
+    import subprocess
+
+    path.mkdir(parents=True, exist_ok=True)
+    if not (path / ".git").exists():
+        for args in (("init", "-q"), ("remote", "add", "origin", "https://github.com/someone/elsewhere.git")):
+            subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+    return path
+
+
 def _build_system_text(task_overrides=None, *, context_mode="max"):
     from ouroboros.context import build_llm_messages
     tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -382,9 +393,9 @@ def test_max_mode_external_workspace_keeps_arch_full_but_drops_development():
     )
     assert "## ARCHITECTURE.md" in external
     assert _ARCH_BODY_SENTINEL in external  # capability map stays resident
-    assert "navigation map" not in external
-    assert "## DEVELOPMENT.md" not in external  # handbook is the pointer
-    assert "DEVELOPMENT.md" in external  # ...but visibly named (P1)
+    assert "## ARCHITECTURE.md (navigation map)" not in external
+    assert "## DEVELOPMENT.md\n\n" not in external  # the handbook is not inlined...
+    assert "## DEVELOPMENT.md (navigation map)" in external  # ...its chapter map is (6A, P1's visible pointer)
 
     self_body = _build_system_text(
         {
@@ -457,8 +468,7 @@ def test_promoted_self_body_requirement_reaches_the_contract_and_context_without
     development_body = "# DEVELOPMENT.md — Dev Guide\n\n## Review\n\nRead every source before committing.\n"
     (env.repo_dir / "docs" / "DEVELOPMENT.md").write_text(development_body, encoding="utf-8", newline="\n")
     memory = Memory(host.root, repo_dir=env.repo_dir)
-    workspace = tmp_path / "working-copy"
-    workspace.mkdir()
+    workspace = foreign_tree(tmp_path / "working-copy")  # proven foreign: the flag alone decides the handbook
     project = create_project(host.root, "code-copy", name="Code Copy")
     entry = next(tool for tool in get_tools() if tool.name == "start_task")
     field = "context_requires_self_body_docs"
@@ -467,7 +477,8 @@ def test_promoted_self_body_requirement_reaches_the_contract_and_context_without
     assert field not in parameters["required"]
     description = parameters["properties"][field]["description"]
     assert "Ouroboros code" in description and "copies elsewhere" in description
-    assert "context_requires_development" not in parameters["properties"]
+    explicit = parameters["properties"]["context_requires_development"]  # absent is not false (6A)
+    assert explicit["type"] == "boolean" and "default" not in explicit and "context_requires_development" not in parameters["required"]
     events = []
 
     def emit(event):
@@ -550,13 +561,20 @@ def test_development_keys_on_the_repo_binding_not_project_membership():
     (D-ARCH): full in max for every class, navigation map in low."""
     # A project task with a BOUND workspace (this is what a promoted project task
     # is since Q10=A auto-provisions a genesis tree) works on ANOTHER codebase.
+    foreign = str(foreign_tree(pathlib.Path(tempfile.mkdtemp()) / "proj-tree"))
     folder_max = _build_system_text(
-        {"project_id": "proj_sub", "workspace_root": "/tmp/proj-tree", "workspace_mode": "external"},
+        {"project_id": "proj_sub", "workspace_root": foreign, "workspace_mode": "external"},
         context_mode="max",
     )
     assert _ARCH_BODY_SENTINEL in folder_max  # ARCH full in max, always
-    assert "## DEVELOPMENT.md" not in folder_max
-    assert "DEVELOPMENT.md" in folder_max  # named in the on-demand pointer
+    assert "## DEVELOPMENT.md\n\n" not in folder_max
+    assert "## DEVELOPMENT.md (navigation map)" in folder_max  # its chapter map stands in (6A)
+    # A bound tree whose body fact is unknown (no git here) keeps the book: missing facts never narrow it (6A).
+    unknown_max = _build_system_text(
+        {"project_id": "proj_sub", "workspace_root": "/tmp/proj-tree-unknown", "workspace_mode": "external"},
+        context_mode="max",
+    )
+    assert "## DEVELOPMENT.md\n\n" in unknown_max
 
     # A direct-chat turn in a PROJECT ROOM binds no workspace: still Ouroboros's
     # own body, so it KEEPS the handbook. This is the case the project_id-keyed
@@ -605,7 +623,7 @@ def test_development_keys_on_the_repo_binding_not_project_membership():
     explicit_off = _build_system_text(
         {"project_id": "proj_sub", "context_requires_development": False}, context_mode="max"
     )
-    assert "## DEVELOPMENT.md" not in explicit_off
+    assert "## DEVELOPMENT.md\n\n" not in explicit_off and "## DEVELOPMENT.md (navigation map)" in explicit_off
 
 
 def test_readme_and_checklists_are_on_demand_pointer_in_both_modes():
