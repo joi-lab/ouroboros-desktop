@@ -111,8 +111,9 @@ def test_git_catalog_schema_bytes_and_handler_owners_are_stable():
     # full_tests distinguishes local adoption from full-only publication consumers;
     # S3 collection permits omitted commit_message; S5 adds author doctrine; D4 adds wake_on.
     # Target merge retains the contributor tool affordances and target review/mail contracts.
+    # Mechanical revert names effective mode/task or managed-update authority, without fresh review.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "ee67d7c420ee8516363d0e01b6a7bbadcf83f6438deb5d11f9425289f7b8af66"
+        "6865d432fa0ac00af83d27322f356e4ef0e6636e7f9c9c3a8783de7845fe206e"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

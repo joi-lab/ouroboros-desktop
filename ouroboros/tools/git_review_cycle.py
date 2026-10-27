@@ -682,7 +682,11 @@ def _reviewed_stage_cycle(
         preflight = bind_author_commit_candidate(ctx, commit_message, pre_fingerprint)
         if preflight:
             from ouroboros.commit_admission import preflight_evidence_unavailable
-            return {"status": "blocked", "message": preflight, "block_reason": "infra_failure" if preflight_evidence_unavailable(preflight) else "preflight"}
+            from ouroboros.tools.review import _handle_review_block_or_warning
+
+            ctx._last_review_block_reason = "infra_failure" if preflight_evidence_unavailable(preflight) else "preflight"
+            if refusal := _handle_review_block_or_warning(ctx, True, preflight, ""):
+                return {"status": "blocked", "message": refusal, "block_reason": ctx._last_review_block_reason}
         advisory_replay = {"advisory_replay": "Explicit current-author continuation; original reviewer facts retained.", "replay_reason": "author_finish"}
     if gate_outcome is not None:
         if "advisory_replay" in gate_outcome:
@@ -736,7 +740,7 @@ def _reviewed_stage_cycle(
             skip_advisory_pre_review=skip_advisory_pre_review,
             skip_tests=skip_tests,
             review_rebuttal=review_rebuttal,
-            goal=goal, scope=scope,
+            goal=goal, scope=scope, review_only=review_only,
         )
     if preflight_gate_outcome is not None:
         _release_review_evidence_if_settled(ctx)

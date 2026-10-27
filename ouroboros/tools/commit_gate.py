@@ -1075,11 +1075,13 @@ def _neutral_commit_allowed(ctx: ToolContext) -> bool:
     return body_candidate.is_bound(ctx) or _authorized_managed_update_resolver(ctx)
 
 
-def deterministic_preflight(ctx: ToolContext, commit_message: str, paths: Optional[List[str]]) -> str:
+def deterministic_preflight(ctx: ToolContext, commit_message: str, paths: Optional[List[str]],
+                            *, review_only: bool = False) -> str:
     """The free checks that ran ahead of the retired advisory delivery, kept whole for every
     commit: size headroom, the staged change's diff pulse (the text the panel's seats read
     first) and readiness (information and warnings), release metadata of the staged index,
-    and the syntax of staged ``.py`` files. Returns the blocking message or ""."""
+    and the syntax of staged ``.py`` files. A non-committing cycle reviews the prepared
+    contribution form too; it grants no commit authority. Returns the blocking message or ""."""
     from ouroboros.commit_admission import release_metadata_preflight, syntax_preflight_staged_py_files
     from ouroboros.review import diff_pulse
     from ouroboros.tools.review_helpers import check_worktree_readiness
@@ -1100,7 +1102,7 @@ def deterministic_preflight(ctx: ToolContext, commit_message: str, paths: Option
         except Exception:
             pass
     return (release_metadata_preflight(repo_dir, commit_message, paths, source="index",
-                                       neutral_allowed=_neutral_commit_allowed(ctx))
+                                       neutral_allowed=review_only or _neutral_commit_allowed(ctx))
             or syntax_preflight_staged_py_files(repo_dir, list(paths or [])) or "")
 
 

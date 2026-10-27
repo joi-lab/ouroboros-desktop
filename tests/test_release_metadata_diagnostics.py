@@ -733,6 +733,54 @@ def test_deleting_version_is_not_a_numbered_release(candidate, source):
     assert error and "VERSION" in error
 
 
+@pytest.mark.parametrize("mode,enforcement", [("pro", "advisory"), ("cyber_pro", "advisory"),
+                                             ("cyber_pro", "blocking")])
+@pytest.mark.parametrize("path", ["docs/notes.md", "change.py"])
+def test_author_continuation_applies_mode_without_erasing_release_finding(candidate, monkeypatch, mode, enforcement, path):
+    from ouroboros.review_state import load_state
+    from ouroboros.tools import commit_gate, git
+    from ouroboros.tools.registry import ToolContext
+
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", mode)
+    monkeypatch.setenv("OUROBOROS_REVIEW_ENFORCEMENT", enforcement)
+    monkeypatch.setattr("ouroboros.tools.review_helpers.check_worktree_readiness", lambda *a, **kw: [])
+    repo = candidate.repo_dir
+    _write(repo, {path: "Updated notes.\n" if path.endswith(".md") else "value = 2\n"})
+    _git(repo, "add", "-A")
+    ctx = ToolContext(repo_dir=repo, drive_root=candidate.drive_root, task_id=candidate.task_id,
+                      emit_progress_fn=lambda *_a: None)
+    git._reset_commit_review_state(ctx)
+    fingerprint = git._fingerprint_staged_diff(repo)["fingerprint"]
+    git._record_commit_attempt(ctx, "change", "reviewing", pre_review_fingerprint=fingerprint, paid=True)
+    git._record_commit_attempt(ctx, "change", "reviewed", phase="review_only", pre_review_fingerprint=fingerprint)
+    source = load_state(ctx.drive_root).attempts[-1]
+    reference = {"surface": "commit", **{key: getattr(source, key) for key in
+        ("repo_key", "task_id", "tool_name", "attempt", "pre_review_fingerprint")}}
+    git._reset_commit_review_state(ctx)
+    ctx._author_commit_source, ctx._author_commit_reference = source, reference
+    ctx._author_commit_decision = {"disposition": "accepted", "rationale": "I accept the recorded facts."}
+    monkeypatch.setattr(git, "_run_review_preflight_tests", lambda *a, **kw: pytest.fail("metadata refusal did not run tests"))
+    monkeypatch.setattr(git, "_run_parallel_review", lambda *a, **kw: pytest.fail("author continuation buys no panel"))
+    assert not commit_gate._neutral_commit_allowed(ctx), "Cyber changes action authority, never the release form."
+    assert "VERSION is not in scope" in commit_gate.deterministic_preflight(ctx, "change", [path])
+    head = _git(repo, "rev-parse", "HEAD")
+    outcome = git._run_reviewed_stage_cycle(ctx, "change", 0, paths=[path], require_release_tag=False)
+    if mode == "pro":
+        assert outcome["status"] == "blocked" and outcome["block_reason"] == "preflight", outcome
+        assert "VERSION is not in scope" in outcome["message"]
+    else:
+        assert outcome["status"] == "passed", outcome
+        assert ctx._commit_review_status == "author_continued"
+        assert "VERSION is not in scope" in " ".join(str(row) for row in ctx._review_advisory)
+        assert ctx._preflight_execution["status"] == "not_run"
+        assert "VERSION is not in scope" in ctx._preflight_execution["reason"]
+        events = [json.loads(line) for line in (ctx.drive_logs() / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert any(row.get("type") == "review_advisory_override" and row.get("decision_authority") == "cyber_pro"
+                   and row.get("block_reason") == "preflight" and "VERSION is not in scope" in row["message_head"]
+                   for row in events)
+    assert _git(repo, "rev-parse", "HEAD") == head, "A stage cycle authorizes; it does not itself commit."
+
+
 @pytest.mark.parametrize("consumer", ["commit", "author_continuation"])
 def test_managed_update_keeps_official_version_under_strict_resolver_authority(candidate, monkeypatch, consumer):
     from ouroboros.tools import commit_gate

@@ -90,8 +90,8 @@ def _preflight_review_params() -> Dict[str, Any]:
                             items={"type": "string"}),
             "deterministic_only": _param("boolean", "Free release diagnostics and worktree book balance before "
                                                     "buying review; no reviewer, staging, tests or record; requires source.", default=False),
-            "source": _param("string", "Release metadata: worktree reads current files; index reads staged blobs. "
-                                      "Book balance is separately labelled worktree.",
+            "source": _param("string", "Release metadata: worktree reads current files; index reads staged blobs and admits neutral contributions. "
+                                      "Ordinary serving commits still require a numbered release. Book balance is labelled worktree.",
                              enum=["worktree", "index"]),
         },
         "required": [],
