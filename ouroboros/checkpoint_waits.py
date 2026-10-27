@@ -52,20 +52,22 @@ def fold_line(kind: str, episodes: Dict[str, Tuple[bool, Optional[float]]]) -> s
 
 
 def fold_progress(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Progress rows, oldest first, with each run of consecutive wait rows of one kind as one
-    entry (the run's first ``ts``, ``host_waits`` set); every other row passes unchanged."""
+    """Progress rows, oldest first, with each run of consecutive wait rows as one entry (the run's
+    first ``ts``, ``host_waits`` set; one clause per kind, so alternating kinds stay one line);
+    every other row passes unchanged."""
     folded: List[Dict[str, Any]] = []
-    kind, episodes = None, {}
+    run: Optional[Dict[str, Dict[str, Tuple[bool, Optional[float]]]]] = None
     for entry in entries:
         wait = wait_episode(entry)
         if wait is None:
             folded.append(entry)
-            kind = None
+            run = None
             continue
-        if wait[0] != kind:
-            kind, episodes = wait[0], {}
+        if run is None:
+            run = {}
             folded.append({"ts": entry.get("ts", ""), "host_waits": True})
+        episodes = run.setdefault(wait[0], {})
         seen_ended, seen_elapsed = episodes.get(wait[1], (False, None))
         episodes[wait[1]] = (seen_ended or wait[2], wait[3] if wait[2] else seen_elapsed)
-        folded[-1]["text"] = fold_line(kind, episodes)
+        folded[-1]["text"] = "; ".join(fold_line(kind, kinds) for kind, kinds in run.items())
     return folded

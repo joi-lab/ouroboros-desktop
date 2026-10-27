@@ -25,8 +25,8 @@ export function mergeHistoricalTimelineItem(record, summary, row, ts) {
     const identity = String(row?.history_id || '');
     if (!identity) return false;
     if (summary.waitEpisode) {  // the same one row per wait kind as live
-        const { changed, index } = foldWaitRow(record, summary, { ts, sourceTs: row.ts || '' });
-        if (index === -1) sortBySource(record);
+        const { changed, index, moved } = foldWaitRow(record, summary, { ts, sourceTs: row.ts || '', earliest: true });
+        if (index === -1 || moved) sortBySource(record);
         return changed;
     }
     // A child's lifecycle is one evolving status, just as it is live. Its

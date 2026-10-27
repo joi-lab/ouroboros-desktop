@@ -8,12 +8,15 @@ reads past them instead of filling up with them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
+from types import SimpleNamespace
 
 from ouroboros import dialogue_store as ds
 from ouroboros.checkpoint_waits import fold_progress, wait_episode
 from ouroboros.context import build_recent_sections
+from ouroboros.gateway.history import make_chat_history_endpoint
 from ouroboros.gateway.history_paging import progress_quota_predicate
 from ouroboros.memory import Memory
 
@@ -49,7 +52,14 @@ def test_only_typed_wait_episodes_fold():
                   note("Waiting for accounting access"), None):
         assert wait_episode(other) is None
     rows = [note("a"), wait("w", "entered"), {**wait("c", "ended", kind="control_store_wait")}, note("b")]
-    assert [entry.get("host_waits", False) for entry in fold_progress(rows)] == [False, True, True, False]
+    assert [entry.get("host_waits", False) for entry in fold_progress(rows)] == [False, True, False]
+
+
+def test_alternating_wait_kinds_stay_one_line_per_run():
+    rows = [wait(f"{kind[0]}{i}", phase, kind=kind) for i in range(3)
+            for kind in ("usage_lock_wait", "control_store_wait") for phase in ("entered", "ended")]
+    assert [entry["text"] for entry in fold_progress([note("a"), *rows, note("b")])[1:-1]] == [
+        "Accounting waits ×3 · longest 0.4 s; Control storage waits ×3 · longest 0.4 s"]
 
 
 def test_a_run_of_waits_is_one_line_and_never_spends_the_progress_limit():
@@ -97,3 +107,32 @@ def test_a_history_page_reads_past_wait_rows_without_counting_them():
     assert counts({**note("a step"), "chat_id": 1})
     assert not counts({**wait("w", "entered"), "chat_id": 1}) and not counts({**wait("w", "ended"), "chat_id": 1})
     assert counts({**wait("w", "ended"), "episode_id": "", "chat_id": 1})  # an untyped row still counts
+
+
+def _room_page(root, notes, waits, n_progress):
+    """Main's opening page over ``notes`` own rows followed by ``waits`` wait episodes."""
+    logs = root / "logs"
+    logs.mkdir()
+    (logs / "chat.jsonl").write_text("", encoding="utf-8")
+    rows = [{**note(f"note {i}"), "chat_id": 1, "role": "assistant", "narration": True} for i in range(notes)]
+    rows += [{**wait(f"w{i}", phase), "chat_id": 1} for i in range(waits) for phase in ("entered", "ended")]
+    for index, row in enumerate(rows):
+        row["ts"] = f"2026-10-27T13:{index // 60:02d}:{index % 60:02d}+00:00"
+    (logs / "progress.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    endpoint = make_chat_history_endpoint(root)
+    response = asyncio.run(endpoint(SimpleNamespace(query_params={"n_progress": str(n_progress)})))
+    page = json.loads(response.body.decode("utf-8"))
+    own = [m.get("text") for m in page["messages"] if m.get("task_id") == "task-a" and "episode_id" not in m]
+    return own, sum("episode_id" in m for m in page["messages"]), page["window"]
+
+
+def test_a_room_page_keeps_the_tasks_note_beside_a_burst_of_waits(tmp_path):
+    own, waits, window = _room_page(tmp_path, notes=1, waits=40, n_progress=60)
+    assert own == ["note 0"] and waits == 80
+    assert window == {"complete": True, "truncated_by": []}
+
+
+def test_a_room_page_still_discloses_own_rows_cut_by_its_quota(tmp_path):
+    own, waits, window = _room_page(tmp_path, notes=70, waits=5, n_progress=60)
+    assert own == [f"note {i}" for i in range(10, 70)] and waits == 10
+    assert window["complete"] is False and "quota" in window["truncated_by"]

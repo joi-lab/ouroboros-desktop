@@ -60,8 +60,9 @@ export function waitFoldLine(kind, episodes) {
 
 /** All of a block's episodes of one kind are ONE receipt row (it never makes a block on its own):
  *  live while an episode is open, then the count and the longest closed one, as measured. Live
- *  frames and history replay land in the same row; an episode seen twice counts once. */
-export function foldWaitRow(record, summary, { ts = '', sourceTs = '' } = {}) {
+ *  frames and history replay land in the same row; an episode seen twice counts once. ``earliest``
+ *  (replay) moves the row to an older episode a later-loaded page brings, where live placed it. */
+export function foldWaitRow(record, summary, { ts = '', sourceTs = '', earliest = false } = {}) {
     const { kind, id, ended, elapsed } = summary.waitEpisode;
     const folds = record.waitFolds || (record.waitFolds = {});
     const episodes = folds[kind] || (folds[kind] = new Map());
@@ -72,14 +73,15 @@ export function foldWaitRow(record, summary, { ts = '', sourceTs = '' } = {}) {
     const index = record.items.findIndex((item) => item.dedupeKey === summary.dedupeKey);
     if (index !== -1) {
         const item = record.items[index];
-        if (item.headline === headline && item.phase === phase) return { changed: false, index };
-        Object.assign(item, { headline, fullHeadline: headline, phase });
-        return { changed: true, index };
+        const moved = earliest && Date.parse(sourceTs) < Date.parse(item.sourceTs);
+        if (item.headline === headline && item.phase === phase && !moved) return { changed: false, index, moved };
+        Object.assign(item, { headline, fullHeadline: headline, phase }, moved ? { ts, sourceTs } : {});
+        return { changed: true, index, moved };
     }
     record.items.push({ phase, headline, fullHeadline: headline, body: '', fullBody: '', fullRef: '', truncated: false,
         evidenceRef: null, receipt: true, ts, sourceTs, count: 1, dedupeKey: summary.dedupeKey,
         lineKey: `wait-${String(summary.dedupeKey).replace(/[^A-Za-z0-9_-]/g, '-')}` });
-    return { changed: true, index: -1 };
+    return { changed: true, index: -1, moved: false };
 }
 
 // What a cost crossing measured (the producer's typed `budget_axis`). A row without one comes

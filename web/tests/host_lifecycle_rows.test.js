@@ -130,6 +130,41 @@ test('#1073 the worker readiness frames render their own fields in Logs', () => 
 });
 
 
+test('a paged reload and a reconnect place the folded wait row where live did', () => {
+    // The newest history page arrives first; an older page brings an earlier episode of the same row.
+    const at = (sec) => `2026-10-27T10:00:${String(sec).padStart(2, '0')}Z`;
+    const wait = (episode_id, phase, sec, elapsed_sec) => ({ type: 'task_checkpoint', task_id: 't1',
+        checkpoint_kind: 'usage_lock_wait', episode_id, phase, elapsed_sec, ts: at(sec) });
+    const note = (text, sec) => ({ note: true, text, ts: at(sec) });
+    const rows = [note('note1', 1), wait('A', 'entered', 2, 0), wait('A', 'ended', 3, 0.4), note('note2', 4),
+        wait('B', 'entered', 5, 0), wait('B', 'ended', 6, 0.7), note('note3', 7)];
+    const summaryOf = (row) => (row.note
+        ? { phase: 'thinking', headline: row.text, body: '', visible: true, dedupeKey: `progress|${row.text}`, human: true }
+        : summarizeChatLiveEvent(row));
+    const live = (part, record = { items: [] }) => {
+        for (const row of part) {
+            const summary = summaryOf(row);
+            updateLiveTimelineItem(record, summary, { ts: row.ts, rawTs: row.ts, syntheticKey: summary.dedupeKey,
+                headline: summary.headline, inPlaceByKey: false });
+        }
+        return record;
+    };
+    const replay = (part, record = { items: [] }) => {
+        for (const row of part) {
+            const index = rows.indexOf(row);
+            mergeHistoricalTimelineItem(record, summaryOf(row), { ...row, history_id: `progress:${index}`,
+                history_position: { source: 'progress', offset: index } }, row.ts);
+        }
+        return record;
+    };
+    const view = (record) => record.items.map((item) => `${item.sourceTs.slice(17, 19)} ${item.headline}`);
+    const expected = view(live(rows));
+    assert.deepEqual(expected, ['01 note1', '02 Accounting waits ×2 · longest 0.7 s', '04 note2', '07 note3']);
+    assert.deepEqual(view(replay(rows)), expected);
+    assert.deepEqual(view(replay(rows.slice(0, 3), replay(rows.slice(3)))), expected, 'paged reload');
+    assert.deepEqual(view(replay(rows, live(rows.slice(4, 6)))), expected, 'reconnect');
+});
+
 test('host wait folds word the shared Python/browser cases', () => {
     const { cases } = JSON.parse(readFileSync(new URL('./fixtures/wait_fold_parity.json', import.meta.url), 'utf8'));
     for (const { kind, rows, line } of cases) {
