@@ -645,6 +645,7 @@ class _TaskEventCursorFollower(_TaskEventFollower):
         """
         for notice in self.take_notices():
             yield self.envelope(notice, delivery=False)
+        skipped = False  # a skipped replica's position, which only a frame carries to the client
         for root in self.roots:
             for source, parts in _LOG_SOURCES:
                 if source in _DIALOGUE_SOURCES:
@@ -713,12 +714,16 @@ class _TaskEventCursorFollower(_TaskEventFollower):
                         if self.suppress_task_done and event["type"] == "task_done":
                             continue
                         if (key := replica_key(entry)) is not None:  # one per connection; a cursor resumed between
-                            if key in self.replicas:                   # the two copies' reads shows both (disclosed)
+                            if key in self.replicas:                   # the two copies' frames shows both (disclosed)
+                                skipped = True
                                 continue
                             self.replicas.add(key)
+                        skipped = False
                         yield self.envelope(event, identity=identity)
                     if position == before:
                         break
+        if skipped:  # a cut in the idle window after the pass would otherwise re-read the copy it skipped
+            yield self.envelope({"type": "cursor_checkpoint", "task_id": self.task_id}, delivery=False)
 
     def _read_dialogue_events(self, root: pathlib.Path, source: str):
         """One pass over a dialogue stream from the cursor's coordinate: the task tree's rows and
