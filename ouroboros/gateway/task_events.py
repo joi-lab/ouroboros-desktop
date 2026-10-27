@@ -712,8 +712,8 @@ class _TaskEventCursorFollower(_TaskEventFollower):
                         event.pop("line")
                         if self.suppress_task_done and event["type"] == "task_done":
                             continue
-                        if (key := replica_key(entry)) is not None:  # one per connection; a reconnect between
-                            if key in self.replicas:                   # the two appends may show both (disclosed)
+                        if (key := replica_key(entry)) is not None:  # one per connection; a cursor resumed between
+                            if key in self.replicas:                   # the two copies' reads shows both (disclosed)
                                 continue
                             self.replicas.add(key)
                         yield self.envelope(event, identity=identity)
