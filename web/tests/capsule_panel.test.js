@@ -193,7 +193,7 @@ test('a phone: a bottom sheet over a scrim; the scrim closes on its click, a swi
     assert.ok(scrim, 'a light scrim under the sheet');
     assert.deepEqual(c.doc.body.children.map((node) => node.className), ['capsule-panel-scrim', 'capsule-panel'], 'the sheet stands over its scrim');
     assert.equal(scrim.getAttribute('aria-hidden'), 'true');
-    assert.equal(c.node.style.left, undefined, 'the sheet\'s place is the stylesheet\'s: no float placement');
+    assert.equal(c.node.style.left || '', '', 'the sheet\'s place is the stylesheet\'s: no float placement');
     c.down(scrim);
     assert.equal(c.panel.isOpen(), true, 'not on the press: what lies under the scrim is never pressed');
     scrim.click();
@@ -219,6 +219,24 @@ test('a phone: a bottom sheet over a scrim; the scrim closes on its click, a swi
     c.press();
     swipe(500, 530, 10, 2000);
     assert.equal(c.panel.isOpen(), false, 'a flick goes however short');
+    c.panel.destroy();
+});
+
+test('the same panel opened as a float and then as a sheet keeps none of the float\'s geometry, and back', () => {
+    const c = capsule();
+    const geometry = () => [c.node.style.left || '', c.node.style.bottom || '', c.node.style.transformOrigin || '',
+        c.node.style.getPropertyValue('--panel-column')];
+    c.press();
+    assert.deepEqual(geometry(), ['200px', `${800 - 600 + 8}px`, '60px 100%', '600px'], 'a float stands above its capsule');
+    c.press();
+    c.media.phone = true;  // a phone turned from landscape to portrait
+    c.press();
+    assert.equal(c.node.dataset.place, 'sheet');
+    assert.deepEqual(geometry(), ['', '', '', ''], 'a sheet stands where the stylesheet puts it');
+    c.press();
+    c.media.phone = false;
+    c.press();
+    assert.deepEqual(geometry(), ['200px', `${800 - 600 + 8}px`, '60px 100%', '600px'], 'and a float is placed afresh');
     c.panel.destroy();
 });
 

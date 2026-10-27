@@ -21,7 +21,7 @@ import urllib.request
 
 import pytest
 
-from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat, _panel, _settled, _shot
+from tests.test_effort_range_browser import _at_rest, _evidence_dir, _launch, _open_chat, _panel, _settled, _shot, _wait
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
@@ -406,6 +406,43 @@ def test_one_panel_at_a_time_and_every_way_to_close_it(direct_server_with_data, 
             _until(page, "r.eff.open === 'false' && r.eff.focused === 'head' && r.panels.length === 0")
             assert not _row(page)["docScroll"]
         finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_a_panel_reopened_after_the_phone_turns_stands_where_its_new_place_is(direct_server_with_data, engine, tmp_path):  # noqa: F811
+    """Each capsule's same panel, opened in landscape (a float above the capsule) and reopened after the phone turned to
+    portrait, is a full-width sheet at the bottom: none of the float's geometry stays; and turned back, a float again."""
+    pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
+    from playwright.sync_api import sync_playwright
+
+    url = direct_server_with_data["url"]
+    landscape, portrait = {"width": 844, "height": 390}, {"width": 390, "height": 844}
+    seen = {}
+    with sync_playwright() as pw:
+        browser, page = _launch(pw, engine, viewport=landscape, is_mobile=True, has_touch=True)
+        try:
+            _open_chat(page, url, width=landscape["width"], height=landscape["height"], theme="light")
+            for kind, capsule in KINDS.items():
+                sel = f"#page-chat {capsule}"
+                for first, then, place in ((landscape, portrait, "sheet"), (portrait, landscape, "float")):
+                    page.set_viewport_size(first)
+                    _at_rest(page, sel)
+                    page.tap(f"{sel} .chat-capsule-head")
+                    _settled(page, sel)
+                    page.keyboard.press("Escape")
+                    _wait(page, "el.dataset.open === 'false'", sel)
+                    page.set_viewport_size(then)
+                    _at_rest(page, sel)
+                    page.tap(f"{sel} .chat-capsule-head")
+                    _settled(page, sel)
+                    facts = seen[f"{kind}-{place}"] = page.evaluate(PANEL, sel)
+                    _shot(page, tmp_path, f"capsules-reopened-{kind}-{place}-{engine}")
+                    _assert_panel(facts, phone=place == "sheet", theme="light")
+                    page.keyboard.press("Escape")
+                    _wait(page, "el.dataset.open === 'false'", sel)
+        finally:
+            _record(tmp_path, f"capsules-reopened-{engine}", seen)
             browser.close()
 
 

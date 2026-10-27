@@ -118,9 +118,15 @@ export function createCapsulePanel({
         if (svg) glyph.replaceChildren(svg.cloneNode(true));
     }
 
-    // Desk: above the capsule, its leading edge on the capsule's, kept inside the composer's column.
+    // Desk: above the capsule, its leading edge on the capsule's, kept inside the composer's column. A sheet stands where
+    // the stylesheet puts it: the same panel may have been a float before a resize, so none of a float's geometry stays.
     function place() {
-        if (!open || panel.dataset.place !== 'float') return;
+        if (!open) return;
+        if (panel.dataset.place !== 'float') {
+            Object.assign(panel.style, { left: '', bottom: '', transformOrigin: '' });
+            panel.style.setProperty('--panel-column', '');
+            return;
+        }
         const at = el.getBoundingClientRect();
         const column = (el.closest?.('.chat-input-wrap') || doc.body).getBoundingClientRect();
         panel.style.setProperty('--panel-column', `${Math.round(column.width)}px`);
