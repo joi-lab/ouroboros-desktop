@@ -977,17 +977,18 @@ def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optio
                 finish: Optional[Callable[[], None]] = None) -> Iterator[sqlite3.Connection]:
     """One transaction: a write locks at ``BEGIN IMMEDIATE``, a read at ``SELECT 1`` (its snapshot, its only wait);
     an error rolls back and propagates; ``finish`` (``commit``) ends it, a write's COMMIT waiting ``commit_wait_sec``
-    for readers to drain (a read's never waits). The lock's hold is reported to ``store_timing`` either way."""
-    began, held = False, 0.0
+    for readers to drain (a read's never waits). The hold goes to ``store_timing``, a failed COMMIT's as failed."""
+    began, held = False, None
     try:
         conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
         began = True
         if not write:  # take the read lock now
             conn.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
-        held = store_timing.clock()
+        held = store_timing.started()
         if write and commit_wait_sec is not None:
             conn.execute(f"PRAGMA busy_timeout = {int(commit_wait_sec * 1000)}")
         yield conn
+        (finish or (lambda: commit(conn)))()
     except BaseException as exc:
         if not began:
             exc.rollback_confirmed = not conn.in_transaction
@@ -998,9 +999,8 @@ def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optio
             except sqlite3.Error:
                 exc.rollback_confirmed = False
         if held:
-            store_timing.record(conn, write, held)
+            store_timing.record(conn, write, held, failed=True)
         raise
-    (finish or (lambda: commit(conn)))()
     store_timing.record(conn, write, held)
 
 
