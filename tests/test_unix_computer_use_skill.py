@@ -127,8 +127,8 @@ def test_unix_computer_use_window_list_uses_linux_backend(tmp_path, monkeypatch)
 
     assert result["ok"] is True and result["platform"] == "linux"
     assert result["windows"] == [{"window_id": "0x001", "desktop": 0, "pid": 4242, "bounds": [10, 20, 800, 600],
-                                  "app": "navigator.Firefox", "title": "Browser - Docs", "frontmost": False}]
-    assert result["frontmost"] is None, "no xdotool here: who is in front is unknown, not invented"
+                                  "app": "navigator.Firefox", "title": "Browser - Docs"}]
+    assert result["frontmost"] is None and "xdotool" in result["front_unread"], "no xdotool here: who is in front is unknown, not invented"
 
 
 # --- NW-5: macOS-branch coverage (previously only the linux path was tested) ---
@@ -750,7 +750,7 @@ def test_angle_brackets_route_through_the_clipboard_not_keystrokes(tmp_path, mon
                         lambda self: ("osw", {"backend": "osworld_http"}))
     sent = []
     monkeypatch.setattr(plugin._ComputerUse, "_remote_pyautogui",
-                        lambda self, conn, code, note=None, timeout=None, target="":
+                        lambda self, conn, code, note=None, timeout=None, target="", **kw:
                             sent.append((code, note)) or json.dumps({"ok": True}))
 
     impl.type_text(text='<?xml version="1.0"?>')
@@ -782,7 +782,7 @@ def test_key_accepts_a_whitespace_separated_sequence_of_combos(tmp_path, monkeyp
                         lambda self: ("osw", {"backend": "osworld_http"}))
     codes = []
     monkeypatch.setattr(plugin._ComputerUse, "_remote_pyautogui",
-                        lambda self, conn, code, note=None, timeout=None, target="":
+                        lambda self, conn, code, note=None, timeout=None, target="", **kw:
                             codes.append(code) or json.dumps({"ok": True}))
 
     out = json.loads(impl.key(keys="shift+Right shift+Right shift+Right"))
@@ -795,7 +795,7 @@ def test_key_accepts_a_whitespace_separated_sequence_of_combos(tmp_path, monkeyp
     # A failing step stops the sequence and says which one.
     codes.clear()
     monkeypatch.setattr(plugin._ComputerUse, "_remote_pyautogui",
-                        lambda self, conn, code, note=None, timeout=None, target="": json.dumps({"ok": True}))
+                        lambda self, conn, code, note=None, timeout=None, target="", **kw: json.dumps({"ok": True}))
     bad = json.loads(impl.key(keys="ctrl+s bogusmod+x"))
     assert bad["ok"] is False and "bogusmod" in bad["error"], bad
 
@@ -818,7 +818,7 @@ def test_multiline_and_long_text_route_through_the_clipboard(tmp_path, monkeypat
                         lambda self: ("osw", {"backend": "osworld_http"}))
     sent = []
     monkeypatch.setattr(plugin._ComputerUse, "_remote_pyautogui",
-                        lambda self, conn, code, note=None, timeout=None, target="":
+                        lambda self, conn, code, note=None, timeout=None, target="", **kw:
                             sent.append((code, note)) or json.dumps({"ok": True}))
 
     impl.type_text(text="para one\npara two")

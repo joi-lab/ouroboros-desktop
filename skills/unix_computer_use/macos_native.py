@@ -10,23 +10,26 @@ Quartz but not the Accessibility API, and source installs carry none).
 
 Operations (all read-only except ``activate``):
 
-- ``front``                       the frontmost application (``lsappinfo``) and its focused window title
 - ``apps [limit]``                running regular applications with their windows, ``frontmost`` and ``scriptable``
 - ``resolve <query>``             which running application a name, bundle id or ``pid:<n>`` means (0, 1 or many)
 - ``activate <query> [wait_ms]``  resolve, bring forward if needed, re-read who is in front (never launches)
 - ``tree <pid> [max_nodes] [timeout_ms] [root] [include_web]``  bounded accessibility walk of one window
 - ``perms``                       prompt-free permission preflights (Accessibility, Screen Recording, input events)
-- ``displays``                    active displays: bounds in global points and pixel sizes
+- ``displays``                    active displays: bounds in global points, pixel sizes, ``screencapture -D`` index
 
 Honesty rules: ``ok`` answers the question asked; ``unknown`` is spelled out, never rendered as an
-empty list or ``false``; a window the walk did not finish says so in ``truncated_by``; ``-25204``
-(the app did not answer in time) is busy, not denied.
+empty list or ``false``; a window the walk did not finish says so in ``truncated_by`` (the only
+bounds are ``max_nodes`` and ``timeout_ms``: a node's children are read up to the remaining node
+budget, so a wide node is cut by ``max_nodes`` and the node says how many children were not read);
+``-25204`` (the app did not answer in time) is busy, not denied. A switch is ``activated`` only when
+the front was read as another application before and as the target afterwards.
 """
 
 from __future__ import annotations
 
 import ctypes
 import json
+import math
 import plistlib
 import re
 import subprocess
@@ -44,8 +47,10 @@ _LSAPPINFO = "/usr/bin/lsappinfo"
 AX_ERR = {0: "ok", -25200: "Failure", -25201: "IllegalArgument", -25202: "InvalidUIElement", -25204: "CannotComplete",
           -25205: "AttributeUnsupported", -25206: "ActionUnsupported", -25208: "NotImplemented", -25211: "APIDisabled",
           -25212: "NoValue", -25213: "ParameterizedAttributeUnsupported", -25214: "NotEnoughPrecision"}
-ACTIONABLE = {"AXButton", "AXTextField", "AXTextArea", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton",
-              "AXComboBox", "AXMenuButton", "AXTab", "AXMenuItem", "AXRow", "AXCell", "AXStaticText", "AXImage"}
+# Roles that get a numbered mark: elements a model usually wants to address. A mark is a position, not
+# proof that the element reacts to a click (static text and images are listed because they are targets too).
+MARKED = {"AXButton", "AXTextField", "AXTextArea", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton",
+          "AXComboBox", "AXMenuButton", "AXTab", "AXMenuItem", "AXRow", "AXCell", "AXStaticText", "AXImage"}
 _WALK_ATTRS = ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPosition", "AXSize"]
 TREE_CEILINGS = {"max_nodes": 2000, "timeout_ms": 15000}
 
@@ -66,15 +71,17 @@ class CGRect(Structure):
 # lsappinfo: fresh application facts without AppKit (format is Apple's CLI output, parsed loosely)
 # ----------------------------------------------------------------------------------------------
 
-def _sh(cmd: list[str], timeout: float = 5.0) -> str:
+def _sh(cmd: list[str], timeout: float = 5.0) -> tuple[int, str]:
+    """(exit code, stdout); a process that could not run answers (-1, '') so the caller renders an unknown."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL).stdout
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        return int(proc.returncode), proc.stdout or ""
     except Exception:  # noqa: BLE001 - the caller renders an unknown
-        return ""
+        return -1, ""
 
 
 def parse_info(text: str) -> dict[str, Any]:
-    """``lsappinfo info -only pid -only bundleid -only name <asn>`` -> {pid, app_id, app}."""
+    """``lsappinfo info -only pid -only bundleid -only name <asn>`` -> {pid, app_id, app} (newlines or spaces between fields)."""
     out: dict[str, Any] = {}
     m = re.search(r'"pid"\s*=\s*(\d+)', text)
     if m:
@@ -89,10 +96,12 @@ def parse_info(text: str) -> dict[str, Any]:
 
 
 def front_app() -> dict[str, Any] | None:
-    asn = _sh([_LSAPPINFO, "front"]).strip()
+    _rc, asn_text = _sh([_LSAPPINFO, "front"])
+    asn = asn_text.strip()
     if not asn:
         return None
-    info = parse_info(_sh([_LSAPPINFO, "info", "-only", "pid", "-only", "bundleid", "-only", "name", asn]))
+    _rc, text = _sh([_LSAPPINFO, "info", "-only", "pid", "-only", "bundleid", "-only", "name", asn])
+    info = parse_info(text)
     return info if info.get("pid") else None
 
 
@@ -113,8 +122,13 @@ def parse_list(text: str) -> list[dict[str, Any]]:
     return apps
 
 
-def running_apps() -> list[dict[str, Any]]:
-    return parse_list(_sh([_LSAPPINFO, "list"], timeout=8.0))
+def running_apps() -> tuple[list[dict[str, Any]], str]:
+    """(applications, error): an inventory that could not be read is an error, never an empty desktop."""
+    rc, text = _sh([_LSAPPINFO, "list"], timeout=8.0)
+    apps = parse_list(text)
+    if rc != 0 or not text.strip():
+        return apps, f"lsappinfo list gave no inventory (exit {rc})"
+    return apps, ""
 
 
 def scriptable(bundle_path: str) -> bool | None:
@@ -131,21 +145,20 @@ def scriptable(bundle_path: str) -> bool | None:
 
 
 def resolve(query: str, apps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Launch-free target resolution: ``pid:<n>``, exact bundle id, or case-insensitive display/executable name."""
+    """Launch-free target resolution: ``pid:<n>``, exact bundle id, or case-insensitive display/executable name.
+
+    No prefix or substring guessing, and no bare numbers: ``pid:`` is the documented form."""
     q = str(query or "").strip()
     if not q:
         return []
-    if q.lower().startswith("pid:") and q[4:].strip().isdigit():
-        pid = int(q[4:].strip())
-        return [a for a in apps if a["pid"] == pid]
-    if q.isdigit():
-        return [a for a in apps if a["pid"] == int(q)]
+    if q.lower().startswith("pid:"):
+        digits = q[4:].strip()
+        return [a for a in apps if digits.isdigit() and a["pid"] == int(digits)]
     exact_id = [a for a in apps if a["app_id"] and a["app_id"].lower() == q.lower()]
     if exact_id:
         return exact_id
     low = q.lower()
-    matches = [a for a in apps if a["app"].lower() == low or a["path"].rstrip("/").rsplit("/", 1)[-1].lower() in (low, low + ".app")]
-    return matches
+    return [a for a in apps if a["app"].lower() == low or a["path"].rstrip("/").rsplit("/", 1)[-1].lower() in (low, low + ".app")]
 
 
 # ----------------------------------------------------------------------------------------------
@@ -179,12 +192,15 @@ class _AX:
         self.kCFBooleanTrue = c_void_p.in_dll(self.CF, "kCFBooleanTrue").value
         self.AXIsProcessTrusted = sig(self.AS, "AXIsProcessTrusted", c_ubyte, [])
         self.AXUIElementCreateApplication = sig(self.AS, "AXUIElementCreateApplication", c_void_p, [c_int32])
+        self.AXUIElementCreateSystemWide = sig(self.AS, "AXUIElementCreateSystemWide", c_void_p, [])
         self.AXUIElementCopyAttributeValue = sig(self.AS, "AXUIElementCopyAttributeValue", c_int32, [c_void_p, c_void_p, POINTER(c_void_p)])
         self.AXUIElementSetAttributeValue = sig(self.AS, "AXUIElementSetAttributeValue", c_int32, [c_void_p, c_void_p, c_void_p])
         self.AXUIElementCopyMultipleAttributeValues = sig(self.AS, "AXUIElementCopyMultipleAttributeValues", c_int32,
                                                           [c_void_p, c_void_p, c_uint32, POINTER(c_void_p)])
         self.AXUIElementCopyAttributeValues = sig(self.AS, "AXUIElementCopyAttributeValues", c_int32,
                                                   [c_void_p, c_void_p, c_long, c_long, POINTER(c_void_p)])
+        self.AXUIElementGetAttributeValueCount = sig(self.AS, "AXUIElementGetAttributeValueCount", c_int32,
+                                                     [c_void_p, c_void_p, POINTER(c_long)])
         self.AXUIElementSetMessagingTimeout = sig(self.AS, "AXUIElementSetMessagingTimeout", c_int32, [c_void_p, c_float])
         self.AXValueGetType = sig(self.AS, "AXValueGetType", c_uint32, [c_void_p])
         self.AXValueGetValue = sig(self.AS, "AXValueGetValue", c_ubyte, [c_void_p, c_uint32, c_void_p])
@@ -207,6 +223,18 @@ class _AX:
             ref = self.CFStringCreateWithCString(None, name.encode(), _UTF8)
             self._strings[name] = ref
         return ref
+
+    def set_timeout(self, elem, seconds: float) -> None:
+        """Messaging timeout for ``elem`` and, through the system-wide element, the default for every other
+        element this process touches (a timeout set on one element does not reach the elements read from it)."""
+        self.AXUIElementSetMessagingTimeout(elem, seconds)
+        system_wide = self.AXUIElementCreateSystemWide()
+        if system_wide:
+            self.AXUIElementSetMessagingTimeout(system_wide, seconds)
+            self.CFRelease(system_wide)
+
+    def is_array(self, ref) -> bool:
+        return bool(ref) and self.CFGetTypeID(ref) == self.T_ARR
 
     def to_py(self, ref) -> Any:
         if not ref:
@@ -237,6 +265,8 @@ class _AX:
         out = c_void_p()
         err = self.AXUIElementCopyAttributeValue(elem, self.cfs(name), byref(out))
         if err != 0 or not out.value:
+            if out.value:
+                self.CFRelease(out.value)
             return None, err
         val = self.to_py(out.value)
         if isinstance(val, tuple) and val and val[0] == "ref":
@@ -253,6 +283,9 @@ class _AX:
             self.CFRelease(arr)
         if err != 0 or not out.value:
             return err, []
+        if not self.is_array(out.value):
+            self.CFRelease(out.value)
+            return -25200, []
         vals = []
         for i in range(len(names)):
             v = self.to_py(self.CFArrayGetValueAtIndex(out.value, i))
@@ -260,25 +293,42 @@ class _AX:
         self.CFRelease(out.value)
         return 0, vals
 
-    def children(self, elem, limit: int) -> tuple[int, list[int]]:
-        """Bounded child fetch (ranged read; plain read when an app rejects the range form) -> RETAINED refs."""
+    def children(self, elem, limit: int) -> tuple[int, list[int], int | None]:
+        """Up to ``limit`` children (ranged read; plain read when an app rejects the range form) as RETAINED
+        refs, plus the child count when the app reports it (so a cut can be sized)."""
+        total: int | None = None
+        count = c_long(0)
+        if self.AXUIElementGetAttributeValueCount(elem, self.cfs("AXChildren"), byref(count)) == 0:
+            total = int(count.value)
         out = c_void_p()
         err = self.AXUIElementCopyAttributeValues(elem, self.cfs("AXChildren"), 0, limit, byref(out))
         if err == -25201:
             err = self.AXUIElementCopyAttributeValue(elem, self.cfs("AXChildren"), byref(out))
         if err != 0 or not out.value:
-            return err, []
+            return err, [], total
+        if not self.is_array(out.value):
+            self.CFRelease(out.value)
+            return -25200, [], total
         try:
-            n = min(self.CFArrayGetCount(out.value), limit)
-            return 0, [self.CFRetain(self.CFArrayGetValueAtIndex(out.value, i)) for i in range(n)]
+            available = self.CFArrayGetCount(out.value)
+            if total is None:
+                total = int(available)
+            n = min(available, limit)
+            return 0, [self.CFRetain(self.CFArrayGetValueAtIndex(out.value, i)) for i in range(n)], total
         finally:
             self.CFRelease(out.value)
 
-    def windows(self, app_elem) -> list[dict[str, Any]]:
+    def windows(self, app_elem) -> tuple[list[dict[str, Any]], str | None]:
+        """(window rows, unread reason): a list that could not be read is said so, never an empty list."""
         val, err = self.attr(app_elem, "AXWindows")
-        if err != 0 or not val:
-            return []
+        if err != 0:
+            return [], AX_ERR.get(err, str(err))
+        if not val:
+            return [], None
         arr = val[1]
+        if not self.is_array(arr):
+            self.CFRelease(arr)
+            return [], "not_an_array"
         rows = []
         try:
             for i in range(self.CFArrayGetCount(arr)):
@@ -286,8 +336,9 @@ class _AX:
                 _e, vals = self.multi(win, ["AXTitle", "AXMinimized", "AXPosition", "AXSize", "AXMain"])
                 title, minimized, pos, size, main = (vals + [None] * 5)[:5]
                 row: dict[str, Any] = {"title": title, "minimized": bool(minimized), "main": bool(main)}
-                if isinstance(pos, tuple) and isinstance(size, tuple):
-                    row["bounds"] = [int(pos[0]), int(pos[1]), int(size[0]), int(size[1])]
+                bounds = _bounds(pos, size)
+                if bounds:
+                    row["bounds"] = bounds
                 if self.AXUIElementGetWindow is not None:
                     wid = c_uint32()
                     if self.AXUIElementGetWindow(win, byref(wid)) == 0:
@@ -295,17 +346,33 @@ class _AX:
                 rows.append(row)
         finally:
             self.CFRelease(arr)
-        return rows
+        return rows, None
 
 
-def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_of: Callable[[Any, int], tuple[int, list[Any]]],
-         *, max_nodes: int, deadline_s: float, fanout: int = 80, skip_children: tuple[str, ...] = ("AXWebArea",),
+def _bounds(pos: Any, size: Any) -> list[int] | None:
+    """[x, y, w, h] from AX position/size tuples; None when either is missing or not a finite number."""
+    if not (isinstance(pos, tuple) and isinstance(size, tuple)):
+        return None
+    try:
+        values = [float(pos[0]), float(pos[1]), float(size[0]), float(size[1])]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not all(math.isfinite(v) for v in values):
+        return None
+    return [int(v) for v in values]
+
+
+def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_of: Callable[[Any, int], tuple],
+         *, max_nodes: int, deadline_s: float, skip_children: tuple[str, ...] = ("AXWebArea",),
          release: Callable[[Any], None] | None = None, now: Callable[[], float] = time.perf_counter) -> dict[str, Any]:
     """Bounded breadth-first walk over an element graph (injectable, so the bound is testable without a desktop).
 
     ``read_node(el)`` -> (err, [role, subrole, title, description, value, position, size]); ``children_of(el, n)`` ->
-    (err, [children]). Stops at ``max_nodes`` visited nodes or at the deadline and SAYS which (``truncated_by``);
-    children of ``skip_children`` roles (web content) are not fetched unless the caller clears the tuple.
+    (err, [children]) or (err, [children], total). Stops at ``max_nodes`` visited nodes or at the deadline and
+    SAYS which (``truncated_by``). A node's children are requested up to the remaining node budget plus one, so a
+    node wider than the budget is cut by ``max_nodes`` and records ``children_unread``; children of
+    ``skip_children`` roles (web content) are not fetched unless the caller clears the tuple. Owns ``root`` and
+    every child it fetched: each is released exactly once, on every exit.
     """
     t0 = now()
     deadline = t0 + deadline_s
@@ -324,40 +391,45 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 truncated_by.append("timeout")
                 break
             el, depth = queue.popleft()
-            err, vals = read_node(el)
-            if err != 0:
-                key = AX_ERR.get(err, str(err))
-                errors[key] = errors.get(key, 0) + 1
-                if release:
-                    release(el)
-                continue
-            visited += 1
-            role, subrole, title, desc, value, pos, size = (list(vals) + [None] * 7)[:7]
-            node: dict[str, Any] = {"id": visited, "depth": depth, "role": (role or "")[2:] if isinstance(role, str) and role.startswith("AX") else role}
-            if subrole:
-                node["subrole"] = subrole
-            label = title or desc or ""
-            if label:
-                node["label"] = str(label)[:200]
-            if isinstance(value, (str, float, bool)) and value != "":
-                text = str(value)
-                node["value"] = text[:200]
-                if len(text) > 200:
-                    node["value_len"] = len(text)
-            if isinstance(pos, tuple) and isinstance(size, tuple):
-                node["x"], node["y"], node["w"], node["h"] = int(pos[0]), int(pos[1]), int(size[0]), int(size[1])
-            nodes.append(node)
-            if role in skip_children:
-                skipped_web += 1
-            else:
-                cerr, kids = children_of(el, fanout)
+            try:
+                err, vals = read_node(el)
+                if err != 0:
+                    key = AX_ERR.get(err, str(err))
+                    errors[key] = errors.get(key, 0) + 1
+                    continue
+                visited += 1
+                role, subrole, title, desc, value, pos, size = (list(vals) + [None] * 7)[:7]
+                node: dict[str, Any] = {"id": visited, "depth": depth, "role": (role or "")[2:] if isinstance(role, str) and role.startswith("AX") else role}
+                if subrole:
+                    node["subrole"] = subrole
+                label = title or desc or ""
+                if label:
+                    node["label"] = str(label)[:200]
+                if isinstance(value, (str, float, bool)) and value != "":
+                    text = str(value)
+                    node["value"] = text[:200]
+                    if len(text) > 200:
+                        node["value_len"] = len(text)
+                bounds = _bounds(pos, size)
+                if bounds:
+                    node["x"], node["y"], node["w"], node["h"] = bounds
+                nodes.append(node)
+                if role in skip_children:
+                    skipped_web += 1
+                    continue
+                answer = children_of(el, max_nodes - visited + 1)
+                cerr, kids = answer[0], list(answer[1])
+                total = answer[2] if len(answer) > 2 else None
                 if cerr not in (0, -25212, -25205):
                     key = "children:" + AX_ERR.get(cerr, str(cerr))
                     errors[key] = errors.get(key, 0) + 1
+                if total is not None and total > len(kids):
+                    node["children_unread"] = total - len(kids)
                 for kid in kids:
                     queue.append((kid, depth + 1))
-            if release:
-                release(el)
+            finally:
+                if release:
+                    release(el)
     finally:
         if release:
             for el, _depth in queue:
@@ -369,10 +441,12 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
 
 
 def marks_from(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Set-of-marks view: numbered actionable elements with centre points in global logical points."""
+    """Set-of-marks view: numbered elements of the marked roles with centre points in global logical points.
+
+    A mark says where an element is, not that it reacts to a click."""
     marks = []
     for node in nodes:
-        if "AX" + str(node.get("role")) in ACTIONABLE and "x" in node and node.get("w", 0) > 0 and node.get("h", 0) > 0:
+        if "AX" + str(node.get("role")) in MARKED and "x" in node and node.get("w", 0) > 0 and node.get("h", 0) > 0:
             marks.append({"id": len(marks) + 1, "role": node["role"], "title": node.get("label", ""),
                           "center_x": node["x"] + node["w"] // 2, "center_y": node["y"] + node["h"] // 2,
                           "x": node["x"], "y": node["y"], "w": node["w"], "h": node["h"]})
@@ -383,89 +457,107 @@ def marks_from(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # operations
 # ----------------------------------------------------------------------------------------------
 
-def op_front(ax: _AX | None = None) -> dict[str, Any]:
-    front = front_app()
-    if not front:
-        return {"ok": False, "error": "lsappinfo gave no frontmost application"}
-    out: dict[str, Any] = {"ok": True, **front}
-    ax = ax or _AX()
-    if ax.AXIsProcessTrusted():
-        app = ax.AXUIElementCreateApplication(int(front["pid"]))
-        ax.AXUIElementSetMessagingTimeout(app, 0.3)
-        win, err = ax.attr(app, "AXFocusedWindow")
-        if err == 0 and win:
-            title, _e = ax.attr(win[1], "AXTitle")
-            ax.CFRelease(win[1])
-            out["title"] = title
-        else:
-            out["title"] = None
-            out["title_unread"] = AX_ERR.get(err, str(err))
-        ax.CFRelease(app)
-    else:
-        out["title"] = None
-        out["title_unread"] = "accessibility_untrusted"
-    return out
-
-
-def op_apps(limit: int = 50, ax: _AX | None = None, with_windows: bool = True) -> dict[str, Any]:
-    apps = running_apps()
+def op_apps(limit: int = 50, ax: _AX | None = None) -> dict[str, Any]:
+    apps, error = running_apps()
+    if error and not apps:
+        return {"ok": False, "reason": "apps_unread", "error": error}
     front = front_app() or {}
     ax = ax or _AX()
     trusted = bool(ax.AXIsProcessTrusted())
     rows = []
     for app in apps[: max(1, limit)]:
-        row: dict[str, Any] = {"app": app["app"], "pid": app["pid"], "app_id": app["app_id"],
-                               "frontmost": app["pid"] == front.get("pid")}
+        row: dict[str, Any] = {"app": app["app"], "pid": app["pid"], "app_id": app["app_id"]}
+        if front.get("pid"):
+            row["frontmost"] = app["pid"] == front.get("pid")
         s = scriptable(app["path"])
         if s is not None:
             row["scriptable"] = s
-        if with_windows and trusted:
+        if trusted:
             elem = ax.AXUIElementCreateApplication(int(app["pid"]))
-            ax.AXUIElementSetMessagingTimeout(elem, 0.25)
+            ax.set_timeout(elem, 0.25)
             try:
-                row["windows"] = ax.windows(elem)
+                windows, unread = ax.windows(elem)
             finally:
                 ax.CFRelease(elem)
+            if unread:
+                row["windows_unread"] = unread
+            else:
+                row["windows"] = windows
         rows.append(row)
-    return {"ok": True, "frontmost": front or None, "apps": rows, "titles_available": trusted,
-            "truncated": len(apps) > len(rows), "limit": limit, "total": len(apps)}
+    out: dict[str, Any] = {"ok": True, "frontmost": front or None, "apps": rows, "titles_available": trusted,
+                           "truncated": len(apps) > len(rows), "limit": limit, "total": len(apps)}
+    if error:
+        out["warning"] = error
+    return out
 
 
 def op_resolve(query: str) -> dict[str, Any]:
-    apps = running_apps()
+    apps, error = running_apps()
+    if error and not apps:
+        return {"ok": False, "reason": "apps_unread", "error": error, "query": query, "candidates": []}
     matches = resolve(query, apps)
     out = {"ok": True, "query": query, "candidates": [{"app": a["app"], "pid": a["pid"], "app_id": a["app_id"]} for a in matches]}
     if not matches:
         out["ok"] = False
         out["reason"] = "not_running"
         out["running"] = [a["app"] for a in apps][:40]
+        if len(apps) > 40:
+            out["running_more"] = len(apps) - 40
     elif len(matches) > 1:
         out["ok"] = False
         out["reason"] = "ambiguous"
     return out
 
 
-def _activate_pid(ax: _AX, pid: int) -> str:
-    """Ask the OS to bring ``pid`` forward; returns the mechanism tried. The caller re-reads who is in front."""
+def _wait_front(pid: int, wait_ms: int) -> tuple[dict[str, Any] | None, int]:
+    """Poll who is in front until it is ``pid`` or ``wait_ms`` passed; (front, waited_ms)."""
+    t0 = time.monotonic()
+    front = front_app()
+    while (not front or front.get("pid") != pid) and (time.monotonic() - t0) * 1000 < max(200, int(wait_ms)):
+        time.sleep(0.05)
+        front = front_app()
+    return front or None, int((time.monotonic() - t0) * 1000)
+
+
+def _activate_pid(ax: _AX, pid: int, wait_ms: int) -> tuple[str, dict[str, Any] | None, int]:
+    """Bring ``pid`` forward: each mechanism is accepted only after a fresh read shows the target in front;
+    an accepted-but-ignored request (macOS 14+ may ignore activation from a background process) falls through
+    to the next one. Returns (mechanism that worked or the last one tried, front read, waited_ms)."""
+    waited_total = 0
+    front: dict[str, Any] | None = None
+    tried = "none"
     if ax.AXIsProcessTrusted():
         app = ax.AXUIElementCreateApplication(pid)
         try:
-            ax.AXUIElementSetMessagingTimeout(app, 0.5)
-            if ax.AXUIElementSetAttributeValue(app, ax.cfs("AXFrontmost"), ax.kCFBooleanTrue) == 0:
-                return "ax_frontmost"
+            ax.set_timeout(app, 0.5)
+            accepted = ax.AXUIElementSetAttributeValue(app, ax.cfs("AXFrontmost"), ax.kCFBooleanTrue) == 0
         finally:
             ax.CFRelease(app)
+        if accepted:
+            tried = "ax_frontmost"
+            front, waited = _wait_front(pid, wait_ms)
+            waited_total += waited
+            if front and front.get("pid") == pid:
+                return tried, front, waited_total
     try:
         from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication  # type: ignore
 
         running = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        if running is not None and running.activateWithOptions_(NSApplicationActivateIgnoringOtherApps):
-            return "nsrunningapplication"
+        accepted = running is not None and bool(running.activateWithOptions_(NSApplicationActivateIgnoringOtherApps))
     except Exception:  # noqa: BLE001 - pyobjc absent or refused; the next mechanism follows
-        pass
+        accepted = False
+    if accepted:
+        tried = "nsrunningapplication"
+        front, waited = _wait_front(pid, wait_ms)
+        waited_total += waited
+        if front and front.get("pid") == pid:
+            return tried, front, waited_total
+    # System Events needs the Automation grant for this helper's parent; macOS may show a one-time consent prompt.
     _sh(["/usr/bin/osascript", "-e",
          f'tell application "System Events" to set frontmost of (first process whose unix id is {int(pid)}) to true'], timeout=5)
-    return "system_events"
+    tried = "system_events"
+    front, waited = _wait_front(pid, wait_ms)
+    return tried, front, waited_total + waited
 
 
 def op_activate(query: str, wait_ms: int = 2000) -> dict[str, Any]:
@@ -476,18 +568,14 @@ def op_activate(query: str, wait_ms: int = 2000) -> dict[str, Any]:
     before = front_app() or None
     out: dict[str, Any] = {"ok": True, "target": target, "front_before": before}
     if before and before.get("pid") == target["pid"]:
-        out.update({"activated": False, "already_front": True, "front": before, "waited_ms": 0})
+        out.update({"activated": False, "already_front": True, "verified": True, "front": before, "waited_ms": 0})
         return out
-    ax = _AX()
-    method = _activate_pid(ax, int(target["pid"]))
-    t0 = time.monotonic()
-    front = front_app()
-    while (not front or front.get("pid") != target["pid"]) and (time.monotonic() - t0) * 1000 < max(200, int(wait_ms)):
-        time.sleep(0.05)
-        front = front_app()
-    waited = int((time.monotonic() - t0) * 1000)
+    method, front, waited = _activate_pid(_AX(), int(target["pid"]), int(wait_ms))
     verified = bool(front and front.get("pid") == target["pid"])
-    out.update({"activated": verified, "method": method, "front": front or None, "waited_ms": waited})
+    # A switch is observed only when the front was read as another application before: with the before
+    # read unknown the target is verified in front, but whether anything changed is unknown.
+    activated: bool | None = (verified and before.get("pid") != target["pid"]) if before else (None if verified else False)
+    out.update({"activated": activated, "verified": verified, "method": method, "front": front or None, "waited_ms": waited})
     if not verified:
         out["ok"] = False
         out["reason"] = "not_frontmost_after_activate"
@@ -501,7 +589,7 @@ def op_tree(pid: int, max_nodes: int = 150, timeout_ms: int = 3000, root: str = 
     max_nodes = max(1, min(int(max_nodes), TREE_CEILINGS["max_nodes"]))
     timeout_ms = max(100, min(int(timeout_ms), TREE_CEILINGS["timeout_ms"]))
     app = ax.AXUIElementCreateApplication(int(pid))
-    ax.AXUIElementSetMessagingTimeout(app, min(1.0, timeout_ms / 1000.0))
+    ax.set_timeout(app, min(1.0, timeout_ms / 1000.0))
     root_ref = None
     root_from = None
     try:
@@ -514,23 +602,28 @@ def op_tree(pid: int, max_nodes: int = 150, timeout_ms: int = 3000, root: str = 
             val, err = ax.attr(app, "AXWindows")
             if err == 0 and val and isinstance(val, tuple):
                 arr = val[1]
-                if ax.CFArrayGetCount(arr) > 0:
+                if ax.is_array(arr) and ax.CFArrayGetCount(arr) > 0:
                     root_ref, root_from = ax.CFRetain(ax.CFArrayGetValueAtIndex(arr, 0)), "AXWindows[0]"
                 ax.CFRelease(arr)
             if root_ref is None:
                 return {"ok": False, "reason": "no_window" if err in (0, -25212) else AX_ERR.get(err, str(err)), "pid": pid}
         title, _e = ax.attr(root_ref, "AXTitle")
-        result = walk(root_ref, lambda el: ax.multi(el, _WALK_ATTRS), ax.children, max_nodes=max_nodes,
+        ref, root_ref = root_ref, None  # the walk owns the root from here and releases it on every exit
+        result = walk(ref, lambda el: ax.multi(el, _WALK_ATTRS), ax.children, max_nodes=max_nodes,
                       deadline_s=timeout_ms / 1000.0, skip_children=() if include_web else ("AXWebArea",),
                       release=ax.CFRelease)
-        root_ref = None  # released by the walk
     finally:
         if root_ref is not None:
             ax.CFRelease(root_ref)
         ax.CFRelease(app)
-    result.update({"ok": True, "pid": pid, "root": root_from, "window": title if isinstance(title, str) else None,
-                   "marks": marks_from(result["nodes"]),
+    result.update({"pid": pid, "root": root_from, "window": title if isinstance(title, str) else None,
                    "limits": {"max_nodes": max_nodes, "timeout_ms": timeout_ms, "ceilings": TREE_CEILINGS}})
+    if result["visited"] == 0:
+        # Not one node could be read: a failed observation, not an empty window.
+        result.update({"ok": False, "reason": "accessibility_read_failed",
+                       "error": "no element of the window could be read: " + json.dumps(result["errors"])})
+        return result
+    result.update({"ok": True, "marks": marks_from(result["nodes"])})
     return result
 
 
@@ -560,30 +653,38 @@ def op_displays() -> dict[str, Any]:
     cg.CGDisplayPixelsHigh.argtypes = [c_uint32]
     cg.CGGetActiveDisplayList.argtypes = [c_uint32, POINTER(c_uint32), POINTER(c_uint32)]
     count = c_uint32(0)
-    ids = (c_uint32 * 16)()
-    if cg.CGGetActiveDisplayList(16, ids, byref(count)) != 0:
+    if cg.CGGetActiveDisplayList(0, None, byref(count)) != 0:
+        return {"ok": False, "error": "CGGetActiveDisplayList failed"}
+    total = max(1, int(count.value))
+    ids = (c_uint32 * total)()
+    if cg.CGGetActiveDisplayList(total, ids, byref(count)) != 0:
         return {"ok": False, "error": "CGGetActiveDisplayList failed"}
     main = cg.CGMainDisplayID()
     rows = []
+    secondary = 1
     for i in range(count.value):
         did = ids[i]
         r = cg.CGDisplayBounds(did)
+        # screencapture -D numbers the main display 1 and the others from 2 in the system's order.
+        if did == main:
+            capture_index = 1
+        else:
+            secondary += 1
+            capture_index = secondary
         rows.append({"id": int(did), "main": did == main, "x": int(r.origin.x), "y": int(r.origin.y),
                      "width": int(r.size.w), "height": int(r.size.h),
                      "pixels_wide": int(cg.CGDisplayPixelsWide(did)), "pixels_high": int(cg.CGDisplayPixelsHigh(did)),
-                     "index": i + 1})
+                     "index": capture_index})
     return {"ok": True, "displays": rows}
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        print(json.dumps({"ok": False, "error": "usage: macos_native.py <front|apps|resolve|activate|tree|perms|displays> [args]"}))
+        print(json.dumps({"ok": False, "error": "usage: macos_native.py <apps|resolve|activate|tree|perms|displays> [args]"}))
         return 2
     op, args = argv[0], argv[1:]
     try:
-        if op == "front":
-            out = op_front()
-        elif op == "apps":
+        if op == "apps":
             out = op_apps(int(args[0]) if args else 50)
         elif op == "resolve":
             out = op_resolve(args[0] if args else "")
@@ -600,7 +701,8 @@ def main(argv: list[str]) -> int:
             out = {"ok": False, "error": f"unknown op {op!r}"}
     except Exception as exc:  # noqa: BLE001 - the plugin renders the failure; nothing here may crash silently
         out = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "op": op}
-    print(json.dumps(out, ensure_ascii=False))
+    # ASCII-only output: the parent decodes it the same way under any locale.
+    print(json.dumps(out, ensure_ascii=True))
     return 0 if out.get("ok") else 1
 
 
