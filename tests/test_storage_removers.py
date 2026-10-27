@@ -5,6 +5,7 @@ Storage projection and ``query_data(kind="storage")`` read the same facts, and t
 fact reads the job rows alone (no engine call while a turn is prepared)."""
 from __future__ import annotations
 
+import json
 import pathlib
 import threading
 import time
@@ -46,17 +47,22 @@ def _engine(data, monkeypatch, answer, *, hung=None):
     class Gateway:
         def __init__(self, endpoint):
             asked.append(endpoint)
+            self.closed = threading.Event()
 
         def __enter__(self):
             return self
 
         def __exit__(self, *_exc):
-            return None
+            self.close()
+
+        def close(self):
+            self.closed.set()
 
         def maintenance_gc_last(self, *, timeout_sec=None):
             asked.append(timeout_sec)
-            if hung is not None:
-                hung.wait(10)
+            while hung is not None and not hung.wait(0.01):
+                if self.closed.is_set():
+                    raise ClaudexorUnavailable("daemon_unreachable", "client closed")
             if isinstance(answer, Exception):
                 raise answer
             return {"last": answer}
@@ -64,6 +70,66 @@ def _engine(data, monkeypatch, answer, *, hung=None):
     monkeypatch.setattr(gateway_module, "discover_daemon_at", lambda home: ("endpoint", pathlib.Path(home)))
     monkeypatch.setattr(gateway_module, "ClaudexorGateway", Gateway)
     return asked
+
+
+def _readers():
+    return [thread for thread in threading.enumerate() if thread.name.startswith("storage-engine-read")]
+
+
+def _until_no_readers(limit: float = 5.0):
+    deadline = time.monotonic() + limit
+    while _readers() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _readers()
+
+
+@pytest.fixture
+def stand_in(data):
+    """A real engine on loopback behind a real descriptor; ``mode["kind"]``: ``slow`` answers after 0.5 s,
+    ``trickle`` sends its body one byte every 50 ms."""
+    import http.server
+
+    mode, stop, requests = {"kind": "slow"}, threading.Event(), []
+    body = json.dumps({"last": HELD}).encode() + b" " * 2048
+
+    class Engine(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            try:
+                if mode["kind"] == "slow" and stop.wait(0.5):
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                for start in range(0, len(body), 1 if mode["kind"] == "trickle" else len(body)):
+                    if mode["kind"] == "trickle" and stop.wait(0.05):
+                        return
+                    self.wfile.write(body[start:start + (1 if mode["kind"] == "trickle" else len(body))])
+                    self.wfile.flush()
+            except OSError:
+                pass  # the reader went away
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Engine)
+    server.daemon_threads = True
+    serving = threading.Thread(target=server.serve_forever, name="engine-stand-in", daemon=True)
+    serving.start()
+    home = data / storage.ENGINE_DIR
+    (home / "daemon").mkdir(parents=True)
+    (home / "token").write_text("stand-in", encoding="utf-8")
+    (home / "daemon" / "control-api.json").write_text(json.dumps(
+        {"host": "127.0.0.1", "port": server.server_address[1], "tokenPath": str(home / "token")}), encoding="utf-8")
+    try:
+        yield SimpleNamespace(mode=mode, requests=requests)
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+        serving.join(5)
+        _until_no_readers()
 
 
 def test_a_throwing_job_keeps_its_state_gains_last_error_and_a_normal_return_clears_it(data, monkeypatch):
@@ -106,7 +172,7 @@ def test_the_engine_place_carries_the_engines_last_pass(data, monkeypatch):
     [engine] = storage_removers.place_removers(data)["engine"]
     assert engine == {"id": "engine", "state": "held", "at": "2026-10-27T15:05:00Z", "freed_bytes": 2_000_000,
                       "held": 359, "held_since": "2026-10-18T09:00:00Z", "errors": 0, "first_error": None}
-    assert asked[-1] == storage_removers.ENGINE_READ_SEC, "the read is bounded"
+    assert asked[-1] == storage_removers.ENGINE_REUSE_SEC, "no phase bound cuts the read before its own"
     assert storage_removers.not_ok({"engine": [engine]}) == [
         "engine retention: last pass held at 2026-10-27T15:05:00Z; holding 359 folders since 2026-10-18T09:00:00Z"]
     _engine(data, monkeypatch, {**HELD, "outcome": "completed", "held": {"roots": 0, "native_homes": 0}, "holds": []})
@@ -136,6 +202,7 @@ def test_a_hung_engine_is_unavailable_within_the_bound_and_a_poll_reuses_a_recen
             "answered while the read still hangs: connect and read together stay within the bound"
     finally:
         hung.set()
+    assert _until_no_readers() == []
     now = [time.monotonic() + 3600]  # past every record read so far
     monkeypatch.setattr(storage_removers, "time", SimpleNamespace(monotonic=lambda: now[0]))
     first = storage_removers.place_removers(data, recent=True)["engine"]
@@ -149,6 +216,28 @@ def test_a_hung_engine_is_unavailable_within_the_bound_and_a_poll_reuses_a_recen
     now[0] += storage_removers.ENGINE_REUSE_SEC
     storage_removers.place_removers(data, recent=True)
     assert len(asked) > reads, "an older record is read again"
+
+
+def test_a_slow_engines_record_arriving_after_the_bound_is_shown_by_the_next_poll(data, monkeypatch, stand_in):
+    """Past the answer bound the read goes on until its own: a record arriving then fills the reuse slot,
+    so the next poll shows it instead of ``unavailable``."""
+    monkeypatch.setattr(storage_removers, "ENGINE_READ_SEC", 0.2)
+    monkeypatch.setattr(storage_removers, "ENGINE_REUSE_SEC", 3.0)
+    assert storage_removers.place_removers(data, recent=True)["engine"][0]["state"] == "unavailable"
+    assert _until_no_readers() == []
+    [engine] = storage_removers.place_removers(data, recent=True)["engine"]
+    assert engine["state"] == "held" and stand_in.requests == ["/v2/maintenance/gc"], "shown, not read again"
+
+
+def test_a_trickling_engine_leaves_no_reader_thread(data, monkeypatch, stand_in):
+    """Bytes arriving faster than any phase bound keep a read alive; at the read's own bound the waiting
+    side closes its client, the engine's connection is torn down and the thread ends."""
+    monkeypatch.setattr(storage_removers, "ENGINE_READ_SEC", 0.2)
+    monkeypatch.setattr(storage_removers, "ENGINE_REUSE_SEC", 0.5)
+    stand_in.mode["kind"] = "trickle"
+    [engine] = storage_removers.place_removers(data)["engine"]
+    assert engine == {"id": "engine", "state": "unavailable", "at": None}
+    assert _until_no_readers() == [], "no reader outlives its bound against a trickling engine"
 
 
 def test_no_provisioned_engine_has_no_engine_remover(data):

@@ -790,26 +790,37 @@ count = StorageCounter()
 
 # ---- the child half -------------------------------------------------------------------------
 
-def utility_io() -> bool:
-    """macOS: this process's disk policy becomes IOPOL_UTILITY and it never materializes dataless
-    (cloud-evicted) files; True when that took. A no-op elsewhere. The count child and the maintenance
-    child share it (a mass read or rewrite must not starve the Mac's foreground IO)."""
+def utility_io(*, thread: bool = False) -> Optional[Callable[[], None]]:
+    """macOS: the disk policy of this process, or with THREAD of the calling thread alone, becomes
+    IOPOL_UTILITY and it never materializes dataless (cloud-evicted) files, so a mass read or rewrite
+    never starves the Mac's foreground IO. Returns what puts back the two policies it replaced, None when
+    nothing took; a no-op elsewhere. The count child keeps the process scope for its life; the
+    ``record_compression`` job takes the thread scope around its own run and restores it after."""
     if sys.platform != "darwin":
-        return False
+        return None
     try:
         import ctypes
 
-        # <sys/resource.h>: IOPOL_UTILITY is 4; 5 is IOPOL_STANDARD, the default tier.
-        IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY = 0, 0, 4
-        IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_MATERIALIZE_DATALESS_FILES_OFF = 3, 1
+        # <sys/resource.h>: IOPOL_UTILITY is 4 (5 is IOPOL_STANDARD; a thread's 0 is "as its process").
+        IOPOL_TYPE_DISK, IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES = 0, 3
+        IOPOL_UTILITY, IOPOL_MATERIALIZE_DATALESS_FILES_OFF = 4, 1
+        scope = 1 if thread else 0  # IOPOL_SCOPE_THREAD, IOPOL_SCOPE_PROCESS
         libc = ctypes.CDLL(None, use_errno=True)
-        if libc.setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY) == 0:
-            libc.setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS,
-                                IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
-            return True
+        kinds = (IOPOL_TYPE_DISK, IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES)
+        replaced = [(kind, libc.getiopolicy_np(kind, scope)) for kind in kinds]
+        if libc.setiopolicy_np(IOPOL_TYPE_DISK, scope, IOPOL_UTILITY) != 0:
+            return None
+        libc.setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, scope, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
     except (OSError, AttributeError, ValueError):
         log.debug("Utility disk policy unchanged", exc_info=True)
-    return False
+        return None
+
+    def restore() -> None:
+        for kind, policy in replaced:
+            if policy >= 0:
+                libc.setiopolicy_np(kind, scope, policy)
+
+    return restore
 
 
 def _lower_io_priority() -> str:
@@ -817,7 +828,7 @@ def _lower_io_priority() -> str:
     took. Function-local platform calls under ``sys.platform`` guards (DEVELOPMENT 10)."""
     try:
         if sys.platform == "darwin":
-            if utility_io():
+            if utility_io() is not None:
                 return "utility"
         elif sys.platform.startswith("linux"):
             import ctypes

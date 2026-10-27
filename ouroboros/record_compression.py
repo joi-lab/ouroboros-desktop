@@ -19,18 +19,20 @@ Never ``area``/``area.noindex`` or a ``.git`` path; every file passes the one fl
 candidate nor reaped. A folder it cannot list is counted (``unreadable``), never taken for empty.
 
 Pacing: at most ``FILES_PER_RUN`` files past the stat floor a run, a stop check between files, the cursor
-durable in the job row. The first pass walks every task folder and seat home (the backlog); later passes
-look at the rows written terminal since the counter the last one covered (a task written again is walked
-from its start), the seat homes changed since it looked and what still waits for its task. Due while a pass
-is unfinished or new terminal writes arrived, never by elapsed time; Linux, Docker and Colab record
-``unsupported`` once. Totals are kept per plane and are the job's own record: the Storage count stays the
-ground truth.
+durable in the job row; a run reads and rewrites at the utility disk tier (its own thread, its ``ditto``).
+The first pass walks every task folder and seat home (the backlog); later passes look at the rows written
+terminal since the counter the last one covered, the seat homes changed since it looked and what still
+waits for its task (a task written again, or a home changed, is walked from its start). Due while a pass
+is unfinished, new terminal writes arrived or another platform's ``unsupported`` is on the row, never by
+elapsed time; Linux, Docker and Colab record ``unsupported`` once. Totals are kept per plane and are the
+job's own record: the Storage count stays the ground truth.
 """
 from __future__ import annotations
 
 import bisect
 import os
 import pathlib
+import stat
 import sys
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
@@ -50,11 +52,11 @@ def _counter(root: pathlib.Path) -> int:
 
 
 def due(root: Any, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
-    """A pass unfinished (the backlog, or a run its budget or a stop ended) or rows written terminal
-    since the counter the last pass covered."""
+    """A pass unfinished (the backlog, or a run its budget or a stop ended), rows written terminal
+    since the counter the last pass covered, or another platform's ``unsupported`` still on the row."""
     if not artifact_storage.compression_supported():
         return row.get("unsupported") != sys.platform
-    return row.get("state") != "done" or row.get("counter") != _counter(pathlib.Path(root))
+    return row.get("state") != "done" or row.get("counter") != _counter(pathlib.Path(root)) or "unsupported" in row
 
 
 def _settled(root: pathlib.Path, task_ids: List[str]) -> Dict[str, bool]:
@@ -73,8 +75,17 @@ def _evidence_part(parts: Tuple[str, ...], directory: bool) -> bool:
 
 
 def _has_evidence(base: pathlib.Path) -> bool:
-    """A task folder holding either evidence plane (two stats): only such a task is worth its proof."""
-    return (base / "delegated_runs").is_dir() or (base / "source_handles" / "test-evidence").is_dir()
+    """A task folder holding either evidence plane (two stats): only such a task is worth its proof. One
+    that cannot be looked into stays a candidate: the walk then counts it ``unreadable`` and goes on."""
+    for path in (base / "delegated_runs", base / "source_handles" / "test-evidence"):
+        try:
+            if stat.S_ISDIR(os.stat(path).st_mode):
+                return True
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return True
+    return False
 
 
 def _seat_part(parts: Tuple[str, ...], directory: bool) -> bool:
@@ -154,7 +165,8 @@ class _Run:
                 before = entry.stat(follow_symlinks=False)
             except OSError:
                 continue  # gone since the listing
-            outcome = artifact_storage.compression_outcome(pathlib.Path(entry.path), owned=owned)
+            path = pathlib.Path(entry.path)
+            outcome = artifact_storage.compression_outcome(path, owned=owned, background=True)
             if outcome not in artifact_storage.STAT_SKIPS:
                 self.left -= 1
             if outcome == "compressed":
@@ -228,6 +240,9 @@ class _Run:
         wanted = (set(present) if since is None else wanted | {name for name, at in present.items() if at >= since}) & set(present)
         resume = self.resume  # the backlog resumes by name; a later pass owes its rest by name
         start = resume.get("key") if resume.get("plane") == "seats" and since is None else None
+        key = resume.get("key") if resume.get("plane") == "seats" and since is not None else None
+        if key in present and present[key] >= since:
+            resume["path"] = []  # changed since the pass that stopped in it: walked from its start
         names = sorted(name for name in wanted if start is None or name >= start)
         verdicts = {home.name: verdict for home, verdict, _task in
                     finished_seat_homes(self.root, self.live, self.should_stop, self.proven, only=set(names))}
@@ -268,12 +283,25 @@ def _added(total: Dict[str, Any], run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run(root: Any, should_stop: Callable[[], bool]) -> Dict[str, Any]:
-    """One paced run (module docstring); its position, cursor, waits and totals go to the job row."""
+    """One paced run (module docstring) at the utility disk tier, dataless files never read: this thread's
+    policy alone (``storage.utility_io``), put back after, and each ``ditto`` through ``taskpolicy``."""
+    from ouroboros.storage import utility_io
+
     root = pathlib.Path(root)
     row = maintenance_jobs.job(root, JOB) or {}
     if not artifact_storage.compression_supported():
         maintenance_jobs.record(root, JOB, state="done", unsupported=sys.platform)
         return {"state": "done", "items": 0}
+    restore = utility_io(thread=True)
+    try:
+        return _pass(root, row, should_stop)
+    finally:
+        if restore is not None:
+            restore()
+
+
+def _pass(root: pathlib.Path, row: Dict[str, Any], should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """The run's planes in order; its position, cursor, waits and totals go to the job row."""
     counter, now = _counter(root), time.time()
     began = row.get("began") or {"counter": counter, "at": now}  # a backlog pass keeps its start facts
     job = _Run(root, row, should_stop)

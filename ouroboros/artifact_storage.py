@@ -26,6 +26,7 @@ _BLOCK = 4096  # one allocation block: the least a compression must save
 STAT_SKIPS = ("not_regular", "dataless", "small", "linked", "compressed_already")  # decided by one lstat, no read
 _SIBLING_TAG = "decmpfs"  # the compression sibling's own tag inside the atomic signature
 _SF_DATALESS = 0x40000000  # <sys/stat.h>: an evicted (File Provider) file; reading it would download it
+_UTILITY_DISK = ("/usr/sbin/taskpolicy", "-d", "utility")  # a program run at the utility disk tier (macOS)
 
 
 def clone_file(source: pathlib.Path, destination: pathlib.Path) -> bool:
@@ -116,7 +117,8 @@ def compress_in_place(path: pathlib.Path, *, owned: Optional[Callable[[], bool]]
     return compression_outcome(path, owned=owned) == "compressed"
 
 
-def compression_outcome(path: pathlib.Path, *, owned: Optional[Callable[[], bool]] = None) -> str:
+def compression_outcome(path: pathlib.Path, *, owned: Optional[Callable[[], bool]] = None,
+                        background: bool = False) -> str:
     """Compress PATH in place, logical size, bytes and sha256 preserved, or say why it stayed: the one
     floor every caller shares. ``unsupported`` off macOS and Windows; one ``lstat`` decides
     ``not_regular``, ``dataless`` (macOS: evicted, a read would download it), ``small`` (under 64 KiB),
@@ -125,7 +127,8 @@ def compression_outcome(path: pathlib.Path, *, owned: Optional[Callable[[], bool
     ``share_unknown`` when the volume does not say: compressing a shared file would unshare it), Windows
     a read-only one (``read_only``: its file control needs a writable handle); a first 64 KiB block zlib
     cannot shrink by one allocation block is ``incompressible``; free space below the file's size is
-    ``low_space``. macOS hashes, writes a ``ditto --hfsCompression`` sibling (``compression_sibling``),
+    ``low_space``. macOS hashes, writes a ``ditto --hfsCompression`` sibling (``compression_sibling``;
+    BACKGROUND, the ``record_compression`` job's, runs it at the utility disk tier through ``taskpolicy``),
     verifies it, asks OWNED (else ``not_owned``), then re-stats the original right before the replace
     (device, inode, size, mtime: else ``changed``); NTFS asks OWNED, compresses in place through its
     file control and verifies the bytes after. Anything else is ``failed``."""
@@ -138,7 +141,7 @@ def compression_outcome(path: pathlib.Path, *, owned: Optional[Callable[[], bool
         if reason:
             return reason
         if sys.platform == "darwin":
-            return _compress_macos(path, before, owned)
+            return _compress_macos(path, before, owned, background)
         return _compress_ntfs(path, owned)
     except (OSError, subprocess.SubprocessError):
         return "failed"
@@ -198,7 +201,8 @@ def _may_share(path: pathlib.Path) -> Optional[bool]:
     return bool(struct.unpack_from("=Q", answer.raw, 24)[0] & 0x1)  # EF_MAY_SHARE_BLOCKS, <sys/stat.h>
 
 
-def _compress_macos(path: pathlib.Path, before: os.stat_result, owned: Optional[Callable[[], bool]]) -> str:
+def _compress_macos(path: pathlib.Path, before: os.stat_result, owned: Optional[Callable[[], bool]],
+                    background: bool = False) -> str:
     from ouroboros.artifacts import stream_artifact_file
     from ouroboros.config import ARTIFACT_COMPRESSION_TIMEOUT_SEC
 
@@ -206,7 +210,7 @@ def _compress_macos(path: pathlib.Path, before: os.stat_result, owned: Optional[
     temporary = compression_sibling(path)  # a hard kill's leftover is reaped (own tag), never a deliverable
     try:
         subprocess.run(
-            ["/usr/bin/ditto", "--hfsCompression", str(path), str(temporary)],
+            [*(_UTILITY_DISK if background else ()), "/usr/bin/ditto", "--hfsCompression", str(path), str(temporary)],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=ARTIFACT_COMPRESSION_TIMEOUT_SEC,
         )
