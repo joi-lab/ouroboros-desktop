@@ -74,7 +74,7 @@ export function createSubagentsChoice({ doc = globalThis.document, onChoose = ()
     note.hidden = true;
     note.innerHTML = '<p class="chat-subagents-meaning"></p><p class="chat-subagents-rule"></p>'
         + '<div class="chat-subagents-locked"><p class="chat-subagents-reason"></p>'
-        + '<button type="button" class="btn btn-default btn-sm chat-subagents-settings">Open Settings</button></div>';
+        + '<button type="button" class="btn btn-default btn-sm chat-subagents-settings ui-hit-area">Open Settings</button></div>';
     const meaning = note.querySelector('.chat-subagents-meaning');
     const rule = note.querySelector('.chat-subagents-rule');
     const locked = note.querySelector('.chat-subagents-locked');
