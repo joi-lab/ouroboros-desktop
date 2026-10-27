@@ -1260,9 +1260,9 @@ def reconstruct_task_cost(
     )
 
 
-def _token_text(value: Any, form: str = "{}") -> str:
+def _token_text(value: Any, form: str = "{}", unknown: str = "unknown") -> str:
     """A ledger token sum, or ``unknown`` when no row reported the counter (never a zero)."""
-    return "unknown" if value is None else form.format(int(value))
+    return unknown if value is None else form.format(int(value))
 
 
 def status_text(workers_dict: Dict[int, Any], pending_list: list,
@@ -1396,7 +1396,7 @@ def status_text(workers_dict: Dict[int, Any], pending_list: list,
             if stats["cost"] > 0 or stats["calls"] > 0:
                 cost = stats["cost"]
                 calls = int(stats["calls"])
-                pt, ct = _token_text(stats["prompt_tokens"], "{:,}"), _token_text(stats["completion_tokens"], "{:,}")
+                pt, ct = (_token_text(stats[name], "{:,}", "?") for name in ("prompt_tokens", "completion_tokens"))
                 lines.append(f"  {model_name}: ${cost:.2f} ({calls} calls, {pt}p/{ct}c tok)")
 
     lines.append(

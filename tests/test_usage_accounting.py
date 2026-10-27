@@ -162,6 +162,26 @@ def test_a_bucket_whose_rows_disclosed_no_token_counts_reports_absence_not_zero(
     assert measured["cached_tokens"] == 0
 
 
+def test_status_prints_a_token_sum_no_row_reported_as_unknown_never_zero(tmp_path, monkeypatch):
+    """A model reached only through sessions without an input split has no known input sum; /status and
+    its per-model line say so instead of printing 0, and a known sum still prints as a number."""
+    from supervisor import state
+
+    prior = state.DRIVE_ROOT, state.TOTAL_BUDGET_LIMIT
+    state.init(tmp_path, 0)
+    try:
+        state.save_state({})
+        bucket = {"physical_calls": 3, "accounted_usd": 0.0, "settled_usd": 0.0, "prompt_tokens": None,
+                  "completion_tokens": 45, "cached_tokens": None}
+        ledger = {**bucket, "by_model": {"agy-model": dict(bucket), "api-model": {**bucket, "prompt_tokens": 7}}}
+        monkeypatch.setattr(ua, "usage_breakdown", lambda *_a, **_k: dict(ledger))
+        text = state.status_text({}, [], {})
+    finally:
+        state.init(*prior)
+    assert "prompt_tokens: unknown, completion_tokens: 45, cached_tokens: unknown" in text
+    assert "agy-model: $0.00 (3 calls, ?p/45c tok)" in text and "api-model: $0.00 (3 calls, 7p/45c tok)" in text
+
+
 def test_breakdown_uses_final_rows_and_keeps_unattributed_explicit(data_root):
     reservation = ua.reserve_attempt(_request(
         data_root, category="review", prompt_tokens_estimate=10,

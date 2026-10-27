@@ -38,8 +38,8 @@ _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification
 # op=blob reads the observability CAS by digest. The digest in a task-source handle's name is that file's own
 # hash, read through the source's reader; a miss names that reader instead of another plane (BIBLE P1).
 _BLOB_KIND_HINT = ("; op=blob reads observability CAS blobs only. A digest in a task-source handle name "
-                   "(source_handles/...-<sha256>.<ext>) is read with memory_read(source_ref={\"kind\": \"task_source\", "
-                   "\"root\": \"artifact_store\", \"path\": ..., \"size\": ..., \"sha256\": ..., \"task_id\": ...})")
+                   "(source_handles/...-<sha256>.<ext>) is that file's own hash: open it with the reader its mark or "
+                   "result names, memory_read(source_ref={kind, root, path, size, sha256, task_id})")
 _STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
 # Each knowledge history row holds both complete versions of its note, so the ordinary
 # 8 MiB log window would cover hours of writes; this read budget covers far more of them.
