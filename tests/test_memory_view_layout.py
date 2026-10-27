@@ -305,12 +305,15 @@ def test_the_tool_schemas_count_in_the_floor_of_every_mode(tmp_path):
     # Unsent book forms share the selected start view, including its resident schema allowance.
 
 
-@pytest.mark.parametrize("actor,owner", [("child", "max"), ("child", "nano"), ("root", "max")])
+@pytest.mark.parametrize("actor,owner", [("child", "max"), ("child", "nano"), ("root", "max"),
+                                         ("child_without_selector", "max")])
 def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkeypatch, actor, owner):
     """The real path: the schemas come from the task's registry under the owner's mode, as the agent
-    passes them (``initial_tool_schemas``), and the plan's Nano projection is the request. Every role
-    holds the schema selectors in every mode (#1860), so a Nano the window chose sends a child, like a
-    root, enable_tools: its floor says memory_read is reachable through it."""
+    passes them (``initial_tool_schemas``), and the plan's Nano projection is the request. A read-only
+    child carries enable_tools in every mode (#1860), so a Nano the window chose for the owner's Max
+    sends it too, as the owner's Nano and a root always do: their floor says memory_read is reachable
+    through it. A child whose contract disables enable_tools sends list_available_tools alone: its
+    floor names that and the parent, never enable_tools or chronicle_write."""
     from types import SimpleNamespace
 
     from ouroboros import context
@@ -327,8 +330,10 @@ def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkey
         "configured_subagent": {"id": "h", "route": {"kind": "api_model"}}})}
     (tmp_path / "registry").mkdir()
     registry = ToolRegistry(repo_dir=tmp_path / "registry", drive_root=tmp_path / "registry")
-    if actor == "child":
+    if actor != "root":
         registry._ctx.task_constraint = TaskConstraint(mode="local_readonly_subagent")
+    if actor == "child_without_selector":
+        registry._ctx.task_contract = {"disabled_tools": ["enable_tools"]}
     schemas = initial_tool_schemas(registry, context_mode=owner)
     core = context._capture_context_core(env, memory, task, None, None)
 
@@ -353,7 +358,12 @@ def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkey
     assert "memory_read" not in sent and ("enable_tools" in floor) == ("enable_tools" in sent), (sent, floor)
     # Sealing is offered only to a request that can call chronicle_write (sent, or loaded by enable_tools).
     assert ("chronicle_write kind=page" in floor) == bool({"chronicle_write", "enable_tools"} & set(sent)), floor
-    assert "enable_tools" in sent and floor.rstrip().endswith("(memory_read is reachable through enable_tools)")
+    if actor == "child_without_selector":
+        assert sent == ("list_available_tools",)
+        assert floor.rstrip().endswith("list_available_tools shows what this task can call, and my parent task can "
+                                       "read any address I name to it)")
+    else:
+        assert "enable_tools" in sent and floor.rstrip().endswith("(memory_read is reachable through enable_tools)")
 
 
 def test_the_task_trace_keeps_the_view_fact_of_its_request(tmp_path, monkeypatch):

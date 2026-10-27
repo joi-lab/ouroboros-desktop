@@ -1324,7 +1324,7 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
     """
     from ouroboros.continuation_tools import history_tool_names
     from ouroboros.provider_models import tool_schema_limit
-    from ouroboros.tool_policy import fit_tool_schemas_to_limit, route_tool_limit_notice
+    from ouroboros.tool_policy import fit_tool_schemas_to_limit, route_tool_limit_notice, usable_selectors
 
     schemas, limit = ctx.tool_schemas, tool_schema_limit(ctx.active_model, use_local=ctx.active_use_local)
     if limit is None or schemas is None or len(schemas) <= limit:
@@ -1336,8 +1336,8 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
                                                      protect=history_tool_names(ctx.messages))
     ctx.tools._ctx._route_left_out_tool_names = earlier | set(left_out)
     invalidate_task_cache_splits(ctx.task_id)
-    _loop()._append_or_merge_user_message(
-        ctx.messages, route_tool_limit_notice(ctx.active_model, limit, total, left_out))
+    _loop()._append_or_merge_user_message(ctx.messages, route_tool_limit_notice(
+        ctx.active_model, limit, total, left_out, selectors=usable_selectors(ctx.tools, schemas)))
     return True
 
 

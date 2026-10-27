@@ -71,7 +71,9 @@ def test_one_over_the_ceiling_leaves_out_the_last_unpinned_schema_only():
 def _round_ctx(schemas, *, model=OPENAI_MAIN, use_local=False):
     return SimpleNamespace(
         tool_schemas=schemas, active_model=model, active_use_local=use_local, task_id="t-ceiling",
-        messages=[{"role": "user", "content": "go"}], tools=SimpleNamespace(_ctx=SimpleNamespace()),
+        messages=[{"role": "user", "content": "go"}],
+        tools=SimpleNamespace(_ctx=SimpleNamespace(),
+                              callable_rows=lambda namespace="": [{"name": name} for name in META_TOOL_NAMES]),
         defer_resource_wait=None, attempt_cap=None, accumulated_usage={}, active_context_mode="max",
     )
 

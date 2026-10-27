@@ -116,7 +116,7 @@ def fit_tool_schemas_to_limit(
     purpose before), then the rest in their own order; the tail beyond the ceiling is
     left out. Kept schemas retain their order, so the request's prefix is stable.
     Nothing is withdrawn from the registry: a left-out schema stays callable and
-    ``enable_tools`` loads it.
+    ``enable_tools``, where the actor has it, loads it.
     """
     if limit is None or len(schemas) <= limit:
         return list(schemas), ()
@@ -129,13 +129,35 @@ def fit_tool_schemas_to_limit(
             tuple(name for index, name in enumerate(names) if index not in kept))
 
 
-def route_tool_limit_notice(model: str, limit: int, total: int, left_out: Sequence[str]) -> str:
-    """The fact an actor reads when its route could not carry all of its loaded schemas."""
+def usable_selectors(registry: Any, resident: Iterable[Dict[str, Any]] | None = None) -> frozenset[str]:
+    """The discovery tools (``META_TOOL_NAMES``) this actor can use now, so advice names no other.
+
+    Dispatchable per ``callable_rows`` (a consciousness-origin contract keeps a disabled
+    tool's schema visible yet refuses the call) and, given the request's fitted ``resident``
+    schemas, sent in it too.
+    """
+    names = {row["name"] for row in registry.callable_rows(BUILTIN_NAMESPACE) or ()} & META_TOOL_NAMES
+    if resident is not None:
+        names &= {schema["function"]["name"] for schema in resident}
+    return frozenset(names)
+
+
+def route_tool_limit_notice(model: str, limit: int, total: int, left_out: Sequence[str], *,
+                            selectors: Iterable[str]) -> str:
+    """The fact an actor reads when its route could not carry all of its loaded schemas.
+
+    It names only the ``selectors`` this actor can use in the fitted request (``usable_selectors``).
+    """
+    selectors = frozenset(selectors)
+    ways = [way for name, way in (
+        ("list_available_tools", "list_available_tools marks them not loaded"),
+        ("enable_tools", "enable_tools loads one (the request then leaves out another schema to stay within "
+                         "the limit)"),
+    ) if name in selectors]
     return ("[SYSTEM NOTICE]\n"
             f"The route {model} accepts at most {limit} tool schemas in one request; this task had "
-            f"{total} loaded. Not loaded for now: {', '.join(left_out)}. They stay callable: "
-            "list_available_tools marks them not loaded, and enable_tools loads one (the request then "
-            "leaves out another schema to stay within the limit).")
+            f"{total} loaded. Not loaded for now: {', '.join(left_out)}. They stay callable"
+            + (": " + ", and ".join(ways) if ways else "") + ".")
 
 
 def compact_tool_catalog(

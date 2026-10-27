@@ -16,6 +16,7 @@ from ouroboros.llm_claudexor import cache_key_for_model
 from ouroboros.loop_model_call import _reprepare_waiting_main
 from ouroboros.model_slots import MODEL_ACCOUNTS_KEY
 from ouroboros.send_clock import CLOCK_NOTE_PREFIX
+from ouroboros.tool_capabilities import META_TOOL_NAMES
 from tests.test_context_fit_integration import _plan
 from tests.test_llm_claudexor import MODEL, ROUTE, result, ledger, setup as gateway_fixture
 from tests.test_model_wait import live_wait as wait_fixture
@@ -40,8 +41,10 @@ def main_call(live_wait, monkeypatch):
                             active_model=MODEL, active_context_mode="max", messages=messages,
                             context_fit_plan=plan, event_queue=events, drive_logs=lambda: root / "logs")
     controller.tool_context = inner
+    # A Main registry: both discovery selectors are callable (``tool_policy.usable_selectors``).
+    tools = SimpleNamespace(_ctx=inner, callable_rows=lambda namespace="": [{"name": n} for n in META_TOOL_NAMES])
     ctx = loop._RoundModelCallContext(
-        llm=client, messages=messages, tools=SimpleNamespace(_ctx=inner), context_fit_plan=plan,
+        llm=client, messages=messages, tools=tools, context_fit_plan=plan,
         active_model=MODEL, tool_schemas=[], active_effort="medium", max_retries=3,
         drive_logs=root / "logs", task_id="task-one", round_idx=1, event_queue=events,
         accumulated_usage={}, task_type="task", active_use_local=False,
@@ -272,6 +275,7 @@ def test_a_wait_card_switch_sends_the_list_fitted_to_the_chosen_routes_ceiling(m
     sent, notice = _names(prepared.kwargs["tools"]), "at most 128 tool schemas" in str(prepared.kwargs["messages"])
     # The switched send, its measurement and discovery carry one list: fitted on a ceiling, untouched without one.
     assert sent == _names(ctx.tool_schemas) and notice is (ceiling is not None)
+    assert ("and enable_tools loads one" in str(prepared.kwargs["messages"])) is notice  # a selector Main can call
     last_extra = catalog[-len(PINNED) - 1]
     assert sent == ([name for name in catalog if name != last_extra] if ceiling else catalog)
 
