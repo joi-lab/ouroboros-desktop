@@ -107,11 +107,9 @@ def _adopt_fallback_route(
     handover_reason: str = "fallback",
     tool_calls_at_handover: Optional[int] = None,
 ) -> tuple:
-    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback as the active route for the rest of
-    the loop, with its sanitized transcript: otherwise a later round replays THIS fallback's
-    reasoning back to the primary family with no switch sanitizer firing (the cross-family
-    signature replay, in reverse). The caller already rebound the context-fit plan to this exact
-    route. Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
+    """Round-4 C1.1: adopt a SUCCESSFUL cross-family fallback for the rest of the loop with its sanitized transcript, so a
+    later round never replays THIS fallback's reasoning to the primary family unsanitized; the caller already rebound the
+    context-fit plan to this route. Returns ``(active_model, active_use_local, context_fit_plan, context_mode)``."""
     ctx.active_model = fallback_model
     ctx.active_use_local = fallback_use_local
     messages[:] = fallback_messages
@@ -292,7 +290,7 @@ def _run_cross_model_fallback_chain(
             tool_schemas=tool_schemas,
             model_role=fallback_role,
             model_route={},
-            start_mode=active_context_mode,  # the shown mode: a fallback or the primary may lower it, never raise it
+            start_mode=active_context_mode,  # the shown mode: a fallback may lower it; the primary row resumes its held view
         )
         candidate_call = _loop()._RoundModelCallContext(
                 llm=llm,
@@ -559,7 +557,7 @@ def _rebind_context_fit_plan(
     model_role: str = "",
     model_route: Optional[Dict[str, Any]] = None,
     credential_profile_id: Optional[str] = None,
-    start_mode: Optional[str] = None,  # the mode the task runs in: a new route may lower it, never raise it
+    start_mode: Optional[str] = None,  # the task's mode: a new route may lower it; a return to the primary resumes its held view
 ) -> Tuple[Any, str]:
     if plan is None or not all(
         hasattr(plan, name) for name in ("max_projection", "low_projection", "core_sha256")
@@ -569,10 +567,12 @@ def _rebind_context_fit_plan(
         )
     from ouroboros.context import _context_fit_route
     from ouroboros.context_anchor import main_input_anchor
+    from ouroboros.primary_route_observation import held_primary_view
     from ouroboros.context_fit import (_failed_route_evidence, _route_calibration_ratio,
                                        estimate_context_prompt_tokens, main_output_reserve_tokens)
     from ouroboros.provider_models import parse_claudexor_model
 
+    plan, start_mode = held_primary_view(tools._ctx, plan, start_mode, model=model, use_local=use_local)
     metadata = getattr(tools._ctx, "task_metadata", {})
     metadata = metadata if isinstance(metadata, dict) else {}
     task = {
