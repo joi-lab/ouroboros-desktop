@@ -14,7 +14,8 @@ sources:
       - /data/archive/tools_*.jsonl
       - /data/archive/supervisor_*.jsonl
       # Worker rows of subagents and forked-memory tasks; deleted with the task drive after retention.
-      # Their tools.jsonl is not read: the canonical tools.jsonl holds the same rows.
+      # Their tools.jsonl is not read: the canonical tools.jsonl holds the same rows. Their llm_api_error
+      # rows reach the canonical events.jsonl too; ouroboros_api_error_once keeps one of each.
       - /data/state/headless_tasks/*/data/logs/events.jsonl
     read_from: beginning
     ignore_older_secs: 86400       # older archive generations and finished drives: a one-time backfill, not this tail
@@ -47,10 +48,20 @@ transforms:
       if row.type == "task_received" && !exists(row.task_id) { .task_id = row.task.id }  # legacy nested id only
       .log = replace(replace(replace(path, r'^.*/', ""), r'\.jsonl$', ""), r'_.*$', "")  # archive/<log>_<stamp>
       .child_drive = contains(path, "/state/headless_tasks/")  # a subagent's or forked-memory task's own drive
+  ouroboros_api_errors:        # REPLICA_RULE: a drive's llm_api_error row is also in the canonical file
+    type: route
+    inputs: [ouroboros_metadata]
+    route:
+      api_error: '.type == "llm_api_error"'
+  ouroboros_api_error_once:    # the first copy passes; an older row only its drive holds is never a duplicate
+    type: dedupe
+    inputs: [ouroboros_api_errors.api_error]
+    fields:
+      match: [type, llm_call_id, ts]
 sinks:
   ouroboros_metadata_file:     # replace with your destination (Loki, Elasticsearch, an OTLP endpoint, ...)
     type: file
-    inputs: [ouroboros_metadata]
+    inputs: [ouroboros_api_errors._unmatched, ouroboros_api_error_once]
     path: /var/lib/vector/ouroboros-metadata.jsonl
     encoding:
       codec: json

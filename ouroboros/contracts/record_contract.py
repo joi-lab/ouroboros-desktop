@@ -65,8 +65,8 @@ PLANES: Mapping[str, str] = {
         "The task's own log directory: the canonical file for Main turns and pooled roots; for every subagent "
         "and forked-memory task its child drive <data>/state/headless_tasks/<task_id>/data/logs/<log>.jsonl, "
         "found through the task's store row (get_task_result / query_data) child_drive_root. A child drive is never rotated and is "
-        "deleted once its task is terminal and older than OUROBOROS_GC_RETENTION_DAYS, or at once for a "
-        "cancelled subagent."
+        "deleted once its task is terminal and older than OUROBOROS_GC_RETENTION_DAYS, at once for a "
+        "cancelled subagent, or when the owner frees it from the storage page (the storage_free event names it)."
     ),
     "both": "The task's log directory and the canonical file receive the same row (see REPLICA_RULE).",
 }
@@ -172,7 +172,7 @@ ANCHOR_ROWS: tuple[AnchorRow, ...] = (
         content=_fields("web_search_sources claudexor"), natural_key=("ledger_attempt_ids",),
     ),
     AnchorRow(
-        "llm_api_error", "events", "drive_logs",
+        "llm_api_error", "events", "both",
         "One failed model attempt inside a round, with its classification and the attempts it reserved.",
         _fields("ts type task_id execution_id round_id llm_call_id round attempt model error error_kind "
                 "status_code ledger_attempt_ids"),
@@ -277,10 +277,11 @@ ROTATION_RULE = (
 )
 
 REPLICA_RULE = (
-    "Only tools rows are written twice: when the task's log directory is not the canonical one, it and the "
-    "canonical tools.jsonl receive the same row. Read tools rows from the canonical file, or drop duplicates "
-    "by (invocation_id, type); a legacy row without invocation_id is a duplicate only when the whole row is "
-    "equal. No other anchor row is mirrored."
+    "Tools rows and llm_api_error rows are written twice: when the task's log directory is not the canonical "
+    "one, it and the canonical file receive the same row. Read them from the canonical file, or drop "
+    "duplicates by the natural key, (invocation_id, type) for tools rows and llm_call_id for llm_api_error; a "
+    "legacy tools row without invocation_id is a duplicate only when the whole row is equal. No other anchor "
+    "row is mirrored."
 )
 
 LEGACY_RULE = (
@@ -296,7 +297,9 @@ LEGACY_RULE = (
     "tool_call row without is_error); direct-root tools rows lacked lineage before 2026-09-21; cost_usd and "
     "cost_usd_with_children on task rows before 7.0.0 mean accounted_upper_bound_usd[_with_children]; "
     "outcome_axes members may be bare strings; llm_round duration_ms, ledger_attempt_ids and "
-    "physical_attempt_id, and llm_api_error ledger_attempt_ids, start with RECORD_CONTRACT_VERSION 1."
+    "physical_attempt_id, and llm_api_error ledger_attempt_ids, start with RECORD_CONTRACT_VERSION 1; "
+    "llm_api_error rows of a task with a child drive reach the canonical file from 2026-10-28, earlier ones "
+    "only their drive."
 )
 
 ACCOUNTING_RULE = (
@@ -315,8 +318,8 @@ ACCOUNTING_RULE = (
 
 COVERAGE_GAPS = (
     "No canonical row marks a task start: the task's store row (get_task_result / query_data) with status running is the start fact.",
-    "Worker rows (llm_round, llm_api_error, task_received, task_error) of a task with a child drive vanish "
-    "with the drive after retention; canonical rows and the archive stay. API-child timeout handovers retain "
+    "Worker rows (llm_round, task_received, task_error) of a task with a child drive vanish with the drive; "
+    "its llm_api_error rows, canonical rows and the archive stay. API-child timeout handovers retain "
     "trace_refs.timeout_repeat and its call sources in the task result; other raw rows require the drive.",
     "llm_round covers a task's main loop only: review, search, vision and memory calls appear only as "
     "llm_usage, without a duration. A round that never settles has no llm_round: its failed attempts are "

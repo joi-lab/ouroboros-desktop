@@ -23,11 +23,12 @@ passport). The collector follows it:
 - `archive/{events,tools,supervisor}_*.jsonl`, so that generations rotated while Vector was stopped are
   still read; a generation Vector already read keeps its inode and checkpoint. `ignore_older_secs`
   (one day) keeps the tail off older history: to ship that, run a one-time backfill over the archive.
-- `state/headless_tasks/*/data/logs/events.jsonl`: the model rounds, errors and task starts of subagents
-  and forked-memory tasks are written there, not to the main `events.jsonl`. These drives are deleted
-  once the task is finished and older than `OUROBOROS_GC_RETENTION_DAYS` (default 7), or at once for a
-  cancelled subagent, so the collector must be running to keep them. Their `tools.jsonl` is skipped on
-  purpose: the main `tools.jsonl` holds the same rows.
+- `state/headless_tasks/*/data/logs/events.jsonl`: the model rounds and task starts of subagents and
+  forked-memory tasks are written there, not to the main `events.jsonl`; their model errors reach both, and
+  `ouroboros_api_error_once` keeps one copy of each. These drives are deleted once the task is finished and
+  older than `OUROBOROS_GC_RETENTION_DAYS` (default 7), at once for a cancelled subagent, or when the owner
+  frees them from the storage page, so the collector must be running to keep them. Their `tools.jsonl` is
+  skipped on purpose: the main `tools.jsonl` holds the same rows.
 
 ## What it forwards
 
