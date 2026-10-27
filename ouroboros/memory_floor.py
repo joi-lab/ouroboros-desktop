@@ -91,7 +91,8 @@ def max_room_fact(snapshot: Optional[mv.MemoryViewSnapshot], core: Any, books: I
     """The Max room of one start, the host's measure in the owner's Max frame with whole books.
 
     ``allowance`` is the memory room that frame leaves (``None``: an unknown window, no fact). ``floor_need``
-    is the books, core, runtime context, assignment, reply reserve and work room; ``zero_need`` adds the tool
+    is the books, core, knowledge with scratchpad and runtime facts (``dynamic_head_text`` and ``dynamic_text``:
+    Health, recent activity, skills, drive state too), assignment, reply reserve and work room; ``zero_need`` adds the tool
     schemas, ``need`` my memory in its ordinary forms (task lines and quiet rooms collapsed, nothing cut):
     ``story`` (``unfolded``: its pages no part or account holds yet) and ``room``. Measures only: the start
     alone chooses the mode, and the mind judges what to fold.
@@ -100,9 +101,10 @@ def max_room_fact(snapshot: Optional[mv.MemoryViewSnapshot], core: Any, books: I
         return None
     base = view_tokens(core.base_prompt) + view_tokens(core.bible_md)
     parts = {"books": max(0, sum(map(view_tokens, books)) - base), "core": base + view_tokens(core.semi_stable_text),
-             "runtime context": view_tokens(core.dynamic_head_text) + view_tokens(core.dynamic_text)}
+             "knowledge, scratchpad and runtime facts": view_tokens(core.dynamic_head_text) + view_tokens(core.dynamic_text)}
     parts["assignment"] = max(0, fixed - schemas - sum(parts.values()))  # the task's messages and their framing
-    ordinary = mv.FloorLevel(tuple((step, tuple(ident for s, ident, *_ in floor_elements(snapshot) if s == step))
+    elements = floor_elements(snapshot) if snapshot else ()
+    ordinary = mv.FloorLevel(tuple((step, tuple(ident for s, ident, *_ in elements if s == step))
                                    for step in _ORDINARY)) if snapshot else mv.FULL_VIEW
     pages = [e for e in (snapshot.story if snapshot else ()) if e.get("kind") == "page" and not e.get("told_by")]
     memory = {"story": view_tokens(story), "room": view_tokens(mv.render_room(snapshot, ordinary)) if snapshot else 0,
@@ -149,7 +151,7 @@ def floor_parts(fact: Mapping[str, Any]) -> str:
 def measure_text(fact: Mapping[str, Any], *, parts: bool = False) -> str:
     """The host's measure of one start in the provable parts; the mind judges what they mean."""
     zero = fact["window"] - fact["zero_need"]
-    return (f"window {fact['window']:,}; books, core, runtime context, assignment, reply reserve and work room "
+    return (f"window {fact['window']:,}; books, core, knowledge, scratchpad, runtime facts, assignment, reply reserve and work room "
             f"{fact['floor_need']:,}{f' ({floor_parts(fact)})' if parts else ''}; tool schemas {fact['schemas']:,}; with "
             f"no memory shown {'headroom' if zero >= 0 else 'over by'} {abs(zero):,}; my memory "
             f"{fact['story'] + fact['room']:,} = story {fact['story']:,} (pages no part or account holds yet "

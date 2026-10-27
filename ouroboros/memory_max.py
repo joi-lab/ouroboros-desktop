@@ -7,9 +7,10 @@ start lowered to Low while the books, core, assignment, reply reserve and work r
 ``memory_max`` obligation set and one line in Main. Later such starts only update its facts: the largest
 work room and the smallest window that lost Max, the last measure. A route whose window cannot hold even
 that floor (``route``) is a disclosed fact of its task, never an episode, and closes none. The episode
-closes at a fresh integrating start that holds whole books beside my whole story in a frame no softer than
-the lost ones (work-room levels not fewer, window not larger), or at one whose owner mode is no longer
-Max; one line in Main says which. A running Low task's view was captured at its start: it neither holds
+closes at a fresh integrating start that holds whole books beside my whole story and whose own need would
+hold them in the worst lost frame too (the smallest lost window with its work room per level, at the most
+levels a lost start had), so a raised window or a Main turn closes it by measure; or at one whose owner
+mode is no longer Max. One line in Main says which. A running Low task's view was captured at its start: it neither holds
 nor closes the episode. While it is open, an integrating reader's Health names it (``health_line``).
 
 The two lines go through the terminal outbox (``supervisor.terminal_delivery``) under ids the row holds
@@ -50,6 +51,11 @@ def _numbers(fact: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
     return {**{key: fact[key] for key in _NUMBERS if key in fact}, **extra}
 
 
+def _unit(fact: Mapping[str, Any]) -> int:
+    """The work room one level takes in this start's frame."""
+    return fact["work"] // max(1, fact["levels"])
+
+
 def transition(row: Optional[Mapping[str, Any]], fact: Mapping[str, Any], *, task_id: str,
                now: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """``(row, event)`` after one fresh integrating start: ``opened``, ``updated``, ``closed`` or ``""``."""
@@ -59,12 +65,17 @@ def transition(row: Optional[Mapping[str, Any]], fact: Mapping[str, Any], *, tas
     if cause == "crowded" and not open_:
         episode = f"{now}:{task_id}"
         return {"id": episode, "opened_at": now, "task": task_id, "starts": 1, "window": fact["window"],
-                "levels": fact["levels"], "first": _numbers(fact), "last": _numbers(fact, at=now, task=task_id),
+                "unit": _unit(fact), "levels": fact["levels"], "first": _numbers(fact),
+                "last": _numbers(fact, at=now, task=task_id),
                 "notices": {"open": {"id": f"memory_max:{episode}:open", "recorded": False}}}, "opened"
     if cause == "crowded":
-        return {**current, "starts": current["starts"] + 1, "window": min(current["window"], fact["window"]),
-                "levels": max(current["levels"], fact["levels"]), "last": _numbers(fact, at=now, task=task_id)}, "updated"
-    held = cause == "held" and open_ and fact["levels"] >= current["levels"] and fact["window"] <= current["window"]
+        smaller = fact["window"] < current["window"]
+        return {**current, "starts": current["starts"] + 1, "window": fact["window"] if smaller else current["window"],
+                "unit": _unit(fact) if smaller else current["unit"], "levels": max(current["levels"], fact["levels"]),
+                "last": _numbers(fact, at=now, task=task_id)}, "updated"
+    # This start's need with the worst lost frame's work room, against that frame's window.
+    held = (cause == "held" and open_
+            and fact["need"] - fact["work"] + current["unit"] * current["levels"] <= current["window"])
     if held or (cause == "owner" and open_):
         return {**current, "closed": _numbers(fact, at=now, task=task_id, cause=cause, mode=fact.get("mode", "max")),
                 "notices": {**current["notices"], "close": {"id": f"memory_max:{current['id']}:close",
@@ -76,8 +87,26 @@ def _minute(stamp: str) -> str:
     return str(stamp or "")[:16].replace("T", " ")
 
 
-def notice_text(row: Mapping[str, Any], which: str) -> str:
-    """The one place the two Main lines are worded: the host's measure and the possibility, never a verdict."""
+def folds_by(root: Any, since: str, until: str) -> Optional[Dict[str, int]]:
+    """Parts and accounts published in ``[since, until]`` by author kind (``mind``, ``helper``); ``None`` unread."""
+    try:
+        from ouroboros.chronicle_store import ChronicleStore
+
+        records = ChronicleStore(root).room_records(None, kinds=("part", "account"))
+    except Exception:
+        log.debug("Chronicle unreadable for the Max episode's close line", exc_info=True)
+        return None
+    by: Dict[str, int] = {}
+    for record in records:
+        if since <= str(record.get("ts") or "") <= until:
+            kind = str((record.get("author") or {}).get("kind") or "")
+            by[kind] = by.get(kind, 0) + 1
+    return by
+
+
+def notice_text(row: Mapping[str, Any], which: str, by: Optional[Mapping[str, int]] = None) -> str:
+    """The one place the two Main lines are worded: the host's measure and the possibility, never a verdict.
+    ``by``: the close line's folds while the episode was open, by author kind (``folds_by``)."""
     first, starts = row["first"], f"{row['starts']} Low start{'' if row['starts'] == 1 else 's'}"
     if which == "open":
         return (f"Max lost: task {row['task']} started in Low with chapter maps. The host's measure: "
@@ -87,9 +116,11 @@ def notice_text(row: Mapping[str, Any], which: str) -> str:
     span = f"Max was lost from {_minute(row['opened_at'])} to {_minute(closed['at'])} over {starts}"
     if closed["cause"] == "owner":
         return f"The lost-Max episode closed: the owner selected {closed['mode'].capitalize()} (task {closed['task']}). {span}."
+    folded = "" if by is None else (f"; parts and accounts written meanwhile: {by.get('mind', 0)} by me, "
+                                     f"{by.get('helper', 0)} by the Light helper")
     return (f"Max holds again: task {closed['task']} started with whole books beside my whole story ("
             f"{floor.measure_text(closed)}). {span}; my story went from {first['story']:,} to {closed['story']:,} "
-            f"tokens, my parts and accounts from {first.get('folds', 0)} to {closed.get('folds', 0)}.")
+            f"tokens{folded}.")
 
 
 def health_line(root: Any, role: str = "integrator") -> str:
@@ -139,8 +170,10 @@ def _publish(root: Any, row: Dict[str, Any], event_queue: Any) -> bool:
         if owed is None:
             owed = {str(item.get("delivery_id") or "") for item in outbox.pending_deliveries(root)}
         if notice["id"] not in owed:
+            closed = row.get("closed") or {}
+            by = folds_by(root, row["opened_at"], closed["at"]) if which == "close" and closed.get("cause") == "held" else None
             outbox.enqueue_terminal_delivery_outcome(root, {
-                "type": "send_message", "chat_id": owner_chat_id(root), "task_id": "", "text": notice_text(row, which),
+                "type": "send_message", "chat_id": owner_chat_id(root), "task_id": "", "text": notice_text(row, which, by),
                 "role": "system", "system_type": NOTICE_TYPE, "delivery_id": notice["id"]}, event_queue=event_queue)
     return changed
 
@@ -166,6 +199,11 @@ def observe_start(root: Any, plan: Any, mode: str, *, task_id: str, event_queue:
             row = txn.get_row(SET, IDENTITY)
         if row is None and fact["cause"] != "crowded":
             return ""
+        if row and row.get("closed") and fact["cause"] == "crowded":
+            try:  # the closed episode's line goes out before a new one takes its row
+                _publish(root, row, event_queue)
+            except Exception:
+                log.warning("Close line of Max episode %s not handed over", row.get("id"), exc_info=True)
         with store.open_store(root, write=True) as txn:
             row, event = transition(txn.get_row(SET, IDENTITY), fact, task_id=task_id, now=utc_now_iso())
             if event:

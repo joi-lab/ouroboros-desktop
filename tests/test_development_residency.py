@@ -101,3 +101,11 @@ def test_max_without_the_handbook_carries_its_chapter_map_in_the_handbooks_own_b
     assert with_book[1] == "## DEVELOPMENT.md\n\n" + development
     assert without[1].startswith("## DEVELOPMENT.md (navigation map)") and "Review" in without[1]
     assert "Read every source." not in without[1]
+
+
+@pytest.mark.parametrize("flag", [True, False, None])
+def test_start_task_carries_an_explicit_answer_to_the_admitted_task_and_absence_stays_absent(tmp_path, monkeypatch, flag):
+    from tests.test_root_effort_ingress import _promoted
+
+    task, _row, _workers = _promoted(tmp_path, monkeypatch, **({} if flag is None else {"context_requires_development": flag}))
+    assert task.get("context_requires_development", "absent") == ("absent" if flag is None else flag)

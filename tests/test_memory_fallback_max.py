@@ -64,3 +64,57 @@ def test_with_consciousness_on_an_episode_drafts_no_acting_part(tmp_path, monkey
     llm = _Light(PART)
     assert _run(tmp_path, llm, direct=True).outcome == "consciousness_on"
     assert llm.prompts == [] and _drafts(tmp_path) == []
+
+
+def _shown_account(root, pages, *, shown=True):
+    store = ChronicleStore(root)
+    account = store.publish_account(room_id="1", text="MY ACCOUNT", sources=pages, author=shared.MIND)
+    assert account.ok, account
+    assert store.select_account(account.record["id"], replaces=pages, author=shared.MIND, reason="it says it",
+                                shown=shown).ok
+
+
+@pytest.mark.parametrize("told,folded", [(2, None), (1, 1)])
+def test_pages_a_shown_account_tells_are_not_folded_again(tmp_path, monkeypatch, light, told, folded):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    pages = _main_pages(tmp_path)
+    _shown_account(tmp_path, pages[:told])
+    _episode(tmp_path)
+    llm = _Light(PART)
+    run = _run(tmp_path, llm, direct=True)
+    if folded is None:  # every page is told already: nothing to fold, no Light call
+        assert run.outcome == "nothing" and llm.prompts == [] and _drafts(tmp_path) == []
+    else:  # the told page starts the room's run; the rest still folds
+        assert run.outcome == "published" and _drafts(tmp_path)[0]["covers"]["member_ids"] == pages[folded:]
+
+
+def test_withdrawing_the_account_lets_its_pages_fold(tmp_path, monkeypatch, light):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    pages = _main_pages(tmp_path)
+    _shown_account(tmp_path, pages, shown=False)
+    _episode(tmp_path)
+    assert _run(tmp_path, _Light(PART), direct=True).outcome == "published"
+    assert _drafts(tmp_path)[0]["covers"]["member_ids"] == pages
+
+
+def test_one_page_is_a_run_light_judges(tmp_path, monkeypatch, light):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    page = _mind_page(tmp_path, "1", 10, 12)["id"]
+    _episode(tmp_path)
+    llm = _Light(PART)
+    assert _run(tmp_path, llm, direct=True).outcome == "published" and len(llm.prompts) == 1
+    assert _drafts(tmp_path)[0]["covers"]["member_ids"] == [page]
+
+
+def test_the_close_line_counts_folds_by_author_within_the_episode(tmp_path, monkeypatch, light):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    _main_pages(tmp_path)
+    _episode(tmp_path)
+    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {}
+    assert _run(tmp_path, _Light(PART), direct=True).outcome == "published"
+    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {"helper": 1}
+    assert mm.folds_by(tmp_path, "2000-01-01", "2000-01-02") == {}  # outside the episode's span

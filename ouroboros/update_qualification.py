@@ -171,24 +171,30 @@ def qualification_summary(qualification: dict | None) -> dict | None:
     """A range's qualification in counts for the Runtime context, with the reader of the whole record.
 
     The panel, preflight and the letter's author keep the full record (owner 8B); a task sees the range, how
-    many commits carry a receipt and each check's outcomes, the post-merge read with its runs and gaps.
+    many commits carry a receipt, each check's outcomes by their source (``author_declared``: the author's
+    word, not a host run) and the reviews observed and declared, the post-merge read with its runs and gaps.
     """
     if not isinstance(qualification, dict):
         return qualification
     commits = [c for c in qualification.get("commits") or [] if isinstance(c, dict)]
     receipts = [c["receipt"] for c in commits if isinstance(c.get("receipt"), dict)]
     checks: dict = {}
+    reviews: dict = {"observed": {}, "declared": {}}
     for receipt in receipts:
         for row in receipt.get("checks") or []:
             outcome = checks.setdefault(str(row.get("name")), {})
-            outcome[str(row.get("status"))] = outcome.get(str(row.get("status")), 0) + 1
+            key = f"{row.get('status')} ({row.get('source') or 'unknown'})"
+            outcome[key] = outcome.get(key, 0) + 1
+        for side, verdicts in reviews.items():
+            verdict = str((receipt.get("review") or {}).get(side) or "unknown")
+            verdicts[verdict] = verdicts.get(verdict, 0) + 1
     github = qualification.get("github") if isinstance(qualification.get("github"), dict) else {}
     conclusions: dict = {}
     for run in github.get("runs") or []:
         key = str(run.get("conclusion") or run.get("status") or "unknown")
         conclusions[key] = conclusions.get(key, 0) + 1
     return {"base_sha": qualification.get("base_sha"), "target_sha": qualification.get("target_sha"),
-            "commits": len(commits), "with_receipt": len(receipts), "checks": checks,
+            "commits": len(commits), "with_receipt": len(receipts), "checks": checks, "reviews": reviews,
             "post_merge": {"read": github.get("status", "unknown"), "reason": github.get("reason"),
                            "runs": conclusions, "missing": len(github.get("missing_shas") or [])},
             "full": "query_data(op='json', kind='update_letter')"}

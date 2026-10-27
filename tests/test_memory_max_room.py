@@ -40,9 +40,9 @@ def test_a_roomy_window_holds_max_and_names_the_measured_parts(monkeypatch):
     assert fact["headroom"] == fact["window"] - fact["need"] > 0 and "short" not in fact
     assert fact["levels"] == 2 and fact["window"] == 2_000_000 and fact["floor_need"] <= fact["zero_need"] < fact["need"]
     assert fact["unfolded"] and fact["unfolded"] <= fact["story"]  # 40 pages, none in a part or account yet
-    assert dict(fact["parts"])["books"] > dict(fact["parts"])["runtime context"] and "tool schemas" not in dict(fact["parts"])
+    assert dict(fact["parts"])["books"] > dict(fact["parts"])["knowledge, scratchpad and runtime facts"] and "tool schemas" not in dict(fact["parts"])
     line = memory_facts(plan, "max")
-    assert line.startswith("Max room: window 2,000,000; books, core, runtime context, assignment, reply reserve and work room")
+    assert line.startswith("Max room: window 2,000,000; books, core, knowledge, scratchpad, runtime facts, assignment, reply reserve and work room")
     assert f"beside a Max room of {fact['allowance']:,}; Max held;" in line
     assert "pages not yet in a part or account 40" in line and "drafts awaiting a decision 0" in line
 

@@ -251,15 +251,23 @@ def _legacy_units(root: pathlib.Path, store: ChronicleStore) -> Iterator[Fallbac
 
 
 def max_episode_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
-    """While my memory keeps Max lost (``memory_max.memory_can_help``): one room's oldest run of unfolded pages,
-    whoever wrote them, the room holding most page text first. Never an account across rooms: that is the mind's."""
+    """While my memory keeps Max lost (``memory_max.memory_can_help``): one room's oldest run of unfolded pages no
+    shown account tells (the view's ``told_map``), whoever wrote them, the room holding most such text first; one
+    page is a run too, Light judges whether folding it helps. Never an account across rooms: that is the mind's."""
+    from ouroboros.memory_view_account import told_map
+
+    told = set(told_map([{"id": r["id"], "replaces": r["selection"].get("replaces") or (),
+                          "selection_sequence": r["selection"]["sequence"]}
+                         for r in store.accounts() if (r.get("selection") or {}).get("shown")]))
     sizes: Dict[str, int] = {}
     for record in store.room_records(None, kinds=("page",)):
-        if not record.get("folded_into"):
+        if not record.get("folded_into") and record["id"] not in told:
             sizes[str(record["room_id"])] = sizes.get(str(record["room_id"]), 0) + len(str(record.get("current_text") or ""))
     for room in sorted(sizes, key=lambda room: (-sizes[room], room)):
-        run = _unfolded_run(store, room, "page")
-        if len(run) >= 2:
+        # A told page breaks the run: a part's members are adjacent in the room's unfolded order.
+        run = list(itertools.takewhile(lambda ident: ident not in told,
+                                       itertools.dropwhile(told.__contains__, _unfolded_run(store, room, "page"))))
+        if run:
             yield FallbackUnit("part", room, f"max:{room}:{run[0]}", member_ids=tuple(run), head_sequence=store.room_head(room))
 
 
