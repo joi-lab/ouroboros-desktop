@@ -21,12 +21,12 @@ web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules n
     project_answer.js — Main's Project lifecycle rows and folded mirrored answers (§3 Main rows)
     work_portal.js, task_episodes.js, project_handoff.js — one Main card per work: the portal and its binding sources, Continue episodes, the binding receipt's words (§3 Project handoff receipts)
     chat_reply.js, chat_reply_quote.js, chat_relay_deck.js, chat_row_menu.js, row_menu_gesture.js, message_actions.js, routing_receipt.js, text_fit.js — replies and host-derived quotes, note decks, row menus, saved-row actions, an owner message's routing receipt, word-cut fitting (§3 Chat and Projects; DESIGN "Replies")
-    composer.js — a room's composer: "+" menu, slots, Send (§3)
+    composer.js, composer_subagents.js, capsule_fit.js, swarm_presentation.js — the composer: "+" menu, slots, Send, Subagents; Swarm's label and receipt (§3)
     chat_cards.js, card_components.js, card_frames.js — living cards in the feed and kept on Widgets; the sandboxed app frame (CLIENT_CONTRACT §5)
     contributions.js, composer_plus.js, composer_chips.js, host_modules.js, holds.js — the contributions store and verbs; skills' "+" items and capsule-row chips; trusted page modules; the start ledger (CLIENT_CONTRACT §11; DESIGN "Skills in the page")
     project_reference.js — the one Project pointer control and the only raiser of `ouro:open-project` (DESIGN "References and actions")
     project_activity.js, work_status.js, work_types.js, status_mark.js — Project marks and room words from the server's `rooms`/`works`; their typedefs (§3 Liveness census)
-    room_work.js, project_read_state.js — a room's header work list without execution authority; its read receipt (§3 Project rooms)
+    room_work.js, project_read_state.js, chat_header.js, consciousness_status.js — a room's bar: work list (no execution authority), consciousness chip and Shade, Panic, Main's Restart/budget; read receipt (§3 Project rooms)
     model_wait.js — model waits and owner actions in chat cards (§6 Quota and auth waits)
     task_checkpoints.js, cancel_presentation.js, dashboard.js, logs.js, worker_sha_presentation.js, costs.js, files.js — typed checkpoints and cancellation-cause text shared by Chat and Logs; Dashboard, Logs, worker-SHA presentation, Costs (unknown is not free), Files (§3)
     skills.js, skill_*.js — Skills page: Installed, Browse and Sources, cards, sheet, dialogs, Skill Review cards, publish (§3 Skills and Widgets)
@@ -34,7 +34,7 @@ web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules n
     model_roles.js, model_chooser.js — the Models editor and editable chooser shared by Settings, onboarding and route editors; catalog arrival never assigns a value (§3 Navigation)
     subagents_settings.js, subagent_status_primitives.js, route_editor_primitives.js, harness_accounts.js, account_resources.js, harness_login_cards.js, claudexor_status_store.js — Agents editors; account/resource/login views share one status/action store (§3 Agent accounts)
     onboarding_agents_step.js, onboarding_starter_skills.js, onboarding_overlay.js, project_create.js, utils.js — first-run accounts step and starter skills; the wizard frame's sandbox policy, one security boundary; New Project dialog; shared utilities (§2; §3 Project rooms)
-    review_command.js — `/review` chooser and send (§3 Chat and Projects)
+    review_command.js — `/review` chooser and send, from Evolution (§3)
     review_presentation.js, review_opinions.js, plan_record_presentation.js, review_record_card.js, review_dom_patch.js, harness_presentation.js — Read-side Reviews groups/opinions, record facts, keyed DOM updates; sole harness identity markup (§3)
     acceptance_incident_presentation.js — a stored task-acceptance incident, read-only; no reviewer authority (§6 Result review)
     widgets.js, widget_render.js, widget_module.js, widget_assets.js, widget_frame.js, widget_card.js, widget_reorder.js, widget_list.js, widget_size.js, widget_chart.js, widget_job.js, masonry.js — Widgets page leaves: host and card registry, the declarative renderer, framed mounts, card chrome, list-request policy, helpers and masonry (§3)
@@ -75,7 +75,7 @@ supervisor/ — background thread inside server.py (§5)
   event_taxonomy.py, events_budget.py, events_chat_delivery.py, events_coop_checkpoint.py, events_evolution_done.py, events_mind_controls.py, events_project_routing.py, events_runtime_controls.py, events_schedule_task.py, events_subagent_admission.py, events_task_done.py, events_worker_reports.py — `EVENT_HANDLERS` leaves, one event family each; `event_taxonomy.py` declares each `EVENT_Q` disposition; `events_project_routing.py` alone writes routing refusals (§5)
   task_dispatch.py, workspace_preparation.py — admitted worker payload; off-loop preparation with durable phases (§5)
   log_addressing.py — audience of task-scoped log events: project binding wins, chat id 0 is `HIDDEN_CHAT_ID`, A2A frames are dropped at the `push_log` choke (§4 WebSocket protocol; §12)
-  steering.py, plan_obligation.py — steering into a running task's mailbox, keyed on the host-minted `issuer`, refused while a cancel intent is pending; a promoting root hands an unmet `force_plan` to the new root inside the admission transaction (§6 Owner routing verbs)
+  steering.py — running-task mailbox steering, keyed on the host-minted `issuer`, refused during pending cancellation (§6 Owner routing verbs)
   direct_roots.py — live direct roster and ended-process handover (§5)
   telemetry_events.py — rare typed telemetry-only worker events: durable appends exclude high-rate narration
   git_ops.py — git operations (clone, checkout, rescue, rollback, push, credential helper) and the bounded local-Git runner
@@ -211,7 +211,6 @@ ouroboros/ — agent core and shared runtime (§6)
   consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
   knowledge.py, memory_publication.py — linked-Markdown notes with shelf indexes and revision-checked writes, so concurrent cognition cannot silently overwrite a newer note; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
-  memory_journal_compaction.py — compatibility entry point that only measures journal sizes (`server_maintenance.py` emits `memory_journal_observation`); history stays complete
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
   task_tree_ledger.py — append-only `data/task_trees/<root>/blackboard.jsonl`: ephemeral swarm coordination (`tree_note`/`tree_read`), mirrored into the project journal at root completion
   projects_registry.py, project_admission.py — the owner Project registry (active|deleting|tombstoned) and strict admission claims (§6 Project registry and lease)

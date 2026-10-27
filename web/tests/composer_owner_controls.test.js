@@ -20,7 +20,7 @@ test('primary and helper bounds are independent, and helper bounds cannot cross'
     assert.deepEqual(snapRange({ min: 0.6, rec: 0.2, max: 2.4 }), { min: 1, rec: 0, max: 2 });
 });
 
-test('the control mounts after the pills, closed: ring, name and the recommended level only; three sliders out of the tab order', () => {
+test('the control mounts after the context capsule, closed: ring, name and the recommended level only; three sliders out of the tab order', () => {
     const m = mount();
     assert.equal(m.el.dataset.open, 'false');
     assert.ok(m.el.classList.contains('chat-capsule'));
@@ -248,12 +248,10 @@ test('hover opens only where the button stays under the mouse; alone or scrollin
     const doc = stubDocument();
     const row = doc.createElement('div');
     row.className = 'chat-toolbar-row';
-    const pills = doc.createElement('div');
-    pills.className = 'chat-composer-pills';
-    const swarm = doc.createElement('button');
-    swarm.getBoundingClientRect = () => ({ width: 220 });
-    pills.appendChild(swarm);
-    row.appendChild(pills);
+    const subagents = doc.createElement('div');  // the other capsules, closed
+    subagents.className = 'chat-capsule chat-subagents-mode';
+    subagents.getBoundingClientRect = () => ({ width: 220 });
+    row.appendChild(subagents);
     const styles = new Map([[row, { paddingLeft: '8px', paddingRight: '8px', columnGap: '8px' }]]);
     const win = { ...hoverWindow(true), getComputedStyle: (node) => styles.get(node) || {} };
     const control = createEffortRangeControl({ row, doc, win, saveEffortRange: async body => ({ effort_range: body }), showToast: () => {} });
@@ -267,12 +265,12 @@ test('hover opens only where the button stays under the mouse; alone or scrollin
     row.getBoundingClientRect = () => ({ width: 440 });  // a Project pane: the strip would stand alone
     enter();
     await sleep(220);
-    assert.equal(control.isOpen(), false, 'no hover-open where the pills would step aside under the mouse');
+    assert.equal(control.isOpen(), false, 'no hover-open where the others would step aside under the mouse');
     leave();
-    row.getBoundingClientRect = () => ({ width: 900 });  // room beside the pills: the button stays put
+    row.getBoundingClientRect = () => ({ width: 900 });  // room beside the others: the button stays put
     enter();
     await sleep(220);
-    assert.equal(control.isOpen(), true, 'hover opens beside the pills');
+    assert.equal(control.isOpen(), true, 'hover opens beside the others');
     control.destroy();
 });
 
@@ -305,20 +303,17 @@ test('fit: beside the other controls when the strip fits there, alone when it do
     const doc = stubDocument();
     const row = doc.createElement('div');
     row.className = 'chat-toolbar-row';
-    const pills = doc.createElement('div');
-    pills.className = 'chat-composer-pills';
-    const swarm = doc.createElement('button');
+    const subagents = doc.createElement('div');
+    subagents.className = 'chat-capsule chat-subagents-mode';
     const context = doc.createElement('div');
     context.className = 'chat-context-mode';
     const sized = (node, width) => { node.getBoundingClientRect = () => ({ width }); };
-    sized(swarm, 120);
-    sized(context, 100);              // the other capsule, closed
-    pills.appendChild(swarm);
-    row.appendChild(pills);
+    sized(subagents, 120);            // the other capsules, closed
+    sized(context, 100);
+    row.appendChild(subagents);
     row.appendChild(context);
     const styles = new Map([
         [row, { paddingLeft: '8px', paddingRight: '8px', columnGap: '8px' }],
-        [pills, { columnGap: '6px' }],
     ]);
     const resize = [];
     const win = {
@@ -329,7 +324,7 @@ test('fit: beside the other controls when the strip fits there, alone when it do
         row, doc, win, saveEffortRange: async body => ({ effort_range: body }), showToast: () => {},
     });
     const el = control.el;
-    assert.equal(row.children.indexOf(el), 2, 'after the pills and the context capsule');
+    assert.equal(row.children.indexOf(el), 2, 'after the Subagents and Context capsules');
     const q = (selector) => el.querySelector(selector);
     styles.set(el, { borderLeftWidth: '1px', borderRightWidth: '1px' });
     styles.set(q('[data-effort-strip]'), { marginRight: '9.33px' });  // the end gutter
@@ -346,7 +341,7 @@ test('fit: beside the other controls when the strip fits there, alone when it do
     const close = () => head.listeners.get('click').forEach((fn) => fn({ detail: 1 }));
     const facts = () => [el.dataset.fit, el.style.getPropertyValue('--capsule-seg-pad'), el.dataset.tight, el.dataset.label, row.dataset.ownerSolo];
     // Words 228.72 and 14 paddings; the gutter and the borders 11.33; the head 30 bare, 77 with the
-    // name and the divider; beside it Swarm 120 and the context capsule 100, a row gap each (236).
+    // name and the divider; beside it Subagents 120 and Context 100, a row gap each (236).
     open(700);
     assert.deepEqual(facts(), ['inline', '8px', 'false', 'true', undefined], 'the owner row: beside the others at full padding');
     close();
@@ -358,12 +353,12 @@ test('fit: beside the other controls when the strip fits there, alone when it do
     close();
     open(560);
     assert.deepEqual(facts(), ['solo', '8px', 'false', 'true', 'effort'], 'no room beside them: they step aside');
-    sized(swarm, 0);                  // hidden controls measure 0: the width seen before hiding stays
+    sized(subagents, 0);              // hidden controls measure 0: the width seen before hiding stays
     sized(context, 0);
     resize.forEach((fn) => fn());
     assert.deepEqual(facts(), ['solo', '8px', 'false', 'true', 'effort'], 'a resize while alone keeps them aside');
     close();
-    sized(swarm, 120);
+    sized(subagents, 120);
     sized(context, 100);
     open(390);
     assert.deepEqual(facts(), ['solo', '3px', 'true', 'true', 'effort'], 'alone, the name stays down to 3 px');
@@ -593,7 +588,7 @@ test('one capsule is open at a time: opening one closes the other at once, a nar
     assert.deepEqual([m.contextEl.dataset.open, m.effortEl.dataset.open], ['false', 'true']);
     await m.press(m.contextHead);
     assert.deepEqual([m.contextEl.dataset.open, m.effortEl.dataset.open], ['true', 'false']);
-    // A narrow line: Effort stands alone (the pills and Context step aside); once it closes and
+    // A narrow line: Effort stands alone (Subagents and Context step aside); once it closes and
     // Context opens, Context is the one alone, never hidden by Effort's flag.
     m.row.dataset.ownerSolo = 'effort';
     m.effortEl.dataset.fit = 'solo';

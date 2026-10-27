@@ -1,6 +1,7 @@
 // Chat timeline ordering, keyed item reconciliation and reading anchors.
 // These helpers own no history source, navigation or task authority.
 import { compareHistoryPosition } from './chat_history_replay.js';
+import { foldWaitRow } from './task_checkpoints.js';
 import { measure } from './layout_batch.js';
 import { appendDelegatedItem, reconcileDelegatedItems } from './delegated_activity.js';
 import { isStoreMigrating } from './api_client.js';
@@ -857,6 +858,10 @@ export function createTimelineAnchors({ messagesDiv, liveCardRecords }) {
 export function updateLiveTimelineItem(record, summary, { ts, rawTs, syntheticKey, headline, inPlaceByKey }) {
     // A delegated observation is its own source record; its projection is per seq.
     if (summary.activity) return appendDelegatedItem(record, summary, { ts, rawTs, syntheticKey, headline });
+    if (summary.waitEpisode) {
+        const { changed, index } = foldWaitRow(record, summary, { ts, sourceTs: rawTs });
+        return { timelineUpdate: !changed ? 'duplicate-skip' : index === -1 ? 'append' : 'patch-at', patchIndex: index };
+    }
     let timelineUpdate = 'none', patchIndex = -1;
     const lastIdx = record.items.length - 1;
     // Full-array dedup keeps routine history syncs from growing Notes.

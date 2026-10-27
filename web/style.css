@@ -397,8 +397,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 .nav-row:focus,
 .nav-section-toggle:focus,
 .app-tab:focus,
-.chat-header-btn:focus,
-.chat-header-more > summary:focus {
+.chat-header-btn:focus {
     outline: none;
 }
 
@@ -407,8 +406,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 .nav-row:focus-visible,
 .nav-section-toggle:focus-visible,
 .app-tab:focus-visible,
-.chat-header-btn:focus-visible,
-.chat-header-more > summary:focus-visible {
+.chat-header-btn:focus-visible {
     outline: 2px solid var(--focus-accent-border);
     outline-offset: -2px;
 }
@@ -1372,8 +1370,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 /* Main's header is one bar like a Project's, one row in every layout (DESIGN "Page header"): the title with the
    room's status right after it, then the agent's commands. The commands keep their width and the title block
-   yields to them, its status word dropping whole while the mark stays (room_work.js); a narrow bar has Restart and
-   the budget inside ⋯ (page_header.js). A wider face (Linux sets these words wider) moves nothing to a second row. */
+   yields to them, its status word dropping whole while the mark stays (room_work.js); the consciousness chip follows
+   the title block and keeps its width; a narrow bar has Restart and the budget inside the status Shade (page_header.js).
+   A wider face (Linux sets these words wider) moves nothing to a second row. */
 .chat-page-header {
     position: absolute;
     top: 0;
@@ -1454,12 +1453,6 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     }
 }
 
-.chat-header-btn.on {
-    border-color: var(--accent-35);
-    background: var(--accent-dim);
-    color: var(--accent-light);
-}
-
 .chat-header-btn.danger {
     border-color: rgba(239, 68, 68, 0.22);
     color: var(--status-error-fg);
@@ -1470,77 +1463,6 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
         border-color: rgba(239, 68, 68, 0.40);
         background: rgba(239, 68, 68, 0.08);
     }
-}
-
-.chat-header-more {
-    position: relative;
-    flex: 0 0 auto;
-}
-
-.chat-header-more > summary {
-    list-style: none;
-    display: inline-flex;
-    align-items: center;
-}
-.chat-header-more-glyph { display: none; }
-.chat-header-more-glyph > svg { display: block; width: 20px; height: 20px; }
-
-.chat-header-more > summary::-webkit-details-marker {
-    display: none;
-}
-
-.chat-header-menu {
-    position: absolute;
-    top: calc(100% + var(--space-2));
-    right: 0;
-    z-index: var(--z-header-menu);
-    min-width: 150px;
-    padding: var(--space-2);
-    border: 1px solid var(--surface-border);
-    border-radius: var(--radius-md);
-    background: rgba(var(--shell-rgb), 0.92);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-.chat-header-menu-item {
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: var(--type-body);
-    text-align: left;
-    padding: var(--space-2) var(--space-3);
-    cursor: pointer;
-}
-
-@media (hover: hover) {
-    .chat-header-menu-item:hover {
-        color: var(--text-primary);
-        background: var(--menu-item-hover);
-    }
-}
-
-/* Evolve/Consciousness live in this menu now; show their on-state in place. */
-.chat-header-menu-item.on {
-    color: var(--accent-light);
-    font-weight: 700;
-}
-
-.chat-header-menu-item.danger {
-    color: var(--status-error-fg);
-}
-
-/* A mode inside More is on: the collapsed More capsule takes its tone, with no dot of its own. */
-.chat-header-more > summary.has-active {
-    border-color: var(--accent-35);
-    background: var(--accent-dim);
-    color: var(--accent-light);
 }
 
 /* The budget: a neutral fact (spent / limit and its bar). It turns amber only while a task the spending limit
@@ -1590,8 +1512,10 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     border-radius: 1px;
     background: var(--text-meta);
     transition: width 0.4s ease;
-    width: 0;
+    width: var(--budget-fill, 0);
 }
+/* The pill names itself only where it stands as a row (the narrow bar's status Shade, room_work.css). */
+.chat-budget-word { display: none; }
 
 .chat-budget-pill[data-attention="1"] .chat-budget-text { color: var(--status-warn-fg); }
 .chat-budget-pill[data-attention="1"] .chat-budget-bar { background: var(--amber-dim); }
@@ -2184,6 +2108,12 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 .msg-time-full {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
+/* A message the host accepted while its room was on Swarm: the quiet word before its time, the Subagents mark in the
+   time line's own ink (DESIGN "Composer owner controls"). */
+.msg-swarm { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: -2px; }
+.msg-swarm > svg { width: 13px; height: 13px; flex: none; }
+.msg-swarm :is(.chat-subagents-core, .chat-subagents-helper, .chat-subagents-link) { color: currentColor; }
+.msg-swarm-sep { margin-inline: var(--space-1); }
 
 .chat-bubble:hover .msg-time {
     opacity: 0.8;
@@ -2698,6 +2628,14 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
    word in the text flow (an inline-flex box would park the dot at the far right of the wrapped fact). */
 .chat-live-meta-part > .chat-live-meta-text:not(.chat-live-effort) {
     display: inline-block;
+}
+
+/* A Swarm root's one receipt line, first in its foot, in the meta line's type (DESIGN "Composer owner controls"). */
+.chat-live-swarm-receipt {
+    color: var(--text-secondary);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    overflow-wrap: anywhere;
 }
 
 
@@ -4151,8 +4089,9 @@ html[data-layout="stack"] #content {
 html[data-layout="stack"] #content > .page:not(#page-chat) {
     padding-bottom: var(--inset-bottom);
 }
-/* The stack layout's header is one row of at most 56px at normal scale: `☰ · title · status … Panic · ⋯`
-   (owner Q4=A). Nothing wraps: the title ellipsizes, Restart and the budget are inside ⋯ (chat.js places them). */
+/* The stack layout's header is one row of at most 56px at normal scale: `☰ · title · status … chip · Panic`
+   (owner Q4=A; no ⋯, owner 25.10). Nothing wraps: the title ellipsizes, Restart and the budget are rows of the room
+   status's Shade (page_header.js places them). */
 html[data-layout="stack"] .page-header,
 html[data-layout="stack"] .app-page-header {
     min-height: 56px;
@@ -4176,37 +4115,11 @@ html[data-layout="stack"] .chat-header-actions {
     flex-wrap: nowrap;
     gap: var(--space-2);
 }
-html[data-layout="stack"] .chat-header-more > summary {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    justify-content: center;
-    border-radius: var(--pill-radius);
-}
-html[data-layout="stack"] .chat-header-more-word { display: none; }
-html[data-layout="stack"] .chat-header-more-glyph { display: inline-flex; }
 html[data-layout="stack"] .chat-page-note {
     left: var(--space-3);
     max-width: calc(100% - 2 * var(--space-3));
     padding: 2px 0 var(--space-2);
 }
-/* Inside ⋯ (page_header.js places them there when the bar is too narrow for the full row) the budget is a
-   full-width row and Restart the last row. */
-.chat-header-menu:has(> .chat-budget-pill) {
-    min-width: 220px;
-}
-.chat-header-menu > .chat-budget-pill {
-    width: 100%;
-    min-width: 0;
-    align-items: stretch;
-    text-align: left;
-}
-.chat-header-menu > .chat-header-btn {
-    width: 100%;
-    justify-content: flex-start;
-    text-align: left;
-}
-
 #chat-input-area,
 .chat-input-area {
     /* Bottom fade darkens transcript before the frosted input without trapping scroll. */
@@ -4589,45 +4502,6 @@ textarea.chat-input[data-sizing="fit"] { overflow-y: hidden; }
 #chat-input::placeholder,
 textarea.chat-input::placeholder { color: var(--text-muted); }
 
-/* Composer pills (Swarm), left of the owner capsules. */
-.chat-composer-pills {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-/* One-shot Swarm arm pill: dim when idle, accent when armed. */
-.chat-swarm {
-    height: var(--composer-control-height);
-    padding: 0 12px;
-    border: 1px solid rgba(var(--neutral-rgb), 0.12);
-    border-radius: 999px;
-    background: rgba(var(--composer-rgb), 0.38);
-    color: var(--text-meta);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    box-shadow: var(--composer-control-shadow);
-    font-size: var(--composer-control-font-size);
-    font-weight: 700;
-    letter-spacing: 0;
-    font-family: inherit;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.18s, background 0.18s, border-color 0.18s, box-shadow 0.18s;
-}
-.chat-swarm:hover {
-    color: var(--accent);
-    border-color: var(--accent-35);
-    background: rgba(var(--composer-hover-rgb), 0.58);
-}
-.chat-swarm[data-armed="true"] {
-    color: var(--accent);
-    border-color: var(--accent-45);
-    background: var(--accent-dim);
-    box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.06), 0 0 0 3px var(--accent-10);
-}
-
 .chat-send-group {
     flex: 0 0 auto;
     align-self: flex-end;
@@ -4815,10 +4689,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 }
 /* A room's ☰ is one of the controls that step aside: the fit gives the open strip the whole line. */
 .chat-toolbar-row[data-owner-solo] > .composer-menu,
-.chat-toolbar-row[data-owner-solo] .chat-composer-pills,
 .chat-toolbar-row[data-owner-solo] .chat-composer-chips,
-.chat-toolbar-row[data-owner-solo="effort"] .chat-context-mode,
-.chat-toolbar-row[data-owner-solo="context"] .chat-effort-range {
+.chat-toolbar-row[data-owner-solo="effort"] :is(.chat-context-mode, .chat-subagents-mode),
+.chat-toolbar-row[data-owner-solo="context"] :is(.chat-effort-range, .chat-subagents-mode),
+.chat-toolbar-row[data-owner-solo="subagents"] :is(.chat-context-mode, .chat-effort-range) {
     display: none;
 }
 /* Alone, a strip grows from its capsule and folds back into it (capsule_morph.js). While it moves, the capsule's
@@ -4887,27 +4761,27 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 
 /* Context: exactly three modes, the chosen one under a glass thumb, in its mode's colour (Max the
    accent, full context; Low the neutral ink, reduced: a level the owner chose is not a warning; Nano the
-   project fuchsia). */
+   project fuchsia). Subagents' strip is the same mode strip (--mode-ink, --mode-fill), below. */
 .chat-context-mode {
-    --context-ink: var(--accent-light);
-    --context-fill: var(--accent-dim);
+    --mode-ink: var(--accent-light);
+    --mode-fill: var(--accent-dim);
 }
 .chat-context-mode[data-context-mode="low"] {
-    --context-ink: var(--status-neutral-fg);
-    --context-fill: var(--status-neutral-bg);
+    --mode-ink: var(--status-neutral-fg);
+    --mode-fill: var(--status-neutral-bg);
 }
 .chat-context-mode[data-context-mode="nano"] {
-    --context-ink: var(--project);
-    --context-fill: var(--project-18);
+    --mode-ink: var(--project);
+    --mode-fill: var(--project-18);
 }
-.chat-context-mode .chat-capsule-value,
-.chat-context-mode .chat-seg[aria-checked="true"] {
-    color: var(--context-ink);
+:is(.chat-context-mode, .chat-subagents-mode) .chat-capsule-value,
+:is(.chat-context-mode, .chat-subagents-mode) .chat-seg[aria-checked="true"] {
+    color: var(--mode-ink);
 }
 .chat-context-mode[data-context-mode="nano"] .chat-context-arc[data-arc="nano"],
 .chat-context-mode[data-context-mode="low"] .chat-context-arc[data-arc="low"],
 .chat-context-mode[data-context-mode="max"] .chat-context-arc[data-arc="max"] {
-    stroke: var(--context-ink);
+    stroke: var(--mode-ink);
 }
 .chat-context-strip {
     position: relative;
@@ -4916,7 +4790,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     align-self: stretch;
     margin-inline-end: var(--capsule-end-gutter);
 }
-.chat-context-mode[data-disabled="true"] .chat-context-strip {
+:is(.chat-context-mode, .chat-subagents-mode)[data-disabled="true"] .chat-context-strip {
     opacity: 0.5;
     pointer-events: none;
 }
@@ -4927,12 +4801,12 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     left: 0;
     width: 0;
     border-radius: 999px;
-    background: var(--context-fill);
+    background: var(--mode-fill);
     box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.06);
     pointer-events: none;
     transition: left 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.2s, background 0.2s;
 }
-.chat-context-mode .chat-seg {
+:is(.chat-context-mode, .chat-subagents-mode) .chat-seg {
     position: relative;
     display: flex;
     align-items: center;
@@ -4950,15 +4824,70 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .chat-seg-text {
     display: block;
 }
-.chat-context-mode .chat-seg:focus-visible {
+:is(.chat-context-mode, .chat-subagents-mode) .chat-seg:focus-visible {
     outline: 2px solid var(--focus-accent-border);
     outline-offset: -2px;
 }
 @media (hover: hover) {
-    .chat-context-mode .chat-seg[aria-checked="false"]:hover {
+    :is(.chat-context-mode, .chat-subagents-mode) .chat-seg[aria-checked="false"]:not([data-disabled="true"]):hover {
         color: var(--text-primary);
     }
 }
+
+/* Subagents: Off · Auto · Swarm on the same strip, the chosen one in its tone (Off the neutral ink, Auto the accent,
+   Swarm the soft crimson of a switched-on capsule); a value Settings rules out is disabled ink. The mark is a small network:
+   Ouroboros in meta ink, its helpers and their threads in the rail's ink until the mode lights them: none, the first,
+   every helper and the threads between them (Swarm). Closed on Swarm the whole capsule takes the soft crimson; Off is muted; Settings-off adds a small lock.
+   Open, the line under the strip says what the value means (composer_subagents.js), and the row grows upward. */
+.chat-subagents-mode {
+    --mode-ink: var(--accent-light);
+    --mode-fill: var(--accent-dim);
+}
+.chat-subagents-mode[data-mode="off"] {
+    --mode-ink: var(--status-neutral-fg);
+    --mode-fill: var(--status-neutral-bg);
+}
+.chat-subagents-mode[data-mode="swarm"] {
+    --mode-ink: var(--tone-crimson-soft-ink);
+    --mode-fill: var(--tone-crimson-soft);
+}
+.chat-subagents-strip .chat-context-thumb { left: var(--thumb-left, 0); width: var(--thumb-width, 0); }
+.chat-subagents-mode .chat-seg { justify-content: center; min-width: var(--touch-target-min); box-sizing: border-box; }
+.chat-subagents-mode .chat-seg[data-disabled="true"] { color: var(--text-disabled); cursor: default; }
+.chat-subagents-core { color: var(--text-meta); }
+.chat-subagents-helper, .chat-subagents-link { color: rgba(var(--neutral-rgb), 0.28); }
+.chat-subagents-mode[data-mode="auto"] .chat-subagents-helper[data-helper="1"],
+.chat-subagents-mode[data-mode="swarm"] :is(.chat-subagents-helper, .chat-subagents-link) { color: var(--accent); }
+.chat-subagents-mode[data-known="false"] :is(.chat-subagents-helper, .chat-subagents-link) { color: rgba(var(--neutral-rgb), 0.28); }
+.chat-subagents-lock { display: none; align-items: center; flex: none; margin-inline-end: var(--space-3); color: var(--text-meta); }
+.chat-subagents-mode[data-locked="true"] .chat-subagents-lock { display: inline-flex; }
+.chat-subagents-mode[data-locked="true"]:not([data-open="true"]) .chat-capsule-value { margin-inline-end: 5px; }
+.chat-subagents-mode[data-locked="true"][data-open="true"] .chat-subagents-lock { margin-inline-end: var(--space-2); }
+.chat-subagents-note {
+    order: 10;
+    flex: 1 0 100%;
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 2px var(--space-1);
+}
+.chat-subagents-note[hidden], .chat-subagents-note [hidden] { display: none; }
+.chat-subagents-meaning, .chat-subagents-reason {
+    margin: 0;
+    font-size: var(--type-body);
+    font-weight: 400;
+    line-height: var(--line-body);
+    color: var(--text-secondary);
+    white-space: normal;
+}
+.chat-subagents-rule {
+    margin: 2px 0 0;
+    font-size: var(--type-meta);
+    font-weight: 400;
+    line-height: var(--line-meta);
+    color: var(--text-meta);
+    white-space: normal;
+}
+.chat-subagents-locked { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 
 /* Effort: one segment per level, as wide as its word plus the padding; the band and the three
    handles sit over it and share one vertical inset, so their edges meet exactly. The max bracket
@@ -7507,11 +7436,6 @@ html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-field {
     html[data-layout="stack"] .chat-input-wrap[data-fold]:not([data-folded]) .chat-toolbar-row > :not(.composer-menu) {
         transition: none;
     }
-}
-
-html[data-layout="stack"] .chat-swarm {
-    padding-left: 10px;
-    padding-right: 10px;
 }
 
 html[data-layout="stack"] .chat-send-inline {
@@ -10594,12 +10518,10 @@ body.keyboard-open .project-panel {
 
 /* Sheets: what floats over moving content takes the float shadow. A menu and a dialog have the popups' opaque backing
    (--popup-float, which .ui-popup wears in ui.css, so setup has it too); the composer's field stays glass. */
-:root[data-theme] :is(.chat-header-menu, .task-control-menu, .marketplace-modal) {
+:root[data-theme] :is(.task-control-menu, .marketplace-modal) {
     border-color: transparent; border-radius: var(--radius-object); background: var(--popup-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-/* More lost the old header's continuous backing: its sheet is the capsules' step, opaque like the work list's. */
-:root[data-theme] .chat-header-menu { background: var(--sheet-float); }
 :root[data-theme] .chat-field {
     background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
@@ -10619,9 +10541,6 @@ body.keyboard-open .project-panel {
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
     transition: var(--motion-tone);
 }
-:root[data-theme] .chat-header-menu > :is(.chat-header-btn.ui-chrome-control, .chat-budget-pill.ui-chrome-control) {
-    background: var(--surface-capsule);
-}
 @media (hover: hover) {
     :root[data-theme] :is(.chat-header-btn.ui-chrome-control, .shell-icon-control):hover {
         border-color: transparent; background: var(--chip-float-hover); box-shadow: var(--elev-rest);
@@ -10630,32 +10549,36 @@ body.keyboard-open .project-panel {
     :root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control:hover { background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control:hover { border-color: transparent; background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"]:hover { background: linear-gradient(var(--tone-amber-hover), var(--tone-amber-hover)), var(--chip-float); }
-    :root[data-theme] .chat-header-menu > :is(.chat-header-btn.ui-chrome-control, .chat-budget-pill.ui-chrome-control):hover {
-        background: var(--surface-capsule-hover);
-    }
 }
 :root[data-theme] :is(.project-panel-close, .mobile-nav-toggle, .nav-drawer-close) { border-radius: var(--pill-radius); }
 :root[data-theme] .chat-header-btn.danger.ui-chrome-control { background: linear-gradient(var(--tone-red), var(--tone-red)), var(--chip-float); color: var(--panic-ink); }
 /* The dark danger tone is already the capsule's neutral veil. Stacking it twice washes out Panic's red ink. */
 :root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control { background: var(--chip-float); }
-:root[data-theme] .chat-header-more > summary.has-active.ui-chrome-control { background: var(--tone-crimson-soft); color: var(--tone-crimson-soft-ink); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control {
     border-color: transparent; background: var(--chip-float); box-shadow: var(--elev-rest); transition: var(--motion-tone);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
 :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"] { background: linear-gradient(var(--tone-amber), var(--tone-amber)), var(--chip-float); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control:active { transform: none; }
-/* The composer: Swarm, Context and Effort are neutral capsules. A setting's name takes the secondary ink at 500 and
-   its value the meta ink at 600 (owner 16.10: never the darkest ink); the only colour is a ring's lit arc. Send is the
-   primary action's crimson tone. */
+/* The composer: Subagents, Context and Effort are neutral capsules. A setting's name takes the secondary ink at 500 and
+   its value the meta ink at 600 (owner 16.10: never the darkest ink); the only colour is a ring's lit arc, except
+   Subagents on Swarm, a switched-on capsule in the soft crimson. Send is the primary action's crimson tone. */
 :root[data-theme] .chat-input-wrap { --composer-control-shadow: var(--elev-rest); }
-:root[data-theme] :is(.chat-swarm, .chat-capsule, .chat-composer-chip) {
+:root[data-theme] :is(.chat-capsule, .chat-composer-chip) {
     border-color: transparent; background: var(--surface-capsule); color: var(--text-secondary); font-weight: 600;
     box-shadow: var(--elev-rest); -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-:root[data-theme] :is(.chat-swarm, .chat-composer-chip):hover { border-color: transparent; background: var(--surface-capsule-hover); color: var(--text-primary); }
-:root[data-theme] .chat-swarm[data-armed="true"] {
-    border-color: transparent; background: var(--tone-crimson-soft); color: var(--tone-crimson-soft-ink); box-shadow: var(--elev-rest);
+:root[data-theme] .chat-composer-chip:hover { border-color: transparent; background: var(--surface-capsule-hover); color: var(--text-primary); }
+:root[data-theme] .chat-subagents-mode[data-mode="off"]:not([data-open="true"]) :is(.chat-capsule-name, .chat-capsule-value) { color: var(--text-meta); }
+:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) { background: var(--tone-crimson-soft); }
+:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-capsule-name, .chat-capsule-value) {
+    color: var(--tone-crimson-soft-ink);
+}
+:root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) :is(.chat-subagents-core, .chat-subagents-helper, .chat-subagents-link) {
+    color: var(--tone-crimson-soft-ink);
+}
+@media (hover: hover) {
+    :root[data-theme] .chat-subagents-mode[data-mode="swarm"]:not([data-open="true"]) .chat-capsule-head:hover { background: var(--tone-crimson-hover); }
 }
 :root[data-theme] .chat-capsule[data-open="true"] { border-color: transparent; }
 :root[data-theme] .chat-capsule[data-morph] {
@@ -10724,7 +10647,7 @@ body.keyboard-open .project-panel {
 :root[data-theme] .filter-chip:hover { background: var(--tone-quiet-hover); }
 :root[data-theme] .filter-chip.active { border-color: transparent; background: var(--tone-crimson-soft); color: var(--tone-crimson-soft-ink); }
 /* A press deepens a capsule's colour; nothing changes height. */
-:root[data-theme] :is(.chat-header-btn, .chat-budget-pill, .project-panel-close, .mobile-nav-toggle, .chat-swarm, .chat-send-inline,
+:root[data-theme] :is(.chat-header-btn, .chat-budget-pill, .project-panel-close, .mobile-nav-toggle, .chat-send-inline,
     .app-tab, .filter-chip, .chat-load-older-btn, .chat-scroll-bottom-btn, .rw-back, .chat-question-nav, .chat-composer-chip):not(:disabled):active,
 :root[data-theme] .chat-capsule:not([data-open="true"]):active {
     filter: var(--press);
@@ -10732,10 +10655,10 @@ body.keyboard-open .project-panel {
 /* The solid crimson under white ink deepens when pressed (--press-solid), so its words keep 4.5:1. */
 :root[data-theme] :is(.chat-send-inline, .chat-quiz-send, .app-tab.active, .app-tab.is-active) { --press: var(--press-solid); }
 /* What cannot be pressed now has no body. */
-:root[data-theme] :is(.chat-header-btn, .chat-budget-pill, .project-panel-close, .mobile-nav-toggle, .chat-swarm, .chat-send-inline,
+:root[data-theme] :is(.chat-header-btn, .chat-budget-pill, .project-panel-close, .mobile-nav-toggle, .chat-send-inline,
     .app-tab, .chat-load-older-btn, .chat-scroll-bottom-btn, .rw-back, .rw-row .rw-pill):disabled {
     box-shadow: none;
 }
-:root[data-theme] :is(.chat-capsule, .chat-swarm, .chat-send-inline, .app-tab, .filter-chip, .chat-load-older-btn, .chat-composer-chip) {
+:root[data-theme] :is(.chat-capsule, .chat-send-inline, .app-tab, .filter-chip, .chat-load-older-btn, .chat-composer-chip) {
     transition: var(--motion-tone);
 }

@@ -180,7 +180,7 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("finish_task", {"name": "finish_task",
             "description": "Select the complete answer and request completion of your current task. "
                 "Use finish after considering the observed work, or stop with a rationale naming unfinished work. "
-                "Select exactly one of answer or a host-offered answer_sha256. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
+                "Select exactly one of answer or a host-offered answer_sha256. Successful page, note, mark and addressed-message writes may ride in the same response; any other result is read before the finish. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["finish", "stop"]}, "answer": {"type": "string", "description": "The complete answer, including a short correction; a root's owner reads it as your reply, a child's parent as your report."},
                 "answer_sha256": {"type": "string", "description": "Exact offered retained or whole held response hash."},
@@ -241,7 +241,6 @@ def get_tools() -> List[ToolEntry]:
                 "at the next execution boundary; knowledge is not automatically reloaded. "
                 "The result reports the recorded durable binding, refusal or unconfirmed outcome. "
                 "A task already bound to a room stays there; a requested name renames that room. "
-                "A planning obligation stays with this task."
             ),
             "parameters": {
                 "type": "object",

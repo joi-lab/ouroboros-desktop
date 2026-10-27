@@ -34,7 +34,7 @@ def _record(*asks, revisions=1):
 
 
 def _gate(record, **over):
-    kwargs = {"enforcement": "blocking", "cyber_pro": False, "hurry": False, "force_plan": False}
+    kwargs = {"enforcement": "blocking", "cyber_pro": False, "hurry": False}
     kwargs.update(over)
     return pr.gate_projection(record, **kwargs)
 
@@ -194,22 +194,14 @@ def test_advisory_cyber_and_hurry_disclose_instead_of_holding():
     assert rail["allow"] is True and rail["status"] == "rail_degraded" and rail["reason"] == "round_limit"
 
 
-def test_force_plan_is_met_only_by_an_ask_that_reached_a_reviewer():
-    absent = _gate(pr.empty_record(), force_plan=True)
-    assert absent["required"] is True and absent["allow"] is False and absent["status"] == "force_plan_unmet"
-    assert _gate(pr.empty_record(), force_plan=True, enforcement="advisory")["allow"] is False  # no plan at all: write one
-    assert _gate(pr.empty_record(), force_plan=True, cyber_pro=True)["allow"] is True
-    # A plan that exists but reached nobody: Blocking holds; Advisory and the owner's hurry disclose.
-    unasked = _record(revisions=1)
-    assert _gate(unasked, force_plan=True)["allow"] is False
-    advisory = _gate(unasked, force_plan=True, enforcement="advisory")
-    assert advisory["allow"] is True and advisory["status"] == "force_plan_unmet" and advisory["force_plan_met"] is False
-    assert _gate(unasked, force_plan=True, hurry=True)["allow"] is True
-    nobody = _record([_participant(SEAT_A, dispatched=False, status="not_dispatched")])
-    assert _gate(nobody, force_plan=True)["status"] == "force_plan_unmet"
-    reached = _record([_participant(SEAT_A)])
-    met = _gate(reached, force_plan=True)
-    assert met["force_plan_met"] is True and met["status"] == "awaiting" and met["allow"] is True and met["self_opened"] is False
+def test_unasked_and_unroutable_plans_never_hold_without_an_objection():
+    for enforcement in ("blocking", "advisory"):
+        for record in (pr.empty_record(), _record(revisions=1),
+                       _record([_participant(SEAT_A, dispatched=False, status="not_dispatched")])):
+            decision = _gate(record, enforcement=enforcement)
+            assert decision["allow"] is True
+    reached = _gate(_record([_participant(SEAT_A)]))
+    assert reached["status"] == "awaiting" and reached["allow"] is True
 
 
 def test_a_task_without_a_plan_is_not_required_and_an_unreadable_record_is_engaged():
@@ -580,22 +572,15 @@ def test_plan_history_views_read_the_record_and_still_read_a_finished_v2_wave(tm
     assert pr.RECORD_HISTORY_RULE in history["rule"] and len(history["rule"]) > len(pr.RECORD_HISTORY_RULE)
 # ---------------------------------------------------------------- Codex audit (2026-10-15), points 2 and 5
 
-def test_an_ask_no_route_could_take_is_attempted_and_disclosed_while_never_asking_or_no_plan_still_holds():
-    """Owner decision (Codex audit, point 2): a Swarm obligation counts as ATTEMPTED when the mind
-    wrote a plan and asked, and no route could take the ask (a recorded attempt) — disclosed, not
-    held, under Blocking too; it stays held when the mind never asked, or when no plan exists."""
+def test_unroutable_asks_stay_recorded_without_creating_a_plan_obligation():
     attempt = {"ts": "t", "revision": 1, "kind": "no_route", "ask": "council",
                "not_sendable": {SEAT_A: "health_skip[credential_pool_exhausted]"}}
     asked = {**_record(revisions=1), "attempts": [attempt]}
-    decision = _gate(asked, force_plan=True)
-    assert decision["status"] == "force_plan_unmet" and decision["allow"] is True and decision["force_plan_met"] is False
-    assert decision["asks_unroutable"] == 1 and decision["holding"] == [] and decision["open_objections"] == []
-    assert _gate(asked, force_plan=True, enforcement="advisory")["allow"] is True
-    assert _gate(_record(revisions=1), force_plan=True)["allow"] is False, "a plan the mind never asked about: held"
-    for enforcement in ("blocking", "advisory"):  # no plan at all: still held to write one, attempt or not
-        assert _gate({**pr.empty_record(), "attempts": [attempt]}, force_plan=True, enforcement=enforcement)["allow"] is False
-    reached = {**_record([_participant(SEAT_A)]), "attempts": [attempt]}
-    assert _gate(reached, force_plan=True)["force_plan_met"] is True and _gate(reached, force_plan=True)["status"] == "awaiting"
+    decision = _gate(asked)
+    assert decision["status"] == "clear" and decision["allow"] is True
+    assert decision["asks_unroutable"] == 1 and decision["holding"] == []
+    assert _gate(_record(revisions=1))["allow"] is True
+    assert _gate({**pr.empty_record(), "attempts": [attempt]})["allow"] is True
     assert pr.unroutable_asks(asked) == 1 and pr.read_view(asked)["attempts"] == [attempt]
     assert pr.validate_record({**pr.empty_record(), "attempts": []})["attempts"] == []
     with pytest.raises(pr.PlanRecordInvalid):

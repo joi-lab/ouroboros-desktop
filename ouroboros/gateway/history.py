@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from ouroboros import dialogue_store as ds
+from ouroboros.checkpoint_waits import wait_episode
 from ouroboros.chat_uploads import attachment_views
 from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
 from ouroboros.gateway._helpers import coerce_int
@@ -803,11 +804,11 @@ def _collect_chat_rows(
                 "client_message_id": str(entry.get("client_message_id", "")),
                 "task_id": str(entry.get("task_id", "")),
                 **_history_identity(entry),
-                # ABI-3: the deprecated ``telegram_chat_id`` twin is no longer
-                # re-emitted; legacy chat.jsonl rows carrying it stay readable
-                # (the key is simply ignored), and ``transport`` is the
-                # provenance surface.
+                # ABI-3: the deprecated ``telegram_chat_id`` twin is no longer re-emitted; legacy chat.jsonl rows
+                # carrying it stay readable (the key is simply ignored), and ``transport`` is the provenance surface.
             }
+            if role == "user" and entry.get("subagents_mode") == "swarm":
+                rec["subagents_mode"] = "swarm"
             if role == "user" and entry.get("ingress_accepted") is True:
                 rec["ingress_accepted"] = True
                 # Proven undispatched, entered, or this live process's and pending; an ended process's: nothing.
@@ -1241,16 +1242,15 @@ def _apply_window_quotas(
         folded_reviews_truncated or review_references_truncated or model_wait_truncated
     )
     review_references = review_references[-n_progress:] if n_progress > 0 else []
-    other = [
-        m for m in progress
-        if not _is_subagent_lineage(m)
-        and str(m.get("system_type") or "") != "review_reference"
-    ]
+    other = [m for m in progress if not _is_subagent_lineage(m) and str(m.get("system_type") or "") != "review_reference"]
+    # A host wait spends no quota, as on the page read; it rides with the rows it sits among (``checkpoint_waits``).
+    waits, other = [m for m in other if wait_episode(m)], [m for m in other if not wait_episode(m)]
     other_tail = other[-n_progress:] if n_progress > 0 else []
     # Recency floor = oldest retained telemetry row. Lineage older than it is
     # dropped unless anchored below, so an ABSENT finished swarm cannot
     # re-materialise as a stuck "Working" parent card.
     floor = str(other_tail[0].get("ts") or "") if other_tail else ""
+    waits = [m for m in waits if len(other) <= n_progress or str(m.get("ts") or "") >= floor] if n_progress > 0 else []
     lineage_rows = [m for m in progress if _is_subagent_lineage(m)]
     # Resolve effective child truth BEFORE the floor/cap and share the result
     # cache with annotation: one read per task per request. Effective orphan
@@ -1344,7 +1344,7 @@ def _apply_window_quotas(
     lineage_truncated = len(lineage) > _LINEAGE_CAP
     if lineage_truncated:
         lineage = lineage[-_LINEAGE_CAP:]  # keep the most recent lineage events
-    progress_tail = lineage + other_tail + review_references
+    progress_tail = lineage + other_tail + waits + review_references
     messages = sorted(
         human_tail + folded_reviews + progress_tail + model_wait_rows,
         key=order,

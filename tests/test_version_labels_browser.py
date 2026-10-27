@@ -18,7 +18,6 @@ import pytest
 from ouroboros.server_web import UI_OWNER_MARKER
 from tests import test_reconnect_feed_browser as feed
 from tests import test_room_work_browser as rw
-from tests.ui_console_errors import PageErrors
 
 room_ui = rw.room_ui
 subscription_ui = rw.subscription_ui
@@ -196,7 +195,8 @@ def test_the_cores_own_page_still_reloads_onto_a_changed_sha(room_ui):
     assert (before["nav"], before["about"]) == labels(OLD), before
     rw.capture(page, "version-labels-reload-before")
 
-    documents, errors = [], PageErrors(page, room_ui["engine"])
+    documents = []
+    room_ui["errors"].watch(page)  # the reload below may cut off this page's own reads (see the last check)
     page.on("framenavigated", lambda frame: documents.append(frame.url) if frame == page.main_frame else None)
     transport.core = dict(NEW)
     count = transport.disconnect()
@@ -217,7 +217,5 @@ def test_the_cores_own_page_still_reloads_onto_a_changed_sha(room_ui):
     assert page.locator(f"{MAIN} {feed.NOTICE} .message").inner_text().strip() == "Restart complete"
     assert (after["nav"], after["about"]) == labels(NEW), after
     # WebKit reports the own-origin reads the reload cut off as page errors (ui_console_errors.PageErrors): only
-    # those leave the fixture's no-page-error check.
-    assert errors.unexpected() == [], errors
-    for entry in [entry for entry in errors if entry.own_fetch]:
-        room_ui["errors"].remove(str(entry))
+    # those of this page, watched as navigating, are set aside; every other error of the fixture's pages counts.
+    assert not room_ui["errors"].unexpected(), room_ui["errors"].report()

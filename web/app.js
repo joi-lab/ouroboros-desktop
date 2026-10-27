@@ -36,6 +36,7 @@ import { initStorage } from './modules/storage.js';
 import { SHELL_ICONS } from './modules/page_icons.js';
 import { renderNavRows, renderProjectsHeader } from './modules/pages.js';
 import { renderPageHeader } from './modules/page_header.js';
+import { createRoomHeader, panicButtonHtml } from './modules/chat_header.js';
 import { isStackLayout, measurePinnedBars, onLayoutChange, pinchMagnified } from './modules/layout.js';
 import { createLayerStack } from './modules/layers.js';
 import { afterMotion, reducedMotion } from './modules/motion.js';
@@ -107,9 +108,7 @@ const navProjectsFacts = navProjectsHeader?.querySelector('.nav-projects-facts')
 const navDrawerBackdrop = document.getElementById('nav-drawer-backdrop');
 const projectPanelBackdrop = document.getElementById('project-panel-backdrop');
 const projectPanel = document.getElementById('project-panel');
-// The Project panel's header is the one page header (page_header.js): name · status … ×; its ☰ is the room's
-// composer row's first control (owner 19.10, 1A). A Project is named by its owner, not by the sidebar, so its name
-// stays visible in every layout (owner Q3=A).
+// The Project panel's bar is the page header (DESIGN "Page header"): name · status, consciousness chip … Panic ×.
 projectPanel?.insertAdjacentHTML('afterbegin', renderPageHeader({
     title: '',
     titleId: 'project-panel-title',
@@ -117,8 +116,9 @@ projectPanel?.insertAdjacentHTML('afterbegin', renderPageHeader({
     showMobileNav: false,
     variant: 'project',
     className: 'project-panel-bar project-inspector-header',
-    trailingHtml: `<button id="project-panel-close" class="shell-icon-control project-panel-close" type="button" title="Close project thread" aria-label="Close project thread">${SHELL_ICONS.close}</button>`,
+    trailingHtml: `${panicButtonHtml()}<button id="project-panel-close" class="shell-icon-control project-panel-close" type="button" title="Close project thread" aria-label="Close project thread">${SHELL_ICONS.close}</button>`,
 }));
+const projectHeader = createRoomHeader({ bar: projectPanel?.querySelector('.project-panel-bar'), ws, openDashboardTab, refreshState: refreshProjectsNav });
 const projectPanelBody = document.getElementById('project-panel-body');
 const projectPanelTitle = document.getElementById('project-panel-title');
 const navProjects = document.getElementById('nav-projects');
@@ -486,6 +486,7 @@ const stateSnapshots = createStateSnapshotSequencer((data, requestedAt, generati
     if (data.task_bindings) applyTaskBindings(data.task_bindings);  // null: unchanged, never filled here
     hydrateOpenChatsFromState(data, requestedAt, generation);
     evolution?.hydrateStateSnapshot(data);
+    projectHeader?.update(data);
     observeMainRevision(data.main_visible_revision);
 }, undefined, (requestedAt) => {
     markProjectActivityUnknown();

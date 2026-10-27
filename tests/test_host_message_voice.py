@@ -197,7 +197,7 @@ HOST_ROW_CLASSES = {
     "subagent_started": ("card_row", 1),
     "subagent_terminal_notice": ("card_row", 1),
     "supervisor_failure": ("no_mind", 1),
-    "task_admission_notice": ("not_started", 3),
+    "task_admission_notice": ("not_started", 1),  # the one-shot Swarm admission's two sites are gone
     "task_error": ("no_mind", 1),
     "task_not_started": ("not_started", 5),  # also the two worker_chat_lane Restart-intake refusals
     "task_pause_notice": ("card_row", 1),

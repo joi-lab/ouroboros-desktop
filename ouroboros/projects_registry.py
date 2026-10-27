@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from ouroboros.contracts.chat_id_policy import project_chat_id
 from ouroboros.composer_cognition import ensure_project_cognition, main_cognition, project_cognition
 from ouroboros.contracts.schema_versions import with_schema_version
-from ouroboros.project_facts import sanitize_project_id
+from ouroboros.project_facts import project_display_name, sanitize_project_id
 from ouroboros.store import StoreBusy, open_store
 from ouroboros import utils
 from ouroboros.utils import atomic_write_json, json_snapshot, read_json_dict, utc_now_iso, strip_markdown
@@ -878,12 +878,19 @@ def _bounded_presentation_name(value: Any, *, fallback: str = "") -> str:
 
 
 def task_presentation_name(*sources: Any) -> str:
-    """Plain work title from structured task/result rows, without storage reads."""
+    """Plain work title from structured task/result rows, without storage reads.
+
+    A title or coined name is shown whole; a bare request shows its first line, the
+    one derivation admission gives every run (``project_naming.admission_names``)."""
+    from ouroboros.project_naming import clean_model_title
+
     sources = [row for row in sources if isinstance(row, dict)]
     for field in ("title", "suggested_name", "objective", "description"):
         for source in sources:
-            # Strip markdown before flattening the raw request into a plain label.
-            name = _bounded_presentation_name(strip_markdown(str(source.get(field) or "")))
+            # Strip markdown while the lines remain: the first line is the request's name.
+            text = strip_markdown(str(source.get(field) or ""))
+            name = (_bounded_presentation_name(text) if field in ("title", "suggested_name")
+                    else clean_model_title(text, max_len=PROJECT_NAME_MAX))
             if name:
                 return name
     return "Task"
@@ -929,9 +936,7 @@ def task_presentation_snapshot(drive_root: Any, task_id: str, *, task: Any = Non
         # includes deleting/tombstoned history reservations, and those have no
         # room left to open.
         registered = str(project.get("lifecycle") or "") == PROJECT_ACTIVE
-        pname = _bounded_presentation_name(project.get("name"))
-    if pname == pid:
-        pname = ""
+        pname = _bounded_presentation_name(project_display_name(project.get("name"), pid))
     if pid and not pname:
         pname = "Project"
     task_name = task_presentation_name(*sources)

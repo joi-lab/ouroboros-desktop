@@ -521,7 +521,7 @@ def assert_test_data_path(path: pathlib.Path) -> None:
 
 def append_jsonl(
     path: pathlib.Path, obj: Dict[str, Any], *, ensure_record_boundary: bool = False,
-    require_lock: bool = False, lock_timeout_sec: float = 2.0,
+    require_lock: bool = False, lock_timeout_sec: float = 2.0, live: bool = True,
 ) -> bool:
     """Append a JSON object as a line to a JSONL file (concurrent-safe).
 
@@ -535,7 +535,8 @@ def append_jsonl(
     shutdown callers whose grace has expired; unlocked fallback is unchanged.
     Runtime ``logs/*.jsonl`` rows are streamed to the ``set_log_sink`` sink, minus
     types with a dedicated live owner (``WORKER_LOG_SINK_SUPPRESSED_TYPES``, server
-    superset ``SERVER_LOG_SINK_SUPPRESSED_TYPES``): one event, one live frame.
+    superset ``SERVER_LOG_SINK_SUPPRESSED_TYPES``): one event, one live frame, so a
+    durable replica of a row its writer already streamed passes ``live=False``.
     Returns ``True`` on successful write, ``False`` when all retries
     failed (which is also logged at WARNING). Important events
     (``task_done``, ``llm_round``, escalation messages) need that signal
@@ -562,9 +563,8 @@ def append_jsonl(
     _written = False
 
     try:
-        # One owner-aware lock primitive for both lanes: a live holder (e.g. the
-        # memory-journal compactor) is waited out, never displaced; the
-        # non-required lane then appends unlocked.
+        # Both lanes wait out a live lock holder, never displacing it;
+        # the non-required lane then appends unlocked.
         lock_fd = acquire_exclusive_file_lock(
             lock_path,
             timeout_sec=lock_timeout_sec,
@@ -645,6 +645,7 @@ def append_jsonl(
         # and state/memory/receipt stores are durable data, not a log feed.
         if (
             _written
+            and live
             and _log_sink is not None
             and path.parent.name == "logs"
             and path.suffix == ".jsonl"

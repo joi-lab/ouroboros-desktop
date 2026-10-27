@@ -627,6 +627,7 @@ def _create_task_from_body(request: Request, body: Any) -> JSONResponse:
     from ouroboros.artifacts import attachment_manifest_projection
     metadata.setdefault("session_id", str(body.get("session_id") or uuid.uuid4().hex))
     metadata.setdefault("actor_id", str(body.get("actor_id") or "cli")); metadata["work_kind"] = "owner"
+    metadata.pop("subagents_mode", None)  # The queue stamps admission; an API caller supplies no prior host fact.
     metadata.setdefault("source", str(body.get("source") or "api_task"))
     # Owner Surface Fact: assembled at its PRODUCER. An external admission
     # carries no browser observables, and a caller-built descriptor must not

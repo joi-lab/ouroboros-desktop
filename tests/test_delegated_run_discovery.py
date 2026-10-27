@@ -674,23 +674,57 @@ def test_receipts_carry_locators_and_old_receipts_stay_byte_identical(geo, monke
         "receipts never touch the primary status or reason (owner Q5=A)"
 
     # A task whose runs settled before these facts existed: the same five keys, no rewrite.
+    from ouroboros import obligations, startup_migrations, usage_store
+    from ouroboros.task_store import signature
+    from supervisor.events_task_done import _terminal_cost_probe
+
     legacy_task = "legacy0aa111111"
+    old_receipt = {"run_id": "run-legacy", "state": "failed", "model": "m", "profile_id": "",
+                   "selected_subagent_id": ""}
+
+    def legacy_result(root):
+        write_task_result(root, legacy_task, "failed", reason_code="tool_failure",
+                          delegate_terminal_reconciliation={
+                              "task_id": legacy_task, "trigger": "terminal_boundary", "outcomes": [],
+                              "unreconciled": [], "audit_status": "ok", "open_run_ids": [],
+                              "pending_invocation_ids": [], "undisposed_patch_run_ids": [],
+                              "terminal_runs": [old_receipt], "deferred_project_retirements": []},
+                          delegated_runs_unreconciled=[])
+
+    def frozen(root):
+        return (signature(root, legacy_task), load_task_result(root, legacy_task),
+                (root / "logs" / "events.jsonl").read_bytes())
+
     assert custody.record_started(geo.canonical, custody.RunCustody(
         run_id="run-legacy", task_id=legacy_task, route_id="r", model="m", ledger_root=str(geo.canonical)))
     assert custody.emit(geo.canonical, custody.SETTLED, {"run_id": "run-legacy", "task_id": legacy_task,
                                                          "state": "failed", "model": "m"})
     custody._CUSTODY.clear()
-    old_receipt = {"run_id": "run-legacy", "state": "failed", "model": "m", "profile_id": "",
-                   "selected_subagent_id": ""}
-    write_task_result(geo.canonical, legacy_task, "failed", reason_code="tool_failure",
-                      delegate_terminal_reconciliation={
-                          "task_id": legacy_task, "trigger": "terminal_boundary", "outcomes": [],
-                          "unreconciled": [], "audit_status": "ok", "open_run_ids": [],
-                          "pending_invocation_ids": [], "undisposed_patch_run_ids": [],
-                          "terminal_runs": [old_receipt], "deferred_project_retirements": []},
-                      delegated_runs_unreconciled=[])
-    from ouroboros.task_store import signature
-
-    before = signature(geo.canonical, legacy_task), load_task_result(geo.canonical, legacy_task)
+    # Imported as closed history (an install whose chain predates its store) the run owes nothing:
+    # the refresh reads no money and changes no byte.
+    history = geo.tmp / "history"
+    (history / "logs").mkdir(parents=True)
+    shutil.copyfile(geo.canonical / "logs" / "events.jsonl", history / "logs" / "events.jsonl")
+    startup_migrations.prepare_startup_state(history)
+    assert legacy_task not in obligations.members(history, "delegated_runs")
+    legacy_result(history)
+    before = frozen(history)
+    with monkeypatch.context() as patch:
+        for name in ("read", "hold"):
+            patch.setattr(usage_store, name, lambda *_a, **_k: pytest.fail("money work without a debt"))
+        assert refresh_terminal_reconciliation(history, legacy_task) is False
+    assert frozen(history) == before
+    # Settled live, the same run owes the task's cost projection once: paying it updates money
+    # fields only, never the receipt, and the repeat is a byte-level no-op.
+    legacy_result(geo.canonical)
+    unpaid = load_task_result(geo.canonical, legacy_task)
     assert refresh_terminal_reconciliation(geo.canonical, legacy_task) is False
-    assert (signature(geo.canonical, legacy_task), load_task_result(geo.canonical, legacy_task)) == before
+    paid = load_task_result(geo.canonical, legacy_task)
+    assert paid["delegate_terminal_reconciliation"] == unpaid["delegate_terminal_reconciliation"]
+    assert paid["delegate_terminal_reconciliation"]["terminal_runs"] == [old_receipt]
+    outcome, money, _ = _terminal_cost_probe(geo.canonical, legacy_task, paid)
+    assert outcome == "equal" and legacy_task not in obligations.members(geo.canonical, "delegated_runs")
+    assert {key for key in {*unpaid, *paid} if unpaid.get(key) != paid.get(key)} <= {*money, "updated_at"}
+    before = frozen(geo.canonical)
+    assert refresh_terminal_reconciliation(geo.canonical, legacy_task) is False
+    assert frozen(geo.canonical) == before
