@@ -159,8 +159,8 @@
  * @property {string} state  // a job: pending | running | done | failed | never | unsupported | unavailable; the engine: completed | held | truncated | failed | none | unavailable | unsupported
  * @property {string|null} at  // the job row's last write; the engine pass's end
  * @property {{class: string, at: string}=} last_error  // a job whose last run threw, until a run returns normally
- * @property {number=} compressed  // record_compression: files compressed so far
- * @property {(number|null)=} saved_bytes  // record_compression: allocation saved; null where none is reported
+ * @property {number=} compressed  // record_compression: files compressed so far in this place's plane
+ * @property {(number|null)=} saved_bytes  // record_compression: that plane's allocation saved; null where unreported
  * @property {number=} freed_bytes  // the engine pass
  * @property {number=} held  // the engine pass: folders it held (project roots and native homes)
  * @property {string=} held_since  // the earliest of those holds

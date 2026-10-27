@@ -117,6 +117,74 @@ def test_ntfs_keeps_a_read_only_file_and_linux_is_unsupported(tmp_path, monkeypa
     assert artifact_storage.compression_outcome(tmp_path / "evidence.log") == "unsupported"
 
 
+def test_the_compression_sibling_carries_its_own_tag_inside_the_atomic_signature(tmp_path, monkeypatch):
+    """One helper owns the tag: the sibling the macOS path writes is the job's own to reap, and still the
+    atomic signature ``temp_sweep`` reaps where it walks."""
+    from ouroboros import temp_sweep
+
+    written = []
+
+    def ditto(command, **_kwargs):
+        written.append(pathlib.Path(command[-1]))
+        raise subprocess.SubprocessError("killed mid-copy")
+
+    monkeypatch.setattr(artifact_storage, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(artifact_storage, "subprocess", SimpleNamespace(
+        run=ditto, DEVNULL=subprocess.DEVNULL, SubprocessError=subprocess.SubprocessError))
+    monkeypatch.setattr(artifact_storage, "_may_share", lambda path: False)
+    assert artifact_storage.compression_outcome(_write(tmp_path / "out.log")) == "failed"
+    [sibling] = written
+    assert sibling.parent == tmp_path and ".out.log.decmpfs.tmp." in sibling.name
+    assert artifact_storage.is_compression_sibling(sibling.name) and temp_sweep.is_atomic_temp(sibling.name)
+    assert not artifact_storage.is_compression_sibling(".out.log.tmp.4242.17.0a1b2c3d"), "another writer's"
+
+
+def test_a_dataless_file_is_kept_by_its_lstat_before_any_read(tmp_path, fake_darwin, monkeypatch):
+    """An evicted (File Provider) file would be downloaded by the first read: the one lstat decides, so
+    the job neither reads it nor spends its budget on it."""
+    from ouroboros import artifacts
+
+    path, real = _write(tmp_path / "evicted.log"), os.lstat
+
+    class Evicted:
+        st_flags = property(lambda self: real(path).st_flags | 0x40000000)  # <sys/stat.h> SF_DATALESS
+
+        def __getattr__(self, name):
+            return getattr(real(path), name)
+
+    monkeypatch.setattr(os, "lstat", lambda target, *a, **k: Evicted() if pathlib.Path(target) == path else real(target, *a, **k))
+    monkeypatch.setattr(artifacts, "stream_artifact_file", lambda *a, **k: pytest.fail("a dataless file was read"))
+    assert artifact_storage.compression_outcome(path) == "dataless" and "dataless" in artifact_storage.STAT_SKIPS
+    assert fake_darwin == [], "nor rewritten"
+
+
+@darwin
+def test_a_writer_during_the_ownership_question_keeps_its_bytes(data, tmp_path):
+    """The ownership question reads the store and may wait, so it comes before the last look at the
+    original: the test writer appending through its open stream meanwhile is seen there and wins (A-F2)."""
+    from ouroboros.task_results import write_task_result
+    from ouroboros.test_evidence import EVIDENCE_POINTER, FileOutput
+
+    parent = data / "task_results" / "artifacts" / "done" / "source_handles" / "test-evidence"
+    (tmp_path / EVIDENCE_POINTER).write_text(str(parent), encoding="utf-8")
+    output, tail = FileOutput(tmp_path, "pytest"), b"written while the owner was asked\n"
+    path = output.root / "stdout.bin"
+    try:
+        output.stdout.write(TEXT * 4096)
+        original = path.read_bytes()
+        write_task_result(data, "done", "completed")
+
+        def owned():
+            output.stdout.write(tail)
+            return job._settled(data, ["done"])["done"]
+
+        assert artifact_storage.compression_outcome(path, owned=owned) == "changed"
+    finally:
+        output.close()
+    assert path.read_bytes() == original + tail and not os.lstat(path).st_flags & stat.UF_COMPRESSED
+    assert sorted(item.name for item in path.parent.iterdir()) == ["stderr.bin", "stdout.bin"], "no sibling left"
+
+
 @darwin
 def test_an_append_during_compression_keeps_the_writers_bytes(tmp_path, monkeypatch):
     path = _write(tmp_path / "growing.log")
@@ -137,7 +205,7 @@ def test_an_append_during_compression_keeps_the_writers_bytes(tmp_path, monkeypa
 
 
 @darwin
-def test_ownership_is_asked_last_and_a_lost_owner_keeps_the_original(tmp_path):
+def test_a_lost_owner_keeps_the_original(tmp_path):
     path = _write(tmp_path / "evidence.log")
     inode, asked = os.lstat(path).st_ino, []
     assert artifact_storage.compression_outcome(path, owned=lambda: asked.append(1) or False) == "not_owned"
@@ -207,7 +275,7 @@ def test_the_job_offers_only_finished_records_never_a_copy_or_git(data, recorded
     assert owned[done["evidence"]] is not None and owned[done["evidence"]]() is True, "the row is asked again"
     assert owned[offered["evidence"]] is None, "a home is held by its seat lock instead"
     row = maintenance_jobs.job(data, job.JOB)
-    assert row["waiting"] == sorted(home.name for home in (_copy_home, _live_home))
+    assert row["waiting"] == {"evidence": [], "seats": sorted(home.name for home in (_copy_home, _live_home))}
     assert _run(data) is None, "a second look at unchanged inputs is at rest"
 
 
@@ -249,17 +317,41 @@ def test_the_budget_and_a_stop_leave_a_cursor_and_every_file_is_offered_once(dat
     assert sorted(path for path, _owned in recorded) == sorted(extra.values())
 
 
-def test_a_killed_runs_sibling_is_reaped_and_never_offered(data, recorded):
+def test_a_killed_runs_own_sibling_is_reaped_and_another_temporary_is_left(data, recorded):
     files = _evidence(data, "done", live_files=False)
     home, _ = _seat(data, "done", "op-1")
-    siblings = [_write(files["evidence"].with_name(".out.log.tmp.4242.17.0a1b2c3d")),
-                _write(home / "evidence" / "files" / ".venv.bin.tmp.4242.17.0a1b2c3d")]
+    own = [_write(artifact_storage.compression_sibling(files["evidence"])),
+           _write(artifact_storage.compression_sibling(home / "evidence" / "files" / "venv.bin"))]
+    foreign = _write(files["evidence"].with_name(".result.json.tmp.4242.17.0a1b2c3d"))  # another writer's
     keep = _write(files["evidence"].with_name(".notes.tmp.backup"))  # not the signature: an ordinary record
     outcome = _run(data)
-    assert outcome["state"] == "done" and not any(path.exists() for path in siblings)
-    assert not {path for path, _owned in recorded} & set(siblings)
-    assert keep.exists() and keep in {path for path, _owned in recorded}
-    assert maintenance_jobs.job(data, job.JOB)["last"]["reaped"] == 2
+    assert outcome["state"] == "done" and not any(path.exists() for path in own)
+    offered = {path for path, _owned in recorded}
+    assert not offered & {*own, foreign} and foreign.exists(), "another writer's temporary: neither a record nor ours"
+    assert keep in offered and maintenance_jobs.job(data, job.JOB)["last"]["reaped"] == 2
+
+
+def test_published_evidence_named_like_a_temporary_is_neither_offered_nor_reaped(data, recorded):
+    """The real seat capture names and hashes a retained file whose name looks like an atomic temporary
+    (A-F1): it is a record, kept as it is; only the job's own siblings are ever reaped."""
+    from ouroboros import review_checking
+    from ouroboros.task_results import write_task_result
+
+    home = review_checking.seat_dir(data, "done", "op")
+    home.mkdir(parents=True)
+    (home / "checking.json").write_text(json.dumps({"schema": 1, "task_id": "done", "operation_id": "op",
+                                                    "source": {"kind": "workspace"}}), encoding="utf-8")
+    source = _write(home / "area.noindex" / ".review-evidence" / ".recovered.log.tmp.4242.17.0a1b2c3d")
+    original = source.read_bytes()
+    capture = review_checking.capture_seat_evidence(data, "done", "op")
+    assert capture["status"] == "retained", capture
+    [named] = capture["named_evidence"]
+    retained = home / "evidence" / "files" / named["path"]
+    assert retained.read_bytes() == original and not (home / "area.noindex").exists()
+    write_task_result(data, "done", "completed")
+    assert _run(data)["state"] == "done"
+    assert retained.read_bytes() == original and retained not in {path for path, _owned in recorded}
+    assert maintenance_jobs.job(data, job.JOB)["last"]["reaped"] == 0
 
 
 def test_a_held_seat_lock_keeps_the_home_waiting_until_it_is_free(data, recorded):
@@ -271,11 +363,11 @@ def test_a_held_seat_lock_keeps_the_home_waiting_until_it_is_free(data, recorded
     with _seat_locked(home) as held:
         assert held
         _run(data)
-    assert not recorded and maintenance_jobs.job(data, job.JOB)["waiting"] == [home.name]
+    assert not recorded and maintenance_jobs.job(data, job.JOB)["waiting"]["seats"] == [home.name]
     write_task_result(data, "other", "completed")  # the next pass: the waiting home is looked at again
     _run(data)
     assert {path for path, _owned in recorded} == {files["evidence"], files["test"]}
-    assert maintenance_jobs.job(data, job.JOB)["waiting"] == []
+    assert maintenance_jobs.job(data, job.JOB)["waiting"]["seats"] == []
 
 
 def test_an_unreadable_listing_fails_the_run_and_marks_nothing_covered(data, recorded, monkeypatch):
@@ -295,6 +387,156 @@ def test_an_unreadable_listing_fails_the_run_and_marks_nothing_covered(data, rec
     assert row["last_error"]["class"] == "PermissionError" and not recorded
     monkeypatch.setattr(os, "scandir", real)
     assert _run(data)["state"] == "done" and len(recorded) == 3
+
+
+def test_a_folder_that_cannot_be_listed_is_counted_and_the_walk_goes_on(data, recorded, monkeypatch):
+    """A-F3: never taken for an empty folder, never a block on the rest; its task's next terminal write
+    brings it back."""
+    from ouroboros.task_results import write_task_result
+
+    files = _evidence(data, "done", live_files=False)
+    real, refused = os.scandir, files["test"].parent
+
+    def scandir(path="."):
+        if pathlib.Path(path) == refused:
+            raise PermissionError(13, "listing refused")
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    assert _run(data)["state"] == "done"
+    assert maintenance_jobs.job(data, job.JOB)["last"]["skipped"] == {"unreadable": 1}
+    assert {path for path, _owned in recorded} == {files["evidence"], files["generation"]}, "the rest is walked"
+    monkeypatch.setattr(os, "scandir", real)
+    recorded.clear()
+    write_task_result(data, "done", "completed")
+    assert _run(data)["state"] == "done" and files["test"] in {path for path, _owned in recorded}
+
+
+def test_a_task_written_terminal_again_is_walked_from_its_start(data, recorded, monkeypatch):
+    """A-F4: a later pass stopped inside a task keeps its cursor only while the task is not written again."""
+    from ouroboros.task_results import write_task_result
+
+    write_task_result(data, "seed", "completed")
+    assert _run(data)["state"] == "done"  # the backlog is behind: later passes read the terminal writes
+    base = data / "task_results" / "artifacts" / "done" / "source_handles" / "test-evidence" / "run"
+    a, z = _write(base / "a.log"), _write(base / "z.log")
+    write_task_result(data, "done", "completed")
+    monkeypatch.setattr(job, "FILES_PER_RUN", 1)
+    assert _run(data)["state"] == "pending" and [path for path, _owned in recorded] == [a]
+    added = _write(base / "0-new.log")  # late evidence sorting before the cursor
+    write_task_result(data, "done", "completed", result="late evidence published")
+    while _run(data) is not None:
+        pass
+    assert {added, z} <= {path for path, _owned in recorded}
+
+
+def test_the_cursors_task_written_again_never_drops_the_tasks_still_owed(data, recorded, monkeypatch):
+    """A later pass stopped at the first file of B, its cursor still in A: A written terminal again is
+    walked again in its place among the writes, and B, owed, is still compressed."""
+    from ouroboros.task_results import write_task_result
+
+    write_task_result(data, "seed", "completed")
+    assert _run(data)["state"] == "done"
+    _evidence(data, "a", live_files=False)
+    owed = _evidence(data, "b", live_files=False)
+    monkeypatch.setattr(job, "FILES_PER_RUN", 3)
+    assert _run(data)["state"] == "pending"
+    row = maintenance_jobs.job(data, job.JOB)
+    assert row["cursor"]["key"] == "a" and row["owed"]["evidence"] == ["b"]
+    write_task_result(data, "a", "completed", result="written again")
+    recorded.clear()
+    monkeypatch.setattr(job, "FILES_PER_RUN", 100)
+    while _run(data) is not None:
+        pass
+    assert set(owed.values()) <= {path for path, _owned in recorded}
+
+
+def test_a_task_closing_mid_backlog_below_the_cursor_is_compressed_by_the_next_pass(data, recorded, monkeypatch):
+    """O-F4: the backlog records the terminal counter it began at, so what closed meanwhile is read next."""
+    _evidence(data, "m", live_files=False)
+    _evidence(data, "z", live_files=False)
+    monkeypatch.setattr(job, "FILES_PER_RUN", 2)
+    assert _run(data)["state"] == "pending" and maintenance_jobs.job(data, job.JOB)["cursor"]["key"] == "m"
+    late = _evidence(data, "b", live_files=False)  # turns terminal now; its name sorts before the cursor
+    while _run(data) is not None:
+        pass
+    assert set(late.values()) <= {path for path, _owned in recorded}
+
+
+def test_a_backlog_whose_cursor_folder_is_gone_resumes_at_the_next_name(data, recorded, monkeypatch):
+    import shutil
+
+    _evidence(data, "a", live_files=False)
+    _evidence(data, "b", live_files=False)
+    later = _evidence(data, "c", live_files=False)
+    monkeypatch.setattr(job, "FILES_PER_RUN", 4)
+    assert _run(data)["state"] == "pending" and maintenance_jobs.job(data, job.JOB)["cursor"]["key"] == "b"
+    shutil.rmtree(data / "task_results" / "artifacts" / "b")
+    recorded.clear()
+    monkeypatch.setattr(job, "FILES_PER_RUN", 100)
+    assert _run(data)["state"] == "done"
+    assert {path for path, _owned in recorded} == set(later.values()), "a is not walked again"
+
+
+def test_evidence_waits_until_its_task_is_proven_over(data, recorded, monkeypatch):
+    """O-F1a: a terminal task whose lineage still runs keeps its files untouched and waits; the next pass
+    after the process is gone compresses them."""
+    from ouroboros import body_candidate
+    from ouroboros.task_results import write_task_result
+
+    files = _evidence(data, "done", live_files=False)
+    lineage = [4242]  # a test process of the task, still writing its output
+    monkeypatch.setattr(body_candidate, "live_lineage_processes", lambda root, task_id: list(lineage))
+    assert _run(data)["state"] == "done"
+    assert not recorded and maintenance_jobs.job(data, job.JOB)["waiting"]["evidence"] == ["done"]
+    lineage.clear()
+    write_task_result(data, "other", "completed")  # the next pass asks again
+    _run(data)
+    assert {path for path, _owned in recorded} == set(files.values())
+    assert maintenance_jobs.job(data, job.JOB)["waiting"]["evidence"] == []
+
+
+def test_totals_are_kept_per_plane_and_shown_under_their_own_place(data, recorded):
+    from ouroboros import storage_removers
+
+    _evidence(data, "done", live_files=False)
+    _seat(data, "done", "op-1")
+    _run(data)
+    totals = maintenance_jobs.job(data, job.JOB)["totals"]
+    assert {plane: total["compressed"] for plane, total in totals.items()} == {"evidence": 3, "seats": 2}
+    found = storage_removers.place_removers(data, engine=False)
+    shown = {place: next(fact for fact in found[place] if fact["id"] == job.JOB)["compressed"]
+             for place in ("task_results", "app_state")}
+    assert shown == {"task_results": 3, "app_state": 2}, "never one job-wide total under two places"
+
+
+def test_a_supported_run_clears_another_platforms_unsupported(data, recorded, monkeypatch):
+    from ouroboros import storage_removers
+
+    _evidence(data, "done", live_files=False)
+    monkeypatch.setattr(artifact_storage, "compression_supported", lambda: False)
+    monkeypatch.setattr(job, "sys", SimpleNamespace(platform="linux"))  # the data folder came from Linux
+    assert _run(data) == {"state": "done", "items": 0}
+    assert maintenance_jobs.job(data, job.JOB)["unsupported"] == "linux"
+    monkeypatch.setattr(artifact_storage, "compression_supported", lambda: True)
+    monkeypatch.setattr(job, "sys", sys)
+    assert _run(data)["items"] == 3 and "unsupported" not in maintenance_jobs.job(data, job.JOB)
+    [fact] = [fact for fact in storage_removers.place_removers(data, engine=False)["task_results"] if fact["id"] == job.JOB]
+    assert fact["state"] == "done" and fact["compressed"] == 3
+
+
+def test_the_maintenance_child_takes_the_count_childs_utility_disk_policy(monkeypatch):
+    """O-F3: the child that reads and rewrites history lowers its disk tier with the count child's helper."""
+    from ouroboros import storage
+
+    taken = []
+    monkeypatch.setattr(storage, "utility_io", lambda: taken.append(True) or True)
+    monkeypatch.setattr(os, "nice", lambda increment: 0, raising=False)  # never this test process's own priority
+    monkeypatch.setattr(os, "name", "posix")
+    maintenance._lower_priority()
+    assert taken == [True]
+    monkeypatch.setattr(storage, "sys", SimpleNamespace(platform="darwin"))
+    assert storage._lower_io_priority() == "utility" and taken == [True, True], "one owner, both children"
 
 
 def test_unsupported_platforms_record_it_once_and_walk_nothing(data, monkeypatch):
@@ -322,5 +564,6 @@ def test_real_compression_of_terminal_evidence_and_a_finished_seat_home(data, mo
     compressed = {path for path in identities if os.lstat(path).st_flags & stat.UF_COMPRESSED}
     assert compressed == {done["evidence"], done["generation"], done["test"], seat["evidence"], seat["test"]}
     row = maintenance_jobs.job(data, job.JOB)
-    assert row["compressed"] == 5 and row["saved_bytes"] > 0 and row["last"]["skipped"] == {}
+    assert {plane: total["compressed"] for plane, total in row["totals"].items()} == {"evidence": 3, "seats": 2}
+    assert all(total["saved_bytes"] > 0 for total in row["totals"].values()) and row["last"]["skipped"] == {}
     assert _run(data) is None

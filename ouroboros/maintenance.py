@@ -513,7 +513,9 @@ child = MaintenanceChild()
 # ---- the child half --------------------------------------------------------------------------
 
 def _lower_priority() -> None:
-    """Background priority: POSIX nice, the Windows below-normal class; best effort."""
+    """Background priority: POSIX nice, the Windows below-normal class; on macOS also the count child's
+    utility disk tier with dataless files never downloaded (``storage.utility_io``: the jobs read and
+    rewrite history); best effort."""
     try:
         if os.name == "nt":
             import ctypes
@@ -524,6 +526,9 @@ def _lower_priority() -> None:
             os.nice(10)
     except (OSError, AttributeError):
         log.debug("Maintenance priority unchanged", exc_info=True)
+    from ouroboros.storage import utility_io
+
+    utility_io()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

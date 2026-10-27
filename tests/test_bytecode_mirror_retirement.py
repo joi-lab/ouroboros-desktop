@@ -200,6 +200,30 @@ def test_windows_drive_list_comes_from_the_system_and_each_root_is_asked_once(mo
     assert retirement._source_roots() == [os.sep]
 
 
+def test_a_drive_refusing_its_root_is_still_a_place_a_source_can_be(data, tmp_path, monkeypatch):
+    """A refused drive root is there (the per-mirror access rule keeps what it may hold); only an absent
+    one (no media, a lost share) is dropped, so another drive's absence never retires a live mirror."""
+    drives = [tmp_path / "C", tmp_path / "D"]
+    for drive in drives:
+        drive.mkdir()
+    (drives[1] / "project").mkdir()
+    mirror = data / "state" / "pycache" / "project"
+    mirror.mkdir()
+    (mirror / "m.cpython-310.pyc").write_bytes(b"\x00")
+    monkeypatch.setattr(retirement, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(os, "listdrives", lambda: [str(drive) for drive in drives], raising=False)
+    real = os.stat
+
+    def refused(path, *args, **kwargs):
+        if pathlib.Path(path) == drives[1]:
+            raise PermissionError(13, "access to the drive root refused")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", refused)
+    assert retirement.prune_stale_bytecode(data)["removed"] == 0 and mirror.exists()
+    assert retirement._answers(str(tmp_path / "Q")) is False, "an absent root is no place a source can be"
+
+
 def test_the_step_runs_in_the_job_and_a_source_removal_makes_it_due(data, tmp_path, monkeypatch):
     from ouroboros import task_custody, worktree_removal
 

@@ -18,12 +18,14 @@ import sys
 import zlib
 from typing import Callable, Optional
 
-from ouroboros.temp_sweep import atomic_temp_path as temporary_sibling
+from ouroboros.temp_sweep import atomic_temp_path as temporary_sibling, is_atomic_temp
 
 _FICLONE = 0x40049409  # _IOW(0x94, 9, int), <linux/fs.h>
 FLOOR_BYTES = 64 * 1024  # under it a file gains little and costs one rewrite (decmpfs blocks, FSEvents)
 _BLOCK = 4096  # one allocation block: the least a compression must save
-STAT_SKIPS = ("not_regular", "small", "linked", "compressed_already")  # decided by one lstat, no read
+STAT_SKIPS = ("not_regular", "dataless", "small", "linked", "compressed_already")  # decided by one lstat, no read
+_SIBLING_TAG = "decmpfs"  # the compression sibling's own tag inside the atomic signature
+_SF_DATALESS = 0x40000000  # <sys/stat.h>: an evicted (File Provider) file; reading it would download it
 
 
 def clone_file(source: pathlib.Path, destination: pathlib.Path) -> bool:
@@ -90,6 +92,18 @@ def _ficlone(source: pathlib.Path, destination: pathlib.Path) -> bool:
     return False
 
 
+def compression_sibling(path: pathlib.Path) -> pathlib.Path:
+    """The sibling ``_compress_macos`` writes: ``.{name}.decmpfs.tmp.<pid>.<tid>.<uuid>``, the atomic
+    signature under this module's own tag, so ``temp_sweep`` still reaps it where it walks."""
+    return temporary_sibling(path, tag=_SIBLING_TAG)
+
+
+def is_compression_sibling(name: str) -> bool:
+    """A name ``compression_sibling`` made: the only temporaries the ``record_compression`` job reaps
+    (any other atomic-signature name is another writer's, or a record that merely looks like one)."""
+    return is_atomic_temp(name) and name.rsplit(".tmp.", 1)[0].endswith("." + _SIBLING_TAG)
+
+
 def compression_supported() -> bool:
     """Transparent compression exists here: decmpfs on macOS, NTFS on Windows. Linux, Docker and Colab
     keep ordinary files: Btrfs needs its compression attribute BEFORE the data write."""
@@ -105,15 +119,16 @@ def compress_in_place(path: pathlib.Path, *, owned: Optional[Callable[[], bool]]
 def compression_outcome(path: pathlib.Path, *, owned: Optional[Callable[[], bool]] = None) -> str:
     """Compress PATH in place, logical size, bytes and sha256 preserved, or say why it stayed: the one
     floor every caller shares. ``unsupported`` off macOS and Windows; one ``lstat`` decides
-    ``not_regular``, ``small`` (under 64 KiB), ``linked`` (another name shares the inode) and
-    ``compressed_already``; macOS keeps a file that may share blocks with a clone (``shared``;
+    ``not_regular``, ``dataless`` (macOS: evicted, a read would download it), ``small`` (under 64 KiB),
+    ``linked`` (another name shares the inode) and ``compressed_already``; macOS keeps a file that may
+    share blocks with a clone (``shared``;
     ``share_unknown`` when the volume does not say: compressing a shared file would unshare it), Windows
     a read-only one (``read_only``: its file control needs a writable handle); a first 64 KiB block zlib
     cannot shrink by one allocation block is ``incompressible``; free space below the file's size is
-    ``low_space``. macOS hashes, writes a ``ditto --hfsCompression`` sibling carrying the atomic
-    signature, verifies it, re-stats the original right before the replace (device, inode, size, mtime:
-    else ``changed``) and asks OWNED last (else ``not_owned``); NTFS asks OWNED, compresses in place
-    through its file control and verifies the bytes after. Anything else is ``failed``."""
+    ``low_space``. macOS hashes, writes a ``ditto --hfsCompression`` sibling (``compression_sibling``),
+    verifies it, asks OWNED (else ``not_owned``), then re-stats the original right before the replace
+    (device, inode, size, mtime: else ``changed``); NTFS asks OWNED, compresses in place through its
+    file control and verifies the bytes after. Anything else is ``failed``."""
     path = pathlib.Path(path)
     if not compression_supported():
         return "unsupported"
@@ -133,6 +148,8 @@ def _floor(path: pathlib.Path, info: os.stat_result) -> str:
     """Why PATH stays as it is before any rewrite, or ``""``."""
     if not stat.S_ISREG(info.st_mode):
         return "not_regular"
+    if getattr(info, "st_flags", 0) & _SF_DATALESS:
+        return "dataless"
     if info.st_size < FLOOR_BYTES:
         return "small"
     if info.st_nlink != 1:
@@ -186,7 +203,7 @@ def _compress_macos(path: pathlib.Path, before: os.stat_result, owned: Optional[
     from ouroboros.config import ARTIFACT_COMPRESSION_TIMEOUT_SEC
 
     expected = stream_artifact_file(path)
-    temporary = temporary_sibling(path)  # the atomic signature: a hard kill's leftover is reaped, never a deliverable
+    temporary = compression_sibling(path)  # a hard kill's leftover is reaped (own tag), never a deliverable
     try:
         subprocess.run(
             ["/usr/bin/ditto", "--hfsCompression", str(path), str(temporary)],
@@ -196,12 +213,12 @@ def _compress_macos(path: pathlib.Path, before: os.stat_result, owned: Optional[
         stream_artifact_file(temporary, expected=expected)
         if not getattr(os.lstat(temporary), "st_flags", 0) & stat.UF_COMPRESSED:
             return "incompressible"
+        if owned is not None and not owned():  # it may wait on the store: before the last look, never after
+            return "not_owned"
         now = os.lstat(path)
         if (now.st_dev, now.st_ino, now.st_size, now.st_mtime_ns) != (
                 before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns):
             return "changed"  # a writer touched it since: its bytes win
-        if owned is not None and not owned():
-            return "not_owned"
         os.replace(temporary, path)
         return "compressed"
     finally:

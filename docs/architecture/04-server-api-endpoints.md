@@ -159,7 +159,7 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | POST | `/api/update/preflight` | |
 | POST | `/api/update/apply` | |
 | GET | `/api/cost-breakdown` | |
-| GET | `/api/storage` | passive; `?count=` omits a held count; `removers` |
+| GET | `/api/storage` | passive; `?count=` omits a held count |
 | POST | `/api/storage/measure` | start/join child count |
 | POST | `/api/storage/measure/cancel` | stop child; saved count stays |
 | POST | `/api/storage/free/preview` | pure preview; 202, start/join |

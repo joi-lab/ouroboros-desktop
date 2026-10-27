@@ -329,8 +329,12 @@ def _source_roots() -> list:
 
 
 def _answers(path) -> bool:
+    """A listed drive is a place a source can be unless its root is absent (no media, a lost share);
+    one that refuses access is there, and the per-mirror access rule then keeps what it might hold."""
     try:
         os.stat(path)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True

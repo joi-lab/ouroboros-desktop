@@ -81,8 +81,10 @@ function engineLine(fact, now) {
     if (fact.state === 'unsupported') return `${head} · ${fmt('last pass unknown: this engine does not report it')}`;
     if (!['completed', 'held', 'truncated', 'failed'].includes(fact.state)) return `${head} · ${fmt('last pass unknown: the engine is not answering')}`;
     const when = whenLabel(fact.at, now);
+    // The state says how the pass ended; a hold is said even when it held no folder (a namespace or an anchor set).
     const parts = [head, fact.state === 'failed' ? fmt('last pass {when} failed', { when })
-        : fact.state === 'truncated' ? fmt('last pass {when} stopped early', { when }) : fmt('last pass {when}', { when })];
+        : fact.state === 'truncated' ? fmt('last pass {when} stopped early', { when })
+            : fact.state === 'held' && !(fact.held > 0) ? fmt('last pass {when} held', { when }) : fmt('last pass {when}', { when })];
     if (isSize(fact.freed_bytes)) parts.push(fmt('{size} freed', { size: formatBytes(fact.freed_bytes) }));
     if (fact.held > 0) {
         parts.push(fact.held_since ? fmt('holding {n} folders since {when}', { n: number(fact.held), when: whenLabel(fact.held_since, now) })
@@ -98,9 +100,11 @@ function jobPhrase(fact, now) {
         return fmt('{job}: stopped by an error ({error}, {when})', { job, error: fact.last_error.class, when: whenLabel(fact.last_error.at, now) });
     }
     if (fact.id === 'record_compression' && fact.state !== 'unsupported' && fact.compressed > 0) {
+        // This place's own plane (task evidence, or reviewer seat homes), never one total under two places.
         const files = plural(fact.compressed, '{n} file compressed', '{count} files compressed');
-        return isSize(fact.saved_bytes) ? fmt('{job}: {files}, {size} saved', { job, files, size: formatBytes(fact.saved_bytes) })
+        const line = isSize(fact.saved_bytes) ? fmt('{job}: {files}, {size} saved', { job, files, size: formatBytes(fact.saved_bytes) })
             : fmt('{job}: {files}', { job, files });
+        return fact.state === 'pending' ? fmt('{line}, in progress', { line }) : line;
     }
     return fmt(JOB_STATES[fact.state] || '{job}: {state}', { job, state: String(fact.state || '') });
 }

@@ -1,10 +1,14 @@
 """A remover's last outcome is durable and read beside the place it serves: a maintenance job that throws
 keeps its state and gains ``last_error`` until it returns normally, the engine place carries the engine's
-last retention pass (unknown, never zero, when the engine cannot be asked or keeps no record), and the
-Storage projection, the runtime ``storage`` fact and ``query_data(kind="storage")`` read the same facts."""
+last retention pass (unknown, never zero, when the engine cannot be asked or keeps no record), the
+Storage projection and ``query_data(kind="storage")`` read the same facts, and the runtime ``storage``
+fact reads the job rows alone (no engine call while a turn is prepared)."""
 from __future__ import annotations
 
 import pathlib
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,8 +35,9 @@ def data(tmp_path, monkeypatch):
     return root
 
 
-def _engine(data, monkeypatch, answer):
-    """A provisioned engine home whose read answers ANSWER (a record, or an exception raised by the read)."""
+def _engine(data, monkeypatch, answer, *, hung=None):
+    """A provisioned engine home whose read answers ANSWER (a record, or an exception raised by the read),
+    after HUNG (an event) is set when given."""
     descriptor = data / storage.ENGINE_DIR / "daemon" / "control-api.json"
     descriptor.parent.mkdir(parents=True, exist_ok=True)
     descriptor.write_text("{}", encoding="utf-8")
@@ -50,6 +55,8 @@ def _engine(data, monkeypatch, answer):
 
         def maintenance_gc_last(self, *, timeout_sec=None):
             asked.append(timeout_sec)
+            if hung is not None:
+                hung.wait(10)
             if isinstance(answer, Exception):
                 raise answer
             return {"last": answer}
@@ -119,6 +126,31 @@ def test_an_engine_that_cannot_answer_is_unknown_never_zero(data, monkeypatch, a
     assert storage_removers.not_ok({"engine": [engine]}) == [f"engine retention: {state}"]
 
 
+def test_a_hung_engine_is_unavailable_within_the_bound_and_a_poll_reuses_a_recent_read(data, monkeypatch):
+    monkeypatch.setattr(storage_removers, "ENGINE_READ_SEC", 0.2)
+    hung = threading.Event()
+    asked = _engine(data, monkeypatch, HELD, hung=hung)
+    try:
+        [engine] = storage_removers.place_removers(data)["engine"]
+        assert engine == {"id": "engine", "state": "unavailable", "at": None} and not hung.is_set(), \
+            "answered while the read still hangs: connect and read together stay within the bound"
+    finally:
+        hung.set()
+    now = [time.monotonic() + 3600]  # past every record read so far
+    monkeypatch.setattr(storage_removers, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    first = storage_removers.place_removers(data, recent=True)["engine"]
+    assert first[0]["state"] == "held"
+    reads = len(asked)
+    now[0] += storage_removers.ENGINE_REUSE_SEC - 1
+    assert storage_removers.place_removers(data, recent=True)["engine"] == first and len(asked) == reads, \
+        "a projection polled every second reuses the record read seconds ago"
+    assert storage_removers.place_removers(data)["engine"] == first and len(asked) > reads, "query_data asks anew"
+    reads = len(asked)
+    now[0] += storage_removers.ENGINE_REUSE_SEC
+    storage_removers.place_removers(data, recent=True)
+    assert len(asked) > reads, "an older record is read again"
+
+
 def test_no_provisioned_engine_has_no_engine_remover(data):
     assert "engine" not in storage_removers.place_removers(data)
 
@@ -149,25 +181,32 @@ def test_the_gateway_reads_the_record_and_types_an_engine_without_the_route(monk
         Gateway({"something": 1}).maintenance_gc_last()
 
 
-def test_the_runtime_fact_is_silent_when_all_is_ok_and_present_before_the_first_count(data, monkeypatch):
+def test_the_runtime_fact_reads_job_rows_alone_and_never_asks_the_engine(data, monkeypatch):
     assert storage_fact(data) is None, "nothing counted, every remover clean"
     maintenance_jobs.record(data, "runtime_retirement", state="done", last_error={"class": "OSError", "at": "T"})
     assert storage_fact(data) == {"removers": "runtime_retirement: last run threw OSError at T"}
-    _engine(data, monkeypatch, ClaudexorUnavailable("daemon_unreachable", "down"))
-    assert storage_fact(data)["removers"] == "engine retention: unavailable; runtime_retirement: last run threw OSError at T"
+    asked = _engine(data, monkeypatch, ClaudexorUnavailable("daemon_unreachable", "down"))
+    assert storage_fact(data) == {"removers": "runtime_retirement: last run threw OSError at T"} and asked == [], \
+        "no engine call while a turn is prepared"
     (data / "observability").mkdir()
     table = [{"id": "model_calls", "group": "records", "roots": [(str(data), ("observability",))]}]
     storage.save_count(data, storage.measure(data, places=table, sleep=lambda _s: None))
     fact = storage_fact(data)
-    assert "counted_at" in fact and fact["removers"].startswith("engine retention: unavailable"), "beside a count too"
+    assert "counted_at" in fact and fact["removers"] == "runtime_retirement: last run threw OSError at T" and not asked
+    assert storage.count.projection(data)["removers"]["engine"] == [{"id": "engine", "state": "unavailable", "at": None}]
+    assert asked, "the Storage page still reads the engine's record"
 
 
 def test_the_projection_and_query_data_read_the_same_removers(data, monkeypatch):
     _engine(data, monkeypatch, HELD)
-    maintenance_jobs.record(data, "record_compression", state="done", compressed=12, saved_bytes=4096)
+    maintenance_jobs.record(data, "record_compression", state="done", totals={
+        "evidence": {"compressed": 12, "saved_bytes": 4096}, "seats": {"compressed": 3, "saved_bytes": None}})
     projected = storage.count.projection(data)["removers"]
     assert projected == storage_removers.place_removers(data)
     assert set(projected) <= {place_id for place_id, _group, _spec in storage.PLACES}
-    [_retirement, compression, _trash] = projected["app_state"]
-    assert compression == {"id": "record_compression", "state": "done", "at": compression["at"],
-                           "compressed": 12, "saved_bytes": 4096}
+    [_packing, evidence] = projected["task_results"]
+    [_retirement, seats, _trash] = projected["app_state"]
+    assert evidence == {"id": "record_compression", "state": "done", "at": evidence["at"],
+                        "compressed": 12, "saved_bytes": 4096}, "Task results shows the evidence plane"
+    assert seats == {"id": "record_compression", "state": "done", "at": seats["at"],
+                     "compressed": 3, "saved_bytes": None}, "App state shows the seat homes, never a sum"

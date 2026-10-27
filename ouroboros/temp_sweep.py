@@ -33,13 +33,14 @@ def is_atomic_temp(name: str) -> bool:
     return name.startswith(".") and len(suffix) == 2 and bool(suffix[1]) and not set(suffix[1]) - _SIGNATURE
 
 
-def atomic_temp_path(path: pathlib.Path) -> pathlib.Path:
+def atomic_temp_path(path: pathlib.Path, *, tag: str = "") -> pathlib.Path:
     """The sibling temp name every atomic writer uses, ``.{name}.tmp.<pid>.<tid>.<uuid>``: the one
     signature this sweep reaps, so a hard kill's leftover is reclaimed instead of surviving beside
     the file it was meant to replace (and, in an artifact folder, being listed as a deliverable).
+    A writer's own ``tag`` (``.{name}.{tag}.tmp…``) lets it know its own siblings; it is never cut.
     A name too long to fit beside that suffix keeps a prefix and a digest of the whole name."""
     path = pathlib.Path(path)
-    suffix = f".tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}"
+    suffix = f"{'.' + tag if tag else ''}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}"
     stem = path.name
     room = _NAME_MAX_BYTES - 1 - len(suffix.encode("utf-8"))
     if len(stem.encode("utf-8")) > room:

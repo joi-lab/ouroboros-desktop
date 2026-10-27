@@ -182,7 +182,7 @@ class StorageResponse(TypedDict):
     volume: StorageVolume
     retention_days: int
     free: "StorageFree"
-    removers: Dict[str, List["StorageRemover"]]  # place id -> its removers, read fresh (``storage_removers``)
+    removers: Dict[str, List["StorageRemover"]]  # place id -> its removers, read on every answer (``storage_removers``)
     started: NotRequired[bool]
     reason: NotRequired[str]
 
@@ -665,7 +665,7 @@ class StorageCounter:
         response: StorageResponse = {  # type: ignore[typeddict-item]
             "counting": counting, "error": error, "volume": _volume(data_root),
             "retention_days": _retention_days(), "free": (free or storage_free.free).projection(data_root),
-            "removers": storage_removers.place_removers(data_root),
+            "removers": storage_removers.place_removers(data_root, recent=True),  # 1 s polls share one engine read
         }
         if not (latest and count_token and count_token == latest["finished_at"]):
             response["count"] = latest
@@ -790,21 +790,34 @@ count = StorageCounter()
 
 # ---- the child half -------------------------------------------------------------------------
 
+def utility_io() -> bool:
+    """macOS: this process's disk policy becomes IOPOL_UTILITY and it never materializes dataless
+    (cloud-evicted) files; True when that took. A no-op elsewhere. The count child and the maintenance
+    child share it (a mass read or rewrite must not starve the Mac's foreground IO)."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        import ctypes
+
+        # <sys/resource.h>: IOPOL_UTILITY is 4; 5 is IOPOL_STANDARD, the default tier.
+        IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY = 0, 0, 4
+        IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_MATERIALIZE_DATALESS_FILES_OFF = 3, 1
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY) == 0:
+            libc.setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS,
+                                IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+            return True
+    except (OSError, AttributeError, ValueError):
+        log.debug("Utility disk policy unchanged", exc_info=True)
+    return False
+
+
 def _lower_io_priority() -> str:
     """Best-effort disk priority of this count child; the policy applied, ``unchanged`` when none
     took. Function-local platform calls under ``sys.platform`` guards (DEVELOPMENT 10)."""
     try:
         if sys.platform == "darwin":
-            import ctypes
-
-            # <sys/resource.h>: the disk policy of this process, then never materialize dataless
-            # (cloud-evicted) files. IOPOL_UTILITY is 4; 5 is IOPOL_STANDARD, the default tier.
-            IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY = 0, 0, 4
-            IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_MATERIALIZE_DATALESS_FILES_OFF = 3, 1
-            libc = ctypes.CDLL(None, use_errno=True)
-            if libc.setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY) == 0:
-                libc.setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS,
-                                    IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+            if utility_io():
                 return "utility"
         elif sys.platform.startswith("linux"):
             import ctypes

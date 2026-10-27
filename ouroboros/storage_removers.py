@@ -1,17 +1,21 @@
 """Who retires or shrinks what each counted place holds, and how its last pass ended.
 
-Dashboard -> Storage shows one line per place from ``place_removers``; the runtime ``storage`` fact and
-``query_data(kind="storage")`` read the same facts. They are read fresh on every projection, with or
-without a count. A place names its removers (``PLACE_REMOVERS``): the maintenance child's job rows
-(``maintenance_jobs``: the row's state and, while its last run threw, ``last_error``) and, for the
-engine place, the engine's last retention pass (the read-only ``GET /v2/maintenance/gc``, which never
-starts one). An engine that cannot be asked is ``unavailable`` and one that keeps no such record
-``unsupported``: unknown, never zero. ``not_ok`` names the outcomes the runtime fact lists.
+Dashboard -> Storage shows one line per place from ``place_removers`` and ``query_data(kind="storage")``
+returns the same facts; both read them on every request, with or without a count. A place names its
+removers (``PLACE_REMOVERS``): the maintenance child's job rows (``maintenance_jobs``: the row's state,
+``last_error`` while its last run threw, ``record_compression``'s totals for the plane in that place) and,
+for the engine place, the engine's last retention pass (the read-only ``GET /v2/maintenance/gc``, which
+never starts one; connect and read bounded together in wall time, a projection polled every second
+reusing a record read in the last few seconds). An engine that cannot be asked, or not within the bound,
+is ``unavailable`` and one that keeps no such record ``unsupported``: unknown, never zero. The runtime ``storage`` fact reads the job rows alone
+(``engine=False``: no engine call while a turn is prepared); ``not_ok`` names what it lists.
 """
 from __future__ import annotations
 
 import pathlib
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 try:  # Python 3.11+
     from typing import NotRequired, TypedDict  # type: ignore[attr-defined]
@@ -30,8 +34,13 @@ PLACE_REMOVERS: Dict[str, tuple] = {
     "app_state": ("runtime_retirement", "record_compression", "custody_trash"),
     "data_other": ("runtime_retirement",),
 }
-ENGINE_READ_SEC = 2.0  # a hung engine reads as unavailable; it never stalls the page or a context build
+# record_compression's plane in a place: task evidence in Task results, reviewer seat homes in App state.
+_COMPRESSION_PLANES = {"task_results": "evidence", "app_state": "seats"}
+ENGINE_READ_SEC = 2.0  # connect and read together, in wall time: a hung engine reads as unavailable
+ENGINE_REUSE_SEC = 5.0  # a projection polled every second reuses the record read this recently
 _ENGINE_OUTCOMES = ("completed", "held", "truncated", "failed")
+_recent: Dict[str, Tuple[float, Optional["StorageRemover"]]] = {}  # data root -> (monotonic time, engine fact)
+_recent_lock = threading.Lock()
 
 
 class StorageRemover(TypedDict):
@@ -41,8 +50,8 @@ class StorageRemover(TypedDict):
     state: str  # a job: pending | running | done | failed | never | unsupported | unavailable; the engine: completed | held | truncated | failed | none | unavailable | unsupported
     at: Optional[str]  # the job row's last write; the engine pass's end
     last_error: NotRequired[Dict[str, str]]  # a job whose last run threw: {class, at}, until a run returns normally
-    compressed: NotRequired[int]  # record_compression: files compressed so far
-    saved_bytes: NotRequired[Optional[int]]  # record_compression: allocation saved; null where none is reported
+    compressed: NotRequired[int]  # record_compression: files compressed so far in this place's plane
+    saved_bytes: NotRequired[Optional[int]]  # record_compression: that plane's allocation saved; null where unreported
     freed_bytes: NotRequired[int]  # the engine pass
     held: NotRequired[int]  # the engine pass: folders it held (project roots and native homes)
     held_since: NotRequired[str]  # the earliest of those holds
@@ -50,8 +59,9 @@ class StorageRemover(TypedDict):
     first_error: NotRequired[Optional[str]]
 
 
-def place_removers(data_root: Any) -> Dict[str, List[StorageRemover]]:
-    """Each place's removers as read now (module docstring); a place nothing removes is absent."""
+def place_removers(data_root: Any, *, engine: bool = True, recent: bool = False) -> Dict[str, List[StorageRemover]]:
+    """Each place's removers as read now (module docstring); a place nothing removes is absent. ``engine``
+    False reads the local job rows alone; ``recent`` reuses an engine record read in ``ENGINE_REUSE_SEC``."""
     root = pathlib.Path(data_root)
     names = sorted({name for names in PLACE_REMOVERS.values() for name in names if name != "engine"})
     rows: Optional[Dict[str, Dict[str, Any]]] = {}  # no store file yet: no job has recorded a fact (and a
@@ -60,14 +70,14 @@ def place_removers(data_root: Any) -> Dict[str, List[StorageRemover]]:
             rows = maintenance_jobs.jobs(root, names)
         except Exception:  # an unreadable store: each job's outcome is unknown, never "not run"
             rows = None
-    facts: Dict[str, Optional[StorageRemover]] = {name: _job(name, rows) for name in names}
-    facts["engine"] = _engine(root)
-    found = {place: [facts[name] for name in removers if facts[name] is not None]
+    engine_fact = _engine(root, recent=recent) if engine else None
+    found = {place: [engine_fact if name == "engine" else _job(name, rows, place) for name in removers]
              for place, removers in PLACE_REMOVERS.items()}
-    return {place: removers for place, removers in found.items() if removers}  # type: ignore[misc]
+    return {place: [fact for fact in removers if fact is not None]  # type: ignore[misc]
+            for place, removers in found.items() if any(fact is not None for fact in removers)}
 
 
-def _job(name: str, rows: Optional[Dict[str, Dict[str, Any]]]) -> StorageRemover:
+def _job(name: str, rows: Optional[Dict[str, Dict[str, Any]]], place: str) -> StorageRemover:
     if rows is None:
         return {"id": name, "state": "unavailable", "at": None}
     row = rows.get(name)
@@ -78,23 +88,58 @@ def _job(name: str, rows: Optional[Dict[str, Dict[str, Any]]]) -> StorageRemover
     error = row.get("last_error")
     if isinstance(error, dict):
         fact["last_error"] = {"class": str(error.get("class") or ""), "at": str(error.get("at") or "")}
-    if name == "record_compression" and "compressed" in row:
-        fact["compressed"], fact["saved_bytes"] = int(row.get("compressed") or 0), row.get("saved_bytes")
+    totals = row.get("totals") if name == "record_compression" and isinstance(row.get("totals"), dict) else {}
+    total = totals.get(_COMPRESSION_PLANES.get(place, "")) or {}
+    if "compressed" in total:  # this place's own plane, never a job-wide sum under two places
+        fact["compressed"], fact["saved_bytes"] = int(total.get("compressed") or 0), total.get("saved_bytes")
     return fact
 
 
-def _engine(root: pathlib.Path) -> Optional[StorageRemover]:
-    """The engine's last retention pass; None where no engine was ever provisioned under ROOT."""
-    from ouroboros.gateways.claudexor import ClaudexorGateway, ClaudexorUnavailable, discover_daemon_at
+def _engine(root: pathlib.Path, *, recent: bool = False) -> Optional[StorageRemover]:
+    """The engine's last retention pass; None where no engine was ever provisioned under ROOT. ``recent``
+    reuses the record read in the last ``ENGINE_REUSE_SEC``; every read is remembered for that reuse."""
+    key = str(root)
+    if recent:
+        with _recent_lock:
+            seen = _recent.get(key)
+        if seen is not None and time.monotonic() - seen[0] < ENGINE_REUSE_SEC:
+            return seen[1]
+    fact = _engine_read(root)
+    with _recent_lock:
+        _recent[key] = (time.monotonic(), fact)
+    return fact
+
+
+def _engine_read(root: pathlib.Path) -> Optional[StorageRemover]:
+    """The read within ``ENGINE_READ_SEC`` of wall time (httpx bounds each phase alone, so the call runs
+    on a daemon thread that its own phase bounds end); past it the engine is ``unavailable``. The gateway
+    is imported first: the bound is the engine's, never a cold import's."""
+    from ouroboros.gateways import claudexor
     from ouroboros.storage import ENGINE_DIR
 
     home = root / ENGINE_DIR
     if not (home / "daemon" / "control-api.json").is_file():
         return None
+    holder: Dict[str, StorageRemover] = {}
+    done = threading.Event()
+
+    def read() -> None:
+        try:
+            holder["fact"] = _engine_ask(claudexor, home)
+        finally:
+            done.set()
+
+    threading.Thread(target=read, name="storage-engine-read", daemon=True).start()
+    if done.wait(ENGINE_READ_SEC) and "fact" in holder:
+        return holder["fact"]
+    return {"id": "engine", "state": "unavailable", "at": None}
+
+
+def _engine_ask(claudexor: Any, home: pathlib.Path) -> StorageRemover:
     try:
-        with ClaudexorGateway(discover_daemon_at(home)) as gateway:
+        with claudexor.ClaudexorGateway(claudexor.discover_daemon_at(home)) as gateway:
             last = gateway.maintenance_gc_last(timeout_sec=ENGINE_READ_SEC)["last"]
-    except ClaudexorUnavailable as exc:
+    except claudexor.ClaudexorUnavailable as exc:
         return {"id": "engine", "state": "unsupported" if exc.code == "maintenance_unavailable" else "unavailable", "at": None}
     except Exception:
         return {"id": "engine", "state": "unavailable", "at": None}
