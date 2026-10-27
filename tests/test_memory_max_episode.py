@@ -7,12 +7,13 @@ from ouroboros import memory_max as mm, store
 from supervisor import schedule_notes, terminal_delivery as outbox
 
 
-def _fact(cause, *, window=1_000_000, levels=2, story=300_000, room=60_000, allowance=320_000, room_id="1"):
+def _fact(cause, *, window=1_000_000, levels=2, story=300_000, room=60_000, allowance=320_000, room_id="1",
+          reserve=65_536):
     work = -(-window // 8) * levels  # the work room: an eighth of the window per level
     return {"cause": cause, "window": window, "levels": levels, "room_id": room_id, "allowance": allowance,
-            "floor_need": 150_000 + work, "schemas": 40_000, "zero_need": 190_000 + work,
-            "need": 190_000 + work + story + room, "story": story, "unfolded": 120_000, "room": room,
-            "reserve": 65_536, "work": work, "folds": 12, "cuts": [],
+            "floor_need": 84_464 + reserve + work, "schemas": 40_000, "zero_need": 124_464 + reserve + work,
+            "need": 124_464 + reserve + work + story + room, "story": story, "unfolded": 120_000, "room": room,
+            "reserve": reserve, "work": work, "folds": 12, "cuts": [],
             "parts": [["books", 170_000], ["knowledge, scratchpad and runtime facts", 60_000], ["core", 40_000],
                       ["assignment", 4_000]]}
 
@@ -59,7 +60,7 @@ def test_a_crowded_start_opens_once_and_later_starts_only_update(tmp_path, lines
     assert mm.observe_start(tmp_path, _plan(_fact("crowded", window=872_000, levels=1)), "low", task_id="t2") == "updated"
     row = _row(tmp_path)
     assert row["starts"] == 2 and row["window"] == 872_000 and row["levels"] == 2 and row["last"]["task"] == "t2"
-    assert row["unit"] == 109_000  # the smallest lost window's work room per level
+    assert (row["unit"], row["reserve"]) == (109_000, 65_536)  # the smallest lost window's frame
     assert len(sent) == 1  # the open line is still owed by the outbox: no second send
     state["owed"].clear()  # lost before delivery: the next fresh start sends it again under the same id
     mm.observe_start(tmp_path, _plan(_fact("crowded")), "low", task_id="t3")
@@ -81,17 +82,20 @@ def _opened(tmp_path, lines, **kwargs):
     _deliver(lines[1], lines[0][0])
 
 
-# Lost on 1,000,000 with two work-room levels: memory fits that frame up to 560,000 (stories below + rooms 60,000).
-@pytest.mark.parametrize("window,levels,story,closes", [
-    (1_000_000, 2, 300_000, True),
-    (1_200_000, 2, 300_000, True),    # the route's window was raised since: its need still fits the lost frame
-    (1_200_000, 2, 520_000, False),   # holds on the raised window, not in the lost one: no saw
-    (1_000_000, 1, 300_000, True),    # a Main turn closes a root's episode when the root's frame would hold
-    (1_000_000, 1, 520_000, False),   # fits Main's own eighth, not the root's two
+# Lost on 1,000,000 with two work-room levels and a 65,536 reply reserve: memory fits that frame up to 560,000
+# (stories below + rooms 60,000).
+@pytest.mark.parametrize("window,levels,story,reserve,closes", [
+    (1_000_000, 2, 300_000, 65_536, True),
+    (1_200_000, 2, 300_000, 65_536, True),    # the route's window was raised since: its need still fits the lost frame
+    (1_200_000, 2, 520_000, 65_536, False),   # holds on the raised window, not in the lost one: no saw
+    (1_000_000, 1, 300_000, 65_536, True),    # a Main turn closes a root's episode when the root's frame would hold
+    (1_000_000, 1, 520_000, 65_536, False),   # fits Main's own eighth, not the root's two
+    (1_000_000, 2, 520_000, 16_384, False),   # a smaller reply reserve elsewhere makes the lost route no roomier
 ])
-def test_a_start_closes_only_when_its_need_fits_the_worst_lost_frame(tmp_path, lines, window, levels, story, closes):
+def test_a_start_closes_only_when_its_need_fits_the_worst_lost_frame(tmp_path, lines, window, levels, story, reserve,
+                                                                      closes):
     _opened(tmp_path, lines)
-    fact = _fact("held", window=window, levels=levels, story=story)
+    fact = _fact("held", window=window, levels=levels, story=story, reserve=reserve)
     assert fact["need"] <= window  # each case is a start that held Max in its own frame
     event = mm.observe_start(tmp_path, _plan(fact), "max", task_id="back")
     assert (event == "closed") is closes and bool(_row(tmp_path).get("closed")) is closes
@@ -106,7 +110,7 @@ def test_a_main_only_installation_closes_in_its_own_eighth_and_the_close_line_re
     assert mm.observe_start(tmp_path, _plan(_fact("held", levels=1, story=200_000)), "max", task_id="main") == "closed"
     close = sent[-1]
     assert close["delivery_id"].endswith(":close") and "Max holds again: task main started with whole books" in close["text"]
-    assert "my story went from 300,000 to 200,000 tokens; parts and accounts written meanwhile: 2 by me, 1 by the Light helper" in close["text"]
+    assert "my story went from 300,000 to 200,000 tokens; parts and accounts written meanwhile: 2 by me, 1 by helpers" in close["text"]
     row = _row(tmp_path)
     assert spans == [(row["opened_at"], row["closed"]["at"])]  # the episode's own span, the same on every retry
     _deliver(state, close)
@@ -127,6 +131,31 @@ def test_a_new_episode_hands_the_closed_ones_line_over_before_taking_its_row(tmp
     assert mm.observe_start(tmp_path, _plan(_fact("crowded")), "low", task_id="again") == "opened"
     assert [event["delivery_id"] for event in sent[1:]] == [f"memory_max:{old['id']}:close", f"memory_max:{_row(tmp_path)['id']}:open"]
     assert _row(tmp_path)["id"] != old["id"] and "Max holds again: task back" in sent[1]["text"]
+
+
+@pytest.mark.parametrize("failure", ["raises", "unregistered"])
+def test_a_closed_row_whose_lines_the_outbox_does_not_hold_stays_until_it_does(tmp_path, lines, monkeypatch, failure):
+    sent, state = lines
+    _opened(tmp_path, lines)
+    publish, enqueue = mm._publish, outbox.enqueue_terminal_delivery_outcome
+    monkeypatch.setattr(mm, "_publish", lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("lost before the send")))
+    mm.observe_start(tmp_path, _plan(_fact("held")), "max", task_id="back")
+    old = _row(tmp_path)
+    monkeypatch.setattr(mm, "_publish", publish)
+
+    def failing(_root, event, event_queue=None):
+        if failure == "raises":
+            raise RuntimeError("store busy")
+        sent.append(event)  # a live send whose owed row was not written
+        return "queued_unregistered"
+
+    monkeypatch.setattr(outbox, "enqueue_terminal_delivery_outcome", failing)
+    assert mm.observe_start(tmp_path, _plan(_fact("crowded")), "low", task_id="again") == ""
+    assert _row(tmp_path)["id"] == old["id"] and _row(tmp_path)["closed"]  # the close line is still owed by the row
+    monkeypatch.setattr(outbox, "enqueue_terminal_delivery_outcome", enqueue)
+    assert mm.observe_start(tmp_path, _plan(_fact("crowded")), "low", task_id="later") == "opened"
+    close_id = f"memory_max:{old['id']}:close"
+    assert close_id in state["owed"] and _row(tmp_path)["id"] != old["id"]
 
 
 def test_a_child_execution_drive_observes_the_installations_canonical_root(tmp_path, lines):

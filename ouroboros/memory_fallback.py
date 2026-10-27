@@ -251,9 +251,10 @@ def _legacy_units(root: pathlib.Path, store: ChronicleStore) -> Iterator[Fallbac
 
 
 def max_episode_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
-    """While my memory keeps Max lost (``memory_max.memory_can_help``): one room's oldest run of unfolded pages no
-    shown account tells (the view's ``told_map``), whoever wrote them, the room holding most such text first; one
-    page is a run too, Light judges whether folding it helps. Never an account across rooms: that is the mind's."""
+    """While my memory keeps Max lost (``memory_max.memory_can_help``): a room's runs of unfolded pages no shown
+    account tells (the view's ``told_map``), oldest first, whoever wrote them, the room holding most such text
+    first; one page is a run too, Light judges whether folding it helps, and a run it kept as it is leaves the
+    next one in turn (``select_unit``). Never an account across rooms: that is the mind's."""
     from ouroboros.memory_view_account import told_map
 
     told = set(told_map([{"id": r["id"], "replaces": r["selection"].get("replaces") or (),
@@ -264,11 +265,14 @@ def max_episode_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
         if not record.get("folded_into") and record["id"] not in told:
             sizes[str(record["room_id"])] = sizes.get(str(record["room_id"]), 0) + len(str(record.get("current_text") or ""))
     for room in sorted(sizes, key=lambda room: (-sizes[room], room)):
-        # A told page breaks the run: a part's members are adjacent in the room's unfolded order.
-        run = list(itertools.takewhile(lambda ident: ident not in told,
-                                       itertools.dropwhile(told.__contains__, _unfolded_run(store, room, "page"))))
-        if run:
-            yield FallbackUnit("part", room, f"max:{room}:{run[0]}", member_ids=tuple(run), head_sequence=store.room_head(room))
+        head, run = store.room_head(room), []
+        # A told page ends a run: a part's members are adjacent in the room's unfolded order.
+        for ident in [*_unfolded_run(store, room, "page"), None]:
+            if ident is not None and ident not in told:
+                run.append(ident)
+            elif run:
+                yield FallbackUnit("part", room, f"max:{room}:{run[0]}", member_ids=tuple(run), head_sequence=head)
+                run = []
 
 
 def candidate_units(root: Any, store: ChronicleStore, shortage: Optional[ShortageFact], *,

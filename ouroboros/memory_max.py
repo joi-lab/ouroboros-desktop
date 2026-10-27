@@ -8,15 +8,16 @@ start lowered to Low while the books, core, assignment, reply reserve and work r
 work room and the smallest window that lost Max, the last measure. A route whose window cannot hold even
 that floor (``route``) is a disclosed fact of its task, never an episode, and closes none. The episode
 closes at a fresh integrating start that holds whole books beside my whole story and whose own need would
-hold them in the worst lost frame too (the smallest lost window with its work room per level, at the most
-levels a lost start had), so a raised window or a Main turn closes it by measure; or at one whose owner
-mode is no longer Max. One line in Main says which. A running Low task's view was captured at its start: it neither holds
+hold them in the worst lost frame too (the smallest lost window with its reply reserve and work room per
+level, at the most levels a lost start had), so a raised window or a Main turn closes it by measure; or at
+one whose owner mode is no longer Max. One line in Main says which. A running Low task's view was captured at its start: it neither holds
 nor closes the episode. While it is open, an integrating reader's Health names it (``health_line``).
 
 The two lines go through the terminal outbox (``supervisor.terminal_delivery``) under ids the row holds
 before the send. A fresh integrating start finds a line not yet delivered and no longer owed and sends it
-again under the same id (the outbox dedupes); a delivered close line removes the row. No walker, no
-outbox of its own; the set is one row.
+again under the same id (the outbox dedupes); a delivered close line removes the row, and a new episode
+takes a closed one's row only once its lines are delivered or held by the outbox. No walker, no outbox of
+its own; the set is one row.
 """
 from __future__ import annotations
 
@@ -51,9 +52,9 @@ def _numbers(fact: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
     return {**{key: fact[key] for key in _NUMBERS if key in fact}, **extra}
 
 
-def _unit(fact: Mapping[str, Any]) -> int:
-    """The work room one level takes in this start's frame."""
-    return fact["work"] // max(1, fact["levels"])
+def _frame(fact: Mapping[str, Any]) -> Dict[str, int]:
+    """This start's frame: the work room one level takes and the reply reserve."""
+    return {"unit": fact["work"] // max(1, fact["levels"]), "reserve": fact["reserve"]}
 
 
 def transition(row: Optional[Mapping[str, Any]], fact: Mapping[str, Any], *, task_id: str,
@@ -65,17 +66,17 @@ def transition(row: Optional[Mapping[str, Any]], fact: Mapping[str, Any], *, tas
     if cause == "crowded" and not open_:
         episode = f"{now}:{task_id}"
         return {"id": episode, "opened_at": now, "task": task_id, "starts": 1, "window": fact["window"],
-                "unit": _unit(fact), "levels": fact["levels"], "first": _numbers(fact),
+                **_frame(fact), "levels": fact["levels"], "first": _numbers(fact),
                 "last": _numbers(fact, at=now, task=task_id),
                 "notices": {"open": {"id": f"memory_max:{episode}:open", "recorded": False}}}, "opened"
     if cause == "crowded":
         smaller = fact["window"] < current["window"]
-        return {**current, "starts": current["starts"] + 1, "window": fact["window"] if smaller else current["window"],
-                "unit": _unit(fact) if smaller else current["unit"], "levels": max(current["levels"], fact["levels"]),
+        return {**current, "starts": current["starts"] + 1, **(_frame(fact) if smaller else {}),
+                "window": fact["window"] if smaller else current["window"], "levels": max(current["levels"], fact["levels"]),
                 "last": _numbers(fact, at=now, task=task_id)}, "updated"
-    # This start's need with the worst lost frame's work room, against that frame's window.
-    held = (cause == "held" and open_
-            and fact["need"] - fact["work"] + current["unit"] * current["levels"] <= current["window"])
+    # This start's need with the worst lost frame's reply reserve and work room, against that frame's window.
+    held = cause == "held" and open_ and (fact["need"] - fact["work"] - fact["reserve"] + current["reserve"]
+                                          + current["unit"] * current["levels"]) <= current["window"]
     if held or (cause == "owner" and open_):
         return {**current, "closed": _numbers(fact, at=now, task=task_id, cause=cause, mode=fact.get("mode", "max")),
                 "notices": {**current["notices"], "close": {"id": f"memory_max:{current['id']}:close",
@@ -88,11 +89,12 @@ def _minute(stamp: str) -> str:
 
 
 def folds_by(root: Any, since: str, until: str) -> Optional[Dict[str, int]]:
-    """Parts and accounts published in ``[since, until]`` by author kind (``mind``, ``helper``); ``None`` unread."""
+    """Parts and accounts published in ``[since, until]`` by author kind (``mind``; ``helper``: Light drafts,
+    children, nannies), a later decision on a draft aside; ``None`` when the chronicle is unread."""
     try:
         from ouroboros.chronicle_store import ChronicleStore
 
-        records = ChronicleStore(root).room_records(None, kinds=("part", "account"))
+        records = ChronicleStore(root).records(kinds=("part", "account"))
     except Exception:
         log.debug("Chronicle unreadable for the Max episode's close line", exc_info=True)
         return None
@@ -117,7 +119,7 @@ def notice_text(row: Mapping[str, Any], which: str, by: Optional[Mapping[str, in
     if closed["cause"] == "owner":
         return f"The lost-Max episode closed: the owner selected {closed['mode'].capitalize()} (task {closed['task']}). {span}."
     folded = "" if by is None else (f"; parts and accounts written meanwhile: {by.get('mind', 0)} by me, "
-                                     f"{by.get('helper', 0)} by the Light helper")
+                                     f"{by.get('helper', 0)} by helpers")
     return (f"Max holds again: task {closed['task']} started with whole books beside my whole story ("
             f"{floor.measure_text(closed)}). {span}; my story went from {first['story']:,} to {closed['story']:,} "
             f"tokens{folded}.")
@@ -152,6 +154,14 @@ def memory_can_help(root: Any) -> bool:
         return False
     last = (row or {}).get("last") or {}
     return bool(row) and not row.get("closed") and "zero_need" in last and last["zero_need"] <= last["window"]
+
+
+def _held(root: Any, delivery_id: str) -> bool:
+    """The outbox delivered this line or holds it as owed (an unregistered live send is neither)."""
+    from supervisor import terminal_delivery as outbox
+
+    return outbox.already_delivered(root, delivery_id) or delivery_id in {
+        str(item.get("delivery_id") or "") for item in outbox.pending_deliveries(root)}
 
 
 def _publish(root: Any, row: Dict[str, Any], event_queue: Any) -> bool:
@@ -200,10 +210,10 @@ def observe_start(root: Any, plan: Any, mode: str, *, task_id: str, event_queue:
         if row is None and fact["cause"] != "crowded":
             return ""
         if row and row.get("closed") and fact["cause"] == "crowded":
-            try:  # the closed episode's line goes out before a new one takes its row
-                _publish(root, row, event_queue)
-            except Exception:
-                log.warning("Close line of Max episode %s not handed over", row.get("id"), exc_info=True)
+            _publish(root, row, event_queue)  # the closed episode's lines go out before a new one takes its row
+            if not all(notice.get("recorded") or _held(root, notice["id"]) for notice in row["notices"].values()):
+                log.warning("Max episode %s keeps its row: its lines are not yet held by the outbox", row.get("id"))
+                return ""  # still owed; the next fresh start hands them over again
         with store.open_store(root, write=True) as txn:
             row, event = transition(txn.get_row(SET, IDENTITY), fact, task_id=task_id, now=utc_now_iso())
             if event:

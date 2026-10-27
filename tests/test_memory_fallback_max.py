@@ -118,3 +118,26 @@ def test_the_close_line_counts_folds_by_author_within_the_episode(tmp_path, monk
     assert _run(tmp_path, _Light(PART), direct=True).outcome == "published"
     assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {"helper": 1}
     assert mm.folds_by(tmp_path, "2000-01-01", "2000-01-02") == {}  # outside the episode's span
+
+
+def test_a_run_light_kept_leaves_the_next_run_of_the_room_in_turn(tmp_path, monkeypatch, light):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    first, told, last = (_mind_page(tmp_path, "1", n, n)["id"] for n in (10, 11, 12))
+    _shown_account(tmp_path, [told])
+    _episode(tmp_path)
+    kept = _run(tmp_path, _Light('{"keep_original": true, "reason": "Already short."}'), direct=True)
+    assert kept.outcome == "kept_original" and kept.unit.member_ids == (first,)
+    assert _run(tmp_path, _Light(PART), direct=True).outcome == "published"
+    assert _drafts(tmp_path)[0]["covers"]["member_ids"] == [last]  # the told page stays the account's
+
+
+def test_folds_written_meanwhile_count_by_publication_a_later_rejection_aside(tmp_path, monkeypatch, light):
+    shared.world(tmp_path)
+    _consciousness(monkeypatch, False)
+    _main_pages(tmp_path)
+    _episode(tmp_path)
+    assert _run(tmp_path, _Light(PART), direct=True).outcome == "published"
+    [part] = _drafts(tmp_path)
+    assert ChronicleStore(tmp_path).decide(part["id"], False, shared.MIND, "not what happened").ok
+    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {"helper": 1}
