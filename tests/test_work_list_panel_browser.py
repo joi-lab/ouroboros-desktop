@@ -8,8 +8,7 @@ awkward names and actions the product really shows. Four oracles; the geometry a
 * geometry: the sheet hangs under the capsules, from the status capsule's left edge to the bar's last control, a gap
   below the capsule, and follows the bar when it resizes;
 * material: its own opaque sheet, float shadow and sheet radius, the same whatever its ARIA role, and no pixel of what
-  lies under it shows through (a differential screenshot over deliberately loud content), nor through a row's menu or
-  Main's More;
+  lies under it shows through (a differential screenshot over deliberately loud content), nor through a row's menu;
 * containment: names clamp, targets stay inside the sheet and reachable, nothing overflows sideways;
 * behaviour: Escape, an outside press and leaving close it and return focus; reduced motion draws no entrance or fold;
   Main's history note waits behind the open list.
@@ -38,12 +37,12 @@ __all__ = ["room_ui", "subscription_ui"]
 _SHEET = """(scope) => {
     const root = scope === 'main' ? document.querySelector('#page-chat') : document.querySelector('#project-panel');
     const bar = scope === 'main' ? root.querySelector('.chat-page-header') : root.querySelector('.project-panel-bar');
-    const sheet = root.querySelector('.rw-shade');
+    const sheet = root.querySelector('.rw-shade:not(.cx-shade)');  // the list, not the consciousness chip's Shade
     const capsule = bar.querySelector('.app-page-title-row');
     const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
     const shown = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
     const controls = [...bar.querySelectorAll('button, summary')].filter((el) => shown(el) && !capsule.contains(el)
-        && !el.closest('.rw-shade-anchor') && !el.closest('.chat-header-menu'));
+        && !el.closest('.rw-shade-anchor'));
     const style = getComputedStyle(sheet);
     const probe = (css) => { const el = document.body.appendChild(document.createElement('i'));
         el.style.cssText = css; const s = getComputedStyle(el);
@@ -184,7 +183,7 @@ def test_the_list_is_its_own_opaque_sheet_under_the_capsules(room_ui, width, hei
     assert facts["reachable"], ("every row target is the element hit at its centre", tag)
     assert_nothing_shows_through(page, facts)
     # The material is the surface's own, never its role's: the same sheet whatever ARIA role it declares.
-    sheet = page.locator(f"{'#page-chat' if room == 'main' else '#project-panel'} .rw-shade")
+    sheet = page.locator(f"{'#page-chat' if room == 'main' else '#project-panel'} .rw-shade:not(.cx-shade)")
     for role in ("menu", "listbox", "group"):
         sheet.evaluate("(el, role) => el.setAttribute('role', role)", role)
         assert page.evaluate(_SHEET, room)["material"] == facts["material"], ("role chooses no paint", role, tag)
@@ -260,29 +259,6 @@ def test_a_rows_menu_is_backed_like_every_popup(room_ui, theme, room):
         assert_menu_holds_its_words(page, clip)
 
 
-@pytest.mark.parametrize("theme", ["dark", "light"])
-def test_mains_more_menu_is_backed_like_every_popup(room_ui, theme):
-    """Main's More (``.chat-header-menu``) drops over the transcript from the bar: the same oracle holds its words."""
-    page, _transport = _open(room_ui, width=1100, height=722, theme=theme, room="main")
-    tag = f"{theme}-{room_ui['engine']}"
-    page.locator("#page-chat .chat-header-more > summary").click()
-    menu = page.locator("#page-chat .chat-header-menu")
-    menu.wait_for(state="visible")
-    page.mouse.move(0, 0)
-    settle_frames(page)
-    box = menu.bounding_box()
-    clip = {"x": box["x"] + 8, "y": box["y"] + 8, "width": box["width"] - 16, "height": box["height"] - 16}
-    page.evaluate(_LOUD_UNDER_MENU)
-    settle_frames(page)
-    capture(page, f"more-menu-loud-{tag}")
-    page.evaluate(_CALM)
-    evidence(f"more-menu-{tag}", {"clip": clip, "difference": assert_menu_holds_its_words(page, clip)})
-    page.add_style_tag(content=".chat-header-menu { background: rgba(32, 32, 34, 0.92) !important; }")
-    settle_frames(page)
-    with pytest.raises(AssertionError, match="shows through"):
-        assert_menu_holds_its_words(page, clip)
-
-
 @pytest.mark.parametrize("room", ["main", "project"])
 @pytest.mark.parametrize("width,height", [(1100, 722), (390, 844)])
 def test_awkward_names_and_actions_stay_inside_the_sheet(room_ui, width, height, room):
@@ -327,7 +303,7 @@ def test_escape_outside_press_and_reduced_motion(room_ui, room, reduced):
     root = "#page-chat" if room == "main" else "#project-panel"
     trigger(page, room).click()
     wait_facts(page, room, lambda f: not f["surfaceHidden"], "open")
-    entrance = page.locator(f"{root} .rw-shade").evaluate("el => getComputedStyle(el).animationName")
+    entrance = page.locator(f"{root} .rw-shade:not(.cx-shade)").evaluate("el => getComputedStyle(el).animationName")
     assert entrance == ("none" if reduced else "rw-unfold"), ("the entrance follows the motion preference", entrance)
     settle_unfold(page, room)
     page.keyboard.press("Escape")

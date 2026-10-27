@@ -293,7 +293,8 @@ class _MarketplaceReviewCtx:
         self.current_chat_id: Any = 0
         self.pending_events: List[Any] = []
         self.emit_progress_fn = lambda _msg: None
-        self.event_queue = None  # _emit_usage_event tolerates None
+        self.event_queue = None  # no task queue: other review events stay on pending_events
+        self.server_usage_bus = True  # its llm_usage rows reach the server bus (review_helpers)
         self.messages: List[Any] = []
 
     def repo_path(self, rel: str) -> pathlib.Path:

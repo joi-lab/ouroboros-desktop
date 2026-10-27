@@ -142,7 +142,7 @@ async def _fetch_openai_compatible_model_catalog(
         from ouroboros.vision_routing import record_catalog_image_input
 
         await asyncio.to_thread(record_catalog_image_input, provider_id, api_root, raw_models,
-                                source=f"the {provider_label} /models catalog")
+                                source=f"the {provider_label} /models catalog", api_key=api_key if headers else "")
 
     models: list[dict[str, str]] = []
     for item in raw_models:
@@ -181,7 +181,7 @@ async def _fetch_anthropic_model_catalog(
         from ouroboros.vision_routing import record_catalog_image_input
 
         await asyncio.to_thread(record_catalog_image_input, "anthropic", "https://api.anthropic.com/v1",
-                                raw_models, source="the Anthropic /models catalog")
+                                raw_models, source="the Anthropic /models catalog", api_key=api_key)
 
     models: list[dict[str, str]] = []
     for item in raw_models:

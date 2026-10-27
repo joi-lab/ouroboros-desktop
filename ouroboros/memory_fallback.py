@@ -1,6 +1,8 @@
 """One signed Light draft: with consciousness on, a candidate from unsealed failed/cancelled work's own rows.
 
-With consciousness off (or unknown), the existing acting-draft selection remains:
+With consciousness off (or unknown), an open lost-Max episode that folding my memory can end
+(``memory_max.memory_can_help``) comes first: one room's oldest run of unfolded pages, whoever
+wrote them, folded into a part (``max_episode_units``); then the existing acting-draft selection:
 
 1. The task's view showed this room's open rows only by address (``shortage_from_trace``,
    ``open_rows``): the room's oldest open segment, up to the newest addressed row (a
@@ -28,6 +30,7 @@ the chronicle: before activation the writer makes no call and creates no file.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import pathlib
@@ -245,6 +248,31 @@ def _legacy_units(root: pathlib.Path, store: ChronicleStore) -> Iterator[Fallbac
         for _pos, record_id, key, segment in sorted(found, key=lambda item: item[:2]):
             yield FallbackUnit("legacy", segment.room_id, key, segment=segment, record_id=record_id,
                                head_sequence=segment.head_sequence)
+
+
+def max_episode_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
+    """While my memory keeps Max lost (``memory_max.memory_can_help``): a room's runs of unfolded pages no shown
+    account tells (the view's ``told_map``), oldest first, whoever wrote them, the room holding most such text
+    first; one page is a run too, Light judges whether folding it helps, and a run it kept as it is leaves the
+    next one in turn (``select_unit``). Never an account across rooms: that is the mind's."""
+    from ouroboros.memory_view_account import told_map
+
+    told = set(told_map([{"id": r["id"], "replaces": r["selection"].get("replaces") or (),
+                          "selection_sequence": r["selection"]["sequence"]}
+                         for r in store.accounts() if (r.get("selection") or {}).get("shown")]))
+    sizes: Dict[str, int] = {}
+    for record in store.room_records(None, kinds=("page",)):
+        if not record.get("folded_into") and record["id"] not in told:
+            sizes[str(record["room_id"])] = sizes.get(str(record["room_id"]), 0) + len(str(record.get("current_text") or ""))
+    for room in sorted(sizes, key=lambda room: (-sizes[room], room)):
+        head, run = store.room_head(room), []
+        # A told page ends a run: a part's members are adjacent in the room's unfolded order.
+        for ident in [*_unfolded_run(store, room, "page"), None]:
+            if ident is not None and ident not in told:
+                run.append(ident)
+            elif run:
+                yield FallbackUnit("part", room, f"max:{room}:{run[0]}", member_ids=tuple(run), head_sequence=head)
+                run = []
 
 
 def candidate_units(root: Any, store: ChronicleStore, shortage: Optional[ShortageFact], *,
@@ -667,6 +695,7 @@ class FallbackRun:
     usage: Dict[str, Any] = field(default_factory=dict)
     errors: List[Dict[str, Any]] = field(default_factory=list)
     input_tokens: Optional[int] = None
+    effect: str = ""  # a published draft, measured: what it folded, its characters before and after
 
 
 def _parse(text: str, *, part: bool = False) -> Optional[Dict[str, Any]]:
@@ -748,8 +777,12 @@ def run_fallback_draft(env: Any, task: Mapping[str, Any], llm: Any, drive_logs: 
                 fitted.append(_light_fit(binding))
             return fitted[0]
 
-        chosen = select_unit(root, store, shortage_from_trace(trace), allow_legacy=not task.get("_is_direct_chat"),
-                             binding=binding, fit=fit, **({"units": failed_work_units(root, store)} if candidate else {}))
+        shortage, allow_legacy = shortage_from_trace(trace), not task.get("_is_direct_chat")
+        from ouroboros.memory_max import memory_can_help  # the open lost-Max episode memory could end
+        units = (failed_work_units(root, store) if candidate else itertools.chain(
+            max_episode_units(store), candidate_units(root, store, shortage, allow_legacy=allow_legacy))
+            if memory_can_help(root) else None)
+        chosen = select_unit(root, store, shortage, allow_legacy=allow_legacy, binding=binding, fit=fit, units=units)
         if chosen is None:
             return FallbackRun("nothing")
         unit, draft = chosen
@@ -774,6 +807,10 @@ def run_fallback_draft(env: Any, task: Mapping[str, Any], llm: Any, drive_logs: 
             result = _publish(root, store, unit, draft, answer, usage, bound)
             if result.ok:
                 run.outcome, run.record_id = "published", str((result.record or {}).get("id") or "")
+                if unit.kind == "part":
+                    from ouroboros.tools.chronicle import _fold_effect
+
+                    run.effect = _fold_effect(store, "a helper draft folded", draft.member_ids, answer["text"])
                 phase = "receipt_clear_failed"
                 _set_refusal(store, unit.key, None)
             elif result.reason in CONFLICT_REASONS:

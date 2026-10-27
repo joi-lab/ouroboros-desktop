@@ -29,9 +29,15 @@ def catalog_path(server_id: str) -> Path:
 def identity(cfg: Any) -> str:
     """Digest credentials too, but never persist their plaintext configuration."""
     fields = asdict(cfg)
-    for key in ("enabled", "allowed_tools", "name", "configuration_warnings", "secret_values"):
+    for key in ("enabled", "allowed_tools", "name", "configuration_warnings", "secret_values", "schemas_at_start"):
         fields.pop(key, None)
     return hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def split_instructions(items: list) -> tuple[list, str]:
+    """Separate the server's ``initialize`` instructions (a listing's leading marker row) from its tools."""
+    text = next((str(item["_server_instructions"]) for item in items if "_server_instructions" in item), "")
+    return [item for item in items if "_server_instructions" not in item], text
 
 
 def sanitize_items(items: list, redact: Callable[[Any], str]) -> tuple[list, bool]:
@@ -56,14 +62,14 @@ def sanitize_items(items: list, redact: Callable[[Any], str]) -> tuple[list, boo
 
 def attempt_envelope(cfg: Any, previous: dict | None, *, at: str, error: str = "",
                      items: list | None = None, complete: bool = False,
-                     schema_omissions: list[str] | None = None) -> dict:
-    """Failures/partial attempts cannot erase a complete last-known listing."""
+                     schema_omissions: list[str] | None = None, instructions: str = "") -> dict:
+    """Failures/partial attempts cannot erase a complete last-known listing or its instructions."""
     envelope = copy.deepcopy(previous) if previous else {
         "_schema_version": 1, "server_id": cfg.id, "identity": identity(cfg),
         "listed_at": None, "complete": False, "items": [],
     }
     if items is not None and (complete or not envelope["complete"]):
-        envelope.update(items=items, complete=complete, listed_at=at)
+        envelope.update(items=items, complete=complete, listed_at=at, instructions=instructions)
         envelope["schema_omissions"] = list(schema_omissions or [])
     envelope["latest_attempt"] = {"at": at, "ok": items is not None, "error": error,
                                   "partial": items is not None and not complete}

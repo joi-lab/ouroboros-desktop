@@ -79,7 +79,7 @@ def _check_budget_limits(
             trace = ctx.llm_trace if isinstance(ctx.llm_trace, dict) else {}
             tool_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
             suffix = (
-                _loop()._force_plan_disclosure(tool_ctx, trace, forced_reason="budget_exhausted")
+                _loop()._plan_gate_disclosure(tool_ctx, trace, forced_reason="budget_exhausted")
                 if tool_ctx is not None else ""
             )
             _loop()._record_forced_finalization(

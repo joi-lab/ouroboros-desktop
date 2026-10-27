@@ -75,28 +75,28 @@ def _skill_finalization_message(drive_root: pathlib.Path, llm_trace: Dict[str, A
     )
 
 
-def _force_plan_decision(
+def _plan_gate_decision(
     ctx: Any,
     _llm_trace: Dict[str, Any],
     *,
     hard_rail: str = "",
 ) -> Dict[str, Any]:
-    """Project force-plan finalization from existing review + policy SSOTs."""
-    from ouroboros.owner_hurry import force_plan_decision
+    """Project plan finalization from existing review + policy SSOTs."""
+    from ouroboros.owner_hurry import plan_gate_decision
 
-    return force_plan_decision(
+    return plan_gate_decision(
         ctx, _llm_trace, hard_rail=hard_rail,
         enforcement=_loop().get_review_enforcement(),
     )
 
 
-def _force_plan_reminder(decision: Dict[str, Any]) -> str:
+def _plan_gate_reminder(decision: Dict[str, Any]) -> str:
     from ouroboros.owner_hurry import plan_review_reminder
 
     return plan_review_reminder(decision)
 
 
-def _force_plan_disclosure(
+def _plan_gate_disclosure(
     ctx: Any,
     llm_trace: Dict[str, Any],
     *,
@@ -107,11 +107,11 @@ def _force_plan_disclosure(
     # permission; forced rails recompute with their explicit rail input.
     from ouroboros.owner_hurry import plan_review_disclosure
 
-    projected = llm_trace.get("force_plan_decision")
+    projected = llm_trace.get("plan_gate", llm_trace.get("force_plan_decision"))
     decision = (
         projected
         if not forced_reason and isinstance(projected, dict)
-        else _loop()._force_plan_decision(ctx, llm_trace, hard_rail=forced_reason)
+        else _loop()._plan_gate_decision(ctx, llm_trace, hard_rail=forced_reason)
     )
     return plan_review_disclosure(decision, forced_reason)
 

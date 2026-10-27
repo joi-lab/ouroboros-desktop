@@ -888,7 +888,7 @@ def build_swarm_efficiency(env: Any, task: Dict[str, Any]) -> Dict[str, Any] | N
     if not task_id:
         return None
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    swarm_intent = metadata.get("force_plan_source") == "swarm"
+    swarm_intent = metadata.get("subagents_mode") == "swarm"
     try:
         from ouroboros.swarm_rollup import load_swarm_rollup
 
