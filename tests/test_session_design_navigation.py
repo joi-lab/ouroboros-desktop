@@ -148,7 +148,7 @@ def test_own_body_session_gets_the_constitution_path_not_its_text(tmp_path, monk
 def test_foreign_and_unidentified_sessions_get_no_constitution(tmp_path, monkeypatch, kind):
     request, *_rest = _start(tmp_path, monkeypatch, kind=kind)
     instructions = request["instructions"]
-    assert "CONSTITUTION DELIVERY" not in instructions and "This work changes the body of Ouroboros" not in instructions
+    assert "CONSTITUTION DELIVERY" not in instructions and "This work concerns the body of Ouroboros" not in instructions
 
 
 def test_missing_copy_constitution_is_named_without_live_fallback(tmp_path, monkeypatch):
@@ -156,7 +156,7 @@ def test_missing_copy_constitution_is_named_without_live_fallback(tmp_path, monk
     instructions = request["instructions"]
     assert f"BIBLE.md source unavailable at {prepared.parent.parent / 'BIBLE.md'}" in instructions
     assert str(live.parent.parent / "BIBLE.md") not in instructions
-    assert "This work changes the body of Ouroboros" not in instructions
+    assert "This work concerns the body of Ouroboros" not in instructions
 
 
 def test_missing_copy_source_is_explicit_and_never_falls_back_to_live_body(tmp_path, monkeypatch):

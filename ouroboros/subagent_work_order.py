@@ -377,7 +377,7 @@ def session_design_navigation(ctx: Any, *, target_root: str, source_root: str) -
 
 
 def session_constitution_pointer(ctx: Any, *, target_root: str, source_root: str) -> str:
-    """Point an own-body session at the constitution of the body it changes, beside DESIGN.
+    """Point an own-body session at the constitution of the body it works on, beside DESIGN.
 
     The leaf is an executor, not Ouroboros, and starts before its nanny's first turn; a path
     and the pinned bytes' digest let its first proposals meet P1. The text is never inlined."""
@@ -390,7 +390,7 @@ def session_constitution_pointer(ctx: Any, *, target_root: str, source_root: str
         digest = sha256(path.read_bytes()).hexdigest()
     except OSError:
         return head + f"BIBLE.md source unavailable at {path}; no constitution delivered."
-    return head + (f"This work changes the body of Ouroboros, which {path} governs. Before your first proposal, "
+    return head + (f"This work concerns the body of Ouroboros, which {path} governs. Before your first proposal, "
                    "read its Principle 1 (continuity, memory and the cognitive horizon); read the rest as the "
                    f"work needs.\nSource bytes SHA-256: {digest}.")
 
