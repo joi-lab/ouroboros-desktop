@@ -1225,11 +1225,12 @@ def working_sources_line(spec: ViewSpec, snapshot: Optional[MemoryViewSnapshot] 
         missing.append(f"{', '.join(memory)} (my memory is not activated yet: {snapshot.store_status.get('reason')})")
     else:
         loaded += memory
-    (loaded if spec.knowledge else missing).append("knowledge (overview, index, patterns)")
+    (loaded if spec.knowledge else missing).append("knowledge (overview, index, project journal and workpad" + (
+        ")" if spec.knowledge else "; the index arrives with your first delegation)"))  # delegation_knowledge_index
     if spec.owner_words and (snapshot is None or snapshot.owner_words):  # named only when the block was drawn
         loaded.append("the words of my human that caused this work")
     missing += ["the global scratchpad", "earlier task reports"]
     return ("## Working sources\n\n"
             f"Loaded above: {', '.join(loaded)}; your own recent process is loaded below. "
-            f"Not loaded: {', '.join(missing)}; memory_read, chat_history, knowledge_read and get_task_result "
-            "reach them, as they reach your parent.\n" + CHILD_ROLE_TEXT)
+            f"Not loaded: {', '.join(missing)}; memory_read, chat_history, knowledge_list, knowledge_read and "
+            "get_task_result reach them, as they reach your parent.\n" + CHILD_ROLE_TEXT)

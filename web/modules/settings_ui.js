@@ -684,9 +684,10 @@ export function renderSettingsPage() {
                         <div class="settings-section-copy">
                             <code>System</code> follows this device's OS appearance and is the default for a new client.
                             <code>Light</code> and <code>Dark</code> pin the palette regardless of the OS.
-                            <br><strong>Per device, not per account:</strong> the choice is stored by this client alone
-                            (the desktop window and each browser keep their own), never sent to the server and never
-                            shared with other devices. Clearing this client's site data returns it to System.
+                            <br><strong>Per device, not per account:</strong> this window or browser keeps the choice
+                            for this Ouroboros, also after it moves to another port; other devices, browsers and
+                            installations keep their own, and the server never stores it. Clearing this client's site
+                            data returns it to System.
                         </div>
                         <div class="settings-effort-card">
                             <label class="theme-choice-label" id="s-appearance-theme-label">Theme</label>
@@ -700,7 +701,7 @@ export function renderSettingsPage() {
                         <h3>Interface size</h3>
                         <div class="settings-section-copy">
                             Makes everything larger or smaller: text, buttons, cards and widgets.
-                            <br><strong>Per device, like the theme:</strong> each window and browser keeps its own size.
+                            <br><strong>Per device:</strong> each window and browser keeps its own size.
                         </div>
                         <div class="settings-effort-card">
                             <!-- interface_size.js paints the range this surface allows and applies a size when the slider is let go. -->
@@ -728,8 +729,8 @@ export function renderSettingsPage() {
                             system and then reports that its notifications and their sound are allowed; it may not
                             follow Focus / Do Not Disturb. Sound off asks for them silently.
                             Test asks the system for permission when it has not been asked yet.
-                            <br><strong>Per device, not per account:</strong> like the theme above, these choices
-                            are stored by this client alone and never sent to the server.
+                            <br><strong>Per device, not per account:</strong> these choices are stored by this
+                            client alone and never sent to the server.
                             Where this system exposes no notifications, or permission is denied, alerts fall back
                             to a browser banner this client allows, or to the app. Do Not Disturb and OS
                             permissions still decide what you see.

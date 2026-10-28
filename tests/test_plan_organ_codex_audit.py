@@ -25,7 +25,7 @@ def _content(sub, call, seat):
 
 # ---------------------------------------------------------------- point 2: asked, but no route
 
-def test_an_ask_every_route_refuses_leaves_a_typed_attempt_that_discloses_the_swarm_obligation_instead_of_holding(harness):
+def test_an_ask_every_route_refuses_leaves_a_typed_attempt_instead_of_holding(harness):
     harness.monkeypatch.setattr("ouroboros.tools.plan_review_runtime.plan_panel_health_snapshot", lambda _slots: dict(DEAD))
     sub = harness.install({})
     ctx = harness.make_ctx(force_plan=True)
@@ -44,14 +44,19 @@ def test_an_ask_every_route_refuses_leaves_a_typed_attempt_that_discloses_the_sw
     read, _ = _call(ctx)
     assert "attempt at" in read and "no route" in read and "nobody was called" in read and "Nothing holds" in read
     assert any("reached nobody" in line for line in harness.progress)
-    # The other direction: a plan the mind never asked about stays held; asking without a plan records nothing.
+    # The other direction: a plan the mind never asked about holds nothing; a reading before any plan
+    # that no route could take leaves the same typed attempt, with no revision, and holds nothing.
     unasked = harness.make_ctx(task_id="task-2", force_plan=True)
     _write(unasked)
     assert oh.plan_gate_decision(unasked, {}, enforcement="blocking")["allow"] is True
     bare = harness.make_ctx(task_id="task-3", force_plan=True)
-    text, _ = _call(bare, ask="council")
-    assert "PLAN_ASK_NEEDS_A_PLAN" in text and _record(harness, "task-3") == plan_record.empty_record()
+    text, result = _call(bare, ask="council")
+    assert "PLAN_ASK_NOTHING_SENDABLE" in text and result.code == "CAPABILITY_UNAVAILABLE" and len(sub.calls) == 0
+    bare_record = _record(harness, "task-3")
+    assert bare_record["revisions"] == [] and bare_record["asks"] == [] and bare_record["attempts"][0]["revision"] is None
     assert oh.plan_gate_decision(bare, {}, enforcement="blocking")["allow"] is True
+    read, _ = _call(bare)
+    assert "attempt at" in read and "on the reading of the request: no route" in read and "Nothing holds" in read
 
 
 # ---------------------------------------------------------------- point 3: imported objections reach their raiser

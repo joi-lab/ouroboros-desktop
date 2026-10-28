@@ -84,14 +84,10 @@ _MIXIN_OWNERS = {
     ),
     (llm_capability_policy, "_CapabilityPolicyMixin"): (
         "_CAPABILITIES_FETCH_OK _CONTEXT_LENGTH_CACHE _EFFORT_CEILING_CACHE _EFFORT_CEILING_LOADED "
-        "_EFFORT_FLOOR_CACHE _EFFORT_FLOOR_LOADED _EFFORT_FLOOR_RELOAD_SEC _NESTED_REASONING_PARAM "
-        "_REJECTED_PARAMS_CACHE _REJECTED_PARAMS_LOADED _REJECTED_PARAMS_RELOAD_SEC "
-        "_SUPPORTED_PARAMS_CACHE _SUPPORTED_PARAMS_FETCHED _apply_rejected_param_cache "
-        "_clamp_effort_for_model _effort_ceiling_for _effort_floor_for "
-        "_fetch_openrouter_capabilities _get_supported_parameters _known_rejected_params "
-        "_mandatory_value_rejection _parameter_rejection_error _payload_effort "
-        "_pop_effort_clamp_disclosure _pop_thread_disclosure _record_effort_ceiling _record_effort_floor "
-        "_remember_rejected_params _retry_without_optional_sampling _set_payload_effort "
+        "_EFFORT_FLOOR_CACHE _EFFORT_FLOOR_LOADED _EFFORT_FLOOR_RELOAD_SEC "
+        "_SUPPORTED_PARAMS_CACHE _SUPPORTED_PARAMS_FETCHED _effort_ceiling_for _effort_floor_for "
+        "_fetch_openrouter_capabilities _get_supported_parameters "
+        "_pop_effort_clamp_disclosure _pop_thread_disclosure "
         "clamp_effort_for_route metadata_fetch_attempted_and_failed openrouter_context_length"
     ),
     (llm_routing, "_ProviderRoutingMixin"): (
@@ -112,7 +108,7 @@ _MIXIN_OWNERS = {
     (llm_fallback, "_RecoveryLadderMixin"): (
         "_create_chat_completion_with_retries _create_chat_completion_with_retries_async "
         "_is_http_status _is_transient_body_error _openrouter_signature_retry_kwargs "
-        "_param_retry_kwargs_for_body_error _provider_body_error _reroute_kwargs_for_body_error "
+        "_provider_body_error _reroute_kwargs_for_body_error "
         "_reroute_same_model_kwargs _retry_without_prompt_cache_parameter "
         "_rotate_openrouter_session_affinity _router_reask_kwargs _strip_kwargs_for_encrypted_body_error"
     ),
@@ -229,6 +225,10 @@ def test_llm_client_member_inventory_is_unchanged():
     with ``_order_complete_tool_episodes`` so eviction preserves answer adjacency.
     (8) Router-error unmasking adds ``_router_reask_kwargs``, the recovery
     ladder's one re-ask of OpenRouter's own final verdict without fallbacks.
+    (9) Exact-route request-wire recovery (041e6e39, 50d054d5) left the private
+    model-global classifier, one-shot repair, rejected-parameter cache and
+    floor/ceiling writers callerless; they are retired, while the diagnostic
+    ``clamp_effort_for_route`` band and its readers stay.
     """
     assert _defined_members(pathlib.Path(llm.__file__), "LLMClient") == _PARENT_MEMBERS
     moved = {name for names in _MIXIN_OWNERS.values() for name in names.split()}
@@ -236,7 +236,7 @@ def test_llm_client_member_inventory_is_unchanged():
     assert hashlib.sha256(
         json.dumps(composed, separators=(",", ":")).encode()
 
-    ).hexdigest() == "10809ff4dd122d6da736b182efdbdf5824514ddfe8d89fc262ffbf3253949d51"
+    ).hexdigest() == "cbd6b34e993735aaa03a4e56e2c9ae4d08559736c5d8286c145e04098d52a255"
     for name in composed:
         assert hasattr(LLMClient, name), name
 

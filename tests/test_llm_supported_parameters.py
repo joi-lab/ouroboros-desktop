@@ -30,11 +30,9 @@ def _reset_llm_cache():
     from ouroboros.llm import LLMClient
     LLMClient._SUPPORTED_PARAMS_CACHE.clear()
     LLMClient._SUPPORTED_PARAMS_FETCHED = False
-    LLMClient._REJECTED_PARAMS_CACHE.clear()
     yield
     LLMClient._SUPPORTED_PARAMS_CACHE.clear()
     LLMClient._SUPPORTED_PARAMS_FETCHED = False
-    LLMClient._REJECTED_PARAMS_CACHE.clear()
 
 
 def _install_fake_response(monkeypatch, data: dict[str, Any]) -> dict[str, int]:
@@ -466,34 +464,20 @@ class TestSupportedParametersFilter:
 
         assert captured["client"]["default_headers"] == OPENROUTER_APP_HEADERS
 
-    def test_parameter_rejection_learns_sampling_strip_without_version_gate(self, monkeypatch):
+    def test_historical_model_global_rows_never_mutate_dispatch(self, monkeypatch, tmp_path):
+        from ouroboros import capability_evidence as ce
         from ouroboros.llm import LLMClient
+        from ouroboros.provider_models import normalize_model_identity
 
+        # Rows an older release learned, under its durable key (the normalized identity).
+        key = normalize_model_identity("anthropic/claude-opus-4.8") or "anthropic/claude-opus-4.8"
+        monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
+        monkeypatch.setattr(LLMClient, "_EFFORT_CEILING_CACHE", {})
+        monkeypatch.setattr(LLMClient, "_EFFORT_CEILING_LOADED", set())
+        ce.record_rejected_params(tmp_path, key, {"temperature", "extra_body.reasoning"})
+        ce.record_effort_ceiling(tmp_path, key, "low")
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.8")
-        first = client._build_remote_kwargs(
-            target=target,
-            messages=[{"role": "user", "content": "hi"}],
-            reasoning_effort="medium",
-            max_tokens=256,
-            tool_choice="auto",
-            temperature=0.2,
-            tools=None,
-            skip_capability_fetch=True,
-        )
-        assert first["model"] == "anthropic/claude-opus-4.8"
-        assert first.get("temperature") == 0.2
-
-        retry = client._retry_without_optional_sampling(
-            first,
-            "anthropic/claude-opus-4.8",
-            RuntimeError("404 No endpoints found that can handle the requested parameters"),
-        )
-        assert retry is not None
-        assert "temperature" not in retry
-        assert retry["extra_body"]["reasoning"]["effort"] == "medium"
-        assert retry["extra_body"]["provider"]["require_parameters"] is True
-
         kwargs = client._build_remote_kwargs(
             target=target,
             messages=[{"role": "user", "content": "hi"}],
@@ -507,6 +491,8 @@ class TestSupportedParametersFilter:
 
         # Legacy model-global rows stay diagnostic and cannot mutate dispatch.
         assert kwargs["temperature"] == 0.2
+        assert kwargs["extra_body"]["reasoning"]["effort"] == "medium"
+        assert LLMClient.clamp_effort_for_route("anthropic/claude-opus-4.8", "medium") == "low"  # rows are read
 
     def test_requests_read_the_catalogue_and_never_fetch_it(self, monkeypatch):
         from ouroboros.llm import LLMClient

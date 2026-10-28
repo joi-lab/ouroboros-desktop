@@ -322,7 +322,6 @@ def test_plan_task_write_publishes_its_typed_facts_at_the_registry_boundary(tmp_
         ({"plan": "P", "goal": "G", "spec": {"affected_paths": []}}, "PLAN_FORM_RETIRED"),
         ({"review_disposition": {"review_fingerprint": "f" * 64, "items": []}}, "PLAN_FORM_RETIRED"),
         ({"plan": "P", "goal": "G"}, "PLAN_FIRST_REVISION_NEEDS_AFFECTED_PATHS"),
-        ({"ask": "council"}, "PLAN_ASK_NEEDS_A_PLAN"),
         ({"message": "hello"}, "PLAN_ARGS_INVALID"),
     ),
 )
