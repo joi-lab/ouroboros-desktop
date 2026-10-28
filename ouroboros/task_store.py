@@ -127,7 +127,10 @@ def _fetch(txn: Txn, where: str = "", params: Iterable[Any] = ()) -> List[Tuple[
     clause = f"WHERE {where}" if where else ""
     cards, join = store_task_cards.select(txn)
     tables = f"FROM tasks AS t JOIN task_bodies AS b ON b.task_id = t.task_id{join}"
-    selected = capture(txn.conn, f"SELECT t.task_id {tables} {clause}", params, ("task_id",))
+    # ``write_seq`` is in no index: the selection reads the rows it selects, as the listing always did, so the planner
+    # keeps the WHERE's index; an id-only select can scan a covering index of every task instead once ANALYZE
+    # statistics make that look cheaper (tests/test_cost_contract.py B7).
+    selected = capture(txn.conn, f"SELECT t.task_id, t.write_seq {tables} {clause}", params, ("task_id", "write_seq"))
     ids = sorted(row[0] for row in selected.tuples())
     columns = ("task_id", "body", *(store_task_cards.FIELDS if join else ()))
     pages: List[Tuple[Captured, Captured]] = []
