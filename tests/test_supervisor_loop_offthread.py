@@ -68,6 +68,8 @@ def quiet_tick(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "DATA_DIR", tmp_path)
     monkeypatch.setattr(sm, "_LAST_CANCEL_INTENT_SWEEP", [time.time()])
     monkeypatch.setattr(sm, "_installed_skill_names", lambda: None)
+    # Not this fixture's duty: the real child's own thread would outlive the test (it has its own tests).
+    monkeypatch.setattr(sm, "_tick_maintenance_child", lambda: None)
     monkeypatch.setattr(queue, "RUNNING", {})
     monkeypatch.setattr(queue, "PENDING", [])
     monkeypatch.setattr(workers, "WORKERS", {})

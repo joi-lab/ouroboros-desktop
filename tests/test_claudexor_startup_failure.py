@@ -808,7 +808,9 @@ def _track_sweep_threads(monkeypatch) -> list:
     from ouroboros import dialogue_retry, server_maintenance as sm
     from supervisor import active_activity, queue
 
-    # This fixture owns only the daemon-retry duty, with no cold actors.
+    # This fixture owns only the daemon-retry duty, with no cold actors and no maintenance child
+    # (whose own thread would outlive the test; it has its own tests).
+    monkeypatch.setattr(sm, "_tick_maintenance_child", lambda: None)
     monkeypatch.setattr(queue, "RUNNING", {})
     monkeypatch.setattr(queue, "PENDING", [])
     monkeypatch.setattr(active_activity, "get_direct_activity_registry", lambda: SimpleNamespace(actors=lambda: []))
