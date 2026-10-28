@@ -412,7 +412,7 @@ class OwnedClaudexorDaemon:
             return None, "stale", f"{exc.code}: {exc}"
         sink = getattr(self._attach, "sink", None)
         if timeout_sec is None:
-            timeout_sec = getattr(self._attach, "bound", None)
+            timeout_sec = self._attach_bound()
         gateway = ClaudexorGateway(endpoint)
         try:
             handshake = gateway.handshake(**({} if timeout_sec is None else {"timeout_sec": timeout_sec}))
@@ -444,6 +444,22 @@ class OwnedClaudexorDaemon:
             ):
                 return None, _TRANSPORT_UNREACHABLE, f"{exc.code}: {exc}"
             return None, "stale", f"{exc.code}: {exc}"
+        except BaseException:
+            _release(gateway)  # a decoded-body or thread-retire failure leaves no open client behind
+            raise
+
+    def _attach_bound(self) -> Optional[float]:
+        """The probe's read bound as the attaching caller set it (``ensure_owned_gateway``): a passive
+        sweep's short bound, else the gateway's default read bound clamped to what remains of the
+        caller's own allowance, floored so a loopback handshake can complete; ``None`` without either."""
+        from ouroboros.gateways.claudexor import _READ_TIMEOUT_SEC
+
+        bound = getattr(self._attach, "bound", None)
+        deadline = getattr(self._attach, "deadline", None)
+        if deadline is None:
+            return bound
+        return max(min(_READ_TIMEOUT_SEC if bound is None else bound, deadline - time.monotonic()),
+                   _ADMISSION_POLL_SEC / 3.0)
 
     @property
     def engine_version(self) -> str:
@@ -746,7 +762,11 @@ class OwnedClaudexorDaemon:
         from ouroboros.gateways.claudexor import _OBSERVATION_READ_TIMEOUT, SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
 
         wait = _SPAWN_WAIT_SEC if startup_wait_sec is None else max(0.0, float(startup_wait_sec))
-        deadline = time.monotonic() + wait
+        started = time.monotonic()
+        deadline = started + wait
+        caller = getattr(self._attach, "deadline", None)  # the attaching caller's own allowance ends it sooner
+        if caller is not None and caller < deadline:
+            deadline, wait = caller, max(0.0, caller - started)
         while True:
             self._check_start_generation(generation)
             remaining = deadline - time.monotonic()
@@ -1263,10 +1283,12 @@ def ensure_owned_gateway(*, admission_wait_sec: Optional[float] = None,
     daemon). A silent listener keeps its typed custody (``daemon_not_answering`` with
     ``observation_reason=observation_read_timeout``); a START caller with no explicit wait
     retries it within ITS OWN logical allowance (``_caller_allowance``), which no handshake
-    resets; a passive sweep (``admission_wait_sec=0``) bounds its probe by
-    ``SHORT_POLL_TIMEOUT_SEC`` and never retries. ADMISSION (``recovery_only``) is re-polled
-    on the same gateway under ``admission_wait_sec``, expiring into the typed refusal the 503
-    produces (D28). ``startup_wait_sec`` narrows the readiness wait as before.
+    resets and which bounds EVERY phase of the start: each probe's read (the gateway default
+    clamped to the remainder), the readiness wait, the backoff (re-checked before another
+    probe) and the admission window below; a passive sweep (``admission_wait_sec=0``) bounds
+    its probe by ``SHORT_POLL_TIMEOUT_SEC`` and never retries. ADMISSION (``recovery_only``)
+    is re-polled on the same gateway under ``admission_wait_sec``, expiring into the typed
+    refusal the 503 produces (D28). ``startup_wait_sec`` narrows the readiness wait as before.
     """
     from ouroboros.gateways.claudexor import (
         SHORT_POLL_TIMEOUT_SEC, ClaudexorGateway, ClaudexorUnavailable,
@@ -1295,21 +1317,25 @@ def ensure_owned_gateway(*, admission_wait_sec: Optional[float] = None,
     attach = getattr(daemon, "_attach", None)
     while gateway is None:
         fresh: list = []
-        if attach is not None:
-            attach.sink, attach.bound = fresh, (SHORT_POLL_TIMEOUT_SEC if sweep else None)
+        proven = False
+        if attach is not None:  # the probe, the readiness wait and the admission poll all end at ``deadline``
+            attach.sink, attach.bound, attach.deadline = fresh, (SHORT_POLL_TIMEOUT_SEC if sweep else None), deadline
         try:
             endpoint = (daemon.ensure_running() if startup_wait_sec is None
                         else daemon.ensure_running(startup_wait_sec=startup_wait_sec))
+            proven = True
         except ClaudexorUnavailable as exc:
             unanswered = exc.code in ("daemon_not_answering", "daemon_starting")
             if deadline is None or not unanswered or time.monotonic() >= deadline:
                 raise
             time.sleep(min(_ADMISSION_POLL_SEC, max(0.0, deadline - time.monotonic())))
+            if time.monotonic() >= deadline:
+                raise  # the backoff spent the allowance: no probe starts after it
             continue
         finally:
             if attach is not None:
-                attach.sink = attach.bound = None
-            for extra, _body in fresh[:-1]:
+                attach.sink = attach.bound = attach.deadline = None
+            for extra, _body in (fresh[:-1] if proven else fresh):
                 _release(extra)
         if fresh:
             gateway, body = fresh[-1]
@@ -1321,21 +1347,28 @@ def ensure_owned_gateway(*, admission_wait_sec: Optional[float] = None,
                 gateway.close()
                 raise
     try:
-        admission = time.monotonic() + wait
+        admitted_from = time.monotonic()
+        admission = admitted_from + wait
+        if deadline is not None:
+            admission = min(admission, deadline)  # the caller's allowance, never a fresh window of its own
 
         def _expired() -> ClaudexorUnavailable:
             return ClaudexorUnavailable(
                 "daemon_recovery_only", "the owned daemon is reachable but still admitting only recovery "
-                f"work after {wait:.1f}s; its product routes answer 503 (retryable) until recovery completes")
+                f"work after {max(0.0, admission - admitted_from):.1f}s; its product routes answer 503 "
+                "(retryable) until recovery completes")
 
         while _handshake_serving_mode(body) == "recovery_only":
             remaining = admission - time.monotonic()
             if remaining <= 0:
                 raise _expired()
             time.sleep(min(_ADMISSION_POLL_SEC, remaining))
-            # The WHOLE window is usable: the last read gets the thin residue, floored so a loopback
-            # handshake can complete; a transport failure inside it is expiry, mid-window propagates.
+            # The WHOLE window is usable (each read's bound reaches the window's end, the last one
+            # floored so a loopback handshake can complete) and no read starts after it; a transport
+            # failure inside the window's last read is expiry, mid-window propagates.
             remaining = admission - time.monotonic()
+            if remaining <= 0:
+                raise _expired()
             try:
                 body = gateway.handshake(
                     timeout_sec=max(remaining, _ADMISSION_POLL_SEC / 3.0))

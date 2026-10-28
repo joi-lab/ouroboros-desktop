@@ -1,4 +1,5 @@
-"""START reuses the handshake that proved the daemon live; a silent listener is waited for, never respawned."""
+"""START reuses the handshake that proved the daemon live; a silent listener is waited for within the
+caller's own allowance, never respawned; no phase of the start (probe, startup wait, admission) outlives it."""
 import http.server
 import json
 import os
@@ -25,9 +26,11 @@ def _point_owned_home(monkeypatch, config_dir: pathlib.Path, data_dir: pathlib.P
     monkeypatch.setattr(config_mod, "DATA_DIR", data_dir)
 
 
-def _daemon(token: str, *, silent_for: int):
-    """A daemon that accepts the socket but answers nothing for its first ``silent_for`` handshakes."""
-    state = {"handshakes": 0, "silent_for": silent_for, "hold": threading.Event()}
+def _daemon(token: str, *, silent_for: int, silence_sec: float = 30.0, serving_mode: str = "normal"):
+    """A daemon that accepts the socket but answers nothing for its first ``silent_for`` handshakes:
+    each holds the socket for ``silence_sec`` (or until ``hold`` is set), then drops it unanswered.
+    Every handshake's arrival is stamped on the test's clock (``arrivals``)."""
+    state = {"handshakes": 0, "silent_for": silent_for, "hold": threading.Event(), "arrivals": []}
 
     class _Daemon(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -49,10 +52,12 @@ def _daemon(token: str, *, silent_for: int):
                 self._send(200, {})
                 return
             state["handshakes"] += 1
+            state["arrivals"].append(time.monotonic())
             if state["handshakes"] <= state["silent_for"]:
-                state["hold"].wait(30)  # an accepted socket with no answer: a busy loop, not an absent daemon
+                state["hold"].wait(silence_sec)  # an accepted socket with no answer: a busy loop, not an absent daemon
+                self.close_connection = True
                 return
-            self._send(200, {"compatible": True, "protocolMajor": 3, "servingMode": "normal",
+            self._send(200, {"compatible": True, "protocolMajor": 3, "servingMode": serving_mode,
                              "engine": {"version": "9.9.9", "sha": "live"}})
 
         def do_GET(self):
@@ -95,12 +100,18 @@ def _manager(monkeypatch, tmp_path, server, token, *, silent_wait: float):
     return manager
 
 
-def _bounded_probes(monkeypatch):
-    """Every handshake of these tests is read-bounded, so a silent accept costs seconds, not the 60 s default."""
+def _recorded_probes(monkeypatch) -> list:
+    """Every handshake this process starts, as ``(started_at, read_bound)``: the real bound, uncapped."""
     from ouroboros.gateways import claudexor as gateway_module
     real = gateway_module.ClaudexorGateway.handshake
-    monkeypatch.setattr(gateway_module.ClaudexorGateway, "handshake",
-                        lambda self, *, timeout_sec=None: real(self, timeout_sec=min(timeout_sec or 0.4, 0.4)))
+    probes: list = []
+
+    def recording(self, *, timeout_sec=None):
+        probes.append((time.monotonic(), timeout_sec))
+        return real(self, timeout_sec=timeout_sec)
+
+    monkeypatch.setattr(gateway_module.ClaudexorGateway, "handshake", recording)
+    return probes
 
 
 def test_start_reuses_the_proving_handshake_without_a_second_one(monkeypatch, tmp_path):
@@ -117,18 +128,33 @@ def test_start_reuses_the_proving_handshake_without_a_second_one(monkeypatch, tm
         server.shutdown()
 
 
-def test_a_silent_accepted_socket_is_waited_for_within_the_callers_allowance_never_respawned(monkeypatch, tmp_path):
-    server, state = _daemon("tok", silent_for=2)
+def test_the_first_probe_is_bounded_by_the_callers_remaining_allowance(monkeypatch, tmp_path):
+    server, state = _daemon("tok", silent_for=0)
+    try:
+        _manager(monkeypatch, tmp_path, server, "tok", silent_wait=2.0)
+        probes = _recorded_probes(monkeypatch)
+        with execution_deadline_scope(monotonic_now() + 1.5):
+            gateway = owned.ensure_owned_gateway()
+        gateway.close()
+        assert len(probes) == 1 and probes[0][1] is not None, "the proving probe reads under the caller's clock"
+        assert 0 < probes[0][1] <= 1.5, "its bound is the caller's remainder, not the gateway's 60 s default"
+    finally:
+        server.shutdown()
+
+
+def test_a_transient_silence_is_retried_within_the_callers_allowance_never_respawned(monkeypatch, tmp_path):
+    server, state = _daemon("tok", silent_for=2, silence_sec=0.3)
     try:
         manager = _manager(monkeypatch, tmp_path, server, "tok", silent_wait=0.5)
-        _bounded_probes(monkeypatch)
+        probes = _recorded_probes(monkeypatch)
         started = time.monotonic()
         with execution_deadline_scope(monotonic_now() + 20.0):  # the review slot's own window
             gateway = owned.ensure_owned_gateway()
         try:
             assert gateway.engine_version == "9.9.9"
-            assert state["handshakes"] >= 3 and time.monotonic() - started < 15.0
+            assert state["handshakes"] == 3 and time.monotonic() - started < 5.0
             assert manager._proc is None
+            assert all(bound is not None and bound <= 20.0 for _at, bound in probes), "every probe under the allowance"
         finally:
             gateway.close()
             state["hold"].set()
@@ -136,19 +162,39 @@ def test_a_silent_accepted_socket_is_waited_for_within_the_callers_allowance_nev
         server.shutdown()
 
 
-def test_an_allowance_that_ends_unanswered_keeps_the_typed_custody_of_a_live_daemon(monkeypatch, tmp_path):
+def test_an_allowance_that_ends_unanswered_keeps_the_typed_custody_and_starts_no_probe_after_it(monkeypatch, tmp_path):
     server, state = _daemon("tok", silent_for=100)
     try:
         _manager(monkeypatch, tmp_path, server, "tok", silent_wait=0.3)
-        _bounded_probes(monkeypatch)
-        with execution_deadline_scope(monotonic_now() + 1.5):
+        probes = _recorded_probes(monkeypatch)
+        deadline = monotonic_now() + 1.0
+        with execution_deadline_scope(deadline):
             with pytest.raises(ClaudexorUnavailable) as caught:
                 owned.ensure_owned_gateway()
+        ended = time.monotonic()
         assert caught.value.code == "daemon_not_answering", "alive and silent, never daemon_unreachable"
         assert caught.value.observation_reason == "observation_read_timeout"
-        assert state["handshakes"] >= 2, "the allowance was spent retrying the same daemon"
+        assert probes and all(at < deadline for at, _bound in probes), "no probe starts after the allowance ends"
+        assert ended - deadline < 0.5, "the last probe read only the allowance's residue, not the 60 s default"
     finally:
         state["hold"].set()
+        server.shutdown()
+
+
+def test_a_recovering_daemon_ends_at_the_original_deadline_with_the_typed_refusal(monkeypatch, tmp_path):
+    server, state = _daemon("tok", silent_for=0, serving_mode="recovery_only")
+    try:
+        _manager(monkeypatch, tmp_path, server, "tok", silent_wait=2.0)
+        deadline = monotonic_now() + 1.0  # shorter than the default admission window the start would open
+        with execution_deadline_scope(deadline):
+            with pytest.raises(ClaudexorUnavailable) as caught:
+                owned.ensure_owned_gateway()
+        ended = time.monotonic()
+        assert caught.value.code == "daemon_recovery_only"
+        assert state["handshakes"] > 1, "admission was re-asked on the proving gateway"
+        assert all(at < deadline for at in state["arrivals"]), "no admission poll starts after the allowance ends"
+        assert ended - deadline < 0.5, "admission ends at the caller's deadline, not at its own window's end"
+    finally:
         server.shutdown()
 
 
@@ -158,12 +204,14 @@ def test_a_passive_sweep_keeps_its_short_bound_and_does_not_retry(monkeypatch, t
         _manager(monkeypatch, tmp_path, server, "tok", silent_wait=0.3)
         from ouroboros.gateways import claudexor as gateway_module
         monkeypatch.setattr(gateway_module, "SHORT_POLL_TIMEOUT_SEC", 0.3)
+        probes = _recorded_probes(monkeypatch)
         started = time.monotonic()
         with execution_deadline_scope(monotonic_now() + 60.0):
             with pytest.raises(ClaudexorUnavailable) as caught:
                 owned.ensure_owned_gateway(admission_wait_sec=0, startup_wait_sec=0.3)
         assert caught.value.code == "daemon_not_answering"
         assert time.monotonic() - started < 5.0, "a sweep skips and comes back next tick"
+        assert probes and all(bound is not None and bound <= 0.3 for _at, bound in probes), "the sweep's short bound"
     finally:
         state["hold"].set()
         server.shutdown()
