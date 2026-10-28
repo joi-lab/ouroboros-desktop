@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from ouroboros import consciousness_view as view, dialogue_store, usage_accounting, usage_store
+from ouroboros import consciousness_view as view, dialogue_store, store, usage_accounting, usage_store
 from ouroboros.gateway.history import _assemble_history_response
 from ouroboros.icon_geometry import icon_spec
 from ouroboros.terminal_projection import _project_row
@@ -105,6 +105,7 @@ def generate():
             with patch("ouroboros.terminal_projection.utc_now_iso", return_value="2026-10-24T07:50:00+00:00"):
                 seed_terminal_history(terminal_root, stored)
             fixture["terminal_only_history"].append(json.loads(_assemble_history_response(terminal_root, 1, 50, 200)))
+        store.close_connections_under(root)  # Windows removes no open file: hand the stores back before the folder goes
     # These are the same icon producer bytes used by PlaceSummary and catalog rows.
     for row in fixture["places"]["places"] + fixture["places"]["connectors"]:
         old = row.get("icon") or {}
