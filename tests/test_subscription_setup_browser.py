@@ -17,6 +17,7 @@ from tests.test_onboarding_complete_endpoint import (
     onboarding as onboarding,  # explicit re-export of the real atomic settings fixture
 )
 from tests.ui_chat_viewport_smoke import wait_drawer_closed
+from tests.ui_console_errors import PageErrors
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -37,7 +38,6 @@ def subscription_ui():
     }]
     posts = []
     reads = []
-    page_errors = []
     backend = {}
     settings = {
         **fixture["preview"]["model_settings"],
@@ -198,6 +198,7 @@ def subscription_ui():
             engine = os.environ.get("OUROBOROS_UI_BROWSER_ENGINE", "chromium")
             if engine not in {"chromium", "webkit", "firefox"}:
                 raise ValueError(f"Unsupported browser engine: {engine}")
+            page_errors = PageErrors(None, engine)
             browser = getattr(pw, engine).launch(
                 headless=True, executable_path=os.environ.get("OUROBOROS_UI_BROWSER_EXECUTABLE") or None)
             try:
@@ -208,13 +209,15 @@ def subscription_ui():
                                                **options})
                     page.route_web_socket('**/ws', lambda ws: ws.send(json.dumps({"type": "heartbeat"})))
                     page.route("**/api/**", respond)
-                    page.on("pageerror", lambda error: page_errors.append(str(error)))
-                    return page
+                    # Every error of every page counts unless the test declares a page it navigates
+                    # (``ui["errors"].watch(page)`` before the reload): then only WebKit's report of that
+                    # page's own cut-off fetch is set aside (tests/ui_console_errors.py).
+                    return page_errors.watch(page, navigates=False)
 
                 yield {"page": new_page(), "new_page": new_page, "url": f"http://127.0.0.1:{server.server_port}",
                        "posts": posts, "reads": reads, "fixture": fixture,
                        "settings": settings, "errors": page_errors, "backend": backend, "bootstrap": bootstrap}
-                assert not page_errors
+                assert not page_errors.unexpected(), page_errors.report()
             finally:
                 browser.close()
     finally:

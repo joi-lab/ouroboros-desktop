@@ -71,7 +71,7 @@ def test_missing_parent_observes_available_history_without_creating_result(tmp_p
     if history == "unreadable":
         monkeypatch.setattr(swarm_rollup, "JsonlChainSnapshot", Mock(side_effect=OSError("denied")))
     result = build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "root", "metadata": {"force_plan_source": "swarm"}})
+        "id": "root", "metadata": {"subagents_mode": "swarm"}})
     if history == "event":
         assert result["subagent_count"] == result["fanout_count"] == 1
     elif history == "empty":

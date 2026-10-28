@@ -322,7 +322,7 @@ def _own_run_outcome_lines(custody_root: Any, custody_state: Any, task_id: str,
 
 
 def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
-                            attempt_key: str = "") -> str:
+                            attempt_key: str = "", view_role: str = "") -> str:
     """Render the health-invariant WARNING block for one reader's context.
 
     Called once when a task's context is built (a task-start snapshot, not
@@ -347,8 +347,15 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
     supervision acknowledgement records it; with ``task_id`` it names the reader's
     OWN settled runs whose terminal payload this attempt's transcript never took
     (``_own_run_outcome_lines``). Empty renders none of those lines.
+
+    ``view_role`` is the reader's memory view role: an integrating one (not a delegated child or
+    nanny) reads the open lost-Max episode (``memory_max.health_line``, one row).
     """
     checks: List[str] = []
+    if view_role:
+        from ouroboros.memory_max import health_line
+
+        checks.extend(filter(None, [health_line(env.drive_root, view_role)]))
 
     try:
         from ouroboros.claudexor_exit_facts import health_line

@@ -743,6 +743,10 @@ class McpServerStatus(TypedDict, total=False):
     cwd: str
     env_from_settings: Any
     configuration_warnings: List[str]
+    schemas_at_start: bool  # the owner's pin: call schemas in every request from task start
+    instructions: str  # the server's own usage text from initialize, untrusted
+    map_tokens: int  # this server's part of the connections map (Main, Low/Max)
+    schema_tokens: int  # all its call schemas, loaded or not
     tool_count: Required[int]
     tools: List[Dict[str, Any]]  # {name, prefixed_name, description}
     tool_name_collisions: List[Dict[str, Any]]
@@ -764,6 +768,7 @@ class McpStatusResponse(TypedDict):
     sdk_error: Any
     tool_timeout_sec: Any
     servers: List[McpServerStatus]
+    weights: Dict[str, int]  # {tools, map_tokens, schema_tokens_from_task_start}: catalog potential
 
 
 class McpRefreshRequest(TypedDict, total=False):

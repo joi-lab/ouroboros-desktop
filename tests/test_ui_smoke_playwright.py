@@ -1868,18 +1868,18 @@ def test_ui_smoke_desktop_composer_chips_above_input_send_inside(direct_server):
                             toolbar: rect('.chat-toolbar-row'),
                             send: rect('.chat-send-group'),
                             sendButton: rect('.chat-send-inline'),
-                            swarm: rect('.chat-swarm'),
+                            subagents: rect('.chat-subagents-mode'),
                             contextMode: rect('.chat-context-mode'),
                         };
                     }"""
                 )
                 # v6.32.0 composer redesign (owner: "чипы правильнее НАД полем ввода"):
-                # the chips row (Swarm + Low/Max) sits ABOVE the text input...
+                # the capsules row (Subagents, Context, Effort) sits ABOVE the text input...
                 assert metrics["toolbar"]["bottom"] <= metrics["input"]["top"] + 4, metrics
-                assert metrics["swarm"]["bottom"] <= metrics["input"]["top"] + 4, metrics
+                assert metrics["subagents"]["bottom"] <= metrics["input"]["top"] + 4, metrics
                 assert metrics["contextMode"]["bottom"] <= metrics["input"]["top"] + 4, metrics
-                # ...the two chips share that row (aligned tops)...
-                assert abs(metrics["swarm"]["top"] - metrics["contextMode"]["top"]) <= 2, metrics
+                # ...the capsules share that row (aligned tops)...
+                assert abs(metrics["subagents"]["top"] - metrics["contextMode"]["top"]) <= 2, metrics
                 # ...and the Send button stays INSIDE the input's vertical band (same text row).
                 assert metrics["send"]["top"] >= metrics["input"]["top"] - 4, metrics
                 assert metrics["send"]["bottom"] <= metrics["input"]["bottom"] + 4, metrics
@@ -1915,10 +1915,9 @@ def test_ui_smoke_mobile_composer_toolbar_does_not_overlap_input(direct_server):
                         return {
                             input: rect('#chat-input'),
                             toolbar: rect('.chat-toolbar-row'),
-                            pills: rect('.chat-composer-pills'),
                             send: rect('.chat-send-group'),
                             sendButton: rect('.chat-send-inline'),
-                            swarm: rect('.chat-swarm'),
+                            subagents: rect('.chat-subagents-mode'),
                             contextMode: rect('.chat-context-mode'),
                             paddingRight: inputStyle.paddingRight,
                         };
@@ -1934,7 +1933,7 @@ def test_ui_smoke_mobile_composer_toolbar_does_not_overlap_input(direct_server):
                 assert metrics["toolbar"]["bottom"] <= metrics["input"]["top"] + 1, metrics
                 assert metrics["send"]["top"] >= metrics["input"]["top"] - 1, metrics
                 assert metrics["send"]["bottom"] <= metrics["input"]["bottom"] + 1, metrics
-                assert abs(metrics["swarm"]["height"] - metrics["sendButton"]["height"]) <= 1, metrics
+                assert abs(metrics["subagents"]["height"] - metrics["sendButton"]["height"]) <= 1, metrics
                 assert abs(metrics["contextMode"]["height"] - metrics["sendButton"]["height"]) <= 1, metrics
                 assert metrics["paddingRight"] != "256px", metrics
             finally:
