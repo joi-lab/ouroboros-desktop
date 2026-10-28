@@ -218,7 +218,7 @@ def test_evidence_packing_keeps_late_manifests_loose_and_the_source_readable(tmp
     settled = _settled(tmp_path / "logs")
     ref = settled["result_ref"]
     write_task_result(tmp_path, "packed-task", "completed", result="done")
-    manifest = json.loads(call_manifest_path(tmp_path, "packed-task", ref["call_id"]).read_text())
+    manifest = json.loads(call_manifest_path(tmp_path, "packed-task", ref["call_id"]).read_text(encoding="utf-8"))
     blob = manifest["redacted_projection_ref"]
     loose_blob = tmp_path / "observability" / "blobs" / f"{blob['sha256']}.{blob['kind']}.gz"
     assert loose_blob.is_file()

@@ -310,7 +310,7 @@ def test_receipt_keeps_focus_identity_snapshot_without_changing_v1(focus, identi
 
 
 def test_own_clock_receipt_has_no_focus_identity(tmp_path):
-    wake = json.loads((Path(__file__).parent / "fixtures/wake_document_214a31b6.json").read_text())
+    wake = json.loads((Path(__file__).parent / "fixtures/wake_document_214a31b6.json").read_text(encoding="utf-8"))
     assert "finished_at" not in wake and wake["terminal_time"]["occurred_at"] and wake["wake_silent"]
     seed_result(tmp_path, wake["task_id"], wake)
     payload = _payload(origin={"kind": "tool", "task_id": wake["task_id"]})
