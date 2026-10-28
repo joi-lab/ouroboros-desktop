@@ -931,3 +931,37 @@ def test_an_open_read_blocks_a_commit_only_under_a_rollback_journal(tmp_path, mo
         assert reader.row("t", "status") == "running"
     with store.open_store(tmp_path, write=False) as after:
         assert after.row("t", "status") == ("completed" if mode == "WAL" else "running")
+
+
+def test_a_forced_journal_a_late_thread_still_leases_is_given_back_at_a_later_teardown(tmp_path, monkeypatch):
+    """The teardown give-back of a forced journal leaves a store another thread still leases to a later teardown
+    instead of failing the test that ends, and converts it once the lease is gone (tests/_store_journal_shared.py)."""
+    from tests import _store_journal_shared as shared
+
+    root = tmp_path / "root"
+    publish(root, {"task_id": "t", "status": "completed", "_schema_version": 1})
+    path = os.path.abspath(store.store_path(root))
+    with store.open_store(root, write=False) as txn:
+        native = txn.conn.execute("PRAGMA journal_mode").fetchone()[0]
+    shared.use_journal(monkeypatch, "PERSIST" if native == "wal" else "WAL")
+    leased, release = threading.Event(), threading.Event()
+
+    def late_reader():
+        with store.open_store(root, write=False):
+            leased.set()
+            release.wait(10)
+
+    reader = threading.Thread(target=late_reader)
+    reader.start()
+    try:
+        assert leased.wait(10)
+        monkeypatch.undo()  # what the teardown hook sees: every monkeypatch undone
+        shared.give_back_converted_journals()  # the lease is the other thread's: nothing raises here
+        assert any(os.path.abspath(converted) == path for converted, _tier in shared._CONVERTED)
+    finally:
+        release.set()
+        reader.join(10)
+    shared.give_back_converted_journals()
+    assert not any(os.path.abspath(converted) == path for converted, _tier in shared._CONVERTED)
+    with store.open_store(root, write=False) as txn:
+        assert txn.conn.execute("PRAGMA journal_mode").fetchone()[0] == native
