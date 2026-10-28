@@ -94,6 +94,11 @@ export function planRecordGroup(owner, record, detail) {
                     const n = (Array.isArray(reply.objections) ? reply.objections : []).length;
                     const w = (Array.isArray(reply.withdrawn) ? reply.withdrawn : []).length;
                     const prose = text(reply.prose);
+                    if (ask.revision == null) {  // a reading's points stay out of the fold: shown here as advice, with their text
+                        const points = (Array.isArray(reply.objections) ? reply.objections : [])
+                            .map((o) => text(o && typeof o === 'object' ? (o.text || o.claim || o.id) : o)).filter(Boolean);
+                        return `${who}: answered${prose ? `: ${prose}` : ''}${points.length ? ` — advice, never holds: ${points.join('; ')}` : ''}`;
+                    }
                     return `${who}: answered — ${n} objection${n === 1 ? '' : 's'}${w ? `, ${w} withdrawn` : ''}${prose ? `: ${prose}` : ''}`;
                 }
                 if (p.status === 'not_dispatched') return `${who}: not sent — ${text(p.not_dispatched_reason) || 'not sendable'}`;

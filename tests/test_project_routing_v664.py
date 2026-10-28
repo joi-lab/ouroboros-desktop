@@ -714,8 +714,7 @@ def test_main_window_addresses_the_owners_quiz_choice_past_a_long_question(tmp_p
     assert len(block["comment"]) > 500
     assert row["chars"] == len(frame.strip())
     shown = _read_dialogue_reference(tmp_path, row)
-    assert ("[answer q-tower] chose (1) Keep the tower and repaint it (the choice is my human's; the option's words are "
-            f"the asking task's) — \"{block['comment']}\"") in shown
+    assert f'[answer q-tower] chose (1) Keep the tower and repaint it — "{block["comment"]}"' in shown
     assert (row["direction"], row["task_id"]) == ("system", "root-q")
 
 

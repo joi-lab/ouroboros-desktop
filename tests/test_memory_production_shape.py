@@ -62,8 +62,7 @@ def test_the_installation_holds_the_forms_found_on_a_live_one(tmp_path):
     assert len(answer) == 1 and row_author(answer[0])["kind"] == "human"
     chosen = "The owner chose option 2: " + shape.OPTIONS[1]
     assert len(shape.QUESTION) > 500 and made.answer["text"].index(chosen) > 500
-    assert render_row_text(made.answer) == (f"[answer q-inventory] chose (2) {shape.OPTIONS[1]} (the choice is my human's; "
-                                            f"the option's words are the asking task's) — \"{shape.COMMENT}\"")
+    assert render_row_text(made.answer) == f'[answer q-inventory] chose (2) {shape.OPTIONS[1]} — "{shape.COMMENT}"'
 
 
 # --- a correction stands under its record, never instead of it ------------------------------------------

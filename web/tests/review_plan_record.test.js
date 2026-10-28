@@ -79,7 +79,14 @@ test('an ask before any plan is shown as the reading of the request, never as "r
     const [ask] = group.attempts;
     assert.equal(ask.label, 'ask a1 · the reading of the request');
     assert.match(ask.detailText, /^ask a1 on the reading of the request — «How do you read it\?»/);
-    assert.match(ask.detailText, /triad_a \(m\/a\): answered — 0 objections: A story, not slides\./);
+    assert.match(ask.detailText, /triad_a \(m\/a\): answered: A story, not slides\./);
+    assert.doesNotMatch(ask.detailText, /objections?:|advice/);
+    // A reading's points stay out of the fold, so the card shows them as advice with their text, never a bare count.
+    const pointed = { ...reading, asks: [{ ...reading.asks[0], participants: [answered('triad_a', 'm/a', {
+        prose: 'A story.', objections: [{ id: 'o1', text: 'The brief narrows the ask' }] })] }] };
+    const pointedAsk = planReviewGroupFromTaskDetail({ task_id: 'root', status: 'running', plan_record: pointed, plan_objections: fold() }, 'root').attempts[0];
+    assert.match(pointedAsk.detailText, /answered: A story\. — advice, never holds: The brief narrows the ask/);
+    assert.doesNotMatch(pointedAsk.detailText, /1 objection/);
     assert.doesNotMatch(ask.detailText + ask.label, /revision (null|undefined|0)/);
     assert.equal(group.verdict, 'no open objection');
     const body = { ...reading, asks: [{ ...reading.asks[0], host_added: ['triad_b'] }] };

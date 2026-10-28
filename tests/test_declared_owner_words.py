@@ -108,8 +108,11 @@ def test_the_receipt_moves_only_the_words_between_its_lists():
     dropped = [item for item in older["omitted_automatic"] if item not in newer["omitted_automatic"]]
     assert len(moved) == 1 and moved[0].startswith(WORDS_ITEM) and "verbatim" in moved[0]
     assert len(dropped) == 1 and dropped[0].startswith(WORDS_ITEM)
-    rest = ("included", "omitted_automatic")
+    rest = ("included", "omitted_automatic", "later_inputs")
     assert {k: v for k, v in newer.items() if k not in rest} == {k: v for k, v in older.items() if k not in rest}
+    # the same fact also names the knowledge index a coordinating declared child meets later; older bytes stay
+    assert newer["later_inputs"].startswith(older["later_inputs"]) and "knowledge index" not in older["later_inputs"]
+    assert "knowledge index" in newer["later_inputs"] and "knowledge_list" in newer["later_inputs"]
     assert newer["included"].index(moved[0]) == older["included"].index(
         "explicit assignment, question, evidence and normalized task authority") + 1  # beside the assignment
     shared = {**_with_fact(OLDER), "task_contract": {"objective": "Take a position on design A"}}
