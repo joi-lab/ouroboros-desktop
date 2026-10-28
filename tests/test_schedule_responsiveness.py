@@ -444,9 +444,11 @@ def test_the_offloop_duty_never_holds_the_tick_and_runs_single_flight(q, monkeyp
         assert release.wait(5)
 
     monkeypatch.setattr(queue_schedules, "check_scheduled_tasks", slow_pass)
-    # Other cadences are not due in this tick: only the schedule duty starts.
+    # Other cadences are not due in this tick: only the schedule duty starts. The maintenance child is owed on a
+    # process's first look, so without this its thread would outlive the test whenever this test runs first.
     monkeypatch.setattr(server_maintenance, "_LAST_CANCEL_INTENT_SWEEP", [time.time()])
     monkeypatch.setattr(server_maintenance, "_LAST_COLD_CUSTODY_SWEEP", [time.time()])
+    monkeypatch.setattr(server_maintenance, "_tick_maintenance_child", lambda: None)
     stop_event = threading.Event()
     stamps = [time.time(), time.time()]
     try:
