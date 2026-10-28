@@ -39,8 +39,7 @@ def _seed_target(tmp_path: pathlib.Path) -> pathlib.Path:
     target = tmp_path / "target"
     target.mkdir()
     _git(target, "init")
-    # LF on every host: tests compare these bytes and build same-size rewrites of them.
-    (target / "tracked.txt").write_text("one\n", encoding="utf-8", newline="\n")
+    (target / "tracked.txt").write_text("one\n", encoding="utf-8", newline="\n")  # LF: the tests compare bytes
     _git(target, "add", "-A")
     _git(target, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "seed")
     (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8", newline="\n")   # unstaged mod
