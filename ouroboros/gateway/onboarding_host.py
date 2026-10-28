@@ -74,7 +74,8 @@ async def onboarding_page(_request: Request) -> HTMLResponse:
         if page is not None:
             return HTMLResponse(page, headers=_NO_STORE)
     _settings, bootstrap = _live_setup()
-    return HTMLResponse(render_onboarding_html(bootstrap), headers=_NO_STORE)
+    head = served_ui.appearance_meta(_request.headers) if served_ui is not None else ""
+    return HTMLResponse(render_onboarding_html(bootstrap, head), headers=_NO_STORE)
 
 
 async def api_onboarding_bootstrap(_request: Request) -> JSONResponse:

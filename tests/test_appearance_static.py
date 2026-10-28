@@ -296,6 +296,18 @@ def test_screens_before_the_interface_restate_exactly_the_palette():
         assert restated["--text-secondary"] == palette["--text-secondary"], theme
 
 
+def test_a_host_charts_default_series_are_the_approved_tokens_of_each_theme():
+    """#474, owner 27.10: four series in one order for both themes, deeper in Light. theme_palette.js keeps
+    the dark values as the colours of a config built without a document and of a page without the tokens."""
+    ui = _read("web/ui.css")
+    names = [f"--chart-series-{n}" for n in range(1, 5)]
+    dark, light = _palette_values(ui, ":root"), _palette_values(ui, ':root[data-theme="light"]')
+    assert [light[name] for name in names] == ["#c0284c", "#2c68d0", "#1e9c76", "#bd6a00"]
+    assert [dark[name] for name in names] == ["#ee6780", "#60a5fa", "#3fdca3", "#fbbf24"]
+    fallback = re.search(r"CHART_SERIES = Object\.freeze\(\[([^\]]*)\]\)", _read("web/modules/theme_palette.js"))
+    assert re.findall(r"'(#[0-9a-f]{6})'", fallback.group(1)) == [dark[name] for name in names]
+
+
 def test_the_telegram_connecting_page_reads_the_one_saved_choice_before_it_paints():
     """No second store: the same key theme.js writes. The script runs in <head> after Telegram's (whose
     colorScheme is the System source there), never deferred, so the first paint already has the palette;
