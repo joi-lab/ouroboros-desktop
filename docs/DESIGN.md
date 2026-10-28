@@ -185,7 +185,7 @@ need a new desktop app on older frozen launchers; source-handoff shells can take
 this through source updates. Login and Telegram change with an ordinary update.
 
 **Interface size** (Settings → Appearance, under Theme) is one slider that makes
-everything larger or smaller, per device like the theme (owner 23.10). Whoever
+everything larger or smaller, per device (owner 23.10). Whoever
 owns the viewport applies it, never the page by scaling itself: the desktop app
 zooms its own window as a browser's Cmd+ does (50–200 %, ⌘/Ctrl + − 0 in tens
 and, on a Mac, the View menu; its next window opens at the same size); a touch screen lays the page out at
@@ -196,18 +196,28 @@ Desktop) the size stays 100 % and the control says so. A size applies when the
 slider is let go; a size the device cannot keep lasts until the page closes. Ouroboros
 sees the size in the owner's surface fact and can say where to change it, never changes it.
 
-Appearance belongs to a browser profile or desktop client, not an account or
-server setting. Existing saved Light/Dark choices keep their meaning. Storage
-failures are visible; clearing site data returns the choice to System. Switching
-repaints mounted charts and diagrams without rebuilding views or losing drafts.
-Independent iframe interiors remain author-owned, not automatically recoloured.
-Desktop persistence requires a desktop app (launcher) built with persistent
-WebView storage, 7.2.0 or later; in-app updates replace the core, never that app.
-An older app opens its WebView in private mode, which erases website data each
-time its window opens, so Settings → Appearance names that app by its own version
-and says the choices reset at restart, instead of presenting them as kept. Server
-restart alone cannot verify survival across full quit/relaunch. Mechanism and
-deployment limits: ARCHITECTURE §3 “Navigation and shared UI contracts”.
+Appearance belongs to one installation in one browser profile or desktop client on
+one host name, never an account or server, and stays when the server moves to another
+port (owner 27.10, #1111 A); another installation, profile or device keeps its own;
+`localhost` and `127.0.0.1` are two host names, and the Telegram Mini App keeps the
+choice of its own address. A choice an address saved before this rule carries over
+once, when that address next opens, unless the installation already keeps one, and is
+then removed there: an interface directory or an older build on that address, as after
+a rollback, reads System until the owner chooses again (owner 28.10). Clearing site
+data returns the choice to System; clearing only cookies does too, except at an
+address whose older choice has not carried over yet. A browser that refuses cookies
+keeps the choice for its address only and says so; refusing storage as well, it lasts
+until the window reloads. The installation scope is the theme's alone: a touch screen's
+Interface size and the notification choices (§9) stay with each address. Switching repaints
+mounted charts and diagrams without rebuilding views or losing drafts. A chart the host
+draws (widgets, living cards) gives its series four default colours in one order,
+deeper in Light (#474); Markdown charts and iframe interiors keep their author's
+colours. Keeping the choice through a desktop quit needs an app (launcher) from
+7.2.0, whose WebView storage persists; in-app updates replace the core, never that
+app, so Settings → Appearance names an older app by its version and says its choices
+reset at restart. Only a full quit and relaunch proves survival, never a server
+restart. Mechanism and deployment limits: ARCHITECTURE §3 “Navigation and shared UI
+contracts”.
 
 ---
 
@@ -2623,8 +2633,8 @@ Attention cues prove no system delivery; unsupported and legacy launchers fall
 back as described above.
 
 **Settings.** The controls live on **Settings → Appearance**, under the theme
-block, and are stored per client exactly like the appearance choice: the desktop
-window and each browser keep their own, nothing reaches the server. Under Sound,
+block, and are stored per address: the desktop window and each browser keep their
+own, another port starts from the defaults, and nothing reaches the server. Under Sound,
 **App tone volume** controls only the app tone, never system volume. Automatic
 fallback requires a client that can report positive system permission and sound
 settings (currently macOS); elsewhere the control affects Preview only. Moving

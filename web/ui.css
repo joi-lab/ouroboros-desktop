@@ -96,11 +96,17 @@
     --surface-card: rgba(var(--neutral-rgb), 0.03);
     --surface-card-soft: rgba(var(--neutral-rgb), 0.025);
     --surface-control: rgba(var(--neutral-rgb), 0.04);
-    /* Chart chrome (grid lines, tick/legend text). Chart.js paints to a canvas
-       and cannot read CSS, so these tokens are the SSOT that theme_palette.js
-       copies into every mounted instance — the canvas twin of --diagram-*. */
+    /* Chart chrome (grid lines, tick/legend text) and the four default series of a
+       chart the host draws (widgets, living cards), in the owner's order; a fifth
+       series takes the first again. Chart.js paints to a canvas and cannot read CSS,
+       so these tokens are the SSOT that theme_palette.js copies into every mounted
+       instance — the canvas twin of --diagram-*. */
     --chart-grid: rgba(var(--neutral-rgb), 0.10);
     --chart-text: #a4a4a4;
+    --chart-series-1: #ee6780;
+    --chart-series-2: #60a5fa;
+    --chart-series-3: #3fdca3;
+    --chart-series-4: #fbbf24;
     /* The native select arrow is a data-URI, so its stroke cannot read a token
        at paint time; the whole image is the token instead. Painting a near-white
        arrow on the light surface is what made the arrows look washed out. */
@@ -375,6 +381,10 @@
     --focus-accent-border: #bf2f40;
     --chart-grid: rgba(var(--neutral-rgb), 0.14);
     --chart-text: #4a515d;
+    --chart-series-1: #c0284c;
+    --chart-series-2: #2c68d0;
+    --chart-series-3: #1e9c76;
+    --chart-series-4: #bd6a00;
     --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M3 5l4 4 4-4' fill='none' stroke='%2320232b' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --diagram-bg: #ffffff;
     --diagram-primary: #f3e8ec;

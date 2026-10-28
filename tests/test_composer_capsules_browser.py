@@ -24,7 +24,7 @@ import json
 
 import pytest
 
-from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat, _shot
+from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat, _painted, _shot
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
 from tests.ui_chat_viewport_smoke import set_viewport
 
@@ -306,11 +306,12 @@ def test_context_capsule_chooses_one_of_three_modes_and_reads_back(direct_server
             assert "Context mode refused by the test." in page.locator(".toast").first.inner_text()
             _until(page, "r.ctx.mode === 'nano' && r.ctx.disabled === 'false' && r.ctx.checked.join() === 'nano'")
             page.unroute("**/api/owner/context-mode")
-            # The one global value: a reload reads Nano back from /api/state.
-            page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'dark'); } catch (e) {}")
+            # The one global value: a reload reads Nano back from /api/state, in Dark chosen as Settings does.
+            page.evaluate("() => window.ouroTheme.set('dark')")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{EFFORT}')?.dataset.known === 'true'", timeout=30_000)
             _until(page, "r.ctx.mode === 'nano' && r.ctx.head === 'ContextNano'", timeout=30_000)
+            assert _painted(page) == ["dark", "dark"], "the dark shots show the dark theme"
             _shot(page, tmp_path, f"capsules-closed-nano-{engine}-dark")
             page.click(f"{CONTEXT} .chat-capsule-head")
             _until(page, "r.ctx.open === 'true'")
