@@ -843,6 +843,8 @@
  * @property {string[]=} held_siblings
  * @property {string[]=} rebound_held_siblings
  * @property {string=} released_hold
+ * @property {{rows: Array<{task_id: string, reason: string}>, count: number}=} membership_gaps
+ * @property {string=} message
  */
 
 /* Living-message cards (`ouroboros.gateway.card_contracts`): the `card` / `card_state` frames, the read API

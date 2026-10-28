@@ -11,12 +11,17 @@ import { SEG_PAD, createCapsuleFit, px, widthOf } from './capsule_fit.js';
 import { haptic } from './haptics.js';
 import { createComposerFold } from './composer_fold.js';
 import { createSubagentsControl } from './composer_subagents.js';
+import { createHint } from './ui_hint.js';
 
 const N = OWNER_TIERS.length - 1;
 const HANDLES = ['min', 'rec', 'max'];
 const CONTEXT_MODES = ['nano', 'low', 'max'];
 const CONTEXT_LABELS = Object.freeze({ nano: 'Nano', low: 'Low', max: 'Max' });
-const CONTEXT_TITLE = 'Context mode (owner setting). Nano is the compact owner window, Low fits ~250K / local models, Max is full. Saves for new participants in this room; running work keeps its context.';
+const CONTEXT_MEANINGS = Object.freeze({
+    nano: 'The compact owner window.', low: 'About 250K tokens: fits local models.', max: 'The full context window.',
+});
+// When a capsule's change takes effect, said once for all three under each one's meaning (the hint's rule line).
+export const CHANGE_RULE = 'Applies to new steps; running work finishes.';
 const contextModeOf = (mode) => (['nano', 'low', 'max'].includes(mode) ? mode : 'max');
 const HOVER_OPEN_MS = 160;
 // After the mouse leaves, the open strip waits this long before it closes, and a margin
@@ -119,11 +124,15 @@ function contextModeMarkup() {
  *
  * Hover is an accelerator only (`(hover: hover) and (pointer: fine)`): a press pins the strip
  * open and unpins it; touch and keyboard use the press. Hover never opens a capsule while
- * another one is open, since closing it would move this one under a still pointer. A capsule's
- * `note` (Subagents' lines under the row) is its own: a press, the pointer or focus there is in it.
+ * another one is open, since closing it would move this one under a still pointer.
+ *
+ * While a capsule is open, the one hint (ui_hint.js) stands above it and says what its value means
+ * (`say(preview)` gives the words; a mouse resting on another value previews that one's), with
+ * CHANGE_RULE under it unless `say` answers its own `rule`, and `onHintAction` for its action. The
+ * hint lives inside the capsule, so a press, the pointer or focus there is in the capsule.
  */
 function createCapsule({
-    el, row, kind, strip, segs, render, focusTarget, padMax = SEG_PAD.max, note = null,
+    el, row, kind, strip, segs, render, focusTarget, padMax = SEG_PAD.max, say = null, onHintAction = () => {},
     busy = () => false, onClosed = () => {}, afterOpen = () => {}, afterOverflow = afterOpen,
     onLayout = () => {}, onSettled = () => {}, win, doc,
 }) {
@@ -146,15 +155,19 @@ function createCapsule({
     // Focus keeps a hover-opened strip open only when the keyboard put it there: browsers report
     // a handle focused after a mouse press as :focus-visible, so the last input decides instead.
     let keyboardFocus = false;
-    const own = (node) => el.contains(node) || Boolean(note?.contains?.(node));
+    const hint = say ? createHint(el, { doc, onAction: onHintAction }) : null;
+    if (hint) head.setAttribute('aria-describedby', hint.el.id);
+    let preview = '';
+    const sayHint = () => { if (hint) hint.say({ rule: CHANGE_RULE, ...say(preview) }); };
+    const own = (node) => el.contains(node);
     const stillHere = () => {
-        try { return Boolean(el.matches(':hover') || note?.matches?.(':hover') || (keyboardFocus && own(doc.activeElement))); } catch { return false; }
+        try { return Boolean(el.matches(':hover') || (keyboardFocus && own(doc.activeElement))); } catch { return false; }
     };
-    // The open strip forgives a mouse that drifts a little: inside the zone (the control plus a
-    // margin) it stays; outside, it closes after the delay unless the mouse comes back first. A
-    // pinned strip, a drag and keyboard focus keep it open regardless.
+    // The open strip forgives a mouse that drifts a little: inside the zone (the control and its
+    // hint, plus a margin) it stays; outside, it closes after the delay unless the mouse comes back
+    // first. A pinned strip, a drag and keyboard focus keep it open regardless.
     function inZone(point) {
-        return [el, note].some((node) => {
+        return [el, hint?.el].some((node) => {
             const r = point && node && !node.hidden && typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : null;
             return Boolean(r) && point.x >= r.left - HOVER_ZONE_PX && point.x <= r.right + HOVER_ZONE_PX
                 && point.y >= r.top - HOVER_ZONE_PX && point.y <= r.bottom + HOVER_ZONE_PX;
@@ -247,6 +260,8 @@ function createCapsule({
             delete el.dataset.settling;
             afterOpen();
         }
+        preview = '';
+        if (hint && open) { sayHint(); hint.show(); } else hint?.hide();
         if (open && focus) focusTarget()?.focus({ preventScroll: true });
         onLayout();
         if (!open && !collapses) settled();
@@ -327,6 +342,12 @@ function createCapsule({
     });
     const onResize = () => { if (state.open) relayout(); };
     const stopObserving = observeLayout(win, [row, strip], () => { if (!state.destroyed) relayout(); });
+    // A mouse resting on a value previews what it means; leaving the strip says the chosen one again.
+    const previewed = (next) => { if (next !== preview) { preview = next; sayHint(); } };
+    const onPreview = (event) => {
+        if (event.pointerType === 'mouse' && state.open) previewed(event.target?.closest?.('.chat-seg')?.dataset?.mode || '');
+    };
+    const onPreviewEnd = () => previewed('');
 
     head.addEventListener('click', onHeadClick);
     body.addEventListener('transitionend', onBodyTransitionEnd);
@@ -337,10 +358,14 @@ function createCapsule({
     if (hoverCapable) {
         el.addEventListener('pointerenter', onEnter);
         el.addEventListener('pointerleave', onLeave);
+        if (hint) {
+            strip.addEventListener('pointerover', onPreview);
+            strip.addEventListener('pointerleave', onPreviewEnd);
+        }
     }
 
     return Object.assign(api, {
-        setOpen, snapClosed, closeSoon, onStripScroll, reveal, measureName, isRtl, relayout,
+        setOpen, snapClosed, closeSoon, onStripScroll, reveal, measureName, isRtl, relayout, sayHint,
         destroy() {
             state.destroyed = true;
             stopMorph(el);
@@ -358,6 +383,9 @@ function createCapsule({
             if (row.dataset?.ownerSolo === kind) delete row.dataset.ownerSolo;
             el.removeEventListener('pointerenter', onEnter);
             el.removeEventListener('pointerleave', onLeave);
+            strip.removeEventListener('pointerover', onPreview);
+            strip.removeEventListener('pointerleave', onPreviewEnd);
+            hint?.destroy();
         },
     });
 }
@@ -471,11 +499,17 @@ export function createEffortRangeControl({
         const word = effortText(state.draft.recommended);
         if (value.textContent !== word) value.textContent = word;
         const stored = state.stored;
-        head.title = fmt('Primary effort: {level}; helpers {min}–{max}. Applies to new participants in this room.', {
+        head.setAttribute('aria-label', fmt('Primary effort: {level}; helpers {min}–{max}.', {
             level: effortText(stored.recommended), min: effortText(stored.min), max: effortText(stored.max),
-        });
-        head.setAttribute('aria-label', head.title);
+        }));
+        capsule?.sayHint();
     }
+    // What the hint says: the primary level and the helpers' range where the marks stand, a drag's included.
+    const say = () => {
+        const s = snapRange(state.view || state.shown);
+        const level = (i) => effortText(OWNER_TIERS[i]);
+        return { word: level(s.rec), text: fmt('Primary effort; helpers between {min} and {max}.', { min: level(s.min), max: level(s.max) }) };
+    };
 
     /* --- the model: drag preview, commit on gesture end, serialized saves --- */
     function beginDrag(which) { state.drag = { which }; state.view = { ...state.shown }; render(); }
@@ -565,7 +599,7 @@ export function createEffortRangeControl({
     }
 
     capsule = createCapsule({
-        el, row, kind: 'effort', strip, segs, render, focusTarget: () => handles.rec, onLayout, onSettled, win, doc,
+        el, row, kind: 'effort', strip, segs, render, focusTarget: () => handles.rec, say, onLayout, onSettled, win, doc,
         busy: () => Boolean(state.drag), onClosed: () => { if (state.drag) cancelDrag(); }, afterOpen: () => revealHandle('rec'),
         afterOverflow: () => revealHandle(HANDLES.find((which) => handles[which] === doc.activeElement) || 'rec'),
     });
@@ -657,8 +691,6 @@ function createContextModeControl({ el, row, saveContextMode, showToast, refresh
     el.setAttribute('role', 'group');
     el.setAttribute('aria-label', 'Context size mode');
     el.innerHTML = contextModeMarkup();
-    const head = el.querySelector('.chat-context-head');
-    head.title = CONTEXT_TITLE;
     const value = el.querySelector('.chat-capsule-value');
     const strip = el.querySelector('.chat-context-strip');
     const thumb = el.querySelector('.chat-context-thumb');
@@ -681,7 +713,13 @@ function createContextModeControl({ el, row, saveContextMode, showToast, refresh
             thumb.style.left = `${seg.offsetLeft}px`;
             thumb.style.width = `${seg.offsetWidth}px`;
         }
+        capsule?.sayHint();
     }
+    // What the hint says: the chosen mode, or the one a mouse rests on.
+    const say = (preview) => {
+        const mode = CONTEXT_MODES.includes(preview) ? preview : current();
+        return { word: CONTEXT_LABELS[mode], text: CONTEXT_MEANINGS[mode] };
+    };
     let saving = null, lastOk = true, destroyed = false;
     function choose(mode) {
         const next = contextModeOf(mode);
@@ -733,7 +771,7 @@ function createContextModeControl({ el, row, saveContextMode, showToast, refresh
     };
 
     capsule = createCapsule({
-        el, row, kind: 'context', strip, segs, render, focusTarget: chosen, padMax: SEG_PAD.max + 3, onLayout, onSettled, win, doc,
+        el, row, kind: 'context', strip, segs, render, focusTarget: chosen, say, padMax: SEG_PAD.max + 3, onLayout, onSettled, win, doc,
         afterOpen: () => revealMode(chosen()),
         afterOverflow: () => revealMode(segs.find((seg) => seg === doc.activeElement) || chosen()),
     });
@@ -845,17 +883,25 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
     for (const capsule of capsules) capsule.peers = capsules.filter((other) => other !== capsule);
     win?.addEventListener?.('resize', fitNames);
     const stopObserving = observeLayout(win, [row], fitNames);
+    // A draft that grows lifts the row with its open capsule: the capsule's hint finds its place again.
+    const stopField = observeLayout(win, [row?.closest?.('.chat-input-wrap')?.querySelector?.('.chat-field')],
+        () => capsules.forEach((capsule) => capsule.sayHint()));
     const relayout = () => { if (!destroyed) { fitNames(); capsules.forEach((capsule) => capsule.relayout()); } };
     // Descendant fitting cannot resize this docking box, so mount/show/resize settle before paint.
     // Text is observed at the microtask boundary, not our geometry attributes; unchanged words stay.
     const boxObserver = box && typeof win?.ResizeObserver === 'function' ? new win.ResizeObserver(relayout) : null;
     boxObserver?.observe(box);
-    // Own values only refit the closed line: realigning an open strip would cancel its motion.
-    const ownValue = (record) => {
-        const node = record.target.nodeType === 1 ? record.target : record.target.parentNode;
-        return Boolean(node?.closest?.('.chat-capsule-value'));
+    // Own values only refit the closed line: realigning an open strip would cancel its motion. A hint's words stand
+    // over the page and size nothing in the row (ui_hint.js), so they refit nothing.
+    const nodeOf = (record) => (record.target.nodeType === 1 ? record.target : record.target.parentNode);
+    const ownValue = (record) => Boolean(nodeOf(record)?.closest?.('.chat-capsule-value'));
+    const inHint = (record) => Boolean(nodeOf(record)?.closest?.('.ui-hint'));
+    const onText = (records) => {
+        const moving = (records || []).filter((record) => !inHint(record));
+        if (!records?.length) relayout();
+        else if (moving.length && moving.every(ownValue)) fitNames();
+        else if (moving.length) relayout();
     };
-    const onText = (records) => { if (records?.length && records.every(ownValue)) fitNames(); else relayout(); };
     const textObserver = row && typeof win?.MutationObserver === 'function' ? new win.MutationObserver(onText) : null;
     textObserver?.observe(row, { childList: true, characterData: true, subtree: true });
     // On a phone the row folds away while the owner reads back through the room's history (composer_fold.js).
@@ -881,6 +927,7 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
         destroy() {
             destroyed = true;
             stopObserving();
+            stopField();
             win?.removeEventListener?.('resize', fitNames);
             boxObserver?.disconnect();
             textObserver?.disconnect();

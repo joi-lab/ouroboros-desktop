@@ -798,9 +798,9 @@ def test_long_closed_values_on_a_320px_phone_give_way_on_one_line(direct_server_
             assert context["word"] == context_word and context["cut"], seen
             for capsule in (subagents, context, effort):  # a value, cut or whole, keeps clear of both ends of its shell
                 assert capsule["value"][0] >= capsule["shell"][0] + 1 and capsule["value"][1] <= capsule["shell"][1] - 1, seen
-            # The whole word stays the button's: its accessible name, Effort's tooltip, the open strip.
+            # The whole word stays the button's: its accessible name and the open strip (no hover-only title).
             assert context_word in page.locator(f"{CONTEXT} .chat-capsule-head").aria_snapshot(), seen
-            assert effort_word in effort["label"] and effort_word in effort["title"], seen
+            assert effort_word in effort["label"] and not effort["title"], seen
             page.tap(f"{CONTEXT} .chat-capsule-head")
             _until(page, "r.ctx.open === 'true'")
             page.wait_for_timeout(450)

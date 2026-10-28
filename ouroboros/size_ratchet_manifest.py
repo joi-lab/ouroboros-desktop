@@ -3,7 +3,6 @@
 BASELINE_SOURCE_SHA = "77d6827b7a72a632899bb6cc64a7e759aabcfaa6"
 
 GIANT_PATHS = (
-    "skills/unix_computer_use/plugin.py",
     "supervisor/workers.py",
     "tests/test_claudexor_owned_daemon.py",
     "tests/test_delivery_forced_finalization.py",
@@ -196,6 +195,7 @@ BAND_PATHS = {
     "skills/telegram/plugin.py": None,
     "skills/telegram/scripts/companion.py": None,
     "skills/telegram/scripts/sidecar.py": None,
+    "skills/unix_computer_use/plugin.py": "Shrank from 1838 lines (giant) when the remote transports (remote.py) and the place readers (place.py, macos_native.py) got their own modules in 0.5.3; registration, the coordinate contract and local input stay one flow.",
     "supervisor/events_budget.py": "Entered the band from 1000 lines (#1716): the owner's held-row selection completes a member's consumed Resume on its own fence only after every refusal it checks, then names the owner-Pause latch that member now passes; both stay at the one place a held row is released, beside the authority snapshot they compare.",
     "supervisor/events_task_done.py": "Entered the band from exactly 1000 lines with the #1154 terminal-projection continuation and the #1087 shared warning fold: the terminal dispatch now hands both halves of a root's owed projection to one settlement owner and reads child warnings from the shared normalized projection instead of a second execution-axis copy. Shrink-only from here.",
     "supervisor/message_bus.py": "Shrank into the band from 1548 lines: the web acceptance moved to message_ingress, and this change's canonical chat writer is the ingress seam over the dialogue store (state/dialog.sqlite), so the bus keeps the transports and the send seam. Shrink-only from here.",

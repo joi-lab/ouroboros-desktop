@@ -33,15 +33,15 @@ export function createCapsuleFit({ el, row, kind, strip, segs, padMax = SEG_PAD.
     // leftwards to negative offsets and its scrollLeft runs from 0 down.
     const isRtl = () => styleOf(strip)?.direction === 'rtl';
     // What stays on the line beside the open strip: the other capsules, closed, and the row's
-    // other controls, each with its row gap; a capsule's note is the line under it, never beside it.
-    // Alone, they are hidden and measure 0: the width seen before they stepped aside stays.
+    // other controls, each with its row gap. Alone, they are hidden and measure 0: the width seen
+    // before they stepped aside stays.
     let beside = { width: 0, count: 0 };
     function measurePeers(gap) {
         if (row.dataset?.ownerSolo) return beside;
         let width = 0;
         let count = 0;
         for (const node of Array.from(row.children || [])) {
-            if (node === el || node.hidden || node.hasAttribute?.('data-capsule-note')) continue;
+            if (node === el || node.hidden) continue;
             const own = widthOf(node);
             if (own > 0) { width += own + gap; count += 1; }
         }

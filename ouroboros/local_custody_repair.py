@@ -384,10 +384,10 @@ def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str]
     done nor failed; a late return of an accepted call writes nothing.
     """
     from ouroboros.model_wait import retire_model_consumers
+    from ouroboros.owner_pause import tree_model_requests
     from ouroboros.task_results import load_task_result, require_writable_task_result_schema, stamp_task_result_schema
     from ouroboros.task_store import patch_document
     from ouroboros.tool_custody import tool_handoff_reason
-    from ouroboros import usage_store
     from ouroboros.utils import utc_now_iso
 
     wanted, at = {str(value) for value in ids if value}, utc_now_iso()
@@ -423,9 +423,8 @@ def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str]
         if decided:
             patch_document(pathlib.Path(root), holder, accept)
             accepted.extend(landed)
-    with usage_store.read(pathlib.Path(root)) as txn:  # the tree's open set (root index), never history
-        attempts = [row for row in txn.open_attempts(root_task_id=root_task_id)
-                    if str(row.get("attempt_id") or "") in wanted]
+    attempts = [row for row in tree_model_requests(pathlib.Path(root), root_task_id)  # the census's own read
+                if str(row.get("attempt_id") or "") in wanted]
     for attempt in attempts:
         consumer, number = attempt.get("local_answer_consumer_id"), attempt.get("local_answer_task_attempt")
         why = receiver_reason(attempt)

@@ -4,6 +4,7 @@ import test from 'node:test';
 import { setup, NodeStub } from './dashboard_dom_fixture.js';
 
 import { normalizeConsciousness, normalizePlacesResponse, normalizeWake } from '../modules/consciousness_api.js';
+import { createContributionsStore } from '../modules/contributions.js';
 import {
     countedRootsText, dashboardPlaceRowHtml, factsLineParts, headlineView, initConsciousnessDashboard, liveWake,
     paintWakeRows, placesCardHtml, summaryHtml, wakeRowHtml, wakesCardHtml,
@@ -182,6 +183,125 @@ test('the Dashboard always reads the Places projection, even with an empty snaps
     assert.equal(reads, before);
 });
 
+test('showing the tab reads Places again, so an updated skill\'s place icon is the one Settings shows', async (t) => {
+    const { window } = setup(t);
+    const mount = fakeMount();
+    const state = { activePage: 'dashboard', dashboardActiveSubtab: 'consciousness' };
+    const mark = (path) => ({ kind: 'svg', svg: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${path}" /></svg>` });
+    const response = normalizePlacesResponse(FIXTURE.places);
+    // The installed connector's mark before and after a skill update on the server; no places-changed event.
+    let icon = mark('M9 3v12M15 9v12M3 9h12M9 15h12');
+    let reads = 0;
+    const controller = initConsciousnessDashboard({ mount, state, read: async () => full(),
+        readPlacesFn: async () => { ++reads; return { ...response, places: response.places.map((place, index) => (index ? place : { ...place, icon })) }; } });
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    const placesHtml = () => mount.regions.get('[data-cx-places]').innerHTML;
+    await settled();
+    assert.match(placesHtml(), /M9 3v12/);
+    icon = mark('M19 8.5V10h1.5A1.5 1.5 0 1 0 19 8.5');
+    await controller.refresh();
+    assert.equal(reads, 1, 'the poll leaves Places to their own reads');
+    window.dispatchEvent(new CustomEvent('ouro:dashboard-subtab-shown', { detail: { tab: 'consciousness' } })); await settled();
+    assert.equal(reads, 2);
+    assert.match(placesHtml(), /M19 8\.5V10h1\.5/);
+    assert.doesNotMatch(placesHtml(), /M9 3v12/);
+    icon = mark('M4 4h16');
+    window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: 'dashboard' } })); await settled();
+    assert.equal(reads, 3, 'returning to the Dashboard on this tab reads them too');
+    assert.match(placesHtml(), /M4 4h16/);
+    state.dashboardActiveSubtab = 'logs';
+    window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: 'dashboard' } })); await settled();
+    assert.equal(reads, 3, 'another tab of the Dashboard reads nothing here');
+    controller.destroy();
+});
+
+test('a skill lifecycle end reads Places at once while shown and at the next show while hidden; the newest read paints', async (t) => {
+    const { window, document } = setup(t);
+    const mount = fakeMount();
+    const state = { activePage: 'dashboard', dashboardActiveSubtab: 'consciousness' };
+    // The page's own contributions store on a stub socket: its lifecycle triggers are the ones the panel hears.
+    const socket = new Map();
+    const ws = { on(type, fn) { socket.set(type, fn); return () => socket.delete(type); }, send() {} };
+    const store = createContributionsStore({ client: { uiContributions: async () => ({}) } });
+    const detach = store.attach({ ws, target: window });
+    const mark = (path) => ({ kind: 'svg', svg: `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${path}" /></svg>` });
+    const response = normalizePlacesResponse(FIXTURE.places);
+    // The first place's mark on the server now: an off connector, which the contributions projection leaves out.
+    let served = mark('M9 3v12M15 9v12M3 9h12M9 15h12');
+    const held = [];  // each Places read answers what the server held when it started, when the test says
+    const controller = initConsciousnessDashboard({ mount, state, ws, contributions: store, read: async () => full(),
+        readPlacesFn: () => {
+            const answer = { ...response, places: response.places.map((place, index) => (index ? place : { ...place, icon: served })) };
+            return new Promise((resolve) => held.push(() => resolve(answer)));
+        } });
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    const placesHtml = () => mount.regions.get('[data-cx-places]').innerHTML;
+    const answerAll = async () => { held.splice(0).forEach((answer) => answer()); await settled(); };
+    const ended = (phase = 'completed') => socket.get('chat')({ type: 'chat', role: 'system', is_progress: true,
+        system_type: 'skill_lifecycle', lifecycle: { kind: 'update', target: 'slack-bridge', phase } });
+    await settled();
+    await answerAll();
+    assert.match(placesHtml(), /M9 3v12/);
+
+    await controller.refresh();
+    socket.get('open')();
+    ended('running');
+    await settled();
+    assert.equal(held.length, 0, 'the poll, a socket open and a running job read no Places');
+
+    served = mark('M19 8.5V10h1.5A1.5 1.5 0 1 0 19 8.5');
+    ended();
+    assert.equal(held.length, 1, 'shown: the end of the update reads Places at once');
+    await answerAll();
+    assert.match(placesHtml(), /M19 8\.5V10h1\.5/);
+    assert.doesNotMatch(placesHtml(), /M9 3v12/);
+
+    // A show's read was already in flight when the next update ended: its older answer arrives last and loses.
+    window.dispatchEvent(new CustomEvent('ouro:dashboard-subtab-shown', { detail: { tab: 'consciousness' } }));
+    served = mark('M2 2h20');
+    ended();
+    assert.equal(held.length, 2);
+    const [older, newer] = held.splice(0);
+    newer(); await settled();
+    older(); await settled();
+    assert.match(placesHtml(), /M2 2h20/);
+    assert.doesNotMatch(placesHtml(), /M19 8\.5/);
+
+    state.activePage = 'chat';
+    served = mark('M3 3h18');
+    ended();
+    socket.get('extension_lifecycle')({ type: 'extension_lifecycle', skill: 'slack-bridge', action: 'reload' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 0, 'hidden on another page: nothing is read yet');
+    state.activePage = 'dashboard';
+    window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: 'dashboard' } }));
+    assert.equal(held.length, 1, 'its next show reads once');
+    await answerAll();
+    assert.match(placesHtml(), /M3 3h18/);
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 0, 'that show already caught up');
+
+    document.hidden = true;
+    served = mark('M4 4h16');
+    window.dispatchEvent(new Event('ouro:skill-lifecycle'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 0, 'a document out of view waits too');
+    document.hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 1, 'and reads once when it comes back');
+    await answerAll();
+    assert.match(placesHtml(), /M4 4h16/);
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 0);
+
+    controller.destroy();
+    ended();
+    window.dispatchEvent(new Event('ouro:skill-lifecycle'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(held.length, 0, 'destroy unsubscribes');
+    detach();
+});
+
 function fakeMount() {
     const regions = new Map();
     return {
@@ -199,7 +319,7 @@ test('while the full snapshot is not served, /api/state and /api/places still gi
     const priorWindow = globalThis.window;
     const priorDocument = globalThis.document;
     globalThis.window = { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} };
-    globalThis.document = { hidden: false };
+    globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
     const mount = fakeMount();
     const notServed = Object.assign(new Error('HTTP 404'), { status: 404 });
     const controller = initConsciousnessDashboard({
@@ -225,7 +345,7 @@ test('a failed read keeps the earlier values and says so', async () => {
     const priorWindow = globalThis.window;
     const priorDocument = globalThis.document;
     globalThis.window = { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} };
-    globalThis.document = { hidden: false };
+    globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
     const mount = fakeMount();
     let fail = false;
     const controller = initConsciousnessDashboard({

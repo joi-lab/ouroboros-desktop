@@ -104,6 +104,7 @@
  * @property {boolean=} unconfirmed
  * @property {'bound'|'admitted'=} state
  * @property {string=} action_nonce
+ * @property {{rows: Array<{task_id: string, reason: string}>, count: number}=} membership_gaps
  */
 /**
  * @typedef {Object} ContinuationOffer
