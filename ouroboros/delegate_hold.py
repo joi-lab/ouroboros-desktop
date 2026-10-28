@@ -241,8 +241,8 @@ def _append_wake_receipt(
             "(it was never resent and stays billed at its reserved upper bound). The "
             f"task held on the live leaf run {run_id} instead of dying; this wake is "
             "the new material input for THIS round — judge it (read results, wait "
-            "again, cancel, or integrate). Never rebuild the leaf's work on metered "
-            "tokens. Use retry_of to resolve an unknown start; a new prompt is independent work.\n" + body
+            "again, cancel, or integrate). Never rebuild the leaf's work. "
+            "Use retry_of to resolve an unknown start; a new prompt is independent work.\n" + body
         ),
     })
 
