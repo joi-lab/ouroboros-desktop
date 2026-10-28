@@ -1,6 +1,8 @@
 """The client contract is regenerated from stored wake facts, never handwritten rows."""
 import json
 from pathlib import Path
+import time
+from unittest.mock import patch
 
 from ouroboros import skill_source_catalog as catalog
 from scripts.generate_consciousness_fixture import generate
@@ -8,7 +10,16 @@ from scripts.generate_consciousness_fixture import generate
 
 def test_browser_fixture_matches_the_producers():
     expected = json.loads((Path(__file__).parents[1] / "web/tests/fixtures/consciousness_contract.json").read_text(encoding="utf-8"))
-    assert generate() == expected  # the generator pins its display zone itself, whatever the caller's
+    if not hasattr(time, "tzset"):  # Windows cannot change the process zone; the generator pins the producer's own
+        assert generate() == expected
+        return
+    try:
+        for zone in ("UTC", "Europe/Moscow"):
+            with patch.dict("os.environ", TZ=zone):
+                time.tzset()
+                assert generate() == expected
+    finally:
+        time.tzset()
 
 
 def test_catalog_passes_optional_titles_without_renaming_ids():

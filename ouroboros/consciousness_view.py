@@ -8,6 +8,7 @@ from typing import Any
 from ouroboros.usage_origin import cause_label
 
 RECENT_WAKE_LIMIT = 50
+_DISPLAY_ZONE = None  # the server's local zone; the browser fixture generator pins one
 
 
 @contextlib.contextmanager
@@ -29,7 +30,7 @@ def _clock_of(iso_value: Any) -> str:
     from ouroboros.deadline_utils import parse_deadline_ts
 
     parsed = parse_deadline_ts(str(iso_value or ""))
-    return parsed.astimezone().strftime("%H:%M") if parsed is not None else "?"
+    return parsed.astimezone(_DISPLAY_ZONE).strftime("%H:%M") if parsed is not None else "?"
 
 
 def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None) -> dict:
