@@ -160,9 +160,10 @@ def _run_pytest(tmp_path, files, *, workers, extra=(), owned=True):
         # No launcher root either: its own evidence in tmp_path would otherwise retain the outer one.
         env = {key: value for key, value in os.environ.items() if key != "OUROBOROS_TEST_TEMP_ROOT"}
         with log.open("w", encoding="utf-8") as output:
+            # Its own session, as every owned child: the kill below then reaches this run, never ours (#2353).
             proc = subprocess.Popen([sys.executable, str(entry)], cwd=ROOT,
                                     env={**env, budget.NESTED_WORKERS_ENV: str(workers)},
-                                    stdout=output, stderr=subprocess.STDOUT)
+                                    stdout=output, stderr=subprocess.STDOUT, **pl.subprocess_new_group_kwargs())
         try:
             code = proc.wait(timeout=60)
         finally:
