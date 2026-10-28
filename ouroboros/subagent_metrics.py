@@ -278,7 +278,7 @@ def job_due(root, row, facts, child):
         return True
     if row.get("state") == "failed":
         return row.get("source") != _source_stamp(root)  # changed failed source, including a repaired torn tail
-    return bool(row.get("publication_owed")) or not row and any(_source_stamp(root))
+    return bool(row.get("publication_owed")) or not row.get("state") and any(_source_stamp(root))
 
 
 def run_job(root, should_stop):

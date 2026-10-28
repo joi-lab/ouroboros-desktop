@@ -10,7 +10,7 @@ from ouroboros.delegate_custody_usage import CostCustody
 from ouroboros.gateway.reference_contracts import ChatReferenceFields
 from ouroboros.storage import (  # noqa: F401 -- public re-exports
     StorageCount, StorageCounting, StorageError, StoragePart, StoragePlace, StorageResponse, StorageRest,
-    StorageVolume,
+    StorageVolume, StorageRemover,
 )
 from ouroboros.storage_free import (  # noqa: F401 -- public re-exports
     StorageFree, StorageFreeGroup, StorageFreeItem, StorageFreeKept, StorageFreeRequest, StorageFreeRun,
@@ -1598,7 +1598,7 @@ __all__ = [
     "OwnerHurryProjection",
     "EffortRange", "OwnerEffortRangeResponse", "OwnerSubagentsModeResponse", "LogTailResponse",
     "StorageCount", "StorageCounting", "StorageError", "StoragePart", "StoragePlace", "StorageResponse",
-    "StorageRest", "StorageVolume",
+    "StorageRest", "StorageVolume", "StorageRemover",
     "StorageFree", "StorageFreeGroup", "StorageFreeItem", "StorageFreeKept", "StorageFreeRequest", "StorageFreeRun",
     "HTTP_ENDPOINTS",
     "WS_MESSAGE_TYPES",

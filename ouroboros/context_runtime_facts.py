@@ -359,22 +359,29 @@ def storage_fact(data_root: Any) -> Optional[Dict[str, Any]]:
     """The last finished storage count as one compact fact for the mind: when it was counted,
     what Ouroboros owns and how many items it could not read, the growth since the count before
     (flagged when either count had unreadable items), free and total space of the data folder's
-    disk. None when nothing was counted yet or the file is unreadable (never zero, never an
-    exception). No threshold, tier or warning stands in for judgment here: the mind reads the
-    numbers (``query_data(kind="storage")`` holds the per-place detail). The saved file is read
-    through the storage owner's identity cache; free space is read fresh."""
+    disk, and one ``removers`` line only while a maintenance job's last outcome is not clean
+    (``storage_removers.not_ok`` over the local job rows: never an engine call while a turn is prepared;
+    the engine's record is ``query_data(kind="storage")``'s and the Storage page's), present before any
+    count too. None when nothing was counted and every job is clean (never zero, never an exception). No
+    threshold, tier or warning stands in for judgment here: the mind reads the numbers. The saved file is
+    read through the storage owner's identity cache; free space and the job rows are read fresh."""
     import shutil
 
-    from ouroboros import storage
+    from ouroboros import storage, storage_removers
 
     try:
+        removers = "; ".join(storage_removers.not_ok(storage_removers.place_removers(data_root, engine=False)))
+    except Exception:  # the readers already answer unknown; anything else is said, never a broken section
+        log.debug("storage removers unreadable for the runtime fact", exc_info=True)
+        removers = "the removers' facts could not be read"
+    try:
         saved = storage.count.saved(data_root)
-        if not saved:
-            return None
-        count = storage.with_growth(saved["latest"], saved["previous"])
+        count = storage.with_growth(saved["latest"], saved["previous"]) if saved else None
     except Exception:  # an unreadable or malformed file is no fact, never a broken Runtime section
         log.debug("storage count unreadable for the runtime fact", exc_info=True)
-        return None
+        count = None
+    if count is None:
+        return {"removers": removers} if removers else None
     try:
         usage = shutil.disk_usage(str(data_root))
         free, total = usage.free, usage.total
@@ -392,6 +399,8 @@ def storage_fact(data_root: Any) -> Optional[Dict[str, Any]]:
     }
     if count.get("growth_flag"):
         fact["growth_flag"] = count["growth_flag"]  # either count had unreadable items: the growth is qualified
+    if removers:
+        fact["removers"] = removers
     return fact
 
 

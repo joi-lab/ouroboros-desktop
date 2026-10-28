@@ -195,7 +195,7 @@ def test_planner_statistics_once_per_store_and_again_after_tenfold_growth(data):
 def test_legacy_reconcile_runs_only_when_scheduled_and_tolerates_a_body_without_it(data, monkeypatch):
     from ouroboros import store_import
 
-    for name in ("pending_invocations", "ended_plan_asks", "runtime_retirement"):
+    for name in ("pending_invocations", "ended_plan_asks", "runtime_retirement", "record_compression"):
         maintenance.run_job(data, name)
     calls = []
     monkeypatch.setattr(store_import, "run_legacy_reconcile",
@@ -286,6 +286,11 @@ def _setup_job(name, data, monkeypatch):
         from tests.test_evidence_packs import _task
 
         _task(data, "settled", blobs=1)
+    elif name == "record_compression":
+        write_task_result(data, "settled", "completed", result="answer")
+        evidence = data / "task_results" / "artifacts" / "settled" / "delegated_runs" / "run" / "evidence" / "out.log"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_bytes(b"a finished record compresses where the filesystem can\n" * 4096)
     elif name == "dialogue_import":
         from ouroboros import dialogue_import
         from tests._dialogue import seed
@@ -394,7 +399,7 @@ def test_the_real_child_process_runs_the_due_jobs_and_reports(data):
 
     dialogue_import.cutover(data)  # as the boot does before the dialogue opens: the archive is planned
     assert maintenance.due(data) == ["subagent_metrics", "pending_invocations", "dialogue_import",
-                                     "ended_plan_asks", "runtime_retirement", "custody_trash"]
+                                     "ended_plan_asks", "custody_trash", "runtime_retirement", "record_compression"]
     unit = maintenance.MaintenanceChild()
     assert unit.tick(data, REPO)
     unit._thread.join(240)
