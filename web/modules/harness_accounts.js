@@ -62,7 +62,7 @@ import {
 } from './claudexor_status_store.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { harnessIdentityMarkup } from './harness_presentation.js';
-import { createLoginCardController, normalizeProfileName, preserveCardFocus } from './harness_login_cards.js';
+import { SIGN_IN_SCOPE_NOTE, createLoginCardController, normalizeProfileName, preserveCardFocus } from './harness_login_cards.js';
 import { createHarnessMaintenanceController } from './harness_maintenance.js';
 import { formatRelativeAge } from './ui_helpers.js';
 import { escapeHtmlAttr as escapeHtml } from './utils.js';
@@ -87,7 +87,7 @@ export function verificationBadge(profile, { known = true } = {}) {
     const availability = String(status.availability || '');
     const badge = () => {
         if (source === 'vendor' && verification === 'passed') {
-            return { tone: 'ok', label: 'Verified live' };
+            return { tone: 'ok', label: 'Login verified' };
         }
         if (verification === 'passed') {
             // The claim is NARROWER than "signed in" and must stay narrower in
@@ -609,11 +609,8 @@ export function bareRowStatusText(accountsRead, { accountsUnsupported = false } 
 }
 
 export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported = false } = {}) {
-    // The aggregate lozenge in a card header: how many accounts ROTATION can
-    // actually use. That claim may only count accounts that are BOTH signed in
-    // and enabled — a disabled row is the owner's own exclusion, and a header
-    // that counted it would over-promise the pool exactly the way counting a
-    // cold row used to.
+    // Count enabled logins, not executable models: authentication and catalog
+    // access do not establish a working main-chat transport or configured agent.
     if (!rows.length) return { tone: 'muted', label: bareRowStatusText(accountsRead, { accountsUnsupported }) };
     // …and the SAME provenance rule the rows obey. These rows are the retained
     // snapshot's memory when the accounts facet did not land, so a green
@@ -648,9 +645,9 @@ export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported
         if (notRun) return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not verified`);
         return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not signed in`);
     }
-    if (live < rows.length) return verdict('ok', `${live} of ${rows.length} connected`);
-    if (live === 1) return verdict('ok', 'Connected');
-    return verdict('ok', `${live} accounts · rotating`);
+    if (live < rows.length) return verdict('ok', `${live} of ${rows.length} signed in`);
+    if (live === 1) return verdict('ok', 'Signed in');
+    return verdict('ok', `${live} accounts signed in`);
 }
 
 export function nextUpBadge(payload, harness, { accountsRead = READ_OK } = {}) {
@@ -1079,10 +1076,9 @@ export function renderAgentAccountsSection() {
         <div class="form-section" id="harness-accounts-section">
             <h3>Accounts</h3>
             <div class="settings-section-copy">
-                Subscriptions shared by Models, delegated subagents, and reviewers. Unpinned work
-                rotates across a family's enabled, signed-in accounts; a disabled account keeps its
-                login and stays out of rotation. Accounts live in Ouroboros's own agent home; your
-                personal logins are never read or imported.
+                ${SIGN_IN_SCOPE_NOTE} Check the intended route in Models or Agents separately.
+                Unpinned work uses enabled accounts; disabling keeps the login out of rotation.
+                Accounts live in Ouroboros's own agent home; personal logins are never imported.
             </div>
             <div id="harness-accounts-error" class="settings-inline-status" data-tone="error" hidden></div>
             <div id="harness-model-marks-note" class="settings-inline-status" data-tone="muted" hidden></div>

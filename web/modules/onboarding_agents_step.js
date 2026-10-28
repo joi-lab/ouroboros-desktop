@@ -4,7 +4,8 @@
 
 import { apiClient } from './api_client.js';
 import { ACCOUNTS_UNSUPPORTED_STATUS, claudexorStatus, accountRows, familyLabel } from './claudexor_status_store.js';
-import { LOGIN_CARD_FULL, createLoginCardController } from './harness_login_cards.js';
+import { LOGIN_CARD_FULL, SIGN_IN_SCOPE_NOTE, createLoginCardController } from './harness_login_cards.js';
+import { familyStatus } from './harness_accounts.js';
 import { harnessIdentityMarkup } from './harness_presentation.js';
 import {
     availableSubagentsEditorHost,
@@ -358,9 +359,9 @@ export function agentsOutcomeText(connected = [], {
     }
     const labels = joinLabels(familyLabels(connected, snapshot, { catalogKnown }));
     if (skipPresets) {
-        return `${labels} ${connected.length === 1 ? 'is' : 'are'} connected, but you chose to `
+        return `Signed in to ${labels}, but you chose to `
             + 'skip the automatic subscription preset. The Available subagents draft below '
-            + 'is still saved exactly as you edit it; other agent defaults stay unchanged.';
+            + `is still saved exactly as you edit it; other agent defaults stay unchanged. ${SIGN_IN_SCOPE_NOTE}`;
     }
     const reviewerHarnesses = connected.filter(
         (harness) => REVIEW_CAPABLE_AGENT_HARNESSES.has(harness),
@@ -369,7 +370,7 @@ export function agentsOutcomeText(connected = [], {
         (harness) => !REVIEW_CAPABLE_AGENT_HARNESSES.has(harness),
     );
     const clauses = [
-        `${labels} ${connected.length === 1 ? 'is' : 'are'} connected. When you finish, `
+        `Signed in to ${labels}. When you finish, `
             + 'Ouroboros will try to add subscription-backed choices to Available subagents '
             + `through ${connected.length === 1 ? 'it' : 'them'}.`,
     ];
@@ -387,18 +388,15 @@ export function agentsOutcomeText(connected = [], {
     clauses.push(connected.includes('codex')
         ? 'Codex can also supply your model roles without an API key.'
         : 'Main still needs Codex, an API key, or a local model.');
+    clauses.push(SIGN_IN_SCOPE_NOTE);
     return clauses.join(' ');
 }
 
 export function familyStatusText(snapshot, harness, { accountsKnown = true, accountsUnsupported = false } = {}) {
     if (accountsUnsupported) return { tone: 'muted', text: ACCOUNTS_UNSUPPORTED_STATUS };
     if (!accountsKnown) return { tone: 'muted', text: 'Not checked' };
-    const count = harnessAccountCount(snapshot, harness);
-    if (!count) return { tone: 'muted', text: 'Not connected' };
-    return {
-        tone: 'ok',
-        text: count === 1 ? 'Connected' : `${count} accounts connected · they rotate`,
-    };
+    const status = familyStatus(accountRows(snapshot).filter((row) => row.harness === harness));
+    return { tone: status.tone, text: status.label };
 }
 
 export function subagentPreviewStatusSignature(view, snapshot) {

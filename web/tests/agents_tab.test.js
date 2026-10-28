@@ -40,6 +40,8 @@ import {
     vendorCredentialRetainedNotice,
 } from '../modules/harness_accounts.js';
 import { profileOptionsFor } from '../modules/route_editor_primitives.js';
+import { loginCardHtml } from '../modules/harness_login_cards.js';
+import { agentsOutcomeText, familyStatusText } from '../modules/onboarding_agents_step.js';
 
 const MULTI = JSON.parse(readFileSync(
     fileURLToPath(new URL('./fixtures/credential_profiles_multi.json', import.meta.url)), 'utf-8'));
@@ -86,6 +88,33 @@ function fakeStore(reads, { error = '', snapshot = null } = {}) {
 
 const ALL = (value) => ({ catalog: value, accounts: value, quota: value });
 
+test('Cursor auth and agent catalog access do not certify either execution surface', () => {
+    const snapshot = payload({
+        harnesses: [{ id: 'cursor', enabled: true, status: 'ok', models: [{ id: 'cursor-test' }] }],
+        profiles: { profiles: [{ profile: {
+            harness_id: 'cursor', profile_id: 'cursor-default', enabled: true,
+        }, status: { verification: 'passed', verification_source: 'vendor', availability: 'available' } }] },
+    });
+    const group = accountGroups(snapshot, { accountsRead: 'ok', catalogKnown: true })[0];
+    assert.equal(group.harness, 'cursor');
+    assert.deepEqual(group.status, { tone: 'ok', label: 'Signed in' });
+    const html = harnessFamilyMarkup(group, snapshot, { accountsRead: 'ok', quotaRead: 'ok' });
+    assert.match(html, /Login verified/);
+    assert.doesNotMatch(html, />Connected<|Verified live|rotating/);
+    assert.equal(familyStatusText(snapshot, 'cursor').text, 'Signed in');
+    for (const skipPresets of [false, true]) {
+        assert.match(agentsOutcomeText(['cursor'], { snapshot, skipPresets }),
+            /Sign-in does not verify main-chat support or agent execution/);
+    }
+    for (const mode of ['full', 'compact']) {
+        const login = loginCardHtml({ harness: 'cursor', profile: 'cursor-default',
+            envelope: { job: { state: 'succeeded' } }, verdict: { kind: 'success' } }, 0, { mode });
+        assert.match(login, /Signed in\./);
+        assert.match(login, /Sign-in does not verify main-chat support or agent execution/);
+        assert.doesNotMatch(login, /Connected\./);
+    }
+});
+
 // ---------------------------------------------------------------------------
 // Grouping: zero accounts, one account, several accounts in one family.
 // ---------------------------------------------------------------------------
@@ -128,7 +157,7 @@ test('several accounts of one family are grouped, counted, and called equivalent
     const codex = groups.find((g) => g.harness === 'codex');
     assert.equal(codex.rows.length, 3);
     assert.equal(codex.status.tone, 'ok');
-    assert.match(codex.status.label, /3 accounts · rotating/);
+    assert.match(codex.status.label, /3 accounts signed in/);
     // Once a family HAS accounts its header button ADDS one, which is what
     // makes them equivalent instead of one-default-plus-extras.
     assert.equal(familyActionLabel(codex, payload()), 'Add account');
@@ -142,10 +171,10 @@ test('several accounts of one family are grouped, counted, and called equivalent
     assert.match(claude.status.label, /1 account · all disabled/);
 });
 
-test('one connected account reads as connected, not as a count', () => {
+test('one authenticated account reports sign-in, not operational readiness', () => {
     const rows = [{ harness: 'codex', profile_id: 'work', kind: 'profile',
         status: { verification: 'passed', verification_source: 'vendor' } }];
-    assert.deepEqual(familyStatus(rows, { accountsRead: 'ok' }), { tone: 'ok', label: 'Connected' });
+    assert.deepEqual(familyStatus(rows, { accountsRead: 'ok' }), { tone: 'ok', label: 'Signed in' });
     // Present but never signed in: not an alarm, and not a lie either.
     const cold = [{ harness: 'codex', profile_id: 'work', kind: 'profile', status: {} }];
     assert.deepEqual(familyStatus(cold, { accountsRead: 'ok' }),
@@ -166,7 +195,7 @@ test('"N accounts · rotating" counts only the accounts rotation can actually us
           status: { verification: 'passed', verification_source: 'local_store' } },
     ];
     assert.deepEqual(familyStatus(mixed, { accountsRead: 'ok' }),
-        { tone: 'ok', label: '1 of 2 connected' });
+        { tone: 'ok', label: '1 of 2 signed in' });
 });
 
 test('a disabled account is out of the rotation claim, and all-disabled is its own state', () => {
@@ -181,7 +210,7 @@ test('a disabled account is out of the rotation claim, and all-disabled is its o
           status: { verification: 'passed', verification_source: 'vendor' } },
     ];
     assert.deepEqual(familyStatus(mixed, { accountsRead: 'ok' }),
-        { tone: 'ok', label: '1 of 2 connected' });
+        { tone: 'ok', label: '1 of 2 signed in' });
     // Every login healthy, every account disabled: saying "not signed in"
     // would send the owner to a login that fixes nothing.
     const allOff = mixed.map((row) => ({ ...row, enabled: false }));
@@ -218,7 +247,7 @@ test('a disabled account with a failed verification does not redden the family h
           status: { verification: 'failed' } },
     ];
     assert.deepEqual(familyStatus(rows, { accountsRead: 'ok' }),
-        { tone: 'ok', label: '1 of 2 connected' });
+        { tone: 'ok', label: '1 of 2 signed in' });
     // The SAME failure on an ENABLED account is rotation's problem and keeps
     // the alarm.
     const enabledFailure = rows.map((row) => ({ ...row, enabled: true }));
@@ -525,17 +554,17 @@ test('a card does not contradict itself: the header is dated by the same read as
     const broken = [{ harness: 'codex', profile_id: 'work', kind: 'profile',
         status: { verification: 'failed' } }];
 
-    assert.deepEqual(familyStatus(live, { accountsRead: 'ok' }), { tone: 'ok', label: 'Connected' });
+    assert.deepEqual(familyStatus(live, { accountsRead: 'ok' }), { tone: 'ok', label: 'Signed in' });
     for (const gap of ['not_read', 'failed', 'transport']) {
         const dated = familyStatus(live, { accountsRead: gap });
         assert.equal(dated.tone, 'muted', `${gap} must not paint a green aggregate`);
-        assert.match(dated.label, /Connected — last known/);
+        assert.match(dated.label, /Signed in — last known/);
         assert.equal(familyStatus(broken, { accountsRead: gap }).tone, 'error',
             `${gap} must not mute an account that needs attention`);
     }
     // Two rows, one signed in: the count is still honest, just dated.
     assert.match(familyStatus([...live, { harness: 'codex', profile_id: 'cold', kind: 'profile', status: {} }],
-        { accountsRead: 'failed' }).label, /1 of 2 connected — last known/);
+        { accountsRead: 'failed' }).label, /1 of 2 signed in — last known/);
 });
 
 test('an UNREACHABLE daemon reaches the banner as ONE coarse verdict, carrying its own reason', async () => {

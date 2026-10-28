@@ -21,18 +21,9 @@
 // once release of the previous job is proven (`loginReleaseProven`) — a 2xx cancel
 // alone is not proof.
 //
-// TWO render modes:
-//   * `full`    — exactly what Settings renders today: link/device code,
-//                 the optional paste-code entry, the live state line, the
-//                 verdict + the engine's own sentence, the collapsed Advanced
-//                 terminal fallback (or an explicit external continuation),
-//                 and Close.
-//   * `compact` — Connect + progress + verified state + retry, for a wizard
-//                 step. The optional paste-code entry and the delayed Advanced
-//                 fallback stay full-only. Any available attach command is
-//                 rendered directly in compact, while an explicitly selected
-//                 external-terminal continuation is direct in BOTH modes, so
-//                 neither mode strands the completion path.
+// Full mode adds paste-code input and the delayed Advanced fallback. Compact
+// mode exposes any available attach command directly; an explicit external
+// terminal continuation is direct in both. Both report authentication only.
 //
 // Pure helpers up top are node-tested without a DOM.
 
@@ -54,6 +45,7 @@ export const JOB_POLL_GIVE_UP_FAILURES = 10;
 
 export const LOGIN_CARD_FULL = 'full';
 export const LOGIN_CARD_COMPACT = 'compact';
+export const SIGN_IN_SCOPE_NOTE = 'Sign-in does not verify main-chat support or agent execution.';
 
 export const TERMINAL_TRANSPORT_ERROR_CODES = Object.freeze([
     'terminal_transport_unavailable',
@@ -599,7 +591,8 @@ export function loginCardHtml(active, nowMs = Date.now(), { mode = LOGIN_CARD_FU
     } else if (face === 'unavailable') {
         bits.push('<div class="settings-inline-status" data-tone="muted" data-login-verdict>This sign-in job is no longer available. Refresh the account status before trying again.</div>');
     } else if (active.verdict?.kind === 'success') {
-        bits.push('<div class="settings-inline-status" data-tone="ok" data-login-verdict>Connected.</div>');
+        bits.push(`<div class="settings-inline-status" data-tone="ok" data-login-verdict>Signed in.</div>
+            <div class="settings-inline-note" data-login-scope>${SIGN_IN_SCOPE_NOTE}</div>`);
     } else if (active.verdict?.kind === 'failure') {
         bits.push(`<div class="settings-inline-status" data-tone="error" data-login-verdict>${escapeHtml(failureText(active.verdict.reason))}</div>`);
     } else if (active.verdict?.kind === 'unconfirmed') {
