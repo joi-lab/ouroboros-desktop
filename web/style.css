@@ -2982,12 +2982,13 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 .review-facts-list {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    /* A label takes at most 40% and wraps: a long one (`Review panel <record id>`) never squeezes the values. */
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
     gap: var(--space-1) var(--space-4);
     margin: 0;
 }
 
-.review-facts-list dt { color: var(--text-secondary); }
+.review-facts-list dt { min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .review-facts-list dd {
     min-width: 0;
