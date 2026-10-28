@@ -2175,14 +2175,14 @@ action changes model/account only. Closing the chat disposes view resources
 without claiming it stopped the task; continuation requires the Ouroboros
 process to keep running.
 
-A self-started run (a wake, a schedule-born root) keeps the ordinary task card: its accepted summary fills the title slot when the run has no authored name (a wake), else it is the card's line under the schedule's name; either way it leads Details as “In its words”, and the answer remains the run's own note when it finishes silently.
+A self-started run (a wake, a schedule-born root) keeps the ordinary task card (owner 28.10, 1A 2A): its accepted summary fills the title slot when the run has no authored name (a wake), else it is the card's line under the schedule's name; either way it leads Details as “In its words”, and the answer remains the run's own note when it finishes silently.
 While running, the server supplies Own time, the focus's cause label or the
 schedule's name in that title slot; no summary leaves the title in place, with
 no invented sentence. Model waits, controls and temporary model changes last
 until the turn ends; the persistence checkbox still saves the consciousness
-role. `Started by: Consciousness` or `Started by: Schedule · <name>` keeps the
-origin in Details and on any delivered answer. The summary is authored text,
-not another message or card.
+role. `Started by: Schedule · <name>` keeps the origin in Details;
+`Started by: Consciousness` keeps it in Details and on its delivered answers.
+The summary is authored text, not another message or card.
 
 An already-delivered answer does not close a still-open post-task synthesis.
 Consolidation or chooser waits use the same role controls in that task's
