@@ -184,3 +184,43 @@ def test_two_kept_warnings_are_reached_whole_by_wheel_and_keyboard(toast_ui, tmp
     finally:
         save_evidence(tmp_path, name, facts)
         page.close()
+
+
+MARGIN_HIT = """([x, y]) => document.getElementById('toast-stack').contains(document.elementFromPoint(x, y))"""
+
+
+def test_the_kept_column_follows_the_window_and_scrolls_from_its_margin(toast_ui, tmp_path):
+    """On a phone the two kept warnings cut the column, and a wheel over its empty left margin scrolls it in every
+    engine. A window that grows releases the column with no notice coming or going, and its margin lets the page
+    through again; shrunk back, the column is cut again."""
+    page = seed_page(toast_ui, 320, 568)
+    facts = {'engine': toast_ui['engine']}
+    try:
+        page.goto(toast_ui['url'] + '/')
+        page.wait_for_selector('#chat-input', state='attached')
+        settle(page)
+        page.evaluate(TWO_GAPS)
+        page.wait_for_function(WARNINGS_ONLY, timeout=15_000)
+        settle(page)
+        facts['cut'] = cut = page.evaluate(REACH)
+        assert cut['stack']['role'] == 'region' and cut['stack']['scroll_end'] > 0, cut
+        first = cut['toasts'][0]
+        margin = ((cut['stack']['left'] + first['left']) / 2, (cut['stack']['top'] + cut['stack']['bottom']) / 2)
+        assert page.evaluate(MARGIN_HIT, list(margin)), ('the cut column takes the pointer in its margin', facts)
+        page.mouse.move(*margin)
+        for _ in range(10):
+            page.mouse.wheel(0, 300)
+            settle(page)
+        facts['margin_wheel'] = page.evaluate(SCROLL)
+        assert facts['margin_wheel']['top'] > 0, ('a wheel over the margin scrolls the cut column', facts)
+        page.set_viewport_size({'width': 1280, 'height': 800})
+        page.wait_for_function("() => !document.getElementById('toast-stack').hasAttribute('tabindex')")
+        facts['wide'] = wide = page.evaluate(REACH)
+        first = wide['toasts'][0]
+        margin = ((wide['stack']['left'] + first['left']) / 2, (wide['stack']['top'] + wide['stack']['bottom']) / 2)
+        assert not page.evaluate(MARGIN_HIT, list(margin)), ('the released column lets the page through', facts)
+        page.set_viewport_size({'width': 320, 'height': 568})
+        page.wait_for_function("() => document.getElementById('toast-stack').getAttribute('role') === 'region'")
+    finally:
+        save_evidence(tmp_path, f'toast-follow-{toast_ui["engine"]}', facts)
+        page.close()

@@ -11,12 +11,15 @@ function getStack(host = null) {
         stack.setAttribute('aria-live', 'polite');
         stack.setAttribute('aria-relevant', 'additions');
         (host || document.body).appendChild(stack);
+        // A window that grows or shrinks cuts the column or releases it with no notice coming or going.
+        if (!host && typeof ResizeObserver === 'function') new ResizeObserver(() => markCut(stack)).observe(stack);
     }
     return stack;
 }
 
 // The page's stack ends above the screen's bottom and scrolls past it (style.css); cut there, it is reached by
-// keyboard too, as a wide table is (docs/DESIGN.md). Measured when a notice comes or goes; room stacks keep their place.
+// keyboard too, as a wide table is (docs/DESIGN.md). Measured when a notice comes or goes and when the column's box
+// changes size; room stacks keep their place.
 function markCut(stack) {
     if (stack.id !== 'toast-stack') return;
     const cut = stack.scrollHeight > stack.clientHeight;
