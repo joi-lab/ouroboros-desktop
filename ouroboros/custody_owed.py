@@ -6,8 +6,8 @@ KNOWS. When the durable write of such a fact meets a busy or failing store, the
 fact waits here, compact (store addresses and stable timestamps; never results,
 prompts or tool contexts), and the process's existing drivers write it again:
 the server's delivery duty beside ``dialogue_retry``
-(``server_maintenance``), a pool worker's idle loop, the process's next claim
-write and its task-scope close. Each attempt is one ordinary bounded store
+(``server_maintenance``), a pool worker's idle loop (woken through its own
+queue), the process's next claim write and its task-scope close. Each attempt is one ordinary bounded store
 acquisition; a failed attempt ends that acquisition, never the duty. Nothing
 here expires, counts or decides that work ended. Process death loses the map:
 the supervisor's exit door and the startup/addressed proof
@@ -28,8 +28,14 @@ _wake: Callable[[], Any] | None = None
 
 
 def bind_wake(wake: Callable[[], Any]) -> None:
-    """The server binds its delivery duty's wake; workers drain from their idle loop."""
+    """The server binds its delivery duty's wake, a pool worker its idle wait's.
+
+    Binding the same wake again changes nothing: a fact that keeps failing is
+    retried at its driver's own cadence, not on every bind.
+    """
     global _wake
+    if _wake is not None and _wake == wake:
+        return
     _wake = wake
     if pending():
         wake()

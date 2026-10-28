@@ -466,7 +466,7 @@ _SETTLEMENT_FIELDS = frozenset({
 })
 _DISPATCH_FIELDS = frozenset({
     "launch_state", "transport_outcome", "candidate_manifest_ref", "local_answer_owner_pid",
-    "local_answer_consumer_id", "local_answer_task_attempt", "local_answer_owner_birth",
+    "local_answer_consumer_id", "local_answer_task_attempt", "local_answer_owner_birth", "local_answer_owner_proof",
 })
 _STORE_ONLY_FIELDS = ("revision", "seq", "ts", "pre_compaction_seq")
 

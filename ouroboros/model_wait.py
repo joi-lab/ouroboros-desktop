@@ -1031,8 +1031,17 @@ def _owe_consumer_retirement(root: Any, task_id: str, consumers: dict[str, int])
     from ouroboros import custody_owed
 
     consumers = dict(consumers)
-    custody_owed.owe(("consumers", str(root), str(task_id), tuple(sorted(consumers))),
-                     lambda: retire_model_consumers(root, task_id, consumers), label=f"consumers:{task_id}")
+
+    def write():
+        try:
+            retire_model_consumers(root, task_id, consumers)
+        except ValueError as exc:
+            if not isinstance(exc.__cause__, LookupError):
+                raise
+            import logging
+            logging.getLogger(__name__).warning("Owed receiver retirement dropped: task %s is gone", task_id)
+    custody_owed.owe(("consumers", str(root), str(task_id), tuple(sorted(consumers))), write,
+                     label=f"consumers:{task_id}")
 
 
 def retire_model_consumers(root: Any, task_id: str, consumers: dict[str, int], *, record: dict | None = None) -> None:

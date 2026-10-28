@@ -64,3 +64,12 @@ def process_kernel_birth(pid: int) -> str | None:
     except Exception:
         return None  # unknown evidence holds; it must never abort a custody sweep
     return token if birth_identity(token) else None
+
+
+def process_zombie(pid: int) -> bool | None:
+    """Whether ``pid`` is an exited, unreaped process, from the one macOS kernel read; None elsewhere
+    or when unreadable (the caller then asks its platform's own probe)."""
+    if platform_darwin_abi.IS_DARWIN:
+        record = platform_darwin_abi.kernel_birth(pid)
+        return record[2] if record else None
+    return None

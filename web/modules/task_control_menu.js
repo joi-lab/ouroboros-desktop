@@ -217,7 +217,8 @@ const HELD_FACTS = {
                 + 'its worker cannot be proven ended',
             owner_ended_effect_unknown: `the ${tool} call of task ${b.task_id} ended with its worker; `
                 + `the outcome of its ${effects} is unknown`,
-            returned_effect_unconfirmed: `the ${tool} call of task ${b.task_id} returned; its ${effects} is not confirmed`,
+            returned_effect_unconfirmed: `the ${tool} call of task ${b.task_id} returned; its ${effects} `
+                + `${Array.isArray(b.effects) && b.effects.length > 1 ? 'are' : 'is'} not confirmed`,
         })[b.reason] || `a ${tool} call of task ${b.task_id} is held`;
     },
     merge_operation: (b) => `a merge of task ${b.task_id} is not settled`,

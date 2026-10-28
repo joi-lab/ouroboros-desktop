@@ -1005,6 +1005,9 @@ def _spawn_worker_slot(wid: int, old: Any = None, *, ready_attempt: int = 1) -> 
     # Close the crashed worker's old queue now that nothing can route to it,
     # otherwise its file descriptors / semaphores leak on every respawn.
     if old is not None:
+        from supervisor.worker_health import owe_worker_exit
+
+        owe_worker_exit(old)  # every replacement door: a confirmed-ended member's claims retire too
         close_worker_stop_channel(old.proc)
     if old is not None and getattr(old, "in_q", None) is not None:
         try:

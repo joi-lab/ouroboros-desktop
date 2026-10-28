@@ -18,6 +18,7 @@ import pytest
 from ouroboros import local_custody_repair as repair
 from ouroboros import platform_layer
 from ouroboros.task_results import load_task_result, write_task_result
+from ouroboros.tool_custody import owner_proof
 from tests._budget_pause_exact_helpers import _install_queue
 from tests._store_shared import result_signature
 
@@ -33,13 +34,14 @@ def _dead_process_identity():
     return child.pid, birth
 
 
-def _claim(tmp_path, task_id, pid, birth, *, holder=None, attempt=1):
+def _claim(tmp_path, task_id, pid, birth, *, holder=None, attempt=1, proof=None):
     holder = holder or task_id
     row = load_task_result(tmp_path, holder) or {}
     claims = dict(row.get("launch_handoffs") or {})
     claims[f"op-{task_id}"] = {"tool": "delegate_wait", "task_id": task_id, "root_task_id": "root",
                                "state": "claimed", "claimed_at": "2026-10-06T11:32:45+00:00",
-                               "local_owner": {"pid": pid, "process_birth": birth, "task_attempt": attempt}}
+                               "local_owner": {"pid": pid, "process_birth": birth, "task_attempt": attempt},
+                               **({"owner_proof": proof} if proof else {})}
     write_task_result(tmp_path, holder, row.get("status") or "cancelled", root_task_id="root", launch_handoffs=claims)
 
 
@@ -82,8 +84,9 @@ def test_a_live_unknown_or_unattributable_owner_stays_held(tmp_path, monkeypatch
     pid, birth = {"live_self": (os.getpid(), own), "unreadable_birth": (os.getpid(), ""),
                   "other_format_birth": (os.getpid(), foreign_birth),
                   "no_identity": (0, own)}[case]
-    _claim(tmp_path, "helper", pid, birth)
-    assert repair.owner_ended(pid, birth) is False
+    proof = owner_proof() if pid else None  # every row this live image writes carries its session
+    _claim(tmp_path, "helper", pid, birth, proof=proof)
+    assert repair.owner_ended(pid, birth, proof) is False
     assert [b["kind"] for b in action_writers(queue, "root")] == ["tool_handoff"]
 
 
@@ -103,8 +106,11 @@ _BOOT = "0123456789abcdef0123456789abcdef"
 def test_only_a_validated_birth_identity_can_prove_a_different_process(monkeypatch, live, recorded, ended):
     monkeypatch.setattr(platform_layer, "process_start_time", lambda _pid: live)
     monkeypatch.setattr(platform_layer, "pid_provably_gone", lambda _pid: False)
-    assert repair.owner_ended(os.getpid(), recorded) is ended
+    monkeypatch.setattr("ouroboros.process_identity.process_zombie", lambda _pid: False)
     assert repair.owner_ended(4242, recorded) is ended
+    # This very pid is decided by the custody session alone: this image's rows carry it.
+    assert repair.owner_ended(os.getpid(), recorded, owner_proof()) is False
+    assert repair.owner_ended(os.getpid(), recorded) is True, "a sessionless row is an earlier image's"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is the POSIX wall-clock fallback")
@@ -120,7 +126,8 @@ def test_two_timezone_readings_of_this_living_process_are_not_its_death(monkeypa
     if not utc or utc == moscow:
         pytest.skip("this ps does not render a timezone-dependent lstart")
     monkeypatch.setattr(platform_layer, "process_start_time", lambda _pid: moscow)
-    assert repair.owner_ended(os.getpid(), utc) is False
+    assert repair.owner_ended(os.getppid(), utc) is False, "another living pid: two readings prove nothing"
+    assert repair.owner_ended(os.getpid(), utc, owner_proof()) is False
 
 
 @pytest.mark.parametrize("state,gone", [("no_such_pid", True), ("exited", True), ("denied", False),
@@ -205,8 +212,7 @@ def test_confirmed_worker_death_whose_write_failed_is_owed_by_the_process(tmp_pa
     _claim(tmp_path, "root", 99999, "b")
     real = task_store.patch_document  # the retirement's store write
     monkeypatch.setattr(task_store, "patch_document", lambda *_a, **_k: (_ for _ in ()).throw(OSError("disk")))
-    assert repair.retire_ended_owner(tmp_path, "root", "root", pid=99999, birth="b", attempt=1,
-                                     producer="worker_death") is False
+    assert repair.retire_ended_process(tmp_path, pid=99999, process_birth="b")["owed"] is True
     assert custody_owed.pending() == 1 and _witnesses(tmp_path) == {}
     monkeypatch.setattr(task_store, "patch_document", real)
     assert custody_owed.drain() == 0
@@ -227,13 +233,12 @@ def test_an_owed_root_held_child_retirement_lands_after_a_write_failure(tmp_path
             ua.execute_physical_attempt(ua.AttemptRequest(model="m", provider="test", reservation_usd=.2),
                                         lambda: (_ for _ in ()).throw(RuntimeError("unknown cost")))
     money = ua.read_usage_records(tmp_path, final_only=True)
-    retire = tool_custody.retire_tool_invocations
-    monkeypatch.setattr(tool_custody, "retire_tool_invocations",
+    retire = tool_custody.retire_process_invocations
+    monkeypatch.setattr(tool_custody, "retire_process_invocations",
                         lambda *_a, **_kw: (_ for _ in ()).throw(OSError("retirement disk failure")))
-    assert repair.retire_ended_owner(tmp_path, "child", "root", pid=pid, birth=birth, attempt=1,
-                                     producer="confirmed_worker_death", holder="root") is False
+    assert repair.retire_ended_process(tmp_path, pid=pid, process_birth=birth)["owed"] is True
     assert custody_owed.pending() == 1 and _witnesses(tmp_path) == {}
-    monkeypatch.setattr(tool_custody, "retire_tool_invocations", retire)
+    monkeypatch.setattr(tool_custody, "retire_process_invocations", retire)
     # No new process probe is available; the process that knew the death owes the write.
     monkeypatch.setattr(repair, "owner_ended", lambda *_a: False)
     assert "tool_handoff" in [b["kind"] for b in conflicting_writers(queue, "root")], "a passive census writes nothing"

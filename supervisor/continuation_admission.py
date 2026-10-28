@@ -351,19 +351,25 @@ def action_writers(q: Any, predecessor: str, *, drive_root: Any = None, owner_pa
 
     root = pathlib.Path(drive_root or q.DRIVE_ROOT)
     events = pathlib.Path(q.DRIVE_ROOT) / "logs" / "events.jsonl"
+    members = None
     try:
         members = set(tree_member_results(root, predecessor).members) | {predecessor}
         repaired = repair_ended_local_custody(root, members, root_task_id=predecessor)
         if repaired:
             q.append_jsonl(events, {"type": "local_custody_retired", "root_task_id": predecessor, "retired": repaired})
-        if decision := accepted_unknown():  # the caller's named decision for this call, on this tree only
-            by = {"actor": "owner", "text": decision["text"], "at": utc_now_iso(), **control_actor()}
+    except Exception:
+        log.warning("Ended local custody of %s was not repaired; it stays held", predecessor, exc_info=True)
+    decision = accepted_unknown()  # the caller's named decision for this call, on this tree only
+    if decision and members:
+        by = {"actor": "owner", "text": decision["text"], "at": utc_now_iso(), **control_actor()}
+        try:
             outcome = accept_unknown_custody(root, members, decision["ids"], root_task_id=predecessor, by=by)
             if outcome["accepted"] or outcome["refused"]:  # a later census of the same call finds nothing new
                 q.append_jsonl(events, {"type": "local_custody_unknown_accepted", "root_task_id": predecessor,
                                         "by": by, **outcome})
-    except Exception:
-        log.warning("Ended local custody of %s was not repaired; it stays held", predecessor, exc_info=True)
+        except Exception:
+            log.warning("The named decision on %s was not recorded; its calls stay held", predecessor,
+                        exc_info=True)
     return conflicting_writers(q, predecessor, drive_root=drive_root, owner_pause_fence_id=owner_pause_fence_id,
                                purpose=purpose, gaps=gaps)
 

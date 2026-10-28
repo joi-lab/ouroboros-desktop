@@ -2,19 +2,23 @@
 
 A task's local tool invocation (``launch_handoffs`` claim) and its model-answer
 receiver (``local_answer_consumer_id``) are writers only while their exact local
-owner can still act. The existing writers retire them (``tool_custody``'s
-retirement, ``model_wait.retire_model_consumers``) on positive evidence only:
+owner can still act. One writer retires them, by PROCESS: every open claim and
+receiver the ended process held, across tasks and attempts
+(``retire_process_custody``; never a row this very image wrote). It runs only on
+positive evidence:
 
-- the supervisor's joined exit of a pool member: every exit door hands the
-  exact process to ``retire_exited_process``, task or no task, and its open
-  claims and receivers across tasks and attempts retire (#1554's missed doors);
+- the supervisor's joined exit of a pool member: every exit door, replacement
+  included, hands the exact process to ``retire_exited_process``, task or no
+  task (#1554's missed doors);
 - a platform-qualified ABSENCE of the recorded owner (``owner_ended``): its pid
   is positively gone (``platform_layer.pid_provably_gone``: POSIX ESRCH,
   Windows no such pid or a read exit code — never access denial, EPERM or an
   unexplained error), an exited zombie, the pid now belongs to a process whose
   validated birth differs (``process_identity``: kernel-derived, the recorded
-  ``owner_proof`` first), or the pid is this very process but an earlier image
-  wrote the row (its custody session differs: exec keeps pid and kernel birth).
+  ``owner_proof`` first), or the pid is this very process but the row does not
+  carry this image's custody session (an exec keeps pid and births; every row
+  this image writes records its session, so another or none is an earlier
+  image's).
   A ``ps`` wall-clock ``lstart`` string is rendered in its reader's timezone and
   locale, so two readings of one living process can differ: it never proves a
   different process. A mixed or unreadable identity, a live owner and a row
@@ -51,11 +55,35 @@ log = logging.getLogger(__name__)
 WITNESS_SET = "local_custody_witnesses"  # legacy rows only: read and discharged, never written
 
 
+def _exited_unreaped(pid: int) -> bool:
+    """A zombie: exited, only its parent has not reaped it. macOS answers from the kernel
+    record the birth read already uses (``process_identity.process_zombie``), never a ``ps``
+    spawn; elsewhere ``process_containment``. An unreadable state proves nothing."""
+    from ouroboros.process_identity import process_zombie
+
+    known = process_zombie(pid)
+    if known is not None:
+        return known
+    try:
+        from ouroboros.process_containment import pid_is_zombie
+
+        return pid_is_zombie(pid)
+    except Exception:
+        return False
+
+
+def _this_session(proof: Dict[str, Any]) -> bool:
+    """Every row this image writes records its custody session; another or none is an earlier
+    image of this pid (an exec keeps pid and births), whose memory ended at exec."""
+    from ouroboros.process_custody import current_custody_session_id
+
+    return str(proof.get("session") or "") == current_custody_session_id()
+
+
 def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
     """Positive evidence that the local owner ``(pid, birth)`` (with its ``owner_proof``) no longer runs."""
     from ouroboros.platform_layer import pid_provably_gone, process_start_time
-    from ouroboros.process_custody import current_custody_session_id
-    from ouroboros.process_identity import different_birth, process_kernel_birth
+    from ouroboros.process_identity import birth_identity, different_birth, process_kernel_birth
 
     try:
         pid = int(pid or 0)
@@ -66,33 +94,24 @@ def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
     if pid <= 0 or not (birth or kernel):
         return False
     if pid == os.getpid():
-        session = str(proof.get("session") or "")
-        if session and session != current_custody_session_id():
-            return True  # an earlier image of this pid wrote it; its memory ended at exec
-    elif pid_provably_gone(pid):
+        return not _this_session(proof)
+    if pid_provably_gone(pid) or _exited_unreaped(pid):
         return True
-    else:
-        try:
-            from ouroboros.process_containment import pid_is_zombie
-
-            if pid_is_zombie(pid):
-                return True  # exited; only its parent has not reaped it
-        except Exception:
-            return False
     if kernel and different_birth(process_kernel_birth(pid) or "", kernel):
         return True
-    return bool(birth) and different_birth(process_start_time(pid), birth)
+    # A ps lstart never validates: only a validated recorded birth is worth reading the live one.
+    return bool(birth_identity(birth)) and different_birth(process_start_time(pid), birth)
 
 
 def owner_live(pid: Any, birth: Any, proof: Any = None) -> bool:
     """Positive evidence the recorded owner STILL runs: its pid carries the same validated birth.
 
     Used to word a hold honestly (``tool_custody.tool_handoff_reason``) and to
-    refuse a decision to go on beside a live call; retirement never reads it. A ``ps`` string, a mixed kind or an unreadable
-    birth is not evidence of either life or death.
+    refuse a decision to go on beside a live call; retirement never reads it.
+    A ``ps`` string, a mixed kind or an unreadable birth is not evidence of
+    either life or death.
     """
     from ouroboros.platform_layer import pid_provably_gone, process_start_time
-    from ouroboros.process_custody import current_custody_session_id
     from ouroboros.process_identity import birth_identity, process_kernel_birth
 
     try:
@@ -103,16 +122,8 @@ def owner_live(pid: Any, birth: Any, proof: Any = None) -> bool:
     if pid <= 0:
         return False
     if pid == os.getpid():
-        session = str(proof.get("session") or "")
-        return not session or session == current_custody_session_id()
-    if pid_provably_gone(pid):
-        return False
-    try:
-        from ouroboros.process_containment import pid_is_zombie
-
-        if pid_is_zombie(pid):
-            return False
-    except Exception:
+        return _this_session(proof)
+    if pid_provably_gone(pid) or _exited_unreaped(pid):
         return False
     kernel = birth_identity(str(proof.get("kernel_birth") or ""))
     if kernel:
@@ -144,57 +155,18 @@ def ended_unbound_model_request(attempt: Dict[str, Any]) -> bool:
     return isinstance(failure, dict) and failure.get("stage") == "raised_exception"
 
 
-def _write_ended_owner(root: Any, task_id: str, root_task_id: str, *, pid: int, birth: str,
-                       attempt: int, holder: str = "") -> None:
-    """Both retirement writes for one ended owner; raises when either did not land."""
-    from ouroboros.model_wait import retire_model_consumers
-    from ouroboros.tool_custody import retire_tool_invocations
-    from ouroboros import usage_store
+def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> Dict[str, Any]:
+    """The one retirement: every open claim and receiver one ended process held, across tasks and
+    attempts (kernel birth first, else the exact pid and birth spelling); raises when unwritten.
 
-    retire_tool_invocations(pathlib.Path(root), task_id, root_task_id, pid=pid, process_birth=birth,
-                            task_attempt=attempt, holder=holder)
-    with usage_store.read(pathlib.Path(root)) as txn:  # this task's rows only (task index)
-        rows = txn.attempts("task_id = ?", (str(task_id),))
-    consumers = {row["local_answer_consumer_id"]: attempt for row in rows
-                 if row.get("task_id") == task_id and row.get("root_task_id") == root_task_id
-                 and row.get("local_answer_owner_pid") == pid and row.get("local_answer_owner_birth") == birth
-                 and type(row.get("local_answer_task_attempt")) is int
-                 and row["local_answer_task_attempt"] == attempt
-                 and isinstance(row.get("local_answer_consumer_id"), str) and row["local_answer_consumer_id"]}
-    if consumers:
-        retire_model_consumers(pathlib.Path(root), task_id, consumers)
-
-
-def retire_ended_owner(root: Any, task_id: str, root_task_id: str, *, pid: int, birth: str,
-                       attempt: int, producer: str, holder: str = "") -> bool:
-    """Retire every claim and receiver of one ended local owner; owe the writes on failure.
-
-    The exact owner identity (pid, birth, attempt, task and tree) selects; any
-    other claim or consumer is untouched. Returns True when both writes landed;
-    otherwise this process owes them (``custody_owed``) and keeps retrying.
+    Rows this very image wrote are never selected (``tool_custody.written_by_this_image``).
+    Returns what changed: the retired operation ids and the number of receivers.
     """
-    from ouroboros import custody_owed
-
-    def write():
-        _write_ended_owner(root, task_id, root_task_id, pid=pid, birth=birth, attempt=attempt, holder=holder)
-    try:
-        write()
-        return True
-    except Exception:
-        log.warning("Ended owner of %s (%s): retirement owed; retried by this process", task_id, producer,
-                    exc_info=True)
-        custody_owed.owe(("ended_owner", str(root), holder or task_id, task_id, pid, birth, attempt), write,
-                         label=f"owner:{task_id}")
-        return False
-
-
-def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> None:
-    """Every open claim and receiver one ended process held, across tasks and attempts; raises unwritten."""
     from ouroboros.model_wait import retire_model_consumers
-    from ouroboros.tool_custody import retire_process_invocations
+    from ouroboros.tool_custody import retire_process_invocations, written_by_this_image
     from ouroboros import usage_store
 
-    retire_process_invocations(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+    claims = retire_process_invocations(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
     with usage_store.read(pathlib.Path(root)) as txn:
         rows = [row for row in txn.open_attempts() if row.get("local_answer_owner_pid") == pid]
     by_task: Dict[str, Dict[str, int]] = {}
@@ -203,10 +175,18 @@ def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_bi
         same = (proof.get("kernel_birth") == kernel_birth if kernel_birth and proof.get("kernel_birth")
                 else bool(process_birth) and row.get("local_answer_owner_birth") == process_birth)
         consumer, attempt = row.get("local_answer_consumer_id"), row.get("local_answer_task_attempt")
-        if same and isinstance(consumer, str) and consumer and type(attempt) is int:
+        if (same and not written_by_this_image(proof) and isinstance(consumer, str) and consumer
+                and type(attempt) is int):
             by_task.setdefault(str(row.get("task_id") or ""), {})[consumer] = attempt
+    receivers = 0
     for task_id, consumers in _unretired(root, by_task).items():
         retire_model_consumers(pathlib.Path(root), task_id, consumers)
+        receivers += len(consumers)
+    return {"claims": claims, "receivers": receivers}
+
+
+def _exit_key(root: Any, pid: int, process_birth: str, kernel_birth: str) -> tuple:
+    return ("exit", str(root), int(pid), str(process_birth), str(kernel_birth))
 
 
 def retire_exited_process(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> None:
@@ -219,10 +199,20 @@ def retire_exited_process(root: Any, *, pid: int, process_birth: str, kernel_bir
 
     if not pid or not (process_birth or kernel_birth):
         return
-    custody_owed.owe(("exit", str(root), int(pid), str(process_birth), str(kernel_birth)),
+    custody_owed.owe(_exit_key(root, pid, process_birth, kernel_birth),
                      lambda: retire_process_custody(root, pid=int(pid), process_birth=str(process_birth),
                                                     kernel_birth=str(kernel_birth)),
                      label=f"exit:{pid}")
+
+
+def retire_ended_process(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> Dict[str, Any]:
+    """A proven-ended owner found off the queue lock: retire now, or owe the same fact as its exit door."""
+    try:
+        return retire_process_custody(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+    except Exception:
+        log.warning("Ended owner %s: retirement owed; retried by this process", pid, exc_info=True)
+        retire_exited_process(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+        return {"claims": [], "receivers": 0, "owed": True}
 
 
 def _unretired(root: Any, by_task: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
@@ -247,11 +237,10 @@ def _discharge(root: Any, witness_id: str, facts: Dict[str, Any]) -> bool:
     owner = facts.get("local_owner") if isinstance(facts.get("local_owner"), dict) else {}
     if isinstance(consumers, dict) and consumers:
         retire_model_consumers(pathlib.Path(root), task_id, {str(k): int(v) for k, v in consumers.items()})
-    elif not (owner and retire_ended_owner(root, task_id, str(facts.get("root_task_id") or task_id),
-                                           pid=int(owner.get("pid") or 0), birth=str(owner.get("process_birth") or ""),
-                                           attempt=int(owner.get("task_attempt") or 0), producer="repair",
-                                           holder=str(facts.get("holder") or ""))):
+    elif not (owner.get("pid") and owner.get("process_birth")):
         return False
+    else:  # the witness is positive proof its owner ended; raises (kept) until the write lands
+        retire_process_custody(root, pid=int(owner["pid"]), process_birth=str(owner["process_birth"]))
     obligations.remove(root, WITNESS_SET, witness_id)
     return True
 
@@ -278,9 +267,9 @@ def _discharge_witnesses(root: Any, addressed) -> List[Dict[str, Any]]:
 
 
 def _repair_holder_claims(root: Any, holder: str) -> List[Dict[str, Any]]:
-    """The claimed rows one task result holds, retired where their recorded owner positively ended."""
+    """The claimed rows one task result holds: each recorded owner that positively ended has every
+    open claim and receiver of its process retired (``retire_ended_process``)."""
     from ouroboros.task_results import load_task_result
-    from ouroboros.tool_custody import retire_process_invocations
 
     try:
         row = load_task_result(pathlib.Path(root), holder, strict=True) or {}
@@ -289,23 +278,21 @@ def _repair_holder_claims(root: Any, holder: str) -> List[Dict[str, Any]]:
     owners: Dict[tuple, Dict[str, Any]] = {}
     for claim in (row.get("launch_handoffs") or {}).values():
         if not isinstance(claim, dict) or claim.get("state") != "claimed":
-            continue  # no exact identity, or nothing local left to retire
+            continue  # nothing local left to retire
         owner = claim.get("local_owner") if isinstance(claim.get("local_owner"), dict) else {}
         proof = claim.get("owner_proof") if isinstance(claim.get("owner_proof"), dict) else {}
-        key = (str(claim.get("task_id") or ""), str(claim.get("root_task_id") or ""), owner.get("pid"),
-               owner.get("process_birth"), owner.get("task_attempt"),
-               proof.get("pid"), str(proof.get("kernel_birth") or ""), str(proof.get("session") or ""))
-        owners[key] = proof
+        pid = owner.get("pid") or proof.get("pid")  # an unbound invocation's proof names its process
+        owners[(pid, str(owner.get("process_birth") or ""), str(proof.get("kernel_birth") or ""),
+                str(proof.get("session") or ""))] = proof if proof.get("pid") == pid else {}
     repaired: List[Dict[str, Any]] = []
-    for (task_id, tree, pid, birth, attempt, proof_pid, kernel, _session), proof in owners.items():
-        if type(attempt) is int and pid and owner_ended(pid, birth, proof if proof_pid == pid else None):
-            if retire_ended_owner(root, task_id, tree, pid=int(pid), birth=str(birth), attempt=attempt,
-                                  producer="repair", holder=holder):
-                repaired.append({"kind": "tool_owner_absent", "task_id": task_id, "pid": pid})
-        elif not pid and proof_pid and kernel and owner_ended(proof_pid, "", proof):
-            # An unbound invocation has no local_owner; its proof names the process.
-            retire_process_invocations(root, pid=int(proof_pid), process_birth="", kernel_birth=kernel)
-            repaired.append({"kind": "tool_owner_absent", "task_id": task_id, "pid": proof_pid})
+    done = set()
+    for (pid, birth, kernel, _session), proof in owners.items():
+        if (pid, birth, kernel) in done or not owner_ended(pid, birth, proof):
+            continue  # one image of a pid may be ended while this one runs: each is judged alone
+        done.add((pid, birth, kernel))
+        outcome = retire_ended_process(root, pid=int(pid), process_birth=birth, kernel_birth=kernel)
+        if outcome["claims"] or outcome["receivers"] or outcome.get("owed"):
+            repaired.append({"kind": "tool_owner_absent", "task_id": holder, "pid": pid, **outcome})
     return repaired
 
 

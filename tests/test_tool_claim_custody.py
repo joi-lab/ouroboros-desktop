@@ -148,10 +148,10 @@ def test_retirement_keeps_a_known_return_and_rewrites_nothing_twice(tmp_path):
            extra={"returned_at": "2026-10-27T17:33:12+00:00",
                   "control_receipts": [{"type": "steer_task", "routing_token": ""}]})
     _claim(tmp_path, "t1", "op-c", pid=5, birth="b")
-    tool_custody.retire_tool_invocations(tmp_path, "t1", "root", pid=5, process_birth="b", task_attempt=1)
+    assert tool_custody.retire_process_invocations(tmp_path, pid=5, process_birth="b") == ["op-c"]
     assert _claims(tmp_path, "t1")["op-r"]["state"] == "returned" and "op-r" not in _retired(tmp_path, "t1")
     first = _retired(tmp_path, "t1")["op-c"]
-    tool_custody.retire_tool_invocations(tmp_path, "t1", "root", pid=5, process_birth="b", task_attempt=1)
+    assert tool_custody.retire_process_invocations(tmp_path, pid=5, process_birth="b") == []
     assert _retired(tmp_path, "t1")["op-c"] == first, "an already retired row is not rewritten"
 
 
@@ -209,12 +209,12 @@ def test_a_failed_retirement_is_owed_by_the_process_not_left_as_a_witness(tmp_pa
     from ouroboros import obligations
 
     _claim(tmp_path, "t1", "op-a", pid=5, birth="b")
-    retire = tool_custody.retire_tool_invocations
-    monkeypatch.setattr(tool_custody, "retire_tool_invocations",
+    retire = tool_custody.retire_process_invocations
+    monkeypatch.setattr(tool_custody, "retire_process_invocations",
                         lambda *_a, **_k: (_ for _ in ()).throw(OSError("retirement disk failure")))
-    assert repair.retire_ended_owner(tmp_path, "t1", "root", pid=5, birth="b", attempt=1, producer="repair") is False
-    assert custody_owed.pending() == 1 and obligations.members(tmp_path, repair.WITNESS_SET) == {}
-    monkeypatch.setattr(tool_custody, "retire_tool_invocations", retire)
+    assert repair.retire_ended_process(tmp_path, pid=5, process_birth="b")["owed"] is True
+    assert custody_owed.labels() == ["exit:5"] and obligations.members(tmp_path, repair.WITNESS_SET) == {}
+    monkeypatch.setattr(tool_custody, "retire_process_invocations", retire)
     assert custody_owed.drain() == 0
     assert _retired(tmp_path, "t1")["op-a"]["effect_outcome"] == "unknown"
 
@@ -391,3 +391,106 @@ def test_only_a_census_of_unknown_outcomes_offers_going_on_and_every_door_carrie
         events_mind_controls._apply({"task_id": "t", "actor_task_id": "mind", "action_nonce": "n", "action": action,
                                      "reason": "the owner asked", "accept_unknown": ["op-u"]})
     assert seen == [{"ids": ["op-u"], "text": "the owner asked"}, {}], "only resume_task carries the decision"
+
+
+# --- review round 1: one writer by process, drivers and doors exercised for real ---------------------------------
+
+
+def test_an_earlier_image_of_this_pid_is_retired_and_this_images_claims_never_are(tmp_path, monkeypatch):
+    """An exec keeps pid, births and attempt; only the custody session tells the images apart."""
+    here = tool_custody.owner_proof()
+    kernel = here["kernel_birth"] or "darwin-start:1.000001"
+    _claim(tmp_path, "t1", "op-old", pid=os.getpid(), birth="b", kernel=kernel)  # session: an earlier image's
+    _claim(tmp_path, "t1", "op-now", pid=os.getpid(), birth="b", extra={"owner_proof": {**here, "kernel_birth": kernel}})
+    _claim(tmp_path, "t2", "op-legacy", pid=os.getpid(), birth="b")  # an older release wrote no session at all
+    retired = repair.reconcile_open_local_custody(tmp_path)
+    assert {row["task_id"] for row in retired} == {"t1"}, "one proof retires that process's claims in every task"
+    assert "op-old" not in _claims(tmp_path, "t1") and "op-legacy" not in _claims(tmp_path, "t2")
+    assert "op-now" in _claims(tmp_path, "t1"), "a claim this live image wrote is never retired"
+    assert tool_custody.retire_process_invocations(tmp_path, pid=os.getpid(), process_birth="b",
+                                                   kernel_birth=kernel) == [], "not even by an exit-shaped selector"
+    assert repair.owner_live(os.getpid(), "b", here) and not repair.owner_live(os.getpid(), "b", {"pid": os.getpid()})
+
+
+def test_a_confirmation_owed_after_its_claim_settled_away_is_discharged(tmp_path):
+    write_task_result(tmp_path, "t1", "running", root_task_id="root")
+    remove = tool_custody._without_token("tok")
+    custody_owed.owe(("confirm", "gone-op"), lambda: tool_custody._patch_owed(tmp_path, "t1", "gone-op", remove),
+                     label="gone-op")
+    assert custody_owed.drain() == 0, "an absent claim is done, never retried forever"
+    assert "gone-op" not in _claims(tmp_path, "t1"), "and never recreated"
+    custody_owed.owe(("confirm", "no-task"), lambda: tool_custody._patch_owed(tmp_path, "no-task", "op", remove),
+                     label="op")
+    assert custody_owed.drain() == 0, "a task whose row is gone has nothing left to change"
+
+
+def test_rebinding_the_same_wake_does_not_rerun_its_duty():
+    import threading
+
+    custody_owed.owe("a fact a busy store refuses", _busy, label="busy")
+    wake = threading.Event()
+    custody_owed.bind_wake(wake.set)
+    assert wake.is_set(), "a fact owed before the first bind wakes the duty once"
+    wake.clear()
+    custody_owed.bind_wake(wake.set)  # the server re-binds on every tick
+    assert not wake.is_set(), "a fact that keeps failing waits for its driver's own cadence"
+    custody_owed.owe("another fact", lambda: None, label="next")
+    assert wake.is_set(), "a new fact still wakes it"
+
+
+def test_the_servers_delivery_duty_writes_what_the_process_owes(tmp_path, monkeypatch):
+    import threading
+
+    from ouroboros import server_maintenance
+
+    monkeypatch.setattr("ouroboros.dialogue_retry.drain", lambda: None)
+    monkeypatch.setattr("supervisor.terminal_delivery.replay_pending_deliveries", lambda _root: None)
+    _claim(tmp_path, "t1", "op-a", pid=63888)
+    repair.retire_exited_process(tmp_path, pid=63888, process_birth=INCIDENT_BIRTH)
+    latch = threading.Lock()
+    latch.acquire()
+    server_maintenance._run_terminal_duty(tmp_path, "terminal_delivery_replay", latch)
+    assert custody_owed.pending() == 0 and "op-a" not in _claims(tmp_path, "t1")
+
+
+def test_the_startup_sweep_retires_an_ended_owners_claims_after_the_reaper(tmp_path, monkeypatch):
+    from ouroboros import server_maintenance
+
+    order = []
+    monkeypatch.setattr(server_maintenance, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server_maintenance, "_installed_skill_names", lambda: set())
+    monkeypatch.setattr("ouroboros.process_custody.reap_orphaned_processes",
+                        lambda *_a, **_k: order.append("reaper") or [])
+    monkeypatch.setattr("ouroboros.process_scope.settle_task_scopes", lambda *_a, **_k: None)
+    monkeypatch.setattr(server_maintenance, "_reconcile_delegated_runs", lambda *_a, **_k: None)
+    monkeypatch.setattr("ouroboros.delegate_terminal.backfill_terminal_reconciliations", lambda _root: [])
+    monkeypatch.setattr("supervisor.terminal_delivery.replay_pending_deliveries", lambda _root: None)
+    reconcile = repair.reconcile_open_local_custody
+    monkeypatch.setattr(repair, "reconcile_open_local_custody", lambda root: order.append("custody") or reconcile(root))
+    _platform(monkeypatch, gone={111})
+    _claim(tmp_path, "t1", "op-dead", pid=111)
+    _claim(tmp_path, "t1", "op-unknown", pid=63888)
+    server_maintenance._startup_custody_sweep()
+    assert order == ["reaper", "custody"]
+    assert "op-dead" not in _claims(tmp_path, "t1") and "op-unknown" in _claims(tmp_path, "t1")
+
+
+def test_replacing_the_pools_last_dead_member_owes_its_exit(tmp_path, monkeypatch):
+    from supervisor import worker_pool_lifecycle as lifecycle, workers
+
+    from tests.test_owner_wait_pool import InputQueue, Process
+
+    dead = SimpleNamespace(wid=0, proc=Process(42), in_q=InputQueue(), process_birth=INCIDENT_BIRTH, kernel_birth="")
+    dead.proc.alive, dead.proc.exitcode = False, 0
+    monkeypatch.setattr(workers, "WORKERS", {0: dead})
+    monkeypatch.setattr(workers, "DRIVE_ROOT", tmp_path)
+    monkeypatch.setattr(workers, "_WORKER_POOL_DISABLED_REASON", "")
+    monkeypatch.setattr(workers, "_get_ctx", lambda: SimpleNamespace(Queue=InputQueue, Process=lambda **_kw: Process(43)))
+    monkeypatch.setattr(workers, "get_event_q", InputQueue)
+    monkeypatch.setattr("supervisor.worker_process.spawn_worker_process", lambda *_a, **_k: Process(43))
+    monkeypatch.setattr("supervisor.worker_process.close_worker_stop_channel", lambda _proc: None)
+    monkeypatch.setattr(lifecycle.threading, "Thread", lambda **_kw: SimpleNamespace(start=lambda: None))
+    _claim(tmp_path, "t1", "op-a", pid=42)
+    assert lifecycle.retire_or_replace_worker(0, dead) == "replaced"
+    assert custody_owed.labels() == ["exit:42"], "a replacement door owes the ended member's exit too"
+    assert custody_owed.drain() == 0 and "op-a" not in _claims(tmp_path, "t1")

@@ -14,7 +14,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, List
 
 log = logging.getLogger(__name__)
 
@@ -86,15 +86,29 @@ def owner_proof() -> dict:
     survives exec, so the custody session tells the image that wrote a claim from
     the one that now runs under the same pid. Older releases ignore this key.
     """
+    global _OWNER_PROOF
     from ouroboros.process_custody import current_custody_session_id
 
-    if _OWNER_PROOF.get("pid") != os.getpid() or _OWNER_PROOF.get("session") != current_custody_session_id():
+    proof = _OWNER_PROOF
+    if (proof.get("pid") != os.getpid() or proof.get("session") != current_custody_session_id()
+            or not proof.get("kernel_birth")):  # a forked child, an adopted session, or an unread birth
         from ouroboros.process_identity import process_kernel_birth
 
-        _OWNER_PROOF.clear()  # a forked child is another process; an adopted session is this one's
-        _OWNER_PROOF.update(pid=os.getpid(), kernel_birth=process_kernel_birth(os.getpid()) or "",
-                            session=current_custody_session_id())
-    return dict(_OWNER_PROOF)
+        _OWNER_PROOF = proof = {"pid": os.getpid(), "kernel_birth": process_kernel_birth(os.getpid()) or "",
+                                "session": current_custody_session_id()}
+    return dict(proof)
+
+
+def written_by_this_image(proof: Any) -> bool:
+    """A row whose ``owner_proof`` names this very process image: its writer is alive by definition.
+
+    No death proof may select it, whatever pid or birth it shares with an ended
+    image (an exec keeps both; only the custody session is new).
+    """
+    from ouroboros.process_custody import current_custody_session_id
+
+    return (isinstance(proof, dict) and proof.get("pid") == os.getpid()
+            and bool(proof.get("session")) and proof.get("session") == current_custody_session_id())
 
 
 def _claim(outcome: dict) -> dict:
@@ -201,13 +215,19 @@ def _owe_settlement(outcome: dict) -> None:
 
 
 def _patch_owed(root: Any, holder: str, op: str, change) -> None:
-    """One bounded acquisition for an owed row write; a failure raises and the fact stays owed."""
+    """One bounded acquisition for an owed row write; a failure raises and the fact stays owed.
+
+    A task whose lifecycle row is gone has nothing left to change: that fact is discharged.
+    """
     from ouroboros import task_store
     from ouroboros.store import acquisition_budget
     from ouroboros._usage_wait import ACQUISITION_SLICE_SEC
 
-    with acquisition_budget(ACQUISITION_SLICE_SEC):
-        task_store.patch_handoff(root, holder, "launch_handoffs", op, change)
+    try:
+        with acquisition_budget(ACQUISITION_SLICE_SEC):
+            task_store.patch_handoff(root, holder, "launch_handoffs", op, change)
+    except LookupError:
+        log.warning("Owed custody write for %s dropped: task %s no longer exists", op, holder)
 
 
 def _update_active_claim(update) -> None:
@@ -240,12 +260,7 @@ def external_handoff(kind: str):
             outcome.setdefault("confirmed_external", set()).add(token)
             if discharged:
                 return
-            def remove(claim):
-                pending = dict(claim.get("external_pending") or {})
-                if token not in pending:
-                    return None  # confirmation cannot manufacture an absent duty
-                pending.pop(token, None)
-                return {**claim, "external_pending": pending}
+            remove = _without_token(token)
             try:
                 retain_invocation(outcome, remove)
                 discharged = True
@@ -277,6 +292,17 @@ def external_handoff(kind: str):
         confirmed()  # no caller acquired this external start
         raise
     return confirmed
+
+
+def _without_token(token: str):
+    """An exact external receipt's removal: idempotent, also once its claim settled away."""
+    def remove(claim):
+        pending = dict((claim or {}).get("external_pending") or {})
+        if claim is None or token not in pending:
+            return None  # confirmation cannot manufacture an absent duty
+        pending.pop(token, None)
+        return {**claim, "external_pending": pending}
+    return remove
 
 
 def _owe_confirmation(outcome: dict, token: str, remove) -> None:
@@ -425,56 +451,43 @@ def retained_tool_custody(root: Any, task_id: str, row: dict, *, excluding: str 
     return blockers
 
 
-def retire_tool_invocations(root: Any, task_id: str, root_task_id: str, *,
-                            pid: int, process_birth: str, task_attempt: int, holder: str = "") -> None:
-    """Called only with positive evidence the exact local owner ended; exact claim match.
-
-    Evidence: a retained-Process confirmed death, or ``local_custody_repair``'s
-    witness / platform-qualified absence. ``holder`` names the task result the
-    claim lives on when it is not the member's own (a member not yet published
-    claims on its root's row). Keep unknown-effect history and independent
-    custody. Legacy/unattributable claims are not evidence and remain untouched.
-    """
-    if not pid or not process_birth or type(task_attempt) is not int:
-        return
-    identity = {"pid": pid, "process_birth": process_birth, "task_attempt": task_attempt}
-    _retire_owned_claims(root, holder or task_id, lambda claim: (
-        claim.get("local_owner") == identity and claim.get("task_id") == task_id
-        and claim.get("root_task_id") == root_task_id))
-
-
-def _retire_owned_claims(root: Any, holder: str, owned) -> None:
+def _retire_owned_claims(root: Any, holder: str, owned) -> List[str]:
     """Turn the ``claimed`` rows ``owned`` selects into ``owner_dead``: effect unknown, never replayed.
 
     A known return stays ``returned`` and an already retired row is not rewritten:
-    the death of a writer never erases what it had already reported.
+    the death of a writer never erases what it had already reported. Returns the
+    operation ids this write retired.
     """
     from ouroboros.task_results import require_writable_task_result_schema, stamp_task_result_schema
     from ouroboros.task_store import patch_document
     from ouroboros.utils import utc_now_iso
 
+    landed: List[str] = []
+
     def retire(current):
         require_writable_task_result_schema(current)
         if current.get("task_id") != holder or not current.get("status"):
             raise ValueError("tool_invocation_authority_unreadable")
+        landed.clear()
         claims = dict(current.get("launch_handoffs") or {})
         retired = dict(current.get("retired_tool_invocations") or {})
-        changed = False
         for op, claim in list(claims.items()):
             if not isinstance(claim, dict) or claim.get("state") != "claimed" or not owned(claim):
                 continue
             fact = {**claim, "state": "owner_dead", "retired_at": utc_now_iso(),
                     "effect_outcome": "unknown", "replay_authorized": False}
-            retired[op], changed = fact, True
+            retired[op] = fact
+            landed.append(op)
             if claim_still_owns_effect(root, fact):
                 claims[op] = fact
             else:
                 claims.pop(op)
-        if not changed:
+        if not landed:
             return None
         return stamp_task_result_schema({**current, "launch_handoffs": claims,
                                          "retired_tool_invocations": retired})
     patch_document(root, holder, retire)
+    return list(landed)
 
 
 def claim_owned_by_process(claim: dict, *, pid: int, process_birth: str, kernel_birth: str = "") -> bool:
@@ -482,20 +495,25 @@ def claim_owned_by_process(claim: dict, *, pid: int, process_birth: str, kernel_
 
     Both kernel births present decide alone (``owner_proof``); otherwise the
     recorded ``local_owner`` must name the same pid and the same non-empty birth
-    spelling. Attempt is a scope of the work, not of the process.
+    spelling. Attempt is a scope of the work, not of the process. A claim this
+    very image wrote is never selected: an earlier image of this pid shares its
+    pid and births, not its session (``written_by_this_image``).
     """
     proof = claim.get("owner_proof") if isinstance(claim.get("owner_proof"), dict) else {}
     owner = claim.get("local_owner") if isinstance(claim.get("local_owner"), dict) else {}
+    if written_by_this_image(proof):
+        return False
     if kernel_birth and proof.get("kernel_birth"):
         return proof.get("pid") == pid and proof["kernel_birth"] == kernel_birth
     return bool(process_birth) and owner.get("pid") == pid and owner.get("process_birth") == process_birth
 
 
-def retire_process_invocations(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> None:
-    """An exit door's writer: every open claim the ended process wrote, across tasks and attempts.
+def retire_process_invocations(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> List[str]:
+    """The one claim retirement: every open claim the ended process wrote, across tasks and attempts.
 
     Called only with positive evidence that exact process ended (a joined
-    retained Process); the open set is the claimed rows, never task history.
+    retained Process, or ``local_custody_repair.owner_ended``); the open set is
+    the claimed rows, never task history. Returns the retired operation ids.
     """
     import json
     import pathlib
@@ -515,8 +533,7 @@ def retire_process_invocations(root: Any, *, pid: int, process_birth: str, kerne
             continue  # an unreadable row is not this process's; it stays held
         if isinstance(claim, dict) and owned(claim):
             holders.add(str(row[0]))
-    for holder in sorted(holders):
-        _retire_owned_claims(root, holder, owned)
+    return [op for holder in sorted(holders) for op in _retire_owned_claims(root, holder, owned)]
 
 def task_process_blockers(drive_root: Any, task_ids: set[str]) -> list[dict]:
     """Strict read of existing canonical executor custody without backend I/O.

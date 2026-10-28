@@ -139,17 +139,21 @@ def test_addressed_resume_repairs_ended_recipients_and_names_live_blockers(tmp_p
     workers.PENDING.clear()
     write_task_result(tmp_path, "child-run", "cancelled", root_task_id="root-1", parent_task_id="root-1")
     pid, birth = _dead_process_identity() if ended else (os.getpid(), platform_layer.process_start_time(os.getpid()))
+    from ouroboros.tool_custody import owner_proof
+    proof = {} if ended else owner_proof()  # a live owner is this image: every row it writes carries its session
     if kind == "tool":
         write_task_result(tmp_path, "child-run", "cancelled", launch_handoffs={"op": {
             "tool": "delegate_wait", "task_id": "child-run", "root_task_id": "root-1", "state": "claimed",
-            "local_owner": {"pid": pid, "process_birth": birth, "task_attempt": 1}}})
+            "local_owner": {"pid": pid, "process_birth": birth, "task_attempt": 1},
+            **({"owner_proof": proof} if proof else {})}})
     else:
         monkeypatch.setenv("TOTAL_BUDGET", "1000")
         receiver = model_wait.TaskModelWait(task={"id": "child-run", "_attempt": 1}, drive_root=tmp_path,
                                             event_queue=None, worker_slot_held=True)
         monkeypatch.setattr(receiver, "bind_answer_consumer", lambda: {
             "local_answer_consumer_id": receiver.answer_consumer_id, "local_answer_owner_pid": pid,
-            "local_answer_owner_birth": birth, "local_answer_task_attempt": 1})
+            "local_answer_owner_birth": birth, "local_answer_task_attempt": 1,
+            **({"local_answer_owner_proof": proof} if proof else {})})
         with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, task_id="child-run", root_task_id="root-1")):
             with model_wait.operation_wait_scope(receiver):
                 attempt = ua.reserve_attempt(ua.AttemptRequest(model="m", provider="t", reservation_usd=.2))

@@ -353,6 +353,7 @@ def tool_handoff_words(block: dict) -> str:
     """One held tool call in the owner's words (``tool_custody.tool_handoff_reason``); the web mirrors them."""
     tid, tool = block.get("task_id", ""), block.get("tool") or "tool"
     effects = " and ".join(block.get("effects") or ()) or "outside effect"
+    verb = "are" if len(block.get("effects") or ()) > 1 else "is"
     return {"local_call_live": f"the {tool} call of task {tid} is in a live worker: still running, "
                                "or its finished result is not recorded yet",
             "local_completion_unknown": f"it is unknown whether the {tool} call of task {tid} finished: "
@@ -360,7 +361,7 @@ def tool_handoff_words(block: dict) -> str:
             "owner_ended_effect_unknown": f"the {tool} call of task {tid} ended with its worker; "
                                           f"the outcome of its {effects} is unknown",
             "returned_effect_unconfirmed": f"the {tool} call of task {tid} returned; its {effects} "
-                                           "is not confirmed"}.get(str(block.get("reason") or ""),
+                                           f"{verb} not confirmed"}.get(str(block.get("reason") or ""),
                                                                   f"a {tool} call of task {tid} is held")
 
 
