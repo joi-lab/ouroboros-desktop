@@ -1,11 +1,13 @@
-"""Bounded engine exit observations and capacity facts, without lifecycle policy.
+"""Bounded engine exit observations, capacity facts and route-health facts, without lifecycle policy.
 
 Context reads only the existing supervisor log. The status surface may sample an
-already authenticated, running endpoint; it never discovers or starts a daemon.
-Observation timestamps name the host's harvest, never the unobserved death time.
+already authenticated, running endpoint; the custody sweep's route-health refresh
+attaches to a serving engine; neither starts a daemon. Observation timestamps name
+the host's harvest, never the unobserved death time.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -21,6 +23,8 @@ log = logging.getLogger(__name__)
 _RECENT_BYTES = 256_000  # Same bounded supervisor-log window as context health.
 _CAPACITY_LOCK = threading.Lock()
 _CAPACITY_SEEN: dict[str, str] = {}
+ROUTE_HEALTH_TYPE = 'claudexor_route_health'
+_ROUTE_HEALTH_SEEN: dict[str, str] = {}  # root -> digest of the newest row this process wrote or found
 
 
 def _recent(root):
@@ -201,6 +205,81 @@ def _record_capacity(root, generation, version, build, memory, runtime=None):
             _CAPACITY_SEEN[key] = generation
         finally:
             release_exclusive_file_lock(lock_path, fd)
+
+
+def route_health_digest(facts) -> str:
+    """What the mind reads: the routes and the scan's completeness. The clocks and the scanned count
+    move with every read and are not a change."""
+    material = {key: facts.get(key) for key in ('routes', 'complete', 'incomplete_reason', 'window_days')}
+    return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def record_route_health(root, facts, *, engine_version='') -> bool:
+    """Append one dated ``claudexor_route_health`` row when the facts differ from the newest such row in
+    the recent window; True when a row was written. The process memo answers first; under the append
+    lock the bounded read also deduplicates other processes, as ``_record_capacity`` does. A row is the
+    engine's facts (``gateways.claudexor_route_health.route_health_facts``) plus ``ts``, ``engine_version``
+    and the ``digest`` the next refresh compares."""
+    from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
+    from ouroboros.utils import assert_test_data_path, jsonl_append_lock_path
+
+    if not isinstance(facts, dict) or not isinstance(facts.get('routes'), list):
+        return False
+    digest = route_health_digest(facts)
+    key = str(pathlib.Path(root).resolve())
+    with _CAPACITY_LOCK:
+        if _ROUTE_HEALTH_SEEN.get(key) == digest:
+            return False
+        path = pathlib.Path(root) / 'logs/supervisor.jsonl'
+        assert_test_data_path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = jsonl_append_lock_path(path)
+        fd = acquire_exclusive_file_lock(lock_path, timeout_sec=2, owner_aware_stale=True)
+        if fd is None:
+            return False
+        try:
+            newest = None
+            for row in _recent(root):
+                if row.get('type') == ROUTE_HEALTH_TYPE:
+                    newest = row
+            if newest is not None and newest.get('digest') == digest:
+                _ROUTE_HEALTH_SEEN[key] = digest
+                return False
+            row = {'ts': utc_now_iso(), 'type': ROUTE_HEALTH_TYPE, 'engine_version': engine_version or None,
+                   'digest': digest, **facts}
+            with path.open('ab') as stream:  # one encoded row under the same lock as the read above
+                stream.write((json.dumps(row) + '\n').encode('utf-8'))
+            _ROUTE_HEALTH_SEEN[key] = digest
+            return True
+        finally:
+            release_exclusive_file_lock(lock_path, fd)
+
+
+def refresh_route_health(open_gateway=None):
+    """Read the engine's per-route failure shares and record them when they changed; the facts, or None
+    when no engine answered. ``open_gateway`` returns an authenticated gateway this call closes; without
+    one the owned engine is attached read-only (``read_owned_gateway``: never a spawn, so a fact is never
+    worth a start). The custody sweep's step (ARCHITECTURE §9). Never raises."""
+    from ouroboros.config import DATA_DIR
+    from ouroboros.gateways.claudexor_route_health import read_route_health
+
+    try:
+        if open_gateway is None:
+            from ouroboros.claudexor_daemon import read_owned_gateway
+
+            open_gateway = read_owned_gateway
+        with contextlib.closing(open_gateway()) as gateway:
+            facts = read_route_health(gateway)
+            version = str(getattr(gateway, 'engine_version', '') or '')
+    except Exception:
+        log.debug('Route health refresh skipped: no engine to attach', exc_info=True)
+        return None
+    if facts is not None:
+        try:
+            record_route_health(DATA_DIR, facts, engine_version=version)
+        except Exception:
+            log.debug('Route health row not written', exc_info=True)
+    return facts
 
 
 def engine_status_facts(endpoint, version, build) -> dict[str, Any]:

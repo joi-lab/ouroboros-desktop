@@ -413,6 +413,8 @@ _STALL_ENDS = {"direct_turn_stall": "direct_turn_stall_end", "host_duty_stall": 
                "supervisor_loop_stall": "supervisor_loop_stall_end"}
 _STALL_WORDS = {"direct_turn_stall": "turn", "host_duty_stall": "duty", "supervisor_loop_stall": "loop"}
 _STALLS_KEY = "stalls, no end in window"
+_ROUTES_SHOWN = 4  # failing routes rendered in the line; the row keeps every route
+_CAUSE_CHARS = 80  # of a top cause's message in the line; the row keeps the engine's whole first line
 _STORE_FILES = ("state/current.sqlite", "state/dialog.sqlite", "state/usage.sqlite")
 _JOURNAL_MODES: Dict[str, str] = {}  # per process: each store file's header, read once
 VITALS_READER = "query_data(kind='supervisor_log', op='jsonl')"  # the minimal working call: the kind requires op='jsonl'
@@ -443,12 +445,13 @@ def _stall_key(row: Dict[str, Any]) -> tuple:
 
 
 def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
-    """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, the newest
-    ``direct_turn`` receipts (a pooled worker has no ring), stall onsets whose end is not in the window
-    (an onset's ``_end`` row with the same identity closes it; a closed episode's ``top_frames`` is kept
-    by execution for the receipts). The tail is the one the health block reads, memoized on the file's
-    identity (``jsonl_tail.cached_tail_objects``): one read per context build serves both. An unreadable
-    or absent journal is no fact: empty, never an error."""
+    """One pass over the journal's bounded tail: the newest boot, ``supervisor_load`` and
+    ``claudexor_route_health`` rows, the newest ``direct_turn`` receipts (a pooled worker has no ring),
+    stall onsets whose end is not in the window (an onset's ``_end`` row with the same identity closes
+    it; a closed episode's ``top_frames`` is kept by execution for the receipts). The tail is the one
+    the health block reads, memoized on the file's identity (``jsonl_tail.cached_tail_objects``): one
+    read per context build serves both. An unreadable or absent journal is no fact: empty, never an
+    error."""
     from ouroboros.jsonl_tail import cached_tail_objects
 
     found: Dict[str, Any] = {"open": {}, "ended": {}, "turns": []}
@@ -463,6 +466,8 @@ def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
             found["boot"] = row
         elif kind == "supervisor_load":
             found["load"] = row
+        elif kind == "claudexor_route_health":
+            found["route_health"] = row
         elif kind == "direct_turn":
             found["turns"] = [*found["turns"], row][-_OWNER_TURNS_SHOWN:]
         elif kind in _STALL_ENDS:
@@ -533,6 +538,39 @@ def _busy_minute(row: Dict[str, Any], today: Any) -> str:
     return text
 
 
+def _route_health(row: Dict[str, Any], today: Any) -> str:
+    """The newest ``claudexor_route_health`` row in one line: the engine's window and the routes it saw
+    (a harness with its access profile), the routes with failed runs, most failed first, each as
+    failed/runs with its top failure group, and the scan's own incompleteness. Counts only: no share,
+    no threshold, no verdict. "" for a row without its routes (then no key, never "none failed")."""
+    routes = [route for route in (row.get("routes") if isinstance(row.get("routes"), list) else [])
+              if isinstance(route, dict) and type(route.get("runs")) is int and type(route.get("failed")) is int]
+    if not routes or len(routes) != len(row["routes"]):
+        return ""
+    text = (f"{_clock(row.get('generated_at') or row.get('ts'), today)}: {row.get('window_days')}-day window, "
+            f"{len(routes)} routes, {sum(route['runs'] for route in routes)} engine runs")
+    failing = sorted((route for route in routes if route["failed"] > 0),
+                     key=lambda route: (-route["failed"], str(route.get("harness")), str(route.get("access"))))
+    if not failing:
+        return text + ", none failed" + _scan_note(row)
+    parts = []
+    for route in failing[:_ROUTES_SHOWN]:
+        part = f"{route.get('harness')} {route.get('access')} {route['failed']}/{route['runs']}"
+        top = next(iter(route.get("top_failures") or []), None)
+        if isinstance(top, dict) and top.get("count") is not None:
+            cause = str(top.get("message") or top.get("code") or "")[:_CAUSE_CHARS]
+            part += f" ({top.get('category')}{': ' + cause if cause else ''} ×{top['count']})"
+        parts.append(part)
+    text += "; failed: " + ", ".join(parts)
+    if len(failing) > _ROUTES_SHOWN:
+        text += f", +{len(failing) - _ROUTES_SHOWN} more routes with failed runs"
+    return text + _scan_note(row)
+
+
+def _scan_note(row: Dict[str, Any]) -> str:
+    return f"; scan incomplete ({row.get('incomplete_reason') or 'reason unknown'})" if row.get("complete") is False else ""
+
+
 def _runtime_facts(root: pathlib.Path) -> Tuple[str, str]:
     """CPython and SQLite as this process runs them with each present store's journal as its header
     says (read once per process: a boot or a handoff is the only writer of that choice), and the WAL
@@ -593,7 +631,9 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
     basis when unobserved, own transactions; the top frame of a stall episode whose end row is still in
     the tail), stall onsets whose end was not observed in the journal's bounded tail (never «current»),
     the last busy minute (counts and summed seconds per store and side, the longest hold's site, never a
-    percentage), the runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a
+    percentage), the engine's per-route failure shares (the newest ``claudexor_route_health`` row the
+    custody sweep wrote: failed/runs and the top cause per route, most failed first; no row, no key),
+    the runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a
     rollback journal), the retained update's before/after, the boot row, and a note that names the
     journal's reader. ``observed_at`` is the fact's own instant (the clocks' day); it is written only
     when it differs from ``captured_at``, the Runtime JSON's ``context_captured_at`` beside it (a stale
@@ -620,6 +660,9 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
             fact[_STALLS_KEY] = stalls
         if isinstance(tail.get("load"), dict):
             fact["busy_minute"] = _busy_minute(tail["load"], observed_at)
+        routes = _route_health(tail["route_health"], observed_at) if isinstance(tail.get("route_health"), dict) else ""
+        if routes:
+            fact["route_health"] = routes
         fact["runtime"], gate = _runtime_facts(root)
         if gate:
             fact["wal_gate"] = gate
@@ -650,7 +693,8 @@ def vitals_line(fact: Optional[Dict[str, Any]]) -> str:
     if not isinstance(fact, dict):
         return ""
     parts = [f"body as of {fact['observed_at']}" if fact.get("observed_at") else "body"]
-    for key in ("owner_turns", "owner_turns_note", _STALLS_KEY, "busy_minute", "runtime", "wal_gate", "last_update", "boot"):
+    for key in ("owner_turns", "owner_turns_note", _STALLS_KEY, "busy_minute", "route_health", "runtime", "wal_gate",
+                "last_update", "boot"):
         value = fact.get(key)
         if isinstance(value, list) and value:
             parts.append(f"{key.replace('_', ' ')} " + " | ".join(str(item) for item in value))
