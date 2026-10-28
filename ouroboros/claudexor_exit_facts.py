@@ -1,9 +1,10 @@
 """Bounded engine exit observations, capacity facts and route-health facts, without lifecycle policy.
 
-Context reads only the existing supervisor log. The status surface may sample an
-already authenticated, running endpoint; the custody sweep's route-health refresh
-attaches to a serving engine; neither starts a daemon. Observation timestamps name
-the host's harvest, never the unobserved death time.
+Context reads only the existing supervisor log and the newest route-health row's
+file. The status surface may sample an already authenticated, running endpoint; the
+custody sweep's route-health refresh attaches to a serving engine; neither starts a
+daemon. Observation timestamps name the host's harvest, never the unobserved death
+time.
 """
 from __future__ import annotations
 
@@ -24,7 +25,8 @@ _RECENT_BYTES = 256_000  # Same bounded supervisor-log window as context health.
 _CAPACITY_LOCK = threading.Lock()
 _CAPACITY_SEEN: dict[str, str] = {}
 ROUTE_HEALTH_TYPE = 'claudexor_route_health'
-_ROUTE_HEALTH_SEEN: dict[str, str] = {}  # root -> digest of the newest row this process wrote or found
+ROUTE_HEALTH_FILE = 'state/claudexor_route_health.json'  # the newest row, whole: what the vitals read
+_ROUTE_HEALTH_MAX_BYTES = 262_144  # a read bound: a row with every route and three groups each is under 32 KB
 
 
 def _recent(root):
@@ -214,21 +216,39 @@ def route_health_digest(facts) -> str:
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
+def latest_route_health(root) -> dict[str, Any] | None:
+    """The newest route-health row, kept whole in ``ROUTE_HEALTH_FILE``: it outlives the supervisor
+    log's bounded tail and its rotation, and a fresh process reads the same row. None when absent,
+    unreadable, over the read bound or not such a row: no fact, never an empty one."""
+    path = pathlib.Path(root) / ROUTE_HEALTH_FILE
+    try:
+        with path.open('rb') as stream:
+            data = stream.read(_ROUTE_HEALTH_MAX_BYTES + 1)
+        row = json.loads(data.decode('utf-8')) if len(data) <= _ROUTE_HEALTH_MAX_BYTES else None
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, ValueError):
+        log.debug('Route health fact unreadable', exc_info=True)
+        return None
+    return row if isinstance(row, dict) and row.get('type') == ROUTE_HEALTH_TYPE else None
+
+
 def record_route_health(root, facts, *, engine_version='') -> bool:
-    """Append one dated ``claudexor_route_health`` row when the facts differ from the newest such row in
-    the recent window; True when a row was written. The process memo answers first; under the append
-    lock the bounded read also deduplicates other processes, as ``_record_capacity`` does. A row is the
-    engine's facts (``gateways.claudexor_route_health.route_health_facts``) plus ``ts``, ``engine_version``
-    and the ``digest`` the next refresh compares."""
+    """Record the engine's facts when they differ from the newest recorded row; True when written. A row
+    is the engine's facts (``gateways.claudexor_route_health.route_health_facts``) plus ``ts``,
+    ``engine_version`` and the ``digest`` the next refresh compares. A change appends the row to
+    ``logs/supervisor.jsonl`` as history, then replaces ``ROUTE_HEALTH_FILE`` with it; that file is the
+    comparison, so an unchanged refresh in this or any later process writes nothing, and an evicted or
+    rotated history row changes nothing. Both writes happen under the log's append lock, as
+    ``_record_capacity``'s do; a failed replace leaves the old digest, so the next refresh writes again."""
     from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
-    from ouroboros.utils import assert_test_data_path, jsonl_append_lock_path
+    from ouroboros.utils import assert_test_data_path, atomic_write_json, jsonl_append_lock_path
 
     if not isinstance(facts, dict) or not isinstance(facts.get('routes'), list):
         return False
     digest = route_health_digest(facts)
-    key = str(pathlib.Path(root).resolve())
     with _CAPACITY_LOCK:
-        if _ROUTE_HEALTH_SEEN.get(key) == digest:
+        if (latest_route_health(root) or {}).get('digest') == digest:
             return False
         path = pathlib.Path(root) / 'logs/supervisor.jsonl'
         assert_test_data_path(path)
@@ -238,18 +258,15 @@ def record_route_health(root, facts, *, engine_version='') -> bool:
         if fd is None:
             return False
         try:
-            newest = None
-            for row in _recent(root):
-                if row.get('type') == ROUTE_HEALTH_TYPE:
-                    newest = row
-            if newest is not None and newest.get('digest') == digest:
-                _ROUTE_HEALTH_SEEN[key] = digest
+            if (latest_route_health(root) or {}).get('digest') == digest:  # another process wrote it
                 return False
             row = {'ts': utc_now_iso(), 'type': ROUTE_HEALTH_TYPE, 'engine_version': engine_version or None,
                    'digest': digest, **facts}
             with path.open('ab') as stream:  # one encoded row under the same lock as the read above
                 stream.write((json.dumps(row) + '\n').encode('utf-8'))
-            _ROUTE_HEALTH_SEEN[key] = digest
+            state = pathlib.Path(root) / ROUTE_HEALTH_FILE
+            state.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(state, row)
             return True
         finally:
             release_exclusive_file_lock(lock_path, fd)

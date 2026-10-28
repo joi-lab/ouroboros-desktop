@@ -1,10 +1,10 @@
 """Per-route failure shares from the engine's own run records: a passive, optional read.
 
 The engine owns the measurement (razzant/claudexor#525): for each route, a harness and
-its effective access profile, the product runs that ended inside its fixed seven-day
-window, how many failed and the leading failure groups. This leaf only negotiates the
-route from the serving operation catalog and keeps the body's shape. An engine that
-does not list the route is not asked; a refused, absent or malformed answer is
+its effective access profile, the terminal product runs created inside its fixed
+seven-day window, how many failed and the leading failure groups. This leaf only
+negotiates the route from the serving operation catalog and keeps the body's shape. An
+engine that does not list the route is not asked; a refused, absent or malformed answer is
 "unavailable from this engine", never a count. No threshold or verdict lives here:
 the facts go to the reasoner (BIBLE P5).
 """

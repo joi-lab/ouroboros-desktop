@@ -445,13 +445,13 @@ def _stall_key(row: Dict[str, Any]) -> tuple:
 
 
 def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
-    """One pass over the journal's bounded tail: the newest boot, ``supervisor_load`` and
-    ``claudexor_route_health`` rows, the newest ``direct_turn`` receipts (a pooled worker has no ring),
-    stall onsets whose end is not in the window (an onset's ``_end`` row with the same identity closes
-    it; a closed episode's ``top_frames`` is kept by execution for the receipts). The tail is the one
-    the health block reads, memoized on the file's identity (``jsonl_tail.cached_tail_objects``): one
-    read per context build serves both. An unreadable or absent journal is no fact: empty, never an
-    error."""
+    """One pass over the journal's bounded tail: the newest boot and ``supervisor_load`` rows, the newest
+    ``direct_turn`` receipts (a pooled worker has no ring), stall onsets whose end is not in the window
+    (an onset's ``_end`` row with the same identity closes it; a closed episode's ``top_frames`` is kept
+    by execution for the receipts). The tail is the one the health block reads, memoized on the file's
+    identity (``jsonl_tail.cached_tail_objects``): one read per context build serves both. An
+    unreadable or absent journal is no fact: empty, never an error. The newest route-health row is not
+    read here: its own file keeps it past this tail (``claudexor_exit_facts.latest_route_health``)."""
     from ouroboros.jsonl_tail import cached_tail_objects
 
     found: Dict[str, Any] = {"open": {}, "ended": {}, "turns": []}
@@ -466,8 +466,6 @@ def _supervisor_tail(root: pathlib.Path) -> Dict[str, Any]:
             found["boot"] = row
         elif kind == "supervisor_load":
             found["load"] = row
-        elif kind == "claudexor_route_health":
-            found["route_health"] = row
         elif kind == "direct_turn":
             found["turns"] = [*found["turns"], row][-_OWNER_TURNS_SHOWN:]
         elif kind in _STALL_ENDS:
@@ -541,14 +539,18 @@ def _busy_minute(row: Dict[str, Any], today: Any) -> str:
 def _route_health(row: Dict[str, Any], today: Any) -> str:
     """The newest ``claudexor_route_health`` row in one line: the engine's window and the routes it saw
     (a harness with its access profile), the routes with failed runs, most failed first, each as
-    failed/runs with its top failure group, and the scan's own incompleteness. Counts only: no share,
-    no threshold, no verdict. "" for a row without its routes (then no key, never "none failed")."""
-    routes = [route for route in (row.get("routes") if isinstance(row.get("routes"), list) else [])
+    failed/runs with its top failure group, and the scan's own incompleteness. A window the engine
+    counted without a run says so, with its scan's completeness. Counts only: no share, no threshold,
+    no verdict. "" for a row without its routes (then no key, never "none failed" or "no engine runs")."""
+    raw = row.get("routes")
+    routes = [route for route in (raw if isinstance(raw, list) else [])
               if isinstance(route, dict) and type(route.get("runs")) is int and type(route.get("failed")) is int]
-    if not routes or len(routes) != len(row["routes"]):
+    if not isinstance(raw, list) or len(routes) != len(raw):
         return ""
-    text = (f"{_clock(row.get('generated_at') or row.get('ts'), today)}: {row.get('window_days')}-day window, "
-            f"{len(routes)} routes, {sum(route['runs'] for route in routes)} engine runs")
+    text = f"{_clock(row.get('generated_at') or row.get('ts'), today)}: {row.get('window_days')}-day window"
+    if not routes:
+        return text + ", no engine runs" + (", scan complete" if row.get("complete") is True else _scan_note(row))
+    text += f", {len(routes)} routes, {sum(route['runs'] for route in routes)} engine runs"
     failing = sorted((route for route in routes if route["failed"] > 0),
                      key=lambda route: (-route["failed"], str(route.get("harness")), str(route.get("access"))))
     if not failing:
@@ -569,6 +571,20 @@ def _route_health(row: Dict[str, Any], today: Any) -> str:
 
 def _scan_note(row: Dict[str, Any]) -> str:
     return f"; scan incomplete ({row.get('incomplete_reason') or 'reason unknown'})" if row.get("complete") is False else ""
+
+
+def _route_health_line(root: pathlib.Path, today: Any) -> str:
+    """The newest route-health row from its own file (``claudexor_exit_facts.latest_route_health``, which
+    its writer owns), rendered; "" without a row or for one this line cannot read, so a damaged file
+    drops only its own key."""
+    from ouroboros.claudexor_exit_facts import latest_route_health
+
+    try:
+        row = latest_route_health(root)
+        return _route_health(row, today) if isinstance(row, dict) else ""
+    except Exception:
+        log.debug("route health fact unreadable for the body fact", exc_info=True)
+        return ""
 
 
 def _runtime_facts(root: pathlib.Path) -> Tuple[str, str]:
@@ -631,8 +647,9 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
     basis when unobserved, own transactions; the top frame of a stall episode whose end row is still in
     the tail), stall onsets whose end was not observed in the journal's bounded tail (never «current»),
     the last busy minute (counts and summed seconds per store and side, the longest hold's site, never a
-    percentage), the engine's per-route failure shares (the newest ``claudexor_route_health`` row the
-    custody sweep wrote: failed/runs and the top cause per route, most failed first; no row, no key),
+    percentage), the engine's per-route failure shares (the newest ``claudexor_route_health`` row, kept
+    in its own file, which the custody sweep replaces only when they change: failed/runs and the top
+    cause per route, most failed first, or a window without runs; no row, no key),
     the runtime (CPython, SQLite, journal per store, the WAL gate while a store runs a
     rollback journal), the retained update's before/after, the boot row, and a note that names the
     journal's reader. ``observed_at`` is the fact's own instant (the clocks' day); it is written only
@@ -660,7 +677,7 @@ def vitals_fact(data_root: Any, *, observed_at: str, captured_at: Optional[str] 
             fact[_STALLS_KEY] = stalls
         if isinstance(tail.get("load"), dict):
             fact["busy_minute"] = _busy_minute(tail["load"], observed_at)
-        routes = _route_health(tail["route_health"], observed_at) if isinstance(tail.get("route_health"), dict) else ""
+        routes = _route_health_line(root, observed_at)
         if routes:
             fact["route_health"] = routes
         fact["runtime"], gate = _runtime_facts(root)

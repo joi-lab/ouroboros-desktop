@@ -1,9 +1,13 @@
-"""Route-health facts: the catalog-negotiated read, the dated supervisor row written on change, the
-custody sweep's attach-only refresh, and the one line the Runtime vitals and deep self-review share.
+"""Route-health facts: the catalog-negotiated read, the dated supervisor row and the newest row's own
+file written on change, the custody sweep's attach-only refresh, and the one line the Runtime vitals
+and deep self-review share, which outlives the journal's tail.
 No threshold, alarm or advice anywhere: counts the mind weighs (BIBLE P5)."""
 from __future__ import annotations
 
 import json
+import pathlib
+import subprocess
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -13,6 +17,9 @@ from ouroboros import claudexor_exit_facts as facts, jsonl_tail
 from ouroboros.context_runtime_facts import vitals_fact, vitals_line
 from ouroboros.gateways import claudexor as transport
 from ouroboros.gateways.claudexor_route_health import ROUTE_HEALTH_PATH, read_route_health, route_health_facts
+from ouroboros.utils import file_identity
+
+REPO = pathlib.Path(__file__).resolve().parent.parent
 
 CATALOG = [{"id": "get:daemon-route-health", "method": "GET", "path": ROUTE_HEALTH_PATH, "parameters": []}]
 OLD_CATALOG = [{"id": "get:daemon-status", "method": "GET", "path": "/v2/daemon/status", "parameters": []}]
@@ -73,9 +80,14 @@ def route_rows(root):
             if row["type"] == "claudexor_route_health"]
 
 
+def written(root):
+    """The newest row's file: its bytes and identity (an atomic replace is a new identity)."""
+    state = root / facts.ROUTE_HEALTH_FILE
+    return state.read_bytes(), file_identity(state.stat())
+
+
 @pytest.fixture(autouse=True)
 def fresh_memos(monkeypatch):
-    monkeypatch.setattr(facts, "_ROUTE_HEALTH_SEEN", {})
     monkeypatch.setattr(jsonl_tail, "_TAILS", {})
     monkeypatch.delenv("OUROBOROS_IN_WORKER", raising=False)
 
@@ -136,27 +148,74 @@ def test_row_is_written_on_change_and_never_rewritten_while_the_facts_hold(tmp_p
     (row,) = route_rows(tmp_path)
     assert row["ts"] and row["engine_version"] == "4.8.0" and row["digest"] == facts.route_health_digest(read)
     assert row["routes"] == read["routes"] and row["window_days"] == 7 and row["complete"] is True
-    assert facts.record_route_health(tmp_path, read, engine_version="4.8.0") is False  # the process memo
-    facts._ROUTE_HEALTH_SEEN.clear()  # another process: the log itself deduplicates
+    assert facts.latest_route_health(tmp_path) == row  # the newest row, whole, in its own file
+    kept = written(tmp_path)
     assert facts.record_route_health(tmp_path, read, engine_version="4.8.0") is False
     later = route_health_facts(body(generatedAt="2026-10-28T12:10:00.000Z", scannedRuns=700))
     assert facts.record_route_health(tmp_path, later, engine_version="4.8.0") is False  # clocks are not a change
-    assert len(route_rows(tmp_path)) == 1
+    assert len(route_rows(tmp_path)) == 1 and written(tmp_path) == kept  # neither appended nor replaced
 
     changed = body()
     changed["routes"][1]["failed"] = 5
     assert facts.record_route_health(tmp_path, route_health_facts(changed), engine_version="4.8.0") is True
     first, second = route_rows(tmp_path)
     assert first["digest"] != second["digest"] and second["routes"][1]["failed"] == 5
+    assert facts.latest_route_health(tmp_path) == second and written(tmp_path)[1] != kept[1]  # replaced
     incomplete = route_health_facts(body(complete=False, incompleteReason="scan_bound"))
     assert facts.record_route_health(tmp_path, incomplete, engine_version="4.8.0") is True  # completeness is a fact
     assert len(route_rows(tmp_path)) == 3
 
 
+def test_a_damaged_newest_row_is_no_fact_and_the_next_refresh_writes_it_again(tmp_path):
+    read = route_health_facts(body())
+    facts.record_route_health(tmp_path, read)
+    (tmp_path / facts.ROUTE_HEALTH_FILE).write_text("{torn", encoding="utf-8")
+    assert facts.latest_route_health(tmp_path) is None
+    assert facts.record_route_health(tmp_path, read) is True and len(route_rows(tmp_path)) == 2
+    assert facts.latest_route_health(tmp_path)["digest"] == facts.route_health_digest(read)
+
+
 def test_malformed_facts_write_no_row(tmp_path):
     for bad in (None, {}, {"routes": None}, "routes"):
         assert facts.record_route_health(tmp_path, bad) is False
-    assert not (tmp_path / "logs/supervisor.jsonl").exists()
+    assert not (tmp_path / "logs/supervisor.jsonl").exists() and not (tmp_path / facts.ROUTE_HEALTH_FILE).exists()
+
+
+# A fresh process: it has none of this process's memory, only the files.
+FRESH_PROCESS = """
+import json, sys
+from ouroboros import claudexor_exit_facts as facts
+from ouroboros.context_runtime_facts import vitals_fact
+root, later, observed = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+recorded = facts.record_route_health(root, later, engine_version="4.8.0")
+print(json.dumps({"recorded": recorded, "route_health": (vitals_fact(root, observed_at=observed) or {}).get("route_health")}))
+"""
+
+
+def test_the_newest_fact_outlives_the_journal_tail_its_rotation_and_the_process(tmp_path):
+    facts.record_route_health(tmp_path, route_health_facts(body()), engine_version="4.8.0")
+    shown = vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"]
+    kept = written(tmp_path)
+    journal = tmp_path / "logs/supervisor.jsonl"
+    with journal.open("a", encoding="utf-8") as stream:  # busy minutes and other rows, no new facts
+        for n in range(400):
+            stream.write(json.dumps({"ts": OBSERVED, "type": "supervisor_load", "n": n, "pad": "x" * 800}) + "\n")
+    assert journal.stat().st_size > 256_000  # the row left the bounded tail every context reads
+    jsonl_tail._TAILS.clear()
+    assert vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"] == shown
+
+    later = route_health_facts(body(generatedAt="2026-10-28T12:10:00.000Z", scannedRuns=700))
+    child = subprocess.run([sys.executable, "-c", FRESH_PROCESS, str(tmp_path), json.dumps(later), OBSERVED],
+                           cwd=REPO, text=True, capture_output=True, timeout=120)
+    assert child.returncode == 0, child.stderr
+    assert json.loads(child.stdout.splitlines()[-1]) == {"recorded": False, "route_health": shown}
+    assert len(route_rows(tmp_path)) == 1 and written(tmp_path) == kept
+
+    journal.rename(tmp_path / "logs/supervisor_rotated.jsonl")  # rotation moves the history aside
+    jsonl_tail._TAILS.clear()
+    assert vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"] == shown
+    assert facts.record_route_health(tmp_path, later) is False and route_rows(tmp_path) == []
+    assert written(tmp_path) == kept
 
 
 # ---- the refresh and its trigger --------------------------------------------------------------------
@@ -273,16 +332,48 @@ def test_vitals_say_none_failed_only_from_a_counted_window_and_name_an_incomplet
     assert fact["route_health"] == "12:00: 7-day window, 3 routes, 621 engine runs, none failed; scan incomplete (scan_bound)"
 
 
-def test_vitals_omit_the_key_when_no_engine_answered_or_the_row_lost_its_routes(tmp_path):
+def test_vitals_name_a_counted_window_without_runs_and_its_scan(tmp_path):
+    facts.record_route_health(tmp_path, route_health_facts(body(routes=[], scannedRuns=0)))
+    assert vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"] == "12:00: 7-day window, no engine runs, scan complete"
+    bounded = body(routes=[], scannedRuns=2000, complete=False, incompleteReason="scan_bound")
+    facts.record_route_health(tmp_path, route_health_facts(bounded))
+    assert vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"] == (
+        "12:00: 7-day window, no engine runs; scan incomplete (scan_bound)")
+    facts.record_route_health(tmp_path, route_health_facts(body(routes=[], complete="unsaid")))
+    assert vitals_fact(tmp_path, observed_at=OBSERVED)["route_health"] == "12:00: 7-day window, no engine runs"
+
+
+def test_vitals_line_holds_byte_for_byte_while_only_the_clocks_move(tmp_path):
+    facts.record_route_health(tmp_path, route_health_facts(body()))
+    first = vitals_line(vitals_fact(tmp_path, observed_at=OBSERVED))
+    for minute, scanned in (("12:10", 700), ("12:20", 655)):
+        later = route_health_facts(body(generatedAt=f"2026-10-28T{minute}:00.000Z", scannedRuns=scanned))
+        assert facts.record_route_health(tmp_path, later) is False
+        assert vitals_line(vitals_fact(tmp_path, observed_at=OBSERVED)) == first  # the prompt prefix holds
+    changed = body(generatedAt="2026-10-28T12:30:00.000Z")
+    changed["routes"][0]["failed"] = 63
+    facts.record_route_health(tmp_path, route_health_facts(changed))
+    line = vitals_line(vitals_fact(tmp_path, observed_at=OBSERVED))
+    assert line != first and "12:30: 7-day window" in line and "agy readonly 63/123" in line
+
+
+def test_vitals_omit_the_key_when_no_engine_answered_or_the_row_is_damaged(tmp_path):
     fact = vitals_fact(tmp_path, observed_at=OBSERVED)  # no row: an older engine, or none attached yet
-    assert fact is not None and "route_health" not in fact and "none failed" not in json.dumps(fact)
+    assert fact is not None and "route_health" not in fact
+    assert "none failed" not in json.dumps(fact) and "no engine runs" not in json.dumps(fact)
     assert "route health" not in vitals_line(fact)
-    path = tmp_path / "logs/supervisor.jsonl"
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"ts": OBSERVED, "type": "claudexor_route_health", "digest": "d", "window_days": 7,
-                                "routes": [{"harness": "agy", "access": "readonly", "runs": "x", "failed": 1}]}) + "\n",
-                    encoding="utf-8")
-    assert "route_health" not in vitals_fact(tmp_path, observed_at=OBSERVED)
+    state = tmp_path / facts.ROUTE_HEALTH_FILE
+    state.parent.mkdir(parents=True)
+    row = {"ts": OBSERVED, "type": "claudexor_route_health", "digest": "d", "window_days": 7}
+    for content in ("{torn", json.dumps([row]), json.dumps({**row, "type": "other", "routes": []}),
+                    json.dumps({**row, "routes": None}),
+                    json.dumps({**row, "routes": [{"harness": "agy", "access": "readonly", "runs": "x", "failed": 1}]}),
+                    json.dumps({**row, "routes": [{"harness": "agy", "access": "readonly", "runs": 3, "failed": 1,
+                                                   "top_failures": 5}]}),
+                    json.dumps({**row, "routes": [], "pad": "x" * 300_000})):  # past the read bound
+        state.write_text(content, encoding="utf-8")
+        fact = vitals_fact(tmp_path, observed_at=OBSERVED)
+        assert fact is not None and "route_health" not in fact and fact.get("runtime"), content[:60]
 
 
 def test_vitals_read_the_newest_row_with_its_own_clock(tmp_path):
