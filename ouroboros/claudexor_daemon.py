@@ -394,7 +394,8 @@ class OwnedClaudexorDaemon:
         """(endpoint_or_None, state, detail) — the ONE liveness probe. Our descriptor's bearer
         token is the identity proof, so a 401/403 is a foreign daemon on a recycled port
         (disclosed, never killed or adopted); a transport failure is kept apart from other
-        stale evidence so explicit stop can use measured custody."""
+        stale evidence so explicit stop can use measured custody; protocol, discovery and
+        malformed-response failures confer no such authority."""
         from ouroboros.gateways.claudexor import (
             ClaudexorGateway,
             ClaudexorUnavailable,
@@ -465,10 +466,13 @@ class OwnedClaudexorDaemon:
     def engine_version(self) -> str:
         """Serving version PROVEN by the last SUCCESSFUL handshake here, else ''.
 
-        A request-shape floor reads this before it has a gateway, so a FAILED probe leaves
-        it as it was (silence about the engine never un-proves a version it served; blanking
-        it would flip a caller's request shape mid-turn); only another successful handshake
-        replaces it. ``_engine_version`` is the liveness projection, blanked on failure.
+        A request-shape floor reads this before it has a gateway, so a FAILED probe
+        leaves it as it was: a timeout, a token refusal or an unreachable socket is
+        silence about the engine, never evidence that a version it served is gone;
+        blanking it would flip a running caller's request shape mid-turn. Only another
+        successful handshake replaces it (downgrade is unsupported, so a replacement
+        proves the same version or newer). ``_engine_version`` stays the liveness
+        projection, blanked on failure, which status and the pin comparison read.
         """
         return self._proven_engine_version
 
@@ -1289,6 +1293,8 @@ def ensure_owned_gateway(*, admission_wait_sec: Optional[float] = None,
     its probe by ``SHORT_POLL_TIMEOUT_SEC`` and never retries. ADMISSION (``recovery_only``)
     is re-polled on the same gateway under ``admission_wait_sec``, expiring into the typed
     refusal the 503 produces (D28). ``startup_wait_sec`` narrows the readiness wait as before.
+    Neither zero-wait parameter promises zero total latency or permission to stop the
+    process. Failed admission skips reconciliation until the next ensure.
     """
     from ouroboros.gateways.claudexor import (
         SHORT_POLL_TIMEOUT_SEC, ClaudexorGateway, ClaudexorUnavailable,

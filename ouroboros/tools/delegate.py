@@ -1198,8 +1198,9 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
                 return _expired()
             time.sleep(min(_POLL_INTERVAL_SEC, max(0.0, deadline - time.monotonic())))
             # BOUNDED whether or not the window is spent (the clamp must bound the waiting,
-            # not only the sleeping). The last poll of a spent window is never skipped and a
-            # daemon too slow to answer it is this window's expiry; earlier, the typed
+            # not only the sleeping). The last poll of a spent window is bounded and never
+            # skipped — terminal state and breach are judged on fresh data or not at all —
+            # and a daemon too slow to answer it is this window's expiry; earlier, the typed
             # refusal propagates — a daemon that died mid-window is no quiet completed wait.
             left = deadline - time.monotonic()
             fresh = (progress.expiring_poll(gateway, rid) if left <= 0
