@@ -580,20 +580,23 @@ class BodyRuntime:
         try:
             detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         except BaseException as exc:
-            self._absorb_refusal(entry, gateway, exc)
+            if self._absorb_refusal(entry, gateway, exc):
+                return
             raise
         with self.lock:
             self._compact_wait = supported
         self._absorb_detail(entry, gateway, detail)
 
-    def _absorb_refusal(self, entry, gateway, exc):
+    def _absorb_refusal(self, entry, gateway, exc) -> bool:
+        """Record a refused read; True when the refusal settled the run (an owning store's absence,
+        or a terminal fact retention cannot erase), so the reader has nothing left to raise."""
         self._remember(entry, None, error=exc)
         entry = current.run(self.root, entry.run_id) or entry
         if c.daemon_says_absent(exc) and entry.terminal_source:
-            return  # Retention loss cannot erase a terminal fact, including an in-flight publication.
+            return True  # Retention loss cannot erase a terminal fact, including an in-flight publication.
         if c.daemon_says_absent(exc, gateway=gateway, run=entry):
             c.close_absent_run(self.root, gateway, entry, "body_observation_absent")
-            return
+            return True
         if c.daemon_says_absent(exc):
             c.record_containment_fault(self.root, entry, "run_absence_identity_unproven",
                 "The daemon returned 404, but ownership by this store is unproven; run outcome remains unknown.")
@@ -601,6 +604,7 @@ class BodyRuntime:
                 self.observation_gaps[entry.run_id] = self._observation_key(entry)
         if not getattr(exc, "status_code", 0) and not getattr(exc, "observation_answered", False):
             self._drop_observer_gateway(gateway)
+        return False
 
     def _absorb_detail(self, entry, gateway, detail):
         with self.lock:
