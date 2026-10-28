@@ -564,7 +564,8 @@ def test_history_details_selection_replay_and_project_reopen(direct_server_with_
                         const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
                         const copied = selection.toString(); selection.removeAllRanges(); return copied;
                     }""")
-                    assert "[RESULT]" in result_copy and "TERMINAL_CHILD_RESULT" in result_copy
+                    # A completed child's result is its report to the parent (#2273); [RESULT] stays for other endings.
+                    assert result_copy.startswith("Report to parent\n") and "TERMINAL_CHILD_RESULT" in result_copy
                     assert "Result heading\n" in result_copy and "UNIQUE_CHILD_TAIL" in result_copy
                     quiz = page.locator(f'{feed} [data-quiz-id="saved-choice"]')
                     assert quiz.get_attribute("data-state") == "answered"

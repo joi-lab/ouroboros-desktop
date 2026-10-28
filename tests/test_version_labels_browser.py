@@ -53,6 +53,7 @@ PIN = """([feedSelector, caret]) => {
     const root = document.querySelector(feedSelector), input = document.getElementById('chat-input');
     const rows = [...root.querySelectorAll('[data-history-id]')];
     const row = rows[Math.floor(rows.length / 2)];
+    root.dispatchEvent(new WheelEvent('wheel', { deltaY: -1 }));  // the reader turns back: reading, not following
     root.scrollTop += row.getBoundingClientRect().top - root.getBoundingClientRect().top - 180;
     input.focus({ preventScroll: true });
     input.setSelectionRange(caret, caret);

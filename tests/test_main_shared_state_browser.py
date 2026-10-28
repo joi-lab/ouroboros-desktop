@@ -6,6 +6,7 @@ owner is one System message there, with the task's own controls.
 """
 import json
 import socket
+from urllib.parse import urlparse
 
 import pytest
 
@@ -20,6 +21,11 @@ pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 _PILL = '#page-chat .chat-toolbar-row > button.chat-question-nav'
 _ACTION = '#chat-messages .chat-bubble.owner-action[data-owner-action="paused-task"]'
+
+
+def _state(url):
+    """Every shared state read: once the page holds the bindings map it asks `/api/state?bindings_since=` (#2307)."""
+    return urlparse(url).path == "/api/state"
 
 
 def _reach_census_question(page, card, text):
@@ -62,7 +68,7 @@ def test_shared_app_read_failure_reaches_main_without_overwriting_newer_question
             const fetch = window.fetch;
             window.__stateCallers = [];
             window.fetch = (url, init) => {
-                if (String(url).endsWith('/api/state')) window.__stateCallers.push(new Error().stack);
+                if (String(url).split('?')[0].endsWith('/api/state')) window.__stateCallers.push(new Error().stack);
                 return fetch(url, init);
             };
         })();""")
@@ -74,7 +80,7 @@ def test_shared_app_read_failure_reaches_main_without_overwriting_newer_question
                 response = route.fetch()
                 route.fulfill(response=response, json={**response.json(), **census})
 
-        page.route("**/api/state", state_read)
+        page.route(_state, state_read)
         # A Main copy that lost its authority re-reads its canonical task before it takes
         # answers again; serve that existing read too, rather than treating an unknown
         # synthetic task as a confirmed question.
@@ -224,11 +230,11 @@ def test_project_panel_read_failure_reaches_main_without_overwriting_newer_quest
             const fetch = window.fetch;
             window.__stateCallers = [];
             window.fetch = (url, init) => {
-                if (String(url).endsWith('/api/state')) window.__stateCallers.push(new Error().stack);
+                if (String(url).split('?')[0].endsWith('/api/state')) window.__stateCallers.push(new Error().stack);
                 return fetch(url, init);
             };
         })();""")
-        page.route("**/api/state", lambda route: held.append(route) if holding else admit(route))
+        page.route(_state, lambda route: held.append(route) if holding else admit(route))
         page.route("**/api/tasks/question-task", lambda route: route.fulfill(json={
             "task_id": "question-task", "project_id": "build", "question_rooms": {
                 row["quiz_id"]: {"state": "known", "chat_id": 12, "project_id": "build"} for row in [question, newer]}, "owner_quiz": {
@@ -381,7 +387,7 @@ def test_genuine_socket_close_withdraws_main_authority_until_a_fresh_census(dire
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.add_init_script("window.__windowErrors = []; addEventListener('error', e => window.__windowErrors.push(String(e.message)));")
         page.add_init_script(f"({_OBSERVE_STATE_READS})(); ({_REAL_SOCKET_DROP})({json.dumps(refused_url)});")
-        page.route("**/api/state", state_read)
+        page.route(_state, state_read)
         page.route("**/api/tasks/question-task", lambda route: route.fulfill(json={
             "task_id": "question-task", "project_id": "build", "question_rooms": {
                 row["quiz_id"]: {"state": "known", "chat_id": 12, "project_id": "build"} for row in [question, newer]}, "owner_quiz": {

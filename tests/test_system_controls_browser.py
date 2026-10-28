@@ -57,7 +57,8 @@ PAINT = """el => {
         reachable:!!hit && (hit===el || el.contains(hit)),overflow:el.scrollWidth-el.clientWidth,
         rest:token('--elev-rest','boxShadow'),float:token('--elev-float','boxShadow'),
         capsule:token('--surface-capsule','backgroundColor'),hover:token('--surface-capsule-hover','backgroundColor'),
-        neutralHover:token('--bg-hover','backgroundColor'),focus:token('--focus-accent-border','color'),
+        neutralHover:token('--bg-hover','backgroundColor'),quietHover:token('--tone-quiet-hover','backgroundColor'),
+        focus:token('--focus-accent-border','color'),
         ok:token('--status-ok-fg','color'), contrast:window.__contrast.of(el)};
 }"""
 
@@ -108,7 +109,7 @@ def button_states(page, control, *, quiet=False, floating=False, card=False, dis
     if floating:
         assert hover["filter"].count('brightness') == 1 and pressed["filter"].count('brightness') == 2
     if quiet:
-        assert hover["bg"] == hover["neutralHover"], hover
+        assert hover["bg"] == hover["quietHover"], hover
     result = {"rest": rest, "hover": hover, "press": pressed, "focus": focus}
     if disable:
         control.evaluate("el=>el.disabled=true")
@@ -258,7 +259,8 @@ def test_shared_controls_material_and_real_actions(room_ui, theme, width):
         control = page.locator(selector).first
         reveal(page, control)
         rw.capture(page, prefix + "-" + name)
-        results[name] = button_states(page, control, quiet=name == "copy", floating=name == "photo",
+        # Copy and the Reviews tray's Retry read (a `.review-read` link-button since #2278) are quiet controls.
+        results[name] = button_states(page, control, quiet=name in ("copy", "retry"), floating=name == "photo",
                                       card=name.endswith("File"), disable=name != "photo")
     disabled = page.locator('.chat-bubble.user .chat-file-card:disabled')
     assert paint(disabled)["shadow"] == "none"

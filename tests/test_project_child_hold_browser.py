@@ -8,6 +8,7 @@ No provider is called. Live scheduled/terminal frames use the normal WS consumer
 import copy
 import json
 import time
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -130,7 +131,8 @@ def test_nested_child_wait_and_same_id_recovery(direct_server_with_data, tmp_pat
             errors = PageErrors(page, engine)
             page.route("**/api/tasks*", task_transport)
             page.route("**/api/tasks/**", task_transport)
-            page.route("**/api/state", state_transport)
+            # Since #2307 a page holding a revision reads /api/state?bindings_since=…, which a bare glob misses.
+            page.route(lambda url: urlsplit(url).path == "/api/state", state_transport)
             page.goto(server["url"], wait_until="domcontentloaded")
             page.wait_for_function("() => window.__testSockets?.some(s => s.readyState === 1)")
             page.wait_for_selector('#chat-messages[data-history-hydrated="true"]')
@@ -308,7 +310,8 @@ def test_held_tree_header_updates_on_child_reply_without_detail_polling(direct_s
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/api/tasks*", task_transport)
             page.route("**/api/tasks/**", task_transport)
-            page.route("**/api/state", state_transport)
+            # Since #2307 a page holding a revision reads /api/state?bindings_since=…, which a bare glob misses.
+            page.route(lambda url: urlsplit(url).path == "/api/state", state_transport)
             page.goto(server["url"], wait_until="domcontentloaded")
             page.wait_for_function("() => window.__testSockets?.some(s => s.readyState === 1)")
             page.wait_for_selector('#chat-messages[data-history-hydrated="true"]')

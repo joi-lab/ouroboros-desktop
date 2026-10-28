@@ -167,7 +167,8 @@ def test_actual_candidate_and_origin_review_cards(engine, width, theme, inherite
                 playwright.expect(owner.locator('[data-live-review-summary]')).to_contain_text(re.compile(r'Reviews\s*1'))
                 assert page.locator('.chat-live-card[data-task-id="marketplace_install"]').count() == 0
                 owner.locator(':scope > [data-live-summary-button] [data-live-disclosure]').click()
-                owner.locator('[data-review-section-toggle]').click()
+                # Reviews opens through its own door since #2278 (docs/DESIGN.md "Reviews inside task cards").
+                owner.locator('[data-live-review-summary]').click()
                 playwright.expect(owner.locator('[data-review-group-toggle]')).to_be_visible()
                 playwright.expect(owner.locator('[data-review-group-toggle]')).to_contain_text('Skill review')
                 owner.scroll_into_view_if_needed()
