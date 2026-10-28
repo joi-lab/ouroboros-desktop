@@ -11,6 +11,7 @@ import { chipHtml, skillIconHtml } from './skill_presentation.js';
 import { allowanceLabel } from './utils.js';
 import { tr, fmt } from './i18n.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
+import { getContributions } from './contributions.js';
 import { CHECK_CHIPS, clockText, durationText, noteLeadText, placeStatusText, sendsAsHtml, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
 import { mountChatMarkdown, enhanceChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
 import { costPresentationDetail } from './chat_activity.js';
@@ -200,7 +201,7 @@ export function paintWakeRows(region, wakes, coverage, opened, put, release = de
 
 /** Mount the tab into its Dashboard panel. */
 export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, read = readConsciousness,
-    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces, openSheet = openPlaceSheet,
+    readFallback = readConsciousnessFromState, readPlacesFn = readPlaces, openSheet = openPlaceSheet, contributions = getContributions(),
     markdown = { mount: mountChatMarkdown, enhance: enhanceChatMarkdown, destroy: destroyChatMarkdown } } = {}) {
     if (!mount) return { refresh: () => {}, destroy() {} };
     mount.innerHTML = `<div class="settings-embedded-content"><div class="costs-scroll scroll-fade-y">
@@ -218,6 +219,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
     let snapshot = null;
     let places = null;
     let placesError = '', placesGeneration = 0;
+    let placesBehind = false;  // a skill lifecycle ended while hidden: the next show reads Places
     let generation = 0;
     let timer = 0;
     let destroyed = false;
@@ -247,11 +249,12 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         paintWakeRows(regions.wakes, snapshot?.recentWakes ?? null, snapshot?.coverage || '', opened, put, releaseNotes);
     }
 
-    // One read in flight at a time; only the change event starts a fresh one over a pending read.
+    // One read in flight at a time; a change, a show or a lifecycle end starts a fresh one over it, and the newest paints.
     let placesPending = null;
     function refreshPlaces({ force = false } = {}) {
         if (placesPending && !force) return placesPending;
         const current = ++placesGeneration;
+        placesBehind = false;
         placesPending = (async () => {
             try {
                 const data = await readPlacesFn();
@@ -266,11 +269,12 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         return placesPending;
     }
 
-    async function refresh() {
+    async function refresh({ rereadPlaces = false } = {}) {
         if (destroyed) return;
         const current = ++generation;
-        // Places are read once here and then only on their change event; a failed first read retries.
-        const placesRead = places === null ? refreshPlaces() : Promise.resolve();
+        // Places are read when the tab is shown, on their change event and at a skill lifecycle end, never by the poll;
+        // a failed first read retries.
+        const placesRead = places === null || rereadPlaces ? refreshPlaces({ force: rereadPlaces }) : Promise.resolve();
         const earlier = Boolean(snapshot);
         regions.status.textContent = earlier ? '' : 'Reading…';
         let next = null;
@@ -359,12 +363,23 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
             await refresh();
         }
     };
-    const onShown = (event) => { if (event?.detail?.tab === 'consciousness') void refresh(); else clearTimeout(timer); };
+    // Shown by its subtab or by returning to the Dashboard on it, as Settings re-reads its places when shown.
+    const onShown = (event) => {
+        if (event?.detail?.tab === 'consciousness' || (event?.detail?.page === 'dashboard' && shown())) void refresh({ rereadPlaces: true });
+        else clearTimeout(timer);
+    };
     const onChanged = () => { void refreshPlaces({ force: true }); };
+    // A skill lifecycle end (an update, a turn-on, whoever started it) can change a place's icon, label or readiness
+    // without the change event, and the contributions projection leaves an off connector out, so `onChange` misses it.
+    const onLifecycle = () => { if (shown()) void refreshPlaces({ force: true }); else placesBehind = true; };
+    const onVisibility = () => { if (placesBehind && shown()) void refreshPlaces({ force: true }); };
+    const offLifecycle = contributions.onLifecycle(onLifecycle);
     mount.addEventListener('click', onClick);
     mount.addEventListener('toggle', onToggle, true);
     window.addEventListener('ouro:dashboard-subtab-shown', onShown);
+    window.addEventListener('ouro:page-shown', onShown);
     window.addEventListener(PLACES_CHANGED_EVENT, onChanged);
+    document.addEventListener('visibilitychange', onVisibility);
     if (shown()) void refresh(); else void refreshPlaces();
     return {
         refresh,
@@ -375,7 +390,10 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
             mount.removeEventListener('click', onClick);
             mount.removeEventListener('toggle', onToggle, true);
             window.removeEventListener('ouro:dashboard-subtab-shown', onShown);
+            window.removeEventListener('ouro:page-shown', onShown);
             window.removeEventListener(PLACES_CHANGED_EVENT, onChanged);
+            document.removeEventListener('visibilitychange', onVisibility);
+            offLifecycle();
         },
     };
 }
