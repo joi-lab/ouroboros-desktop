@@ -513,6 +513,18 @@ def test_osworld_a_lost_answer_after_a_paste_is_not_retyped_and_negative_points_
     for tool in ("mouse_down", "mouse_up"):
         pressed = receipt(api.tools[tool](x=-5, y=20, raw=True))
         assert pressed["ok"] is False and "negative" in pressed["error"] and guest.commands == [], (tool, pressed)
+    monkeypatch.setattr(module, "_platform", lambda: "macos")  # the host's own space never decides for a guest
+    assert receipt(api.tools["click"](x=-5, y=20, raw=True))["ok"] is False and guest.commands == []
+    # A stored transform from another display or backend that maps a point outside the guest is refused the same way.
+    api.tools["click"].__self__._save_transform({"sx": 1.0, "sy": 1.0, "ox": -1920, "oy": 0, "ts": 1, "platform": "macos"})
+    mapped = receipt(api.tools["click"](x=100, y=100))
+    assert mapped["ok"] is False and "stored screenshot transform" in mapped["error"] and guest.commands == [], mapped
+    # Untargeted: a lost answer after the clipboard program is final here too (the base retyped); a lost read carries no dispatch fact.
+    plain = receipt(api.tools["type_text"](text="<b>x</b>"))
+    assert plain["ok"] is False and plain["transport_failed"] is True and plain["dispatched"] is None and plain["method"] == "clipboard", plain
+    assert "clipboard_replaced" not in plain and not any("typewrite" in c[-1] for c in guest.commands)
+    pos = receipt(api.tools["cursor_position"]())
+    assert pos["ok"] is False and pos["transport_failed"] is True and "dispatched" not in pos and "note" not in pos, pos
 
 
 def test_osworld_a_pid_less_window_keeps_its_title_in_the_probe(tmp_path, monkeypatch):
@@ -614,6 +626,9 @@ def test_ssh_a_reply_cut_short_is_an_unknown_outcome_never_a_withheld_input(tmp_
     assert "unknown" in out["note"] and "not sent" not in out["note"] and "Connection refused" in out["error"] and "observed_effect" not in out
     ran = receipt(api.tools["key"](keys="right", app="Keynote"))  # a switch that ran before it keeps its mark
     assert ran["dispatched"] is None and ran["activation_done"] is True and ran["observed_effect"] is True, ran
+
+    paste = receipt(api.tools["type_text"](text="x", via="paste"))  # the same refusal on a paste: never a clipboard failure
+    assert paste["dispatched"] is None and paste["reason"] == "ssh_failed" and "clipboard_replaced" not in paste and paste["method"] == "paste", paste
 
     def cut_short(command):  # the input stage had started, then the channel broke: the clipboard stage is unknown
         if "cliclick" in command:

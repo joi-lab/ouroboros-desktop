@@ -183,6 +183,13 @@ def strip_markers(text: str) -> str:
     return _MARKER_LINE.sub("", text or "").strip()
 
 
+def _clean_listing_text(text: str) -> str:
+    """Error text of the guest listing without the script's own separator and front line."""
+    keep = [ln for ln in str(text or "").splitlines()
+            if ln.strip() != "__ACTIVE__" and not re.match(r"^\d+\|\d*\|b64:", ln.strip())]
+    return strip_markers("\n".join(keep))
+
+
 class RemoteBackends:
     """OSWorld HTTP + SSH Mac transports (see module docstring)."""
 
@@ -373,8 +380,12 @@ class RemoteBackends:
                 return {"ok": False, "error": f"unsupported remote backend {backend!r}"}
         except Exception as exc:  # noqa: BLE001 - the transport failed; an earlier observed switch is still a fact
             failed: dict[str, Any] = {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}", "code": code,
-                                      "transport_failed": True, "dispatched": None,
-                                      "note": "the remote call did not answer: whether the input ran is unknown (do not assume it did not)"}
+                                      "transport_failed": True}
+            if input_effect:
+                failed.update({"dispatched": None,
+                               "note": "the remote call did not answer: whether the input ran is unknown (do not assume it did not)"})
+                if note:  # what was attempted (the method); a clipboard stage with no answer makes no claim
+                    failed.update({k: v for k, v in note.items() if k != "clipboard_replaced" and k not in failed})
             if ctx.get("target"):
                 failed["target"] = ctx["target"]
             if ctx.get("front_before") is not None:
@@ -445,7 +456,7 @@ class RemoteBackends:
             return [], None, "the guest listing could not be decoded (the script did not run as written)"
         rows = parse_wmctrl_rows(listing)
         front = parse_x11_front(active.splitlines()[0] if active else "", rows)
-        return rows, front, ("" if ok else (strip_markers(err) or "wmctrl failed in the guest"))
+        return rows, front, ("" if ok else (_clean_listing_text(err) or "wmctrl failed in the guest"))
 
     def _remote_front(self, conn: dict[str, Any]) -> dict[str, Any] | None:
         """Who is in front on the remote now (OSWorld: the X11 window; SSH Mac: the application); None = unread."""

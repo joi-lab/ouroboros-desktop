@@ -862,6 +862,7 @@ def test_x11_a_window_named_by_title_stops_a_sequence_when_its_sibling_comes_for
     focus_inspector_after_a_key(module, state, monkeypatch)
     out = receipt(api.tools["key"](keys="right down", app="Deck"))
     assert out["ok"] is False and out["reason"] == "target_lost" and out["steps_done"] == 1, out
+    assert "is not one of the target's windows" in out["error"] and "0x00000003" in out["error"] and "0x00000002" in out["error"], out["error"]
     assert [argv for argv in state["calls"] if argv[:2] == ["xdotool", "key"]] == [["xdotool", "key", "Right"]]
     assert out["front_after"]["window_id"] == "0x00000003" and out["delivered_to"]["window_id"] == "0x00000002"
     # The same two keys named by class: any window of Keynote is Keynote, both are sent, both recipients named.

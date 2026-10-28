@@ -274,6 +274,8 @@ class PlaceMixin:
             return (f"{app!r} did not come to the front{where}; nothing was sent. The OS can refuse activation "
                     "from a background process: ask the owner to click it, or use the app's own commands (run_command)")
         if reason == "front_unread":
+            if res.get("before_step"):
+                return f"{app!r}: who is in front could not be read before the next step ({res.get('error')}); nothing more was sent"
             return f"{app!r}: the switch was requested but who is in front could not be read ({res.get('error')}); nothing was sent"
         if reason == "target_lost":
             resolved = res.get("resolved") or {}
@@ -350,7 +352,7 @@ class PlaceMixin:
             app = ctx["target"]["requested"]
             ctx["front_last"] = front  # the newest read, for the aggregate even when the step is refused
             if front is None:
-                res = {"reason": "front_unread", "error": "no front reader answered before the next step"}
+                res = {"reason": "front_unread", "error": "no front reader answered before the next step", "before_step": True}
                 return {"ok": False, "reason": "front_unread", "error": self._target_error(app, res), "target": ctx["target"]}, step
             # An X11/OSWorld target is its matched windows; a macOS/SSH application is its pid.
             still = x11_same(front, target) if target.get("window_ids") else front.get("pid") == target.get("pid")
@@ -392,7 +394,7 @@ class PlaceMixin:
                 # Nothing was dispatched (a refused combo, a failed clipboard write): a known fact, not an unknown outcome.
                 if known:
                     payload["front"] = delivered
-                payload["note"] = "the input was not sent" + switched
+                payload["note"] = "the input was not sent" + ("; the clipboard write before it completed" if payload.get("clipboard_done") else "") + switched
                 return payload
             if known:
                 payload["front_at_dispatch"] = delivered
@@ -450,8 +452,10 @@ class PlaceMixin:
                 payload["observed_effect"] = True  # the clipboard write before it completed
                 payload["clipboard_done"] = True
                 effects.append("the clipboard write")
-            payload["note"] = ((" and ".join(effects) + " ran; the input after it was dropped (see error)") if effects
-                               else "the input was dropped (see error); this tool observed no UI change")
+            dropped_text = ("characters without a key code were dropped (see error); the rest may have been typed" if untyped
+                            else "the input was dropped (see error)")
+            payload["note"] = ((" and ".join(effects) + " ran; the input after it: " + dropped_text) if effects
+                               else dropped_text + "; this tool observed no UI change")
             return payload
         if payload.get("observed_effect"):
             payload["note"] = ((f"dispatched while {where} was in front" if where else "dispatched; who was in front is unknown")

@@ -122,7 +122,7 @@ Acting in a named application (`app=`):
   before it; a step whose remote call did not answer is `null`, and the note
   says so, never "not sent"). A tool's registered budget covers one
   input's worst case (`type_text` 180 s, the other inputs 90 s, `move` and
-  `mouse_up` 10 s), not a long
+  `mouse_up` 45 s), not a long
   sequence: when the host's budget ends a call, no receipt comes back.
 - `move` and `mouse_up` never change which application is in front: a drag
   must end where it started.
@@ -152,7 +152,9 @@ Coordinate contract:
   one (cliclick then receives `=`-prefixed absolute coordinates, locally and
   on a Mac over SSH; on a Mac negative raw coordinates are valid input, while
   an X11/Wayland desktop and an OSWorld guest, which have no screen space left
-  of or above their origin, refuse them before any call). Without those bounds the Finder
+  of or above their origin, refuse them before any call, also when a stored
+  transform maps a point there: a screenshot of another display or backend,
+  so take a screenshot of this desktop first). Without those bounds the Finder
   desktop size is used (the union of all displays) and the transform is always
   flagged `approx`; an SSH Mac's transform is always `approx` for the same
   reason.

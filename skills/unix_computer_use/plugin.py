@@ -802,6 +802,17 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             return str(conn.get("backend") or "") == "ssh_macos"
         return _platform() == "macos"
 
+    def _outside_desktop(self, *points: tuple[int, int]) -> str:
+        """A mapped point left of or above the origin on a desktop that has no such space: the stored screenshot
+        transform belongs to another display or backend. Empty when every point is fine."""
+        if self._takes_negative_points():
+            return ""
+        bad = [p for p in points if p[0] < 0 or p[1] < 0]
+        if not bad:
+            return ""
+        return (f"the stored screenshot transform maps this point to {bad[0][0]},{bad[0][1]}, outside this desktop "
+                "(a screenshot of another display or backend?): take a screenshot of this desktop first, or pass raw=true")
+
     def _backend_unavailable(self, action: str) -> str:
         return _json({
             "ok": False,
@@ -823,6 +834,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         if (int(x) < 0 or int(y) < 0) and not self._takes_negative_points():
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
+        if self._outside_desktop((ix, iy)):
+            return _json({"ok": False, "error": self._outside_desktop((ix, iy))})
         repeat = 3 if triple else (2 if double else 1)
         if self._is_remote():
             _name, conn = self._active_connection()
@@ -865,6 +878,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         if (int(x) < 0 or int(y) < 0) and not self._takes_negative_points():
             return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
         ix, iy, note = self._map_xy(x, y, raw=raw)
+        if self._outside_desktop((ix, iy)):
+            return _json({"ok": False, "error": self._outside_desktop((ix, iy))})
         if self._is_remote():
             _name, conn = self._active_connection()
             return self._remote_pyautogui(conn, f"pyautogui.moveTo({ix}, {iy})", note=note)
@@ -890,6 +905,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             return _json({"ok": False, "error": "negative coordinates not allowed"})
         sx_, sy_, note = self._map_xy(start_x, start_y, raw=raw)
         ex_, ey_, _ = self._map_xy(end_x, end_y, raw=raw)
+        if self._outside_desktop((sx_, sy_), (ex_, ey_)):
+            return _json({"ok": False, "error": self._outside_desktop((sx_, sy_), (ex_, ey_))})
         if self._is_remote():
             _name, conn = self._active_connection()
             return self._remote_pyautogui(
@@ -952,6 +969,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         note: dict[str, Any] = {}
         if has_xy:
             ix, iy, note = self._map_xy(x, y, raw=raw)
+            if self._outside_desktop((ix, iy)):
+                return _json({"ok": False, "error": self._outside_desktop((ix, iy))})
         if self._is_remote():
             _name, conn = self._active_connection()
             fn = "mouseDown" if press else "mouseUp"
@@ -1152,7 +1171,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         plat = _platform()
         mods, base, err = self._parse_combo(combo)
         if err:
-            return {"ok": False, "error": err}
+            return {"ok": False, "error": err, "dispatched": False, "note": "the input was not sent"}
         if self._is_remote():
             _name, conn = self._active_connection()
             tokens = [_PYAUTOGUI_MODS.get(m, m) for m in mods]
@@ -1235,7 +1254,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         if plat == "linux" and _which("xdotool"):
             mods, base, err = self._parse_combo(combo)
             if err:
-                return _json({"ok": False, "error": err})
+                return _json({"ok": False, "error": err, "dispatched": False, "note": "the input was not sent"})
             # Same case-preservation as key(): unknown multi-char tokens keep
             # their ORIGINAL case (X11 keysyms are case-sensitive).
             base_raw = getattr(self, "_last_base_raw", base)
@@ -1431,7 +1450,7 @@ def register(api: Any) -> None:
     api.register_tool("test_connection", impl.test_connection, description="Run a safe non-mutating health check for a configured connection (default: the active one).", schema={"type": "object", "properties": {"name": {"type": "string", "default": ""}}}, timeout_sec=30)
     api.register_tool("activate_connection", impl.activate_connection, description="Select a configured connection as the active target for screenshot/input tools.", schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, timeout_sec=5)
     api.register_tool("use_local", lambda: impl.use_local(), description="Return computer-use tools to the local desktop backend.", schema={"type": "object", "properties": {}}, timeout_sec=5)
-    api.register_tool("capabilities", lambda: impl.capabilities(), description="Who is in front, which OS grants this process holds (prompt-free preflights on macOS), whether app= targeting works here, and the installed backends.", schema={"type": "object", "properties": {}}, timeout_sec=20)
+    api.register_tool("capabilities", lambda: impl.capabilities(), description="Who is in front, which OS grants this process holds (prompt-free preflights on macOS), whether app= targeting works here, and the installed backends.", schema={"type": "object", "properties": {}}, timeout_sec=45)
     api.register_tool("screenshot", impl.screenshot, description="Capture the main display (or, with app=, the display holding that app's window on macOS; display.selected_by says which was captured), downscale to <=WXGA and persist the image->input transform. The image is attached automatically; an engine without vision gets its path.", schema={"type": "object", "properties": {"job_id": {"type": "string", "default": "manual"}, "max_width": {"type": "integer", "default": _MAX_IMAGE_W}, "max_height": {"type": "integer", "default": _MAX_IMAGE_H}, **_app}}, timeout_sec=90)
     # y is deliberately NOT in `required` for click/move: models recurringly emit the
     # whole point inside x ("663, 500") with y omitted, and a required-field rejection
@@ -1441,12 +1460,12 @@ def register(api: Any) -> None:
     # previously "Unknown tool"): register them as thin aliases of click.
     api.register_tool("double_click", lambda **kw: impl.click(**{**kw, "double": True}), description="Alias of click with double=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
     api.register_tool("triple_click", lambda **kw: impl.click(**{**kw, "triple": True}), description="Alias of click with triple=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
-    api.register_tool("move", impl.move, description="Move the mouse pointer to screenshot-space coordinates (auto-remapped; raw=true for native input space).", schema={"type": "object", "properties": _xy, "required": ["x"]}, timeout_sec=10)
+    api.register_tool("move", impl.move, description="Move the mouse pointer to screenshot-space coordinates (auto-remapped; raw=true for native input space).", schema={"type": "object", "properties": _xy, "required": ["x"]}, timeout_sec=45)
     # start_y/end_y are recoverable from a pair packed into start_x/end_x, so only
     # the x-side fields stay required (same rationale as click/move above).
     api.register_tool("left_click_drag", impl.left_click_drag, description="Drag with the left button from start to end (screenshot-space, auto-remapped; raw=true for native). " + _targeted, schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}, "raw": {"type": "boolean", "default": False}, **_app}, "required": ["start_x", "end_x"]}, timeout_sec=90)
     api.register_tool("mouse_down", impl.mouse_down, description="Press and hold a mouse button (left only on macOS) at the pointer or at screenshot-space coordinates. " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}}, timeout_sec=90)
-    api.register_tool("mouse_up", impl.mouse_up, description="Release a held mouse button at the pointer, or at screenshot-space coordinates (auto-remapped; raw=true for native input space). Never changes which app is in front.", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}}}, timeout_sec=10)
+    api.register_tool("mouse_up", impl.mouse_up, description="Release a held mouse button at the pointer, or at screenshot-space coordinates (auto-remapped; raw=true for native input space). Never changes which app is in front.", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}}}, timeout_sec=45)
     api.register_tool("cursor_position", lambda: impl.cursor_position(), description="Report the current pointer position in native input coordinates.", schema={"type": "object", "properties": {}}, timeout_sec=10)
     api.register_tool("type_text", impl.type_text, description="Type text into the focused field of the frontmost app, or of app= (brought forward and verified first). via=paste writes the clipboard and pastes (long or non-ASCII text on a local or SSH Mac; the clipboard is replaced); an OSWorld guest pastes such text through its clipboard by itself.", schema={"type": "object", "properties": {"text": {"type": "string"}, "interval_ms": {"type": "integer", "default": 0}, **_app, "via": {"type": "string", "default": ""}}, "required": ["text"]}, timeout_sec=180)
     api.register_tool("key", impl.key, description="Press keys in the front app or app= (verified; else nothing sent). Result: who was in front, not that the app reacted. Combos with '+', sequences with spaces (cmd+s, ctrl+l, page-down, 'down down return'); a targeted sequence stops when its app leaves the front. Scriptable apps are better driven by their own commands through run_command.", schema={"type": "object", "properties": {"keys": {"type": "string"}, **_app}, "required": ["keys"]}, timeout_sec=90)
@@ -1454,6 +1473,6 @@ def register(api: Any) -> None:
     api.register_tool("scroll", impl.scroll, description="Scroll 1-20 wheel steps; app= acts in that app (verified first, else nothing is sent). X11/OSWorld: up/down/left/right; Wayland: up/down; macOS: unsupported, page with key. The result names who was in front at dispatch.", schema={"type": "object", "properties": {"clicks": {"type": "integer", "default": 3}, "direction": {"type": "string", "default": "down"}, **_app}}, timeout_sec=90)
     api.register_tool("wait", impl.wait, description="Sleep up to 10s so the UI can settle before the next observation.", schema={"type": "object", "properties": {"ms": {"type": "integer", "default": 500}}}, timeout_sec=12)
     api.register_tool("activate_app", impl.activate_app, description="Bring a running application to the front (name, bundle id / WM_CLASS, or pid:<n> from window_list; resolved from the running list, never launched) and report who is in front afterwards. Inputs with app= do this themselves; use this to switch before several inputs or to check that a switch works.", schema={"type": "object", "properties": {"app": {"type": "string"}, "wait_ms": {"type": "integer", "default": 2000}}, "required": ["app"]}, timeout_sec=90)
-    api.register_tool("window_list", impl.window_list, description="Running applications with their windows: who is in front, titles, bounds, pid, and on macOS whether the app has its own scripting commands (scriptable). app= filters; limit caps the rows (truncated says so).", schema={"type": "object", "properties": {**_app, "limit": {"type": "integer", "default": 50}}}, timeout_sec=30)
+    api.register_tool("window_list", impl.window_list, description="Running applications with their windows: who is in front, titles, bounds, pid, and on macOS whether the app has its own scripting commands (scriptable). app= filters; limit caps the rows (truncated says so).", schema={"type": "object", "properties": {**_app, "limit": {"type": "integer", "default": 50}}}, timeout_sec=60)
     api.register_tool("ax_tree", impl.ax_tree, description="Read one window as text through the Accessibility API (macOS), bounded: the frontmost app's window or app='s (without bringing it forward). Nodes with role/label/value/bounds plus numbered marks (positions to click with raw=true; a mark is not proof the element reacts); truncated_by names every cut. An OSWorld remote returns the guest's whole tree; Linux reports unsupported with the window rows, SSH Macs unsupported.", schema={"type": "object", "properties": {**_app, "max_nodes": {"type": "integer", "default": 150}, "timeout_ms": {"type": "integer", "default": 3000}, "root": {"type": "string", "default": "window"}, "include_web": {"type": "boolean", "default": False}}}, timeout_sec=45)
     api.register_tool("remote_exec", impl.remote_exec, description="Run a shell command on the active remote connection only; refuses on local backend. OSWorld/Linux guest: each call is a FRESH `bash -lc` starting in $HOME. SSH Mac: each call runs through the remote account's login shell via ssh. Either way this is NOT the visible desktop terminal: it does not inherit that terminal's working directory and leaves nothing in its shell history.", schema={"type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "integer", "default": 60}}, "required": ["command"]}, timeout_sec=120)
