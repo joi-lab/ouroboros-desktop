@@ -933,8 +933,9 @@ def tree_model_requests(root_drive: Any, root_task_id: str) -> list:
     first so their task ids tie damaged rows to this tree. Raises when unreadable: unknown, never none."""
     from ouroboros import usage_store
 
-    with usage_store.read(root_drive) as txn:
-        return txn.open_attempts(root_task_id=str(root_task_id))
+    with usage_store.read(root_drive) as txn:  # captured in one step, decoded after the read closed
+        captured = txn.open_attempt_rows(root_task_id=str(root_task_id))
+    return usage_store.decode_attempts(captured)
 
 
 @contextmanager

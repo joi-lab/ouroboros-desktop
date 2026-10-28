@@ -181,8 +181,9 @@ def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_bi
         raise  # the receivers would meet the same busy store
     except Exception as exc:  # the receivers below still retire; the fact stays owed for the refusing row
         claims, refused = [], exc
-    with usage_store.read(pathlib.Path(root)) as txn:
-        rows = [row for row in txn.open_attempts() if row.get("local_answer_owner_pid") == pid]
+    with usage_store.read(pathlib.Path(root)) as txn:  # captured in one step, decoded after the read closed
+        captured = txn.open_attempt_rows()
+    rows = [row for row in usage_store.decode_attempts(captured) if row.get("local_answer_owner_pid") == pid]
     by_task: Dict[str, Dict[str, int]] = {}
     for row in rows:
         proof = row.get("local_answer_owner_proof") if isinstance(row.get("local_answer_owner_proof"), dict) else {}
@@ -475,8 +476,9 @@ def _repair_absent_receivers(root: Any, members: Optional[set], root_task_id: Op
 
     try:  # the tree's own open rows (root index), or the open set at startup; never history
         with usage_store.read(pathlib.Path(root)) as txn:
-            rows = [row for row in txn.open_attempts(root_task_id=root_task_id)
-                    if members is None or str(row.get("task_id") or "") in members]
+            captured = txn.open_attempt_rows(root_task_id=root_task_id)
+        rows = [row for row in usage_store.decode_attempts(captured)
+                if members is None or str(row.get("task_id") or "") in members]
     except Exception:
         log.warning("Open attempts unreadable; receivers stay held", exc_info=True)
         return []

@@ -121,10 +121,16 @@ def reset_process_memo() -> None:
     """Forget what this process showed and which engines list the stream (tests reuse ids)."""
     from ouroboros.gateways import claudexor_run_events
 
+    from ouroboros import delegate_observe
+    from ouroboros.gateways import claudexor_observation
+
     with _MEMO_LOCK:
         _MEMO.clear()
     with claudexor_run_events._SUPPORT_LOCK:
         claudexor_run_events._SUPPORT.clear()
+    with claudexor_observation._SUPPORT_LOCK:
+        claudexor_observation._SUPPORT.clear()
+    delegate_observe.reset_process_seen()
 
 
 def _memo(task_id: str, run_id: str) -> _RunMemo:
@@ -631,6 +637,33 @@ def _commit(memo: _RunMemo, record: Dict[str, Any], shown_through: Optional[int]
                 memo.drafts, memo.speech_whole = memo.pending_drafts
             memo.pending = memo.pending_drafts = None
     return commit
+
+
+def shown_cursor(ctx: Any, task_id: str, run_id: str, after_seq: Optional[int]) -> int:
+    """Where this process's view of the run's journal ends: what it showed, else the last
+    retained range, else the journal's beginning — the same resolution ``observations`` makes."""
+    memo = _memo(task_id, run_id)
+    if memo.shown_through is None:
+        retained = _retained_range(ctx, task_id, run_id)
+        memo.shown_through = min(int(after_seq or 0), retained[0] - 1) if retained else 0
+    return int(memo.shown_through or 0)
+
+
+def stream_observations(ctx: Any, run_id: str, read: Any, *, after: int):
+    """The typed record of one journal read the caller already made (the supervised wait's
+    speech read), with the commit its emitter calls; nothing for a read that carried no event."""
+    if not read.events:
+        return
+    task_id = str(getattr(ctx, "task_id", "") or "")
+    memo = _memo(task_id, run_id)
+    source: Dict[str, Any] = {"kind": "run_events", "read_through": read.through_seq, "events": len(read.events)}
+    if read.ended:
+        source["ended"] = True
+    ref = _persist(ctx, task_id, run_id, read.events)
+    source.update({"ref": ref} if ref else {"retained": False})
+    record = _record(task_id, run_id, int(after), int(read.through_seq),
+                     [_event_item(event.seq, event.value) for event in read.events], source, [], memo)
+    yield record, _commit(memo, record, read.through_seq)
 
 
 def retained_observations(ctx: Any, run_id: str):

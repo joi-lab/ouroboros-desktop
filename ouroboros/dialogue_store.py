@@ -650,35 +650,39 @@ _PAGE = ("SELECT json_group_array(json_object('stream',stream,'seq',seq,'body',b
          "length FROM dialogue ")
 
 
-def _page(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -> List[Dict[str, Any]]:
-    """The rows ``where`` selects in ONE step, by coordinate (``_row`` takes them as it takes ``sqlite3.Row``):
-    every ``sqlite3_step`` releases the GIL, so beside busy threads a page re-queues once, not once per row."""
-    return sorted(json.loads(conn.execute(_PAGE + where + ")", params).fetchone()[0] or "[]"),
-                  key=lambda record: record["seq"])
+def _page(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -> str:
+    """The rows ``where`` selects in ONE step, as one text (``_decoded`` after the transaction closed): every
+    ``sqlite3_step`` releases the GIL, so beside busy threads a page re-queues once, not once per row."""
+    return conn.execute(_PAGE + where + ")", params).fetchone()[0] or "[]"
+
+
+def _decoded(*pages: str) -> List[Dict[str, Any]]:
+    """The records of captured pages by coordinate (``_row`` takes them as it takes ``sqlite3.Row``)."""
+    return sorted((record for page in pages for record in json.loads(page)), key=lambda record: record["seq"])
 
 
 def rows_at(root: Any, stream: str, seqs: Iterable[int]) -> Dict[int, Row]:
     """The rows at many coordinates in one read (a statement per 500): each row found, by coordinate."""
-    wanted, records = sorted({int(seq) for seq in seqs}), []
+    wanted, pages = sorted({int(seq) for seq in seqs}), []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 500):
             chunk = wanted[start:start + 500]
-            records += _page(conn, f"WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})", (stream, *chunk))
-    return {record["seq"]: _row(record) for record in records}
+            pages.append(_page(conn, f"WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})", (stream, *chunk)))
+    return {record["seq"]: _row(record) for record in _decoded(*pages)}
 
 
 def rows_between(root: Any, stream: str, lower: int, upper: int) -> List[Row]:
     """Every row with ``lower <= seq < upper`` in order (a frozen page replayed by its coordinates)."""
     with transaction(root, write=False) as conn:
-        records = _page(conn, "WHERE stream=? AND seq>=? AND seq<?", (stream, lower, upper))
-    return [_row(record) for record in records]
+        page = _page(conn, "WHERE stream=? AND seq>=? AND seq<?", (stream, lower, upper))
+    return [_row(record) for record in _decoded(page)]
 
 
 def rows_after(root: Any, stream: str, seq: int, *, limit: int = 1000) -> List[Row]:
     """The rows appended after ``seq`` (a live follower's next batch, a wake's window), in order."""
     with transaction(root, write=False) as conn:
-        records = _page(conn, "WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit))
-    return [_row(record) for record in records]
+        page = _page(conn, "WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit))
+    return [_row(record) for record in _decoded(page)]
 
 
 def iter_rows(root: Any, stream: str, *, lower: int = 0, upper: Optional[int] = None, batch: int = 500) -> Iterator[Row]:
@@ -688,8 +692,9 @@ def iter_rows(root: Any, stream: str, *, lower: int = 0, upper: Optional[int] = 
     bound = _bound(upper)
     while True:
         with transaction(root, write=False) as conn:
-            records = _page(conn, "WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
-                            (stream, lower, bound, batch))
+            page = _page(conn, "WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
+                         (stream, lower, bound, batch))
+        records = _decoded(page)
         for record in records:
             yield _row(record)
         if len(records) < batch:
@@ -725,12 +730,18 @@ def probe_rows(root: Any, stream: str, keys: Iterable[Tuple[str, Any]], *, befor
     at most ``limit`` coordinates through its index; only the union's winning rows fetch bodies in
     that snapshot; JSON decoding follows release. ``("chat_id", None)`` probes NULL chats."""
     with transaction(root, write=False) as conn:
-        records = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=newest_first)
-    return [_row(record) for record in records]
+        probed = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=newest_first)
+    return _probed(*probed)
+
+
+def _probed(chosen: List[int], pages: List[str]) -> List[Row]:
+    """``_probe``'s winning rows, decoded after the transaction closed, in its order."""
+    records = {record["seq"]: record for record in _decoded(*pages)}
+    return [_row(records[seq]) for seq in chosen]
 
 
 def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]], *, before: Optional[int],
-           lower: int, limit: int, newest_first: bool) -> List[Dict[str, Any]]:
+           lower: int, limit: int, newest_first: bool) -> Tuple[List[int], List[str]]:
     """Capture the winning stored records; the transaction owner decodes after release.
 
     One statement per column selects, through that column's index, the first ``limit`` coordinates
@@ -756,17 +767,13 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
                 select + "IN (SELECT +value FROM json_each(?))" + tail,  # unary + keeps the column's affinity
                 (stream, json.dumps([value for value in listed if value is not None]), *bounds)).fetchone()[0]))
     chosen = heapq.nlargest(limit, found) if newest_first else heapq.nsmallest(limit, found)
-    if not chosen:
-        return []
     # Python 3.10 has no getlimit; 999 is the default variable limit at our SQLite 3.24 floor.
     variables = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) if hasattr(conn, "getlimit") else 999
-    records = {}
+    pages = []
     for start in range(0, len(chosen), variables - 1):  # one binding is the stream, including for 10,000-row readers
         batch = chosen[start:start + variables - 1]
-        marks = ",".join("?" for _ in batch)
-        for record in _page(conn, f"WHERE stream=? AND seq IN ({marks})", (stream, *batch)):
-            records[record["seq"]] = record
-    return [records[seq] for seq in chosen]
+        pages.append(_page(conn, f"WHERE stream=? AND seq IN ({','.join('?' for _ in batch)})", (stream, *batch)))
+    return chosen, pages
 
 
 def room_candidates(root: Any, stream: str, chat_id: int, *, tasks: Iterable[str] = (), origins: Iterable[str] = (),
@@ -792,8 +799,8 @@ def main_candidates(root: Any, stream: str, *, exclude_chats: Iterable[int], pin
                  if record["chat_id"] not in excluded]
         keys: List[Tuple[str, Any]] = [("chat_id", chat) for chat in chats] + [("chat_id", None)]
         keys.extend(("kind", kind) for kind in pinned_kinds)
-        records = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=True)
-    return [_row(record) for record in records]
+        probed = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=True)
+    return _probed(*probed)
 
 
 def task_rows(root: Any, task_ids: Iterable[str], *, stream: str, after: int = -1,
@@ -861,7 +868,7 @@ def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tu
     of addresses, then of rows, in ONE step each, as ``_page`` reads a page)."""
     wanted = sorted({(str(gen), int(line)) for gen, line in pairs if gen and line})
     seqs: Dict[Tuple[str, int], List[int]] = {}
-    records = []
+    pages = []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 250):
             chunk = wanted[start:start + 250]
@@ -873,8 +880,8 @@ def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tu
         found = sorted({seq for listed in seqs.values() for seq in listed})
         for start in range(0, len(found), 500):
             chunk = found[start:start + 500]
-            records += _page(conn, f"WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})", tuple(chunk))
-    rows = {record["seq"]: _row(record) for record in records}
+            pages.append(_page(conn, f"WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})", tuple(chunk)))
+    rows = {record["seq"]: _row(record) for record in _decoded(*pages)}
     return {pair: [rows[seq] for seq in sorted(seqs.get(pair, ())) if seq in rows] for pair in wanted}
 
 

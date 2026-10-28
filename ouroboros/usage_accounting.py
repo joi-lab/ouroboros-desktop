@@ -508,21 +508,22 @@ def usage_breakdown(
     coverage first, then join receipts and amounts in this same money read.
     Amount-only admission and pacing never read custody."""
     root = _drive_root(drive_root)
+    from ouroboros._usage_rows import breakdown_read
     from ouroboros.delegate_custody_usage import cost_coverage, cost_snapshot, with_cost_coverage
     custody = (cost_snapshot(root, task_id=task_id, root_task_id=root_task_id,
                              custody_root=custody_root, allow_stale=allow_stale)
                if include_custody and (task_id or root_task_id) else None)
-    with usage_store.read(root, allow_stale=allow_stale) as txn:
-        result = breakdown_view(txn, root_task_id=root_task_id, task_id=task_id, include_owners=include_owners,
-                                degraded=usage_store.integrity_degraded(root))
-        result["_ledger_high_water_seq"] = txn.marker()
-        if custody is not None:
-            joined = cost_coverage(custody, txn, root)
-            result = with_cost_coverage(result, joined)
-            result["by_task"] = {tid: with_cost_coverage(bucket, joined, task_id=tid)
-                                 for tid, bucket in result["by_task"].items()}
-            result["by_root"] = {rid: with_cost_coverage(bucket, joined, root_task_id=rid)
-                                 for rid, bucket in result["by_root"].items()}
+    with usage_store.read(root, allow_stale=allow_stale) as txn:  # rows captured here, rendered after it closed
+        render = breakdown_read(txn, root_task_id=root_task_id, task_id=task_id, include_owners=include_owners)
+        marker, joined = txn.marker(), (cost_coverage(custody, txn, root) if custody is not None else None)
+    result = render(usage_store.integrity_degraded(root))
+    result["_ledger_high_water_seq"] = marker
+    if joined is not None:
+        result = with_cost_coverage(result, joined)
+        result["by_task"] = {tid: with_cost_coverage(bucket, joined, task_id=tid)
+                             for tid, bucket in result["by_task"].items()}
+        result["by_root"] = {rid: with_cost_coverage(bucket, joined, root_task_id=rid)
+                             for rid, bucket in result["by_root"].items()}
     return result
 
 
