@@ -401,7 +401,7 @@ test('a Resume held only by calls of unknown outcome asks once, then resumes nam
         }
         return { ok: true };
     };
-    await resumeTaskAction('root-u', { resume, toast, confirm: async (dialog) => { asked.push(dialog); return true; } });
+    await resumeTaskAction('root-u', { resume, toast, askOwner: async (dialog) => { asked.push(dialog); return true; } });
     assert.deepEqual(calls, [null, { accept_unknown: ['op-1'], reason: 'The owner resumed without these results.' }]);
     assert.equal(asked.length, 1);
     assert.match(asked[0].body, /^It is unknown whether the run_command call of task 96ac2f7c981b4f54 finished/);
@@ -410,7 +410,7 @@ test('a Resume held only by calls of unknown outcome asks once, then resumes nam
 
     calls.length = 0;
     toasts.length = 0;
-    await resumeTaskAction('root-u', { resume, toast, confirm: async () => false });
+    await resumeTaskAction('root-u', { resume, toast, askOwner: async () => false });
     assert.deepEqual(calls, [null], 'declining keeps the task paused');
     assert.deepEqual(toasts, []);
 
@@ -418,7 +418,7 @@ test('a Resume held only by calls of unknown outcome asks once, then resumes nam
     await resumeTaskAction('root-l', {
         resume: async () => { throw Object.assign(new Error('x'), { status: 409,
             body: { error: 'owner_pause_effects_unsettled', blockers: [held, live] } }); },
-        toast, confirm: async () => { throw new Error('a live call is never offered'); } });
+        toast, askOwner: async () => { throw new Error('a live call is never offered'); } });
     assert.equal(toasts.length, 1);
     assert.match(toasts[0][0], /^Resume refused: .*is in a live worker/);
 });
