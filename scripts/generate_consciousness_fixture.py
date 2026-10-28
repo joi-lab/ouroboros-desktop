@@ -3,6 +3,7 @@
 Run from the repository root with an isolated OUROBOROS_DATA_DIR. The real old
 wake is unchanged; named variants explicitly exercise the new optional facts.
 """
+import contextlib
 import copy
 import datetime as dt
 import json
@@ -50,8 +51,9 @@ def generate():
     with patch.object(view.time, "time", return_value=NOW), patch.object(view, "_DISPLAY_ZONE", dt.timezone.utc):
         snapshot = view.describe_consciousness_state(snapshot, True)
     fixture["state"]["bg_consciousness_state"] = snapshot
-    with tempfile.TemporaryDirectory(prefix="wake-fixture-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="wake-fixture-") as temporary, contextlib.ExitStack() as release:
         root = Path(temporary)
+        release.callback(store.close_connections_under, root)  # Windows removes no open file: hand the stores back first
         documents = []
         variants = [(document["task_id"], {}), ("w-summary", {
             "wake_summary": SENTENCE, "suggested_name": SENTENCE, "tool_calls": 16,
@@ -105,7 +107,6 @@ def generate():
             with patch("ouroboros.terminal_projection.utc_now_iso", return_value="2026-10-24T07:50:00+00:00"):
                 seed_terminal_history(terminal_root, stored)
             fixture["terminal_only_history"].append(json.loads(_assemble_history_response(terminal_root, 1, 50, 200)))
-        store.close_connections_under(root)  # Windows removes no open file: hand the stores back before the folder goes
     # These are the same icon producer bytes used by PlaceSummary and catalog rows.
     for row in fixture["places"]["places"] + fixture["places"]["connectors"]:
         old = row.get("icon") or {}
