@@ -401,18 +401,21 @@ def test_an_earlier_image_of_this_pid_is_retired_and_this_images_claims_never_ar
     from ouroboros import model_wait, usage_accounting as ua
 
     here = tool_custody.owner_proof()
-    write_task_result(tmp_path, "t1", "running", root_task_id="root",
-                      billing_group={"billing_group_id": "root", "billing_group_limit_usd": 20.0,
+    write_task_result(tmp_path, "r1", "running", root_task_id="r1",
+                      billing_group={"billing_group_id": "r1", "billing_group_limit_usd": 20.0,
                                      "billing_group_limit_source": "initial_task_admission",
                                      "billing_group_limit_revision": "admission-1"})
     monkeypatch.setenv("TOTAL_BUDGET", "1000")
-    receiver = model_wait.TaskModelWait(task={"id": "t1", "_attempt": 1}, drive_root=tmp_path,
+    receiver = model_wait.TaskModelWait(task={"id": "r1", "_attempt": 1}, drive_root=tmp_path,
                                         event_queue=None, worker_slot_held=True)  # this image's live receiver
-    with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, task_id="t1", root_task_id="root")):
+    with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, task_id="r1", root_task_id="r1")):
         with model_wait.operation_wait_scope(receiver):
-            with pytest.raises(RuntimeError):
+            with pytest.raises(RuntimeError, match="response unknown"):
                 ua.execute_physical_attempt(ua.AttemptRequest(model="m", provider="t", reservation_usd=.2),
                                             lambda: (_ for _ in ()).throw(RuntimeError("response unknown")))
+    [bound] = [row for row in ua.read_usage_records(tmp_path, final_only=True)
+               if row.get("local_answer_consumer_id") == receiver.answer_consumer_id]
+    assert bound["local_answer_owner_pid"] == os.getpid(), "the receiver is really bound by this image"
     kernel = here["kernel_birth"] or "darwin-start:1.000001"
     _claim(tmp_path, "t1", "op-old", pid=os.getpid(), birth="b", kernel=kernel)  # session: an earlier image's
     _claim(tmp_path, "t1", "op-now", pid=os.getpid(), birth="b", extra={"owner_proof": {**here, "kernel_birth": kernel}})
@@ -421,7 +424,7 @@ def test_an_earlier_image_of_this_pid_is_retired_and_this_images_claims_never_ar
     assert {row["task_id"] for row in retired} == {"t1"}, "one proof retires that process's claims in every task"
     assert "op-old" not in _claims(tmp_path, "t1") and "op-legacy" not in _claims(tmp_path, "t2")
     assert "op-now" in _claims(tmp_path, "t1"), "a claim this live image wrote is never retired"
-    retired_receivers = load_task_result(tmp_path, "t1").get("retired_model_consumers") or {}
+    retired_receivers = load_task_result(tmp_path, "r1").get("retired_model_consumers") or {}
     assert receiver.answer_consumer_id not in retired_receivers, "nor a receiver this live image bound"
     assert tool_custody.retire_process_invocations(tmp_path, pid=os.getpid(), process_birth="b",
                                                    kernel_birth=kernel) == [], "not even by an exit-shaped selector"
@@ -541,7 +544,7 @@ def test_a_worker_parked_for_its_owner_services_what_it_owes(monkeypatch):
 
     def hold(_ctx):
         polls.append(1)
-        return "test_stop" if written == [1, 1] else ""
+        return "test_stop" if written == [1, 1] or len(polls) > 50 else ""  # fails, never hangs, without the drain
     custody_owed.owe("late", write, label="late-call")
     monkeypatch.setattr("ouroboros.budget_pause._hold_control_reason", hold)
     ctx = SimpleNamespace(task_id="t1", task_attempt=1, pending_events=[], drive_root="/nonexistent")
@@ -646,3 +649,45 @@ def test_a_retirement_never_overwrites_a_recorded_decision(tmp_path):
     model_wait.retire_model_consumers(tmp_path, "t1", {"c": 1}, record={"accepted": by})
     model_wait.retire_model_consumers(tmp_path, "t1", {"c": 1})  # a death proof that read before the decision
     assert load_task_result(tmp_path, "t1")["retired_model_consumers"]["c"]["accepted"] == by
+
+
+def test_a_busy_store_ends_the_pass_at_once_instead_of_trying_every_row(tmp_path, monkeypatch):
+    for holder in ("t1", "t2", "t3"):
+        _claim(tmp_path, holder, f"op-{holder}", pid=63888)
+    attempts = []
+
+    def busy(root, holder, owned):
+        attempts.append(holder)
+        _busy()
+    monkeypatch.setattr(tool_custody, "_retire_owned_claims", busy)
+    with pytest.raises(store.StoreBusy):
+        tool_custody.retire_process_invocations(tmp_path, pid=63888, process_birth=INCIDENT_BIRTH)
+    assert attempts == ["t1"], "contention is store-wide: the next row would meet the same lock"
+    _platform(monkeypatch, gone={63888})
+    attempts.clear()
+    repair.reconcile_open_local_custody(tmp_path)
+    assert attempts == ["t1"], "one pass tries an ended process once, not once per holder"
+
+
+def test_a_landed_decision_is_reported_even_when_the_receivers_cannot_be_read(tmp_path, monkeypatch):
+    _platform(monkeypatch)
+    _claim(tmp_path, "t1", "op-u", pid=63888)
+    monkeypatch.setattr("ouroboros.owner_pause.tree_model_requests",
+                        lambda *_a, **_k: (_ for _ in ()).throw(OSError("usage store unreadable")))
+    outcome = repair.accept_unknown_custody(tmp_path, {"t1"}, ["op-u", "attempt-x"], root_task_id="root",
+                                            by={"actor": "owner", "text": "", "at": "2026-10-28T07:30:00+00:00"})
+    assert outcome["accepted"] == ["op-u"], "what landed is reported, so its journal event is written"
+    assert outcome["refused"] == [{"id": "attempt-x", "task_id": "", "reason": "unreadable"}]
+
+
+def test_an_undelivered_wake_is_tried_again_by_the_next_owe():
+    calls = []
+
+    def wake():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("the queue is closing")
+    custody_owed.bind_wake(wake)
+    custody_owed.owe("first", _busy, label="first")
+    custody_owed.owe("second", _busy, label="second")
+    assert calls == [1, 1], "a wake that failed to deliver is not counted as sent"

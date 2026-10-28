@@ -172,9 +172,13 @@ def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_bi
     from ouroboros.tool_custody import retire_process_invocations, written_by_this_image
     from ouroboros import usage_store
 
+    from ouroboros.store import StoreBusy
+
     refused = None
     try:
         claims = retire_process_invocations(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+    except StoreBusy:
+        raise  # the receivers would meet the same busy store
     except Exception as exc:  # the receivers below still retire; the fact stays owed for the refusing row
         claims, refused = [], exc
     with usage_store.read(pathlib.Path(root)) as txn:
@@ -216,10 +220,15 @@ def retire_exited_process(root: Any, *, pid: int, process_birth: str, kernel_bir
 
     if not pid or not (process_birth or kernel_birth):
         return
-    custody_owed.owe(_exit_key(root, pid, process_birth, kernel_birth),
-                     lambda: retire_process_custody(root, pid=int(pid), process_birth=str(process_birth),
-                                                    kernel_birth=str(kernel_birth)),
-                     label=f"exit:{pid}")
+
+    def write():
+        from ouroboros.store import acquisition_budget
+        from ouroboros._usage_wait import ACQUISITION_SLICE_SEC
+
+        with acquisition_budget(ACQUISITION_SLICE_SEC):  # a driver's attempt never waits a full store budget
+            retire_process_custody(root, pid=int(pid), process_birth=str(process_birth),
+                                   kernel_birth=str(kernel_birth))
+    custody_owed.owe(_exit_key(root, pid, process_birth, kernel_birth), write, label=f"exit:{pid}")
 
 
 def retire_ended_process(root: Any, *, pid: int, process_birth: str, kernel_birth: str = "") -> Dict[str, Any]:
@@ -282,9 +291,9 @@ def _discharge_witnesses(root: Any, addressed) -> List[Dict[str, Any]]:
     return repaired
 
 
-def _repair_holder_claims(root: Any, holder: str) -> List[Dict[str, Any]]:
+def _repair_holder_claims(root: Any, holder: str, done: set) -> List[Dict[str, Any]]:
     """The claimed rows one task result holds: each recorded owner that positively ended has every
-    open claim and receiver of its process retired (``retire_ended_process``)."""
+    open claim and receiver of its process retired (``retire_ended_process``), once per pass (``done``)."""
     from ouroboros.task_results import load_task_result
 
     try:
@@ -301,7 +310,6 @@ def _repair_holder_claims(root: Any, holder: str) -> List[Dict[str, Any]]:
         owners[(pid, str(owner.get("process_birth") or ""), str(proof.get("kernel_birth") or ""),
                 str(proof.get("session") or ""))] = proof if proof.get("pid") == pid else {}
     repaired: List[Dict[str, Any]] = []
-    done = set()
     for (pid, birth, kernel, _session), proof in owners.items():
         if (pid, birth, kernel) in done or not owner_ended(pid, birth, proof):
             continue  # one image of a pid may be ended while this one runs: each is judged alone
@@ -324,9 +332,9 @@ def repair_ended_local_custody(root: Any, task_ids: Iterable[str], *, root_task_
         holder = str(facts.get("holder") or "")
         return (holder in members and str(facts.get("root_task_id") or "") == str(root_task_id)
                 if holder else str(facts.get("task_id") or "") in members)
-    repaired = _discharge_witnesses(root, addressed)
+    repaired, done = _discharge_witnesses(root, addressed), set()
     for holder in sorted(members):
-        repaired.extend(_repair_holder_claims(root, holder))
+        repaired.extend(_repair_holder_claims(root, holder, done))
     repaired.extend(_repair_absent_receivers(root, members, str(root_task_id)))
     return repaired
 
@@ -343,8 +351,9 @@ def reconcile_open_local_custody(root: Any) -> List[Dict[str, Any]]:
     with open_store(pathlib.Path(root), write=False) as txn:
         holders = sorted({str(row[0]) for row in txn.conn.execute(
             "SELECT DISTINCT task_id FROM task_handoffs WHERE kind='launch_handoffs' AND state='claimed'")})
+    done: set = set()
     for holder in holders:
-        repaired.extend(_repair_holder_claims(root, holder))
+        repaired.extend(_repair_holder_claims(root, holder, done))
     repaired.extend(_repair_absent_receivers(root, None, None))
     return repaired
 
@@ -430,22 +439,31 @@ def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str]
             except Exception:
                 log.warning("Named decision on %s not recorded; its calls stay held", holder, exc_info=True)
                 refused.extend({"id": op, "task_id": holder, "reason": "unwritten"} for op in decided)
-    attempts = [row for row in tree_model_requests(pathlib.Path(root), root_task_id)  # the census's own read
-                if str(row.get("attempt_id") or "") in wanted]
+    try:
+        attempts = [row for row in tree_model_requests(pathlib.Path(root), root_task_id)  # the census's own read
+                    if str(row.get("attempt_id") or "") in wanted]
+    except Exception:  # what already landed is still reported; the receivers stay held
+        log.warning("Open model requests of %s unreadable; named receivers stay held", root_task_id, exc_info=True)
+        attempts = []
+        refused.extend({"id": op, "task_id": "", "reason": "unreadable"}
+                       for op in sorted(wanted - set(accepted) - {row["id"] for row in refused}))
     for attempt in attempts:
         consumer, number = attempt.get("local_answer_consumer_id"), attempt.get("local_answer_task_attempt")
-        why = receiver_reason(attempt)
-        if why != "no_local_receiver" and not _unretired(root, {str(attempt.get("task_id") or ""): {consumer: number}}):
-            continue  # already retired: nothing held, nothing to record twice
-        if judged(str(attempt["attempt_id"]), str(attempt.get("task_id") or ""), why):
+        attempt_id, task, why = str(attempt["attempt_id"]), str(attempt.get("task_id") or ""), receiver_reason(attempt)
+        try:
+            if why != "no_local_receiver" and not _unretired(root, {task: {consumer: number}}):
+                continue  # already retired: nothing held, nothing to record twice
+        except Exception:
+            refused.append({"id": attempt_id, "task_id": task, "reason": "unreadable"})
+            continue
+        if judged(attempt_id, task, why):
             try:
-                retire_model_consumers(pathlib.Path(root), str(attempt.get("task_id") or ""), {consumer: number},
+                retire_model_consumers(pathlib.Path(root), task, {consumer: number},
                                        record={"accepted": {**by, "reason": why}})
-                accepted.append(str(attempt["attempt_id"]))
+                accepted.append(attempt_id)
             except Exception:
-                log.warning("Named decision on receiver %s not recorded", attempt["attempt_id"], exc_info=True)
-                refused.append({"id": str(attempt["attempt_id"]), "task_id": str(attempt.get("task_id") or ""),
-                                "reason": "unwritten"})
+                log.warning("Named decision on receiver %s not recorded", attempt_id, exc_info=True)
+                refused.append({"id": attempt_id, "task_id": task, "reason": "unwritten"})
     return {"accepted": accepted, "refused": refused,
             "unmatched": sorted(wanted - set(accepted) - {row["id"] for row in refused})}
 

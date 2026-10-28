@@ -1033,8 +1033,12 @@ def _owe_consumer_retirement(root: Any, task_id: str, consumers: dict[str, int])
     consumers = dict(consumers)
 
     def write():
+        from ouroboros.store import acquisition_budget
+        from ouroboros._usage_wait import ACQUISITION_SLICE_SEC
+
         try:
-            retire_model_consumers(root, task_id, consumers)
+            with acquisition_budget(ACQUISITION_SLICE_SEC):  # a driver's attempt never waits a full store budget
+                retire_model_consumers(root, task_id, consumers)
         except ValueError as exc:
             if type(exc.__cause__) is not LookupError:  # only "the task's row is gone" is done
                 raise

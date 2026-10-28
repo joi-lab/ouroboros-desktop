@@ -537,11 +537,15 @@ def retire_process_invocations(root: Any, *, pid: int, process_birth: str, kerne
             holders.add(str(row[0]))
     retired: List[str] = []
     refused: List[Exception] = []
+    from ouroboros.store import StoreBusy
+
     for holder in sorted(holders):  # one refusing row never starves the others; the fact stays owed for it
         try:
             retired += _retire_owned_claims(root, holder, owned)
+        except StoreBusy:
+            raise  # a busy store refuses every row alike: retry the whole fact later, not each row now
         except Exception as exc:
-            log.warning("Claims of ended process %s on %s not retired yet", pid, holder, exc_info=True)
+            log.debug("Claims of ended process %s on %s not retired yet", pid, holder, exc_info=True)
             refused.append(exc)
     if refused:
         raise refused[0]

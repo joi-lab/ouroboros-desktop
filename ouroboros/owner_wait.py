@@ -464,8 +464,6 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
             command = in_q.get(timeout=1.0)
         except queue.Empty:
             command = None
-        if custody_owed.pending():  # this park's own poll services what the worker owes (its wake lands here too)
-            custody_owed.drain()
         if isinstance(command, dict) and command.get("type") == "owner_wait":
             if all(command.get(key) == identity[key] for key in ("task_id", "task_attempt", "wait_id")):
                 phase = command.get("phase")
@@ -481,6 +479,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
                     return outcome
                 elif phase == "refused":
                     raise RuntimeError(str(command.get("reason") or "owner wait refused"))
+        if custody_owed.pending():  # this park's own poll services what the worker owes (its wake lands here too)
+            custody_owed.drain()
         if not parked and (reason := _hold_control_reason(ctx)):
             from ouroboros.model_wait import ModelWaitInterrupted
 

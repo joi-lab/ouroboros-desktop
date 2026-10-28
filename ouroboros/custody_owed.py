@@ -7,7 +7,8 @@ fact waits here, compact (store addresses and stable timestamps; never results,
 prompts or tool contexts), and the process's existing drivers write it again:
 the server's delivery duty beside ``dialogue_retry``
 (``server_maintenance``), a pool worker's idle loop (woken through its own
-queue), the process's next claim write and its task-scope close. Each attempt is one ordinary bounded store
+queue) and its parked owner wait, the process's next claim write and its
+task-scope close. Each attempt is one ordinary bounded store
 acquisition; a failed attempt ends that acquisition, never the duty. Nothing
 here expires, counts or decides that work ended. Process death loses the map:
 the supervisor's exit door and the startup/addressed proof
@@ -59,6 +60,8 @@ def owe(key: Hashable, apply: Callable[[], Any], *, label: str = "") -> None:
             wake()
         except Exception:
             log.debug("Owed custody wake failed", exc_info=True)
+            with _LOCK:
+                _wake_sent = False  # not delivered: the next owe tries again
 
 
 def pending() -> int:
