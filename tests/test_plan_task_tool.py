@@ -427,7 +427,7 @@ def test_pending_seats_settle_from_the_custody_hook_and_wake_the_mailbox(harness
     record = _record(harness)
     assert [p["status"] for p in record["asks"][0]["participants"]] == ["pending", "pending", "answered"]
     assert result.meta["plan_pending_asks"] == 1 and "Still working: s1, s2" in text
-    decision = plan_record.gate_projection(record, enforcement="blocking", cyber_pro=False, hurry=False, force_plan=False)
+    decision = plan_record.gate_projection(record, enforcement="blocking", cyber_pro=False, hurry=False)
     assert decision["status"] == "awaiting" and decision["allow"] is True  # silence never holds
     from ouroboros.review_records import ReviewActorRecord
 

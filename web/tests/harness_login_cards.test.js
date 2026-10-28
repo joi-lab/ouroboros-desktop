@@ -61,9 +61,11 @@ function statusPayload(loggedIn) {
         daemon: { state: 'running', engine_version: '3.3.13', runtime: {} },
         config_dir: '/home/agent',
         harnesses: [{ id: 'codex' }],
+        // The engine's bootstrap registry row for an empty family's login.
         profiles: {
-            harnessAccounts: [{ harness_id: 'codex', native_login_detected: loggedIn }],
-            profiles: [],
+            profiles: [{ profile: { harness_id: 'codex', profile_id: 'codex-default' },
+                status: { verification: loggedIn ? 'passed' : 'not_run', verification_source: 'local_store' } }],
+            harnessAccounts: [], accountPools: [],
         },
         quota: [],
     };
@@ -176,11 +178,13 @@ test('a verify-race failure is re-checked against live account status before the
         host,
         store,
         fetchImpl: async (url, init = {}) => {
+            // The engine resolves the empty family's login onto its row and names it.
             if (url === '/api/claudexor/login' && init.method === 'POST') {
-                return json(200, { job_id: 'job-2', job: { state: 'running' } });
+                return json(200, { job_id: 'job-2', job: { state: 'running', profileId: 'codex-default' } });
             }
             if (url.startsWith('/api/claudexor/login/')) {
-                return json(200, { job: { state: 'failed', outcome: { reason: 'auth_not_ready' } } });
+                return json(200, { job: { state: 'failed', profileId: 'codex-default',
+                    outcome: { reason: 'auth_not_ready' } } });
             }
             return json(404, {});
         },

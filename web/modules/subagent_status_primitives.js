@@ -57,7 +57,8 @@ export function harnessMap(snapshot) {
 
 /** Engine verdict for an honored exact scope, as in claudexor_observations.
  * Catalog/account facts remain useful when quota scope is unknown; neither a
- * model-name substring nor a raw ratio certifies this actor's availability.
+ * model-name substring nor a raw ratio certifies this actor's availability,
+ * and a pin answers only to its exact subject (a null one belongs to no pin).
  */
 function routeQuotaFact(snapshot, harness, model, profileId = '') {
     const scope = snapshot?.availability_scope;
@@ -65,16 +66,8 @@ function routeQuotaFact(snapshot, harness, model, profileId = '') {
     if (!scope || !Object.hasOwn(scope, 'model') || scope.model !== (model || null)
         || scope.requestKind !== 'text' || scope.basis !== 'quota_block') return unknown;
     const pin = String(profileId || '');
-    const aliases = pin === `${harness}-default` && Array.isArray(snapshot?.profiles?.accountPools)
-        && Array.isArray(snapshot?.profiles?.profiles)
-        && snapshot.profiles.profiles.some((row) => row?.profile?.harness_id === harness
-            && row.profile.profile_id === pin);
-    const subjectRows = (rows) => {
-        const relevant = (Array.isArray(rows) ? rows : []).filter((row) => row?.subject?.harness === harness);
-        const exact = relevant.filter((row) => !pin || row.subject.subject_id === pin);
-        return exact.length ? exact : relevant.filter((row) => aliases
-            && [null, undefined, ''].includes(row.subject.subject_id));
-    };
+    const subjectRows = (rows) => (Array.isArray(rows) ? rows : []).filter((row) => row?.subject?.harness === harness
+        && (!pin || row.subject.subject_id === pin));
     const rows = subjectRows(snapshot?.quota);
     if (!rows.length || subjectRows(snapshot?.quota_absences).length) return unknown;
     if (rows.some((row) => !(row.freshness === 'fresh' || (Array.isArray(row.constraints)

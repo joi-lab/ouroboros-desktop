@@ -1064,6 +1064,8 @@ def _commit_request_refusals(ctx: ToolContext, *, root: str, preflight_reviewer:
         return None, _COMMIT_ROOT_REFUSAL
     if continuation and wake_on is not None:
         return None, "TOOL_ARG_ERROR: wake_on belongs to a new ask; collection retains its saved selection"
+    if continuation and getattr(ctx, "_review_since", ""):
+        return None, "⚠️ TOOL_ARG_ERROR: since_review shapes a new wave's brief; an author continuation dispatches no critic."
     selector = "" if collecting and not (skipped or continuation) else preflight_reviewer
     error = _commit_preflight_choice_error(selector, skipped=skipped, continuation=continuation,
                                          ctx=ctx, goal=goal, scope=scope, review_rebuttal=review_rebuttal)
@@ -1121,12 +1123,13 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
                        scope: str = "", review_reference: Optional[dict] = None,
                        author_disposition: Optional[dict] = None, root: str = "",
                        preflight_reviewer: str = "", reviewers: Optional[List[str]] = None, reason: str = "",
-                       wake_on: Any = None) -> str:
+                       wake_on: Any = None, since_review: str = "") -> str:
     """Stage, review, and commit files with unified pre-commit review."""
     from ouroboros import body_candidate  # lazy: the Git tools reach the candidate owner only when committing
     skip_advisory_pre_review = bool(skip_advisory_review or skip_advisory_pre_review)
     preflight_reviewer = str(preflight_reviewer or "").strip()
     _reset_commit_review_state(ctx)
+    ctx._review_since = str(since_review or "").strip()  # read when the wave prepares its history
     ctx._left_review_wait = None  # a new commit act is the author's explicit next choice
     continuation = review_reference is not None or author_disposition is not None
     collecting_reference = review_reference is not None and author_disposition is None
@@ -1134,7 +1137,7 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
         from ouroboros.tools.review_collection import prepare_commit_collection
         try:
             source = prepare_commit_collection(ctx, review_reference, commit_message=commit_message,
-                mutations=(review_rebuttal, goal, scope, reviewers, reason, preflight_reviewer))
+                mutations=(review_rebuttal, goal, scope, reviewers, reason, preflight_reviewer, ctx._review_since))
             commit_message = source.commit_message
         except ValueError as exc:
             return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=str(exc)))
@@ -1445,13 +1448,14 @@ def get_tools() -> List[ToolEntry]:
         "paths": {"type": "array", "items": {"type": "string"}, "description": "Optional subset of task-attributed paths. Omitted computes candidates; empty never stages the whole tree."},
         "skip_tests": {"type": "boolean", "default": False, "description": "Skip pre-commit tests."},
         "review_rebuttal": {"type": "string", "default": "", "description": "A NEW content-hashed counter-argument buys one paid re-review within capacity; repeating it is free-refused."},
-        "preflight_reviewer": {"type": "string", "default": "", "description": "One ENABLED catalog row (id or handle; a review-pool member or not) for an early informational look at the worktree before the panel; unknown or disabled is TOOL_ARG_ERROR."},
+        "preflight_reviewer": {"type": "string", "default": "", "description": "One ENABLED catalog row (id or handle; a review-pool member or not) for an early informational look at the worktree before the panel; unknown or disabled, or named beside skip_advisory_review=True or an author continuation, is TOOL_ARG_ERROR before anything is staged."},
         "reviewers": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Enabled catalog ids/handles. Blocking widens a subset to every ticked reviewer. Advisory allows a subset with at least one ticked reviewer and requires reason when narrowed. Cyber Pro composes freely. Omitted means the whole pool. Unticked advisers are heard, not counted; unknown or disabled is TOOL_ARG_ERROR."},
         "reason": {"type": "string", "default": "", "description": "Why these reviewers; required when an Advisory panel is narrowed. Missing reason refuses at $0 before staging."},
         "skip_advisory_review": {"type": "boolean", "default": False, "description": "Record that this commit deliberately goes without a preflight (preflight: skipped). The deterministic checks, the tests (see skip_tests) and the panel still run; the opposite of preflight_reviewer."},
         "goal": {"type": "string", "default": "", "description": "High-level goal of this change. Used by the panel's coupling questions to judge completeness."}, "scope": {"type": "string", "default": "", "description": "Declared scope boundary. Without a goal it is the intended transformation the panel's coupling questions judge the change against (completeness, forgotten adjacent surfaces)."},
         "review_reference": {"type": "object", "description": "Exact reference a prior commit call of this task returned, for the free explicit Advisory or Cyber Pro continuation."},
         "author_disposition": AUTHOR_DISPOSITION_SCHEMA,
+        "since_review": {"type": "string", "default": "", "description": "A review_record_id of an earlier change review of this repository (another task, or a copy such as a reviewed candidate) to compare with: the panel is shown what changed since its subject, its verdict only as a label of those earlier bytes; no PASS, finding or obligation carries over. Unknown, foreign or unreadable is a stated comparison gap. Omitted: this task's earlier reviews of this checkout."},
     }
     return [
         ToolEntry("commit_reviewed", {"name": "commit_reviewed", "description": reviewed_commit_description,

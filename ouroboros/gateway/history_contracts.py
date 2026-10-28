@@ -141,6 +141,7 @@ class ChatHistoryMessage(TypedDict, total=False):
     source: str
     sender_label: str
     sender_session_id: str
+    subagents_mode: Literal["swarm"]  # Effective room mode at owner-message acceptance.
     client_message_id: str  # correlation id; owner rows have role=user, quiz publications also use it
     ingress_accepted: bool
     ingress_dispatched: bool

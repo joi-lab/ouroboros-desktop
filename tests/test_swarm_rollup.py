@@ -107,7 +107,7 @@ def test_malformed_history_does_not_become_zero_swarm(tmp_path):
     with pytest.raises(json.JSONDecodeError):
         swarm_rollup.repair_swarm_rollup(tmp_path, "parent")
     assert build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "parent", "metadata": {"force_plan_source": "swarm"}}) is None
+        "id": "parent", "metadata": {"subagents_mode": "swarm"}}) is None
     path.write_text("", encoding="utf-8")
     assert swarm_rollup.repair_swarm_rollup(tmp_path, "parent")["child_ids"] == []
 
@@ -345,7 +345,7 @@ def test_real_producer_preserves_requested_counts_intervals_children_and_lane_or
         "version": 2, "fanout_count": 3, "requested_count": 5, "fanout_interval_sec_total": 3.0,
         "child_ids": ["a", "b", "c"], "lanes_requested": ["first", "second"]}
     result = build_swarm_efficiency(SimpleNamespace(drive_root=tmp_path), {
-        "id": "parent", "metadata": {"force_plan_source": "swarm"}})
+        "id": "parent", "metadata": {"subagents_mode": "swarm"}})
     assert {key: result[key] for key in ("subagent_count", "fanout_count", "requested_count",
                                         "fanout_interval_sec_total", "lanes_requested", "intent_source")} == {
         "subagent_count": 3, "fanout_count": 3, "requested_count": 5, "fanout_interval_sec_total": 3.0,

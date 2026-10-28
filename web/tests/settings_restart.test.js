@@ -46,8 +46,8 @@ test('Restart now confirm-and-send sends exactly one non-queueable /restart', as
 
 test('Settings and the chat header share ONE restart confirmation (owner quiz 285597)', () => {
     assert.equal(confirmAndSendRestart, sharedRestart);
-    const chat = readFileSync(new URL('../modules/chat.js', import.meta.url), 'utf8');
-    const header = chat.slice(chat.indexOf("if (command === 'restart')"), chat.indexOf("if (command === 'panic')"));
+    const bar = readFileSync(new URL('../modules/chat_header.js', import.meta.url), 'utf8');
+    const header = bar.slice(bar.indexOf("if (command === 'restart')"), bar.indexOf("if (command === 'panic')"));
     // The header no longer sends /restart directly: it runs the same dialog.
     assert.match(header, /await confirmAndSendRestart\(\{ openConfirmDialog, ws \}\)/);
     assert.doesNotMatch(header, /ws\.send/);

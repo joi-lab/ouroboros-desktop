@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import pathlib
+import stat
 import threading
 import time
 from contextlib import contextmanager
@@ -788,6 +789,28 @@ from ouroboros.maintenance_retirement import prune_agent_media_uploads as prune_
 
 # The server mirror of the durable startup_recovery gate; the child reads only the stored fact.
 _STARTUP_RECOVERY_GAPS = [False]
+# The full-text memory journals whose growth boot reports; the report never opens or rewrites them.
+_OBSERVED_JOURNALS = ("memory/identity_journal.jsonl", "memory/world_journal.jsonl",
+                      "memory/knowledge_history.jsonl", "memory/knowledge/patterns_history.jsonl")
+
+
+def _memory_journal_sizes(root: pathlib.Path) -> Dict[str, Any]:
+    """The ``memory_journal_observation`` report, from ``lstat`` alone. A missing journal is ``None``,
+    not a measured zero; a non-regular entry or another ``OSError`` is ``None`` with an error."""
+    sizes: Dict[str, Optional[int]] = {}
+    errors: list = []
+    for relative in _OBSERVED_JOURNALS:
+        try:
+            info = (root / relative).lstat()
+            sizes[relative] = info.st_size if stat.S_ISREG(info.st_mode) else None
+            if sizes[relative] is None:
+                errors.append(f"{relative}: not_regular")
+        except FileNotFoundError:
+            sizes[relative] = None
+        except OSError as exc:
+            sizes[relative] = None
+            errors.append(f"{relative}: {type(exc).__name__}")
+    return {"errors": errors, "journal_bytes": sizes}
 
 
 def _startup_prune_sweeps(*, preserve_task_sources=False, recovery_report=None):
@@ -802,12 +825,8 @@ def _startup_prune_sweeps(*, preserve_task_sources=False, recovery_report=None):
         from ouroboros.temp_sweep import sweep_stale_temp_files
         sweep_stale_temp_files(DATA_DIR, atomic_temps=False)
     try:
-        # TZ-3 11A/B5 supersedes old age-digestion: measure journal growth
-        # without touching historical or new full-text snapshots.
-        from ouroboros.memory_journal_compaction import compact_memory_journal_snapshots
-
         _prune_event("memory_journal_observation", ("journal_bytes", "errors"),
-                     report=compact_memory_journal_snapshots(DATA_DIR))
+                     report=_memory_journal_sizes(DATA_DIR))
     except Exception:
         log.debug("Memory journal observation failed", exc_info=True)
 

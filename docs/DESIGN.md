@@ -426,22 +426,29 @@ Enter as a line break.
 
 ### Composer owner controls
 
-Each composer saves its room's **Context** and **Effort** through the owner endpoints.
-Main supplies a one-time copy to new Projects; later changes stay in their room.
+Each composer saves its room's **Subagents**, **Context** and **Effort** through the owner endpoints,
+in that order after ☰. Main supplies a one-time copy to new Projects; later changes stay in their room.
 Readback comes from Main state or the named Project, never another room. Saves apply
 to new participants; running work retains its choices through Resume. A refusal
 keeps the saved value and says why. No scope selector or extra settings row.
 
-Each is a neutral **capsule** of the pills' height — ring, name, value: `Context Max`,
+Each is a neutral **capsule** of the pills' height — ring, name, value: `Subagents Auto`, `Context Max`,
 `Effort X-High`; the name in secondary ink at 500, the value in meta ink at 600,
 and only the ring's lit arc coloured (crimson; Low neutral ink, Nano the Project's): a level is never amber.
+One exception: closed on Swarm, Subagents rests in the soft crimson tone (Off is muted, Auto plain), since
+Swarm asks Ouroboros not to economise (owner 24.10).
 Until the room's values arrive the ring stays unlit and the value secondary,
 never a faded capsule. Closed, Effort names only the primary level; its ring (a 300°
 arc: band minimum..maximum, dot primary) and the button's name carry the range.
 Context's ring is three arcs, the chosen one lit: one of three modes, never a fill
-level or capacity. A capsule opens **inline**, never as a dropdown, one at a time;
-its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
-choice posts at once and the strip waits for the answer. Effort's seven levels carry
+level or capacity. Subagents' mark is a small network (owner 27.10, G): Ouroboros joined by threads to three helpers; Off lights none, Auto one helper and its thread, Swarm every helper and the threads between them.
+
+**A capsule opens inline, in the row, never as a dropdown or a panel, one at a time** (owner 11.10; the panels tried
+on 26.10 were withdrawn on 27.10); its value yields to the strip. Context's is Nano · Low · Max under a glass thumb; a
+choice posts at once and the strip waits for the answer. Subagents' is Off · Auto · Swarm the same way, and while it
+is open its lines stand under the row: what the value means and «Applies to new steps in this chat; running helpers
+finish.» When Settings turns subagents off or they are not set up yet, it says `Off` with a lock; open, Auto and Swarm
+are disabled and the reason and `Open Settings` stand under the row instead; the room keeps its own value. Effort's seven levels carry
 a primary pill and two helper bounds; the primary may lie outside them. A
 segment is its word plus `--capsule-seg-pad` a side; the pill covers its segment;
 band, pill and brackets share one vertical inset. The primary and helper bounds never
@@ -458,7 +465,8 @@ scrolling and dragging.
 (padding down to `--space-1`), else alone while they step aside (down to 3 px, the
 pill's corners tightening; the name and divider yield first), last scrolling inside
 itself, faded where levels hide. A closed line too narrow drops the names, then
-ellipsizes the longest values, never rings. All is measured, so no breakpoint.
+ellipsizes the longest values, never rings. All is measured, so no breakpoint
+(`web/modules/capsule_fit.js`).
 
 **It opens in place.** Beside the others the strip grows by its width. Alone, its
 glass grows from the closed capsule to the whole line in 300 ms on the iOS sheet
@@ -488,9 +496,16 @@ or the chosen mode; arrows step a handle (PageUp/PageDown too) or choose the nex
 mode, Home/End reach the ends; Esc closes and returns focus to the head; an outside
 press closes. Handles are sliders naming their level; closed, they leave the tab
 order. An effort change saves when the gesture ends, saves run in order (last wins),
-and Send waits for both pending Context and Effort saves; a refused
+and Send waits for every pending capsule save; a refused
 save keeps the draft, says why and returns to the saved value — unsaved values are
 never shown as saved.
+
+**What Swarm leaves behind.** An owner message the host accepted while its room was on Swarm says `Swarm`
+before its time: a request, never proof that helpers ran. A Swarm root's card says one line, first in its foot,
+from its receipt: helpers started (counted from recorded starts; while none is recorded, the helpers requested),
+models, `$X known + N not final`, subscription sessions, or
+`Swarm requested · no helpers started`; never minds, waves, families, peaks, percentages or one sum the facts
+do not make, and an unknown amount is a word, never $0 (`web/modules/swarm_presentation.js`).
 
 **"+" holds the composer's actions.** Where the paperclip stood, "+" (More actions, a
 finger-sized target that keeps the row's height) opens a menu sheet above itself: Attach
@@ -829,7 +844,7 @@ status sentence's or a composer chip's dot is its tone, §4).
 - **Amber is the owner's attention and nothing else:** (1) the owner's move — a
   question, or what only the owner can do: sign in, a spending limit, Resume after a
   restart, crash or Panic, grant access, a skill review that must run first, local
-  changes before an update, an Evolution chip or Consciousness sentence that needs the owner
+  changes before an update, an Evolution chip, the consciousness chip or a Consciousness sentence that needs the owner
   or was stopped by the spending limit; (2) a warning worth reading — warn toasts and sentences,
   Settings and onboarding notes, warnings inside task timelines, reviews and Logs
   events, account quota; (3) the System voice (a pale tint in the light theme, its name
@@ -1973,7 +1988,9 @@ lifecycle.
 A task that ends with a cause states it on the collapsed line in the
 owner's words (the sentence of the durable row and the expanded body), so a
 `Done with warnings` chip never stands beside an unrelated last action; a clean
-ending keeps the last narration. Successful tool calls are not rows: they fold
+ending keeps the last narration. Residual tool errors name the first recorded
+failure in plain words (a noun for the step and what happened, never a tool
+name, its result text or a path) and count the rest (`tool_error_words`). Successful tool calls are not rows: they fold
 into ONE evidence row per block (`N tool calls`, `N tool calls · M errors` once
 a call failed) at the first call's position and time, patched in place; Expand
 shows per-tool counts (`read_file ×3 · web_search`), and the phase (`calling`
@@ -2058,7 +2075,12 @@ host jobs (routing, census `kind`, Stop custody, terminal rows); the client
 draws no chrome or status from it. A block that existed only for open attention leaves when that attention
 closes: a wait-only block disappears when the wait resolves, and the resolved
 episode's no-reopen ledger survives with the record, so a stale revision cannot
-bring it back.
+bring it back. A host wait (accounting access, control storage: the typed
+`usage_lock_wait`/`control_store_wait` episodes) is how the host ran, not the
+turn's work: a block's episodes of one kind are one receipt row, live while one
+is open, then their count and the longest measured one, so a wait never makes or
+keeps a block, live or on reload; Logs keep every phase, and the model's progress
+window folds them the same way (`checkpoint_waits`).
 
 An addressing call (`start_task`, `move_to_project`, `tell_task`: the
 routing-verb family `ouroboros/tool_capabilities.py::ROUTING_VERBS` owns) is
@@ -2081,7 +2103,7 @@ states the cause in the owner's words, the failed call stays the error row
 inside the block, and the tool result carries the typed reason (with the cause
 and repair in `detail` where the producer holds one) so the model narrates; no
 host bubble interrupts a narrating turn. When the host itself issued the act (a
-Swarm message, a skill-card repair, a picker click), or a refused owner steer
+skill-card repair, a picker click), or a refused owner steer
 carries no owner-message receipt, the host states the refusal as ONE typed
 System row (`task_not_started`, `task_start_unconfirmed` for unconfirmed
 admission, or `steer_not_delivered` for steering) in the issuing chat, keyed to
@@ -2707,7 +2729,7 @@ under it with a little parallax. Nothing darkens. The quarter of the room left
 showing is the way back: a tap or a sideways finger on it closes the drawer. A
 Project open over Main is the room then, and moves the same way; on the desk the
 column stays docked and nothing changes (owner 19.10). In a room (Main, an open Project) ☰
-is the first control of the composer's row, beside Swarm and under the thumb, and
+is the first control of the composer's row, beside Subagents and under the thumb, and
 steps aside with the others while an open capsule has the line alone; on a page
 without a composer it sits in the leading slot of the header. While the drawer is
 closed ☰ carries one 7 px dot for Main and the Projects, the room on screen
@@ -2762,7 +2784,7 @@ while it reconnects: the room's bar says Reconnecting….
 
 **Haptics.** Inside Telegram, and only there (its HapticFeedback; a browser and the
 desktop app have none), a few moments are felt, one meaning each: the drawer,
-released, latches open or closed (a light impact); a level steps or Swarm flips (a
+released, latches open or closed (a light impact); a level steps or a mode is chosen (a
 selection tick); a long press opens a row's menu, a swipe on a message reaches its
 reply point (again after pulling back under it) or a widget is picked up to be moved
 (a medium impact); Stop on a work is pressed (a rigid impact, once); the owner's own
@@ -2791,15 +2813,28 @@ and in the macOS window its empty parts still move the window. A header with not
 no bar, and its page starts at the window's top edge: the band under the macOS title bar stays the
 window's (owner 22.10), the page's first row starts below it, and the Widgets board's cards pass under it with
 crisp edges (owner 20.10), as a room's feed does (owner 21.10), while a plain press in the empty band still moves the window. A Project shows its name. In the stack
-layout the row is at most 56 px: ☰, the place's name, its status, then Panic and
-⋯, with the page's tabs, or Files' location and its actions, under it
+layout the row is at most 56 px: ☰, the place's name, its status, then a room's
+consciousness chip and Panic, with the page's tabs, or Files' location and its actions, under it
 (`bindPageHeader` moves those nodes); the name wins over the status word, which a short row
-drops whole after its start step, keeping its mark. Navigation sharing a toolbar also returns below the bar when the
+drops whole after its start step, keeping its mark, and a room's title ellipsizes before its chip or Panic yields.
+Navigation sharing a toolbar also returns below the bar when the
 content column is too narrow, including while the sidebar is resized; the toolbar wraps in its
-own row. Files' location and actions return above the list, folder names fit and actions wrap. Whenever the bar itself is narrow, on a phone or in a narrow window,
-Restart and the budget move into ⋯ — the same controls, placed by the bar's
-width. While a mode it holds is on (Evolve, Consciousness), ⋯ takes its tone,
-with no corner dot. In Main and Project, the bar has no continuous backing strip:
+own row. Files' location and actions return above the list, folder names fit and actions wrap.
+
+**A room's bar is the law of places** (owner 24.10): it holds what has a state and the emergency exit, and a
+command lives under the capsule of the state it changes; there is no ⋯ and no More. Main's bar holds its status,
+the consciousness chip, Restart, Panic and the budget; whenever the bar itself is narrow, on a phone or in a
+narrow window, Restart and the budget are the work list's last rows `Restart` and `Budget` — the same controls,
+placed by the bar's width. A Project's bar holds its name and status, the same chip and Panic
+(`web/modules/chat_header.js`); the chip leads the end group, so a status word never moves it. The chip is
+the brain and the next wake's time; `Evolving` while an evolution campaign runs, even with consciousness off;
+grey with `Off` while it is off. Awake it shows the moving dots,
+never a breathing glyph; an unconfirmed state shows a ring, a failed wake the outcome's red dot, and amber only
+the owner's move (§4). A press opens its own sheet of the work list's material, hung under the capsules, and
+switches nothing: the host's state sentence, Start or Stop, `$X of $Y in the
+last 24 hours`, the three last wakes, `Dashboard ›`, and `Evolution ›` while a campaign runs
+(`web/modules/consciousness_status.js`). Evolve and Review live in Dashboard › Evolution (`Run review…` opens
+`/review`'s picker). In Main and Project, the bar has no continuous backing strip:
 the title and status share one floating capsule (`--chip-float`, non-shrinking
 mark and caret with inline inset), and each command is its own floating capsule
 (owner 21.10). A failure or approximation note hangs under the bar; a page
@@ -2817,8 +2852,10 @@ applies only where a pointer can hover (`@media (hover: hover)`).
 **Touch and containment.** Under a coarse pointer every target is at least 44 px
 (`--touch-target-min`); a control whose look is smaller keeps its look and gains
 the invisible hit area of the one `.ui-hit-area` recipe in `web/ui.css`, which a
-link inside a sentence takes too so the sentence keeps its lines. Nothing that
-acts is hidden until hover there (a Project row's menu is reached by its long press).
+link inside a sentence takes too so the sentence keeps its lines. Inside a strip
+that scrolls (a capsule's open levels on a narrow phone) a value keeps only its drawn
+height, since the strip clips that reach. Nothing that acts is hidden until hover
+there (a Project row's menu is reached by its long press).
 No page scrolls sideways at any width; only code, tables, tab strips and a bar's
 Files location scroll sideways, inside themselves, with a fade where content
 hides. Text wraps before it widens a column. A pinch only magnifies (owner 23.10): while it

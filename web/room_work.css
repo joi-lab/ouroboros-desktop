@@ -55,7 +55,10 @@ html[data-layout="docked"] .chat-page-header .app-page-title-row > .rw-trigger {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 :is(.chat-page-header, .project-panel-bar) > .app-page-title-block { flex: 0 1 auto; min-width: 0; max-width: 100%; }
-:is(.chat-page-header, .project-panel-bar) > :is(.app-page-actions, .app-page-trailing) { flex: 0 0 auto; }
+/* The consciousness chip follows the title block and keeps its width (consciousness.css); the commands take the bar's
+   far end, so the title yields first. */
+:is(.chat-page-header, .project-panel-bar) > :is(.app-page-actions, .app-page-trailing) { flex: 0 0 auto; margin-inline-start: auto; }
+.project-panel-bar { column-gap: var(--space-2); }
 :is(.chat-page-header, .project-panel-bar) .app-page-title-row {
     box-sizing: border-box;
     display: inline-flex; align-items: center; gap: 0; max-width: 100%; min-width: 0;
@@ -165,8 +168,26 @@ html[data-layout="docked"] .chat-page-header .app-page-title-row {
 }
 /* Main and Project: the header floats over the transcript, so its anchor hangs from the header's bottom edge. */
 :is(.chat-page-header, .project-panel-bar) > .rw-shade-anchor { position: absolute; left: 0; right: 0; top: 100%; height: 0; z-index: 30; }
-/* Main's history note hangs on the place the open list covers, so it waits behind the list (Project's note is in flow). */
-.chat-page-header[data-rw-open] ~ .chat-page-note { visibility: hidden; }
+/* Main's history note hangs on the place an open list covers, so it waits behind the list (Project's note is in
+   flow): the room's work list, or the consciousness chip's (consciousness_status.js). */
+.chat-page-header:is([data-rw-open], [data-cx-shade]) ~ .chat-page-note { visibility: hidden; }
+/* A narrow bar's commands are the list's last rows (Main's Restart and budget, page_header.js): the same two nodes
+   lie flat here, the budget saying its name and its amount, and an empty slot takes no room. */
+.rw-extras { display: flex; flex-direction: column; gap: 2px; padding: 0 var(--space-2) var(--space-3); }
+.rw-extras:empty { display: none; }
+:root[data-theme] .rw-extras > :is(.chat-header-btn, .chat-budget-pill).ui-chrome-control {
+    display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-3);
+    width: 100%; height: auto; min-height: var(--touch-target-min); padding: 0 var(--space-3);
+    border-radius: var(--radius-md); background: transparent; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    color: var(--text-primary); font-size: var(--type-body); font-weight: 400; text-align: start;
+}
+@media (hover: hover) {
+    :root[data-theme] .rw-extras > :is(.chat-header-btn, .chat-budget-pill).ui-chrome-control:hover { background: var(--rw-hover); }
+}
+.rw-extras .chat-budget-word { display: inline; }
+.rw-extras .chat-budget-text { font-size: var(--type-body); color: var(--text-meta); }
+.rw-extras .chat-budget-bar { display: none; }
 /* The Project status bar keeps the room's history note; without one it takes no room. */
 .chat-panel-statusbar:not(:has(> :not([hidden]))) { display: none; }
 

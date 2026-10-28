@@ -6,7 +6,7 @@ import pytest
 
 from ouroboros.settings_setup_contract import ONBOARDING_COMPLETED_KEY
 from tests.test_onboarding_complete_endpoint import (
-    LIVE_SNAPSHOT, WIZARD_PAYLOAD, _profile, _profile_account,
+    LIVE_SNAPSHOT, WIZARD_PAYLOAD, _pool, _profile,
     onboarding as onboarding,  # explicit fixture re-export, not another settings writer
 )
 
@@ -203,8 +203,8 @@ def test_codex_only_preview_and_finish_share_models_agents_and_atomic_settings(o
     onboarding.calls["snapshot_payload"] = {
         **LIVE_SNAPSHOT,
         "harnesses": [LIVE_SNAPSHOT["harnesses"][1]],
-        "profiles": {"harnessAccounts": [_profile_account("codex", "shared")],
-                     "profiles": [_profile("codex", "shared")]},
+        "profiles": {"profiles": [_profile("codex", "shared")], "harnessAccounts": [],
+                     "accountPools": [_pool("codex", {"kind": "profile", "profileId": "shared"})]},
         "model_catalog": [{"value": model, "is_default": True, "input_modalities": ["text", "image"],
                            "credential_profile_id": "shared", "max_context_window": 872000}],
     }

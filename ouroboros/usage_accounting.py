@@ -884,8 +884,8 @@ def record_subscription_session(
     (total, cache read, cache write). It is validated here, the one place that
     persists it, and it is deliberately outside the idempotent identity: an
     engine that starts reporting it must not rewrite or duplicate a row already
-    settled without it. Unreported or unusable stays absent — the legacy
-    ``prompt_tokens``/``cached_tokens`` axes keep their own meanings.
+    settled without it. The input axes are that split, a direct call's meaning (unknown where it
+    is); the harness's own counters, of differing meanings, stay in ``harness_tokens``.
     """
     stable_id, route_id = str(session_id or "").strip(), str(route or "").strip()
     if not stable_id or not route_id:
@@ -902,6 +902,7 @@ def record_subscription_session(
     real_root = str(root_task_id or (bound.root_task_id if not task_id else "") or real_task)
     billing = settlement_billing_fields(root, real_task, real_root)
     input_counters = _normalized_input_token_usage(input_token_usage)
+    split = input_counters or {}
     cost = provider_cost_value(spend_usd)
     cash = disclosed_cost({"spendUsd": cost, "spendEstimated": spend_estimated}, attempt_execution=attempt_execution)
     cost, spend_estimated = cash["cost_usd"], cash["cost_estimated"]
@@ -919,10 +920,12 @@ def record_subscription_session(
         **({"cost_partial": True, "cost_estimated": spend_estimated} if cash["cost_partial"] else {}),
         "pricing_known": cost is not None,
         **({"cost_invalid": True} if spend_usd is not None and cost is None else {}),
-        "prompt_tokens": None if prompt_tokens is None else max(0, int(prompt_tokens)),
+        "prompt_tokens": split.get("total_tokens"),
         "completion_tokens": None if completion_tokens is None else max(0, int(completion_tokens)),
-        # Cached tokens are a separate axis because harness semantics differ.
-        "cached_tokens": None if cached_tokens is None else max(0, int(cached_tokens)),
+        "cached_tokens": split.get("cache_read_tokens"),
+        "cache_write_tokens": split.get("cache_write_tokens"),
+        "harness_tokens": {name: None if value is None else max(0, int(value))
+                           for name, value in (("prompt_tokens", prompt_tokens), ("cached_tokens", cached_tokens))},
         "task_id": real_task,
         "root_task_id": real_root,
         **({"consciousness_cause": bound.consciousness_cause}

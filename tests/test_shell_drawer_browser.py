@@ -81,7 +81,7 @@ def test_the_drawer_opens_from_the_edge_from_the_chrome_and_keeps_the_finger(chr
         header = page.locator(f'{scope} .app-page-header').first.bounding_box()
         feed = page.locator(feed_selector).first.bounding_box()
         field = page.locator(f'{scope} textarea').first.bounding_box()
-        capsule = page.locator(f'{scope} .chat-toolbar-row .chat-swarm').first.bounding_box()
+        capsule = page.locator(f'{scope} .chat-toolbar-row .chat-subagents-mode').first.bounding_box()
         mid = feed['y'] + feed['height'] / 2
         starts = {
             'edge': (3, mid),
@@ -123,7 +123,7 @@ MENU = """scope => {
     const shown = (el) => Boolean(el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
     const menu = [...room.querySelectorAll('[data-mobile-nav-toggle]')].find(shown);
     const row = room.querySelector('.chat-toolbar-row');
-    const swarm = row?.querySelector('.chat-swarm');
+    const first = row?.querySelector('.chat-subagents-mode');
     const box = (el) => el ? (({x, y, width, height}) => ({x, y, w: width, h: height}))(el.getBoundingClientRect()) : null;
     const b = menu?.getBoundingClientRect();
     const at = (dx, dy) => document.elementFromPoint(b.x + b.width / 2 + dx, b.y + b.height / 2 + dy)
@@ -131,7 +131,7 @@ MENU = """scope => {
     const area = menu ? getComputedStyle(menu, '::after') : null;
     return {inRow: Boolean(menu && menu.parentElement === row && row.firstElementChild === menu),
             inHeader: [...room.querySelectorAll('.app-page-header [data-mobile-nav-toggle]')].some(shown),
-            menu: box(menu), swarm: box(swarm),
+            menu: box(menu), first: box(first),
             // The finger's target is the touch minimum, centred on the button: 21px from its centre is still the
             // button, 30px is not (not the composer around it either).
             inside: b ? [[0, -21], [0, 21], [-21, 0]].map(([dx, dy]) => at(dx, dy)) : [],
@@ -174,8 +174,8 @@ def test_a_rooms_menu_is_the_composers_first_control(shell_ui, tmp_path, room, h
         page.close()
     assert facts['theme'] == theme, facts
     assert facts['inRow'] is True and facts['inHeader'] is False, facts
-    assert facts['menu']['x'] + facts['menu']['w'] <= facts['swarm']['x'], ('left of Swarm', facts)
-    assert facts['menu']['h'] == facts['swarm']['h'] == 32, ('as tall as the capsules', facts)
+    assert facts['menu']['x'] + facts['menu']['w'] <= facts['first']['x'], ('left of the first capsule, Subagents', facts)
+    assert facts['menu']['h'] == facts['first']['h'] == 32, ('as tall as the capsules', facts)
     assert facts['inside'] == [True, True, True] and facts['outside'] == [False, False, False], (
         'the touch minimum, centred on the button, is its finger target', facts)
     assert facts['area'] == {'w': '44px', 'h': '44px'}, facts

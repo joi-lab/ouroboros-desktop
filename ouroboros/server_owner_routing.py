@@ -596,55 +596,6 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
     ):
         received = {"received_at": str(incoming["received_at"])} if incoming.get("received_at") else {}
         task_metadata = {**task_metadata, "client_surface": {"channel": _ingress_source, **received}}
-    if task_metadata.get("force_plan"):
-        from supervisor.worker_chat_lane import owner_conversation_admitted
-        from supervisor.state import budget_remaining, load_state
-        from supervisor.events import _handle_promote_chat_to_task
-        from ouroboros.gateway.routing_decision import _derived_identity
-
-        from ouroboros.task_finalization import host_operation_reply_kwargs
-
-        if not owner_conversation_admitted(chat_id, client_message_id):
-            return
-        answers = host_operation_reply_kwargs(None, "", client_message_id)  # the refusal settles only this Sending
-        try:  # bridge intake runs on the supervisor loop: same pre-check contract as assignment
-            remaining = budget_remaining(load_state(), strict=True, allow_stale=True)
-        except Exception:
-            ctx.send_with_budget(chat_id, "⚠️ Cost accounting is unavailable. Task was not dispatched; retry after ledger recovery.", **answers, role="system", system_type="task_admission_notice")
-            return
-        if remaining <= 0:
-            try:
-                ctx.send_with_budget(chat_id, "🚫 Budget exhausted. Task rejected. Please increase TOTAL_BUDGET in settings.", **answers, role="system", system_type="task_admission_notice")
-            except Exception:
-                pass
-            return
-        routing_token, task_id = (
-            _derived_identity(client_message_id, "swarm", 0)
-            if client_message_id else (uuid.uuid4().hex, uuid.uuid4().hex[:16])
-        )
-        event = {
-            "type": "promote_chat_to_task", "task_id": task_id,
-            # A wordless attachment message takes its canonical row's placeholder as
-            # the objective, the same text a direct turn receives; attachments ride below.
-            "routing_token": routing_token,
-            "objective": text or image_caption or str(incoming.get("log_text") or ""),
-            "chat_id": chat_id, "project_id": project_id,
-            "client_message_id": client_message_id, "task_constraint": task_constraint,
-            "force_plan": True, "force_plan_source": task_metadata.get("force_plan_source"),
-            "attachment_uploads": list(task_metadata.get("chat_attachment_uploads") or []),
-            # Swarm: the host promotes with no model turn waiting on the receipt,
-            # so a refusal reaches the owner as the handler's typed System row.
-            "host_initiated": True,
-        }
-        if isinstance(task_metadata.get("client_surface"), dict):
-            event["client_surface"] = dict(task_metadata["client_surface"])
-        if isinstance(origin_ref, dict) and origin_ref:
-            event["source_ref"] = dict(origin_ref)
-            event["source_text"] = task_metadata["origin_message_text"]
-        else:
-            event["origin_suppressed"] = True
-        _handle_promote_chat_to_task(event, ctx)
-        return
     from ouroboros.card_store import late_press_ref
     from ouroboros.owner_quiz import late_answer_ref
 

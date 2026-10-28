@@ -13,10 +13,11 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from tests.test_onboarding_complete_endpoint import (
-    LIVE_SNAPSHOT, _profile, _profile_account,
+    LIVE_SNAPSHOT, _pool, _profile,
     onboarding as onboarding,  # explicit re-export of the real atomic settings fixture
 )
 from tests.ui_chat_viewport_smoke import wait_drawer_closed
+from tests.ui_console_errors import PageErrors
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -37,7 +38,6 @@ def subscription_ui():
     }]
     posts = []
     reads = []
-    page_errors = []
     backend = {}
     settings = {
         **fixture["preview"]["model_settings"],
@@ -198,6 +198,7 @@ def subscription_ui():
             engine = os.environ.get("OUROBOROS_UI_BROWSER_ENGINE", "chromium")
             if engine not in {"chromium", "webkit", "firefox"}:
                 raise ValueError(f"Unsupported browser engine: {engine}")
+            page_errors = PageErrors(None, engine)
             browser = getattr(pw, engine).launch(
                 headless=True, executable_path=os.environ.get("OUROBOROS_UI_BROWSER_EXECUTABLE") or None)
             try:
@@ -208,13 +209,15 @@ def subscription_ui():
                                                **options})
                     page.route_web_socket('**/ws', lambda ws: ws.send(json.dumps({"type": "heartbeat"})))
                     page.route("**/api/**", respond)
-                    page.on("pageerror", lambda error: page_errors.append(str(error)))
-                    return page
+                    # Every error of every page counts unless the test declares a page it navigates
+                    # (``ui["errors"].watch(page)`` before the reload): then only WebKit's report of that
+                    # page's own cut-off fetch is set aside (tests/ui_console_errors.py).
+                    return page_errors.watch(page, navigates=False)
 
                 yield {"page": new_page(), "new_page": new_page, "url": f"http://127.0.0.1:{server.server_port}",
                        "posts": posts, "reads": reads, "fixture": fixture,
                        "settings": settings, "errors": page_errors, "backend": backend, "bootstrap": bootstrap}
-                assert not page_errors
+                assert not page_errors.unexpected(), page_errors.report()
             finally:
                 browser.close()
     finally:
@@ -249,8 +252,8 @@ def test_codex_quick_setup_computes_skipped_steps_and_finishes_once(subscription
     ui['backend']['client'] = onboarding.client
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT, 'harnesses': [LIVE_SNAPSHOT['harnesses'][1]],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     ui['fixture']['status']['profiles']['profiles'] = ui['fixture']['status']['profiles']['profiles'][:1]
@@ -476,8 +479,8 @@ def test_failed_preview_allows_manual_main_and_visible_reviewer_recovery_before_
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT,
         'harnesses': [{**LIVE_SNAPSHOT['harnesses'][1], 'models': []}],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     page.goto(ui['url'] + '/onboarding')
@@ -806,8 +809,8 @@ def test_review_shortcut_reconciles_local_vision_before_preview(
     ui['fixture']['status']['profiles']['profiles'] = profiles
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT, 'harnesses': [LIVE_SNAPSHOT['harnesses'][1]],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     page.evaluate("async () => (await import('/onboarding/static/modules/claudexor_status_store.js')).claudexorStatus.refresh()")

@@ -27,6 +27,7 @@ def schedule_subagent_properties() -> Dict[str, Any]:
     a returned schema cannot corrupt every later `get_tools()`."""
     from ouroboros.tool_access import SUBAGENT_CAPABILITIES
     from ouroboros.configured_subagents import SESSION_ACCESS_LOWERING
+    from ouroboros.delegate_documents import attachment_parameters
     from ouroboros.settings_scales import EFFORT_SCALE
 
     return {
@@ -110,6 +111,10 @@ def schedule_subagent_properties() -> Dict[str, Any]:
             "type": "array", "items": {"type": "string"},
             "description": "Agent-session ordinary folders: relative inputs for copy (nonempty required), or direct capture footprint including future outputs. ['.'] selects the whole folder. Acting children only, like directory_strategy. Native children declare outputs on file/process tools.",
         },
+        **attachment_parameters(
+            "Your retained inputs, for an agent_session child only (API children refuse both): the first start of "
+            "the child's work order attaches them; its later starts, continuations and replacements select their own. "
+            "With input_sources=declared only these inputs are copied to the child."),
         "protected_paths_grant": {"type": "boolean", "default": False, "description": "Allow the child to modify protected paths in its self_worktree. Honored only in pro runtime mode; you still re-check at integration."},
         "external_tool_grants": {"type": "array", "items": {"type": "string"}, "description": "Optional extension/MCP tool names to grant this mutative child. Denied by default."},
         "allowed_origins": {
@@ -249,6 +254,20 @@ def _validated_schedule_fields(params: Dict[str, Any], *, ctx: Any = None) -> tu
         return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): copy requires scope_paths; use ['.'] to select the whole folder."
     from ouroboros.delegate_directory import DIRECTORY_OPTIONS_NEED_WRITE, default_shaped_directory_options
 
+    if "attachment_paths" in params or "attachment_import" in params:  # membership is checked while copying
+        from ouroboros.delegate_documents import DocumentSelectionError, selection_options
+
+        try:
+            new_import = selection_options(params.get("attachment_paths"), params.get("attachment_import"))
+        except DocumentSelectionError as exc:
+            return {}, f"⚠️ TOOL_ARG_ERROR (schedule_subagent): {exc.detail}"
+        if "attachment_paths" in params:
+            directory_options["attachment_paths"] = list(params["attachment_paths"])
+        directory_options["attachment_import"] = "new" if new_import else "reuse"
+        if new_import:  # the first start's one new intent, saved with the task: a restart never mints twice
+            import uuid
+
+            directory_options["document_import_intent"] = uuid.uuid4().hex
     if params.get("workspace") not in (None, "copy", "in_place"):
         return {}, "⚠️ TOOL_ARG_ERROR (schedule_subagent): workspace must be copy or in_place."
     if params.get("workspace") == "in_place":  # the documented default geometry is no folder request, as at delegate_start
