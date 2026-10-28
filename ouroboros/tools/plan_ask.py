@@ -179,12 +179,17 @@ def resolve_participants(ask: Any, *, first_body_ask: bool, reviewer_effort: str
 
 
 def first_body_ask(record: Mapping[str, Any], revision: Optional[Mapping[str, Any]], *, body: bool = False) -> bool:
-    """The first ask after the plan became a body plan: this revision is body (a reading,
-    ``revision=None``, carries the task's own ``body`` fact) and no earlier ask was about a
-    body revision. A reading names no stored revision, so it never spends that first ask."""
+    """The first ask about a body intention, counted apart for readings and revisions: the
+    first ask about a body revision, and the first reading of declared body work (``revision=None``
+    with the task's own ``body`` fact). A reading never spends the revision's first ask; a later
+    reading names its participants like any later ask."""
     if not (revision.get("body") if revision is not None else body):
         return False
     for ask in record.get("asks") or []:
+        if revision is None:  # an earlier reading that already heard every marked reviewer
+            if ask.get("revision") is None and ask.get("body_first_ask"):
+                return False
+            continue
         earlier = plan_record.revision_by_number(record, ask.get("revision"))
         if earlier is not None and earlier.get("body"):
             return False

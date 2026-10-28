@@ -361,7 +361,7 @@
         "title": "Choose models"
       },
       {
-        "copy": "Reviewers read how Ouroboros understood a request, its plans, its results and changes to its own code. Decide whether their critical findings block the work or only inform Ouroboros.",
+        "copy": "Reviewers read how Ouroboros understood a request, its plans, its results and its changes. Decide whether their critical findings block the work or only inform Ouroboros.",
         "footer": "Pick both review enforcement and the initial runtime mode before Ouroboros starts.",
         "id": "review_mode",
         "railCopy": "Advisory vs blocking",

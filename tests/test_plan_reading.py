@@ -100,13 +100,16 @@ def test_a_declared_body_reading_hears_every_marked_reviewer_and_spends_no_first
     assert "This reading concerns Ouroboros's own body" in text
     system_prompt = _user_text(sub.calls[0]["request"].slot_messages["s2"][0]["content"])
     assert "## BIBLE.md (constitution" in system_prompt and "## ARCHITECTURE.md" in system_prompt
-    # The first ask about a body revision still widens: the reading spent nothing.
+    # A later reading names its participants like any later ask: the first reading heard everyone.
+    _call(ctx, ask=["s2"], message="One more question about the request.")
+    assert [s.slot_id for s in sub.calls[1]["slots"]] == ["s2"] and _record(harness)["asks"][1]["body_first_ask"] is False
+    # The first ask about a body revision still widens: the readings spent nothing.
     _write(ctx, affected_paths=["ouroboros/loop.py"], ask=["s2"])
-    assert [s.slot_id for s in sub.calls[1]["slots"]] == ["s2", "s1", "s3"] and _record(harness)["asks"][1]["body_first_ask"] is True
+    assert [s.slot_id for s in sub.calls[2]["slots"]] == ["s2", "s1", "s3"] and _record(harness)["asks"][2]["body_first_ask"] is True
     # The other direction: without the declaration a reading carries no pack and widens nothing.
     _call(harness.make_ctx(active_workspace=False, task_id="task-2"), ask=["s2"])
-    assert [s.slot_id for s in sub.calls[2]["slots"]] == ["s2"] and _record(harness, "task-2")["asks"][0]["body_first_ask"] is False
-    assert "## BIBLE.md" not in _user_text(sub.calls[2]["request"].slot_messages["s2"][0]["content"])
+    assert [s.slot_id for s in sub.calls[3]["slots"]] == ["s2"] and _record(harness, "task-2")["asks"][0]["body_first_ask"] is False
+    assert "## BIBLE.md" not in _user_text(sub.calls[3]["request"].slot_messages["s2"][0]["content"])
 
 
 # ---------------------------------------------------------------- the cached prefix of a participant's packet
