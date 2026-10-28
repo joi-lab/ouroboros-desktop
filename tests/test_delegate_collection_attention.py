@@ -11,6 +11,7 @@ from ouroboros import delegate_collection as body
 from ouroboros import delegate_custody_current as current
 from ouroboros.delegate_supervision import _TICK_SEC
 from ouroboros.gateways import claudexor_observation as obs
+from ouroboros.gateways import claudexor_run_events as run_events
 from ouroboros.gateways.claudexor import ClaudexorUnavailable
 from tests.test_delegate_body_collection import started, terminal
 
@@ -32,14 +33,17 @@ def _question(interaction_id="int-1"):
 
 
 class Engine:
-    """A 4.8.1 engine: the compact wait scripted per pass, details on demand."""
+    """An engine listing the compact wait: scripted per pass, details on demand; ``repaired`` says
+    whether its route accepts the problem acknowledgement (the contract probe's answer)."""
     engine_version = "4.8.1"
     engine_build_sha = "sha-attention"
     store_identity = ""
     routes = [{"method": "POST", "path": "/v2/runs/wait-many"}]
+    repaired = True
     wakes: list = []
     details: dict = {}
     requests: list = []
+    probes: list = []
     detail_reads: list = []
     catalog: list = []
     hold = False  # honour the requested hold (an engine default stands in for ``None``)
@@ -50,6 +54,11 @@ class Engine:
         return list(self.routes)
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
+            Engine.probes.append(wait_ms)
+            if not Engine.repaired:
+                raise ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
+            return _wake("timeout", [{"status": None, "pending": None, "token": None, "problem": "not_found"}])
         Engine.requests.append({"targets": targets, "wait_ms": wait_ms})
         if Engine.hold:
             time.sleep((25_000 if wait_ms is None else wait_ms) / 1000)
@@ -73,8 +82,9 @@ class Engine:
 def runtime(tmp_path, monkeypatch):
     """The real runtime with its driver parked; ``step`` runs one tick and joins its passes."""
     monkeypatch.setattr(obs, "_SUPPORT", {})
+    monkeypatch.setattr(run_events, "_SUPPORT", {})
     Engine.wakes, Engine.details, Engine.requests, Engine.detail_reads, Engine.catalog = [], {}, [], [], []
-    Engine.hold = False
+    Engine.probes, Engine.hold, Engine.repaired = [], False, True
     release, entered = threading.Event(), threading.Event()
     tick = body.BodyRuntime.tick
 
@@ -196,18 +206,19 @@ def test_a_problem_row_whose_addressed_read_fails_stays_unacknowledged(tmp_path,
     assert Engine.detail_reads == [entry.run_id] and entry.run_id not in instance.seen
 
 
-def test_an_engine_below_the_floor_keeps_todays_beat_of_one_detail_per_run(tmp_path, runtime, monkeypatch):
+def test_an_engine_whose_route_rejects_the_acknowledgement_keeps_todays_beat_of_one_detail_per_run(tmp_path, runtime):
     instance, step = runtime
     instance._compact_wait = False  # never learned on this engine
-    monkeypatch.setattr(Engine, "engine_version", "4.8.0")
+    Engine.repaired = False  # lists the route, serves it unrepaired: the release number says nothing
     entry = started(tmp_path)
     other = started(tmp_path, rid="run-two", tid="task-two")
     for rid in (entry.run_id, other.run_id):
         Engine.details[rid] = {"summary": {"runId": rid, "state": "running"}, "lastSeq": 1, "pendingInteractions": []}
     step()
     assert Engine.requests == [] and sorted(Engine.detail_reads) == [entry.run_id, other.run_id]
+    assert Engine.probes == [0], "probed once, remembered for this engine identity"
     step()
-    assert len(Engine.detail_reads) == 4
+    assert len(Engine.detail_reads) == 4 and Engine.probes == [0]
 
 
 def test_support_is_learned_by_the_first_read_then_the_pass_takes_over(tmp_path, runtime):

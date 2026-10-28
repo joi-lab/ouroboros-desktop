@@ -5,6 +5,7 @@ import pytest
 
 from ouroboros import review_execution as rx
 from ouroboros.gateways import claudexor_observation as obs
+from ouroboros.gateways import claudexor_run_events as run_events
 from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
 TOKEN_A = "a" * 43
@@ -23,10 +24,11 @@ class Engine:
     engine_version = "4.8.1"
     engine_build_sha = "sha-review"
     routes = [{"method": "POST", "path": "/v2/runs/wait-many"}]
+    repaired = True  # the route accepts the problem acknowledgement (the contract probe's answer)
 
     def __init__(self, wakes, details):
         self.wakes, self.details = list(wakes), list(details)
-        self.requests, self.detail_reads, self.catalog = [], 0, []
+        self.requests, self.detail_reads, self.catalog, self.probes = [], 0, [], []
 
     def operations(self, *, timeout_sec=None):
         if self.catalog and isinstance(self.catalog[0], BaseException):
@@ -34,6 +36,11 @@ class Engine:
         return list(self.routes)
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
+            self.probes.append(wait_ms)
+            if not self.repaired:
+                raise ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
+            return _wake("timeout", [{"status": None, "pending": None, "token": None, "problem": "not_found"}])
         self.requests.append({"targets": targets, "wait_ms": wait_ms})
         answer = self.wakes.pop(0)
         if isinstance(answer, BaseException):
@@ -68,6 +75,8 @@ class RuleEngine(Engine):
         self.held, self.finished = 0, False
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
+            return super().wait_run_attention(targets, wait_ms=wait_ms, timeout_sec=timeout_sec)
         self.requests.append({"targets": targets, "wait_ms": wait_ms})
         assert len(self.requests) <= 50, "busy loop: the slot never let the engine hold"
         target = targets[0]
@@ -89,6 +98,7 @@ class RuleEngine(Engine):
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     monkeypatch.setattr(obs, "_SUPPORT", {})
+    monkeypatch.setattr(run_events, "_SUPPORT", {})
     monkeypatch.setattr(rx, "_SESSION_POLL_SEC", 0.01)
 
 
@@ -176,7 +186,7 @@ def test_an_engine_that_lost_the_route_hands_its_own_detail_read_to_the_slot(tmp
 
 def test_an_engine_without_the_wait_keeps_the_old_sleep_and_read_beat(tmp_path, monkeypatch):
     class Old(Engine):
-        engine_version = "4.8.0"
+        repaired = False  # lists the route, rejects the acknowledgement: the release number is not asked
 
     gateway = Old(wakes=[], details=[RUNNING, RUNNING, DONE])
     slept = []

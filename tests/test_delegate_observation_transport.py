@@ -80,13 +80,13 @@ def test_public_wait_reads_response_slower_than_five_seconds(tmp_path, monkeypat
         assert result["status"] == "terminal", result
         assert result["state"] == "succeeded"
         # The route's live-input capability is read ONCE at entry on the same transport
-        # and stamped on the wake; then one handshake per supervision loop, one GET per
-        # tick (S2): the loop holds the transport across quiet ticks. The terminal tick's
-        # new journal tail is drained to the owner before settlement, which negotiates
-        # the run event route once per engine identity (#1350).
+        # and stamped on the wake; then one handshake per supervision loop, one catalog read
+        # per engine identity (#1350: the first beat's question about the compact wait and the
+        # terminal drain's about the run event route share it), one GET per tick (S2): the
+        # loop holds the transport across quiet ticks.
         assert result["leaf_live_input"] == "mid_turn"
-        assert requests == [("GET", "/v2/agent-capabilities"), ("POST", "/v2/handshake")] + [
-            ("GET", "/v2/runs/run-slow")] * (2 if initially_queued else 1) + [("GET", "/v2/operations")]
+        assert requests == [("GET", "/v2/agent-capabilities"), ("POST", "/v2/handshake"), ("GET", "/v2/operations")] + [
+            ("GET", "/v2/runs/run-slow")] * (2 if initially_queued else 1)
     finally:
         server.shutdown()
         server.server_close()
@@ -527,9 +527,11 @@ def test_a_busy_answer_to_the_compact_wait_is_an_observation_hole_like_a_read():
     assert caught.value.observation_answered is True
 
 
-def _repaired_engine(tmp_path, monkeypatch, *, version, events, wait_many=None, catalog=None):
+def _repaired_engine(tmp_path, monkeypatch, *, events, wait_many=None, catalog=None, repaired=True,
+                     version="4.8.1"):
     """One observing beat of the real wait over the real gateway against a scripted engine that
-    proves ``version`` and lists both observation routes; ``events``/``wait_many``/``catalog``
+    lists both observation routes and answers the contract probe as ``repaired`` says (the
+    release number it proves is the same either way); ``events``/``wait_many``/``catalog``
     answer (or raise for) their route. Returns the beat's result and the owner's activity frames."""
     from ouroboros import delegate_activity
 
@@ -560,6 +562,11 @@ def _repaired_engine(tmp_path, monkeypatch, *, version, events, wait_many=None, 
         if path == "/v2/runs/run-x/events":
             return events(request)
         if path == "/v2/runs/wait-many":
+            if json.loads(request.content or b"{}").get("targets") == [{"runId": "capability-probe", "seen": None}]:
+                return (httpx.Response(200, json={"wakeReason": "timeout", "attention": [], "summaries": [
+                    {"status": None, "pending": None, "token": None, "problem": "not_found"}]}) if repaired
+                    else httpx.Response(400, json={"code": "invalid_request",
+                                                   "message": "targets[0].seen: expected string"}))
             return wait_many(request) if wait_many else httpx.Response(200, json=quiet)
         assert path == "/v2/runs/run-x", path
         return httpx.Response(200, json=running)
@@ -576,13 +583,13 @@ def _raise(exc):
     return handler
 
 
-@pytest.mark.parametrize("version", ["4.8.0", "4.8.1"])
+@pytest.mark.parametrize("repaired", [False, True])
 @pytest.mark.parametrize("status,code", [(404, "not_found"), (503, "daemon_busy")])
 def test_an_unavailable_stream_keeps_the_provisional_window_on_the_repaired_engine_too(
-        tmp_path, monkeypatch, version, status, code):
+        tmp_path, monkeypatch, repaired, status, code):
     """A journal that cannot be opened hands the beat to the detail read and its degraded window,
     exactly as on the engine before the compact wait: never a refused wake."""
-    result, frames = _repaired_engine(tmp_path, monkeypatch, version=version,
+    result, frames = _repaired_engine(tmp_path, monkeypatch, repaired=repaired,
                                       events=lambda _r: httpx.Response(status, json={"code": code}))
     assert result["status"] == "progress", result
     sources = [meta["delegated_activity"]["source"] for meta in frames if "delegated_activity" in meta]
@@ -591,11 +598,11 @@ def test_an_unavailable_stream_keeps_the_provisional_window_on_the_repaired_engi
 
 def test_holes_on_the_repaired_engines_observation_routes_are_quiet(tmp_path, monkeypatch):
     stream = lambda _r: httpx.Response(200, headers={"content-type": "text/event-stream"}, text=": connected\n\n")  # noqa: E731
-    busy, _frames = _repaired_engine(tmp_path, monkeypatch, version="4.8.1", events=stream,
+    busy, _frames = _repaired_engine(tmp_path, monkeypatch, events=stream,
                                      wait_many=lambda _r: _busy("daemon_busy"))
     assert busy["status"] == "observation_pending" and busy["reason"] == "daemon_busy", busy
     assert busy["answered"] is True, "the engine itself answered: no outage line"
-    gone, _frames = _repaired_engine(tmp_path, monkeypatch, version="4.8.1", events=stream,
+    gone, _frames = _repaired_engine(tmp_path, monkeypatch, events=stream,
                                      catalog=_raise(httpx.ConnectError("refused")))
     assert gone["status"] == "observation_pending" and gone["reason"] == "daemon_unreachable", gone
 

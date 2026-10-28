@@ -50,9 +50,11 @@ class Engine:
     engine_build_sha = "sha-observe"
     routes = ROUTES
 
+    repaired = True  # the route accepts the problem acknowledgement (the contract probe's answer)
+
     def __init__(self, *, streams=(), wakes=(), details=()):
         self.streams, self.wakes, self.details = list(streams), list(wakes), list(details)
-        self.stream_opens, self.requests, self.detail_reads = [], [], []
+        self.stream_opens, self.requests, self.detail_reads, self.probes = [], [], [], []
 
     def operations(self, *, timeout_sec=None):
         return list(self.routes)
@@ -65,6 +67,11 @@ class Engine:
         return contextlib.nullcontext(answer if isinstance(answer, _Stream) else _Stream(answer))
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        if targets == [{"runId": obs.PROBE_RUN_ID, "seen": None}]:
+            self.probes.append(wait_ms)
+            if not self.repaired:
+                raise ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
+            return _wake("timeout", [{"status": None, "pending": None, "token": None, "problem": "not_found"}])
         self.requests.append({"targets": targets, "wait_ms": wait_ms})
         answer = self.wakes.pop(0)
         if isinstance(answer, BaseException):
@@ -176,3 +183,10 @@ def test_an_engine_missing_either_surface_keeps_the_detail_beat(ctx, routes):
     gateway.routes = routes
     assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
     assert gateway.stream_opens == [] and gateway.requests == []
+
+
+def test_an_engine_whose_route_rejects_the_acknowledgement_keeps_the_detail_beat(ctx):
+    gateway = Engine(streams=[""], wakes=[_wake("timeout", [_summary()])])
+    gateway.repaired = False
+    assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
+    assert gateway.probes == [0] and gateway.stream_opens == [] and gateway.requests == []

@@ -3,23 +3,33 @@
 import pytest
 
 from ouroboros.gateways import claudexor_observation as obs
+from ouroboros.gateways import claudexor_run_events as run_events
 from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
 ENGINE_TOKEN = "A" * 43
 OTHER_TOKEN = "B" * 43
 WAIT_MANY_ROW = {"method": "POST", "path": "/v2/runs/wait-many"}
+PROBE = [{"runId": obs.PROBE_RUN_ID, "seen": None}]
+# The contract probe's answers: a repaired engine places no such run; an engine without the
+# repair refuses ``seen: null`` at its schema.
+ACCEPTED = {"wakeReason": "timeout", "attention": [],
+            "summaries": [{"status": None, "pending": None, "token": None, "problem": "not_found"}]}
+REJECTED = ClaudexorUnavailable("invalid_request", "targets[0].seen: expected string", status_code=400)
 
 
 class FakeGateway:
-    """The two surfaces the adapter may touch, scripted per test."""
+    """The two surfaces the adapter may touch, scripted per test; ``probe`` answers the contract probe."""
 
-    def __init__(self, *, version="4.8.1", sha="sha-1", routes=(WAIT_MANY_ROW,), waits=(), details=None):
+    def __init__(self, *, version="4.8.1", sha="sha-1", routes=(WAIT_MANY_ROW,), waits=(), details=None,
+                 probe=ACCEPTED):
         self.engine_version = version
         self.engine_build_sha = sha
         self.routes = list(routes)
         self.waits = list(waits)
         self.details = dict(details or {})
+        self.probe = probe
         self.catalog_reads = 0
+        self.probes = []
         self.wait_requests = []
         self.detail_reads = []
 
@@ -28,6 +38,11 @@ class FakeGateway:
         return list(self.routes)
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        if targets == PROBE:
+            self.probes.append({"wait_ms": wait_ms, "timeout_sec": timeout_sec})
+            if isinstance(self.probe, BaseException):
+                raise self.probe
+            return self.probe
         self.wait_requests.append({"targets": targets, "wait_ms": wait_ms, "timeout_sec": timeout_sec})
         answer = self.waits.pop(0)
         if isinstance(answer, BaseException):
@@ -45,6 +60,7 @@ class FakeGateway:
 @pytest.fixture(autouse=True)
 def _fresh_support_cache(monkeypatch):
     monkeypatch.setattr(obs, "_SUPPORT", {})
+    monkeypatch.setattr(run_events, "_SUPPORT", {})
 
 
 def _summary(status="running", pending=False, token=ENGINE_TOKEN):
@@ -57,16 +73,61 @@ def _problem(kind):
 
 # -- support ------------------------------------------------------------------------------
 
-def test_support_needs_the_repaired_floor_and_the_catalog():
-    below = FakeGateway(version="4.8.0")
-    assert obs.wait_many_supported(below, timeout_sec=1) is False
-    assert below.catalog_reads == 0, "an engine below the repaired floor is not asked for its catalog"
-    unlisted = FakeGateway(version="4.8.1", routes=())
+def test_support_is_the_catalog_and_the_contract_probe_remembered_per_engine_identity():
+    unlisted = FakeGateway(sha="sha-unlisted", routes=())
     assert obs.wait_many_supported(unlisted, timeout_sec=1) is False
-    listed = FakeGateway(version="4.9.0")
-    assert obs.wait_many_supported(listed, timeout_sec=1) is True
-    assert obs.wait_many_supported(listed, timeout_sec=1) is True
-    assert listed.catalog_reads == 1, "one catalog read per engine identity"
+    assert unlisted.probes == [], "an engine that lists no route is not probed"
+    repaired = FakeGateway()
+    assert obs.wait_many_supported(repaired, timeout_sec=1) is True
+    assert obs.wait_many_supported(repaired, timeout_sec=1) is True
+    assert repaired.catalog_reads == 1 and repaired.probes == [{"wait_ms": 0, "timeout_sec": 1}], \
+        "one catalog read and one zero-wait probe per engine identity"
+    same_identity = FakeGateway(probe=REJECTED)
+    assert obs.wait_many_supported(same_identity, timeout_sec=1) is True and same_identity.probes == []
+
+
+@pytest.mark.parametrize("answer", [
+    REJECTED,
+    ClaudexorUnavailable("bad_request", "unknown field seen", status_code=400),
+    ClaudexorUnavailable("not_found", "no such route", status_code=404),
+    {"wakeReason": "timeout", "attention": [], "summaries": [_summary()]},  # a 200 of another shape
+    {"wakeReason": "problems", "attention": [], "summaries": []},
+], ids=["invalid_request", "other-400", "route-404", "old-shape-row", "old-shape-empty"])
+def test_a_received_refusal_of_the_acknowledgement_is_unsupported_and_remembered(answer):
+    gateway = FakeGateway(sha="sha-unrepaired", probe=answer)
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is False
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is False
+    assert len(gateway.probes) == 1 and gateway.catalog_reads == 1, "a received answer is remembered"
+
+
+@pytest.mark.parametrize("hole", [
+    ClaudexorUnavailable("daemon_unreachable", "read bound expired", observation_timeout=True,
+                         observation_reason="observation_read_timeout"),
+    ClaudexorUnavailable("daemon_busy", "local RPC timed out", status_code=503),
+    ClaudexorUnavailable("daemon_stopping", "no new product request was admitted", status_code=503),
+])
+def test_a_hole_on_the_probe_leaves_support_unknown_and_is_asked_again(hole):
+    gateway = FakeGateway(sha="sha-hole", probe=hole)
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is False, "this beat reads as before"
+    assert obs._SUPPORT == {}, "nothing is remembered of a hole"
+    gateway.probe = ACCEPTED
+    assert obs.wait_many_supported(gateway, timeout_sec=1) is True
+    assert len(gateway.probes) == 2 and gateway.catalog_reads == 1, "the next beat asked the contract again"
+
+
+def test_a_release_number_decides_nothing_about_the_route():
+    claims = FakeGateway(version="4.8.1", sha="sha-claims", probe=REJECTED)
+    assert obs.wait_many_supported(claims, timeout_sec=1) is False, "lists the route, serves it unrepaired"
+    predates = FakeGateway(version="4.8.0", sha="sha-predates")
+    assert obs.wait_many_supported(predates, timeout_sec=1) is True, "the contract, whatever the number"
+    assert not hasattr(obs, "WAIT_MANY_MIN_VERSION")
+
+
+def test_another_received_refusal_of_the_probe_propagates_typed():
+    gateway = FakeGateway(probe=ClaudexorUnavailable("http_401", "unauthorized", status_code=401))
+    with pytest.raises(ClaudexorUnavailable) as caught:
+        obs.wait_many_supported(gateway, timeout_sec=1)
+    assert caught.value.status_code == 401 and obs._SUPPORT == {}
 
 
 def test_a_double_without_the_seam_or_a_handshake_is_unsupported_without_a_request():
@@ -199,7 +260,7 @@ def test_detail_fallback_derives_rows_and_attention_and_keeps_todays_beat():
     live = {"summary": {"state": "running"}, "pendingInteractions": [], "lastSeq": 1}
     asked = {"summary": {"state": "running", "waitingOnUser": True}, "pendingInteractions": [_pending("i-1")]}
     done = {"summary": {"state": "succeeded"}, "pendingInteractions": [], "lastSeq": 9}
-    gateway = FakeGateway(version="4.7.0", details={"run-a": live, "run-b": asked, "run-c": done})
+    gateway = FakeGateway(probe=REJECTED, details={"run-a": live, "run-b": asked, "run-c": done})
     wake = obs.wait_attention(gateway, [("run-a", None), ("run-b", None), ("run-c", None)],
                               wait_sec=3.0, timeout_sec=5.0)
     assert wake.source == "detail" and wake.waited is False and wake.reason == "attention"
@@ -213,7 +274,7 @@ def test_detail_fallback_derives_rows_and_attention_and_keeps_todays_beat():
 
 def test_fallback_tokens_follow_the_compact_facts_so_seen_suppresses_a_known_question():
     asked = {"summary": {"state": "running", "waitingOnUser": True}, "pendingInteractions": [_pending("i-1")]}
-    gateway = FakeGateway(version="4.7.0", details={"run-b": asked})
+    gateway = FakeGateway(probe=REJECTED, details={"run-b": asked})
     first = obs.wait_attention(gateway, [("run-b", None)], wait_sec=0, timeout_sec=1.0)
     assert first.attention == [0]
     token = first.rows[0].token
@@ -226,7 +287,7 @@ def test_fallback_tokens_follow_the_compact_facts_so_seen_suppresses_a_known_que
 
 def test_fallback_keeps_a_runs_own_refusal_on_its_row_and_a_hole_for_the_whole_batch():
     gone = ClaudexorUnavailable("run_not_found", "no such run", status_code=404)
-    gateway = FakeGateway(version="4.7.0", details={
+    gateway = FakeGateway(probe=REJECTED, details={
         "run-a": {"summary": {"state": "running"}, "pendingInteractions": []}, "run-b": gone})
     wake = obs.wait_attention(gateway, [("run-a", None), ("run-b", None)], wait_sec=0, timeout_sec=1.0)
     assert wake.reason == "problems" and wake.rows[1].problem == "not_found" and wake.rows[1].error is gone

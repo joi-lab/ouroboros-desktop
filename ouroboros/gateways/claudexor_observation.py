@@ -9,13 +9,16 @@ until something needs attention or its window ends; the full run detail (events,
 artifacts) is an addressed read a consumer takes on a reason — attention, terminal, a person
 opening the run — never as the heartbeat.
 
-The engine listed that route from 4.8.0 but served it repaired only from 4.8.1 (claudexor
-#513–#515: shutdown, deadline passes, problem rows), so support is the version floor AND the
-catalog, remembered per exact engine identity like the event stream's. Below the floor, or
-when the route is missing (a 404 on the route is the engine's answer about the ROUTE, never
-about a run), ``wait_attention`` reads each run's detail once, as the old pollers did, and
-hands those details back so a consumer keeps today's behaviour without a second code path.
-No probe reads a timeout as "unsupported": a transport hole is reported as one.
+An engine may list that route and still serve it unrepaired (claudexor #513–#515: shutdown,
+deadline passes, problem rows; the repair carries no marker in the handshake or the catalog,
+and release numbers do not say which build ships it), so support is a contract: the catalog
+lists the route AND the route accepts the problem acknowledgement (``seen: null``), which only
+the repaired wait-many does. That is one side-effect-free probe per exact engine identity,
+remembered like the event stream's catalog answer. Without the contract, or when the route
+is missing (a 404 on the route is the engine's answer about the ROUTE, never about a run),
+``wait_attention`` reads each run's detail once, as the old pollers did, and hands those
+details back so a consumer keeps today's behaviour without a second code path. No probe reads
+a timeout as "unsupported": a hole leaves support unknown and this beat reads as before.
 
 Tokens are the engine's; a consumer echoes a row's token as ``seen`` only after it fetched
 what the attention was about (pending rows, terminal detail), so an unfetched question can
@@ -38,8 +41,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 WAIT_MANY_OPERATION = ("POST", "/v2/runs/wait-many")
-# The first release whose wait-many carries the repaired contract (#513–#515).
-WAIT_MANY_MIN_VERSION = "4.8.1"
+# The contract probe's target: a run id no engine can own, acknowledged (``seen: null``) with a
+# zero wait. A repaired engine answers 200 with that row's ``not_found`` problem; an engine
+# without the repair answers 400 (``seen: null`` fails its schema). No run is touched.
+PROBE_RUN_ID = "capability-probe"
 # The engine's own bounds (packages/schema/src/run-observation.ts): targets per call,
 # wait window and the shape of a token it minted.
 WAIT_MANY_MAX_TARGETS = 1000
@@ -52,8 +57,9 @@ _LOCAL_TOKEN = "local:"
 ACKNOWLEDGED_PROBLEM = _LOCAL_TOKEN + "problem"
 PROBLEMS = frozenset({"not_found", "snapshot_unavailable", "not_observed"})
 WAKE_REASONS = frozenset({"attention", "problems", "timeout", "aborted"})
-# Catalog answers per exact engine identity (version, build sha): a route cannot appear or
-# vanish without the engine changing, so one catalog read per identity per process.
+# The contract's answer per exact engine identity (version, build sha): an engine cannot
+# change what its route accepts without changing, so one probe per identity per process.
+# The catalog itself is the event stream module's shared one.
 _SUPPORT: Dict[Tuple[str, str], bool] = {}
 _SUPPORT_LOCK = threading.Lock()
 
@@ -129,34 +135,58 @@ class AttentionWake:
 def wait_many_supported(gateway: Any, *, timeout_sec: Optional[float]) -> bool:
     """Does the handshaken engine behind ``gateway`` serve the repaired compact wait?
 
-    An unhandshaken transport, a test double without the seam, or an engine below the
-    floor is answered ``False`` without a request; at or above it, the catalog decides.
+    Support is the contract, not a release number: the catalog lists the route AND the
+    route accepts the problem acknowledgement. The probe (``PROBE_RUN_ID``, ``seen: null``,
+    zero wait) is asked once per exact engine identity. Only a RECEIVED answer is
+    remembered: 200 with the ``not_found`` row (supported), a 400 or a 200 of another shape
+    (the route rejects or predates the acknowledgement), a 404 (the route is gone). A hole
+    (our bound expiring, a transport failure, the engine's busy or stopping 503) leaves
+    support unknown: nothing is remembered, this beat reads details as before and the next
+    beat asks again. An unhandshaken transport, or a double without the seam, is ``False``
+    without a request; the catalog read is the one shared with the event stream's question
+    (``claudexor_run_events.route_listed``), and a hole on it propagates typed.
     """
-    from ouroboros.gateways.claudexor import engine_at_least
+    from ouroboros.gateways.claudexor import ClaudexorUnavailable
+    from ouroboros.gateways.claudexor_run_events import engine_identity, route_listed
 
-    version = str(getattr(gateway, "engine_version", "") or "")
-    if not version or not callable(getattr(gateway, "wait_run_attention", None)):
+    if not getattr(gateway, "engine_version", "") or not callable(getattr(gateway, "wait_run_attention", None)):
         return False
-    if not engine_at_least(version, WAIT_MANY_MIN_VERSION):
-        return False
-    key = (version, str(getattr(gateway, "engine_build_sha", "") or ""))
+    key = engine_identity(gateway)
     with _SUPPORT_LOCK:
         if key in _SUPPORT:
             return _SUPPORT[key]
-    method, path = WAIT_MANY_OPERATION
-    supported = any(row.get("method") == method and row.get("path") == path
-                    for row in gateway.operations(timeout_sec=timeout_sec) if isinstance(row, dict))
+    supported = route_listed(gateway, WAIT_MANY_OPERATION, timeout_sec=timeout_sec)
+    if supported:
+        try:
+            body = gateway.wait_run_attention([{"runId": PROBE_RUN_ID, "seen": None}], wait_ms=0,
+                                              timeout_sec=timeout_sec)
+        except ClaudexorUnavailable as exc:
+            if int(getattr(exc, "status_code", 0) or 0) in (400, 404):
+                supported = False  # received: the route rejects the acknowledgement, or is gone
+            elif is_observation_hole(exc):
+                return False  # unknown: nothing remembered, today's reads this beat, asked again next beat
+            else:
+                raise
+        else:
+            supported = _accepts_acknowledgement(body)
     with _SUPPORT_LOCK:
         _SUPPORT[key] = supported
     return supported
 
 
+def _accepts_acknowledgement(body: Any) -> bool:
+    """The repaired answer to the probe: one row, the ``not_found`` problem, nothing else claimed."""
+    rows = body.get("summaries") if isinstance(body, dict) else None
+    return isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) and rows[0].get("problem") == "not_found"
+
+
 def forget_support(gateway: Any) -> None:
     """The route is unusable on this exact engine (absent, or answering outside its contract):
     every consumer reads details as before until the engine changes."""
-    key = (str(getattr(gateway, "engine_version", "") or ""), str(getattr(gateway, "engine_build_sha", "") or ""))
+    from ouroboros.gateways.claudexor_run_events import engine_identity
+
     with _SUPPORT_LOCK:
-        _SUPPORT[key] = False
+        _SUPPORT[engine_identity(gateway)] = False
 
 
 def is_observation_hole(exc: BaseException) -> bool:
