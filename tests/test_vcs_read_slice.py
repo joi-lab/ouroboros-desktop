@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shlex
 import shutil
@@ -91,7 +92,8 @@ def test_repository_is_selected_before_path_and_nested_repo_is_distinct(world):
 
 def test_literal_metacharacter_filename_blame_and_file_whitespace(world):
     _registry, ctx, _system, project = world
-    filename = "literal [x] $cash &!.txt"  # glob, shell and history metacharacters every filesystem allows
+    # Glob, shell and history metacharacters; NTFS forbids the glob ``?`` in a name, so Windows checks the rest.
+    filename = "literal [x] $cash &!.txt" if os.name == "nt" else "literal [x] $cash ?&!.txt"
     content = "alpha  \n\nlast\t \n\n"
     (project / filename).write_text(content, encoding="utf-8", newline="\n")
     git(project, "add", "--", filename)
