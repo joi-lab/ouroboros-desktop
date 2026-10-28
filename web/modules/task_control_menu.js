@@ -274,12 +274,12 @@ const KEPT_PAUSED = Symbol('kept_paused');
 
 // Every holder is a held call whose outcome is unknown (the server lists their ids): the owner may go on
 // without their results. They are never run again; the task records the decision (local_custody_repair).
-async function resumeWithoutUnknown(id, refusal, { resume, confirm }) {
+async function resumeWithoutUnknown(id, refusal, { resume, askOwner }) {
     const named = refusal?.body?.acceptable_unknown;
     if (!Array.isArray(named) || !named.length) throw refusal;
     const facts = heldWorkFacts(refusal.body.blockers, 5);
     const one = named.length === 1;
-    const confirmed = await confirm({
+    const confirmed = await askOwner({
         title: 'Resume without these results?',
         body: `${facts.charAt(0).toUpperCase()}${facts.slice(1)}. If you resume, ${one ? 'this call is' : 'these calls are'} `
             + `never run again, whatever ${one ? 'it' : 'they'} changed outside stays as it is, `
@@ -290,12 +290,12 @@ async function resumeWithoutUnknown(id, refusal, { resume, confirm }) {
         : KEPT_PAUSED;
 }
 
-export async function resumeTaskAction(taskId, { resume = resumeTask, toast = showToast, confirm = openConfirmDialog } = {}) {
+export async function resumeTaskAction(taskId, { resume = resumeTask, toast = showToast, askOwner = openConfirmDialog } = {}) {
     const id = String(taskId || '').trim();
     if (!id || inFlight.has(id)) return;
     inFlight.add(id);
     try {
-        const ack = await resume(id).catch((refusal) => resumeWithoutUnknown(id, refusal, { resume, confirm }));
+        const ack = await resume(id).catch((refusal) => resumeWithoutUnknown(id, refusal, { resume, askOwner }));
         if (ack === KEPT_PAUSED) return;
         if (ack?.ok !== true) throw new Error('Resume acknowledgement is unknown; retry this action.');
         pauseRequestIds.delete(id);
