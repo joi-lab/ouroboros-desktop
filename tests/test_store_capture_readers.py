@@ -304,7 +304,8 @@ QUEUE = [{"task_id": "queued-1", "parent_task_id": "grandchild", "status": "requ
 
 def _census_store(root):
     """#2371's ``_tree`` with every damage kind, rows tied each way, a flagged pair, a grandchild, BLOB bodies
-    (one spelling its own document) and a handoff that ties beside one that cannot."""
+    (one spelling its own document, one torn, one whose bytes are no UTF-8) and a handoff that ties beside one
+    that cannot."""
     from tests.test_hot_facts import _old_task, _task
     from tests.test_tree_census_damage import DAMAGE, _damage, _tree
 
@@ -322,8 +323,10 @@ def _census_store(root):
                          (store.encode_document({**txn.load("copied"), "task_id": "someone-else"}),))
         _old_task(txn, "blob-own", parent_task_id="root-1", metadata={"root_task_id": "root-1"})
         _old_task(txn, "blob-torn")
+        _old_task(txn, "blob-bad")
         txn.conn.execute("UPDATE task_bodies SET body=CAST(body AS BLOB) WHERE task_id='blob-own'")
         txn.conn.execute("UPDATE task_bodies SET body=CAST('{' AS BLOB) WHERE task_id='blob-torn'")
+        txn.conn.execute("UPDATE task_bodies SET body=X'FFFE7B' WHERE task_id='blob-bad'")  # not UTF-8 text
         txn.put_handoff("tied-handoff", "launch_handoffs", "op-1",
                         {"tool": "shell", "task_id": "tied-handoff", "root_task_id": "root-1", "state": "claimed"})
         txn.conn.execute("INSERT INTO task_handoffs (task_id, op_id, kind, facts) "
@@ -351,7 +354,46 @@ def test_the_tree_census_answers_what_its_per_row_read_answered(tmp_path):
     assert census.members["child"]["status"] == "running" and "copied" not in census.members
     assert census.unresolved["tied-parent"]["linked"] and census.unresolved["tied-handoff"]["linked"]
     assert not census.unresolved["bad-handoff"]["linked"]
-    assert census.unresolved["blob-torn"] == {"reason": "body_unreadable", "linked": False}
+    assert census.unresolved["blob-torn"] == census.unresolved["blob-bad"] == {"reason": "body_unreadable",
+                                                                                 "linked": False}
+
+
+def test_the_census_pages_its_underived_bodies_and_halves_a_page_past_sqlites_string_limit(tmp_path, monkeypatch):
+    """Every underived body in one aggregate could pass SQLite's string limit (an install still deriving its rows):
+    the census captures them by pages of ids inside its one snapshot, a page past the limit halves, and one body
+    past it refuses the census typed, never a census without that row."""
+    _census_store(tmp_path)
+    shapes = (("root-1", False, ()), ("root-1", True, QUEUE), ("other", False, ()))
+    expected = [_old_tree_facts(tmp_path, tree, descendants=descendants, queue_rows=queue)
+                for tree, descendants, queue in shapes]
+
+    def answered():
+        for (tree, descendants, queue), old in zip(shapes, expected):
+            new = task_store.tree_facts(tmp_path, tree, descendants=descendants, queue_rows=queue)
+            assert list(new.members.items()) == list(old.members.items()), tree
+            assert list(new.unresolved.items()) == list(old.unresolved.items()), tree
+        return True
+
+    monkeypatch.setattr(task_store, "_PAGE", 2)
+    assert answered()
+    real = task_store.capture
+
+    def too_big_past_one(conn, sql, params=(), columns=()):  # any aggregate of more than one body is too big
+        if "b.body" in sql and ("json_each" not in sql or len(json.loads(tuple(params)[0])) > 1):
+            raise sqlite3.DataError("string or blob too big")
+        return real(conn, sql, params, columns)
+
+    monkeypatch.setattr(task_store, "capture", too_big_past_one)
+    assert answered()  # every page halved to one body, in the same snapshot
+
+    def too_big_always(conn, sql, params=(), columns=()):
+        if "b.body" in sql:
+            raise sqlite3.DataError("string or blob too big")
+        return real(conn, sql, params, columns)
+
+    monkeypatch.setattr(task_store, "capture", too_big_always)
+    with pytest.raises(store.StoreError):
+        task_store.tree_facts(tmp_path, "root-1")
 
 
 # ---- O(statements) rows into Python -----------------------------------------------------------------------------

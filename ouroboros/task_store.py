@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
 from ouroboros import store, store_task_cards
 from ouroboros.store import Txn, open_store
@@ -133,21 +133,27 @@ def _fetch(txn: Txn, where: str = "", params: Iterable[Any] = ()) -> List[Tuple[
     selected = capture(txn.conn, f"SELECT t.task_id, t.write_seq {tables} {clause}", params, ("task_id", "write_seq"))
     ids = sorted(row[0] for row in selected.tuples())
     columns = ("task_id", "body", *(store_task_cards.FIELDS if join else ()))
-    pages: List[Tuple[Captured, Captured]] = []
+    select = f"SELECT t.task_id, b.body{cards} {tables} WHERE t.task_id IN (SELECT value FROM json_each(?))"
+    return [(rows, _handoff_capture(txn, page)) for page, rows in _pages(txn, ids, select, columns)]
+
+
+def _pages(txn: Txn, ids: List[str], select: str, columns: Tuple[str, ...]) -> Iterator[Tuple[str, Captured]]:
+    """``(ids page, capture)`` of SELECT (one ``?``: a JSON array of task ids) over IDS in pages of ``_PAGE``,
+    inside the caller's read (one snapshot): the bodies of many tasks in one aggregate could pass SQLite's string
+    limit. A page past it halves; one document past it, or a NOMEM that rolled the read back, raises (the store
+    types it), never an answer without that row."""
     start, size = 0, _PAGE
     while start < len(ids):
         page = json.dumps(ids[start:start + size])
         try:
-            rows = capture(txn.conn, f"SELECT t.task_id, b.body{cards} {tables} WHERE t.task_id IN "
-                           "(SELECT value FROM json_each(?))", (page,), columns)
+            rows = capture(txn.conn, select, (page,), columns)
         except (sqlite3.DataError, MemoryError):  # past SQLite's string limit: the same ids in smaller pages,
             if size == 1 or not txn.conn.in_transaction:  # in the same snapshot (a NOMEM may have rolled it back)
                 raise
             size = max(1, size // 2)
             continue
-        pages.append((rows, _handoff_capture(txn, page)))
+        yield page, rows
         start += size
-    return pages
 
 
 def _handoff_capture(txn: Txn, ids_json: str) -> Captured:
@@ -549,9 +555,25 @@ def _tied(tree_id: str, members: Dict[str, dict], rows: Dict[str, dict], faults:
         tied |= more
 
 
+_BODY_PAGE = ("SELECT b.task_id, CASE WHEN typeof(b.body)='blob' THEN NULL ELSE b.body END AS body, "
+              "CASE WHEN typeof(b.body)='blob' THEN hex(b.body) END AS body_hex FROM task_bodies AS b "
+              "WHERE b.task_id IN (SELECT value FROM json_each(?))")  # a damaged BLOB body travels as its bytes
+
+
+def _with_bodies(records: List[dict], pages: List[Captured]) -> List[dict]:
+    """Each census row with its stored body as the per-row read saw it: the text, a BLOB's own bytes, or ``None``
+    for a row without one."""
+    bodies = {}
+    for page in pages:
+        for task_id, text, hexed in page.tuples():
+            bodies[task_id] = bytes.fromhex(hexed) if hexed is not None else text
+    return [{**record, "body": bodies.get(record["task_id"])} for record in records]
+
+
 def _keyed(captured: Captured) -> Dict[str, dict]:
-    """A captured census selection by task id, in the order its statement answered (none has an ORDER BY;
-    the aggregate keeps the order the rows were stepped in, as the per-row read did)."""
+    """A captured census selection by task id, in the aggregate's order. None of the census statements has an
+    ORDER BY, so the per-row read's order was unspecified as well; that the two answer in the same order, with and
+    without planner statistics, is pinned by tests/test_store_capture_readers.py, not promised by SQLite."""
     return {row["task_id"]: row for row in captured.rows()}
 
 
@@ -566,8 +588,8 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
     census: ``linked`` when a typed parent/retry/supersession edge to or from this tree, a handoff
     naming it or a caller's ``linked`` id (queue, custody, model request) ties it here; otherwise
     a named gap, neither member nor proof of absence. A store failure raises. Each statement is
-    captured in one step (``store_capture``) and decoded after the read, unless descendant anchors
-    need them within it (one snapshot either way).
+    captured in one step (``store_capture``), the bodies in pages of ids (``_pages``), and decoded after
+    the read, unless descendant anchors need them within it (one snapshot either way).
     Descendant selection closes over the indexed parent chain, including bridges present only in
     the queue snapshot; a row reached so is a member by ancestry, and a damaged one stays named
     (linked) beside it. Durable rows win over queue rows. The caller still applies its own
@@ -580,18 +602,20 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
         flagged = int(txn.meta("schema_version") or VERSION) >= VERSION  # control_valid exists
         where = "t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else "")
         params = (tree_id,) if flagged else ()
-        bodies = capture(txn.conn,  # CAST: a damaged BLOB body travels as the text its bytes spell, as it was read
-                         f"SELECT {_TREE_SQL},CAST(b.body AS TEXT) AS body FROM tasks AS t LEFT JOIN task_bodies AS b "
-                         f"ON b.task_id=t.task_id WHERE {where}", params, (*_TREE_ROW, "body"))
+        # The rows first, then their bodies by pages of ids: every underived body of an install still deriving
+        # them, in one aggregate, could pass SQLite's string limit.
+        records = capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE {where}", params, _TREE_ROW).rows()
+        ids = [record["task_id"] for record in records]
+        bodies = [page for _ids, page in _pages(txn, ids, _BODY_PAGE, ("task_id", "body", "body_hex"))]
         selected = capture(txn.conn, f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,),
                            _TREE_ROW)
-        handoffs = capture(txn.conn,  # those rows' handoffs naming this tree; a damaged handoff ties nothing
-                           "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT t.task_id FROM tasks AS t "
-                           f"WHERE {where}) AND CASE WHEN json_valid(facts) THEN "
-                           "json_extract(facts, '$.root_task_id') END=?", (*params, tree_id), ("task_id",))
+        handoffs = capture(txn.conn,  # a damaged handoff ties nothing
+                           "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
+                           "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
+                           (json.dumps(ids), tree_id), ("task_id",))
         if descendants:  # the closure's anchors are these rows: decoded inside this one snapshot
             ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
-            members, rows, faults = _validated(tree_id, _keyed(selected), bodies.rows())
+            members, rows, faults = _validated(tree_id, _keyed(selected), _with_bodies(records, bodies))
             queued = {}
             for row in queue_rows:
                 tid = str(row.get("task_id") or row.get("id") or "")
@@ -624,7 +648,7 @@ def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
                     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
                 anchors.update(reached)
     ties = {*map(str, linked), *(row[0] for row in handoffs.tuples())}
-    members, rows, faults = _validated(tree_id, _keyed(selected), bodies.rows())
+    members, rows, faults = _validated(tree_id, _keyed(selected), _with_bodies(records, bodies))
     return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
 
 
