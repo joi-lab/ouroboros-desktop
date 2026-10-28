@@ -1398,7 +1398,7 @@ class TestApplyIntentAmbiguity:
         replayed = custody.replay(drive)["run-retry"]
         assert replayed.patch_apply_pending is False  # resolved: tree unmutated
         # The nanny reconciles the tree back, restarts, retries: apply works.
-        (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+        (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8", newline="\n")  # the seed's LF bytes
         out2 = _integrate_delegated_patch(ctx, "run-retry", "apply", "")
         assert "✅ Integrated" in out2, out2
         custody._CUSTODY.clear()

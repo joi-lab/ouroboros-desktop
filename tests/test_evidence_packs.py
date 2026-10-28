@@ -164,7 +164,7 @@ def test_readers_resolve_loose_then_pack_and_blob_shared_with_active_task_stays_
     from ouroboros.tools.core_file_tools import _list_dir, _read_source_text
     store_dir = task_artifact_dir_path(root, "task-a", create=False) / CHECKPOINTS
     listed = _list_dir(task_artifact_dir_path(root, "task-a", create=False), CHECKPOINTS)
-    assert listed == [str(pathlib.Path(CHECKPOINTS) / pathlib.PurePosixPath(handle_a['path']).name)]
+    assert listed == [str(pathlib.PurePosixPath(CHECKPOINTS) / pathlib.PurePosixPath(handle_a['path']).name)]  # slashes on any OS
     extent = {}
     assert _read_source_text(store_dir / pathlib.PurePosixPath(handle_a["path"]).name, extent).startswith("# focus")
     assert extent["source_revision"] == handle_a["sha256"] and _handle_path(root, "task-a", handle_a).exists()
