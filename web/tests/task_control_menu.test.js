@@ -356,6 +356,21 @@ test('held-work facts say what is known, and an unknown start is never called ru
     assert.equal(heldWorkFacts(null), '');
 });
 
+test('a held tool call is worded by what is known, never as a call that has not returned', () => {
+    const base = { kind: 'tool_handoff', task_id: '96ac2f7c981b4f54', tool: 'run_command' };
+    assert.equal(heldWorkFacts([{ ...base, reason: 'local_completion_unknown' }]),
+        'it is unknown whether the run_command call of task 96ac2f7c981b4f54 finished: its worker cannot be proven ended');
+    assert.equal(heldWorkFacts([{ ...base, reason: 'local_call_live' }]),
+        'the run_command call of task 96ac2f7c981b4f54 is in a live worker: still running, or its finished result is not recorded yet');
+    assert.equal(heldWorkFacts([{ ...base, tool: 'mcp_gitlab__get_commit', reason: 'owner_ended_effect_unknown',
+        effects: ['MCP request'] }]),
+    'the mcp_gitlab__get_commit call of task 96ac2f7c981b4f54 ended with its worker; the outcome of its MCP request is unknown');
+    assert.equal(heldWorkFacts([{ ...base, reason: 'returned_effect_unconfirmed', effects: [] }]),
+        'the run_command call of task 96ac2f7c981b4f54 returned; its outside effect is not confirmed');
+    assert.equal(heldWorkFacts([{ ...base }]), 'a run_command call of task 96ac2f7c981b4f54 is held');
+    assert.ok(!menuSrc.includes('has not returned'), 'the false sentence is gone');
+});
+
 test('a refused Resume of a held Continue toasts its facts, with wait-or-stop only for running work', async () => {
     const toasts = [];
     const toast = (text, kind) => toasts.push([text, kind]);
@@ -369,6 +384,52 @@ test('a refused Resume of a held Continue toasts its facts, with wait-or-stop on
         ['Resume refused: delegated run run-leaf is running. Wait for that work or stop it.', 'error'],
         ['Resume refused: replay_unsafe', 'error'],
     ]);
+});
+
+test('a Resume held only by calls of unknown outcome asks once, then resumes naming them', async () => {
+    const held = { kind: 'tool_handoff', task_id: '96ac2f7c981b4f54', tool: 'run_command',
+        reason: 'local_completion_unknown', operation_id: 'op-1' };
+    const toasts = [];
+    const calls = [];
+    const asked = [];
+    const toast = (text, kind) => toasts.push([text, kind]);
+    const resume = async (id, body) => {
+        calls.push(body ?? null);
+        if (!body) {
+            throw Object.assign(new Error('owner_pause_effects_unsettled'), { status: 409,
+                body: { error: 'owner_pause_effects_unsettled', blockers: [held], acceptable_unknown: ['op-1'] } });
+        }
+        return { ok: true };
+    };
+    await resumeTaskAction('root-u', { resume, toast, askOwner: async (dialog) => { asked.push(dialog); return true; } });
+    assert.deepEqual(calls, [null, { accept_unknown: ['op-1'], reason: 'The owner resumed without these results.' }]);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0].body, /^It is unknown whether the run_command call of task 96ac2f7c981b4f54 finished/);
+    assert.match(asked[0].body, /this call is never run again/);
+    assert.deepEqual(toasts, [['Resuming: the task returns to the queue.', 'info']]);
+
+    calls.length = 0;
+    toasts.length = 0;
+    await resumeTaskAction('root-u', { resume, toast, askOwner: async () => false });
+    assert.deepEqual(calls, [null], 'declining keeps the task paused');
+    assert.deepEqual(toasts, []);
+
+    const live = { ...held, operation_id: 'op-2', reason: 'local_call_live' };
+    await resumeTaskAction('root-l', {
+        resume: async () => { throw Object.assign(new Error('x'), { status: 409,
+            body: { error: 'owner_pause_effects_unsettled', blockers: [held, live] } }); },
+        toast, askOwner: async () => { throw new Error('a live call is never offered'); } });
+    assert.equal(toasts.length, 1);
+    assert.match(toasts[0][0], /^Resume refused: .*is in a live worker/);
+});
+
+test('a held model answer receiver is worded by what is known', () => {
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', task_id: 't-1', reason: 'local_completion_unknown' }]),
+        'it is unknown whether the model answer receiver of task t-1 ended: its worker cannot be proven ended');
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', task_id: 't-1', reason: 'local_call_live' }]),
+        'a model answer for task t-1 is awaited by a live worker');
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', reason: 'no_local_receiver' }]),
+        'a model request has no recorded result');
 });
 
 test('an accepted Resume keeps its own words and names the gap its Pause did not wait for', async () => {
@@ -438,4 +499,10 @@ test('a gap notice keeps all its words beside its close button; the page stack i
     env.doc.body.append(host);
     showToast('A room notice.', 'warn', { ttl: 0, dismissLabel: 'Dismiss notice', host });
     assert.ok(!host.querySelector('.toast-stack--room').hasAttribute('tabindex'));
+});
+
+test('two unconfirmed effects are worded in the plural, as on the server', () => {
+    assert.equal(heldWorkFacts([{ kind: 'tool_handoff', task_id: 't', tool: 'run_command',
+        reason: 'returned_effect_unconfirmed', effects: ['started process', 'MCP request'] }]),
+    'the run_command call of task t returned; its started process and MCP request are not confirmed');
 });

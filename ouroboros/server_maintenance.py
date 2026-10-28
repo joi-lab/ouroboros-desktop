@@ -157,11 +157,13 @@ def _run_terminal_duty(drive_root: pathlib.Path, step: str, latch: Any,
             if outcomes:
                 log.info("Cancel-intent watchdog settled: %s", outcomes)
         elif step == "terminal_delivery_replay":
+            from ouroboros import custody_owed
             from ouroboros.dialogue_retry import drain, _requested
             from supervisor.terminal_delivery import replay_pending_deliveries
             _requested.clear()
             _DELIVERY_WAKE.clear()
             drain()
+            custody_owed.drain()  # local custody facts this server process knows but could not write yet
             replay_pending_deliveries(drive_root)
         elif step == "question_delivery_replay":
             import asyncio
@@ -336,9 +338,11 @@ def _periodic_supervisor_maintenance(
         return
     now = time.time()
     from supervisor import queue
+    from ouroboros import custody_owed
     from ouroboros.dialogue_retry import bind_wake
 
     bind_wake(_DELIVERY_WAKE.set)
+    custody_owed.bind_wake(_DELIVERY_WAKE.set)
     if (now - _LAST_CANCEL_INTENT_SWEEP[0] <= BODY_MAINTENANCE_INTERVAL_SEC
             and _DELIVERY_WAKE.is_set() and _DELIVERY_SWEEP_LOCK.acquire(blocking=False)):
         _DELIVERY_WAKE.clear()
@@ -900,6 +904,18 @@ def _startup_custody_sweep() -> None:
             log.info("Process custody reaper killed %d orphaned process(es): %s", len(reaped), reaped)
     except Exception:
         log.debug("Process custody startup reap failed", exc_info=True)
+    try:  # after the reaper: open local custody whose owner positively ended (never by generation alone)
+        from ouroboros.local_custody_repair import reconcile_open_local_custody
+
+        retired = reconcile_open_local_custody(DATA_DIR)
+        if retired:
+            from supervisor.state import append_jsonl
+
+            log.info("Startup local custody retired %d ended owner row(s)", len(retired))
+            append_jsonl(DATA_DIR / "logs" / "events.jsonl",
+                         {"ts": utc_now_iso(), "type": "local_custody_retired", "phase": "startup", "retired": retired})
+    except Exception:
+        log.warning("Startup local custody reconcile failed; open custody stays held", exc_info=True)
     try:  # ended tasks' leftovers (abrupt death): settled on positive terminal evidence only
         from ouroboros.process_scope import settle_task_scopes
         settle_task_scopes(DATA_DIR, _live_task_ids)

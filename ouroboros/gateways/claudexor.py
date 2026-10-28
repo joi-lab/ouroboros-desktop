@@ -42,6 +42,7 @@ from ouroboros.effort_evidence import validated_effort_resolution, validated_pro
 from ouroboros.gateways import claudexor_metadata as metadata
 from ouroboros.gateways.claudexor_identity import validated_catalog_match
 from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
+from ouroboros.gateways.claudexor_observation import ClaudexorObservationGateway
 from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
 from ouroboros.observability import timed_phase
 
@@ -64,9 +65,8 @@ _READ_TIMEOUT_SEC = 60.0
 # itself to (measured, 4.51s of wall against a 4.2s window, and that was a fast daemon).
 # Five seconds is a real answer from a healthy loopback daemon and a rounding error
 # against the finalization grace the clamp reserves. It bounds the READ phase only:
-# `_request` applies the caller bound to every HTTPX phase. Strict review polls add
-# their total wall-clock bound outside this phase-local adapter.
-# Passed per request via ``_request(timeout_sec=...)``; it never changes the default.
+# `_request` applies the caller bound to every HTTPX phase. Strict review polls add their
+# total wall-clock bound outside this phase-local adapter. Passed per request, never the default.
 SHORT_POLL_TIMEOUT_SEC = 5.0
 # The httpx failures a READ-ONLY observer may retry as the same unresolved read: the
 # socket delivered no daemon answer, so nothing is known about the run and nothing
@@ -431,7 +431,7 @@ def run_message_supported(operations: list[dict]) -> bool:
     )
 
 
-class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway):
+class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway, ClaudexorObservationGateway):
     """Thin typed client over the Claudexor ``/v2`` control API."""
 
     def __init__(self, endpoint: Optional[DaemonEndpoint] = None, *, home: Optional[pathlib.Path] = None):

@@ -48,7 +48,7 @@ _MONEY_KIND = "COALESCE(NULLIF(kind, ''), 'attempt') IN ('attempt', 'subscriptio
 
 
 def _window_rows(txn: Any, now_ts: float) -> tuple:
-    """(roots, their 24 h money rows, root causes), with addressed selections."""
+    """(roots, their 24 h money rows captured per root for ``decode_attempts``, root causes), addressed selections."""
     discovered = list(txn.conn.execute(
         "SELECT DISTINCT root_task_id, category, json_extract(extra, '$.consciousness_cause') AS cause "
         "FROM attempts WHERE category IN ('consciousness', 'consciousness_task') "
@@ -57,10 +57,8 @@ def _window_rows(txn: Any, now_ts: float) -> tuple:
                 for record in discovered}
     causes = {root: root_cause(txn, root) or fallback for root, fallback in defaults.items()}
     roots = sorted(causes)
-    rows: list = []
-    for root in roots:
-        rows.extend(txn.attempts(f"root_task_id = ? AND ts_last_epoch >= ? AND {_MONEY_KIND}",
-                                 (root, now_ts - WINDOW_SEC)))
+    rows = [txn.attempt_rows(f"root_task_id = ? AND ts_last_epoch >= ? AND {_MONEY_KIND}", (root, now_ts - WINDOW_SEC))
+            for root in roots]  # captured here, decoded after the read closed (``allowance_window``)
     return roots, rows, causes
 
 
@@ -78,8 +76,9 @@ def allowance_window(
     try:
         root = _drive_root(drive_root)
         with usage_store.read(root, allow_stale=allow_stale) as txn:
-            roots, rows, root_causes = _window_rows(txn, now_ts)
-            degraded = usage_store.integrity_degraded(root)
+            roots, captured, root_causes = _window_rows(txn, now_ts)
+        degraded = usage_store.integrity_degraded(root)
+        rows = [row for part in captured for row in usage_store.decode_attempts(part)]
     except Exception as exc:  # noqa: BLE001 — every read failure is the one typed outcome
         return {"status": STATUS_UNKNOWN, "error": f"{type(exc).__name__}: {exc}",
                 "limit_usd": limit, "settled_usd": None, "accounted_usd": None, "remaining_usd": None,

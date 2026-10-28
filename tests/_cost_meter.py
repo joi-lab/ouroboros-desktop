@@ -25,6 +25,8 @@ What is counted, per tag:
   lock tier takes its name so), one per acquisition however contended, since a refused create raises;
 - ``json_loads`` and ``json_chars``: every ``json.loads``/``json.load`` and its input length;
   ``rows_decoded``: the stored dialogue row bodies among them (``ROW_DECODER``);
+- ``rows_crossed``: every row a statement hands to Python as a ``sqlite3.Row`` (the store's row factory),
+  one SQLite-to-Python crossing each: a read that captures (``store_capture``) crosses once per statement;
 - ``popen`` (argv[0] names kept in ``popen_names``) and ``thread_start`` (thread names).
 
 ``callers`` attributes counter amounts and SQL statements to reader stacks, including
@@ -445,6 +447,17 @@ def _w_json_loads(s, *args, **kwargs):
     return _ORIG["json.loads"](s, *args, **kwargs)
 
 
+class _CountedRow(sqlite3.Row):
+    """``sqlite3.Row`` while a meter is installed (the store sets ``row_factory = sqlite3.Row`` at each
+    connect): each row a statement hands to Python counts ``rows_crossed``."""
+
+    def __new__(cls, cursor, data):
+        meter = _ACTIVE
+        if meter is not None:
+            meter.add("rows_crossed")
+        return super().__new__(cls, cursor, data)
+
+
 def _trace(statement: str) -> None:
     meter = _ACTIVE
     if meter is not None:
@@ -515,6 +528,7 @@ _MODULE_PATCHES = (
     (os, "pread", "os.pread", _w_os_pread), (os, "close", "os.close", _w_os_close),
     (io, "open", "io.open", _w_open), (builtins, "open", "builtins.open", _w_open),
     (json, "loads", "json.loads", _w_json_loads), (sqlite3, "connect", "sqlite3.connect", _w_connect),
+    (sqlite3, "Row", "sqlite3.Row", _CountedRow),
 )
 _ACCESSOR = getattr(pathlib, "_NormalAccessor", None)
 _ACCESSOR_PATCHES = (("stat", _w_stat), ("scandir", _w_scandir), ("listdir", _w_listdir),

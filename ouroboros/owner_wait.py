@@ -457,6 +457,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
     deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))
     parked = resume_requested = False
     outcome = "unknown"
+    from ouroboros import custody_owed
+
     while True:
         try:
             command = in_q.get(timeout=1.0)
@@ -477,6 +479,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
                     return outcome
                 elif phase == "refused":
                     raise RuntimeError(str(command.get("reason") or "owner wait refused"))
+        if custody_owed.pending():  # this park's own poll services what the worker owes (its wake lands here too)
+            custody_owed.drain()
         if not parked and (reason := _hold_control_reason(ctx)):
             from ouroboros.model_wait import ModelWaitInterrupted
 

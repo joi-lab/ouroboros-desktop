@@ -1338,16 +1338,26 @@ async def api_task_resume(request: Request) -> JSONResponse:
     revocation, an acceptance fence at restore) is granted by the same call once
     its durable authority validates again; a fence-lifted zero-dispatch sibling
     is released by this same call as an explicit selection. A paused direct
-    owner-chat turn is resumed here too, under its own task id.
+    owner-chat turn is resumed here too, under its own task id. The optional
+    body (``TaskResumeRequest``) names held calls whose outcome is unknown that
+    the owner goes on past (a refusal's ``acceptable_unknown``), never re-run.
     """
     try:
         task_id = validate_task_id(request.path_params.get("task_id"))
     except ValueError as exc:
         return json_error(str(exc), 400)
+    body = await request_json_or(request, {}) or {}
+    named = body.get("accept_unknown", []) if isinstance(body, dict) else None
+    if (not isinstance(named, list) or set(body) - {"accept_unknown", "reason"}
+            or not all(isinstance(value, str) for value in named)):
+        return json_error('resume accepts only {"accept_unknown", "reason"}', 400, task_id=task_id,
+                          reason_code="unexpected_fields")
     try:
+        from ouroboros.control_actor import accepting_unknown
         from supervisor.queue import resume_budget_paused_task
 
-        result = resume_budget_paused_task(task_id)
+        with accepting_unknown(named, str(body.get("reason") or "")):
+            result = resume_budget_paused_task(task_id)
     except Exception as exc:
         return json_exception(exc, 503)
     if result.get("ok"):
@@ -1379,8 +1389,8 @@ async def api_task_resume(request: Request) -> JSONResponse:
         # a held Continue's observed blockers (#1721): an existing successor, never Not Found
         "predecessor_writers_unsettled", "selection_owner_held",
     } else 404
-    return JSONResponse({"error": error, "task_id": task_id,
-                         **{key: result[key] for key in ("action", "blockers", "message") if result.get(key)}},
+    return JSONResponse({"error": error, "task_id": task_id, **{key: result[key] for key in (
+                             "action", "blockers", "message", "acceptable_unknown") if result.get(key)}},
                         status_code=status)
 
 

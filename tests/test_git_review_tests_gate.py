@@ -30,6 +30,11 @@ def _make_staged_repo(tmp_path):
     # One uncommitted change so `git status --porcelain` is non-empty after the stage
     # cycle runs `git add -A` internally.
     (repo / "new_change.txt").write_text("something", encoding="utf-8")
+    # A serving-checkout commit needs a numbered release, including this prose diff.
+    (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8")
+    (repo / "README.md").write_text(
+        "[![Version 1.0.1](https://img.shields.io/badge/version-1.0.1-green.svg)]\n"
+        "## Version History\n| 1.0.1 | today | fixture release |\n", encoding="utf-8")
     return ToolContext(repo_dir=repo, drive_root=drive)
 
 

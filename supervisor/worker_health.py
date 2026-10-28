@@ -343,44 +343,50 @@ def recover_confirmed_dead_worker(job: dict) -> None:
                 _respawn_after_reap(queue, _pool(), job["worker_id"], expected_worker=w)
 
 
+def owe_worker_exit(worker: Any, root: Any = None) -> None:
+    """Every confirmed exit door: the ended member's open claims and receivers retire, task or no task.
+
+    The positive evidence is the joined retained Process (exit code read, not
+    alive). The write is owed in memory and applied off the queue lock
+    (``local_custody_repair.retire_exited_process``), across every task and
+    attempt the process served, so an idle retirement leaves nothing behind.
+    ``root`` names a task's own budget store when it is not the pool's.
+    """
+    proc = getattr(worker, "proc", None)
+    pid = int(getattr(proc, "pid", 0) or 0)
+    try:
+        if not pid or proc.exitcode is None or proc.is_alive():
+            return
+    except Exception:
+        return  # an unreadable Process proves nothing
+    from ouroboros.local_custody_repair import retire_exited_process
+
+    retire_exited_process(root or _pool().DRIVE_ROOT, pid=pid,
+                          process_birth=str(getattr(worker, "process_birth", "") or ""),
+                          kernel_birth=str(getattr(worker, "kernel_birth", "") or ""))
+
+
 def retire_confirmed_worker_consumers(worker: Any, meta: dict | None) -> None:
-    """Reuse exact current pool ownership at every confirmed kill/join door.
+    """Every confirmed kill/join door: owe the ended process's retirement, its task's store included.
 
     Call under the queue lock before removing the captured RUNNING/worker row.
     """
-    if not isinstance(meta, dict) or not isinstance(meta.get("task"), dict):
-        return
-    task = meta["task"]
-    _retire_dead_model_consumers({"worker": worker, "worker_id": worker.wid,
-        "task_id": str(task.get("id") or ""), "task": task, "meta": meta,
-        "attempt": int(meta.get("attempt") or task.get("_attempt") or 1),
-        "drive_root": str(_pool().DRIVE_ROOT)})
+    task = meta.get("task") if isinstance(meta, dict) and isinstance(meta.get("task"), dict) else {}
+    _retire_dead_model_consumers({"worker": worker, "task": task})
 
 
-def _retire_dead_model_consumers(job: dict, *, captured_timeout: bool = False) -> None:
-    """Queue-locked exact death proof, never PID absence or task terminality.
+def _retire_dead_model_consumers(job: dict) -> None:
+    """A queue-locked death door: owe the ended process's retirement, never write the store here.
 
-    Timeout transfers ownership from RUNNING to its captured reaper job; the
-    other doors retain RUNNING until retirement. Each uses its existing current-
-    owner check, plus the same retained birth/Process/task/attempt proof below.
-    Unreadable/legacy evidence stays held; money and other custody are untouched.
+    The joined retained Process is the proof (``owe_worker_exit``); the owed
+    write retires every claim and receiver of that process off the queue lock,
+    on the task's own budget store too when it is not the pool's. Unreadable
+    or live evidence owes nothing; money and other custody are untouched.
     """
-    worker = job["worker"]
-    birth = getattr(worker, "process_birth", "")
-    if (not isinstance(birth, str) or not birth or worker.proc.exitcode is None
-            or worker.proc.is_alive() or not _job_current(job, captured_timeout)):
-        return
-    if (not isinstance(job.get("meta"), dict)
-            or job["meta"].get("task", {}).get("id") != job["task_id"]
-            or job["task"].get("id") != job["task_id"]):
-        return
-    # One owner-ended writer: a write that fails keeps this positive death as a
-    # witness the next addressed Continue/Resume discharges (#1554).
-    from ouroboros.local_custody_repair import retire_ended_owner
-
-    retire_ended_owner(pathlib.Path(job["task"].get("budget_drive_root") or job["drive_root"]),
-                       job["task_id"], str(job["task"].get("root_task_id") or job["task_id"]),
-                       pid=worker.proc.pid, birth=birth, attempt=job["attempt"], producer="worker_death")
+    owe_worker_exit(job["worker"])
+    budget_root = (job.get("task") or {}).get("budget_drive_root")
+    if budget_root and str(budget_root) != str(_pool().DRIVE_ROOT):
+        owe_worker_exit(job["worker"], root=budget_root)
 
 
 def _complete_exact_budget_pause_after_death(job: dict, root: pathlib.Path, task: dict, task_id: str,

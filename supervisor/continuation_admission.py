@@ -271,7 +271,7 @@ def model_handoffs(custody_root, predecessor, *, member_results=None, for_contin
     ``attempts``: the root's open attempts the caller already read (``None``: read here)."""
     blockers = []
     try:
-        from ouroboros.local_custody_repair import ended_unbound_model_request
+        from ouroboros.local_custody_repair import ended_unbound_model_request, receiver_reason
         from ouroboros.owner_pause import tree_member_results, tree_model_requests
         if attempts is None:  # the root's open attempts only (the store's open-set index)
             attempts = tree_model_requests(custody_root, predecessor)
@@ -298,8 +298,8 @@ def model_handoffs(custody_root, predecessor, *, member_results=None, for_contin
                 if for_continue and review_owned:
                     continue
                 blockers.append({"kind": "model_handoff", "attempt_id": attempt.get("attempt_id"),
-                                 "task_id": attempt.get("task_id"),
-                                 "review_owned": review_owned})
+                                 "task_id": attempt.get("task_id"), "review_owned": review_owned,
+                                 "reason": receiver_reason(attempt)})
     except Exception as exc:
         blockers.append({"kind": "attempt_custody_unreadable", "detail": str(exc)[:200]})
     return blockers
@@ -336,24 +336,40 @@ def action_writers(q: Any, predecessor: str, *, drive_root: Any = None, owner_pa
     """An ADDRESSED action's census (Continue, Resume, held selection) of ``predecessor``.
 
     It first retires the positively ended local owners of this tree only
-    (``local_custody_repair``: a retained witness or platform-qualified
-    absence), then observes exactly as ``conflicting_writers`` — which stays
-    the passive, write-free reader every census and GET uses (#1554).
-    ``purpose`` and ``gaps`` are passed through unchanged: only the owner's Continue and its
-    held selection name ``CONTINUE_PURPOSE``; Pause and Resume keep the default.
+    (``local_custody_repair``: positive proof of the owner's end) and applies
+    the caller's named decision to go on past held calls of this tree whose
+    outcome is unknown (``control_actor.accepting_unknown``), then observes
+    exactly as ``conflicting_writers`` — which stays the passive, write-free
+    reader every census and GET uses (#1554). ``purpose`` and ``gaps`` are
+    passed through unchanged: only the owner's Continue and its held selection
+    name ``CONTINUE_PURPOSE``; Pause and Resume keep the default.
     """
-    from ouroboros.local_custody_repair import repair_ended_local_custody
+    from ouroboros.control_actor import accepted_unknown, control_actor
+    from ouroboros.local_custody_repair import accept_unknown_custody, repair_ended_local_custody
     from ouroboros.owner_pause import tree_member_results
+    from ouroboros.utils import utc_now_iso
 
     root = pathlib.Path(drive_root or q.DRIVE_ROOT)
+    events = pathlib.Path(q.DRIVE_ROOT) / "logs" / "events.jsonl"
+    members = None
     try:
         members = set(tree_member_results(root, predecessor).members) | {predecessor}
         repaired = repair_ended_local_custody(root, members, root_task_id=predecessor)
         if repaired:
-            q.append_jsonl(pathlib.Path(q.DRIVE_ROOT) / "logs" / "events.jsonl",
-                           {"type": "local_custody_retired", "root_task_id": predecessor, "retired": repaired})
+            q.append_jsonl(events, {"type": "local_custody_retired", "root_task_id": predecessor, "retired": repaired})
     except Exception:
         log.warning("Ended local custody of %s was not repaired; it stays held", predecessor, exc_info=True)
+    decision = accepted_unknown()  # the caller's named decision for this call, on this tree only
+    if decision and members:
+        by = {"actor": "owner", "text": decision["text"], "at": utc_now_iso(), **control_actor()}
+        try:
+            outcome = accept_unknown_custody(root, members, decision["ids"], root_task_id=predecessor, by=by)
+            if outcome["accepted"] or outcome["refused"]:  # a later census of the same call finds nothing new
+                q.append_jsonl(events, {"type": "local_custody_unknown_accepted", "root_task_id": predecessor,
+                                        "by": by, **outcome})
+        except Exception:
+            log.warning("The named decision on %s was not recorded; its calls stay held", predecessor,
+                        exc_info=True)
     return conflicting_writers(q, predecessor, drive_root=drive_root, owner_pause_fence_id=owner_pause_fence_id,
                                purpose=purpose, gaps=gaps)
 
