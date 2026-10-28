@@ -150,7 +150,8 @@ def test_a_notes_navigation_is_parsed_once_per_content(tmp_path, monkeypatch):
     assert "Second" in store.knowledge_index_view(address) and len(parses) == 3  # the writer's index read it
 
 
-@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX change time; Windows compares the bytes' digest")
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX change time; Windows st_ctime is the creation "
+                    "time, so an edit restoring size and mtime keeps the identity (utils.json_snapshot's rule)")
 def test_an_in_place_edit_that_restores_size_and_mtime_is_parsed_again(tmp_path, monkeypatch):
     import os
 

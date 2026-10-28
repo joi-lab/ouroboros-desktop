@@ -297,21 +297,17 @@ _NAVIGATION: Dict[KnowledgeAddress, tuple] = {}
 
 
 def _navigation_row(address: KnowledgeAddress) -> dict[str, Any]:
-    """``_navigation_descriptor``, parsed again only when the note's bytes may have changed: on POSIX
-    while its file identity holds (``utils.file_identity``: a change time no caller sets back), settled
-    beyond a clock tick; on Windows, whose ``st_ctime`` is the creation time, while its bytes' digest
-    holds (the read stays, the parse goes). A row with a parse error is never kept."""
-    started, raw = time.time_ns(), None
-    if os.name == "nt":
-        raw = address.path.read_bytes()
-        key, settled = hashlib.sha256(raw).digest(), True
-    else:
-        info = os.stat(address.path)  # before the read: a write after it moves the identity
-        key, settled = utils.file_identity(info), max(info.st_mtime_ns, info.st_ctime_ns) < started - utils._RACY_NS
+    """``_navigation_descriptor``, parsed again only when the note's bytes may have changed: while its
+    file identity holds (``utils.file_identity``, the rule ``utils.json_snapshot`` keeps on every OS;
+    Windows' ``st_ctime`` is the creation time, its in-place writes move the mtime), settled beyond a
+    clock tick. A row with a parse error is never kept."""
+    started = time.time_ns()
+    info = os.stat(address.path)  # before the read: a write after it moves the identity
+    key, settled = utils.file_identity(info), max(info.st_mtime_ns, info.st_ctime_ns) < started - utils._RACY_NS
     held = _NAVIGATION.get(address)
     if held is not None and held[0] == key:
         return dict(held[1])
-    row = _navigation_descriptor(address, raw)
+    row = _navigation_descriptor(address)
     if settled and not row.get("parse_error"):
         _NAVIGATION[address] = (key, row)
     return dict(row)
