@@ -240,10 +240,12 @@ def new_execution_id() -> str:
     return f"exec_{uuid.uuid4().hex}"
 
 
-def new_call_id(prefix: str) -> str:
+def new_call_id(prefix: str, unique: str = "") -> str:
+    """``<prefix>_<32 hex>``; a 32-hex ``unique`` (a tool invocation id) is that suffix, so
+    the record of one invocation has one address its readers can derive (#1376)."""
     safe = re.sub(r"[^a-zA-Z0-9_]+", "_", str(prefix or "call")).strip("_").lower()
     safe = safe or "call"
-    return f"{safe}_{uuid.uuid4().hex}"
+    return f"{safe}_{unique if re.fullmatch(r'[0-9a-f]{32}', str(unique)) else uuid.uuid4().hex}"
 
 
 def _observability_dir(drive_root: pathlib.Path) -> pathlib.Path:

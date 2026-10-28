@@ -357,6 +357,9 @@ def _golden() -> dict[str, dict]:
 # unavailable. Keep the historical corpus intact and assert the new observed
 # outcome explicitly rather than manufacture old evidence (04-AGENCY S1/S3).
 CURRENT_PRODUCER_CONTRACTS = {"WORLD_SIZE_NOTICE": (False, "ok"),  # the map's size notice rides a successful update_world
+    # tools/tool_discovery.py `enable_tools`: a load none of which fits the route's schema ceiling;
+    # the retired pair never saw it. A physical resource refusal: nothing loaded, every tool stays callable.
+    "TOOL_SCHEMA_LIMIT": (True, "resource_constraint_blocked"),
     # D1 per-target mutation custody: the existing INTEGRATE_ family reports a
     # busy target as a substrate refusal; no historical answer is fabricated.
     "INTEGRATE_DELEGATED_TARGET_BUSY": (True, "integration_blocked"),

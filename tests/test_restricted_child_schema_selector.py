@@ -94,7 +94,7 @@ def test_an_omitted_permitted_schema_loads_stays_through_the_next_fit_and_dispat
     assert "enable_tools loads a not-loaded one" in listing and chosen in listing
 
     loaded = registry.execute("enable_tools", {"tools": chosen})
-    assert f"{chosen} (registered late)" in loaded
+    assert "Call schemas loaded" in loaded and chosen in loaded
     assert _names(resident)[-1] == chosen and len(resident) == 129
     assert chosen in registry._ctx._actor_loaded_tool_names
     second = _round(registry, resident)  # the next request fits the same list again
@@ -247,5 +247,6 @@ def test_a_cold_continuation_keeps_the_loaded_late_schema_and_a_callable_selecto
     notices = [row["content"] for row in messages if "tool schemas in one request" in str(row.get("content"))]
     assert notices and "list_available_tools marks them not loaded, and enable_tools loads one" in notices[-1]
     another = sorted(set(extensions[1:]) - set(_names(resident)))[-1]
-    assert f"{another} (registered late)" in cold.execute("enable_tools", {"tools": another})
+    receipt = cold.execute("enable_tools", {"tools": another})
+    assert "Call schemas loaded" in receipt and another in receipt
     assert another in enabled and cold.execute(chosen, {"query": "c"}) == f"{chosen}:c"

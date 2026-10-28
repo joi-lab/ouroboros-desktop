@@ -84,8 +84,9 @@ _SQL_ONLY = "db, query, max_rows, snapshot and timeout_sec are op=sql only"
 # as emitted before these prose-only edits. A deliberate parameter change updates its pin.
 # delegate_start: + attachment_paths (string array) and attachment_import (reuse|new), C505;
 # without those two the structure is the earlier c4263da7232644b1 / 1aa885fc9a0c37ff.
+# query_data: + state_file "context_snapshot" (the current skill snapshot reader, #2333); before it 6ddb5645e6aecb12.
 _STRUCTURE = {
-    "query_data": {"full": "6ddb5645e6aecb12", "readonly": "6ddb5645e6aecb12", "acting": "6ddb5645e6aecb12"},
+    "query_data": {"full": "f790f964764d75b7", "readonly": "f790f964764d75b7", "acting": "f790f964764d75b7"},
     "delegate_start": {"full": "5e25716838978044", "readonly": "1326e91ef42b3cea", "acting": "1326e91ef42b3cea"},
     "delegate_wait": {"full": "60ab2c0f421da812", "readonly": "60ab2c0f421da812", "acting": "60ab2c0f421da812"},
     "wait_tasks": {"full": "c806a86311a0a965", "readonly": "c806a86311a0a965", "acting": "c806a86311a0a965"},
