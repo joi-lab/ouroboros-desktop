@@ -1335,6 +1335,9 @@ def pytest_runtest_teardown(item, nextitem):  # noqa: ARG001
     finally:
         teardown_loop.close()
         asyncio.set_event_loop(None)
+        from tests._store_journal_shared import give_back_converted_journals
+
+        give_back_converted_journals()  # every monkeypatch undone: what a forced journal converted reverts
         _fail_if_the_password_resolver_leaked(item)
         _fail_if_a_thread_leaked(item)
         _fail_if_retention_was_left(item, tmp)
