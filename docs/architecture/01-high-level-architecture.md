@@ -240,8 +240,7 @@ ouroboros/ — agent core and shared runtime (§6)
   workspace_copies.py — git-copy source/baseline identity and own-body policy (§6 Delegated subagents)
   coop_checkpoint.py — quiescent checkpoint commits of cooperative trees from a mutative child's `write_root`; a root mid merge/rebase/cherry-pick/revert is skipped (§5)
   delegate_output.py, delegate_directory.py, workspace_file_outputs.py — retained terminal JSON with physical-task reads; directory apply/discard and ordinary-folder results with exact before/after identities (§6 Terminal products)
-  delegate_activity.py — typed executor activity JSONL with an emission-committed cursor (§6 Delegated activity)
-  delegate_observe.py — the supervising wait's beat: journal read, then the engine's present state
+  delegate_activity.py, delegate_observe.py — typed executor activity JSONL with an emission-committed cursor; the supervised wait's beat (§6 Delegated activity)
   delegate_containment.py — engine-derived isolation facts (§6 Access disclosure)
   delegate_progress.py — poll-bound transport retry and event-local executor observations (§6 Delegated subagents)
   nanny_pacing.py — round/cost anchors; no reset on coordination (§6 Supervision)
@@ -394,13 +393,11 @@ ouroboros/ — agent core and shared runtime (§6)
     image_api.py — Image API routes/credentials; one send, bounded results, cost evidence
     claudexor.py, claudexor_uploads.py — Loopback descriptor/handshake/runs/quota/uploads; private token; owned daemon; `discover_daemon_at`: daemon/control-api.json (§6)
     claudexor_metadata.py — handshake/catalog cache (`storeId`)
-    claudexor_run_events.py — Catalog-negotiated, bounded run-journal SSE frames and durable seq cursors; no polling owner (§6 Delegated subagents)
-    claudexor_observation.py — one observation adapter: the compact attention wait, detail fallback
+    claudexor_run_events.py, claudexor_observation.py — Catalog-negotiated, bounded run-journal SSE frames and durable seq cursors, no polling owner; the run observation adapter (§6 Delegated subagents)
     claudexor_routing.py — Catalog-negotiated passive read of the engine's account/model marks (§3 Agent accounts)
   claudexor_runtime.py, claudexor_runtime_retention.py — Reviewed next-spawn pin in `data/state/cx`: seed/download, verify/probe, atomic promote; no mutable current; override `OUROBOROS_CLAUDEXOR_BIN` (§6); copies neither pinned nor serving retire (§5)
   claudexor_exit_facts.py — Bounded saved exits; live memory/loop/store/admission facts and dated capacity snapshots, without lifecycle policy (§9)
-  claudexor_daemon.py — Owned `data/claudexor`: lazy start, authenticated attach, `stop_outcome`, failed-start latch (§9)
-  claudexor_harness_install.py — Connect's repair of a missing vendor CLI through the pinned engine's installer: strict receipt, reaped on panic (§9)
+  claudexor_daemon.py, claudexor_harness_install.py — Owned `data/claudexor`: lazy start, authenticated attach, `stop_outcome`, failed-start latch; vendor-CLI repair by the pinned installer (§9)
   claudexor_startup_failure.py — Stdlib `ExitFact`; `failed_without_control` drives spawn latch; diagnostic-only log labels and latch record (§9)
   gateway/ — Gateway Boundary v1 (below): browser-facing route ownership and the frontend contract SSOT
     contracts.py — Active WS/HTTP envelope contract owner
