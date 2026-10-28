@@ -430,16 +430,19 @@ def composed_size(sizes: dict[str, int]) -> int:
 def ruled_text_sizes(root: Path, text_id: str, ref: str = "") -> dict[str, int] | None:
     """UTF-8 bytes of each file of a ruled text, in the working tree or at ``ref``; ``None`` when absent."""
     root, where = Path(root), RULED_TEXTS[text_id]
-    if ref:
-        listing = _git_bytes(root, "ls-tree", "-l", "-z", "--full-tree", ref, "--",
-                             where if text_id == "constitution" else f"{where}/")
-        rows = [row.partition("\t") for row in (listing or b"").decode("utf-8", "replace").split("\0")]
-        sizes = {path: int(meta.split()[3]) for meta, _, path in rows
-                 if path and meta.split()[1] == "blob" and ruled_text_of(path) == text_id}
-    else:  # a Windows checkout may hold CRLF for these unpinned files: count the committed LF form
-        files = [root / where] if text_id == "constitution" else sorted((root / where).glob("*.md"))
-        sizes = {file.relative_to(root).as_posix(): len(file.read_bytes().replace(b"\r\n", b"\n"))
-                 for file in files if file.is_file()}
+    try:
+        if ref:
+            listing = _git_bytes(root, "ls-tree", "-l", "-z", "--full-tree", ref, "--",
+                                 where if text_id == "constitution" else f"{where}/")
+            rows = [row.partition("\t") for row in (listing or b"").decode("utf-8", "replace").split("\0")]
+            sizes = {path: int(meta.split()[3]) for meta, _, path in rows
+                     if path and meta.split()[1] == "blob" and ruled_text_of(path) == text_id}
+        else:  # a Windows checkout may hold CRLF for these unpinned files: count the committed LF form
+            files = [root / where] if text_id == "constitution" else sorted((root / where).glob("*.md"))
+            sizes = {file.relative_to(root).as_posix(): len(file.read_bytes().replace(b"\r\n", b"\n"))
+                     for file in files if file.is_file()}
+    except (OSError, ValueError, IndexError):  # a file gone mid-read: unmeasured, like an unreadable book
+        return None
     return sizes or None
 
 
