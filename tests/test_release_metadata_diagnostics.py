@@ -98,6 +98,28 @@ def test_sm1_committed_crlf_export_preserves_carrier_lines(candidate):
     assert release_carriers_desync_at(repo, "HEAD") == ""
 
 
+@pytest.mark.parametrize("reader", ["index", "preflight"])
+@pytest.mark.parametrize("delete_readme", [False, True])
+def test_numbered_release_needs_a_surviving_staged_readme(candidate, reader, delete_readme):
+    repo = candidate.repo_dir
+    _write(repo, _release("1.2.4"))
+    if delete_readme:
+        (repo / "README.md").unlink()
+    _git(repo, "add", "-A")
+    if reader == "index":
+        report = admission.release_metadata_diagnostics(repo, source="index")
+        assert report["form"] == "numbered"
+        message = admission.format_release_metadata_preflight(report)
+    else:
+        # The real preflight classifies active/deleted paths and supplies its index reader.
+        message = review._preflight_check("release", review._build_preflight_staged(str(repo)), repo)
+    if delete_readme:
+        assert "Missing from staged: README.md" in message
+        assert "PREFLIGHT_UNAVAILABLE" in message and "index:README.md" in message
+    else:
+        assert not message
+
+
 def test_unicode_worktree_discovery_is_not_locale_decoded(candidate):
     repo = candidate.repo_dir
     _git(repo, "config", "core.quotepath", "false")

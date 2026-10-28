@@ -167,7 +167,7 @@ def release_metadata_diagnostics(
         touched |= removed
     if version_in_scope:
         report["form"] = "numbered"
-        if source == "index" and version_in_scope and "README.md" not in touched:
+        if source == "index" and version_in_scope and "README.md" not in touched - removed:
             findings.append("Missing from staged: README.md (badge + changelog). Stage all related files together.")
         texts = {}
         for path in sorted(CARRIER_SPAN_PATHS):
