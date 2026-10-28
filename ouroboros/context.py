@@ -88,9 +88,10 @@ def build_user_content(task: Dict[str, Any]) -> Any:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     author = metadata.get("objective_author")
     if isinstance(author, dict) and author.get("kind") == "task":
-        text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
-                "not spoken by the owner. The owner's words retain their own source. "
-                "[/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
+        from ouroboros.owner_words import objective_author_line
+
+        text = (f"[OBJECTIVE_AUTHOR] The objective below was {objective_author_line({'objective_author': author})}. "
+                "My human's words keep their own source. [/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
     image_b64 = task.get("image_base64")
     if not image_b64 and task.get("image_source_ref"):
         # A prestart Pause has original input, but no checkpointed transcript.
@@ -631,8 +632,7 @@ def build_knowledge_sections(
     # One mind keeps its authored common orientation across rooms. The generated
     # inventory is navigation, not a substitute for that understanding; a
     # project's shelf adds focus without hiding the common corpus.
-    from ouroboros.knowledge import (OVERVIEW_TOPIC, knowledge_index_view,
-                                     read_knowledge_note, resolve_knowledge_address)
+    from ouroboros.knowledge import OVERVIEW_TOPIC, read_knowledge_note, resolve_knowledge_address
 
     pid = str(project_id or "").strip()
     global_address = resolve_knowledge_address(env.drive_path("memory").parent, OVERVIEW_TOPIC, "global")
@@ -648,25 +648,8 @@ def build_knowledge_sections(
         sections.append(_SHARED_UNDERSTANDING_GAP)
     except (OSError, UnicodeDecodeError) as exc:
         sections.append(f"Shared understanding source unavailable: knowledge_read(topic='{OVERVIEW_TOPIC}', scope='global'). {type(exc).__name__}.")
-    knowledge_indexes = [(global_address,
-                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
-                          "knowledge index")]
-    if pid:
-        from ouroboros.project_facts import project_knowledge_dir
-
-        project_address = resolve_knowledge_address(project_knowledge_dir(pid).parents[2], "topic", f"project:{pid}")
-        knowledge_indexes.append((project_address,
-                                  f"## Project knowledge ({pid})", "project knowledge index"))
-    for address, header, label in knowledge_indexes:
-        # Every shelf and overview branch projects the current source state, even
-        # when a previous writer could not publish its generated index.
-        try:
-            text = knowledge_index_view(address, overview=overview)
-        except (OSError, UnicodeDecodeError) as exc:
-            text = f"Knowledge navigation unavailable: {type(exc).__name__}; knowledge_list(scope={address.scope!r})."
-        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
-            log.warning("context: %s is large (%d chars)", label, len(text))
-        sections.append(f"{header}\n\n{text}")
+    sections.extend(knowledge_navigation_sections(global_address.canonical_root, pid, overview=overview,
+                                                  warn_large=warn_large))
     if pid:
         # Bounded per-project journal tail + workpad (multi-project, v6.32.0):
         # the project's durable progress memory rides along with its knowledge.
@@ -691,6 +674,37 @@ def build_knowledge_sections(
                 sections.append(f"## Project workpad ({pid})\n\n{workpad}")
         except Exception:
             log.debug("project journal/workpad context injection failed", exc_info=True)
+    return sections
+
+
+def knowledge_navigation_sections(root: Any, project_id: str = "", *, overview: Any = None,
+                                  warn_large: bool = False) -> List[str]:
+    """The global shelf's knowledge index and a project shelf's, under their headings: one rendering
+    for the integrating context and for a helper's first delegation (``delegation_knowledge_index``).
+    ``overview`` is the global note its caller already read, if any."""
+    from ouroboros.knowledge import OVERVIEW_TOPIC, knowledge_index_view, resolve_knowledge_address
+
+    pid = str(project_id or "").strip()
+    knowledge_indexes = [(resolve_knowledge_address(root, OVERVIEW_TOPIC, "global"),
+                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
+                          "knowledge index")]
+    if pid:
+        from ouroboros.project_facts import project_knowledge_dir
+
+        project_address = resolve_knowledge_address(project_knowledge_dir(pid).parents[2], "topic", f"project:{pid}")
+        knowledge_indexes.append((project_address,
+                                  f"## Project knowledge ({pid})", "project knowledge index"))
+    sections: List[str] = []
+    for address, header, label in knowledge_indexes:
+        # Every shelf and overview branch projects the current source state, even
+        # when a previous writer could not publish its generated index.
+        try:
+            text = knowledge_index_view(address, overview=overview)
+        except (OSError, UnicodeDecodeError) as exc:
+            text = f"Knowledge navigation unavailable: {type(exc).__name__}; knowledge_list(scope={address.scope!r})."
+        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
+            log.warning("context: %s is large (%d chars)", label, len(text))
+        sections.append(f"{header}\n\n{text}")
     return sections
 
 

@@ -426,8 +426,10 @@ def plan_gate_decision(
 
 
 def _objection_lines(decision: Dict[str, Any], *, holding_only: bool) -> List[str]:
+    from ouroboros.plan_record import ask_subject
+
     rows = [o for o in decision.get("open_objections") or [] if not holding_only or o.get("holds")]
-    return [f"{o.get('seat_id')}/{o.get('id')} (ask {o.get('ask_id')}, revision {o.get('revision')}"
+    return [f"{o.get('seat_id')}/{o.get('id')} (ask {o.get('ask_id')}, {ask_subject(o.get('revision'))}"
             + ("; not adjudicated in its raiser's last reply" if o.get("not_adjudicated") else "")
             + ("; imported from the previous plan review" if o.get("legacy") else "") + f"): {o.get('text')}" for o in rows]
 

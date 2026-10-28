@@ -6,17 +6,18 @@ One intention, one record, three kinds of fact the mind writes through ``plan_ta
 * a REVISION — goal, ``done_when`` (the acceptance claim grammar: id / claim /
   support), ``affected_paths`` and the plan prose; omitted fields carry over,
   identical content creates no revision; the body flag is computed at write;
-* an ASK — the revision it carried, the mind's message, the attachments, the
-  participants it was dispatched to (each with the recorded fact whether it was an
-  owner-marked reviewer OF THAT ASK) and the review-ledger record that retains the
-  exact texts;
+* an ASK — the revision it carried (``None``: a reading of the request before any
+  plan), the mind's message, the attachments, the participants it was dispatched to
+  (each with the recorded fact whether it was an owner-marked reviewer OF THAT ASK)
+  and the review-ledger record that retains the exact texts;
 * a REPLY — one participant's parsed ``{prose, objections, withdrawn}``, or its
   typed absence (pending, failed, not dispatched, unparseable).
 
 Everything else is derived here and never stored: the open objections (a fold over
-EACH SEAT'S OWN replies — an objection stands until the same seat lists it under
-``withdrawn``; omission keeps it and flags ``not_adjudicated``; an unparseable reply
-changes nothing), who last saw which revision, the gate projection
+EACH SEAT'S OWN replies to stored revisions — an objection stands until the same seat
+lists it under ``withdrawn``; omission keeps it and flags ``not_adjudicated``; an
+unparseable reply changes nothing; a reading's reply is advice and moves no objection),
+who last saw which revision, the gate projection
 (``gate_projection``), the claims view (``acceptance_view``) and the review
 history the context views read (``record_history``). There is no cycle counter, no
 quorum, no aggregate and no fingerprint routing for plans.
@@ -120,6 +121,15 @@ def revision_by_number(record: Mapping[str, Any], n: Any) -> Optional[Dict[str, 
     return next((r for r in record.get("revisions") or [] if r.get("n") == n), None)
 
 
+READING_SUBJECT = "the reading of the request"
+
+
+def ask_subject(revision: Any, *, plan: bool = False) -> str:
+    """What an ask was about, as every reader names it: ``revision N`` (``plan revision N``),
+    or the reading of the request an ask before any plan carries (``revision: None``)."""
+    return READING_SUBJECT if revision is None else f"{'plan ' if plan else ''}revision {revision}"
+
+
 def revision_delta(previous: Optional[Mapping[str, Any]], current: Mapping[str, Any]) -> Dict[str, Any]:
     """What changed between two revisions: field flags, ``done_when`` by id (added /
     removed / reworded with both texts) and a unified diff of the plan prose."""
@@ -166,7 +176,11 @@ def validate_record(value: Any) -> Dict[str, Any]:
         if not isinstance(ask, dict) or not _ID_RE.fullmatch(str(ask.get("ask_id") or "")) or ask["ask_id"] in seen:
             raise PlanRecordInvalid("PLAN_RECORD_INVALID: ask ids must be unique")
         seen.add(ask["ask_id"])
-        if revision_by_number(value, ask.get("revision")) is None:
+        # ``revision: None`` is a reading of the request before any plan; anything else must be
+        # the number of a stored revision (a bool is not one, though ``True == 1``).
+        if "revision" not in ask or (ask["revision"] is not None and (
+                isinstance(ask["revision"], bool) or not isinstance(ask["revision"], int)
+                or revision_by_number(value, ask["revision"]) is None)):
             raise PlanRecordInvalid("PLAN_RECORD_INVALID: an ask names a revision the record does not hold")
         if not isinstance(ask.get("participants"), list):
             raise PlanRecordInvalid("PLAN_RECORD_INVALID: ask participants must be a list")
@@ -250,7 +264,10 @@ def parse_reply(text: str) -> tuple[Optional[Dict[str, Any]], str]:
 # ------------------------------------------------------------------ folds
 
 def _reply_rows(record: Mapping[str, Any], legacy: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Every participant row that carries a reply, in ask order, legacy first."""
+    """Every participant row that carries a reply to a stored revision, in ask order, legacy
+    first. A reading of the request (an ask before any plan, ``revision: None``) is not among
+    them, whenever it settles: its reply is advice that raises, restates and withdraws no
+    standing objection, and its replies, history and panel rows keep showing it."""
     rows: List[Dict[str, Any]] = []
     for objection in (legacy or {}).get("open_objections") or []:
         rows.append({"ask_id": LEGACY_ASK_ID, "revision": 0, "seat_id": str(objection.get("seat_id") or ""),
@@ -258,6 +275,8 @@ def _reply_rows(record: Mapping[str, Any], legacy: Optional[Mapping[str, Any]] =
                      "reply": {"objections": [{"id": str(objection.get("id") or ""), "text": str(objection.get("text") or "")}],
                                "withdrawn": []}, "legacy": True})
     for ask in record.get("asks") or []:
+        if ask.get("revision") is None:
+            continue
         for participant in ask.get("participants") or []:
             if participant.get("status") == "answered" and isinstance(participant.get("reply"), dict):
                 rows.append({"ask_id": ask.get("ask_id"), "revision": ask.get("revision"),
@@ -786,7 +805,7 @@ def next_ask_id(record: Mapping[str, Any]) -> str:
 def append_attempt(root: Any, task_id: str, attempt: Mapping[str, Any]) -> Dict[str, Any]:
     """Record one ask that could reach nobody (typed, $0): the mind asked and every named
     route was unavailable, so no participant was called. Not an ask — it dispatches nobody,
-    raises no objection and holds nothing; the Swarm obligation reads it as attempted."""
+    raises no objection and holds nothing; the record shows it as asked, with no route."""
     def _append(record: Dict[str, Any]) -> Dict[str, Any]:
         record["attempts"] = [*record.get("attempts", []), {"ts": utc_now_iso(), **copy.deepcopy(dict(attempt))}]
         return record

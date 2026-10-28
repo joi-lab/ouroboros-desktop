@@ -302,7 +302,7 @@
     "reviewModes": [
       {
         "className": "advisory",
-        "copy": "Review still runs. After feedback, Ouroboros can fix, reject or finish; raw reviewer findings remain visible.",
+        "copy": "Reviewers read plans, results and changes; their findings stay visible and Ouroboros decides what to do with them.",
         "label": "Advisory",
         "tone": "Flexible",
         "value": "advisory"
@@ -361,7 +361,7 @@
         "title": "Choose models"
       },
       {
-        "copy": "Decide how strict pre-commit review should be before Ouroboros starts modifying itself.",
+        "copy": "Reviewers read how Ouroboros understood a request, its plans, its results and its changes. Decide whether their critical findings block the work or only inform Ouroboros.",
         "footer": "Pick both review enforcement and the initial runtime mode before Ouroboros starts.",
         "id": "review_mode",
         "railCopy": "Advisory vs blocking",
