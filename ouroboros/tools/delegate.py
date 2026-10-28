@@ -1110,6 +1110,8 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
     # (an old row, an unknown run) stay null — never invented.
     _started_ts, _run_max_seconds = custody.run_timing(custody.custody_root(ctx), rid)
     _started_at = parse_deadline_ts(_started_ts)
+    _elapsed = lambda: None if _started_at is None else max(0, int(  # noqa: E731
+        (_dt.datetime.now(tz=_dt.timezone.utc) - _started_at).total_seconds()))
     # The idle-rail lease for THIS hold: granted before the loop, released in the
     # finally below — the supervisor's idle enforcer spares a leased task while
     # every other rail (deadline, ceiling, budget, cancel) still cuts through.
@@ -1132,7 +1134,8 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
                 ctx, rid, _external_wait_lease_until(ctx, read_window(), _started_at, _run_max_seconds),
                 lease_id=_lease_id)
             from ouroboros import delegate_observe  # speech from the journal, attention from the engine
-            step = delegate_observe.step(ctx, gateway, rid, window=window, since_seq=since_seq, read_window=read_window)
+            step = delegate_observe.step(ctx, gateway, rid, window=window, since_seq=since_seq, read_window=read_window,
+                                         elapsed_seconds=_elapsed(), max_seconds=_run_max_seconds or None)
             if step is not None and step.payload is not None:
                 return step.payload  # a quiet beat: nothing needed the detail
         detail = step.detail if step is not None else progress.bounded_poll(gateway, rid, read_window())
@@ -1182,9 +1185,7 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
                 payload = progress.window_payload(
                     run_id=rid, state=state, last_seq=last_seq,
                     window=(time.monotonic() - started) if observation_only else window,
-                    elapsed_seconds=(None if _started_at is None else max(0, int(
-                        (_dt.datetime.now(tz=_dt.timezone.utc) - _started_at).total_seconds()))),
-                    max_seconds=_run_max_seconds or None,
+                    elapsed_seconds=_elapsed(), max_seconds=_run_max_seconds or None,
                     waiting_on_user=bool(summary.get("waitingOnUser")) or bool(pending),
                     pending_interactions=_bounded_interactions(pending) if pending else None,
                     detail=detail, seen=seen,

@@ -69,12 +69,20 @@ class ClaudexorObservationGateway:
         hold plus the caller's transport allowance: a completed pass may overrun the nominal
         window by itself.
         """
-        from ouroboros.gateways.claudexor import ClaudexorUnavailable
+        from ouroboros.gateways.claudexor import DAEMON_BUSY_CODES, ClaudexorUnavailable
 
         hold = WAIT_MANY_MAX_WAIT_SEC if wait_ms is None else wait_ms / 1000.0
         bound = None if timeout_sec is None else float(timeout_sec) + hold
         request = {"targets": targets, **({} if wait_ms is None else {"waitMs": int(wait_ms)})}
-        body = self._request("POST", "/v2/runs/wait-many", json_body=request, timeout_sec=bound)
+        try:
+            body = self._request("POST", "/v2/runs/wait-many", json_body=request, timeout_sec=bound)
+        except ClaudexorUnavailable as exc:
+            # A read in POST clothing: the engine's typed "cannot serve now" is the same quiet
+            # observation hole it is for a GET. ``_problem`` stamps GETs only, since a lost
+            # answer to a mutating POST never proves the mutation was not accepted.
+            if exc.status_code == 503 and (exc.code in DAEMON_BUSY_CODES or exc.code == "daemon_stopping"):
+                exc.observation_timeout, exc.observation_reason, exc.observation_answered = True, exc.code, True
+            raise
         if not isinstance(body, dict):
             raise ClaudexorUnavailable("malformed_response", "Claudexor wait-many returned no object")
         return body

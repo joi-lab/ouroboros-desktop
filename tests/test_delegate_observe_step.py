@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import json
 
+import httpx
 import pytest
 
 from ouroboros import delegate_activity, delegate_observe
@@ -34,11 +35,14 @@ def _frames(events, *, end=False):
 
 
 class _Stream:
-    def __init__(self, text):
-        self.status_code, self._text = 200, text
+    def __init__(self, text, status_code=200, code=""):
+        self.status_code, self._text, self._code = status_code, text, code
 
     def iter_text(self):
         yield self._text
+
+    def read(self):
+        return json.dumps({"code": self._code}).encode()
 
 
 class Engine:
@@ -55,7 +59,10 @@ class Engine:
 
     def open_run_events(self, run_id, after_seq, timeout_sec):
         self.stream_opens.append((run_id, after_seq, timeout_sec))
-        return contextlib.nullcontext(_Stream(self.streams.pop(0) if self.streams else ""))
+        answer = self.streams.pop(0) if self.streams else ""
+        if isinstance(answer, BaseException):
+            raise answer
+        return contextlib.nullcontext(answer if isinstance(answer, _Stream) else _Stream(answer))
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
         self.requests.append({"targets": targets, "wait_ms": wait_ms})
@@ -88,11 +95,13 @@ def _speech(seq, text):
 def test_a_quiet_beat_reads_no_detail_and_speech_reaches_the_owner(ctx):
     gateway = Engine(streams=[_frames([_speech(1, "hello"), _speech(2, "world")])],
                      wakes=[_wake("timeout", [_summary()])])
-    step = delegate_observe.step(ctx, gateway, "run-s", window=3.0, since_seq=0, read_window=lambda: 30.0)
+    step = delegate_observe.step(ctx, gateway, "run-s", window=3.0, since_seq=0, read_window=lambda: 30.0,
+                                 elapsed_seconds=42, max_seconds=600)
     assert step.detail is None and gateway.detail_reads == []
     payload = json.loads(step.payload)
     assert payload["status"] == "progress" and payload["last_seq"] == 2 and payload["state"] == "running"
     assert payload["answered"] is True and payload["waiting_on_user"] is False
+    assert (payload["elapsed_seconds"], payload["max_seconds"]) == (42, 600), "the facts against a premature cancel"
     assert gateway.stream_opens == [("run-s", 0, 3.0)]
     assert gateway.requests == [{"targets": [{"runId": "run-s"}], "wait_ms": 0}], "attention is a present-state read"
     assert len(ctx.frames) == 1 and "hello" in ctx.frames[0][0]
@@ -107,12 +116,14 @@ def test_attention_earns_the_detail_and_acknowledges_the_token_after_it(ctx):
         {"interactionId": "i-1", "questions": [{"id": "q", "question": "?", "options": [], "multi_select": False}]}]}
     gateway = Engine(streams=[""], wakes=[_wake("attention", [_summary(pending=True, token=TOKEN_B)], [0]),
                                           _wake("timeout", [_summary(pending=True, token=TOKEN_B)])],
-                     details=[asked])
+                     details=[asked, asked])
     step = delegate_observe.step(ctx, gateway, "run-s", window=3.0, since_seq=0, read_window=lambda: 30.0)
     assert step.detail is asked and gateway.detail_reads == ["run-s"]
     gateway.streams.append("")
-    delegate_observe.step(ctx, gateway, "run-s", window=3.0, since_seq=3, read_window=lambda: 30.0)
+    again = delegate_observe.step(ctx, gateway, "run-s", window=3.0, since_seq=3, read_window=lambda: 30.0)
     assert gateway.requests[1]["targets"] == [{"runId": "run-s", "seen": TOKEN_B}]
+    assert again.detail is asked and gateway.detail_reads == ["run-s"] * 2, \
+        "a run waiting on its person is never a quiet beat: its question is projected from fresh detail"
 
 
 def test_the_streams_end_earns_the_terminal_detail(ctx):
@@ -130,6 +141,15 @@ def test_a_hole_on_the_attention_read_raises_the_gateways_typed_hole(ctx):
     with pytest.raises(ClaudexorUnavailable) as caught:
         delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0)
     assert caught.value is hole
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError("refused"), _Stream("", 503, "daemon_busy"),
+                                     _Stream("", 503, "daemon_stopping"), _Stream("", 404, "not_found")],
+                         ids=["connect", "busy", "stopping", "absent"])
+def test_a_journal_that_could_not_be_read_hands_the_beat_to_the_detail_read(ctx, failure):
+    gateway = Engine(streams=[failure], wakes=[_wake("timeout", [_summary()])])
+    assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
+    assert gateway.requests == [], "the detail beat decides this one, with its own hole rules and degraded window"
 
 
 def test_a_problem_row_hands_the_beat_back_to_the_detail_read(ctx):

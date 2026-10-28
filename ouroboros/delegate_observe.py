@@ -39,11 +39,15 @@ def reset_process_seen() -> None:
 
 
 def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optional[int],
-         read_window: Callable[[], float]) -> Optional[Step]:
-    """``None`` when this engine has no compact wait or no event stream: the caller reads detail."""
+         read_window: Callable[[], float], elapsed_seconds: Optional[int] = None,
+         max_seconds: Optional[int] = None) -> Optional[Step]:
+    """``None`` when this engine has no compact wait or no event stream, or when the journal
+    could not be read this beat: the caller reads detail, with its hole rules and its degraded
+    window. ``elapsed_seconds``/``max_seconds`` are the run's timing facts the quiet payload
+    carries, as the window payload does, against a nanny's premature cancel."""
     from ouroboros import delegate_activity, delegate_progress
     from ouroboros.gateways import claudexor_observation as observation
-    from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
+    from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
     from ouroboros.gateways.claudexor_run_events import read_run_events, run_events_supported
 
     bound = min(max(0.0, float(read_window())), SHORT_POLL_TIMEOUT_SEC)
@@ -55,10 +59,13 @@ def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optio
     started = time.monotonic()
     # 1. Speech: the journal read is the wait. It resumes after what this process has shown.
     after = delegate_activity.shown_cursor(ctx, task_id, run_id, since_seq)
-    read = read_run_events(gateway, run_id, after_seq=after, through_seq=None, timeout_sec=max(0.0, float(window)))
+    try:
+        read = read_run_events(gateway, run_id, after_seq=after, through_seq=None, timeout_sec=max(0.0, float(window)))
+    except ClaudexorUnavailable:
+        return None  # a transport before the stream opened, busy, stopping, a refused or absent stream
     delegate_progress.emit_stream(ctx, run_id, read, after_seq=after)
-    # 2. Attention: the present state, body-free. A hole raises the gateway's own typed refusal,
-    # which the wait already reports as a quiet observation hole.
+    # 2. Attention: the present state, body-free. A hole raises the gateway's own typed hole
+    # (``observation_timeout``), which the wait already reports as a quiet observation hole.
     with _SEEN_LOCK:
         seen = _SEEN.get(key)
     wake = observation.wait_attention(gateway, [(run_id, seen)], wait_sec=0.0, timeout_sec=bound)
@@ -69,7 +76,9 @@ def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optio
         return Step(detail=row.detail)  # the route vanished: this call read the detail, the old path takes it
     if row.problem is not None or row.error is not None:
         return None  # the engine could not place the run: the addressed read decides what it is
-    if wake.needs_attention(0) or read.ended:
+    if wake.needs_attention(0) or read.ended or row.pending:
+        # A run waiting on its person is never a quiet beat: the question's projection (the
+        # pending interactions, the paused note, the continuation) comes from fresh detail.
         detail = delegate_progress.bounded_poll(gateway, run_id, read_window())
         with _SEEN_LOCK:
             _SEEN[key] = row.token  # acknowledged only once the rows it stands for were fetched
@@ -77,5 +86,6 @@ def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optio
     cursor = max(int(after), int(read.through_seq or 0), int(since_seq or 0))
     payload = {"status": "progress" if read.events else "no_progress", "run_id": str(run_id),
                "state": row.status or "", "last_seq": cursor, "waited_sec": int(time.monotonic() - started),
-               "waiting_on_user": bool(row.pending), "answered": True}
+               "elapsed_seconds": elapsed_seconds, "max_seconds": max_seconds,
+               "waiting_on_user": False, "answered": True}
     return Step(payload=json.dumps(payload, ensure_ascii=False))
