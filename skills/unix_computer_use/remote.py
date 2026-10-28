@@ -165,6 +165,15 @@ def parse_markers(text: str, parse: Any) -> tuple[dict[str, Any] | None, dict[st
     return found["BEFORE"], found["AFTER"], stop
 
 
+def split_ssh_inventory(out: str) -> tuple[str, str]:
+    """(listing, front text) of an SSH inventory read: the marker is matched at the start of a line (the last one), so
+    an application name that contains it is data."""
+    marks = list(re.finditer(r"^__FRONT__", out, re.M))
+    if not marks:
+        return out, ""
+    return out[:marks[-1].start()], out[marks[-1].end():]
+
+
 def _info_or_none(raw: str) -> dict[str, Any] | None:
     info = parse_info(raw)
     return info if info.get("pid") else None
@@ -332,21 +341,34 @@ class RemoteBackends:
                 before, after, stop = parse_markers(stdout, _info_or_none)
                 if stop:
                     return self._stopped(ctx, shared, before, backend, stop)
-                # The wrapper prints its first marker before the input runs: no marker means ssh itself failed
-                # (connection refused, authentication) and the input never reached the Mac.
-                ran = bool(re.search(r"^__FRONT_BEFORE__", stdout, re.M)) if input_effect else True
-                payload = {"ok": rc == 0, "backend": backend, "returncode": rc, "output": strip_markers(stdout), "dispatched": ran}
-                if rc != 0:
+                # The wrapper prints `__FRONT_BEFORE__` before the input and `__FRONT_AFTER__` after it. Both received:
+                # the wrapper completed and `rc` is the input's own exit. A reply cut short (a refused connection, a
+                # channel broken after the input may have run) leaves the outcome unknown: never "not sent".
+                # ssh returns the remote exit status only after the session ended normally: exit 0 is completion too.
+                completed = (rc == 0 or bool(re.search(r"^__FRONT_AFTER__", stdout, re.M))) if input_effect else True
+                started = completed or bool(re.search(r"^__FRONT_BEFORE__", stdout, re.M))
+                payload = {"ok": rc == 0 and completed, "backend": backend, "returncode": rc, "output": strip_markers(stdout),
+                           "dispatched": True if completed else None}
+                if not completed:
+                    payload.update({"transport_failed": True, "reason": "ssh_failed",
+                                    "error": f"ssh ended without the wrapper's completion marker ({stderr.strip() or f'exit {rc}'}); "
+                                             + ("the input stage had started when the reply was cut short" if started
+                                                else "nothing of the wrapper's output came back")})
+                elif rc != 0:
                     payload["error"] = stderr.strip() or strip_markers(stdout) or f"exit {rc}"
-                    if not ran:
-                        payload["reason"] = "ssh_failed"
                 if note and "clipboard_replaced" in note:
-                    # The clipboard stage reports itself; the paste chord may still have failed after it.
-                    payload["clipboard_replaced"] = bool(re.search(r"^__CLIPBOARD_WRITTEN__$", stdout, re.M))
-                    if rc != 0 and not payload["clipboard_replaced"]:
-                        # The `&&` chain stops at the clipboard write: the paste chord never ran.
-                        payload.update({"dispatched": False, "reason": "clipboard_failed",
-                                        "error": f"the clipboard write failed on the remote Mac ({payload.get('error')}); nothing was pasted"})
+                    # The clipboard stage reports itself. A received marker is a fact whatever came after; no marker
+                    # from a completed wrapper means the `&&` chain stopped at the write (the chord never ran); no
+                    # marker from a cut-short reply is an unknown stage, not a failed one.
+                    if re.search(r"^__CLIPBOARD_WRITTEN__$", stdout, re.M):
+                        payload["clipboard_replaced"] = True
+                    elif completed:
+                        payload["clipboard_replaced"] = False
+                        if rc != 0:
+                            payload.update({"dispatched": False, "reason": "clipboard_failed",
+                                            "error": f"the clipboard write failed on the remote Mac ({payload.get('error')}); nothing was pasted"})
+                    else:
+                        note = {k: v for k, v in note.items() if k != "clipboard_replaced"}  # an unknown stage makes no claim
             else:
                 return {"ok": False, "error": f"unsupported remote backend {backend!r}"}
         except Exception as exc:  # noqa: BLE001 - the transport failed; an earlier observed switch is still a fact
@@ -414,11 +436,13 @@ class RemoteBackends:
         m = re.search(r"^__ACTIVE__$", text, re.M)
         if not m:
             return [], None, "the guest printed no window listing (the script did not run as written)"
-        encoded, active = text[:m.start()].strip(), text[m.end():].strip()
+        # The listing is the LAST line before the separator: a login shell (`bash -lc`) may greet before the script runs.
+        lines = [ln.strip() for ln in text[:m.start()].splitlines() if ln.strip()]
+        encoded, active = (lines[-1] if lines else ""), text[m.end():].strip()
         try:
-            listing = base64.b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8", "replace") if encoded else ""
+            listing = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True).decode("utf-8", "replace") if encoded else ""
         except (ValueError, UnicodeError):
-            listing = ""
+            return [], None, "the guest listing could not be decoded (the script did not run as written)"
         rows = parse_wmctrl_rows(listing)
         front = parse_x11_front(active.splitlines()[0] if active else "", rows)
         return rows, front, ("" if ok else (strip_markers(err) or "wmctrl failed in the guest"))
@@ -476,7 +500,7 @@ class RemoteBackends:
             if rc != 0:
                 return {"ok": False, "backend": backend, "reason": "apps_unread",
                         "error": f"the remote Mac's applications could not be listed ({err.strip() or strip_markers(out) or f'exit {rc}'})"}
-            listing, _sep, front_text = out.partition("__FRONT__")
+            listing, front_text = split_ssh_inventory(out)
             apps = parse_list(listing)
             if not apps:
                 return {"ok": False, "backend": backend, "reason": "apps_unread",
@@ -543,7 +567,7 @@ class RemoteBackends:
             if rc != 0:
                 return self._json_text({"ok": False, "backend": backend, "reason": "apps_unread",
                                         "error": f"lsappinfo list failed on the remote Mac ({err.strip() or strip_markers(out) or f'exit {rc}'})"})
-            listing, _sep, front_text = out.partition("__FRONT__")
+            listing, front_text = split_ssh_inventory(out)
             front = _info_or_none(front_text)
             apps = parse_list(listing)
             if not apps:

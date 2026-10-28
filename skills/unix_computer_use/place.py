@@ -381,12 +381,14 @@ class PlaceMixin:
         if after is not None and not same_place(after, delivered):
             payload["front_after"] = after
         steps_done = int(payload.get("steps_done") or 0)
-        dispatched = bool(payload.get("dispatched"))  # the helper ran at all (an explicit fact, never inferred)
+        # The dispatch fact is explicit, never inferred: True = the helper ran; False = nothing was sent (a known
+        # fact); None = unknown (the call that carried the input did not answer). Unknown is never read as "not sent".
+        dispatched = payload.get("dispatched")
         switched = f"; the switch to {target.get('requested')} ran before it" if payload.get("activation_done") else ""
         if not payload.get("ok") and not steps_done:
             if isinstance(before, dict) and (not known or not same_place(before, delivered)):
                 payload["front_before"] = before
-            if not dispatched:
+            if dispatched is False:
                 # Nothing was dispatched (a refused combo, a failed clipboard write): a known fact, not an unknown outcome.
                 if known:
                     payload["front"] = delivered
@@ -394,6 +396,10 @@ class PlaceMixin:
                 return payload
             if known:
                 payload["front_at_dispatch"] = delivered
+            if dispatched is None:
+                payload["note"] = ("the call that carried the input did not answer, so whether it ran and whether anything "
+                                   f"reached {where or 'the front application'} is unknown (do not assume it did not)" + switched)
+                return payload
             # The input helper ran and did not report success: whether anything reached the screen is unknown.
             payload["note"] = ("the input helper did not report success, so whether anything reached "
                                f"{where or 'the front application'} is unknown" + switched)
@@ -404,9 +410,14 @@ class PlaceMixin:
         if not payload.get("ok"):
             # Some steps of one call completed before it stopped (``error`` says why); the failing step may have been
             # dispatched (its outcome is unknown) or withheld.
+            if dispatched:
+                next_step = "the next step was dispatched and did not report success, "
+            elif dispatched is False:
+                next_step = "the next step was not sent, "
+            else:
+                next_step = "the call that carried the next step did not answer (whether it ran is unknown), "
             payload["note"] = (f"{steps_done} of {payload.get('steps_total')} step(s) completed while {where or 'an unknown application'} "
-                               "was in front; " + ("the next step was dispatched and did not report success, " if dispatched
-                                                   else "the next step was not sent, ") + "the rest were not sent; this tool observed no UI change")
+                               "was in front; " + next_step + "the rest were not sent; this tool observed no UI change")
             return payload
         dropped = "accessibility" in text.lower() and "not enabled" in text.lower()
         untyped = re.findall(r"Unable to get key code for (\S+)", text)

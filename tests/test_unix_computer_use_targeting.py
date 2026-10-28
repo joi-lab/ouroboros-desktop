@@ -722,6 +722,22 @@ def test_a_demoted_step_inside_a_sequence_is_reported_as_dispatched_with_its_fac
     assert out["ok"] is False and out["reason"] == "permission_denied" and out["steps_done"] == 0
     assert "failed" in out["error"] and "not sent" not in out["error"] and out["permission"]["accessibility"] == "untrusted"
     assert out["dispatched"] is True and "dropped" in out["note"], "the demoted step keeps its own explanation"
+    # After completed steps the explanation is said about the next step, beside what completed.
+    module, api, state = mac(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    original = module.subprocess.run
+
+    def second_dropped(cmd, *a, **k):
+        argv = [str(p) for p in cmd]
+        if argv[0] == "cliclick":
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return subprocess.CompletedProcess(argv, 0, "", warning)
+        return original(cmd, *a, **k)
+    monkeypatch.setattr(module.subprocess, "run", second_dropped)
+    out = receipt(api.tools["key"](keys="down return up"))
+    assert out["steps_done"] == 1 and out["reason"] == "permission_denied" and out["observed_effect"] is True and calls["n"] == 2, out
+    assert out["note"].startswith("1 of 3 step(s) completed") and "dropped" in out["note"] and "the rest were not sent" in out["note"], out["note"]
 
 
 def test_a_failed_helper_with_an_unread_front_is_still_a_dispatched_input(tmp_path, monkeypatch):
@@ -745,6 +761,24 @@ def test_a_failed_helper_with_an_unread_front_is_still_a_dispatched_input(tmp_pa
     out = receipt(api.tools["key"](keys="right down return"))
     assert out["steps_done"] == 1 and out["dispatched"] is True and calls["n"] == 2, "the second helper ran and failed; the third was not sent"
     assert "dispatched and did not report success" in out["note"] and "the rest were not sent" in out["note"]
+    # A dispatched step whose front could not be read is listed as an unknown recipient, not left out.
+    module, api, state = mac(tmp_path, monkeypatch)
+    seen = {"inputs": 0}
+    original = module.subprocess.run
+
+    def front_unread_after_first(cmd, *a, **k):
+        argv = [str(p) for p in cmd]
+        if argv[0] == "cliclick":
+            seen["inputs"] += 1
+            if seen["inputs"] == 2:
+                return subprocess.CompletedProcess(argv, 1, "", "boom")
+        if argv[0] == "lsappinfo" and seen["inputs"] >= 1:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return original(cmd, *a, **k)
+    monkeypatch.setattr(module.subprocess, "run", front_unread_after_first)
+    out = receipt(api.tools["key"](keys="right down return"))
+    assert out["steps_done"] == 1 and out["dispatched"] is True and seen["inputs"] == 2, out
+    assert out["steps_delivered_to"][0]["app"] == "Safari" and out["steps_delivered_to"][1] == "unknown", out
 
 
 def test_cliclick_gets_absolute_negative_coordinates_for_a_display_left_of_the_main_one(tmp_path, monkeypatch):
@@ -892,6 +926,18 @@ def test_native_reads_say_which_attributes_failed_and_never_render_a_failed_read
         return (-25204, [], 10) if el == "root" else (0, [], 0)
     refused = native.walk("root", read_failing_rows, children_refused, max_nodes=150, deadline_s=5)
     assert refused["truncated_by"] == ["read_errors"] and refused["nodes"][0]["children_unread"] == 10 and refused["errors"] == {"children:CannotComplete": 1}
+    # Fewer children than the count within the budget (the read disagreed with the count): a read error, not a budget cut.
+
+    def children_race(el, n):
+        return (0, ["c1", "c2", "c3"], 10) if el == "root" else (0, [], 0)
+    race = native.walk("root", read_failing_rows, children_race, max_nodes=150, deadline_s=5)
+    assert race["visited"] == 4 and race["nodes"][0]["children_unread"] == 7 and race["truncated_by"] == ["read_errors"] and race["errors"] == {}
+    # A count with no value answered for the children: named too.
+
+    def children_no_value(el, n):
+        return (-25212, [], 4) if el == "root" else (0, [], 0)
+    no_value = native.walk("root", read_failing_rows, children_no_value, max_nodes=150, deadline_s=5)
+    assert no_value["nodes"][0]["children_unread"] == 4 and no_value["truncated_by"] == ["read_errors"] and no_value["errors"] == {}
 
 
 def test_native_activation_rules_without_a_desktop(monkeypatch):

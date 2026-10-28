@@ -943,7 +943,11 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 x, y = _coerce_point(x, y)
             except ValueError as exc:
                 return _json({"ok": False, "error": str(exc)})
-            has_xy = self._takes_negative_points() or (int(x) >= 0 and int(y) >= 0)
+            if (int(x) < 0 or int(y) < 0) and not self._takes_negative_points():
+                # A provided point the destination has no space for is refused, as click does: never a press at
+                # wherever the pointer happens to be.
+                return _json({"ok": False, "error": f"negative coordinates not allowed ({x},{y})"})
+            has_xy = True
         ix = iy = 0
         note: dict[str, Any] = {}
         if has_xy:
@@ -1100,7 +1104,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             if not results[-1].get("ok"):
                 break
         recipients = [r.get("delivered_to") or r.get("front_at_dispatch") or "unknown"
-                      for r in results if "delivered_to" in r or "front_at_dispatch" in r]  # the dispatched steps
+                      for r in results if r.get("dispatched") is True]  # the dispatched steps, whether or not their front was read
         last = results[-1]
         if last.get("ok"):
             payload: dict[str, Any] = {"ok": True, "sequence": steps, "steps": len(steps), "keys": combo, "dispatched": True}
@@ -1129,7 +1133,15 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         stderr = "\n".join(r.get("helper_stderr") or "" for r in results).strip()
         payload = self._finish(payload, ctx, stderr, after=ctx.get("front_last"))
         if not last.get("ok") and last.get("reason") in ("permission_denied", "untypable_characters") and last.get("note"):
-            payload["note"] = last["note"]  # a demoted step keeps its own explanation
+            # A demoted step keeps its own explanation; after completed steps it is said about the next step.
+            done = len(results) - 1
+            if done:
+                at = payload.get("delivered_to")
+                where = (at.get("app") or at.get("title")) if isinstance(at, dict) else None
+                payload["note"] = (f"{done} of {len(steps)} step(s) completed while {where or 'an unknown application'} was in front; "
+                                   f"the next step: {last['note']}; the rest were not sent")
+            else:
+                payload["note"] = last["note"]
         if len({json.dumps(r, sort_keys=True) if isinstance(r, dict) else "unknown" for r in recipients}) > 1:
             payload["steps_delivered_to"] = recipients
         return _json(payload)

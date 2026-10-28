@@ -97,10 +97,11 @@ Acting in a named application (`app=`):
   tool resolves the name against the running list without launching anything,
   brings the application forward when it is not already in front, reads who is
   in front again, and only then sends the input. Two matches are
-  a refusal that lists the candidates; an application that is not running, or
-  that did not come to the front (macOS 14+ may refuse activation from a
-  background process), is a refusal that names who is in front instead; a
-  front that could not be read after the switch is the refusal `front_unread`.
+  a refusal that lists the candidates; an application that is not running is
+  a refusal that lists the running applications; one that did not come to the
+  front (macOS 14+ may refuse activation from a background process) is a
+  refusal that names who is in front; a front that could not be read after
+  the switch is the refusal `front_unread`.
   A refusal sends nothing and carries no effect mark (a switch it observed
   first keeps its own, `activation_done`). An empty `app` (what a voice model
   sends for an unused optional field) means "untargeted": the input goes to
@@ -116,8 +117,12 @@ Acting in a named application (`app=`):
   not be sent keeps its mark (`activation_done`). Without `app=` every step
   goes to whatever is in front at that moment, and the receipt names each
   step's recipient when they differ (`steps_delivered_to`, `"unknown"` for a
-  step whose front could not be read). A tool's registered budget covers one
-  input's worst case (`type_text` 180 s, the other inputs 90 s), not a long
+  step whose front could not be read). On a sequence that stopped, `dispatched`
+  is the fact for the step that failed (`steps_done` counts the steps that ran
+  before it; a step whose remote call did not answer is `null`, and the note
+  says so, never "not sent"). A tool's registered budget covers one
+  input's worst case (`type_text` 180 s, the other inputs 90 s, `move` and
+  `mouse_up` 10 s), not a long
   sequence: when the host's budget ends a call, no receipt comes back.
 - `move` and `mouse_up` never change which application is in front: a drag
   must end where it started.
@@ -177,7 +182,8 @@ Input receipts (the same contract on every backend):
   `already_front`, `method`, `waited_ms` (on a remote: the host's round trip
   for the switch); `activated` is `null` when the previous front could not be
   read), `helper_stderr` when the input helper printed anything, and one
-  `note` saying that no UI change was observed by this tool.
+  `note` saying what this tool observed and did not observe (a dispatched input:
+  no UI change; a withheld one: "not sent"; a lost remote answer: unknown).
 - An input whose helper did not report success (non-zero exit, timeout) is
   `ok: false` without the input's mark; it carries `front_at_dispatch` instead
   of `delivered_to`, because whether anything reached the screen is unknown.
@@ -219,9 +225,9 @@ Observation without images (`ax_tree`, `window_list`):
   focused element), stops at `max_nodes` (default 150, ceiling 2000) or
   `timeout_ms` (default 3000, ceiling 15000) and names every cut in
   `truncated_by`: a node's children are requested up to the remaining node
-  budget plus one, so a wide list is cut by `max_nodes` (named whenever
-  children were left unrequested, whether or not the visited count reached the
-  budget) and the node records `children_unread`; a node or a children list
+  budget plus one, so a wide list is cut by `max_nodes` (named whenever the
+  budget left children unrequested, whether or not the visited count reached
+  it) and the node records `children_unread`; a node or a children list
   the application failed to answer is a cut too (`read_errors`: that subtree
   is not requested, `errors` counts the failures by attribute); web content (`AXWebArea`)
   is skipped unless `include_web=true`. Nodes carry role, label, value (capped,
@@ -316,12 +322,15 @@ Backend matrix (honest limitations):
   is final (never retried by typing); a clipboard program that ran and failed
   (`pyperclip` or `xclip` absent) falls back to `typewrite` once with the same
   switch; a remote call that did not answer (`transport_failed`: the paste may
-  have run) is final, nothing is retyped. With `app=""` the action, its exit-code
-  reading and the clipboard/typewrite routing are unchanged; what changed on
+  have run) is final, nothing is retyped, with or without `app=`. With `app=""`
+  the action, its exit-code reading and the clipboard/typewrite routing are
+  otherwise unchanged; what changed on
   the benchmark path is the probe around the action (markers are stripped from
   the returned output), `activate_app` in the tool list, `app` in the input
   schemas and `window_list` answering parsed rows from a base64-encoded
-  listing (`ok: false` when the guest printed no listing); no text a window
+  listing (the last line before its separator, so a login-shell greeting
+  cannot hide the windows; `ok: false` when the guest printed no listing or
+  one that does not decode); no text a window
   shows can reach the readers as a separator or a marker. Honesty guarantees on this
   backend: `scroll` clicks are 1:1 wheel detents (not multiplied); non-ASCII,
   angle brackets, multi-line or long `type_text` (or `via=paste`) is pasted via
@@ -338,9 +347,11 @@ Backend matrix (honest limitations):
   through System Events (only the integer pid enters the remote command, never
   the name), verified by polling `lsappinfo front` up to `wait_ms`; an input
   cliclick cannot express is refused before any switch; a transport failure
-  after a switch still reports the switch; an ssh call that failed before the
-  remote wrapper ran (connection refused, authentication: `ssh_failed`) sent
-  nothing, `dispatched: false`. cliclick's stderr is read the same
+  after a switch still reports the switch; an ssh call that ended without the
+  wrapper's completion marker (a refused connection, a channel broken after
+  the input may have run: `ssh_failed`) leaves the outcome unknown
+  (`dispatched: null`, `transport_failed`; a clipboard marker that did come
+  back is kept as a fact), never "not sent". cliclick's stderr is read the same
   way as locally. `type_text` with `via=paste` writes the Mac's clipboard
   (`pbcopy`) and pastes, and the receipt says whether the clipboard stage
   completed (a failed write sends nothing: `clipboard_failed`, `dispatched:

@@ -473,7 +473,8 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                 if role in skip_children:
                     skipped_web += 1
                     continue
-                answer = children_of(el, max_nodes - visited + 1)
+                requested = max_nodes - visited + 1
+                answer = children_of(el, requested)
                 cerr, kids = answer[0], list(answer[1])
                 total = answer[2] if len(answer) > 2 else None
                 if cerr not in (0, -25212, -25205):
@@ -481,10 +482,10 @@ def walk(root: Any, read_node: Callable[[Any], tuple[int, list[Any]]], children_
                     cut("read_errors")
                 if total is not None and total > len(kids):
                     node["children_unread"] = total - len(kids)
-                    if cerr == 0:
-                        # The budget left children unrequested: a cut, whether or not the visited count reaches it.
-                        cut("max_nodes")
-                    # A failed children read is counted above, not laundered into a budget cut.
+                    # The budget capped the request: a budget cut (whether or not the visited count reaches it). Fewer
+                    # children than the count for any other reason (a failed read, no value, a count the read disagreed
+                    # with) is a read error, never laundered into a budget cut.
+                    cut("max_nodes" if cerr == 0 and len(kids) >= requested else "read_errors")
                 for kid in kids:
                     queue.append((kid, depth + 1))
             finally:

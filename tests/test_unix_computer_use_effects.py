@@ -273,6 +273,15 @@ def test_a_multi_process_input_reports_which_step_ran_and_a_helper_that_never_st
     assert step["dispatched"] is False and step["steps_done"] == 1 and "the next step was not sent" in step["note"], step
 
 
+def test_a_press_at_a_negative_point_is_refused_where_the_desktop_has_no_such_space(tmp_path, monkeypatch):
+    tools, transport = desktop(tmp_path, monkeypatch, "linux", "x11", tools=("xdotool",))
+    for tool in ("mouse_down", "mouse_up"):
+        out = receipt(tools[tool](x=-5, y=20, raw=True))
+        assert out["ok"] is False and "negative" in out["error"] and transport.calls == [], (tool, out)
+    assert receipt(tools["mouse_down"](x=5, y=6, raw=True))["ok"] is True and transport.calls[-1] == ["xdotool", "mousemove", "5", "6", "mousedown", "1"]
+    assert receipt(tools["mouse_up"]())["ok"] is True, "omitted coordinates still release at the pointer"
+
+
 @pytest.mark.parametrize("tool, args, steps", [
     ("click", {"x": 3, "y": 4, "raw": True}, 2),
     ("left_click_drag", {"start_x": 1, "start_y": 2, "end_x": 3, "end_y": 4, "raw": True}, 4),

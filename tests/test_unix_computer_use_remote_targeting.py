@@ -510,6 +510,9 @@ def test_osworld_a_lost_answer_after_a_paste_is_not_retyped_and_negative_points_
     guest.commands.clear()
     refused = receipt(api.tools["click"](x=-5, y=20, raw=True))
     assert refused["ok"] is False and "negative" in refused["error"] and guest.commands == []
+    for tool in ("mouse_down", "mouse_up"):
+        pressed = receipt(api.tools[tool](x=-5, y=20, raw=True))
+        assert pressed["ok"] is False and "negative" in pressed["error"] and guest.commands == [], (tool, pressed)
 
 
 def test_osworld_a_pid_less_window_keeps_its_title_in_the_probe(tmp_path, monkeypatch):
@@ -563,17 +566,68 @@ def test_osworld_a_lost_reply_after_a_key_is_an_unknown_outcome_never_a_withheld
     out = receipt(api.tools["key"](keys="right down"))
     assert out["ok"] is False and out["dispatched"] is None and out["transport_failed"] is True and out["steps_done"] == 0, out
     assert "outcome unknown" in out["error"] and "not sent" not in out["error"]
+    assert "did not answer" in out["note"] and "not sent" not in out["note"], out["note"]
     assert sum("pyautogui.press" in c[-1] for c in guest.commands) == 1, "the second step is withheld after an unknown outcome"
+    # The second step's answer lost after the first ran: the aggregate says which step is unknown, never "not sent".
+    presses = {"n": 0}
+
+    def lost_second(code, index):
+        if "pyautogui.press" in code:
+            presses["n"] += 1
+            if presses["n"] == 2:
+                raise TimeoutError("reply lost after guest input")
+        return 0, f"__FRONT_BEFORE__{FIREFOX_FRONT}\n__FRONT_AFTER__{FIREFOX_FRONT}\n"
+    module, api, guest = osworld(tmp_path, monkeypatch, lost_second)
+    out = receipt(api.tools["key"](keys="right down return"))
+    assert out["steps_done"] == 1 and out["dispatched"] is None and presses["n"] == 2, out
+    head, _, _rest = out["note"].partition("the rest")
+    assert head.startswith("1 of 3 step(s) completed") and "did not answer" in head and "not sent" not in head, out["note"]
 
 
-def test_ssh_a_connection_that_never_ran_the_wrapper_is_not_a_dispatched_input(tmp_path, monkeypatch):
+def test_osworld_a_login_shell_greeting_before_the_listing_hides_nothing(tmp_path, monkeypatch):
+    """`bash -lc` may print a greeting before the script runs: the listing is the last line before the separator."""
+    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, "Welcome to the guest\n" + listing(FIREFOX_FRONT)))
+    rows = receipt(api.tools["window_list"]())
+    assert rows["ok"] is True and len(rows["windows"]) == 3 and rows["frontmost"]["window_id"] == "0x00000001", rows
+    module, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, "not base64!\n__ACTIVE__\n" + FIREFOX_FRONT + "\n"))
+    bad = receipt(api.tools["window_list"]())
+    assert bad["ok"] is False and "decode" in bad["error"], bad
+
+
+def test_ssh_an_application_name_containing_the_front_marker_is_data(tmp_path, monkeypatch):
+    rows = LISTING + ' 5) "My __FRONT__ Tool" ASN:0x0-0x5: \n    bundleID="com.example.front"\n    pid = 500 type="Foreground" flavor=3\n'
+    module, api, calls = ssh(tmp_path, monkeypatch, lambda command: (0, rows + "\n__FRONT__\n" + info_line(SAFARI)))
+    out = receipt(api.tools["window_list"]())
+    assert out["ok"] is True and [r["app"] for r in out["windows"]][-1] == "My __FRONT__ Tool" and out["frontmost"]["pid"] == 100, out
+
+
+def test_ssh_a_reply_cut_short_is_an_unknown_outcome_never_a_withheld_input(tmp_path, monkeypatch):
+    """ssh exit 255 without the wrapper's completion marker: a refused connection or a channel broken after the input
+    may have run; the receipt says unknown, keeps a received clipboard fact, and never says "not sent"."""
     def refused(command):
-        if "cliclick" in command:  # ssh failed before the wrapper printed its first marker
+        if "cliclick" in command:  # nothing of the wrapper's output came back
             return 255, "", "ssh: connect to host mac.invalid port 22: Connection refused"
         return mac_over_ssh(SAFARI, KEYNOTE)(command)  # the switch itself succeeds
     module, api, calls = ssh(tmp_path, monkeypatch, refused)
     out = receipt(api.tools["key"](keys="right"))
-    assert out["ok"] is False and out["dispatched"] is False and out["reason"] == "ssh_failed", out
-    assert "not sent" in out["note"] and "observed_effect" not in out and "Connection refused" in out["error"]
+    assert out["ok"] is False and out["dispatched"] is None and out["transport_failed"] is True and out["reason"] == "ssh_failed", out
+    assert "unknown" in out["note"] and "not sent" not in out["note"] and "Connection refused" in out["error"] and "observed_effect" not in out
     ran = receipt(api.tools["key"](keys="right", app="Keynote"))  # a switch that ran before it keeps its mark
-    assert ran["ok"] is False and ran["dispatched"] is False and ran["activation_done"] is True and ran["observed_effect"] is True, ran
+    assert ran["dispatched"] is None and ran["activation_done"] is True and ran["observed_effect"] is True, ran
+
+    def cut_short(command):  # the input stage had started, then the channel broke: the clipboard stage is unknown
+        if "cliclick" in command:
+            return 255, f"__FRONT_BEFORE__{info_line(SAFARI)}\n", "client_loop: send disconnect: Broken pipe"
+        return mac_over_ssh(SAFARI)(command)
+    module, api, calls = ssh(tmp_path, monkeypatch, cut_short)
+    out = receipt(api.tools["type_text"](text="x", via="paste"))
+    assert out["dispatched"] is None and out["reason"] == "ssh_failed" and "clipboard_replaced" not in out and "observed_effect" not in out, out
+    assert "started" in out["error"] and "unknown" in out["note"] and "not sent" not in out["note"]
+
+    def cut_after_write(command):  # the clipboard marker came back before the break: a fact that is kept
+        if "cliclick" in command:
+            return 255, f"__FRONT_BEFORE__{info_line(SAFARI)}\n__CLIPBOARD_WRITTEN__\n", "client_loop: send disconnect: Broken pipe"
+        return mac_over_ssh(SAFARI)(command)
+    module, api, calls = ssh(tmp_path, monkeypatch, cut_after_write)
+    out = receipt(api.tools["type_text"](text="x", via="paste"))
+    assert out["dispatched"] is None and out["clipboard_replaced"] is True and out["clipboard_done"] is True and out["observed_effect"] is True, out
