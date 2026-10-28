@@ -102,8 +102,9 @@ def dispatch_executor_note(decision: Optional[SubagentExecutorResolution],
             "its settled spend as $0 (an estimated or undisclosed spend is estimated/unknown, "
             "not zero); your own rounds bill as your route bills. Your role, not a billing "
             "type, decides who does the work: while the lane is healthy the delegated run "
-            "does it through delegate_start / delegate_wait, and you verify what comes back "
-            "rather than believing it. After a delegated run SUCCEEDS, your job is to VERIFY "
+            "does it (you start and await it with delegate_start / delegate_wait), and you "
+            "verify what comes back rather than believing it. After a delegated run SUCCEEDS, "
+            "your job is to VERIFY "
             "and INTEGRATE its output — never to rebuild the same work yourself. Follow-up "
             "work (fixes, the next increment, a retry with a corrected "
             "prompt) is delegated too, with a new "
@@ -116,7 +117,7 @@ def dispatch_executor_note(decision: Optional[SubagentExecutorResolution],
             "reaches your mailbox on a later round) while you keep waiting (a timeout_at "
             "question benign-declines at the engine timeout; timeout_at=null waits until answered). "
             "If your task text instructs you to execute the work natively yourself, that "
-            "instruction described the metered fallback and is superseded by this dispatch. "
+            "instruction described the native fallback and is superseded by this dispatch. "
             "Route thinking-work (code, research, generation) through "
             "delegate_start/delegate_wait; your own run_command/read_file rounds are for "
             "verification, integration, and acceptance. The parent's step-by-step context "
@@ -583,7 +584,7 @@ def capability_delta_prompt_block(dispatch: Optional[SubagentDispatch]) -> str:
         )
         action = (
             "Do the work anyway — routed through your delegated run "
-            "(delegate_start / delegate_wait), not your own metered rounds — but say "
+            "(delegate_start / delegate_wait), not your own rounds — but say "
             if delta.get("effective_executor") == "harness"
             else "Do the work anyway, but say "
         )
