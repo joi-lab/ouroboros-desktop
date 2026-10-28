@@ -37,7 +37,7 @@ from ouroboros.cost_projection import carry_cost_meta, live_root_cost_projection
 from ouroboros.outcomes import normalize_outcome_axes
 from ouroboros.history_retention import retention_summary
 from ouroboros.post_task_checkpoint import post_task_synthesis_is_open
-from ouroboros.project_dialogue import ORIGIN_ADDRESSED_NOTICE_TYPES, historical_terminal_projection
+from ouroboros.project_dialogue import ORIGIN_ADDRESSED_NOTICE_TYPES, ROUTING_RECEIPT_FIELDS, historical_terminal_projection
 from ouroboros.store import StoreError, StoreMigrating
 from ouroboros.subagent_messages import SUBAGENT_MESSAGE_FIELDS, delegated_activity_meta, executor_observation_meta, initiator_meta, subagent_message_meta
 from ouroboros.task_results import TASK_COST_META_FIELDS as _TASK_COST_META_FIELDS
@@ -191,14 +191,8 @@ def _user_annotation(
     annotation = annotations.get(client_message_id)
     if role != "user" or not isinstance(annotation, dict):
         return None
-    return {
-        key: annotation.get(key)
-        for key in (
-            "action", "target", "target_label", "status", "detail", "cause", "options",
-            "attachment_manifest", "routing_token", "project_id", "project_chat_id", "reasoning_effort",
-        )
-        if key in annotation
-    }
+    # The live frame's fields, so a reload paints what the frame did (#968), plus the row's `detail`.
+    return {key: annotation[key] for key in (*ROUTING_RECEIPT_FIELDS, "detail") if key in annotation}
 
 
 def _origin_fallback_rows(data_dir, thread_id: int, human_tail: list) -> list:

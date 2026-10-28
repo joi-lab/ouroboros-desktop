@@ -3393,7 +3393,8 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 }
 
 /* A disclosure among quieter notes reads as a control: control ink, native marker. */
-.chat-delegated-thinking > summary {
+.chat-delegated-thinking > summary,
+.chat-delegated-answer > summary {
     cursor: pointer;
     color: var(--text-primary);
 }
@@ -3413,7 +3414,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     color: var(--status-warn-fg);
 }
 
+/* The voice's link ink (DESIGN seed), never the browser default, which falls under 4.5:1 on the dark card. */
 .chat-delegated-source {
+    color: var(--accent-light);
     overflow-wrap: anywhere;
 }
 
