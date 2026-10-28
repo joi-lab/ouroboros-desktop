@@ -4,8 +4,9 @@
  * lives inside its control: the control's own press, hover and focus handling covers it, a reader hears it as the
  * control's description, and Tab reaches its one action right after the control.
  *
- * `say({ word, text, rule, action })` writes only the words that changed; a row that watches its words for a refit
- * leaves the hint's alone (composer_owner_controls.js). `onAction()` runs the action.
+ * `say({ word, text, rule, action })` writes only the words that changed since it last said them, so a translation the
+ * overlay put in their place stays; a row that watches its words for a refit leaves the hint's alone
+ * (composer_owner_controls.js). `onAction()` runs the action.
  */
 let made = 0;
 const EDGE_PX = 8;
@@ -22,9 +23,12 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
         word: el.querySelector('.ui-hint-word'), text: el.querySelector('.ui-hint-text'),
         rule: el.querySelector('.ui-hint-rule'), action: el.querySelector('.ui-hint-action'),
     };
-    const write = (node, words = '') => {
-        if (node.textContent !== words) node.textContent = words;
-        node.hidden = !words;
+    const said = { word: null, text: null, rule: null, action: null };
+    const write = (part, words = '') => {
+        if (said[part] === words) return;
+        said[part] = words;
+        parts[part].textContent = words;
+        parts[part].hidden = !words;
     };
     const onClick = () => onAction();
     parts.action.addEventListener('click', onClick);
@@ -74,10 +78,10 @@ export function createHint(host, { doc = host.ownerDocument, onAction = () => {}
     return {
         el,
         say({ word = '', text = '', rule = '', action = '' } = {}) {
-            write(parts.word, word);
-            write(parts.text, text);
-            write(parts.rule, rule);
-            write(parts.action, action);
+            write('word', word);
+            write('text', text);
+            write('rule', rule);
+            write('action', action);
             if (!el.hidden) { place(); later(); }
         },
         show() {

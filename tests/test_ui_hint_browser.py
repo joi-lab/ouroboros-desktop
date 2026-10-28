@@ -1,10 +1,11 @@
 """The one hint stays inside the window (docs/DESIGN.md "Hints", web/modules/ui_hint.js).
 
-In Chromium and WebKit on the real composer: words that grow after the hint stood (the translation overlay rewrites
-them in place) move it back inside a 1000 px window, where the docked sidebar leaves Effort's capsule far enough to
-the right for its hint to pass the window's edge; and in a 320 x 280 phone window with a long draft, Subagents' longest hint never
-starts above the window: it stands below the capsule or scrolls inside itself where neither side has the room.
-(A phone in landscape with its keyboard up leaves about that much.)
+In Chromium and WebKit on the real composer: a translated hint (the page's real translation overlay, which rewrites
+every write in place) stays inside a 1000 px window, where the docked sidebar leaves Effort's capsule far enough to
+the right for its hint to pass the window's edge, also after the page's next state read renders the capsule again
+with the same words; and in a 320 x 280 phone window (a phone in landscape with its keyboard up leaves about that much)
+Subagents' longest hint never leaves the window, with a long draft before it opens or a draft that grows while it is
+open: it stands below the capsule or scrolls inside itself where neither side has the room.
 """
 from __future__ import annotations
 
@@ -12,7 +13,8 @@ import json
 
 import pytest
 
-from tests.test_composer_subagents_browser import SUBAGENTS, _hold, _settle
+from tests.test_composer_capsules_browser import _install
+from tests.test_composer_subagents_browser import STATE_READS, SUBAGENTS, _hold, _settle
 from tests.test_effort_range_browser import _evidence_dir, _launch, _open_chat
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
 
@@ -28,15 +30,10 @@ WHERE = """(sel) => {
         windowTop: top, windowBottom: top + height, side: hint.dataset.side || '', cramped: hint.dataset.cramped || '',
         hidden: hint.hidden, scrolls: hint.scrollHeight > hint.clientHeight + 1 };
 }"""
-# A translation the overlay could write: longer than the English, written after the hint stood.
+# The shared rule line in a translation longer than the English.
 LONGER = "Gilt für neue Schritte in diesem Chat; laufende Arbeit wird ohne Unterbrechung zu Ende geführt."
-# The overlay translates every write: whatever the composer writes there again, it puts the translation back.
-TRANSLATE = """([sel, words]) => {
-    const rule = document.querySelector(sel).querySelector('.ui-hint-rule');
-    const translate = () => { if (rule.textContent !== words) rule.textContent = words; };
-    new MutationObserver(translate).observe(rule, { childList: true, characterData: true, subtree: true });
-    translate();
-}"""
+GERMAN = {"language": "de", "english": False, "revision": 1, "entries": {
+    "Applies to new steps; running work finishes.": {"text": LONGER, "provenance": "imported"}}}
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
@@ -49,18 +46,24 @@ def test_words_that_grow_after_the_hint_stood_keep_it_inside_the_window(direct_s
     with sync_playwright() as pw:
         browser, page = _launch(pw, engine, viewport={"width": 1000, "height": 820})
         try:
+            _install(page, GERMAN)
             _open_chat(page, url, width=1000, height=820)
             page.click(f"{EFFORT} .chat-capsule-head")
             page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=EFFORT)
+            page.wait_for_function("([sel, words]) => document.querySelector(sel).querySelector('.ui-hint-rule')"
+                                   ".textContent === words", arg=[EFFORT, LONGER], timeout=10_000)
             _settle(page)
-            seen["before"] = page.evaluate(WHERE, EFFORT)
-            assert not seen["before"]["hidden"] and seen["before"]["right"] <= seen["before"]["width"] - 7, seen
-            page.evaluate(TRANSLATE, [EFFORT, LONGER])
-            page.wait_for_timeout(400)
-            seen["after"] = after = page.evaluate(WHERE, EFFORT)
-            assert after["right"] > seen["before"]["right"] or after["left"] < seen["before"]["left"], \
-                ("the words grew the hint", seen)
-            assert after["left"] >= 7 and after["right"] <= after["width"] - 7, ("it moved back inside the window", seen)
+            seen["translated"] = page.evaluate(WHERE, EFFORT)
+            # The page reads its state every 3 s and the capsule renders its hint again, with the same words.
+            with page.expect_response(lambda r: STATE_READS.search(r.url) is not None, timeout=20_000):
+                pass
+            _settle(page)
+            seen["echoed"] = page.evaluate(WHERE, EFFORT)
+            for step in ("translated", "echoed"):
+                where = seen[step]
+                assert not where["hidden"] and where["left"] >= 7 and where["right"] <= where["width"] - 7, \
+                    (f"{step}: the translated hint stands inside the window", seen)
+            assert page.locator(f"{EFFORT} .ui-hint-rule").inner_text() == LONGER, "the translation stays"
         finally:
             (_evidence_dir(tmp_path) / f"ui-hint-grown-words-{engine}.json").write_text(json.dumps(seen, indent=1),
                                                                                       encoding="utf-8")
@@ -88,6 +91,24 @@ def test_a_short_phone_window_never_puts_the_hint_out_of_it(direct_server_with_d
             assert where["top"] >= where["windowTop"] - 1 and where["bottom"] <= where["windowBottom"] + 1, \
                 ("the hint stands inside the window, above, below or scrolling", seen)
             assert where["side"] in ("above", "below") and (where["cramped"] == "true") == where["scrolls"], seen
+            # A short draft, the hint open above the row; then the keyboard goes to the field and the draft grows to
+            # the field's cap: the row rises with the capsule, and the hint finds its place again.
+            _open_chat(page, url, width=320, height=280)
+            page.fill("#chat-input", "A short draft")
+            page.tap(f"{SUBAGENTS} .chat-capsule-head")
+            page.wait_for_function("sel => document.querySelector(sel)?.dataset.open === 'true'", arg=SUBAGENTS)
+            _settle(page)
+            seen["short"] = page.evaluate(WHERE, SUBAGENTS)
+            page.focus("#chat-input")
+            page.keyboard.press("End")
+            for n in range(2, 15):
+                page.keyboard.press("Shift+Enter")
+                page.keyboard.type(f"Line {n}")
+            _settle(page)
+            seen["grown"] = where = page.evaluate(WHERE, SUBAGENTS)
+            assert not where["hidden"], ("the hint stays while the keyboard writes", seen)
+            assert where["top"] >= where["windowTop"] - 1 and where["bottom"] <= where["windowBottom"] + 1, \
+                ("a draft that grows under the open hint keeps it inside the window", seen)
         finally:
             (_evidence_dir(tmp_path) / f"ui-hint-short-window-{engine}.json").write_text(json.dumps(seen, indent=1),
                                                                                        encoding="utf-8")

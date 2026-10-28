@@ -883,6 +883,9 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
     for (const capsule of capsules) capsule.peers = capsules.filter((other) => other !== capsule);
     win?.addEventListener?.('resize', fitNames);
     const stopObserving = observeLayout(win, [row], fitNames);
+    // A draft that grows lifts the row with its open capsule: the capsule's hint finds its place again.
+    const stopField = observeLayout(win, [row?.closest?.('.chat-input-wrap')?.querySelector?.('.chat-field')],
+        () => capsules.forEach((capsule) => capsule.sayHint()));
     const relayout = () => { if (!destroyed) { fitNames(); capsules.forEach((capsule) => capsule.relayout()); } };
     // Descendant fitting cannot resize this docking box, so mount/show/resize settle before paint.
     // Text is observed at the microtask boundary, not our geometry attributes; unchanged words stay.
@@ -924,6 +927,7 @@ export function createComposerOwnerControls({ row, byId, apiFetch, saveEffortRan
         destroy() {
             destroyed = true;
             stopObserving();
+            stopField();
             win?.removeEventListener?.('resize', fitNames);
             boxObserver?.disconnect();
             textObserver?.disconnect();
