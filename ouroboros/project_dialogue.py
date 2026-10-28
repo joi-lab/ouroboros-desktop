@@ -438,6 +438,13 @@ def _compact_annotations_locked(drive_root: Any, path: pathlib.Path) -> None:
     replace_atomic(tmp, path)
 
 
+# One owner-routing receipt's fields (#968): its row below, its live frame (`send_routing_ack`) and its history
+# replay state this one set; the destination part names the room and the works its words reached.
+ROUTING_DESTINATION_FIELDS = ("project_id", "project_chat_id", "project_name", "target_task_ids", "target_titles")
+ROUTING_RECEIPT_FIELDS = ("action", "target", "target_label", "status", "routing_token", "cause", "options",
+                          "attachment_manifest", "reasoning_effort", *ROUTING_DESTINATION_FIELDS)
+
+
 def append_chat_annotation(
     drive_root: Any,
     client_message_id: str,

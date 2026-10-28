@@ -707,11 +707,17 @@ def test_owner_project_message_survives_into_history_with_annotation(tmp_path, m
     row = owner_rows[0]
     assert row["role"] == "user"
     assert row["text"] == "please also fix the failing test"
+    destination = {  # #968: the live work the words reached and its room; a nameless work is never named by its id
+        "project_id": "racer", "project_chat_id": chat_id, "project_name": "racer",
+        "target_task_ids": ["running-root"], "target_titles": [],
+    }
     assert row["chat_annotation"] == {
         "action": "mailbox_delivery",
         "target": "running-root",
         "target_label": "Task",
         "status": "delivered",
         "attachment_manifest": [],
+        **destination,
     }
-    assert acks[-1][1]["target_label"] == row["chat_annotation"]["target_label"]
+    for key in ("target_label", *destination):
+        assert acks[-1][1][key] == row["chat_annotation"][key]
