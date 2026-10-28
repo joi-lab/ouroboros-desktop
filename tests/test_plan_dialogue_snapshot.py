@@ -58,7 +58,12 @@ def test_inline_view_is_the_numbered_conversation(harness):
         assert row["text"].startswith(text) or row.get("quiz", {}).get("question") == text
         assert line.startswith(f"{number} · {row['ts']} · {author} · ")
     assert "[question q1] Five or six slides? — options: (1) five (2) six; recommended (1)" in view
-    assert '[answer q1] chose (1) five — "The board asked for five."' in view
+    # The choice is the owner's; the option's words are the asking task's, never quoted as theirs.
+    assert ("[answer q1] chose (1) five (the choice is my human's; the option's words are the asking task's) "
+            '— "The board asked for five."') in view
+    from ouroboros.tools.plan_dialogue import _quiz_text
+    own_answer = _quiz_text({"type": "quiz_answer", "quiz": {"quiz_id": "q2", "options": ["five"], "comment": "Seven, please."}})
+    assert own_answer == '[answer q2] own answer: "Seven, please."' and "asking task" not in own_answer
     assert "[attachments: outline.pdf]" in view and "\n  Option B keeps choices" in view
     assert facts["conversation_rows"] == 4 and facts["conversation_inline_rows"] == 4 and facts["other_rows"] == 4
     assert "Not inline: 3 progress rows and 1 host rows." in view

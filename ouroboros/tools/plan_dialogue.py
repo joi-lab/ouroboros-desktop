@@ -175,7 +175,9 @@ def _quiz_text(row: dict) -> str:
         return f"[question closed without answer {qid}] by {actor}: {quiz.get('closed_reason') or ''}. No approval recorded."
     if row.get("type") == "quiz_answer":
         index = quiz.get("answered_index")
-        chosen = (f"chose ({index + 1}) {options[index]}" if isinstance(index, int) and 0 <= index < len(options)
+        # The choice is my human's; an offered option's words are the asking task's, never theirs.
+        chosen = (f"chose ({index + 1}) {options[index]} (the choice is my human's; the option's words are the asking task's)"
+                  if isinstance(index, int) and 0 <= index < len(options)
                   else f'own answer: "{quiz.get("comment") or row.get("text") or ""}"')
         comment = str(quiz.get("comment") or "")
         return f"[answer {qid}] {chosen}" + (f' — "{comment}"' if comment and isinstance(index, int) else "")
@@ -229,13 +231,14 @@ def dialogue_view(own: dict, keep: int | None = None) -> tuple[str, dict]:
         body = f"Explicit gap: own room source unavailable ({own.get('gap') or 'no snapshot rows'})."
         return ("## OWN ROOM DIALOGUE (exact recorded snapshot)\n\n" + body + "\n"), facts
     header = (f"Room {own.get('label') or own.get('chat_id')} · locator `{locator}` · {facts['snapshot_lines']} snapshot "
-              f"lines, {own.get('bytes', '?')} bytes · captured {own.get('captured_at') or 'time unavailable'} · "
-              f"{len(conversation)} conversation rows, {len(others)} other rows · gaps: {_gap_summary(own)}")
+              f"lines, {own.get('bytes', '?')} bytes · {len(conversation)} conversation rows, {len(others)} other rows · "
+              f"gaps: {_gap_summary(own)}")
     cut = (f"; {omitted} earlier conversation rows before line {inline[0][0]} (exact omitted prefix: "
            f"`{locator}::lines=2-{inline[0][0] - 1}`)" if omitted and inline else
            f"; all {omitted} conversation rows (nothing fit inline; exact omitted prefix: "
            f"`{locator}::lines=2-{facts['snapshot_lines']}`)" if omitted else "")
-    footer = (
+    footer = (  # the capture time trails the rows: a header that changes on every ask would void the cached room
+        f"Captured {own.get('captured_at') or 'time unavailable'}. "
         f"Not inline: {progress} progress rows and {len(others) - progress} host rows{cut}. Every inline line "
         "carries its snapshot line number, so a gap in the numbering is a row not shown. The complete redacted "
         f"snapshot `{locator}` ({facts['snapshot_lines']} lines) is in task custody: a session reads "

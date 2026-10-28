@@ -88,9 +88,10 @@ def build_user_content(task: Dict[str, Any]) -> Any:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     author = metadata.get("objective_author")
     if isinstance(author, dict) and author.get("kind") == "task":
-        text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
-                "not spoken by the owner. The owner's words retain their own source. "
-                "[/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
+        from ouroboros.owner_words import objective_author_line
+
+        text = (f"[OBJECTIVE_AUTHOR] The objective below was {objective_author_line({'objective_author': author})}. "
+                "My human's words keep their own source. [/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
     image_b64 = task.get("image_base64")
     if not image_b64 and task.get("image_source_ref"):
         # A prestart Pause has original input, but no checkpointed transcript.
