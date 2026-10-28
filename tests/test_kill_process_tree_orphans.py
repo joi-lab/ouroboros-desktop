@@ -1,4 +1,4 @@
-"""Regression test for the kill_process_tree orphan-reaping fix.
+"""Regression tests for kill_process_tree: orphan reaping, and never signalling the caller's own group.
 
 A grandchild spawned in its own session/process group survives ``os.killpg`` of
 the parent's group. ``kill_process_tree`` must collect descendants BEFORE
@@ -50,3 +50,51 @@ def test_kill_process_tree_sweeps_escaped_descendants(monkeypatch):
     assert escaped[0] in killed and escaped[1] in killed
     assert 4242 in killed
     assert all(sig == _signal.SIGKILL for _, sig in kill_calls)
+
+
+@pytest.mark.parametrize("caller_group, group_killed", [(7777, False), (1234, True)])
+def test_the_group_kill_skips_only_the_callers_own_group(monkeypatch, caller_group, group_killed):
+    """A child left in the caller's group dies by PID; any other group is still killed whole (#2353)."""
+    import signal as _signal
+    import ouroboros.platform_layer as pl
+
+    if pl.IS_WINDOWS:
+        pytest.skip("POSIX process-group sweep path")
+    killpg_calls, kill_calls = [], []
+    monkeypatch.setattr(pl, "_process_children", lambda: {4242: [4101]})
+    monkeypatch.setattr(pl.os, "getpgid", lambda pid: 7777)
+    monkeypatch.setattr(pl.os, "getpgrp", lambda: caller_group)
+    monkeypatch.setattr(pl.os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+    monkeypatch.setattr(pl.os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+
+    class _FakeProc:
+        pid = 4242
+
+    pl.kill_process_tree(_FakeProc())
+
+    assert killpg_calls == ([(7777, _signal.SIGKILL)] if group_killed else [])
+    assert {pid for pid, _ in kill_calls} >= {4242, 4101}
+
+
+def test_a_child_in_the_callers_group_dies_and_the_caller_lives():
+    """The #2353 shape on real processes: a caller in its own session kills a child it left in that group."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import ouroboros.platform_layer as pl
+
+    if pl.IS_WINDOWS:
+        pytest.skip("POSIX process groups")
+    caller = (
+        "import subprocess, sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from ouroboros import platform_layer as pl\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "pl.kill_process_tree(child)\n"
+        "print('child', child.wait(timeout=10), flush=True)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", caller], start_new_session=True,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, (done.returncode, done.stdout, done.stderr)
+    assert done.stdout.strip() == "child -9"
