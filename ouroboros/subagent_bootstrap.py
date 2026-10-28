@@ -887,8 +887,8 @@ def append_startup_receipt(
             "The exact configured leaf run is LIVE — the receipt carries its id. "
             "Waiting is your decision: call delegate_wait when you want its facts, "
             "or use this round for parallel judgment first (schedule auxiliary "
-            "children, prepare how you will verify its result). Never rebuild its work on metered "
-            "tokens. Replay an unresolved start with retry_of; an explicit selector and new "
+            "children, prepare how you will verify its result). Never rebuild its work. "
+            "Replay an unresolved start with retry_of; an explicit selector and new "
             "prompt create an independent run. Every captured result still needs your disposition."
         )
     elif receipt_status == "configured_session_recovered_wake":
