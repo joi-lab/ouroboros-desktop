@@ -54,9 +54,12 @@ def test_words_that_grow_after_the_hint_stood_keep_it_inside_the_window(direct_s
                                    ".textContent === words", arg=[EFFORT, LONGER], timeout=10_000)
             _settle(page)
             seen["translated"] = page.evaluate(WHERE, EFFORT)
-            # The page reads its state every 3 s and the capsule renders its hint again, with the same words.
-            with page.expect_response(lambda r: STATE_READS.search(r.url) is not None, timeout=20_000):
+            # The page reads its state every 3 s and the capsule renders its hint again, with the same words: the read's
+            # body is in, and two frames later the page has applied it.
+            with page.expect_response(lambda r: STATE_READS.search(r.url) is not None, timeout=20_000) as state:
                 pass
+            state.value.body()
+            page.evaluate("() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))")
             _settle(page)
             seen["echoed"] = page.evaluate(WHERE, EFFORT)
             for step in ("translated", "echoed"):
@@ -67,6 +70,7 @@ def test_words_that_grow_after_the_hint_stood_keep_it_inside_the_window(direct_s
         finally:
             (_evidence_dir(tmp_path) / f"ui-hint-grown-words-{engine}.json").write_text(json.dumps(seen, indent=1),
                                                                                       encoding="utf-8")
+            page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
             browser.close()
 
 
@@ -112,4 +116,5 @@ def test_a_short_phone_window_never_puts_the_hint_out_of_it(direct_server_with_d
         finally:
             (_evidence_dir(tmp_path) / f"ui-hint-short-window-{engine}.json").write_text(json.dumps(seen, indent=1),
                                                                                        encoding="utf-8")
+            page.unroute_all(behavior="ignoreErrors")  # a state read still in flight ends with the browser
             browser.close()
