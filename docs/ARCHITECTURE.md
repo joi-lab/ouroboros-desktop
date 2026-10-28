@@ -1,4 +1,4 @@
-# Ouroboros v7.8.1 — Architecture & Reference
+# Ouroboros v7.9.0 — Architecture & Reference
 
 This present-tense map (BIBLE P6) explains structure and rationale; module docstrings own mechanisms. Replace obsolete descriptions. History belongs in README.md, tags and Git.
 
