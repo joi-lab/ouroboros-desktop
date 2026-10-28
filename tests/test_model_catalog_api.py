@@ -312,6 +312,24 @@ def test_account_catalog_matches_the_published_response_shape(account_engine):
     assert not validate_ingress(payload, ModelCatalogResponse)
 
 
+def test_agent_inventory_does_not_supply_an_absent_main_chat_transport(account_engine):
+    gateway, _ = account_engine
+    # Cursor login and agent inventory may succeed independently. Neither is a
+    # raw-model source; borrowing them here would reproduce the false-ready bug.
+    gateway.harness_model_catalog = lambda **_: {"models": [{"id": "cursor-test"}]}
+    gateway.credential_profiles = lambda: {"profiles": [{
+        "profile": {"harness_id": "cursor", "profile_id": "cursor-default"},
+        "status": {"verification": "passed", "verification_source": "vendor"},
+    }]}
+    assert gateway.credential_profiles()["profiles"][0]["status"]["verification"] == "passed"
+    assert gateway.harness_model_catalog()["models"]
+    result = model_catalog_api._subscription_model_catalog("cursor", "cursor-default")
+    assert result["items"] == []
+    assert result["errors"][0]["code"] == "model_source_unavailable"
+    assert gateway.calls == []  # no unrelated/default model request
+    assert model_catalog_api._subscription_model_catalog("codex")["items"]
+
+
 def test_auto_catalog_keeps_every_account_and_independent_capabilities(account_engine):
     gateway, accounts = account_engine
     payload = json.loads(asyncio.run(model_catalog_api.api_model_catalog(None)).body)

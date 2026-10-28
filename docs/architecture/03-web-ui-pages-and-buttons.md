@@ -225,7 +225,7 @@ A directory or separately hosted builtin client offers outside-frame recovery vi
 
 #### Agent accounts
 
-Accounts shows owned daemon facts, not credentials. Vendor-live and local verification differ; absent quota is not logout. Percentages/exhaustion need fresh windows and future resets. Catalog/accounts/quota `reads` keep successful siblings (§1); concurrent requests share a read; an unanswered facet keeps its dated stale value and error. The banner states its verdict, engine version and explicit store failures; metrics/limits open under Diagnostics (§9), never choosing an action.
+Accounts/login/onboarding show owned daemon facts, not credentials; vendor-live and local sign-in differ and prove no execution (SYSTEM). Counts include disabled logins; rotation/admission/attention don't; all-disabled is neutral. Shared catalog/accounts/quota reads keep successful siblings (§1) and dated gap values/errors. Quota needs fresh windows/future resets; absence is not logout. Banner: verdict, engine version, store failures; Diagnostics' metrics/limits (§9) never act.
 
 Family cards show named rows (Enabled/Remove, own quota subject only), `accountPools` "Next up" and Add. A pre-unified roster (`account_model_unsupported`) shows no rows or Connect; the banner names the update. `not_run` is unknown; unknown availability offers Refresh. Removal keeps refusal and vendor-retained/unchanged credential warnings, never false logout. Rows add engine model marks; a failed read is one dated section note.
 

@@ -2375,8 +2375,8 @@ not previously selected starts without another source's pin.
 The wizard has five steps: Accounts, Models, Review, Budget, Summary. Agent
 connection is inside Accounts; Codex is the recommended connection for starting
 without an API key. Other existing agent connections describe their actual agent
-capability. Connected reports sign-in, independently of the model-source and
-suggestion reads. Accounts names pending, failed or partial reads and offers a
+capability. Signed in reports authentication, not execution, independently of
+the model-source and suggestion reads. Accounts names pending, failed or partial reads and offers a
 contextual Retry that preserves the current fields. A known model source allows
 Continue and manual model entry even when its inventory or automatic suggestions
 cannot be read; an unknown source explains why Continue is unavailable. New

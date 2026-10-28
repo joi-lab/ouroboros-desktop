@@ -247,6 +247,41 @@ def capture(page, name):
         page.screenshot(path=str(target / f"{name}.png"), animations="disabled")
 
 
+def test_cursor_login_and_catalog_are_not_execution_readiness(subscription_ui):
+    """Real Accounts and onboarding consumers, no generation or live credentials."""
+    ui = subscription_ui
+    ui["fixture"]["status"]["profiles"]["profiles"] = [{
+        "profile": {"profile_id": "cursor-default", "harness_id": "cursor", "enabled": True},
+        "status": {"verification": "passed", "verification_source": "vendor", "availability": "available"},
+        "identity": {"label": "Cursor account"},
+    }]
+    ui["fixture"]["status"]["harnesses"] = [{
+        "id": "cursor", "display_name": "Cursor", "enabled": True, "status": "ok",
+        "models": [{"id": "cursor-test"}],
+    }]
+    ui["settings"]["OUROBOROS_SUBAGENTS"] = {"enabled": True, "items": []}
+    assert all(source["id"] != "cursor" for source in ui["fixture"]["catalog"]["model_sources"])
+    page = ui["page"]
+    page.goto(ui["url"])
+    page.click('[data-nav-page="settings"]')
+    page.click('[data-settings-tab="providers"]')
+    cursor = page.locator('[data-family="cursor"]')
+    cursor.get_by_text("Signed in", exact=True).wait_for()
+    assert "Login verified" in cursor.inner_text()
+    assert "Connected" not in cursor.inner_text()
+    assert "Sign-in does not verify main-chat support or agent execution" in page.locator(
+        "#harness-accounts-section").inner_text()
+    cursor.scroll_into_view_if_needed()
+    capture(page, "cursor-auth-only-settings")
+    page.goto(ui["url"] + "/onboarding")
+    page.wait_for_function("() => document.querySelector('#agents-outcome')?.textContent.includes('Signed in to Cursor')")
+    outcome = page.locator("#agents-outcome").inner_text()
+    assert "Main still needs" in outcome
+    assert "Sign-in does not verify main-chat support or agent execution" in outcome
+    capture(page, "cursor-auth-only-onboarding")
+    assert not ui["posts"] or all(path == "/api/onboarding/subagents/preview" for path, _ in ui["posts"])
+
+
 def test_codex_quick_setup_computes_skipped_steps_and_finishes_once(subscription_ui, onboarding):
     ui = subscription_ui
     ui['backend']['client'] = onboarding.client
@@ -448,7 +483,7 @@ def test_cursor_only_does_not_claim_model_access_and_api_only_finishes(subscript
     }]
     page = ui['page']
     page.goto(ui['url'] + '/onboarding')
-    page.wait_for_function("() => document.querySelector('[data-agent-family=cursor]').textContent.includes('Connected')")
+    page.wait_for_function("() => document.querySelector('[data-agent-family=cursor]').textContent.includes('Signed in')")
     assert page.locator('#quick-start-btn').is_hidden()
     assert page.locator('#next-btn').is_disabled()
     assert 'Main still needs Codex' in page.locator('#agents-outcome').inner_text()
@@ -640,7 +675,7 @@ def test_late_catalog_does_not_restore_access_after_the_account_disconnects(subs
     assert held
     ui['fixture']['status']['profiles']['profiles'] = []
     page.evaluate("async () => (await import('/onboarding/static/modules/claudexor_status_store.js')).claudexorStatus.refresh()")
-    page.wait_for_function("() => !document.querySelector('[data-agent-family=codex]').textContent.includes('Connected')")
+    page.wait_for_function("() => !document.querySelector('[data-agent-family=codex]').textContent.includes('Signed in')")
     for route in held:
         route.fulfill(content_type='application/json', body=json.dumps(ui['fixture']['catalog']))
     page.unroute('**/api/model-catalog')
