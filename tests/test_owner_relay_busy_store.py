@@ -89,14 +89,24 @@ def test_the_first_held_messages_read_of_a_turn_survives_a_busy_store(tmp_path, 
     assert ctx._held_state_dirty is True
 
 
-def test_an_unchanged_record_is_not_rewritten(tmp_path, store):
+def test_maps_this_context_already_persisted_open_no_write_transaction(tmp_path, store):
     row, handle = source(tmp_path)
     ctx = context(tmp_path, row)
     held_owner_messages(ctx)
     assert len(store.written) == 1
     persist_held_state(ctx)
     persist_held_state(ctx)
-    assert len(store.written) == 1 and store.calls == 3, "the mutator saw the same maps and wrote nothing"
+    assert len(store.written) == 1 and store.calls == 1, "unchanged maps never reach the write gate"
+    ctx._open_relays = {"r": {"relay_id": "r", "source": {"chat_id": 1, "address": handle}}}
+    persist_held_state(ctx)
+    assert len(store.written) == 2 and store.calls == 2, "a changed map is persisted again"
+    store.refusals = [_busy()]
+    ctx._open_relays = {}
+    persist_held_state(ctx)
+    assert ctx._held_state_dirty is True and store.calls == 3
+    persist_held_state(ctx)
+    assert store.calls == 4 and ctx._held_state_dirty is False, "a refused persist is retried even for the same maps"
+    assert store.written[-1]["open_relays"] == {}
 
 
 @pytest.mark.parametrize("error", [StoreLost("current store unreadable"), _busy(confirmed=False)])

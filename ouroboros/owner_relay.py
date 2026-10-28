@@ -73,7 +73,9 @@ def persist_held_state(ctx) -> None:
     """Retain sources and return addresses on an existing canonical task record.
 
     The context's own maps are the turn's authority; the record is their durable copy for a
-    later Continue. A record that already holds them is not rewritten. A store too busy to
+    later Continue. Maps this context already persisted open no write transaction at all (the
+    write gate is the convoy's own contention point); a record that already holds them is not
+    rewritten. A store too busy to
     take the write (``StoreBusy`` after a confirmed rollback: a reader convoy, never a lost
     write) must not fail the owner's turn over bookkeeping: the maps stay, the gap is logged
     once and marked, and the next persist or the loop's terminal save carries them. Other
@@ -86,6 +88,8 @@ def persist_held_state(ctx) -> None:
     from ouroboros.tool_access import canonical_data_root
     held = copy.deepcopy(getattr(ctx, "_held_owner_messages", None) or {})
     relays = copy.deepcopy(getattr(ctx, "_open_relays", None) or {})
+    if getattr(ctx, "_held_state_persisted", None) == (held, relays) and not getattr(ctx, "_held_state_dirty", False):
+        return
 
     def _mutate(current):
         if not current or (current.get("held_owner_messages") == held and current.get("open_relays") == relays):
@@ -104,6 +108,7 @@ def persist_held_state(ctx) -> None:
         ctx._held_state_dirty = True
         return
     ctx._held_state_dirty = False
+    ctx._held_state_persisted = (held, relays)
 
 
 def flush_held_state(ctx) -> None:
