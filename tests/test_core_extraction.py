@@ -162,8 +162,10 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # Target merge retains the contributor tool affordances and target review/mail contracts.
     # 2026-10-23: escalate gains request_id for private Main questions; its retry
     # description also explains that a new wait after timeout needs a new key.
+    # Rolled for the decision-quality review fixes: escalate's description names a helper's
+    # proposal as a fork source and makes a set-aside position one of the options; nothing else changed.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "466a6505a29350292d7a4586df88bc04089466f8b95dfce6dc9232d530ab4168"
+        "c624c58e06228b4f0079bcbaafac846c6eb2a59ade38300a2d7fd528895a39fb"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

@@ -1,8 +1,11 @@
-# Pre-Commit Review Checklists
+# Review Checklists
 
-Single source of truth for all automated review checklists (Bible P7: DRY).
-Loaded by `ouroboros/tools/review.py` at review time and injected into the
-multi-model review prompt.
+The questions independent reviewers answer about each subject of my immune
+system: an intention before work starts (Plan Review), a delivered result
+(Result Review), a staged change to any repository (Change Review, with the
+Ouroboros Body Layer on my own body) and a skill (Skill Review). Loaded by
+`ouroboros/tools/review.py`, `plan_task`, `review_change` and `skill_review` at
+review time and delivered to reviewers verbatim.
 
 A new reviewable concern belongs here, not in prompts or docs. A change to a
 governance document replaces or merges the description of the node it touches
@@ -977,15 +980,17 @@ block repo commits and vice versa.
 Used by `plan_task` when the mind asks the council about an INTENTION — code, research, a
 deliverable or an action in the world. The council is one organ: independent reviewers (by default
 the review pool; the Main model when no reviewer is marked) weigh the plan and each other's answers.
-The host builds what each of you receives: this section; the task objective and the owner's words,
-with the own-room conversation inline as numbered lines (both speakers, options, quiz cards with the
-chosen answer, attachment names, addressed mailbox provenance; progress rows and host notices stay
+The host builds what each of you receives: this section; the task objective with who wrote it, and
+the owner's words as the host recorded them, with the own-room conversation inline as numbered lines
+(both speakers, options, quiz cards with the chosen answer, attachment names, addressed mailbox
+provenance; progress rows and host notices stay
 in the exact redacted snapshot those numbers address; a route that cannot hold the whole
 conversation keeps the newest rows and names the cut as an exact line range; related rooms are
-pointers); the plan, always whole, with the change since the revision you last answered about when
-you answered before; everything said in the council since your last answer, peers attributed by seat
-and model; your own open objections; the mind's message; and attached evidence (bounded, every
-absence named). A body plan — its declared `affected_paths` reach Ouroboros's own body — carries
+pointers); the plan when one exists, always whole, with the change since the revision you last
+answered about when you answered before; everything said in the council since your last answer,
+peers attributed by seat and model; your own open objections; the mind's message; and attached
+evidence (bounded, every absence named). A body intention — its declared `affected_paths` reach
+Ouroboros's own body, or the task declares body work with a recognized design source — carries
 BIBLE.md and ARCHITECTURE.md in full (inline for an api reviewer; mandatory full reads with its own
 tools for a retrieving reviewer). Any other plan carries no Ouroboros governance and no navigation
 maps: judge it in its own domain. Judge only the evidence actually present; nothing missing is ever
@@ -998,6 +1003,11 @@ Suggestions, alternatives and questions are prose; the mind decides whether to a
 challenge, preference or repetition alone is not an objection; a demonstrated failure follows the
 height rule below. No compulsory competing plan or finding quota. The mind authors the plan and is
 the addressee of everything the council produces (P0).
+
+**Before any plan, the question is the reading:** is this what the owner asked, and which direction
+would you take? Compare their words with each account the work rests on — the objective, an issue, a
+brief, an earlier plan, each labelled with its author — and say where one narrows, widens or replaces
+what they asked. Nothing raised before a plan holds, and the plan that follows is judged as below.
 
 ### The plan you are reviewing
 
@@ -1014,7 +1024,7 @@ stay stable across revisions.
 
 | # | item | what to check |
 |---|------|---------------|
-| 1 | the bar | Does `done_when` capture what the ask needs? For a vague ask ("make it good"), is it the bar a demanding person who made the request would mean — nothing obviously missing, nothing met trivially? Is each claim an observable outcome a third party could check, not a method? When the work changes what a person sees, does a claim reach that view in its changed state, not only the data or API behind it? |
+| 1 | the bar | Does `done_when` capture what the ask needs? For a vague ask ("make it good"), is it the bar a demanding person who made the request would mean — nothing obviously missing, nothing met trivially? Is each claim an observable outcome a third party could check, or a method the owner fixed for this work — not a method of the mind's own choosing? When the work changes what a person sees, does a claim reach that view in its changed state, not only the data or API behind it? |
 | 2 | load-bearing decisions | Are the decisions that are expensive to reverse explicit, with their rejected alternatives and why? |
 | 3 | constraints and invariants | Are the real constraints named — budget, deadline, safety, irreversibility, commitments to others? |
 | 4 | deferrals | Is anything deferred that will be expensive to change once the work has started? |
@@ -1075,7 +1085,10 @@ what was asked (the task, its owner's words and the claims it was held to, the l
 and content hash) and the host-attested verification receipts.
 
 **One question: does this result do what was asked?**
-- Judge the result, never the method: how the work was done is not under review.
+- Judge the result, not the method — unless the owner's own words or explicit choice in what was asked
+  fix a method for this work: following it is then part of the ask. A fixed method skipped without
+  saying so is a silent narrowing; one the subject cannot show is a gap to name, not by itself a
+  failure. A method that only an account names (the objective, the plan) is not fixed by the owner.
 - A partial result that says plainly what it did not do is honest, not a defect. A result that silently
   narrows what was asked, claims what it did not do, or contradicts its own material is a defect.
 - Read the produced files you can reach; a claim about a file must match its content.
