@@ -255,8 +255,9 @@ def test_current_store_hold_stays_within_half_the_writers_wait(ctx, tmp_path, mo
                                    query="SELECT task_id FROM tasks", scratch=str(scratch), max_rows=10, max_bytes=65536))
         assert result["rows"] == [["caller"]]
         assert [name for name, _ in seen] == ["source", store.store_path(ctx.drive_root).name, "snapshot.sqlite"]
-        assert 0 < seen[1][1] < seen[0][1] <= held
-        assert 0 < seen[2][1] < timeout
+        # Positive and never growing; a coarse clock (Windows) may not tick between two reads.
+        assert 0 < seen[1][1] <= seen[0][1] <= held
+        assert 0 < seen[2][1] <= timeout
 
 
 def test_name_tier_uses_the_store_lock(tmp_path, monkeypatch):

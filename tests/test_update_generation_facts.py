@@ -3,10 +3,12 @@ import asyncio
 import builtins
 import concurrent.futures
 import io
+import itertools
 import json
 import os
 import queue
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -89,6 +91,10 @@ def test_direct_dispatch_does_no_io_until_supervisor_handles_its_frame(isolated_
 
 
 def test_update_records_before_and_after_and_events_update_only_its_generation(isolated_progress, monkeypatch):  # noqa: F811
+    # Each sample's monotonic read advances by one second, so the CPU interval is never the zero
+    # that two fast reads of a coarse clock (Windows) give; the CPU time itself stays real.
+    ticks = itertools.count(1.0)
+    monkeypatch.setattr(facts, "time", SimpleNamespace(monotonic=lambda: next(ticks), process_time=time.process_time))
     facts.observe_duty_overrun("reconcile")
     facts.observe_direct_dispatch(task_id="before", accepted_at=100, dispatched_at=102, attempt_id="attempt-before")
     _restart_requested_attempt()

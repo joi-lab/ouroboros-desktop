@@ -66,7 +66,8 @@ def test_the_receipt_rides_the_first_dispatch_frame_and_the_consumer_records_it_
     assert receipt["owner_wait_sec"] == pytest.approx(receipt["wait_before_entry_sec"] + receipt["handler_wait_sec"], abs=1e-3)
     assert receipt["handler_wait_sec"] == pytest.approx(execution.marks[-1][1] - execution.marks[0][1], abs=1e-3)
     assert receipt["meter"] == {"current.read": 3, "current.read.sec": 0.012, "chronicle.locked": 1}
-    assert receipt["census"] == {"direct_turns_at_entry": 1} and receipt["dispatched_at"] > receipt["entered_at"]
+    # Order, not a tick: two reads of a coarse clock (Windows) can be equal.
+    assert receipt["census"] == {"direct_turns_at_entry": 1} and receipt["dispatched_at"] >= receipt["entered_at"]
     assert (receipt["chat_id"], receipt["task_id"], receipt["execution_id"]) == (1, "owner", execution.execution_id)
 
     ctx = SimpleNamespace(RUNNING={"a": {}}, PENDING=[1, 2], DRIVE_ROOT=tmp_path)
