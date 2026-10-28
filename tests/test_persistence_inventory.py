@@ -872,7 +872,10 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # (the records row), and the seat homes the owner's Storage -> Free lists
 # (``review_checking_prune.finished_seat_homes``, the seats row).
 # 425 -> 426: ``state/openrouter_models.json``, the OpenRouter catalogue every process adopts.
-EXPECTED_SCAN_PATHS = 427
+# 427 -> 428: ``observability/calls/*/*``, the derived address of one loop tool invocation's result and
+# wait-end manifests (``observability.call_manifest_path``, read back by ``late_tool_results.py``), the
+# observability row.
+EXPECTED_SCAN_PATHS = 428
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
