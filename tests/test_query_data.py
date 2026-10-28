@@ -652,14 +652,29 @@ def test_storage_kind_reads_the_saved_count_from_the_installation_root_and_refus
     table = [{"id": "model_calls", "group": "records", "roots": [(str(ctx.drive_root), ("observability",))]}]
     record = storage.measure(ctx.drive_root, places=table, sleep=lambda _s: None)
     storage.save_count(ctx.drive_root, record)
+    from ouroboros import maintenance_jobs
+    from ouroboros.storage_removers import place_removers
+
+    maintenance_jobs.record(ctx.drive_root, "runtime_retirement", state="done", last_error={"class": "OSError", "at": "T"})
+    maintenance_jobs.record(ctx.drive_root, "record_compression", state="pending", totals={
+        "evidence": {"compressed": 12, "saved_bytes": 4096}, "seats": {"compressed": 3, "saved_bytes": None}})
     result = call(ctx, op="json", kind="storage")
-    assert result["status"] == "ok" and result["source"]["kind"] == "storage"
+    assert result["status"] == "ok" and result["source"]["kind"] == "storage" and result["reconstructed"] is True
     assert result["data"]["latest"]["finished_at"] == record["finished_at"] and result["data"]["previous"] is None
+    removers = result["data"]["removers"]
+    assert removers == place_removers(ctx.drive_root) == storage.count.projection(ctx.drive_root)["removers"], \
+        "the per-place facts GET /api/storage serves"
+    assert removers["app_state"][0]["last_error"] == {"class": "OSError", "at": "T"}
+    assert {place: [fact["compressed"] for fact in removers[place] if fact["id"] == "record_compression"]
+            for place in ("task_results", "app_state")} == {"task_results": [12], "app_state": [3]}
     assert call(ctx, op="json", kind="storage", select="latest.places[*].id")["data"] == ["model_calls"]
     monkeypatch.setattr("ouroboros.tools.query_data._child_root", lambda *_a: pytest.fail("storage must not resolve a child"))
     refused = call(ctx, op="json", kind="storage", child_task_id="second")
     assert refused["status"] == "error" and "installation-wide" in refused["message"]
     assert call(ctx, op="json", kind="storage", ids=["x"])["status"] == "error"
+    (ctx.drive_root / "state" / "storage_measurement.json").unlink()
+    uncounted = call(ctx, op="json", kind="storage")
+    assert uncounted["status"] == "ok" and set(uncounted["data"]) == {"removers"}, "the removers come before any count"
 
 
 def test_knowledge_history_lists_writes_without_bodies_from_the_installation_root(ctx, monkeypatch):

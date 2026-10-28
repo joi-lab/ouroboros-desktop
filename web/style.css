@@ -5674,6 +5674,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .storage-group-why,
 .storage-place-why,
 .storage-place-split,
+.storage-place-remover,
 .storage-place-delta { color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
 .storage-meta { margin-top: var(--space-1); }
 .storage-card-title {
@@ -5730,7 +5731,8 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .storage-place-size { grid-column: 3; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); text-align: end; white-space: nowrap; }
 .storage-place-delta { grid-column: 4; text-align: end; white-space: nowrap; }
 .storage-place-why,
-.storage-place-split { grid-column: 2 / -1; }
+.storage-place-split,
+.storage-place-remover { grid-column: 2 / -1; }
 .storage-group-body { display: grid; row-gap: 2px; margin: 2px 0 0 calc(8px + var(--space-2)); }
 .storage-group-places { display: grid; margin: var(--space-2) 0 0 calc(8px + var(--space-2)); padding: 0; list-style: none; }
 .storage-place.is-member { grid-template-columns: minmax(0, 1fr) auto minmax(56px, auto); padding-block: var(--space-2); border-top: 1px solid var(--surface-border-soft); }
@@ -5738,7 +5740,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .storage-place-label { grid-column: 1; min-width: 0; color: var(--text-primary); font-size: var(--type-body); line-height: var(--line-body); font-weight: 500; overflow-wrap: anywhere; }
 .storage-place.is-member > .storage-place-size { grid-column: 2; }
 .storage-place.is-member > .storage-place-delta { grid-column: 3; }
-.storage-place.is-member > :is(.storage-place-why, .storage-place-split, .storage-parts) { grid-column: 1 / -1; }
+.storage-place.is-member > :is(.storage-place-why, .storage-place-split, .storage-place-remover, .storage-parts) { grid-column: 1 / -1; }
 
 /* Largest parts: the house disclosure gesture, listing a place's eight largest depth-1 parts. */
 .storage-groups .storage-parts { margin-top: var(--space-1); border-top: 0; padding-top: 0; }
