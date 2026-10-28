@@ -469,6 +469,7 @@
  * @property {string=} client_message_id
  * @property {Object=} transport
  * @property {string=} system_type
+ * @property {"routing_ack"|"system"=} routing_notice_carrier  // live frame only: a routing refusal's System row names the carrier its receipt selected
  * @property {"timeline"|"reviews"=} card_row
  *   A host-stamped placement fact for a task-keyed System row: "timeline" = a timeline item of the task's card, "reviews" = the card's Reviews group carries the fact (the row is still attached to the card); absent = an ordinary row.
  * @property {string=} card_row_id  // the row's stable identity across live delivery, outbox replay and history
@@ -719,6 +720,8 @@
  * @property {string=} routing_token
  * @property {string=} cause  // host-authored owner sentence for a REFUSED act; absent on scheduled/delivered/pending and on the picker frame
  * @property {string=} reasoning_effort  // the explicit start a New task picked from this picker card requests
+ * @property {"routing_ack"|"system"=} routing_notice_carrier  // this ACK is the selected carrier of the act's owner notice; never delivery proof
+ * @property {Object=} reply_to  // the owner message that notice answers (host Reply reference)
  * @property {boolean} suppress_bubble
  * @property {string=} ts
  * @property {string=} project_name
