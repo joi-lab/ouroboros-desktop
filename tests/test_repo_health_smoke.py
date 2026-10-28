@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from ouroboros.review import (
+    BAND_MODULE_MAX_LINES,
     MAX_FUNCTION_LINES,
     MAX_MODULE_BYTES,
     MAX_MODULE_LINES,
@@ -785,6 +786,55 @@ def test_pairwise_degraded_red_parent_does_not_condemn_its_fix_forward(tmp_path:
 
     assert validate_size_ratchet_transition_against_base(repo, "deadbeef" * 5) == []
     assert validate_size_ratchet(repo) == []
+
+
+def _degraded_history(repo: Path, steps: list) -> list[str]:
+    """Commit each (files, manifest) step in order and return the degraded-mode transition at the tip."""
+    baseline = _bootstrap_repo(repo)
+    for index, (files, manifest) in enumerate(steps):
+        for name, (count, line) in files.items():
+            _write_lines(repo / name, count, line)
+        _write_manifest(repo, manifest(baseline))
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-q", "--allow-empty", "-m", f"step {index}")
+    return validate_size_ratchet_transition_against_base(repo, "0" * 40)
+
+
+def test_pairwise_degraded_red_parent_lends_the_tip_no_debt(tmp_path: Path) -> None:
+    """Against an under-declaring parent, a tip that keeps the debt still fails its live check, and a tip
+    that writes the debt into its manifest is new debt; a parent that pre-claims a small existing file, a
+    byte count above its tree, or a band entry for a module that left the band downward stays fabricated."""
+    band = lambda sha: _manifest(band_paths={"edge.py": "sits at the limit"}, sha=sha)  # noqa: E731
+    edge = {"edge.py": (MAX_MODULE_LINES + 5, "x")}
+
+    kept = _degraded_history(tmp_path / "kept", [({"edge.py": (MAX_MODULE_LINES, "x")}, band), (edge, band), (edge, band)])
+    assert kept == [] and validate_size_ratchet(tmp_path / "kept"), "the transition alone is not the gate"
+    claimed = _degraded_history(tmp_path / "claimed", [
+        ({"edge.py": (MAX_MODULE_LINES, "x")}, band), (edge, band),
+        (edge, lambda sha: _manifest(giant_paths=frozenset({"edge.py"}), sha=sha))])
+    assert claimed == ["new module debt above 1600 lines: edge.py"]
+
+    preclaim = _degraded_history(tmp_path / "preclaim", [
+        ({}, lambda sha: _manifest(giant_paths=frozenset({"small.py"}), sha=sha)),
+        ({"small.py": (MAX_MODULE_LINES + 1, "x")}, lambda sha: _manifest(giant_paths=frozenset({"small.py"}), sha=sha))])
+    assert len(preclaim) == 1 and "does not match the parent's own tree" in preclaim[0]
+
+    wide = "x" * 249  # 250 bytes a line: 1000 lines are 250 000 bytes, above MAX_MODULE_BYTES
+    debt = lambda value: (lambda sha: _manifest(byte_debt={"big.py": value}, sha=sha))  # noqa: E731
+    low = {"big.py": (920, wide)}
+    assert _degraded_history(tmp_path / "bytes_fixed", [({"big.py": (1000, wide)}, debt(1000 * 250)),
+                                                         ({"big.py": (1000, wide)}, debt(920 * 250)),
+                                                         (low, debt(920 * 250))]) == []
+    grew = _degraded_history(tmp_path / "bytes_grew", [({"big.py": (1000, wide)}, debt(1000 * 250)),
+                                                       (low, debt(1000 * 250)), (low, debt(1001 * 250))])
+    assert len(grew) == 1 and "does not match the parent's own tree" in grew[0]
+    assert MAX_MODULE_BYTES < 920 * 250
+
+    gone = _degraded_history(tmp_path / "band_down", [
+        ({"low.py": (BAND_MODULE_MAX_LINES - 100, "x")}, lambda sha: _manifest(band_paths={"low.py": "in band"}, sha=sha)),
+        ({"low.py": (900, "x")}, lambda sha: _manifest(band_paths={"low.py": "in band"}, sha=sha)),
+        ({"low.py": (900, "x")}, lambda sha: _manifest(band_paths={"low.py": "in band"}, sha=sha))])
+    assert len(gone) == 1 and "does not match the parent's own tree" in gone[0]
 
 
 def test_interval_rationale_form_allows_legal_reentry_and_blocks_drops(tmp_path: Path) -> None:

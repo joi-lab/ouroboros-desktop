@@ -35,9 +35,7 @@ def test_navigation_matches_full_inventory_with_real_markdown_titles_and_metadat
 
 @pytest.mark.parametrize("scope", ["global", "project:demo"])
 @pytest.mark.parametrize("index_exists", [False, True])
-def test_real_consumers_see_external_edits_even_when_size_and_mtime_match(tmp_path, monkeypatch, scope, index_exists):
-    import os
-
+def test_real_consumers_see_a_same_size_external_edit(tmp_path, monkeypatch, scope, index_exists):
     monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
     address = store.resolve_knowledge_address(tmp_path, "topic", scope)
     original = ("---\ntitle: Before\nsummary: Before summary\n"
@@ -54,12 +52,11 @@ def test_real_consumers_see_external_edits_even_when_size_and_mtime_match(tmp_pa
     for consume in consumers:
         assert "Before summary" not in consume()
         assert "Archived notes: 1" in consume()
-    stat = address.path.stat()
-    # Same-length invalid archive value must become visible; no stat cache may hide it.
+    # A same-length invalid archive value becomes visible to every consumer; an edit that also puts the
+    # mtime back is seen on POSIX by its change time (test_an_in_place_edit_that_restores_size_and_mtime…).
     changed = original.replace("Before", "After!").replace("reason: old", "reason: 123")
     assert len(changed.encode()) == len(original.encode())
     address.path.write_text(changed)
-    os.utime(address.path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     for consume in consumers:
         text = consume()
         assert "After! summary" in text and "source metadata unavailable" in text
