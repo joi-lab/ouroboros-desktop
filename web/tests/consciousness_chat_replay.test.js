@@ -123,13 +123,26 @@ test('replay: a quiet schedule run is titled by its schedule and says what it di
     });
 });
 
-test('replay: a wake\'s sentence stays its title with no duplicate line; origin rows name their fact or stay absent', async () => {
-    const wake = checkpoint('w1', { initiator: 'consciousness', suggested_name: 'Own time' });
+// A wake's narration as the live path sends it and history replays it: the words after the mark are its line.
+const narration = (task_id, words, extra = {}) => ({ task_id, chat_id: 1, ts: '2026-10-28T06:30:00+00:00', role: 'assistant',
+    is_progress: true, narration: true, text: `💬 ${words}`, content: `💬 ${words}`, ...extra });
+
+test('replay and live: a wake\'s sentence is its title and its last narration stays its line; origin rows name their fact or stay absent', async () => {
+    const wake = narration('w1', 'Reading the rooms', { initiator: 'consciousness', suggested_name: 'Own time' });
     await replay({ messages: [wake, terminal('w1', { suggested_name: SENTENCE, wake_summary: SENTENCE, initiator: 'consciousness' })], window: { complete: true } }, (feed) => {
         const seen = view(feed, 'w1');
         assert.equal(seen.title, SENTENCE);
-        assert.equal(seen.line, '', 'the title already says it');
+        assert.equal(seen.line, 'Reading the rooms', 'the title already says the sentence; the narration keeps the line');
         assert.match(seen.facts, /<dt>Started by<\/dt><dd>Consciousness<\/dd>/);
+    });
+    await replay({ messages: [], window: { complete: true } }, (feed, handlers) => {
+        handlers.get('chat')(wake);
+        handlers.get('log')({ chat_id: 1, data: { type: 'task_done', task_id: 'w1', status: 'completed', wake_summary: SENTENCE,
+            wake_silent: true, quiet_effective: true, initiator: 'consciousness', ts: AT } });
+        handlers.get('task_named')({ task_id: 'w1', suggested_name: SENTENCE });  // _wake_finished names the card after task_done
+        const seen = view(feed, 'w1');
+        assert.equal(seen.title, SENTENCE);
+        assert.equal(seen.line, 'Reading the rooms');
     });
     await replay({ messages: [checkpoint('o1'), terminal('o1', { suggested_name: 'Owner work', quiet_effective: false, wake_silent: false })], window: { complete: true } }, (feed) => {
         assert.doesNotMatch(view(feed, 'o1').facts, /Started by/);

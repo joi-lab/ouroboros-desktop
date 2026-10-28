@@ -786,10 +786,12 @@ export function createChatInstance({
     }
 
     // Write only on change: a rewrite would destroy a selection being copied. A finished root's own sentence is its
-    // line under an authored title (a wake's sentence is its title, so no duplicate); a host cause holding the line stays.
+    // line under an authored title; a wake's sentence is its title, so its last narration stays the line; a host cause
+    // holding the line stays.
     function syncCardHeadline(record) {
         const title = cardTitle(record);
-        const line = (record.finished && !record.isSubagent && !record.causeHeld && record.wakeSummary) || record.collapsedActivity;
+        const own = record.finished && !record.isSubagent && !record.causeHeld && record.wakeSummary;
+        const line = own && own !== title ? own : record.collapsedActivity;
         if (record.titleEl.textContent !== title) { record.titleEl.textContent = title; portals.relabel(record); }
         renderCollapsedActivity(record, projectCollapsedActivity({ isSubagent: record.isSubagent, suggestedName: title, headline: line, body: line }));
     }
