@@ -489,6 +489,7 @@ def _preflight_and_tests_gate(
     review_rebuttal: str = "",
     goal: str = "",
     scope: str = "",
+    review_only: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Ahead of the panel: the free deterministic checks, the tests preflight, then the author's
     preflight when one row was named (decision 3A). The checks and the tests block as before
@@ -498,7 +499,7 @@ def _preflight_and_tests_gate(
 
     ctx._commit_preflight = {"status": "skipped" if skip_advisory_pre_review else "not_performed", "record_id": ""}
     named = bool(preflight_reviewer) and not skip_advisory_pre_review
-    message = deterministic_preflight(ctx, commit_message, classification_paths or None)
+    message = deterministic_preflight(ctx, commit_message, classification_paths or None, review_only=review_only)
     reason = "infra_failure" if preflight_evidence_unavailable(message) else "preflight"
     _managed_needs_proof = _managed_candidate_needs_proof(ctx)
     # The retired advisory's own tests rule, for every commit: the suite runs unless the author
@@ -1489,7 +1490,9 @@ def get_tools() -> List[ToolEntry]:
             "name": "vcs_revert",
             "description": (
                 'Undo one commit by creating a revert commit. confirm=false previews; true requires a clean worktree. '
-                "Refuses merge commits and, in Ouroboros's own repository, commits touching protected paths."
+                "Refuses merge commits. In Ouroboros's own repository, protected-path reverts follow the caller's "
+                "effective runtime mode (task limits included) or existing managed-update authority. "
+                "Mechanical revert requires no new review."
             ),
             "parameters": {"type": "object", "properties": {
                 "root": {"type": "string", "enum": ["active_workspace", "system_repo"], "default": "active_workspace", "description": "Omit for the active project workspace; use system_repo for Ouroboros source."},
@@ -1520,8 +1523,6 @@ from ouroboros.tools.git_plumbing import (  # noqa: E402,F401
 
 
 from ouroboros.tools.git_review_cycle import (  # noqa: E402,F401
-    _DOC_ONLY_EXTENSIONS,
-    _diff_is_doc_only,
     _finalize_blocked_review,
     _finalize_pending_review,
     _fingerprint_staged_diff,

@@ -1,9 +1,9 @@
 # 10. Key Invariants
 
-Numbered rules identify cross-cutting owners; the continuity map separates exact sources, working views and authority.
+Cross-cutting owners and the continuity map: exact sources, working views and authority.
 
 1. **Constitution and identity persist.** `BIBLE.md` is never deleted; `identity.md` stays a physical file as its content evolves.
-2. **Release metadata has one projection.** `VERSION` is canonical; `ouroboros/tools/release_sync.py::version_carrier_desyncs()` and `sync_release_metadata()` project it into every carrier the Release Invariant names (BIBLE) plus both root entries of `web/package-lock.json`; changelog prose stays deliberate. A pull request into `ouroboros` leaves the carriers byte-identical to its target; integration assigns the version.
+2. **Release metadata has one projection.** `VERSION` is canonical; `ouroboros/tools/release_sync.py::VERSION_CARRIER_SPANS` names carriers, `sync_release_metadata()` writes and `version_carrier_desyncs()` checks them. Changelog prose stays deliberate. Contributions preserve carrier bytes; integration assigns the version. Ordinary serving commits, docs included, are numbered; body candidates may be neutral (BIBLE P9).
 3. **Configuration and messaging have single owners.** `ouroboros/config.py` is the one import surface for paths and settings; the vocabularies live in its leaves `settings_defaults` (keys, shipped defaults, dropped-key lists), `settings_scales` (clamps), `model_slots` (slot resolution), `review_model_routes` (reviewer lists), `runtime_limits` (numeric knobs) and `settings_integrity` (the verified read), so a new key belongs to a leaf, never to the facade (§7). Messages go through `supervisor/message_bus.py`; task-fact transitions are store transactions (`ouroboros/store.py`; `store_switch.py` owns the boot import and restart exit); other transitions use the owning file lock.
 4. **The usage store is the record of spend.** `state/usage.sqlite` owns current attempts and their summaries; state, task, event and UI amounts are projections carrying attempt identity (`ouroboros/usage_store.py`).
 5. **Packaged bootstrap is manifest-bound.** A packaged install verifies `repo.bundle` and its manifest once, then runs the managed checkout; Restart preserves the local tip; only an explicit update applies an approved exact SHA.

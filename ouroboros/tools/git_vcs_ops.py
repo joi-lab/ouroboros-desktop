@@ -459,12 +459,15 @@ def _revert_commit(
         if _git().binding_targets_system_repo(ctx, binding)
         else []
     )
-    if protected_changes:
+    from ouroboros.consciousness_authority import effective_runtime_mode
+    from ouroboros.runtime_mode_policy import mode_allows_protected_write
+
+    mode = effective_runtime_mode(_git()._current_runtime_mode(), getattr(ctx, "task_metadata", None))
+    if protected_changes and not (mode_allows_protected_write(mode) or _git()._authorized_managed_update_resolver(ctx)):
         return _git()._vcs_result(
-            f"⚠️ REVERT_BLOCKED: Commit {sha[:8]} touches protected file(s): "
+            f"⚠️ CORE_PROTECTION_BLOCKED: Runtime mode {mode} cannot revert protected file(s): "
             f"{format_protected_paths(protected_changes)}. "
-            "Direct vcs_revert cannot create protected-path commits; stage the intended "
-            "revert manually and use commit_reviewed so the normal panel review covers it.",
+            "Mechanical revert is review-exempt, but retains the caller's runtime-mode authority.",
             binding,
         )
     try:

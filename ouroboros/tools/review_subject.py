@@ -24,8 +24,8 @@ code. The declared review subject for that commit is the RESOLUTION DELTA:
 Everything a reviewer needs to know about that substitution is DISCLOSED in the
 artifact header: both tree identities, both real merge parents, the conflict
 anchors, and two counters (full candidate paths vs reviewed resolution paths).
-Review binding, advisory freshness, preflight staged lists, doc-only
-classification and the scope snapshot key stay on the FULL candidate — this
+Review binding, advisory freshness, preflight staged lists and the scope
+snapshot key stay on the FULL candidate — this
 module only changes what the reviewers read, never what the gate fingerprints.
 
 ``capture_review_diff`` is the shared capture used by every review consumer:

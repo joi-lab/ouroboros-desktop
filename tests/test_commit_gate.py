@@ -370,13 +370,6 @@ def test_restore_to_head_blocks_protected_paths():
     assert "RESTORE_BLOCKED" in source
 
 
-def test_revert_commit_blocks_protected_paths():
-    git_mod = _get_git_module()
-    source = inspect.getsource(git_mod._revert_commit)
-    assert "protected_paths_in" in source
-    assert "REVERT_BLOCKED" in source
-
-
 # --- Confirm gates ---
 
 def test_revert_commit_has_confirm_gate():

@@ -183,7 +183,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "write_text",
     })),
     "ouroboros/tools/git_review_cycle.py": ("ouroboros/tools/git.py", "_git", frozenset({
-        "_DOC_ONLY_EXTENSIONS", "_acquire_git_lock",
+        "_acquire_git_lock",
         "_aggregate_review_verdict",
         "_authorized_managed_update_resolver", "_check_overlapping_review_attempt",
         "_current_runtime_mode", "_ensure_gitignore", "_finalize_blocked_review",
@@ -202,7 +202,8 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "protected_paths_in", "run_cmd", "safe_relpath",
     })),
     "ouroboros/tools/git_vcs_ops.py": ("ouroboros/tools/git.py", "_git", frozenset({
-        "_acquire_git_lock", "_binding_relative_path", "_ff_pull",
+        "_acquire_git_lock", "_authorized_managed_update_resolver",
+        "_binding_relative_path", "_current_runtime_mode", "_ff_pull",
         "_limit_git_output", "_release_git_lock",
         "_run_git_network_cmd", "_vcs_binding", "_vcs_result",
         "binding_targets_system_repo", "build_resolved_resource_binding",
