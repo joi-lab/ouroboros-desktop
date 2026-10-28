@@ -186,7 +186,7 @@ def first_body_ask(record: Mapping[str, Any], revision: Optional[Mapping[str, An
     if not (revision.get("body") if revision is not None else body):
         return False
     for ask in record.get("asks") or []:
-        if revision is None:  # an earlier reading that already heard every marked reviewer
+        if revision is None:  # an earlier first reading of the body spent the reading's own floor
             if ask.get("revision") is None and ask.get("body_first_ask"):
                 return False
             continue
