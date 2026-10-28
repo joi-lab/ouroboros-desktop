@@ -970,7 +970,7 @@ test("a settled non-success verdict carries the engine's own explanation", () =>
     assert.ok(loginCardHtml({ ...nested, verdict: { kind: 'failure', reason: 'launch_failed' } }, 0)
         .includes('data-login-detail'));
 
-    // Never beside "Connected." (a stale message must not contradict success),
+    // Never beside "Signed in." (a stale message must not contradict success),
     // and never while the job is unsettled (the status line owns the card).
     assert.ok(!loginCardHtml({ ...nested, verdict: { kind: 'success', reason: '' } }, 0)
         .includes('data-login-detail'));
@@ -1490,7 +1490,7 @@ test('each row projection is gated by ITS OWN facet, and a stale value says it i
     // verification claim is dated — and the window, read fine, is not.
     const staleAccount = accountRowFacts(row, payload, { accountsRead: 'failed', quotaRead: 'ok' });
     assert.match(staleAccount.badge.label, /last known/);
-    assert.equal(staleAccount.badge.tone, 'muted', 'no green "Verified live" over a read that never landed');
+    assert.equal(staleAccount.badge.tone, 'muted', 'no green "Login verified" over a read that never landed');
     assert.equal(staleAccount.quota.exhausted, true);
     assert.doesNotMatch(staleAccount.quota.label, /last known/);
 

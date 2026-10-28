@@ -152,7 +152,7 @@ test('an empty family that WAS read says so, and its button still connects', () 
 test('several accounts of one family are grouped, counted, and called equivalent', () => {
     // The owner's ask, verbatim: «все акки клод кода должны быть эквивалентны».
     // Three codex accounts (the migrated default + two named) become ONE card
-    // whose header says they rotate — no row is the "real" one.
+    // whose header counts them alike — no row is the "real" one.
     const groups = accountGroups(payload({ profiles: MIGRATED_MULTI }), { accountsRead: 'ok' });
     const codex = groups.find((g) => g.harness === 'codex');
     assert.equal(codex.rows.length, 3);
@@ -559,9 +559,9 @@ test('the REAL store, fed a corrupted runtime, reaches the repair sentence', asy
 });
 
 test('a card does not contradict itself: the header is dated by the same read as its rows', () => {
-    // The row badge stops claiming "Verified live" when the ACCOUNTS read never
+    // The row badge stops claiming "Login verified" when the ACCOUNTS read never
     // landed. The header lozenge counts the very same rows, so it obeys the very
-    // same provenance — otherwise one card says "Connected" in green over rows
+    // same provenance — otherwise one card says "Signed in" in green over rows
     // that each say "last known", and the owner has to decide which half to
     // believe. An account that needs ATTENTION keeps its tone: a dated warning
     // is still a warning, and muting it would hide the one row worth acting on.

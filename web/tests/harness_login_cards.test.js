@@ -73,7 +73,7 @@ function statusPayload(loggedIn) {
 
 const flush = async () => { for (let i = 0; i < 40; i += 1) await Promise.resolve(); };
 
-test('the controller drives create → poll → Connected, and holds the status poll while it runs', async (t) => {
+test('the controller drives create → poll → Signed in, and holds the status poll while it runs', async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let jobState = 'running';
     let statusReads = 0;

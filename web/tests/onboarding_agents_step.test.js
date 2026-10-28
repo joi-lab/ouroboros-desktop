@@ -204,7 +204,7 @@ test('a mixed reviewer-capable and task-only setup names each capability separat
     assert.doesNotMatch(text, /Antigravity can also move commit review/);
 });
 
-test('several accounts are named in family order and the rows say they rotate', () => {
+test('several accounts are named in family order and the rows count their logins', () => {
     const snapshot = snapshotWith(['cursor', 'claude']);
     assert.deepEqual(connectedHarnesses(snapshot), ['claude', 'cursor']);
     assert.match(agentsOutcomeText(['claude', 'cursor']), /Signed in to Claude Code and Cursor/);
@@ -283,9 +283,13 @@ test('a family the engine renames is spoken in the engine words, never as a raw 
 });
 
 test('an unread account facet claims nothing — a gap is not a zero', () => {
+    // The known read renders both claims, so the negative below can fail.
+    const known = familyListHtml(snapshotWith(['claude']));
+    assert.match(known, /No account connected/);
+    assert.match(known, /Signed in/);
     const rows = familyListHtml(snapshotWith(['claude']), { accountsKnown: false });
     assert.ok(rows.includes('Not checked'));
-    assert.doesNotMatch(rows, /Not signed in/);
+    assert.doesNotMatch(rows, /No account connected|Signed in/);
     assert.match(agentsOutcomeText([], { accountsKnown: false }), /could not be checked/i);
 });
 

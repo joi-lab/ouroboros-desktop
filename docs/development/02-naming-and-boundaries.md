@@ -164,17 +164,18 @@ language-tagged fences and the declared skipped subsections ("External facts: un
 is not no" and this one); the untagged module-tree fence in ARCHITECTURE §1 is
 scanned.
 
-Size is pairwise: a change ends each composed book, entrypoint included, no
-larger than at its event base, so text it adds is paid by shortening the same
-book. With ordinary push/PR CI disabled (ARCHITECTURE §8), manual/tag runs
-lack a per-change base and skip the book comparison; they do not certify this rule.
-Local qualification supplies `OURO_SIZE_RATCHET_BASE_REF` explicitly; review
-checks the actual contribution. The owner's `book-growth` label can exempt it.
-Local surfaces never block: the edit
-tools, `plan_task`, the free `preflight_review(deterministic_only=True)` diagnostic
-and `codebase_health` report the running balance as a fact. Contribution is measured
-against the displayed merge-base of the cached official development ref; an unknown
-base stays unknown, and no network refresh is implied. Free diagnostics label book
+Size is pairwise: a change ends each composed book, entrypoint included,
+`BIBLE.md` and the prompts (`prompts/*.md` as one text) no larger than at its
+event base, so text it adds is paid by shortening the same text. With
+ordinary push/PR CI disabled (ARCHITECTURE §8), manual/tag runs lack a
+per-change base and skip this comparison. Local qualification supplies
+`OURO_SIZE_RATCHET_BASE_REF` explicitly; review checks the actual
+contribution. The owner's `book-growth` label can exempt it. Local surfaces
+never block: the edit tools, `plan_task`, the free
+`preflight_review(deterministic_only=True)` diagnostic and `codebase_health`
+report the balance as a fact. Contribution is measured from the displayed
+merge-base of the cached official development ref; an unknown base stays
+unknown and nothing is fetched. Free diagnostics label book
 bytes as worktree separately from the selected release-metadata source.
 Equivalent historical prose stays review-only under CHECKLISTS item 5.
 

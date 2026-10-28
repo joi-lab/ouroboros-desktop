@@ -50,7 +50,7 @@ def _codebase_health(ctx: ToolContext) -> str:
 
         books = book_balances(repo_dir)
         if books:
-            lines.append("\n### Reference books (information; contribution-base measurement)")
+            lines.append("\n### Text growth (information; contribution-base measurement)")
             lines.extend(f"  {render_book_balance(balance)}" for balance in books)
             lines.append(f"  {BOOK_GROWTH_RULE}")
 

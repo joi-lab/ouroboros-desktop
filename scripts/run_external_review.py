@@ -114,6 +114,7 @@ _REVIEW_SUBSTRATE_PATHS = frozenset({
     "ouroboros/tools/governance_context.py", "ouroboros/review_session_reads.py",
     "ouroboros/tools/scope_window.py", "ouroboros/claudexor_daemon.py", "ouroboros/delegate_custody.py",
     "ouroboros/delegate_custody_usage.py", "ouroboros/delegate_output.py", "ouroboros/gateways/claudexor.py",
+    "ouroboros/gateways/claudexor_identity.py",
     "ouroboros/review_evidence.py", "ouroboros/review_evidence_sections.py", "ouroboros/subagents.py",
     "ouroboros/review_model_routes.py", "ouroboros/review_run_isolation.py", "ouroboros/settings_integrity.py",
     "ouroboros/settings_setup_contract.py", "ouroboros/usage_admission.py",

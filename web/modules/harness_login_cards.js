@@ -538,7 +538,7 @@ export function loginCardHtml(active, nowMs = Date.now(), { mode = LOGIN_CARD_FU
     // ALSO silences it explicitly: once a verdict (or its re-check) owns the
     // card, a snapshot that still reads pending — a poll response captured
     // before the job settled — must not print "Waiting for the sign-in link…"
-    // underneath "Connected.".
+    // underneath "Signed in.".
     if (face !== 'error' && face !== 'name' && !active.verdict && !active.confirming) {
         const line = active.preparingRuntime
             ? claudexorPreparationLine(statusPayload)
@@ -612,7 +612,7 @@ export function loginCardHtml(active, nowMs = Date.now(), { mode = LOGIN_CARD_FU
     // other an honest "unknown"), so without this line a settled login says
     // nothing about WHY — the daemon's sentence lived in the snapshot and was
     // rendered nowhere. Only for a settled non-success verdict: beside
-    // "Connected." a stale message would contradict the outcome, and while the
+    // "Signed in." a stale message would contradict the outcome, and while the
     // job is pending the live status line already owns the card.
     if (!compact && (active.verdict?.kind === 'failure' || active.verdict?.kind === 'unconfirmed')) {
         // #125: a verdict minted client-side (the poll give-up) carries its own

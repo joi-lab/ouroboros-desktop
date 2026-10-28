@@ -113,8 +113,8 @@ export function verificationBadge(profile, { known = true } = {}) {
     };
     const value = badge();
     // `known` = the ACCOUNTS facet was really read. Otherwise this row is the
-    // retained snapshot's memory of an account, and painting a green "Verified
-    // live" over a read that never landed is the same lie as the banner's — the
+    // retained snapshot's memory of an account, and painting a green "Login
+    // verified" over a read that never landed is the same lie as the banner's — the
     // panel used to say nothing could be listed while a stale row sat below it
     // dressed as verified. The row survives (it is the only Connect affordance
     // some harnesses have); only its claim is dated, and the green goes with it.
@@ -614,7 +614,7 @@ export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported
     if (!rows.length) return { tone: 'muted', label: bareRowStatusText(accountsRead, { accountsUnsupported }) };
     // …and the SAME provenance rule the rows obey. These rows are the retained
     // snapshot's memory when the accounts facet did not land, so a green
-    // "Connected" over them is the row badge's lie one level up — and the two
+    // "Signed in" over them is the row badge's lie one level up — and the two
     // would contradict each other inside one card, the header claiming fresh
     // while the badge under it says last known.
     const known = accountsRead === READ_OK;
@@ -1097,7 +1097,7 @@ export function accountRowFacts(row, payload,
     // ACCOUNTS read, the window is the QUOTA read, and one lands while the
     // other refuses. The panel used to render both off the retained snapshot
     // regardless, so after a refused read the banner said nothing could be
-    // listed while a stale row sat underneath it showing "Verified live" and a
+    // listed while a stale row sat underneath it showing a verified badge and a
     // red exhausted window. Pure, because that rule is the thing worth pinning.
     //
     // The two-line anatomy is the owner's (D-10): line 1 is the account and its
