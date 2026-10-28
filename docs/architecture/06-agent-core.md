@@ -525,7 +525,7 @@ Review panel asks accept `wake_on={senders,tasks,runs,reviewers,wake_at}` (`revi
 
 #### Session identity
 
-Session reviewer identity comes from `gateways.claudexor.final_attempt_facts`: the unique `final_attempt_id` row of the engine-owned `final/telemetry.yaml`, bound to the requested run id, with model, harness and credential profile read from that same attempt. Summary echoes and earlier attempts never fill missing observations. Usage, last-execution views, payloads and settlement keep absence; custody/billing routes stay authoritative. Observed identity changes neither quorum nor routing.
+`gateways.claudexor.final_attempt_facts` binds model/harness/profile to one final-attempt row in this run's `final/telemetry.yaml`; request/summary echoes and earlier attempts never fill gaps. Live/late facts preserve absence and raw labels; same-spawn catalog proof verifies exact IDs, not inferred effort siblings. Without proof, legacy checks apply. Identity changes neither quorum nor routing; custody/billing remain authoritative.
 
 #### Structural gates
 
