@@ -82,6 +82,7 @@ def test_contributor_trust_boundary_covers_functional_review_dependencies():
         "ouroboros/delegate_custody_usage.py",
         "ouroboros/delegate_output.py",
         "ouroboros/gateways/claudexor.py",
+        "ouroboros/gateways/claudexor_identity.py",
         "ouroboros/outcomes.py",
         "ouroboros/openrouter_attribution.py",
         "ouroboros/platform_layer.py",

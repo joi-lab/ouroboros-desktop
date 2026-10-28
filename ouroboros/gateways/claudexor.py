@@ -33,18 +33,18 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
-from ouroboros.gateways.claudexor_observation import ClaudexorObservationGateway
-from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
-from ouroboros.gateways import claudexor_metadata as metadata
-from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
-from ouroboros.observability import timed_phase
-
 from ouroboros.config import (
     CLAUDEXOR_MIN_VERSION,
     CLAUDEXOR_PROTOCOL_MAJOR,
     get_claudexor_quota_refresh_timeout_sec,
 )
+from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
+from ouroboros.gateways import claudexor_metadata as metadata
+from ouroboros.gateways.claudexor_identity import validated_catalog_match
+from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
+from ouroboros.gateways.claudexor_observation import ClaudexorObservationGateway
+from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
+from ouroboros.observability import timed_phase
 
 log = logging.getLogger(__name__)
 
@@ -1537,12 +1537,9 @@ def attempt_containment(run_dir: str) -> List[AttemptContainment]:
 
 
 def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
-    """Read the final attempt's route and effort facts from engine-owned telemetry.
-
-    The summary's model and harnesses echo the request; its route/authRoute
-    projections may borrow facts from earlier attempts. Only the unique row
-    named by final_attempt_id belongs to the delivered result. Missing facts
-    stay unknown, never filled from another attempt or the request.
+    """Read one final attempt's raw model/harness/profile and effort/cache facts.
+    Summary/authRoute may borrow earlier attempts; request echoes never fill gaps.
+    Catalog proof only supplements this run-bound row's observed identity.
     """
     summary = detail.get("summary") if isinstance(detail, dict) else None
     if not isinstance(summary, dict) or not isinstance(run_id, str) or not run_id.strip():
@@ -1551,6 +1548,7 @@ def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     if not isinstance(run_dir, str) or not run_dir.strip():
         return {}
     import yaml  # type: ignore
+
     from ouroboros.delegate_custody_usage import held_run_names
 
     try:
@@ -1578,6 +1576,8 @@ def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
         facts["effort_resolution"] = validated_effort_resolution(row["effort_resolution"])
     if "prompt_cache_ttl" in row:
         facts["prompt_cache_ttl"] = validated_prompt_cache_ttl(row["prompt_cache_ttl"])
+    if "observed_model_catalog_match" in row:
+        facts["observed_model_catalog_match"] = validated_catalog_match(row["observed_model_catalog_match"], facts)
     return facts
 
 

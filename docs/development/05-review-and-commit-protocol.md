@@ -16,7 +16,7 @@ Each wave or free pre-dispatch refusal leaves an `ouroboros/review_ledger.py` re
 
 A technical review failure keeps its phase, reason, received findings and full result recorded as failure, never PASS. Once its typed outcome reaches Main it may support explicit Advisory author continuation on a known, independently bound candidate; outside Cyber Pro, Blocking still blocks. Cyber may continue without a new review, keeping the original findings and pending invocation; it never fabricates candidate bytes, custody or physical effects, and Stop, deadline and cost facts stay recorded.
 
-A named `review_change` look owns neither commit custody nor the panel verdict. Reconciliation preserves the prepared index, never restages a lost one; same-candidate/intent retries collect original paid seats, never replacements (ARCHITECTURE §6 "Late completion and typed refusals"). Hosted identity: §6 "Session identity". Retain full raw results, ordinary PASS and empty-clean test responses; the contributor checker rejects unconfirmed identity, display labels included.
+Named `review_change` owns no commit custody or panel verdict. Prepared/lost reconciliation preserves the index, never restages it; same-candidate/intent retries collect original paid seats, never replacements (ARCHITECTURE §6 "Late completion and typed refusals"). Keep full raw results, PASS and empty-clean responses. Contributor checks accept exact IDs or bound catalog proof (§6 "Session identity"); labels alone stay unverified. Other refusals keep their causes.
 
 ### Review pool and paid cycles
 
