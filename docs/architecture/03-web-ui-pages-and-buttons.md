@@ -225,7 +225,7 @@ A directory or separately hosted builtin client offers outside-frame recovery vi
 
 #### Agent accounts
 
-Accounts, login and onboarding show authentication, not readiness. SYSTEM requires support, configuration and matching inference; sign-in/catalog prove no execution. Catalog/accounts/quota `reads` coalesce, keep successful siblings (§1) and retain dated facts/errors on gaps. Quota percentages/exhaustion need fresh windows/future resets; absent quota is not logout. The banner names verdict, engine version and store failures; Diagnostics opens metrics/limits (§9), never acts.
+Accounts, login and onboarding show authentication, not readiness. Family counts include disabled logins; all-disabled stays neutral. Rotation/admission and attention are enabled-only. Catalog/accounts/quota `reads` coalesce, keep successful siblings (§1) and date retained facts/errors on gaps. Quota needs fresh windows/future resets; absent quota is not logout. The banner names verdict, engine version and store failures; Diagnostics opens metrics/limits (§9), never acts.
 
 Family cards show named rows (Enabled/Remove, own quota subject only), `accountPools` "Next up" and Add. A pre-unified roster (`account_model_unsupported`) shows no rows or Connect; the banner names the update. `not_run` is unknown; unknown availability offers Refresh. Removal keeps refusal and vendor-retained/unchanged credential warnings, never false logout. Rows add engine model marks; a failed read is one dated section note.
 

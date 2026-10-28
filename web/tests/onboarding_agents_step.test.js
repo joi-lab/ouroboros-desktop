@@ -221,27 +221,28 @@ test('several accounts are named in family order and the rows say they rotate', 
     assert.deepEqual(familyStatusText(twoInOne, 'claude'), { tone: 'muted', text: 'No account connected' });
 });
 
-test('an all-disabled family is not connected — the aggregate reads the enabled fact', () => {
-    // The owner switched every codex account OFF: rotation never takes them,
-    // so the wizard must not declare the family connected under a header that
-    // says the opposite (the same rule the Subagents section applies).
+test('family sign-in counts stay independent of enabled-only preset admission', () => {
     const allOff = snapshotWith([]);
     allOff.profiles.profiles = [
         { profile: { harness_id: 'codex', profile_id: 'a', enabled: false }, status: { verification: 'passed' } },
         { profile: { harness_id: 'codex', profile_id: 'b', enabled: false }, status: { verification: 'passed' } },
     ];
     assert.deepEqual(connectedHarnesses(allOff), []);
-    assert.deepEqual(familyStatusText(allOff, 'codex'), { tone: 'muted', text: '2 accounts · all disabled' });
+    assert.deepEqual(familyStatusText(allOff, 'codex'), { tone: 'muted', text: '2 accounts signed in · all disabled' });
+    assert.deepEqual(subscriptionDeclaration({ connected: connectedHarnesses(allOff) }), {
+        subscriptionsConnected: false, skipSubscriptionPresets: false,
+    });
+    assert.match(familyListHtml(allOff), /2 accounts signed in · all disabled/);
 
-    // One row re-enabled: enabled+passed still connects and counts — and the
-    // count excludes the disabled sibling instead of over-promising the pool.
+    // Re-enabling changes admission, while both passed logins remain counted.
     const oneOn = snapshotWith([]);
     oneOn.profiles.profiles = [
         { profile: { harness_id: 'codex', profile_id: 'a', enabled: false }, status: { verification: 'passed' } },
         { profile: { harness_id: 'codex', profile_id: 'b', enabled: true }, status: { verification: 'passed' } },
     ];
     assert.deepEqual(connectedHarnesses(oneOn), ['codex']);
-    assert.deepEqual(familyStatusText(oneOn, 'codex'), { tone: 'ok', text: '1 of 2 signed in' });
+    assert.deepEqual(familyStatusText(oneOn, 'codex'), { tone: 'ok', text: '2 accounts signed in' });
+    assert.match(familyListHtml(oneOn), /2 accounts signed in/);
     const unknown = snapshotWith([]);
     unknown.profiles.profiles = [{ profile: { harness_id: 'codex', profile_id: 'a', enabled: true },
         status: { verification: 'not_run', availability: 'unknown' } }];

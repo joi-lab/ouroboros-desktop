@@ -609,7 +609,7 @@ export function bareRowStatusText(accountsRead, { accountsUnsupported = false } 
 }
 
 export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported = false } = {}) {
-    // Count enabled logins, not executable models: authentication and catalog
+    // Count logins independently of rotation: authentication and catalog
     // access do not establish a working main-chat transport or configured agent.
     if (!rows.length) return { tone: 'muted', label: bareRowStatusText(accountsRead, { accountsUnsupported }) };
     // …and the SAME provenance rule the rows obey. These rows are the retained
@@ -635,19 +635,19 @@ export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported
     // deliberately does not probe disabled rows and reports `not_run`; that
     // unknown verification must not hide the stronger fact that every account
     // has been excluded from rotation.
-    if (rows.every((row) => row.enabled === false)) {
+    const allDisabled = rows.every((row) => row.enabled === false);
+    const live = rows.filter((row) => String(row?.status?.verification || '') === 'passed').length;
+    if (allDisabled && !live) {
         return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · all disabled`);
     }
-    const live = rows.filter((row) => String(row?.status?.verification || '') === 'passed'
-        && row.enabled !== false).length;
     if (!live) {
         const notRun = rows.some((row) => String(row?.status?.verification || '') === 'not_run');
         if (notRun) return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not verified`);
         return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not signed in`);
     }
-    if (live < rows.length) return verdict('ok', `${live} of ${rows.length} signed in`);
-    if (live === 1) return verdict('ok', 'Signed in');
-    return verdict('ok', `${live} accounts signed in`);
+    const label = live < rows.length ? `${live} of ${rows.length} signed in`
+        : live === 1 ? 'Signed in' : `${live} accounts signed in`;
+    return verdict(allDisabled ? 'muted' : 'ok', `${label}${allDisabled ? ' · all disabled' : ''}`);
 }
 
 export function nextUpBadge(payload, harness, { accountsRead = READ_OK } = {}) {

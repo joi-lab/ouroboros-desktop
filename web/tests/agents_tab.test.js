@@ -185,7 +185,7 @@ test('one authenticated account reports sign-in, not operational readiness', () 
         { tone: 'muted', label: '1 account · not verified' });
 });
 
-test('"N accounts · rotating" counts only the accounts rotation can actually use', () => {
+test('a family counts observed logins without claiming rotation capacity', () => {
     // Caught by LOOKING at the rendered tab: a Cursor family holding one signed-in
     // account and one cold native row announced "2 accounts · rotating", promising
     // a rotation width that did not exist (a cold row is any row not signed in).
@@ -198,11 +198,7 @@ test('"N accounts · rotating" counts only the accounts rotation can actually us
         { tone: 'ok', label: '1 of 2 signed in' });
 });
 
-test('a disabled account is out of the rotation claim, and all-disabled is its own state', () => {
-    // Unified-accounts sprint: the header's "rotating" promise may only count
-    // accounts that are BOTH signed in and enabled. A disabled row is the
-    // owner's own exclusion — counting it over-promises the pool exactly the
-    // way counting a cold row used to.
+test('disabling excludes rotation without erasing a passed login', () => {
     const mixed = [
         { harness: 'codex', profile_id: 'codex-default', kind: 'profile', enabled: true,
           status: { verification: 'passed', verification_source: 'local_store' } },
@@ -210,12 +206,26 @@ test('a disabled account is out of the rotation claim, and all-disabled is its o
           status: { verification: 'passed', verification_source: 'vendor' } },
     ];
     assert.deepEqual(familyStatus(mixed, { accountsRead: 'ok' }),
-        { tone: 'ok', label: '1 of 2 signed in' });
+        { tone: 'ok', label: '2 accounts signed in' });
+    const unknown = { harness: 'codex', profile_id: 'unknown', enabled: true,
+        status: { verification: 'not_run', availability: 'unknown' } };
+    assert.deepEqual(familyStatus([...mixed, unknown]),
+        { tone: 'ok', label: '2 of 3 signed in' });
     // Every login healthy, every account disabled: saying "not signed in"
     // would send the owner to a login that fixes nothing.
     const allOff = mixed.map((row) => ({ ...row, enabled: false }));
     assert.deepEqual(familyStatus(allOff, { accountsRead: 'ok' }),
-        { tone: 'muted', label: '2 accounts · all disabled' });
+        { tone: 'muted', label: '2 accounts signed in · all disabled' });
+    assert.deepEqual(familyStatus([allOff[0]]),
+        { tone: 'muted', label: 'Signed in · all disabled' });
+    assert.deepEqual(familyStatus([allOff[0], { ...allOff[1], status: { verification: 'not_run' } }]),
+        { tone: 'muted', label: '1 of 2 signed in · all disabled' });
+    for (const accountsRead of ['not_read', 'failed', 'transport', 'indeterminate']) {
+        assert.deepEqual(familyStatus(mixed, { accountsRead }),
+            { tone: 'muted', label: '2 accounts signed in — last known' });
+        assert.deepEqual(familyStatus(allOff, { accountsRead }),
+            { tone: 'muted', label: '2 accounts signed in · all disabled — last known' });
+    }
     // Disabled rows are intentionally not probed by the engine. Their
     // verification=not_run remains neutral but must not overwrite the owner's
     // stronger structural state.
@@ -231,6 +241,8 @@ test('a disabled account is out of the rotation claim, and all-disabled is its o
     }));
     assert.deepEqual(familyStatus(ambiguous, { accountsRead: 'ok' }),
         { tone: 'muted', label: '2 accounts · not verified' });
+    assert.deepEqual(familyStatus(allOffNotRun, { accountsRead: 'failed' }),
+        { tone: 'muted', label: '2 accounts · all disabled — last known' });
     // …and the metadata line states the exclusion in words on the row itself.
     assert.match(accountMetaLine(allOff[0], payload()), /^disabled — excluded from rotation/);
 });
@@ -253,6 +265,10 @@ test('a disabled account with a failed verification does not redden the family h
     const enabledFailure = rows.map((row) => ({ ...row, enabled: true }));
     assert.deepEqual(familyStatus(enabledFailure, { accountsRead: 'ok' }),
         { tone: 'error', label: '1 of 2 need attention' });
+    assert.deepEqual(familyStatus(enabledFailure, { accountsRead: 'failed' }),
+        { tone: 'error', label: '1 of 2 need attention — last known' });
+    assert.deepEqual(familyStatus(rows.map((row) => ({ ...row, enabled: false }))),
+        { tone: 'muted', label: '1 of 2 signed in · all disabled' });
 });
 
 test('the Next up badge renders every wire kind fail-safe, unknown included', () => {
