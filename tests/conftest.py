@@ -777,6 +777,7 @@ def _reset_custody_memo_between_tests():
     delegate_custody._CUSTODY.clear()
     delegate_activity.reset_process_memo()
     custody_owed._FACTS.clear()
+    custody_owed._wake, custody_owed._wake_sent = None, False
     yield
     delegate_custody._CUSTODY.clear()
     delegate_activity.reset_process_memo()

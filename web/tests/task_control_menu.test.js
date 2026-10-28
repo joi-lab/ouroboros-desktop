@@ -500,3 +500,9 @@ test('a gap notice keeps all its words beside its close button; the page stack i
     showToast('A room notice.', 'warn', { ttl: 0, dismissLabel: 'Dismiss notice', host });
     assert.ok(!host.querySelector('.toast-stack--room').hasAttribute('tabindex'));
 });
+
+test('two unconfirmed effects are worded in the plural, as on the server', () => {
+    assert.equal(heldWorkFacts([{ kind: 'tool_handoff', task_id: 't', tool: 'run_command',
+        reason: 'returned_effect_unconfirmed', effects: ['started process', 'MCP request'] }]),
+    'the run_command call of task t returned; its started process and MCP request are not confirmed');
+});

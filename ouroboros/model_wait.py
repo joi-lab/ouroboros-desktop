@@ -1036,7 +1036,7 @@ def _owe_consumer_retirement(root: Any, task_id: str, consumers: dict[str, int])
         try:
             retire_model_consumers(root, task_id, consumers)
         except ValueError as exc:
-            if not isinstance(exc.__cause__, LookupError):
+            if type(exc.__cause__) is not LookupError:  # only "the task's row is gone" is done
                 raise
             import logging
             logging.getLogger(__name__).warning("Owed receiver retirement dropped: task %s is gone", task_id)
@@ -1049,12 +1049,13 @@ def retire_model_consumers(root: Any, task_id: str, consumers: dict[str, int], *
 
     This existing result projection releases only local answer-writing custody.
     It changes no usage row, external process or delegated-run obligation.
-    ``record`` adds facts to each row (an owner's or the mind's ``accepted`` decision).
+    ``record`` adds facts to each row (an owner's or the mind's ``accepted`` decision). A
+    retirement already recorded is kept: the first writer's facts stand, decided in the write.
     """
     try:  # one `retired_model_consumers` row per consumer, one transaction, never the body
         put_handoffs(pathlib.Path(root), task_id, "retired_model_consumers",
                      {consumer: {**(record or {}), "task_attempt": attempt, "retired_at": utc_now_iso()}
-                      for consumer, attempt in consumers.items()})
+                      for consumer, attempt in consumers.items()}, only_absent=True)
     except LookupError as exc:
         raise ValueError("model consumer retirement requires its task result") from exc
 

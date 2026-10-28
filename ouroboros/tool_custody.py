@@ -226,7 +226,9 @@ def _patch_owed(root: Any, holder: str, op: str, change) -> None:
     try:
         with acquisition_budget(ACQUISITION_SLICE_SEC):
             task_store.patch_handoff(root, holder, "launch_handoffs", op, change)
-    except LookupError:
+    except LookupError as exc:
+        if type(exc) is not LookupError:  # a KeyError or IndexError is a defect, never "the task is gone"
+            raise
         log.warning("Owed custody write for %s dropped: task %s no longer exists", op, holder)
 
 
@@ -533,7 +535,17 @@ def retire_process_invocations(root: Any, *, pid: int, process_birth: str, kerne
             continue  # an unreadable row is not this process's; it stays held
         if isinstance(claim, dict) and owned(claim):
             holders.add(str(row[0]))
-    return [op for holder in sorted(holders) for op in _retire_owned_claims(root, holder, owned)]
+    retired: List[str] = []
+    refused: List[Exception] = []
+    for holder in sorted(holders):  # one refusing row never starves the others; the fact stays owed for it
+        try:
+            retired += _retire_owned_claims(root, holder, owned)
+        except Exception as exc:
+            log.warning("Claims of ended process %s on %s not retired yet", pid, holder, exc_info=True)
+            refused.append(exc)
+    if refused:
+        raise refused[0]
+    return retired
 
 def task_process_blockers(drive_root: Any, task_ids: set[str]) -> list[dict]:
     """Strict read of existing canonical executor custody without backend I/O.

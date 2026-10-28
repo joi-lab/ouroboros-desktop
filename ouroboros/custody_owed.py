@@ -25,6 +25,7 @@ _LOCK = threading.Lock()
 _DRAINING = threading.Lock()
 _FACTS: Dict[Hashable, Tuple[Callable[[], Any], str]] = {}
 _wake: Callable[[], Any] | None = None
+_wake_sent = False  # one wake per undrained batch: a drain re-arms it
 
 
 def bind_wake(wake: Callable[[], Any]) -> None:
@@ -33,11 +34,12 @@ def bind_wake(wake: Callable[[], Any]) -> None:
     Binding the same wake again changes nothing: a fact that keeps failing is
     retried at its driver's own cadence, not on every bind.
     """
-    global _wake
+    global _wake, _wake_sent
     if _wake is not None and _wake == wake:
         return
-    _wake = wake
-    if pending():
+    with _LOCK:
+        _wake, _wake_sent = wake, bool(_FACTS)
+    if _wake_sent:
         wake()
 
 
@@ -45,13 +47,16 @@ def owe(key: Hashable, apply: Callable[[], Any], *, label: str = "") -> None:
     """Keep one fact until ``apply`` (an idempotent write) returns without raising.
 
     A newer fact under the same key replaces the older one: the key names the
-    row, and the newer observation carries everything the older one did.
+    row, and the newer observation carries everything the older one did. The
+    driver is woken once per undrained batch.
     """
+    global _wake_sent
     with _LOCK:
         _FACTS[key] = (apply, label)
-    if _wake is not None:
+        wake, _wake_sent = (_wake if not _wake_sent else None), _wake_sent or _wake is not None
+    if wake is not None:
         try:
-            _wake()
+            wake()
         except Exception:
             log.debug("Owed custody wake failed", exc_info=True)
 
@@ -73,10 +78,12 @@ def drain() -> int:
     One failing root never starves another: every fact gets its attempt. The
     drain lock is nonblocking, so a producer never waits behind a store writer.
     """
+    global _wake_sent
     if not _DRAINING.acquire(blocking=False):
         return pending()
     try:
         with _LOCK:
+            _wake_sent = False  # what is owed from now on wakes its driver again
             batch = list(_FACTS.items())
         for key, (apply, label) in batch:
             try:

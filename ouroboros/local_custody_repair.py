@@ -81,7 +81,12 @@ def _this_session(proof: Dict[str, Any]) -> bool:
 
 
 def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
-    """Positive evidence that the local owner ``(pid, birth)`` (with its ``owner_proof``) no longer runs."""
+    """Positive evidence that the local owner ``(pid, birth)`` no longer runs.
+
+    Custody rows pass their ``owner_proof`` (``{}`` when they carry none): on
+    this very pid only the custody session decides. Other stamps (no proof:
+    ``workspace_preparation``'s request owners) keep the birth comparison.
+    """
     from ouroboros.platform_layer import pid_provably_gone, process_start_time
     from ouroboros.process_identity import birth_identity, different_birth, process_kernel_birth
 
@@ -89,13 +94,14 @@ def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
         pid = int(pid or 0)
     except (TypeError, ValueError):
         return False
-    proof = proof if isinstance(proof, dict) else {}
+    custody = isinstance(proof, dict)
+    proof = proof if custody else {}
     birth, kernel = str(birth or ""), str(proof.get("kernel_birth") or "")
     if pid <= 0 or not (birth or kernel):
         return False
-    if pid == os.getpid():
+    if pid == os.getpid() and custody:
         return not _this_session(proof)
-    if pid_provably_gone(pid) or _exited_unreaped(pid):
+    if pid != os.getpid() and (pid_provably_gone(pid) or _exited_unreaped(pid)):
         return True
     if kernel and different_birth(process_kernel_birth(pid) or "", kernel):
         return True
@@ -104,12 +110,12 @@ def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
 
 
 def owner_live(pid: Any, birth: Any, proof: Any = None) -> bool:
-    """Positive evidence the recorded owner STILL runs: its pid carries the same validated birth.
+    """Positive evidence a custody row's owner STILL runs: its pid carries the same validated birth.
 
     Used to word a hold honestly (``tool_custody.tool_handoff_reason``) and to
     refuse a decision to go on beside a live call; retirement never reads it.
     A ``ps`` string, a mixed kind or an unreadable birth is not evidence of
-    either life or death.
+    either life or death; on this very pid the custody session decides.
     """
     from ouroboros.platform_layer import pid_provably_gone, process_start_time
     from ouroboros.process_identity import birth_identity, process_kernel_birth
@@ -166,7 +172,11 @@ def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_bi
     from ouroboros.tool_custody import retire_process_invocations, written_by_this_image
     from ouroboros import usage_store
 
-    claims = retire_process_invocations(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+    refused = None
+    try:
+        claims = retire_process_invocations(root, pid=pid, process_birth=process_birth, kernel_birth=kernel_birth)
+    except Exception as exc:  # the receivers below still retire; the fact stays owed for the refusing row
+        claims, refused = [], exc
     with usage_store.read(pathlib.Path(root)) as txn:
         rows = [row for row in txn.open_attempts() if row.get("local_answer_owner_pid") == pid]
     by_task: Dict[str, Dict[str, int]] = {}
@@ -180,8 +190,15 @@ def retire_process_custody(root: Any, *, pid: int, process_birth: str, kernel_bi
             by_task.setdefault(str(row.get("task_id") or ""), {})[consumer] = attempt
     receivers = 0
     for task_id, consumers in _unretired(root, by_task).items():
-        retire_model_consumers(pathlib.Path(root), task_id, consumers)
-        receivers += len(consumers)
+        try:
+            retire_model_consumers(pathlib.Path(root), task_id, consumers)
+            receivers += len(consumers)
+        except ValueError as exc:
+            if type(exc.__cause__) is not LookupError:
+                raise
+            log.warning("Receivers of ended process %s: task %s is gone, nothing left to retire", pid, task_id)
+    if refused is not None:
+        raise refused
     return {"claims": claims, "receivers": receivers}
 
 
@@ -237,10 +254,9 @@ def _discharge(root: Any, witness_id: str, facts: Dict[str, Any]) -> bool:
     owner = facts.get("local_owner") if isinstance(facts.get("local_owner"), dict) else {}
     if isinstance(consumers, dict) and consumers:
         retire_model_consumers(pathlib.Path(root), task_id, {str(k): int(v) for k, v in consumers.items()})
-    elif not (owner.get("pid") and owner.get("process_birth")):
-        return False
-    else:  # the witness is positive proof its owner ended; raises (kept) until the write lands
+    elif owner.get("pid") and owner.get("process_birth"):  # positive proof its owner ended; kept until it lands
         retire_process_custody(root, pid=int(owner["pid"]), process_birth=str(owner["process_birth"]))
+    # A witness naming nothing retirable is discharged as it is: there is nothing to apply.
     obligations.remove(root, WITNESS_SET, witness_id)
     return True
 
@@ -348,7 +364,7 @@ def receiver_reason(attempt: Dict[str, Any]) -> str:
     proof = attempt.get("local_answer_owner_proof") if isinstance(attempt.get("local_answer_owner_proof"), dict) else {}
     try:
         live = owner_live(attempt.get("local_answer_owner_pid"), attempt.get("local_answer_owner_birth"),
-                          proof if proof.get("pid") == attempt.get("local_answer_owner_pid") else None)
+                          proof if proof.get("pid") == attempt.get("local_answer_owner_pid") else {})
     except Exception:
         live = False  # an unreadable probe proves nothing either way
     return "local_call_live" if live else "local_completion_unknown"
@@ -408,8 +424,12 @@ def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str]
             return stamp_task_result_schema({**current, "launch_handoffs": rows,
                                              "retired_tool_invocations": retired}) if landed else None
         if decided:
-            patch_document(pathlib.Path(root), holder, accept)
-            accepted.extend(landed)
+            try:  # one refusing row never takes the others' decisions with it
+                patch_document(pathlib.Path(root), holder, accept)
+                accepted.extend(landed)
+            except Exception:
+                log.warning("Named decision on %s not recorded; its calls stay held", holder, exc_info=True)
+                refused.extend({"id": op, "task_id": holder, "reason": "unwritten"} for op in decided)
     attempts = [row for row in tree_model_requests(pathlib.Path(root), root_task_id)  # the census's own read
                 if str(row.get("attempt_id") or "") in wanted]
     for attempt in attempts:
@@ -418,9 +438,14 @@ def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str]
         if why != "no_local_receiver" and not _unretired(root, {str(attempt.get("task_id") or ""): {consumer: number}}):
             continue  # already retired: nothing held, nothing to record twice
         if judged(str(attempt["attempt_id"]), str(attempt.get("task_id") or ""), why):
-            retire_model_consumers(pathlib.Path(root), str(attempt.get("task_id") or ""), {consumer: number},
-                                   record={"accepted": {**by, "reason": why}})
-            accepted.append(str(attempt["attempt_id"]))
+            try:
+                retire_model_consumers(pathlib.Path(root), str(attempt.get("task_id") or ""), {consumer: number},
+                                       record={"accepted": {**by, "reason": why}})
+                accepted.append(str(attempt["attempt_id"]))
+            except Exception:
+                log.warning("Named decision on receiver %s not recorded", attempt["attempt_id"], exc_info=True)
+                refused.append({"id": str(attempt["attempt_id"]), "task_id": str(attempt.get("task_id") or ""),
+                                "reason": "unwritten"})
     return {"accepted": accepted, "refused": refused,
             "unmatched": sorted(wanted - set(accepted) - {row["id"] for row in refused})}
 
@@ -445,7 +470,7 @@ def _repair_absent_receivers(root: Any, members: Optional[set], root_task_id: Op
             continue
         proof = row.get("local_answer_owner_proof") if isinstance(row.get("local_answer_owner_proof"), dict) else {}
         if owner_ended(row.get("local_answer_owner_pid"), row.get("local_answer_owner_birth"),
-                       proof if proof.get("pid") == row.get("local_answer_owner_pid") else None):
+                       proof if proof.get("pid") == row.get("local_answer_owner_pid") else {}):
             task_id = str(row.get("task_id") or "")
             by_task.setdefault(task_id, {})[consumer] = attempt
             pids[task_id] = row.get("local_answer_owner_pid")

@@ -398,7 +398,21 @@ def test_only_a_census_of_unknown_outcomes_offers_going_on_and_every_door_carrie
 
 def test_an_earlier_image_of_this_pid_is_retired_and_this_images_claims_never_are(tmp_path, monkeypatch):
     """An exec keeps pid, births and attempt; only the custody session tells the images apart."""
+    from ouroboros import model_wait, usage_accounting as ua
+
     here = tool_custody.owner_proof()
+    write_task_result(tmp_path, "t1", "running", root_task_id="root",
+                      billing_group={"billing_group_id": "root", "billing_group_limit_usd": 20.0,
+                                     "billing_group_limit_source": "initial_task_admission",
+                                     "billing_group_limit_revision": "admission-1"})
+    monkeypatch.setenv("TOTAL_BUDGET", "1000")
+    receiver = model_wait.TaskModelWait(task={"id": "t1", "_attempt": 1}, drive_root=tmp_path,
+                                        event_queue=None, worker_slot_held=True)  # this image's live receiver
+    with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, task_id="t1", root_task_id="root")):
+        with model_wait.operation_wait_scope(receiver):
+            with pytest.raises(RuntimeError):
+                ua.execute_physical_attempt(ua.AttemptRequest(model="m", provider="t", reservation_usd=.2),
+                                            lambda: (_ for _ in ()).throw(RuntimeError("response unknown")))
     kernel = here["kernel_birth"] or "darwin-start:1.000001"
     _claim(tmp_path, "t1", "op-old", pid=os.getpid(), birth="b", kernel=kernel)  # session: an earlier image's
     _claim(tmp_path, "t1", "op-now", pid=os.getpid(), birth="b", extra={"owner_proof": {**here, "kernel_birth": kernel}})
@@ -407,6 +421,8 @@ def test_an_earlier_image_of_this_pid_is_retired_and_this_images_claims_never_ar
     assert {row["task_id"] for row in retired} == {"t1"}, "one proof retires that process's claims in every task"
     assert "op-old" not in _claims(tmp_path, "t1") and "op-legacy" not in _claims(tmp_path, "t2")
     assert "op-now" in _claims(tmp_path, "t1"), "a claim this live image wrote is never retired"
+    retired_receivers = load_task_result(tmp_path, "t1").get("retired_model_consumers") or {}
+    assert receiver.answer_consumer_id not in retired_receivers, "nor a receiver this live image bound"
     assert tool_custody.retire_process_invocations(tmp_path, pid=os.getpid(), process_birth="b",
                                                    kernel_birth=kernel) == [], "not even by an exit-shaped selector"
     assert repair.owner_live(os.getpid(), "b", here) and not repair.owner_live(os.getpid(), "b", {"pid": os.getpid()})
@@ -435,7 +451,10 @@ def test_rebinding_the_same_wake_does_not_rerun_its_duty():
     custody_owed.bind_wake(wake.set)  # the server re-binds on every tick
     assert not wake.is_set(), "a fact that keeps failing waits for its driver's own cadence"
     custody_owed.owe("another fact", lambda: None, label="next")
-    assert wake.is_set(), "a new fact still wakes it"
+    assert not wake.is_set(), "one wake per undrained batch: the driver has not drained since"
+    assert custody_owed.drain() == 1, "the busy fact stays; the drain re-arms the wake"
+    custody_owed.owe("a later fact", lambda: None, label="later")
+    assert wake.is_set(), "what is owed after a drain wakes the driver again"
 
 
 def test_the_servers_delivery_duty_writes_what_the_process_owes(tmp_path, monkeypatch):
@@ -494,3 +513,136 @@ def test_replacing_the_pools_last_dead_member_owes_its_exit(tmp_path, monkeypatc
     assert lifecycle.retire_or_replace_worker(0, dead) == "replaced"
     assert custody_owed.labels() == ["exit:42"], "a replacement door owes the ended member's exit too"
     assert custody_owed.drain() == 0 and "op-a" not in _claims(tmp_path, "t1")
+
+
+# --- review round 2 ------------------------------------------------------------------------------------------------
+
+
+def test_a_request_stamp_of_this_live_process_is_never_ended_by_the_custody_session_rule():
+    """``workspace_preparation`` judges request owners with no ``owner_proof``: the birth comparison stays."""
+    own = platform_layer.process_start_time(os.getpid())
+    assert repair.owner_ended(os.getpid(), own) is False, "a stamp without a session is not a custody row"
+    assert repair.owner_ended(os.getpid(), own, {}) is True, "a custody row without this image's session is"
+    assert repair.owner_ended(os.getpid(), own, tool_custody.owner_proof()) is False
+
+
+def test_a_worker_parked_for_its_owner_services_what_it_owes(monkeypatch):
+    import queue as stdqueue
+
+    from ouroboros import owner_wait
+    from ouroboros.model_wait import ModelWaitInterrupted
+
+    written, polls = [], []
+
+    def write():
+        written.append(1)
+        if len(written) == 1:
+            raise OSError("the store is busy")
+
+    def hold(_ctx):
+        polls.append(1)
+        return "test_stop" if written == [1, 1] else ""
+    custody_owed.owe("late", write, label="late-call")
+    monkeypatch.setattr("ouroboros.budget_pause._hold_control_reason", hold)
+    ctx = SimpleNamespace(task_id="t1", task_attempt=1, pending_events=[], drive_root="/nonexistent")
+    empty = SimpleNamespace(get=lambda timeout: (_ for _ in ()).throw(stdqueue.Empty()))
+    with pytest.raises(ModelWaitInterrupted):
+        owner_wait.worker_owner_wait(0, empty, SimpleNamespace(put=lambda _m: None), ctx, {"wait_id": "w"})
+    assert written == [1, 1] and custody_owed.pending() == 0, "the park's poll retried and landed it"
+
+
+def test_the_named_decision_applies_even_when_the_repair_before_it_fails(tmp_path, monkeypatch):
+    from ouroboros.control_actor import accepting_unknown
+    from supervisor import continuation_admission as admission
+
+    _platform(monkeypatch)
+    _claim(tmp_path, "A", "op-A", pid=63888, tree="A")
+    monkeypatch.setattr(admission, "conflicting_writers", lambda *_a, **_k: [])
+    monkeypatch.setattr(repair, "repair_ended_local_custody",
+                        lambda *_a, **_k: (_ for _ in ()).throw(OSError("repair refused")))
+    q = SimpleNamespace(DRIVE_ROOT=tmp_path, append_jsonl=lambda _path, _row: None)
+    with accepting_unknown(["op-A"], "go on"):
+        admission.action_writers(q, "A", drive_root=tmp_path)
+    assert _retired(tmp_path, "A")["op-A"]["effect_outcome"] == "unknown_accepted"
+
+
+def test_one_refusing_row_never_starves_the_other_tasks_of_an_ended_process(tmp_path, monkeypatch):
+    _claim(tmp_path, "t-bad", "op-bad", pid=63888)
+    _claim(tmp_path, "t-good", "op-good", pid=63888)
+    retire = tool_custody._retire_owned_claims
+
+    def refusing(root, holder, owned):
+        if holder == "t-bad":
+            raise ValueError("tool_invocation_authority_unreadable")
+        return retire(root, holder, owned)
+    monkeypatch.setattr(tool_custody, "_retire_owned_claims", refusing)
+    assert repair.retire_ended_process(tmp_path, pid=63888, process_birth=INCIDENT_BIRTH)["owed"] is True
+    assert "op-good" not in _claims(tmp_path, "t-good"), "the other task's claim retired anyway"
+    assert "op-bad" in _claims(tmp_path, "t-bad") and custody_owed.labels() == ["exit:63888"]
+
+
+def test_a_receiver_retirement_owed_for_a_task_that_is_gone_is_discharged(tmp_path):
+    from ouroboros import model_wait
+
+    model_wait._owe_consumer_retirement(tmp_path, "gone-task", {"consumer": 1})
+    assert custody_owed.drain() == 0, "nothing is left to retire on a task whose row is gone"
+
+
+def test_two_unconfirmed_effects_are_worded_in_the_plural():
+    from ouroboros.work_stop import tool_handoff_words
+
+    words = tool_handoff_words({"task_id": "t", "tool": "run_command", "reason": "returned_effect_unconfirmed",
+                                "effects": ["started process", "MCP request"]})
+    assert words.endswith("its started process and MCP request are not confirmed")
+
+
+def test_retiring_a_non_last_dead_member_owes_its_exit(tmp_path, monkeypatch):
+    """The incident's own door: idle retirement of a member of a pool that keeps others."""
+    from supervisor import worker_pool_lifecycle as lifecycle, workers
+
+    from tests.test_owner_wait_pool import InputQueue, Process
+
+    dead = SimpleNamespace(wid=0, proc=Process(42), in_q=InputQueue(), process_birth=INCIDENT_BIRTH, kernel_birth="")
+    dead.proc.alive, dead.proc.exitcode = False, 0
+    other = SimpleNamespace(wid=1, proc=Process(43), in_q=InputQueue())
+    monkeypatch.setattr(workers, "WORKERS", {0: dead, 1: other})
+    monkeypatch.setattr(workers, "DRIVE_ROOT", tmp_path)
+    monkeypatch.setattr(workers, "_WORKER_POOL_DISABLED_REASON", "")
+    monkeypatch.setattr("supervisor.worker_process.close_worker_stop_channel", lambda _proc: None)
+    _claim(tmp_path, "t1", "op-a", pid=42)
+    assert lifecycle.retire_or_replace_worker(0, dead) == "retired"
+    assert custody_owed.labels() == ["exit:42"]
+    assert custody_owed.drain() == 0 and "op-a" not in _claims(tmp_path, "t1")
+
+
+
+def test_a_decision_that_lands_on_one_row_is_journalled_even_when_another_row_refuses(tmp_path, monkeypatch):
+    from ouroboros import task_store
+    from ouroboros.control_actor import accepting_unknown
+    from supervisor import continuation_admission as admission
+
+    _platform(monkeypatch)
+    _claim(tmp_path, "A", "op-A", pid=63888, tree="A")
+    _claim(tmp_path, "A-child", "op-child", pid=63888, tree="A")
+    patch = task_store.patch_document
+    monkeypatch.setattr(task_store, "patch_document", lambda root, holder, mutator: (
+        (_ for _ in ()).throw(OSError("busy")) if holder == "A-child" else patch(root, holder, mutator)))
+    monkeypatch.setattr(admission, "conflicting_writers", lambda *_a, **_k: [])
+    events = []
+    q = SimpleNamespace(DRIVE_ROOT=tmp_path, append_jsonl=lambda _path, row: events.append(row))
+    with accepting_unknown(["op-A", "op-child"], "go on"):
+        admission.action_writers(q, "A", drive_root=tmp_path)
+    [event] = [row for row in events if row["type"] == "local_custody_unknown_accepted"]
+    assert event["accepted"] == ["op-A"] and event["refused"] == [
+        {"id": "op-child", "task_id": "A-child", "reason": "unwritten"}]
+    assert "op-child" in _claims(tmp_path, "A-child"), "the refused row stays held as it was"
+
+
+def test_a_retirement_never_overwrites_a_recorded_decision(tmp_path):
+    from ouroboros import model_wait
+
+    write_task_result(tmp_path, "t1", "running", root_task_id="root")
+    by = {"actor": "owner", "text": "go on", "at": "2026-10-28T07:00:00+00:00"}
+    model_wait.retire_model_consumers(tmp_path, "t1", {"c": 1}, record={"accepted": by})
+    model_wait.retire_model_consumers(tmp_path, "t1", {"c": 1})  # a death proof that read before the decision
+    assert load_task_result(tmp_path, "t1")["retired_model_consumers"]["c"]["accepted"] == by

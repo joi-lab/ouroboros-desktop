@@ -108,9 +108,10 @@ def test_only_a_validated_birth_identity_can_prove_a_different_process(monkeypat
     monkeypatch.setattr(platform_layer, "pid_provably_gone", lambda _pid: False)
     monkeypatch.setattr("ouroboros.process_identity.process_zombie", lambda _pid: False)
     assert repair.owner_ended(4242, recorded) is ended
-    # This very pid is decided by the custody session alone: this image's rows carry it.
+    assert repair.owner_ended(os.getpid(), recorded) is ended, "a stamp with no proof keeps the birth comparison"
+    # A custody row on this very pid is decided by the custody session alone: this image's rows carry it.
     assert repair.owner_ended(os.getpid(), recorded, owner_proof()) is False
-    assert repair.owner_ended(os.getpid(), recorded) is True, "a sessionless row is an earlier image's"
+    assert repair.owner_ended(os.getpid(), recorded, {}) is True, "a sessionless custody row is an earlier image's"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is the POSIX wall-clock fallback")
@@ -127,6 +128,7 @@ def test_two_timezone_readings_of_this_living_process_are_not_its_death(monkeypa
         pytest.skip("this ps does not render a timezone-dependent lstart")
     monkeypatch.setattr(platform_layer, "process_start_time", lambda _pid: moscow)
     assert repair.owner_ended(os.getppid(), utc) is False, "another living pid: two readings prove nothing"
+    assert repair.owner_ended(os.getpid(), utc) is False
     assert repair.owner_ended(os.getpid(), utc, owner_proof()) is False
 
 

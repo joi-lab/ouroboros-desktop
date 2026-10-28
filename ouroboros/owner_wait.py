@@ -457,11 +457,15 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
     deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))
     parked = resume_requested = False
     outcome = "unknown"
+    from ouroboros import custody_owed
+
     while True:
         try:
             command = in_q.get(timeout=1.0)
         except queue.Empty:
             command = None
+        if custody_owed.pending():  # this park's own poll services what the worker owes (its wake lands here too)
+            custody_owed.drain()
         if isinstance(command, dict) and command.get("type") == "owner_wait":
             if all(command.get(key) == identity[key] for key in ("task_id", "task_attempt", "wait_id")):
                 phase = command.get("phase")
