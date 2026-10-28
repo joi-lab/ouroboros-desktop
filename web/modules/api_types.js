@@ -330,9 +330,20 @@
  *   through_seq, source{kind: run_events|timeline_window, read_through?, ref?,
  *   provisional?}, parts[{kind: message|thinking|problem, actor, text, seq?,
  *   last_seq?, cuts?[[seq, Unicode code-point offset]], cuts_truncated?, chars?,
- *   truncated?}], technical?{count, labels, recent, seqs?, seqs_truncated?},
- *   gaps?[{after_seq, through_seq, reason, final?}],
- *   omitted?, latest_message?}. Identity is (run_id, seq); host progress about
+ *   truncated?, speech?{key, op: fragment|complete}, updated?, carried?, final?}],
+ *   technical?{count, labels, recent, seqs?, seqs_truncated?},
+ *   gaps?[{after_seq, through_seq, reason, final?}], speech_abandoned?[{actor,
+ *   key, seq?}], omitted?, speech_omitted?[{actor, key, seq, last_seq}],
+ *   speech_omitted_truncated?, latest_message?{seq?, actor, text, speech?{key, op:
+ *   fragment|complete|abandoned}, final?}}. Identity is (run_id, seq); a gap
+ *   inside the read range (reason not_served|unreadable|not_read) names events
+ *   not read whole, which no text joins across, and `speech_omitted` (present
+ *   whenever a message preview is omitted) names the keyed pieces left out of the
+ *   preview, which no text joins across either. An engine-keyed message is one
+ *   utterance per (run_id, actor, speech.key): a `complete` part's text replaces
+ *   its `fragment` drafts (`updated`: they differed; `carried`: equal, and earlier
+ *   frame texts showed its first N code points whole), `final` is the typed final
+ *   answer, never keyed. Host progress about
  *   the executor, never narration or execution evidence; `source.ref` names
  *   retained redacted JSONL (confined task-file `?source=`, 503 where unsupported).
  *   Incomplete preview identity is disclosed; a preview is not the whole journal.

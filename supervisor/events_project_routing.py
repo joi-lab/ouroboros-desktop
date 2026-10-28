@@ -88,6 +88,96 @@ def _routing_notice_reply(ctx: Any, evt: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+def _routing_notice_ack_fields(ctx: Any, evt: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
+    """What an ACK sent from these receipt fields adds when it carries the act's owner notice:
+    itself as the selected carrier and the owner message it answers; ``{}`` for a quiet ACK.
+    Neither is a row field, and neither proves that a transport delivered anything."""
+    if not _routing_notice_carried(fields["status"], str(fields.get("cause") or ""), fields.get("options"),
+                                   fields.get("attachment_manifest")):
+        return {}
+    return {"routing_notice_carrier": "routing_ack", "reply_to": _routing_notice_reply(ctx, evt)}
+
+
+# Acts that pass the owner's words on to a running work: their receipt names that work and its room.
+_PASSED_ON_ACTS = frozenset({"steer_task", "mailbox_delivery"})
+
+
+def _routing_receipt_fields(
+    ctx: Any,
+    evt: Dict[str, Any],
+    *,
+    action: str,
+    target: str = "",
+    target_label: str = "",
+    status: str,
+    reason: str = "",
+    options: Optional[list] = None,
+    attachment_manifest: Optional[list] = None,
+    reasoning_effort: str = "",
+    **supplied: Any,
+) -> Dict[str, Any]:
+    """The fields one routing receipt states, read once (#968).
+
+    The supervisor's token-bound receipts and the server's direct one write
+    their durable row and send their live frame from this one dict, so a second
+    read can no longer make the two disagree. Words passed on to a running work
+    name that work and its room (the relay's facts): a relay names the room as it
+    always did, any other act only an ACTIVE Project it landed in. Another landed
+    act carries the Project address of its registered binding. A supervisor relay
+    whose work cannot be read fails as it always did; for any other act the work's
+    facts are added enrichment, so the receipt falls back to that address rather
+    than being lost. ``supplied`` is the caller's own presentation, forwarded as
+    given and never chosen here; only ``ROUTING_RECEIPT_FIELDS`` reach the durable row.
+    """
+    from ouroboros.project_dialogue import routing_refusal_cause, routing_target_label
+
+    if target and not str(target_label or "").strip():
+        target_label = routing_target_label(ctx.DRIVE_ROOT, action, target, task=evt, project_id=str(evt.get("project_id") or ""))
+    fields: Dict[str, Any] = {**supplied, "action": action, "target": target, "target_label": target_label, "status": status}
+    optional = {
+        "routing_token": str(evt.get("routing_token") or "").strip(),
+        # Q3=A: the owner-facing sentence for a REFUSED act ("" for a landed row or the picker).
+        "cause": routing_refusal_cause(action, status, reason, options),
+        "reasoning_effort": str(reasoning_effort or ""),
+    }
+    fields.update({key: value for key, value in optional.items() if value})
+    if options is not None:
+        fields["options"] = options
+    if attachment_manifest is not None:
+        fields["attachment_manifest"] = attachment_manifest
+    if not (target and action in _PASSED_ON_ACTS):
+        fields.update(_routing_project_address(ctx, target, status))
+        return fields
+    from ouroboros.owner_relay import relay_target_facts
+
+    try:
+        facts = relay_target_facts(ctx.DRIVE_ROOT, target, evt.get("relay_target"))
+    except Exception:
+        if evt.get("relay_id"):
+            raise  # before any row is written, as a relay's receipt always failed
+        log.debug("Routing work facts unavailable for %s", target, exc_info=True)
+        fields.update(_routing_project_address(ctx, target, status))
+        return fields
+    if not evt.get("relay_id") and not _routing_room_open(ctx, str(facts.get("project_id") or ""), status):
+        # The work keeps its name; a deleting or tombstoned room is no address to open.
+        facts = {key: value for key, value in facts.items() if key not in ("project_id", "project_chat_id")}
+    fields.update(facts)
+    return fields
+
+
+def _routing_room_open(ctx: Any, project_id: str, status: str) -> bool:
+    """Whether a landed act's receipt may open this Project's room: an ACTIVE one only (``_routing_project_address``)."""
+    if not project_id or status not in {"scheduled", "delivered"}:
+        return False
+    try:
+        from ouroboros.projects_registry import get_project
+
+        return get_project(ctx.DRIVE_ROOT, project_id) is not None
+    except Exception:
+        log.debug("Routing room lifecycle unavailable for %s", project_id, exc_info=True)
+        return False
+
+
 def _emit_routing_receipt(
     ctx: Any,
     evt: Dict[str, Any],
@@ -104,43 +194,24 @@ def _emit_routing_receipt(
     reasoning_effort: str = "",
 ) -> Dict[str, Any]:
     """Persist and publish one token-bound routing annotation receipt."""
-    from ouroboros.project_dialogue import routing_refusal_cause
-
-    if target and not str(target_label or "").strip():
-        from ouroboros.project_dialogue import routing_target_label
-
-        target_label = routing_target_label(ctx.DRIVE_ROOT, action, target, task=evt, project_id=str(evt.get("project_id") or ""))
+    fields = _routing_receipt_fields(
+        ctx, evt, action=action, target=target, target_label=target_label, status=status, reason=reason,
+        options=options, attachment_manifest=attachment_manifest, reasoning_effort=reasoning_effort,
+    )
     client_message_id = str(evt.get("client_message_id") or "").strip()
-    routing_token = str(evt.get("routing_token") or "").strip()
     annotation_status = "not_applicable"
-    project_address = _routing_project_address(ctx, target, status)
-    if evt.get("relay_id"):
-        from ouroboros.owner_relay import relay_target_facts
-        project_address.update(relay_target_facts(ctx.DRIVE_ROOT, target, evt.get("relay_target")))
-    # Q3=A: the owner-facing sentence for a REFUSED act (host table; "" for a
-    # landed row or the picker), computed once for the durable row and the ack.
-    cause = routing_refusal_cause(action, status, reason, options)
     if client_message_id:
         try:
-            from ouroboros.project_dialogue import append_chat_annotation
+            from ouroboros.project_dialogue import ROUTING_RECEIPT_FIELDS, append_chat_annotation
 
             annotation_status = (
                 "persisted"
                 if append_chat_annotation(
                     ctx.DRIVE_ROOT,
                     client_message_id,
-                    action=action,
-                    target=target,
-                    target_label=target_label,
-                    status=status,
-                    routing_token=routing_token,
                     reason=reason,
                     detail=detail,
-                    cause=cause,
-                    options=options,
-                    attachment_manifest=attachment_manifest,
-                    reasoning_effort=reasoning_effort,
-                    **project_address,
+                    **{key: value for key, value in fields.items() if key in ROUTING_RECEIPT_FIELDS},
                 )
                 else "failed"
             )
@@ -165,96 +236,45 @@ def _emit_routing_receipt(
         "reason": effective_reason,
         "detail": str(detail or ""),
         "annotation_status": annotation_status,
-        "routing_token": routing_token,
-        "target_label": str(target_label or ""),
+        "routing_token": str(fields.get("routing_token") or ""),
+        "target_label": str(fields["target_label"] or ""),
+        # What the row was written from: a publish deferred past the admission record sends exactly this.
+        "fields": fields,
     }
     if attachment_manifest is not None:
         receipt["attachment_manifest"] = _events()._routing_attachments(attachment_manifest) or []
     # The carrier SELECTED for the act's owner notice (never proof that a transport
     # delivered it): the ACK when one carrying it was handed over; for a known refusal
     # without one, the System row its path writes; "" when there is nothing to say.
-    receipt["routing_notice_carrier"] = "system" if cause and publish else ""
+    receipt["routing_notice_carrier"] = "system" if fields.get("cause") and publish else ""
     if annotation_status == "failed":
         # Fail closed: no ACK outruns its durable row, so a landed act reads unconfirmed
         # and a picker is never clickable without its authority.
         return receipt
     if publish:
-        carrier = _publish_routing_ack(
-            ctx,
-            evt,
-            action=action,
-            target=target,
-            target_label=target_label,
-            status=effective_status,
-            options=options,
-            attachment_manifest=attachment_manifest,
-            cause=cause,
-            reasoning_effort=reasoning_effort,
-        )
+        carrier = _publish_routing_ack(ctx, evt, {**fields, "status": effective_status})
         receipt["routing_notice_carrier"] = carrier or receipt["routing_notice_carrier"]
     return receipt
 
 
-def _publish_routing_ack(
-    ctx: Any,
-    evt: Dict[str, Any],
-    *,
-    action: str,
-    target: str,
-    target_label: str = "",
-    status: str,
-    options: Optional[list] = None,
-    attachment_manifest: Optional[list] = None,
-    cause: str = "",
-    reasoning_effort: str = "",
-) -> str:
-    """Publish a live non-bubble acknowledgement after durable authority exists.
+def _publish_routing_ack(ctx: Any, evt: Dict[str, Any], fields: Dict[str, Any]) -> str:
+    """Publish a live non-bubble acknowledgement after durable authority exists:
+    the fields its row was written from (``_routing_receipt_fields``), never a second read.
 
-    An ACK carrying the act's owner notice names itself its carrier and the owner
-    message it answers; the return is that carrier ("" for a quiet ACK or none sent).
+    An ACK carrying the act's owner notice also names itself its carrier and the owner
+    message it answers (``_routing_notice_ack_fields``, #966). The return is that carrier
+    once the bus took the ACK without raising ("" for a quiet ACK or none sent).
     """
     try:
-        if target and not str(target_label or "").strip():
-            from ouroboros.project_dialogue import routing_target_label
-
-            target_label = routing_target_label(ctx.DRIVE_ROOT, action, target, task=evt, project_id=str(evt.get("project_id") or ""))
-        client_message_id = str(evt.get("client_message_id") or "").strip()
         try:
             chat_id = int(evt.get("chat_id") or 0)
         except (TypeError, ValueError):
             chat_id = 0
-        bridge = getattr(ctx, "bridge", None)
-        ack = getattr(bridge, "send_routing_ack", None)
+        ack = getattr(getattr(ctx, "bridge", None), "send_routing_ack", None)
         if callable(ack):
-            ack_kwargs = {
-                "client_message_id": client_message_id,
-                "action": action,
-                "target": target,
-                "target_label": target_label,
-                "status": status,
-                **_routing_project_address(ctx, target, status),
-            }
-            if evt.get("relay_id"):
-                from ouroboros.owner_relay import relay_target_facts
-                ack_kwargs.update(relay_target_facts(ctx.DRIVE_ROOT, target, evt.get("relay_target")))
-            if options is not None:
-                ack_kwargs["options"] = options
-            if attachment_manifest is not None:
-                ack_kwargs["attachment_manifest"] = attachment_manifest
-            if str(cause or ""):
-                ack_kwargs["cause"] = str(cause)
-            if reasoning_effort:
-                ack_kwargs["reasoning_effort"] = str(reasoning_effort)
-            if str(evt.get("routing_token") or ""):
-                ack_kwargs["routing_token"] = str(evt.get("routing_token"))
-            carrier = "routing_ack" if _routing_notice_carried(status, cause, options, attachment_manifest) else ""
-            if carrier:
-                ack_kwargs.update(routing_notice_carrier=carrier, reply_to=_routing_notice_reply(ctx, evt))
-            ack(
-                chat_id,
-                **ack_kwargs,
-            )
-            return carrier
+            notice = _routing_notice_ack_fields(ctx, evt, fields)
+            ack(chat_id, client_message_id=str(evt.get("client_message_id") or "").strip(), **fields, **notice)
+            return str(notice.get("routing_notice_carrier") or "")
     except Exception:
         log.debug("Routing typed ack failed", exc_info=True)
     return ""
@@ -633,15 +653,7 @@ def _promote_chat_to_task_outcome(evt: Dict[str, Any], ctx: Any) -> Dict[str, An
             from ouroboros.project_handoff import enqueue_project_handoff
 
             enqueue_project_handoff(ctx.DRIVE_ROOT, str(outcome.get("task_id") or task_id))
-            _publish_routing_ack(
-                ctx,
-                evt,
-                action=receipt_action,
-                target=str(outcome.get("task_id") or task_id),
-                target_label=str(receipt.get("target_label") or ""),
-                status="scheduled",
-                attachment_manifest=_events()._routing_attachments(outcome.get("attachment_manifest")),
-            )
+            _publish_routing_ack(ctx, evt, receipt["fields"])
             if suggested_name:
                 _broadcast_task_named(
                     {"type": "task_named", "task_id": str(outcome.get("task_id") or task_id),

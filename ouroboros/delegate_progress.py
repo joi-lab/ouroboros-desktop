@@ -73,11 +73,17 @@ def _bounded(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for key in ("attemptId", "harnessId", "messageId", "outcome"):
             if isinstance(row.get(key), str) and row[key]:
                 item[key] = _label(row[key])
+        # The engine's opaque utterance key is compared whole, never cut.
+        for key in ("speechKey", "speechOp"):
+            if isinstance(row.get(key), str) and row[key]:
+                item[key] = row[key]
         if row.get("textKind") in _TEXT_KINDS and isinstance(row.get("detail"), str):
             # The typed body preserves stream whitespace; the engine's title is
             # only a preview. Keep the same disclosed bound, without a second copy.
             item.update(title=_label(row["detail"]), textKind=row["textKind"],
                         textDelta=row.get("textDelta") is True)
+            if row.get("textFinal") is True:
+                item["textFinal"] = True
         out.append(item)
     return out
 
@@ -534,6 +540,7 @@ def _fitted_pending(payload: Dict[str, Any], pending: List[Dict[str, Any]],
 
 def live_line(run_id: str, advance: _Advance) -> str:
     parts: List[str] = []
+    keyed: Dict[Any, int] = {}
     previous_stream = None
     for row in advance.events:
         text_kind = row.get("textKind")
@@ -543,6 +550,18 @@ def live_line(run_id: str, advance: _Advance) -> str:
             actor = "/".join(str(row[key]) for key in ("harnessId", "attemptId") if row.get(key))
             if actor:
                 text = f"[{actor}] {text}"
+        # One engine-keyed utterance: its fragments join and its complete text replaces them.
+        scope = (row.get("attemptId"), row.get("harnessId"), row.get("speechKey"))
+        if is_text and text_kind == "message" and scope[2] and row.get("speechOp") in ("fragment", "complete") \
+                and not row.get("textFinal"):
+            if scope in keyed:
+                at = keyed[scope]
+                parts[at] = text if row["speechOp"] == "complete" else parts[at] + text
+            elif text:
+                keyed[scope] = len(parts)
+                parts.append(text)
+            previous_stream = None
+            continue
         stream = (text_kind, row.get("attemptId"), row.get("harnessId")) \
             if is_text and row.get("textDelta") is True else None
         if not text:

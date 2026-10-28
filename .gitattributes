@@ -16,6 +16,9 @@ tests/fixtures/skill_publish_scanner/*.fixture text eol=lf
 # Generated engine schemas are SHA-pinned to the published contract bytes.
 tests/fixtures/claudexor_image_contract/*.schema.json text eol=lf
 
+# Engine-normalized speech journals are SHA-pinned to the engine's export (provenance.json).
+tests/fixtures/claudexor_speech/** text eol=lf
+
 # Recorded provider wire (SSE / JSON bodies) is byte-exact evidence: no line-ending
 # conversion at commit or checkout, so the replay corpus always sees the recorded bytes.
 tests/fixtures/llm_wire/** -text -whitespace
