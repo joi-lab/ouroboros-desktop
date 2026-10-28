@@ -120,6 +120,17 @@ def runs(root, where: str = "", params: tuple = ()):
     return _decode_all({rid: json_loads(text) for rid, text in raw.items()})
 
 
+# The held rows are a few current runs among every closed one. Under the planner statistics the maintenance
+# child's ANALYZE writes, SQLite would rather walk every run in run_id order than sort these few (always before
+# 3.46: tests/test_cost_contract.py B7); ``unlikely`` states the selection is rare, so the read stays on its index.
+HELD_WHERE = "unlikely(state=?)"
+
+
+def held_runs(root, also: str = "", params: tuple = ()):
+    """The held runs, narrowed by ALSO (a predicate over the row with PARAMS)."""
+    return runs(root, f"{HELD_WHERE} AND ({also})" if also else HELD_WHERE, (HELD, *params))
+
+
 def health_runs(root, task_id: str = ""):
     """The rows the context's delegated-run lines can name, in ONE read and ``run_id`` order:
     the reader's own runs, every held run (an undisposed patch is held) and every run whose
@@ -264,7 +275,7 @@ def snapshot(root, closed: bool = True):
     """One read: held runs and pending invocations, optionally including owed closing receipts."""
     with store.open_store(root, write=False) as txn:
         debts = txn.set_rows("delegated_runs") if closed else {}
-        held = txn.custody_rows("state=?", (HELD,))
+        held = txn.custody_rows(HELD_WHERE, (HELD,))
         invocations = [facts for key, facts in txn.set_rows("custody_open").items() if key.startswith("invocation:")]
     from ouroboros.delegate_pending import current_rows
 

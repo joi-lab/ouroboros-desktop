@@ -92,7 +92,10 @@ def members_in(txn: store.Txn, name: str) -> dict[str, dict]:
     if name in store.FLAG_COLUMNS:
         where = f"{store.FLAG_COLUMNS[name]}=1"
     elif name == "nonterminal":
-        where = "status IN ('running', 'interrupted')"
+        # The few live tasks among the whole history: ``unlikely`` keeps the read on the status index, which the
+        # maintenance child's ANALYZE statistics would otherwise trade for a walk of every task in task_id order
+        # (any SQLite, by the table's shape: tests/test_store_capture_readers.py).
+        where = "unlikely(status IN ('running', 'interrupted'))"
     else:
         return rows
     for record in txn.conn.execute(f"SELECT {','.join(_FACT_COLUMNS)} FROM tasks WHERE {where} ORDER BY task_id"):

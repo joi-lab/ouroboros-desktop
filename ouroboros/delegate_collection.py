@@ -743,7 +743,7 @@ class BodyRuntime:
     def tick(self):
         if not self.active:
             return
-        entries = current.runs(self.root, "state=?", (current.HELD,))
+        entries = current.held_runs(self.root)
         with self.lock:
             for jobs in (self.reads, self.collections):
                 for rid, future in list(jobs.items()):

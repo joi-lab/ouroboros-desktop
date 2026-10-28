@@ -449,3 +449,39 @@ def test_the_open_usage_set_crosses_once_per_statement(data_root):  # noqa: F811
     crossed, statements = _crossed(data_root, captured)
     assert crossed <= statements and usage_store.decode_attempts(captured()) != []
     assert _crossed(data_root, stepped)[0] > len(usage_store.decode_attempts(captured()))  # every row, one by one
+
+
+def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_path):
+    """The held custody runs and the live tasks are a few rows among the whole closed history: once the
+    maintenance child's ANALYZE wrote planner statistics, their reads stay on their indexes and cost the same
+    SQLite VM steps over 10 and 300 closed rows of each. An older SQLite (< 3.46) would otherwise walk every row
+    in key order to spare sorting the few (tests/test_cost_contract.py B7 on the PERSIST leg's SQLite 3.45.1)."""
+    from ouroboros import delegate_custody as custody, delegate_custody_current as current, obligations
+    from tests._cost_meter import VM_STEP
+    from tests.test_store import publish
+
+    steps = {}
+    for history in (10, 300):
+        root = tmp_path / f"history-{history}"
+        publish(root, *({"task_id": f"done-{n}", "status": "completed", "_schema_version": 1} for n in range(history)),
+                *({"task_id": f"live-{n}", "status": "running", "_schema_version": 1} for n in range(3)))
+        custody.emit(root, custody.STARTED, {"run_id": "run-template", "task_id": "done-0"})
+        custody.emit(root, custody.SETTLED, {"run_id": "run-template", "task_id": "done-0", "state": "succeeded"})
+        obligations.remove(root, "delegated_runs", "done-0")  # its closing receipt acknowledged, as the scale root does
+        with store.open_store(root, write=True) as txn:
+            closed = txn.custody_row("run-template")
+            for n in range(history):
+                run_id = f"run-closed-{n}"
+                txn.put_custody(run_id, {**closed, "run_id": run_id, "task_id": f"done-{n}"}, state="closed")
+        for n in range(3):
+            custody.emit(root, custody.STARTED, {"run_id": f"run-live-{n}", "task_id": f"live-{n}"})
+        with store.open_store(root, write=True) as txn:
+            txn.conn.execute("ANALYZE")
+        store.close_connections()  # the reads below open their connections under the meter
+        with CostMeter(root) as meter:
+            held = tagged("held", lambda: current.snapshot(root)["state"])
+            live = tagged("live", lambda: obligations.members(root, "nonterminal"))
+        assert sorted(held) == [f"run-live-{n}" for n in range(3)], sorted(held)
+        assert {f"live-{n}" for n in range(3)} <= set(live) and not set(live) & {"done-0", "done-1"}, sorted(live)
+        steps[history] = {tag: meter.snapshot(tag)["counts"].get("vm_steps", 0) for tag in ("held", "live")}
+    assert all(steps[300][tag] - steps[10][tag] <= VM_STEP for tag in ("held", "live")), steps

@@ -167,7 +167,7 @@ def test_the_delegated_reconciler_reads_its_candidates_before_it_reads_liveness(
     seen: list = []
 
     def reading_candidates(root, where="", params=()):
-        assert (where, params) == ("state=?", ("held",))
+        assert (where, params) == (current.HELD_WHERE, ("held",))
         live.add("late-task")  # admitted while current candidates are read
         return {run.run_id: run}
 

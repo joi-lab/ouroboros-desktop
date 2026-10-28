@@ -91,13 +91,13 @@ def accept_result(root, entry, result):
 
 def _pending(root, *, child=False):
     pending = "json_extract(facts, '$.capture_job.state')='pending'"
-    params = [current.HELD]
+    params = []
     if child:
         pending += (" OR (json_extract(facts, '$.capture_job.state')='consumed'"
                     " AND json_extract(facts, '$.capture_job.retry')='transient'"
                     " AND COALESCE(json_extract(facts, '$.capture_job.child_generation'), '')<>?)")
         params.append(GENERATION)
-    return current.runs(root, f"state=? AND ({pending})", tuple(params))
+    return current.held_runs(root, pending, tuple(params))
 
 
 def due(root, row, facts, child):
