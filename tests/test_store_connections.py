@@ -564,7 +564,10 @@ def test_a_warm_read_lease_states_its_file_outside_the_pool_guard_and_reads_no_h
 def test_a_read_takes_its_snapshot_when_its_lease_begins_not_at_its_first_query(tmp_path):
     """The read's ``SELECT 1`` is its snapshot moment: a commit another connection attempts after the lease
     began is refused under the rollback journal (the read's shared lock) or kept out of the read under WAL,
-    so the read's first query answers the state at entry; the next read sees the commit."""
+    so the read's first query answers the state at entry; the next read sees the commit. The other
+    connection is this install's (``store.connect``: the file's journal, as every writer keeps it): a raw
+    DELETE-mode one could not commit on Windows while this thread's cached PERSIST handle keeps the
+    journal open (SQLITE_IOERR_DELETE; test_delete_and_persist_writers_interleave_with_full_durability)."""
     dialogue_store = _dialogue_root(tmp_path)
     if dialogue_store.header_tier(tmp_path) != store.TIER_ENFORCED:
         pytest.skip("kernel locks are what a foreign connection meets here")
@@ -572,7 +575,7 @@ def test_a_read_takes_its_snapshot_when_its_lease_begins_not_at_its_first_query(
     probe = "SELECT value FROM meta WHERE key='entry_probe'"
     outcome = []
     with dialogue_store.transaction(tmp_path, write=False) as conn:
-        with contextlib.closing(sqlite3.connect(dialogue_store.path(tmp_path), isolation_level=None, timeout=0)) as other:
+        with contextlib.closing(store.connect(dialogue_store.path(tmp_path), store.TIER_ENFORCED)) as other:
             try:
                 other.execute(write)
                 outcome.append("committed")
@@ -581,7 +584,7 @@ def test_a_read_takes_its_snapshot_when_its_lease_begins_not_at_its_first_query(
                 outcome.append("refused")
         assert conn.execute(probe).fetchone() is None, outcome
     if outcome == ["refused"]:
-        with contextlib.closing(sqlite3.connect(dialogue_store.path(tmp_path), isolation_level=None, timeout=5)) as other:
+        with contextlib.closing(store.connect(dialogue_store.path(tmp_path), store.TIER_ENFORCED, wait_sec=5)) as other:
             other.execute(write)
     with dialogue_store.transaction(tmp_path, write=False) as conn:
         assert conn.execute(probe).fetchone()["value"] == "1"

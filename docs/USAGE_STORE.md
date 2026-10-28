@@ -13,7 +13,10 @@ change what an attempt costs.
 
 The shared store core defaults to `journal_mode=PERSIST`, `synchronous=FULL`
 and a 64 MiB idle journal size limit. A retained rollback journal avoids file
-creation/deletion on every commit; DELETE-mode older writers can interleave.
+creation/deletion on every commit; DELETE-mode older writers can interleave
+only in turns: on Windows a live PERSIST connection keeps the journal open, so
+a DELETE-mode commit beside it fails (SQLITE_IOERR_DELETE) and the next reader
+rolls it back. Every connection of one install opens through `store.connect`.
 WAL keeps FULL and requires all three facts: SQLite >= 3.51.3 (or the 3.50
 branch >= 3.50.7 / 3.44 branch >= 3.44.6, which carry the WAL-reset fix: a race
 between two connections, in threads or processes, writing or checkpointing the
