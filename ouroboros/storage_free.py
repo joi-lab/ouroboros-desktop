@@ -49,7 +49,7 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from ouroboros.utils import utc_now_iso
 
@@ -311,8 +311,8 @@ class FreeSpace:
             "items": [{"id": item.key, "name": item.name, "bytes": item.bytes} for item in ranked],
         }
 
-    def _run_view(self, root: pathlib.Path, run: Dict[str, Any]) -> StorageFreeRun:
-        """The result as it stands now: a moved folder is removed once its trash entry is gone,
+    def _settled(self, root: pathlib.Path, run: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]:
+        """The run's folders as they stand now, by id: a moved folder is removed once its trash entry is gone,
         stuck once the ``custody_trash`` job recorded that this very entry survived its removal."""
         from ouroboros.task_custody import custody_trash_entries
 
@@ -323,6 +323,11 @@ class FreeSpace:
         deleting = [key for key in run["moved"] if key.split(":", 1)[-1] in waiting]
         stuck = [key for key in run["moved"] if key not in deleting and key.split(":", 1)[-1] in blocked]
         removed = [key for key in run["moved"] if key not in deleting and key not in stuck] + run["removed"]
+        return removed, deleting, stuck
+
+    def _run_view(self, root: pathlib.Path, run: Dict[str, Any], settled: Optional[Tuple[List[str], ...]] = None) -> StorageFreeRun:
+        """The result as it stands now (``_settled``)."""
+        removed, deleting, stuck = settled or self._settled(root, run)
         sizes = run["sizes"]
         return {
             "groups": run["groups"], "selected": run["selected"], "done": run["done"],
@@ -646,18 +651,24 @@ class FreeSpace:
         with self._lock:
             self._state = "stopped" if run["stopped"] else "failed" if run["error"] else "done"
             self._plan = {**plan, "finished_at": utc_now_iso()}
-        view = self._run_view(root, run)
-        self._record(root, view, time.monotonic() - started)
+        settled = self._settled(root, run)
+        view = self._run_view(root, run, settled)
+        self._record(root, view, time.monotonic() - started, settled)
         supervisor_row(root, "storage_free", {"phase": self._state, "duration_seconds": round(time.monotonic() - started, 2),
                                                **{key: view[key] for key in ("groups", "selected", "removed", "removed_bytes",
                                                                              "deleting", "stuck", "kept", "free_before", "free_after")}})
 
     @staticmethod
-    def _record(root: pathlib.Path, view: StorageFreeRun, seconds: float) -> None:
+    def _record(root: pathlib.Path, view: StorageFreeRun, seconds: float, settled: Tuple[List[str], ...]) -> None:
         try:
             from ouroboros.server_maintenance import _prune_event
 
-            _prune_event("storage_free", ("removed", "deleting", "kept"), report={**view, "duration_seconds": round(seconds, 2)})
+            # The folders by the ids the preview named them with (a work folder: ``layout:task_id``), as the
+            # cadence's own prune names what it removed: who removed a task's folder is then one search.
+            removed, deleting, stuck = settled
+            _prune_event("storage_free", ("removed", "deleting", "kept"), report={
+                **view, "duration_seconds": round(seconds, 2),
+                "removed_ids": removed, "deleting_ids": deleting, "stuck_ids": stuck})
         except Exception:
             log.debug("storage_free event not recorded", exc_info=True)
 

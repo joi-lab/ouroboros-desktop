@@ -3038,8 +3038,8 @@ def test_ui_owner_context_mode_and_reviewer_row_save(direct_server_with_data):
                 assert toggle.get_attribute("data-context-mode") == "low"
                 page.screenshot(path=str(evidence_dir / "context-mode-low-before.png"))
 
-                toggle.locator(".chat-capsule-head").click()  # the capsule opens its panel of modes
-                page.locator('.capsule-panel[data-kind="context"] .chat-seg[data-mode="max"]').click()
+                toggle.locator(".chat-capsule-head").click()  # the capsule opens into its modes
+                toggle.locator('.chat-seg[data-mode="max"]').click()
                 page.wait_for_selector('#chat-context-mode[data-context-mode="max"]', timeout=30_000)
                 assert page.locator(".confirm-dialog:not([hidden])").count() == 0
                 page.screenshot(path=str(evidence_dir / "context-mode-max-after.png"))

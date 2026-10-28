@@ -605,6 +605,10 @@
  * @property {string=} cwd
  * @property {*=} env_from_settings
  * @property {string[]=} configuration_warnings
+ * @property {boolean=} schemas_at_start
+ * @property {string=} instructions
+ * @property {number=} map_tokens
+ * @property {number=} schema_tokens
  * @property {number} tool_count
  * @property {Object[]=} tools
  * @property {Object[]=} tool_name_collisions
@@ -853,6 +857,7 @@
  * @property {*} sdk_error
  * @property {*} tool_timeout_sec
  * @property {McpServerStatus[]} servers
+ * @property {Object<string, number>} weights
  */
 
 /**

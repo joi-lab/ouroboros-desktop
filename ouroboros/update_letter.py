@@ -924,6 +924,7 @@ def official_update_projection(
     try:
         from ouroboros import get_version
         from ouroboros.config import DATA_DIR
+        from ouroboros.update_qualification import runtime_letter  # the full record: query_data kind update_letter
 
         head = str(head_sha or "")
         if not head or head == "unknown":
@@ -947,13 +948,13 @@ def official_update_projection(
                 "status": "unchecked", "status_as_of": "",
                 "running": {"version": get_version(), "sha": head},
                 "update_channel": active_channel, "target": None, "behind": None, "ahead": None,
-                "local_changes": "unknown", "letter": project_letter(record, head_sha=head, latest_sha=""),
+                "local_changes": "unknown", "letter": runtime_letter(project_letter(record, head_sha=head, latest_sha="")),
             }
         latest = str(cache.get("latest_sha") or "")
         checked_head = str((record or {}).get("checked_head_sha") or "")
         shown = shown_letter(record)[0] if record else {}
         record_key = shown.get("key") if isinstance(shown.get("key"), dict) else {}
-        letter = project_letter(record, head_sha=head, latest_sha=latest)
+        letter = runtime_letter(project_letter(record, head_sha=head, latest_sha=latest))
         if not cache:
             status = "unchecked"
         elif head and head == checked_head:

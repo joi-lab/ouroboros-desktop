@@ -116,8 +116,10 @@ EVENT_DISPOSITIONS: Dict[str, EventDisposition] = {
     "llm_usage": _handled(
         "supervisor.events_budget", "ouroboros/agent.py",
         "ouroboros/pricing.py", "ouroboros/tools/search.py", "ouroboros/tools/vision.py",
-        "ouroboros/tools/skill_publish.py", idle_input=True, lane=TELEMETRY_LANE,
-        note="the producer's per-task endpoint stamps lineage and chat by value; "
+        "ouroboros/tools/skill_publish.py", "ouroboros/tools/review_helpers.py", idle_input=True,
+        lane=TELEMETRY_LANE,
+        note="the producer's per-task endpoint stamps lineage and chat by value (a queue-less server "
+             "review's row, put on the bus directly, carries its usage scope and its carrier's chat); "
              "the handler fills a missing field from RUNNING only as a fallback"),
     "log_event": _handled(
         "supervisor.events_worker_reports", "ouroboros/utils.py", lane=TELEMETRY_LANE,

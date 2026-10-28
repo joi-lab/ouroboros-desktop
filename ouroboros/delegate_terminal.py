@@ -905,7 +905,7 @@ def _ack_current_receipts(root, tid, snapshot):
                 if rid not in state or vars(_decode(raw)) != vars(state[rid])}
         if not held and not row.get("delegated_runs_unreconciled") and not facts.get("cost_revision"):
             txn.delete_row("delegated_runs", tid)
-        else:
+        elif {**facts, "closed_runs": held} != facts:  # an unchanged retained debt writes nothing
             txn.put_row("delegated_runs", tid, {**facts, "closed_runs": held})
         # The result itself is never rewritten here.
 

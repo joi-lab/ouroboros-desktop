@@ -4,7 +4,7 @@
 // helpers started — requested, while no start is recorded —, models, the money known and what is not final yet,
 // subscription sessions), never minds, waves, families, peaks, percentages or one sum the facts do not make; an
 // unknown amount is a word, never $0.
-import { SUBAGENTS_RING } from './composer_subagents.js';
+import { SUBAGENTS_MARK } from './composer_subagents.js';
 import { formatUsd2 } from './utils.js';
 
 const counted = (count, one) => `${count} ${one}${count === 1 ? '' : 's'}`;
@@ -46,7 +46,7 @@ export function markSwarmLabel(feed, row, bubble = ownBubble(feed, row)) {
     const label = doc.createElement('span');
     label.className = 'msg-swarm';
     label.title = 'Sent while Subagents was on Swarm';
-    label.innerHTML = `<svg viewBox="0 0 184 184" aria-hidden="true">${SUBAGENTS_RING}</svg>`;
+    label.innerHTML = `<svg viewBox="0 0 184 184" aria-hidden="true">${SUBAGENTS_MARK}</svg>`;
     const word = doc.createElement('span');
     word.textContent = 'Swarm';
     label.append(word);

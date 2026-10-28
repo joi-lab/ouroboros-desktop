@@ -1399,6 +1399,7 @@ def _review_ledger_facts(ctx: ToolContext, commit_message: str, *, goal: str, sc
             surface="commit_gate", goal=goal or commit_message, task_id=task_id,
             retry_key=str(getattr(ctx, "_current_review_retry_key", "") or "")), {}, ""),
         "repo_dir": str(ctx.repo_dir), "goal": goal, "scope": scope, "commit_message": commit_message,
+        "since_review": str(getattr(ctx, "_review_since", "") or ""),
         "binding": dict(pre_fingerprint.get("binding") or {}),
         "binding_fingerprint": str(pre_fingerprint.get("fingerprint") or ""),
         "review_contract_fingerprint": str(getattr(ctx, "_current_review_contract_fingerprint", "") or ""),

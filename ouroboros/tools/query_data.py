@@ -8,9 +8,9 @@ JSON reconstructions; single file/blob records retain their original bytes.
 Every result names its data plane: ``caller`` (the task's drive), ``child`` (an
 owned descendant's drive, selected through the caller's lineage), ``canonical``
 (the installation owner) or a native reviewer's pinned ``native_pin``, which never
-resolves to live data. The owner's default queue files and the owner fallback of a
-blob read need the same actor's existing resource read admission of each exact
-loose or pack file; tool availability is separate. Refusal grants nothing. Task documents, review
+resolves to live data. The owner's default queue files, its money ledger and the
+owner fallback of a blob read need the same actor's existing resource read
+admission of each exact loose or pack file; tool availability is separate. Refusal grants nothing. Task documents, review
 records, skill state and retained runs are read from the owner's state without
 that check.
 """
@@ -33,9 +33,16 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "verification_receipts": "task_results/artifacts/{id}/verification_receipts.jsonl",
           "storage": "state/storage_measurement.json",  # the last two finished counts (installation-wide) + removers
           "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
+          "update_letter": "state/update_letter.json",  # the letter with its whole range qualification
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
 _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification_receipts"}
-_STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
+# op=blob reads the observability CAS by digest. The digest in a task-source handle's name is that file's own
+# hash, read through the source's reader; a miss names that reader instead of another plane (BIBLE P1).
+_BLOB_KIND_HINT = ("; op=blob reads observability CAS blobs only. A digest in a task-source handle name "
+                   "(source_handles/...-<sha256>.<ext>) is that file's own hash: open it with the reader its mark or "
+                   "result names, memory_read(source_ref={kind, root, path, size, sha256, task_id})")
+# ``context_snapshot``: the skill's current declared context snapshot, the address its outdated note names.
+_STATES = ("review", "review_job", "health", "enabled", "deps", "grants", "context_snapshot")
 # Each knowledge history row holds both complete versions of its note, so the ordinary
 # 8 MiB log window would cover hours of writes; this read budget covers far more of them.
 _HISTORY_SCAN_BYTES = 256 * 1024 * 1024
@@ -317,6 +324,13 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if root is None:
         raise FileNotFoundError("owned child drive is unavailable")
     relative = _FILES[kind].format(id=identity, child=child, state_file=state_file)
+    if kind == "skill_state" and state_file == "context_snapshot":
+        from ouroboros.extension_liveness import live_context_publishers
+
+        descriptor = live_context_publishers(root).get(identity)
+        if not descriptor or not descriptor.get("eligible"):
+            raise FileNotFoundError(f"{identity} publishes no live context snapshot")
+        relative = (Path(descriptor["state_dir"]).resolve() / descriptor["path"]).relative_to(Path(root).resolve()).as_posix()
     if kind == "run" and root.parts[-2:] == ("task_drives", child):
         relative = f"delegated_runs/{identity}.json"
     path = _path(ctx, root, relative)
@@ -392,8 +406,8 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 hint = f"; {rows} bounds rows for op={op}" if rows and {"tail", "max_rows"} & {n for n, _ in named} else ""
                 raise ValueError(f"{', '.join(_arg(*item) for item in named)} {'applies' if len(named) == 1 else 'apply'} "
                                  f"only to {owner}; omit {'it' if len(named) == 1 else 'them'}{hint}")
-        if kind == "storage" and child_task_id:
-            raise ValueError("storage is installation-wide; it has no child selector")
+        if kind in {"storage", "update_letter"} and child_task_id:
+            raise ValueError(f"{kind} is installation-wide; it has no child selector")
         if kind == "knowledge_history" and child_task_id:
             raise ValueError("knowledge_history is the installation's global knowledge; it has no child selector")
         native = (ctx.task_metadata or {}).get("native_data_root")
@@ -416,7 +430,10 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
             if db == "current" and not use_snapshot and timeout_sec > sql.CURRENT_HOLD_SEC:
                 raise ValueError(f"a direct db=current read stops at {sql.CURRENT_HOLD_SEC:g} s because task writes wait "
                                  "on it; use snapshot=true for a longer query")
-            path = _path(ctx, root, sql.database_path(root, db).relative_to(root))
+            local = root
+            if db == "money" and not child_task_id and root != canonical:  # one ledger, the owner's (USAGE_STORE §4)
+                root, plane = canonical, owner
+            path = _plane_path(ctx, plane, root, sql.database_path(root, db).relative_to(root), local)
             absent = not any(path.parent.glob("*.members.json")) if db == "packs" else not path.is_file()
             if absent:
                 result = {"status": "unavailable", "code": "no_packs" if db == "packs" else "not_found", "source": {"db": db}}
@@ -444,7 +461,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 except PermissionError as exc:
                     raise PermissionError("".join(f"blob not found in the {p} plane; " for p in missed) + str(exc)) from None
             else:
-                raise FileNotFoundError("blob not found in the " + " or ".join(missed) + " plane")
+                raise FileNotFoundError("blob not found in the " + " or ".join(missed) + " plane" + _BLOB_KIND_HINT)
             value = json.loads(raw) if blob_kind == "json" else {"hex": raw.hex()} if blob_kind == "bin" else raw.decode("utf-8")
             source.update(sha256=sha256, blob_kind=blob_kind)
         else:
@@ -470,7 +487,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 # The installation queue lives with its owner; child_task_id keeps child-local meaning.
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
-            elif kind in {"storage", "knowledge_history"}:
+            elif kind in {"storage", "knowledge_history", "update_letter"}:
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
             values, remaining, retained = {}, sql.MAX_BYTES, 0
@@ -550,7 +567,7 @@ def get_tools():
         "format=text saves one selected string exactly. Complete tool output is retained before any delivery cut. "
         "kind=knowledge_history lists global knowledge writes (when, topic, mode, writer, focus, task, summary, sizes, "
         "change delta) without the note bodies, about 1 KB a row (raise max_bytes or lower tail); knowledge_read gives the current text. "
-        "Results name their data plane; the owner's default queue files and blob fallback need the caller's existing read of each file."),
+        "Results name their data plane; the owner's default queue files, money ledger and blob fallback need the caller's existing read of each file."),
         "parameters": {"type": "object", "required": ["op"], "properties": {
             "op": {"enum": ["sql", "json", "jsonl", "blob"], "type": "string"},
             "db": {"enum": ["current", "money", "packs"], "type": "string", "default": "current",
