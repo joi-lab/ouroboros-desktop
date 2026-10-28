@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from tests.test_onboarding_complete_endpoint import (
-    LIVE_SNAPSHOT, _profile, _profile_account,
+    LIVE_SNAPSHOT, _pool, _profile,
     onboarding as onboarding,  # explicit re-export of the real atomic settings fixture
 )
 from tests.ui_chat_viewport_smoke import wait_drawer_closed
@@ -252,8 +252,8 @@ def test_codex_quick_setup_computes_skipped_steps_and_finishes_once(subscription
     ui['backend']['client'] = onboarding.client
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT, 'harnesses': [LIVE_SNAPSHOT['harnesses'][1]],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     ui['fixture']['status']['profiles']['profiles'] = ui['fixture']['status']['profiles']['profiles'][:1]
@@ -479,8 +479,8 @@ def test_failed_preview_allows_manual_main_and_visible_reviewer_recovery_before_
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT,
         'harnesses': [{**LIVE_SNAPSHOT['harnesses'][1], 'models': []}],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     page.goto(ui['url'] + '/onboarding')
@@ -809,8 +809,8 @@ def test_review_shortcut_reconciles_local_vision_before_preview(
     ui['fixture']['status']['profiles']['profiles'] = profiles
     onboarding.calls['snapshot_payload'] = {
         **LIVE_SNAPSHOT, 'harnesses': [LIVE_SNAPSHOT['harnesses'][1]],
-        'profiles': {'harnessAccounts': [_profile_account('codex', 'personal')],
-                     'profiles': [_profile('codex', 'personal')]},
+        'profiles': {'profiles': [_profile('codex', 'personal')], 'harnessAccounts': [],
+                     'accountPools': [_pool('codex', {'kind': 'profile', 'profileId': 'personal'})]},
         'model_catalog': ui['fixture']['catalog']['items'],
     }
     page.evaluate("async () => (await import('/onboarding/static/modules/claudexor_status_store.js')).claudexorStatus.refresh()")

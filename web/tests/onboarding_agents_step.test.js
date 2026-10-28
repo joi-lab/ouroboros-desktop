@@ -41,11 +41,15 @@ function snapshotWith(harnesses) {
         daemon: { state: 'running' },
         reads: { catalog: 'ok', accounts: 'ok', quota: 'ok' },
         harnesses: [{ id: 'claude' }, { id: 'codex' }, { id: 'cursor' }, { id: 'agy' }],
+        // The unified roster: a connected family is a verified named row (the
+        // engine's migrated default login), with `enabled` absent (fail-open).
         profiles: {
-            harnessAccounts: harnesses.map((harness) => ({
-                harness_id: harness, native_login_detected: true,
+            profiles: harnesses.map((harness) => ({
+                profile: { harness_id: harness, profile_id: `${harness}-default` },
+                status: { verification: 'passed', verification_source: 'vendor' },
             })),
-            profiles: [],
+            harnessAccounts: [],
+            accountPools: [],
         },
         quota: [],
     };
@@ -240,8 +244,8 @@ test('an all-disabled family is not connected — the aggregate reads the enable
     assert.deepEqual(familyStatusText(oneOn, 'codex'), { tone: 'ok', text: 'Connected' });
 
     // Absent stays connected: the fail-open default, exactly like the panel.
-    const legacy = snapshotWith(['claude']);
-    assert.deepEqual(connectedHarnesses(legacy), ['claude']);
+    const absent = snapshotWith(['claude']);
+    assert.deepEqual(connectedHarnesses(absent), ['claude']);
 });
 
 test('a family the engine renames is spoken in the engine words, never as a raw id', () => {
@@ -322,7 +326,7 @@ test('a late status settle invalidates preview on model/account facts, not times
     assert.notEqual(subagentPreviewStatusSignature(view, modelChanged), first);
 
     const timestampOnly = structuredClone(base);
-    timestampOnly.profiles.harnessAccounts[0].last_verified_at = '2099-01-01T00:00:00Z';
+    timestampOnly.profiles.profiles[0].status.last_verified_at = '2099-01-01T00:00:00Z';
     assert.equal(subagentPreviewStatusSignature(view, timestampOnly), first);
 });
 
