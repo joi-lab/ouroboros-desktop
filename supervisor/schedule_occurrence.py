@@ -829,6 +829,7 @@ def _write_receipt(item: Dict[str, Any], record: Dict[str, Any]) -> bool:
             result="Scheduled task queued.", metadata=dict(task.get("metadata") or {}),
             schedule_id=item["schedule_id"], schedule_name=str(record.get("name") or ""),
             schedule_admission=receipt,
+            **{key: task[key] for key in ("title", "suggested_name") if task.get(key)},
             **({"reasoning_effort": task["reasoning_effort"]} if task.get("reasoning_effort") else {}),
             **({"billing_group": task["metadata"]["billing_group"]}
                if (task.get("metadata") or {}).get("billing_group") else {}),

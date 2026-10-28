@@ -87,7 +87,7 @@ def test_stored_wake_and_history_share_phase_and_quiet_facts(tmp_path, silent, n
 @pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
 @pytest.mark.parametrize("owner_sent", [True, False])
 def test_wake_words_and_quiet_truth_survive_terminal_only_history(tmp_path, retained, summary, owner_sent):
-    fields = {"owner_message_sent": owner_sent}
+    fields = {"owner_message_sent": owner_sent, "schedule_name": "Daily check"}
     if summary:
         fields.update(wake_summary=summary, suggested_name=summary)
     stored = seed_wake(tmp_path, **fields)
@@ -100,13 +100,13 @@ def test_wake_words_and_quiet_truth_survive_terminal_only_history(tmp_path, reta
     projected = next(row for row in rows if row.get("system_type") == "task_summary" and "wake_silent" in row)
     assert projected["quiet_effective"] is (not owner_sent)
     assert projected.get("wake_summary", "") == summary
-    assert projected["suggested_name"] == stored["suggested_name"]
+    assert projected["suggested_name"] == stored["suggested_name"] and projected["schedule_name"] == "Daily check"
     assert stored["result"] not in json.dumps(rows, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("kind", ["task_summary", "message"])
 def test_terminal_copy_carries_both_authored_title_fields_only_on_summaries(kind):
-    words = {"suggested_name": "Title", "wake_summary": "The mind's line."}
+    words = {"suggested_name": "Title", "wake_summary": "The mind's line.", "schedule_name": "Daily check"}
     projected = {}
     _copy_task_summary_metadata(projected, {"type": kind, **words})
     assert {key: projected[key] for key in words if key in projected} == (words if kind == "task_summary" else {})

@@ -70,6 +70,8 @@ def test_one_occurrence_one_receipt_with_the_room_address(q):
     receipt = load_task_result(q.root, task["id"])
     admission = receipt["schedule_admission"]
     assert receipt["status"] == "scheduled" and receipt["chat_id"] == 42  # never the hidden chat 0
+    # The schedule's name is the run's authored name from admission on: history and the task API read it here.
+    assert receipt["title"] == receipt["suggested_name"] == task["title"] == "Follow-up"
     assert (admission["status"], admission["dispatch"]) == ("accepted", "none")
     assert task["metadata"]["schedule_occurrence"]["token"] == admission["token"]
     row = _rows(q)["s1"]
