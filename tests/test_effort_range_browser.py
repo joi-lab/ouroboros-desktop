@@ -100,6 +100,13 @@ def _open_chat(page, url: str, *, width: int, height: int = 900, theme: str = "d
     page.wait_for_function(f"() => document.querySelector('{CONTROL}')?.dataset.known === 'true'", timeout=30_000)
 
 
+def _painted(page) -> list:
+    """The page's theme choice and painted palette. A case changes the theme with `window.ouroTheme.set`, as the
+    control does: a page the core serves keeps the choice in its installation's cookie from its first load on, so
+    a re-seeded `ouroboros.theme` no longer moves it (web/theme.js)."""
+    return page.evaluate("() => [window.ouroTheme.choice, document.documentElement.dataset.theme]")
+
+
 def _facts(page, selector: str = CONTROL) -> dict:
     return page.evaluate(FACTS, selector)
 
@@ -206,10 +213,11 @@ def test_desktop_hover_opens_press_pins_escape_and_outside_close(direct_server_w
             assert _facts(page)["recFocused"] is True
             page.mouse.click(400, 300)
             _wait(page, "el.dataset.open === 'false'")
-            # Light theme, for the eye.
-            page.add_init_script("try { localStorage.setItem('ouroboros.theme', 'light'); } catch (e) {}")
+            # Light theme, for the eye: chosen as Settings → Appearance does, then a fresh page.
+            page.evaluate("() => window.ouroTheme.set('light')")
             page.reload(wait_until="domcontentloaded")
             page.wait_for_function(f"() => document.querySelector('{CONTROL}')?.dataset.known === 'true'", timeout=30_000)
+            assert _painted(page) == ["light", "light"], "the light shots show the light theme"
             _shot(page, tmp_path, f"composer-closed-{engine}-light")
             page.click(HEAD)
             _wait(page, "el.dataset.open === 'true'")

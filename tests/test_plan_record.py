@@ -160,6 +160,64 @@ def test_participant_views_track_last_seen_revision_and_last_answered_ask():
     assert [a["ask_id"] for a in pr.pending_asks(record)] == ["a1", "a2"]
 
 
+# ---------------------------------------------------------------- a reading of the request (an ask before any plan)
+
+def _reading(*participants, ask_id="a1"):
+    return {"ask_id": ask_id, "ts": "2026-10-15T00:30:00+00:00", "revision": None, "message": "How do you read it?",
+            "participants": list(participants)}
+
+
+def test_a_reading_carries_revision_none_and_every_other_missing_revision_stays_invalid():
+    """``revision: None`` (the key present) is the one form of an ask before any plan; a missing key,
+    a bool (``True == 1``), zero, an absent number or a string still name a revision the record lacks."""
+    reading = {**pr.empty_record(), "asks": [_reading(_participant(SEAT_A))]}
+    assert pr.validate_record(reading)["asks"][0]["revision"] is None
+    stored = _record(revisions=1)
+    assert pr.validate_record({**stored, "asks": [_reading(ask_id="a2")]})["asks"][0]["revision"] is None
+    assert pr.validate_record({**stored, "asks": [{"ask_id": "a1", "revision": 1, "participants": []}]})["asks"][0]["revision"] == 1
+    for broken in ({"ask_id": "a1", "participants": []}, {"ask_id": "a1", "revision": True, "participants": []},
+                   {"ask_id": "a1", "revision": 0, "participants": []}, {"ask_id": "a1", "revision": 2, "participants": []},
+                   {"ask_id": "a1", "revision": "1", "participants": []}):
+        with pytest.raises(pr.PlanRecordInvalid):
+            pr.validate_record({**stored, "asks": [broken]})
+
+
+def test_a_readings_reply_is_advice_that_moves_no_objection_in_any_mode():
+    """A reading's reply raises, restates, withdraws and flags nothing — before a plan or settling
+    late beside one — in every mode; the same reply to a stored revision acts as before."""
+    objecting = _participant(SEAT_A, reply={"objections": [{"id": "o1", "text": "the owner asked for a story"}]})
+    reading = {**pr.empty_record(), "asks": [_reading(objecting)]}
+    assert pr.fold_objections(reading) == [] and pr.open_objections(reading) == []
+    for mode in ({}, {"enforcement": "advisory"}, {"cyber_pro": True}):
+        decision = _gate(reading, **mode)
+        assert decision["allow"] is True and decision["holding"] == [] and decision["open_objections"] == []
+    assert pr.read_view(reading)["asks"][0]["revision"] is None  # the reading itself stays visible
+    # A standing objection on revision 1: a later reading's withdrawal, restatement or silence leaves it as it was.
+    standing = _record([objecting])
+    for reply in ({"withdrawn": [{"id": "o1", "why": "fine now"}]}, {"objections": [{"id": "o1", "text": "reworded"}]},
+                  {"prose": "nothing about o1"}):
+        late = {**standing, "asks": [*standing["asks"], _reading(_participant(SEAT_A, reply=reply), ask_id="a2")]}
+        [objection] = pr.open_objections(late)
+        assert (objection["holds"], objection["ask_id"], objection["text"], objection["not_adjudicated"]) == (
+            True, "a1", "the owner asked for a story", False)
+        assert _gate(late)["status"] == "held"
+    # The other direction: the same objection stated about a stored revision holds, and its raiser's withdrawal there releases it.
+    on_plan = _record([objecting])
+    assert _gate(on_plan)["status"] == "held" and pr.open_objections(on_plan)[0]["revision"] == 1
+    released = _record([objecting], [_participant(SEAT_A, reply={"withdrawn": [{"id": "o1", "why": "fine now"}]})], revisions=2)
+    assert _gate(released)["status"] == "clear"
+
+
+def test_a_reading_leaves_an_imported_legacy_objection_holding():
+    legacy = pr.import_legacy_v2(_v2_state(closed=False, blocking_findings=("triad_old",)))
+    withdrawal = {"withdrawn": [{"id": "triad_old:f1", "why": "fixed"}]}
+    reading = {**pr.empty_record(), "asks": [_reading(_participant("triad_old", reply=withdrawal))]}
+    decision = _gate(reading, legacy=legacy)
+    assert decision["status"] == "held" and decision["holding"] == ["triad_old:triad_old:f1"]
+    assert pr.open_objections(reading, legacy)[0]["not_adjudicated"] is False
+    assert _gate(_record([_participant("triad_old", reply=withdrawal)]), legacy=legacy)["status"] == "clear"
+
+
 # ---------------------------------------------------------------- the gate
 
 def test_blocking_holds_only_on_an_open_objection_of_an_owner_marked_seat():

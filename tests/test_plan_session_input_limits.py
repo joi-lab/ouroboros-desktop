@@ -52,7 +52,8 @@ def _delivery(harness, text, *, bound=None, asserted=0, monkeypatch):
     for direction, body in [("in", "Preserve original files."), ("out", text), ("in", "LATEST: choose A.")]:
         append_jsonl(chat, {"direction": direction, "chat_id": 1, "text": body})
     manifest = plan_dialogue.attach_own_dialogue(ctx, harness.drive, {}, f"plan-ask-{ctx.task_id}-a1", persist=True)
-    packet = "OPERATIVE PLAN MUST STAY\n" + plan_dialogue.render_dialogue(manifest)
+    conversation, snapshot = plan_dialogue.render_dialogue(manifest)  # the plan sits between them in a packet
+    packet = conversation + "OPERATIVE PLAN MUST STAY\n" + snapshot
     monkeypatch.setattr(model_slots, "model_role_option", lambda *_a: asserted)
     slot = _slot()
     delivery = plan_dialogue.dialogue_slot_inputs([slot], system_prompt="g", user_content=packet,

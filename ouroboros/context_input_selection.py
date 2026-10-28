@@ -328,9 +328,13 @@ def _capture_declared_context_core(
 
     Branch before shared memory is opened. Do not guess which memory sentences
     might bias this case. Rebuilds read the same durable task selection, while
-    retries and fitting operate on the resulting immutable ContextCore.
+    retries and fitting operate on the resulting immutable ContextCore. A task
+    scheduled with ``DECLARED_WORDS_FACT`` carries the owner's words that caused
+    the work right after its receipt, ahead of the dated runtime facts: the block
+    a shared child reads, rendered from the task's own frozen record.
     """
-    from ouroboros.subagent_work_order import input_source_selection_receipt
+    from ouroboros.memory_view import _owner_words_block  # the shared child's block, byte for byte
+    from ouroboros.subagent_work_order import declared_inputs_carry_owner_words, input_source_selection_receipt
     from ouroboros.subagent_metrics import fact_line
     from ouroboros.subagent_runtime import (
         current_model_visible_subagent_catalog, review_facts_block, review_records_block, subagent_supervision_fact_line,
@@ -340,8 +344,10 @@ def _capture_declared_context_core(
     same_drive = canonical_root.resolve(strict=False) == memory.drive_root.resolve(strict=False)
     process_memory = memory if same_drive else Memory(drive_root=canonical_root, repo_dir=memory.repo_dir)
     supplementary_messages: list = []
+    words = _owner_words_block(task) if declared_inputs_carry_owner_words(task) else ""
     parts = [
         "## Input source selection\n\n" + json.dumps(input_source_selection_receipt(task), ensure_ascii=False, sort_keys=True),
+        *([words] if words else []),
         runtime_builder(env, task, ctx=ctx, captured_at=sources["captured_at"],
                         supplementary_messages_out=supplementary_messages),
     ]

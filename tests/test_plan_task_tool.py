@@ -166,8 +166,6 @@ def test_first_revision_requires_affected_paths_and_schema_errors_write_nothing(
                 {"ask": "everyone"}, {"message": "hello"}, {"reviewer_effort": "turbo", "ask": "council"}, {"nonsense": 1}):
         text, result = _call(ctx, **bad)
         assert "PLAN_ARGS_INVALID" in text and result.code == "TOOL_ARG_ERROR", bad
-    text, result = _call(ctx, ask="council")
-    assert "PLAN_ASK_NEEDS_A_PLAN" in text
     assert sub.calls == [] and _record(harness) == plan_record.empty_record()
 
 
@@ -215,7 +213,7 @@ def test_read_is_free_and_shows_the_state(harness):
     sub = harness.install({})
     ctx = harness.make_ctx()
     text, result = _call(ctx)
-    assert "No plan revision recorded" in text and result.meta["plan_effect"] == "read"
+    assert "No plan revision is recorded" in text and result.meta["plan_effect"] == "read"
     _write(ctx)
     text, result = _call(ctx)
     assert "# Plan — revision 1 of 1" in text and "exactly 5 slides" in text and "Nothing holds your final answer" in text

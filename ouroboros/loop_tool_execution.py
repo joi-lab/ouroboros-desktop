@@ -1405,12 +1405,13 @@ def process_tool_results(
         record_tool_activity(ctx, exec_result)
     from ouroboros.artifacts import task_id_for_artifacts
     from ouroboros.mark_anchors import anchored_note
+    from ouroboros.delegation_knowledge_index import with_knowledge_index
 
     # A mark the mind tied to an action trails what the mind sees of that call, once per task: a
     # delivery note measured with the batch and kept beside the retained producer payload, so the
     # host readers below (acknowledgements, receipts, result review) parse the result without it.
     notes = [anchored_note(ctx, row["fn_name"], row.get("tool_args") or {}) for row in results]
-    results = prepare_producer_sources(results, getattr(ctx, "drive_root", None),
+    results = prepare_producer_sources(with_knowledge_index(ctx, results), getattr(ctx, "drive_root", None),
                                        task_id_for_artifacts(ctx) if ctx is not None else "", notes)
     review_updates, review_pending = [], {}
     if ctx is not None and getattr(ctx, "_pending_review_context", None):

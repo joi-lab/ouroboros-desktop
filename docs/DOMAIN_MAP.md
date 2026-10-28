@@ -10,11 +10,11 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 |---|---|---:|---:|
 | D01 | Agent core & main loop | 55 | 0 |
 | D02 | LLM client, routing & providers | 44 | 0 |
-| D03 | Context assembly, fit & compaction | 26 | 0 |
+| D03 | Context assembly, fit & compaction | 27 | 0 |
 | D04 | Tool execution: registry, access & typed results | 24 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 45 | 0 |
 | D06 | Review stack | 95 | 0 |
-| D07 | Delegation, subagents & Claudexor | 96 | 0 |
+| D07 | Delegation, subagents & Claudexor | 97 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 73 | 0 |
 | D09 | Cancellation, owner control & process custody | 27 | 0 |
 | D10 | Git, update & release machinery | 40 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 37 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 20 | 0 |
-| **total** | | **919** | **0** |
+| **total** | | **921** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -323,6 +323,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/context_source_view.py`
 - `ouroboros/context_view_facts.py`
 - `ouroboros/context_window.py`
+- `ouroboros/delegation_knowledge_index.py`
 - `ouroboros/density_probe.py`
 - `ouroboros/main_context_authority.py`
 - `ouroboros/memory_floor.py`
@@ -566,6 +567,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateways/claudexor_maintenance.py`
 - `ouroboros/gateways/claudexor_metadata.py`
 - `ouroboros/gateways/claudexor_observation.py`
+- `ouroboros/gateways/claudexor_route_health.py`
 - `ouroboros/gateways/claudexor_routing.py`
 - `ouroboros/gateways/claudexor_run_events.py`
 - `ouroboros/gateways/claudexor_uploads.py`

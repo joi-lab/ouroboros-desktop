@@ -246,7 +246,12 @@ def _builtin_web_dir(served_ui: ServedUI | None) -> pathlib.Path:
     return resolve_web_dir(pathlib.Path(__file__).resolve().parents[1])
 
 
-def _login_page(next_url: str, error: str = "", web_dir: pathlib.Path | None = None) -> str:
+def _appearance_meta(served_ui: ServedUI | None, request: Request) -> str:
+    """The form names the installation's appearance scope as the interface's own pages do."""
+    return served_ui.appearance_meta(request.headers) if served_ui is not None else ""
+
+
+def _login_page(next_url: str, error: str = "", web_dir: pathlib.Path | None = None, head: str = "") -> str:
     """The builtin form. It answers before any asset behind the gate may load, so it inlines the builtin
     appearance owner and tokens: this browser's saved Light / Dark / System choice, else the device's."""
     safe_next = html.escape(_sanitize_next_url(next_url), quote=True)
@@ -261,18 +266,19 @@ def _login_page(next_url: str, error: str = "", web_dir: pathlib.Path | None = N
   </div>
   <button type="submit" class="btn btn-primary">Unlock</button>{error_html}
 </form>"""
-    return themed_page(web_dir or _builtin_web_dir(None), "Ouroboros Login", form, _LOGIN_CSS)
+    return themed_page(web_dir or _builtin_web_dir(None), "Ouroboros Login", form, _LOGIN_CSS, head)
 
 
 async def _handle_login(scope: Scope, receive: Receive, send: Send, password: str,
                         served_ui: ServedUI | None = None) -> None:
     request = Request(scope, receive)
     web_dir = _builtin_web_dir(served_ui)
+    head = _appearance_meta(served_ui, request)
     if request.method == "GET":
         page = (served_ui.custom_page("auth/index.html")
                 if served_ui is not None and request.query_params.get("builtin") != "1" else None)
         response = HTMLResponse(page if page is not None else _login_page(request.query_params.get("next", "/"),
-                                                                          web_dir=web_dir),
+                                                                          web_dir=web_dir, head=head),
                                 headers=_NO_STORE)
         await response(scope, receive, send)
         return
@@ -298,7 +304,7 @@ async def _handle_login(scope: Scope, receive: Receive, send: Send, password: st
         if is_json:
             response = JSONResponse({"error": "Invalid password."}, status_code=401)
         else:
-            response = HTMLResponse(_login_page(next_url, "Invalid password.", web_dir), status_code=401,
+            response = HTMLResponse(_login_page(next_url, "Invalid password.", web_dir, head), status_code=401,
                                     headers=_NO_STORE)
         await response(scope, receive, send)
         return
@@ -411,7 +417,8 @@ class NetworkAuthGate:
                 response = RedirectResponse("/auth/login?" + urlencode({"next": next_url}), status_code=303,
                                             headers=_NO_STORE)
             else:
-                response = HTMLResponse(_login_page(next_url, web_dir=_builtin_web_dir(self.served_ui)),
+                response = HTMLResponse(_login_page(next_url, web_dir=_builtin_web_dir(self.served_ui),
+                                                    head=_appearance_meta(self.served_ui, Request(scope))),
                                         status_code=401, headers=_NO_STORE)
         else:
             response = JSONResponse({"error": "Authentication required."}, status_code=401)

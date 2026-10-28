@@ -38,6 +38,7 @@ from ouroboros.subagent_runtime import (
     effective_runtime_subagent_settings,
     select_subagent_snapshot,
 )
+from ouroboros.subagent_work_order import declared_words_fact
 from ouroboros.subagents import build_subagent_envelope
 from ouroboros.task_results import STATUS_REQUESTED, write_task_result
 from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE, LOCAL_READONLY_SUBAGENT_MODE
@@ -989,7 +990,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         **{key: fields[key] for key in ("directory_strategy", "scope_paths", "delegated_mode", "workspace", "attachment_paths",
                                         "attachment_import", "document_import_intent") if key in fields},
     }
-    owner_origin = governing_words_for_schedule(ctx)  # the owner's words that caused this tree, by value
+    owner_origin = {**governing_words_for_schedule(ctx), **declared_words_fact(child_contract)}  # the owner's words, by value
     child_facts = {
         **({"execution_timeout_sec": execution_left} if execution_left is not None else {}),
         "objective": objective,
