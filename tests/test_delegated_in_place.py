@@ -130,15 +130,16 @@ def test_the_wired_refusals_are_typed_unrun_and_send_nothing(tmp_path, monkeypat
 
 
 def test_a_non_git_write_root_is_refused_toward_the_folder_strategy(tmp_path, monkeypatch):
-    import shutil
-
+    from ouroboros.force_remove import force_rmtree
     from tests import test_delegate_continuation as continuation_tests
 
     original = continuation_tests._delegating_ctx
 
     def plain_folder(tmp, **kwargs):
         ctx = original(tmp, **kwargs)
-        shutil.rmtree(pathlib.Path(ctx.workspace_root) / ".git")  # the write root is an ordinary folder now
+        git_dir = pathlib.Path(ctx.workspace_root) / ".git"
+        force_rmtree(git_dir)  # Git's object files are read-only, which Windows refuses to unlink
+        assert not git_dir.exists(), "the write root is an ordinary folder now"
         return ctx
 
     monkeypatch.setattr(continuation_tests, "_delegating_ctx", plain_folder)

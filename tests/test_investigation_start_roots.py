@@ -211,7 +211,9 @@ def _source_local(project, policy):
         _git(project, "config", "core.autocrlf", "true")
     else:
         (project / ".git" / "info").mkdir(exist_ok=True)
-        (project / ".git" / "info" / "attributes").write_text("*.py text\n*.txt text\n")
+        # The policy names its line end: a bare `text` checks out the host's native one (CRLF on Windows).
+        (project / ".git" / "info" / "attributes").write_text("*.py text eol=lf\n*.txt text eol=lf\n",
+                                                              encoding="utf-8", newline="\n")
     for path in (project / "conftest.py", *(project / "pkg" / "component").iterdir()):
         path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
 
@@ -243,7 +245,7 @@ def test_source_local_comparison_settings_reach_the_investigation_copy(tmp_path,
     clone = Path(find_execution_snapshot(held.snapshot_id)["path"])
     # The copy holds the source's current files as Git checks them out under the source's own
     # (shared) settings, and its Git sees them unchanged. autocrlf and filemode reproduce the
-    # working bytes; a `text` attribute checks normalized files out with the native LF.
+    # working bytes; the `text eol=lf` attributes check normalized files out with LF.
     copied = {rel: (clone / rel).read_bytes() for rel in before[2]}
     if policy == "info_attributes":
         assert {rel: raw.replace(b"\r\n", b"\n") for rel, raw in before[2].items()} == copied

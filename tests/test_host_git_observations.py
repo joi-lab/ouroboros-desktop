@@ -183,7 +183,12 @@ def test_pr_integration_checks_content_before_writing(tmp_path, monkeypatch, cha
 
 @pytest.mark.parametrize("comparison", ["worktree", "staged", "tree"])
 @pytest.mark.parametrize("binary_metadata", [False, True], ids=["text-metadata", "binary-metadata"])
-def test_vcs_names_keep_binary_mode_and_rename_changes(tmp_path, monkeypatch, comparison, binary_metadata):
+@pytest.mark.parametrize("rename", [
+    "renamed file.txt",  # binary, mode and rename changes on every host
+    # The quoting case: a tab and a double quote reach the output quoted, but Windows refuses such a name.
+    pytest.param('renamed\t"file.txt', marks=pytest.mark.skipif(os.name == "nt", reason="a POSIX-only file name")),
+], ids=["portable-name", "quoted-name"])
+def test_vcs_names_keep_binary_mode_and_rename_changes(tmp_path, monkeypatch, comparison, binary_metadata, rename):
     from ouroboros.tools.registry import ToolContext
     from ouroboros.tools.vcs_read import _vcs_read
 
@@ -197,7 +202,6 @@ def test_vcs_names_keep_binary_mode_and_rename_changes(tmp_path, monkeypatch, co
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "fixtures")
     binary.write_bytes(b"\0after")
-    rename = 'renamed\t"file.txt'
     _git(repo, "mv", "seed.txt", rename)
     _git(repo, "update-index", "--chmod=+x", "mode.sh")
     _git(repo, "add", "binary.dat")

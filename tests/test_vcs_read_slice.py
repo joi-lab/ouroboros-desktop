@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import shutil
 import subprocess
 
@@ -19,7 +20,8 @@ def repo(path: pathlib.Path) -> pathlib.Path:
     git(path, "init", "-q")
     git(path, "config", "user.name", "Test")
     git(path, "config", "user.email", "test@example.com")
-    (path / "note.txt").write_text("first\n", encoding="utf-8")
+    # Payloads the reads must return byte-exact are LF on every host (a fresh repository converts nothing).
+    (path / "note.txt").write_text("first\n", encoding="utf-8", newline="\n")
     git(path, "add", "note.txt")
     git(path, "commit", "-qm", "first")
     return path
@@ -89,9 +91,9 @@ def test_repository_is_selected_before_path_and_nested_repo_is_distinct(world):
 
 def test_literal_metacharacter_filename_blame_and_file_whitespace(world):
     _registry, ctx, _system, project = world
-    filename = "literal [x] $cash ?.txt"
+    filename = "literal [x] $cash &!.txt"  # glob, shell and history metacharacters every filesystem allows
     content = "alpha  \n\nlast\t \n\n"
-    (project / filename).write_text(content, encoding="utf-8")
+    (project / filename).write_text(content, encoding="utf-8", newline="\n")
     git(project, "add", "--", filename)
     git(project, "commit", "-qm", "literal filename")
     head = git(project, "rev-parse", "HEAD")
@@ -123,7 +125,7 @@ def test_identity_unborn_dirty_refs_merge_base_and_linked_worktree(world):
     (project / "dirty.txt").write_text("untracked", encoding="utf-8")
     identity = json.loads(read_ok(ctx, action="identity").split("\n\nVCS target:")[0])
     assert identity["head"] == second and identity["dirty"] is True
-    assert identity["worktree"] == str(project)
+    assert pathlib.Path(identity["worktree"]).resolve() == project.resolve()  # Git spells it with "/"
     assert first in read_ok(ctx, action="merge_base", base=first, head=second)
     assert "refs/heads/" in read_ok(ctx, action="refs")
     assert "first" in read_ok(ctx, action="log", max_count=2)
@@ -132,7 +134,7 @@ def test_identity_unborn_dirty_refs_merge_base_and_linked_worktree(world):
     linked = project / "linked"
     git(project, "worktree", "add", "-q", "-b", "linked-test", str(linked), second)
     linked_identity = json.loads(read_ok(ctx, action="identity", repository="linked").split("\n\nVCS target:")[0])
-    assert linked_identity["worktree"] == str(linked)
+    assert pathlib.Path(linked_identity["worktree"]).resolve() == linked.resolve()
     assert linked_identity["git_dir"] != linked_identity["common_dir"]
     assert linked_identity["head"] == second
 
@@ -223,29 +225,33 @@ def test_hostile_git_env_and_repo_helpers_cannot_execute_or_write(world, monkeyp
     _registry, ctx, _system, project = world
     marker = project / "helper-ran"
     helper = project / "helper.sh"
-    helper.write_text(f"#!/bin/sh\ntouch '{marker}'\nprintf hijacked\n", encoding="utf-8")
+    helper.write_text(f"#!/bin/sh\ntouch {shlex.quote(marker.as_posix())}\nprintf hijacked\n",
+                      encoding="utf-8", newline="\n")
     helper.chmod(0o755)
+    # Git hands these values to sh, which would eat a Windows path's backslashes: then nothing could
+    # execute and the refusals below would hold vacuously.
+    command = shlex.quote(helper.as_posix())
     (project / ".gitattributes").write_text("*.txt diff=spy\n", encoding="utf-8")
     git(project, "add", ".gitattributes")
     git(project, "commit", "-qm", "attributes")
-    (project / "note.txt").write_text("second\n", encoding="utf-8")
+    (project / "note.txt").write_text("second\n", encoding="utf-8", newline="\n")
     git(project, "add", "note.txt")
     git(project, "commit", "-qm", "second")
-    git(project, "config", "diff.spy.textconv", str(helper))
+    git(project, "config", "diff.spy.textconv", command)
     # Prove the configured converter can execute for this exact file/commit.
     git(project, "show", "--textconv", "--no-ext-diff", "HEAD", "--", "note.txt")
     assert marker.exists()
     marker.unlink()
-    git(project, "config", "diff.external", str(helper))
-    git(project, "config", "core.pager", str(helper))
-    git(project, "config", "core.fsmonitor", str(helper))
+    git(project, "config", "diff.external", command)
+    git(project, "config", "core.pager", command)
+    git(project, "config", "core.fsmonitor", command)
     (project / "note.txt").write_text("changed\n", encoding="utf-8")
     monkeypatch.setenv("GIT_DIR", str(project / "missing-git-dir"))
-    monkeypatch.setenv("GIT_PAGER", str(helper))
-    monkeypatch.setenv("GIT_EXTERNAL_DIFF", str(helper))
+    monkeypatch.setenv("GIT_PAGER", command)
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", command)
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "diff.external")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(helper))
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", command)
     index = project / ".git" / "index"
     before_index = index.read_bytes()
     before_objects = {p.relative_to(project / ".git" / "objects")
@@ -441,7 +447,7 @@ def test_registered_protected_ancestor_blocks_unfiltered_history_without_sibling
 def test_registered_file_content_that_looks_like_tool_error_is_ok(world):
     registry, _ctx, _system, project = world
     content = "⚠️ TOOL_ERROR literal historical content\nsecond line\n"
-    (project / "warning.txt").write_text(content, encoding="utf-8")
+    (project / "warning.txt").write_text(content, encoding="utf-8", newline="\n")
     git(project, "add", "warning.txt")
     git(project, "commit", "-qm", "warning file")
     result = registry.execute_result("vcs_read", {"action": "file", "path": "warning.txt"})
@@ -456,10 +462,11 @@ def test_registered_worktree_reads_keep_configured_clean_and_process_filters(wor
     clean_marker = project / "clean-ran"
     process_marker = project / "process-ran"
     clean = project / "clean.sh"
-    clean.write_text(f"#!/bin/sh\ntouch '{clean_marker}'\ncat\n", encoding="utf-8")
+    clean.write_text(f"#!/bin/sh\ntouch {shlex.quote(clean_marker.as_posix())}\ncat\n", encoding="utf-8", newline="\n")
     clean.chmod(0o755)
     process = project / "process.sh"
-    process.write_text(f"#!/bin/sh\ntouch '{process_marker}'\nexit 1\n", encoding="utf-8")
+    process.write_text(f"#!/bin/sh\ntouch {shlex.quote(process_marker.as_posix())}\nexit 1\n", encoding="utf-8",
+                       newline="\n")
     process.chmod(0o755)
     (project / "process.txt").write_text("first\n", encoding="utf-8")
     (project / ".gitattributes").write_text(
@@ -467,8 +474,8 @@ def test_registered_worktree_reads_keep_configured_clean_and_process_filters(wor
     )
     git(project, "add", "process.txt", ".gitattributes")
     git(project, "commit", "-qm", "filters")
-    git(project, "config", "filter.clean-spy.clean", str(clean))
-    git(project, "config", "filter.process-spy.process", str(process))
+    git(project, "config", "filter.clean-spy.clean", shlex.quote(clean.as_posix()))  # sh keeps it whole on Windows
+    git(project, "config", "filter.process-spy.process", shlex.quote(process.as_posix()))
     (project / "note.txt").write_text("changed\n", encoding="utf-8")
     (project / "process.txt").write_text("changed\n", encoding="utf-8")
     subprocess.run(["git", "diff", "--", "note.txt", "process.txt"], cwd=project, capture_output=True)
