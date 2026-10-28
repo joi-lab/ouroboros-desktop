@@ -624,7 +624,8 @@ class BodyRuntime:
         An engine without the wait keeps today's beat: one detail read per run per tick.
         The hold is the observer's own tick window, not the engine's: closing the client does
         not wake a receive blocked in a hold on every platform (Linux ``close(2)`` leaves the
-        blocked thread to the socket's own end), so shutdown is bounded by the tick instead.
+        blocked thread to the socket's own end), so a pass ends within the tick plus the
+        transport bound (``SHORT_POLL_TIMEOUT_SEC``: about eight seconds), never the engine's window.
         """
         from ouroboros.delegate_supervision import _TICK_SEC
         from ouroboros.gateways import claudexor_observation as observation
@@ -808,9 +809,9 @@ class BodyRuntime:
             self.stop.set()
             # Actual jobs remain owned until their physical return; a caller of
             # close(wait=False) neither joins on the control loop nor forgets them.
-            # The observer transport closes first; a compact pass still held ends at its own
-            # tick-sized window at the latest (``_watch``), so the join below is bounded by
-            # the tick, never by the engine's window.
+            # The observer transport closes first; a compact pass still held ends within its own
+            # tick plus the transport bound at the latest (``_watch``), so the join below is
+            # bounded by those, never by the engine's window.
             self._drop_observer_gateway()
             self.observers.shutdown(wait=True, cancel_futures=True)
             with _RUNTIME_LOCK:

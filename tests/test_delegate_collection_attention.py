@@ -246,9 +246,10 @@ def test_support_is_learned_by_the_first_read_then_the_pass_takes_over(tmp_path,
     assert Engine.detail_reads == [entry.run_id] and len(Engine.requests) == 1
 
 
-def test_shutdown_during_a_hold_waits_at_most_the_observers_own_tick(tmp_path, runtime):
+def test_shutdown_during_a_hold_is_bounded_by_the_observers_tick_and_transport_bound(tmp_path, runtime):
     """Closing the client does not wake a receive blocked in the hold on every platform, so the
-    pass itself must end within the tick; the double honours the hold it was asked for."""
+    pass itself must end within the tick plus the transport bound (about eight seconds), never
+    the engine's window; the double honours the hold it was asked for and answers at once after it."""
     instance, step = runtime
     entry = started(tmp_path)
     Engine.hold = True
@@ -258,7 +259,7 @@ def test_shutdown_during_a_hold_waits_at_most_the_observers_own_tick(tmp_path, r
     time.sleep(0.2)  # the pass is inside its hold
     instance._drop_observer_gateway()
     pass_.result(timeout=_TICK_SEC + 2.0)
-    assert time.monotonic() - began < _TICK_SEC + 1.0, "bounded by the observer's tick, not the engine's window"
+    assert time.monotonic() - began < _TICK_SEC + 1.0, "a hold that answers at its end: the tick, not the engine's window"
 
 
 def test_a_catalog_hole_never_blocks_the_old_read(tmp_path, runtime):

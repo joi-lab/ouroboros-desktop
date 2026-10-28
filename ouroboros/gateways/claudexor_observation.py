@@ -58,8 +58,8 @@ ACKNOWLEDGED_PROBLEM = _LOCAL_TOKEN + "problem"
 PROBLEMS = frozenset({"not_found", "snapshot_unavailable", "not_observed"})
 WAKE_REASONS = frozenset({"attention", "problems", "timeout", "aborted"})
 # The contract's answer per exact engine identity (version, build sha): an engine cannot
-# change what its route accepts without changing, so one probe per identity per process.
-# The catalog itself is the event stream module's shared one.
+# change what its route accepts without changing, so one probe per identity per process (a
+# same-build restart keeps it). The catalog itself is the event stream module's shared one.
 _SUPPORT: Dict[Tuple[str, str], bool] = {}
 _SUPPORT_LOCK = threading.Lock()
 
@@ -182,7 +182,8 @@ def _accepts_acknowledgement(body: Any) -> bool:
 
 def forget_support(gateway: Any) -> None:
     """The route is unusable on this exact engine (absent, or answering outside its contract):
-    every consumer reads details as before until the engine changes."""
+    every consumer reads details as before until the engine identity (version, build sha)
+    changes; a same-build restart of the engine keeps this process memo."""
     from ouroboros.gateways.claudexor_run_events import engine_identity
 
     with _SUPPORT_LOCK:
