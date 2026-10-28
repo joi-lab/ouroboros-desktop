@@ -626,6 +626,20 @@ def _prepare_forced_prompt(
     )
 
 
+def _deliver_forced_late_results(ctx: _RoundLimitContext, llm_trace: Dict[str, Any]) -> bool:
+    """Locators of timed-out calls that settled since (``late_tool_results``) join the forced candidate
+    on the live transcript before it is priced and sealed: an authorized forced send is the task's next
+    turn too. Rails that end without a send never call this; a budget candidate priced and then not
+    sent leaves them in the transcript its pause or next ordinary round carries."""
+    tools_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
+    if tools_ctx is not None:
+        from ouroboros.late_tool_results import deliver_late_results
+
+        return deliver_late_results(ctx.messages, tools_ctx, llm_trace, ctx.drive_logs,
+                                    _loop()._append_or_merge_user_message)
+    return False
+
+
 def _presence_forced_contract(ctx: _RoundLimitContext, tools_ctx: Any) -> str:
     """Arm a Presence task's ONE forced call to declare its outward delivery apart from its record.
 
@@ -1339,14 +1353,27 @@ def _forced_final_answer(
         return finish(ctx, reason=reason_code)
     tools_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
     _loop()._retire_main_reasoning(ctx)
+    if _admitted_request is None:  # an admitted candidate was priced with them (``loop_budget``)
+        _deliver_forced_late_results(ctx, llm_trace)
     _loop()._append_or_merge_user_message(ctx.messages, prompt)
     from ouroboros.transcript_prefix import append_reasoning_retirement_fact
     append_reasoning_retirement_fact(ctx.accumulated_usage, getattr(ctx, "round_idx", None), ctx.messages)
     extracted = ""
     response_meta: Dict[str, Any] = {}
     attempt = 0
+    refresh_late = False
     while attempt < (1 if single_semantic_turn else 2):
         try:
+            if refresh_late and _deliver_forced_late_results(ctx, llm_trace) and _admitted_request is not None:
+                from ouroboros import task_pacing
+
+                _admitted_request, _initial_messages = task_pacing.prepared_wrapup_candidate(
+                    ctx, [dict(row) for row in ctx.messages],
+                    allow_server_web_search=_loop()._server_web_allowed_by_task(tools_ctx))
+                if _admission is not None and task_pacing.wrapup_reservation_fits(
+                        request=_admitted_request, **_admission) is False:
+                    raise ForcedCandidateUnaffordable("late result changed the resumed wrap-up price")
+            refresh_late = False
             ctx.accumulated_usage.pop("_forced_response_meta", None)
             if attempt == 0 and _admitted_request is not None:
                 forced = _send_admitted_forced_candidate(
@@ -1360,6 +1387,7 @@ def _forced_final_answer(
             controlled = _loop()._handle_model_wait_control(ctx, error)
             if controlled is not None:
                 return controlled
+            refresh_late = True
             continue  # only an actual warm Resume returns; retry the same intent
         except BudgetExceeded:
             _loop()._drain_forced_owner_directives(ctx, llm_trace)
@@ -1414,6 +1442,7 @@ def _forced_final_answer(
             "[FORCED_OWNER_REFRESH] Answer all current directives; ignore the stale draft."
             + _forced_subject_prompt(ctx, llm_trace),
         )
+        refresh_late = True
         attempt += 1
 
     # Control resolution runs BEFORE the incomplete branch: a retained candidate
