@@ -274,7 +274,8 @@ root), `initial_text` otherwise. `dialogue_provenance.run_origin` mints that fac
 from typed fields (`owner_ingress`): an owner turn is a direct turn the door stamped,
 never a lane, a client id or an inherited stamp, and the stamp is reserved on
 `/api/tasks` and schedule templates. Neither label decides what work was accepted; the
-task contract and the owner's recorded answers do.
+task contract and the owner's recorded answers do. Who wrote an objective is a projection of
+the same fact (`owner_words.objective_author_line`), never read from the text.
 
 ### Anti-pattern: a chat id tested for truth
 
