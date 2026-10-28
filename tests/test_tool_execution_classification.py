@@ -59,28 +59,38 @@ def test_late_tool_settlement_runs_owner_cleanup_before_lease_close(monkeypatch)
     assert calls == ["cleanup", "lease"]
 
 
-def test_get_tool_timeout_honors_per_call_override(monkeypatch):
-    """T3 (v6.35.0): the OUTER tool-execution timeout must rise for a per-call
-    run_command/run_script timeout_sec, else the static 360s entry cap would cut
-    off a long command before the handler's own subprocess timeout fires."""
+def test_get_tool_timeout_follows_the_handlers_own_child_timeout(monkeypatch):
+    """The OUTER wait of a handler that bounds its own child (run_command, run_script,
+    verify_and_record) is that child's resolved timeout plus the settlement margin, never
+    below the registered window, so the inner timeout fires and settles first (#1376).
+    The rule it replaces raised the wait only for an explicit run_command/run_script
+    override, so the 600 s default child ran under a 360 s wait. The real entries carry
+    dispatch's own alias folding (``timeout`` -> ``timeout_sec``)."""
     from types import SimpleNamespace
 
     import ouroboros.loop_tool_execution as lte
+    import ouroboros.tools.shell_process as shell_process
+    from ouroboros.tools import shell, verify
 
     monkeypatch.setattr(lte, "load_settings", lambda: {})
+    monkeypatch.setattr(shell_process, "load_settings", lambda: {})
     monkeypatch.delenv("OUROBOROS_TOOL_TIMEOUT_SEC", raising=False)
-    tools = SimpleNamespace(get_timeout=lambda name: 360)
+    tools = SimpleNamespace(get_timeout=lambda name: 360,
+                            _entries={entry.name: entry for entry in [*shell.get_tools(), *verify.get_tools()]})
 
-    from ouroboros.config import get_per_call_timeout_ceiling_sec
+    from ouroboros.config import SETTINGS_DEFAULTS, get_per_call_timeout_ceiling_sec
 
     ceil = get_per_call_timeout_ceiling_sec()
     margin = lte._PER_CALL_TIMEOUT_OUTER_MARGIN_SEC
-    assert lte._get_tool_timeout(tools, "run_command", {}) == 360               # no override -> base
-    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": 900}) == min(max(360, 900), ceil) + margin
-    assert lte._get_tool_timeout(tools, "run_script", {"timeout": 600}) == min(max(360, 600), ceil) + margin  # alias
-    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": 5000}) == min(5000, ceil) + margin  # clamped
-    assert lte._get_tool_timeout(tools, "read_file", {"timeout_sec": 900}) == 360      # non-shell tool ignores it
-    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": "abc"}) == 360  # garbage -> base
+    default = min(int(SETTINGS_DEFAULTS["OUROBOROS_TOOL_TIMEOUT_SEC"]), ceil)
+    assert lte._get_tool_timeout(tools, "run_command", {}) == default + margin  # the default child, not 360
+    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": 900}) == min(900, ceil) + margin
+    assert lte._get_tool_timeout(tools, "run_script", {"timeout": 600}) == min(600, ceil) + margin  # alias
+    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": 5000}) == ceil + margin  # clamped
+    assert lte._get_tool_timeout(tools, "verify_and_record", {"timeout_sec": 900}) == min(900, ceil) + margin
+    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": 5}) == 360  # never below the window
+    assert lte._get_tool_timeout(tools, "read_file", {"timeout_sec": 900}) == 360  # non-shell tool ignores it
+    assert lte._get_tool_timeout(tools, "run_command", {"timeout_sec": "abc"}) == default + margin  # garbage -> default
 
 
 def test_review_blocked_is_not_treated_as_tool_failure():
