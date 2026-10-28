@@ -403,6 +403,11 @@ class OwnedClaudexorDaemon:
         )
         import httpx
 
+        deadline = getattr(self._attach, "deadline", None)
+        if deadline is not None and time.monotonic() >= deadline:
+            # The attaching caller's allowance ended: no request starts after it. The last
+            # probe's facts stand, so the start's typed outcome is the one it already earned.
+            return None, "allowance_spent", "the caller's allowance ended before this probe"
         self._silent_listener = False
         if not owned_daemon_provisioned():
             self._engine_version = self._engine_build_sha = ""
@@ -412,8 +417,7 @@ class OwnedClaudexorDaemon:
         except ClaudexorUnavailable as exc:
             return None, "stale", f"{exc.code}: {exc}"
         sink = getattr(self._attach, "sink", None)
-        if timeout_sec is None:
-            timeout_sec = self._attach_bound()
+        timeout_sec = self._attach_bound(timeout_sec)
         gateway = ClaudexorGateway(endpoint)
         try:
             handshake = gateway.handshake(**({} if timeout_sec is None else {"timeout_sec": timeout_sec}))
@@ -449,13 +453,16 @@ class OwnedClaudexorDaemon:
             _release(gateway)  # a decoded-body or thread-retire failure leaves no open client behind
             raise
 
-    def _attach_bound(self) -> Optional[float]:
-        """The probe's read bound as the attaching caller set it (``ensure_owned_gateway``): a passive
-        sweep's short bound, else the gateway's default read bound clamped to what remains of the
-        caller's own allowance, floored so a loopback handshake can complete; ``None`` without either."""
+    def _attach_bound(self, bound: Optional[float] = None) -> Optional[float]:
+        """The probe's read bound under the attaching caller's clock (``ensure_owned_gateway``):
+        the phase's own bound (``bound`` when the phase names one, as a readiness poll or the
+        re-probe after runtime preparation does; else a passive sweep's short bound, else the
+        gateway's default read bound) clamped to what remains of the caller's allowance,
+        floored so a loopback handshake can complete; outside an attach, the bound as given."""
         from ouroboros.gateways.claudexor import _READ_TIMEOUT_SEC
 
-        bound = getattr(self._attach, "bound", None)
+        if bound is None:
+            bound = getattr(self._attach, "bound", None)
         deadline = getattr(self._attach, "deadline", None)
         if deadline is None:
             return bound
@@ -1287,9 +1294,11 @@ def ensure_owned_gateway(*, admission_wait_sec: Optional[float] = None,
     daemon). A silent listener keeps its typed custody (``daemon_not_answering`` with
     ``observation_reason=observation_read_timeout``); a START caller with no explicit wait
     retries it within ITS OWN logical allowance (``_caller_allowance``), which no handshake
-    resets and which bounds EVERY phase of the start: each probe's read (the gateway default
-    clamped to the remainder), the readiness wait, the backoff (re-checked before another
-    probe) and the admission window below; a passive sweep (``admission_wait_sec=0``) bounds
+    resets and which bounds EVERY probe and wait of the start: each probe's read (its phase's
+    bound clamped to the remainder, the re-probe after runtime preparation included; no probe
+    starts after the allowance), the readiness wait, the backoff (re-checked before another
+    probe) and the admission window below. Runtime preparation itself is not a probe and is
+    not clamped. A passive sweep (``admission_wait_sec=0``) bounds
     its probe by ``SHORT_POLL_TIMEOUT_SEC`` and never retries. ADMISSION (``recovery_only``)
     is re-polled on the same gateway under ``admission_wait_sec``, expiring into the typed
     refusal the 503 produces (D28). ``startup_wait_sec`` narrows the readiness wait as before.
