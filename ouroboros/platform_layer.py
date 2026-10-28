@@ -788,10 +788,10 @@ def kill_process_tree(proc: subprocess.Popen, *, exclude_pids: "set[int] | None"
 
 
 def terminate_process_tree(proc: subprocess.Popen) -> None:
-    """Gracefully terminate a subprocess and its process tree."""
-    if IS_WINDOWS:
+    """Gracefully terminate a subprocess and its process tree; a child in the caller's own group gets SIGTERM alone."""
+    if IS_WINDOWS or (pgid := process_group_id(proc.pid)) == current_process_group_id():
         proc.terminate()
-    elif pgid := process_group_id(proc.pid):
+    elif pgid:
         terminate_process_group_id(pgid)
 
 

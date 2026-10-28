@@ -32,6 +32,7 @@ def test_kill_process_tree_sweeps_escaped_descendants(monkeypatch):
 
     monkeypatch.setattr(pl, "_process_children", fake_snapshot)
     monkeypatch.setattr(pl.os, "getpgid", lambda pid: 7777)
+    monkeypatch.setattr(pl.os, "getpgrp", lambda: 1)  # the caller is in another group
     monkeypatch.setattr(pl.os, "killpg", fake_killpg)
     monkeypatch.setattr(pl.os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
 
@@ -98,3 +99,50 @@ def test_a_child_in_the_callers_group_dies_and_the_caller_lives():
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, (done.returncode, done.stdout, done.stderr)
     assert done.stdout.strip() == "child -9"
+
+
+@pytest.mark.parametrize("caller_group, group_signalled", [(7777, False), (1234, True)])
+def test_terminate_process_tree_spares_only_the_callers_own_group(monkeypatch, caller_group, group_signalled):
+    """A child in the caller's group gets SIGTERM alone; any other group still gets it whole (#2353)."""
+    import signal as _signal
+    import ouroboros.platform_layer as pl
+
+    if pl.IS_WINDOWS:
+        pytest.skip("POSIX process groups")
+    killpg_calls, terminated = [], []
+    monkeypatch.setattr(pl.os, "getpgid", lambda pid: 7777)
+    monkeypatch.setattr(pl.os, "getpgrp", lambda: caller_group)
+    monkeypatch.setattr(pl.os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+
+    class _FakeProc:
+        pid = 4242
+
+        def terminate(self):
+            terminated.append(self.pid)
+
+    pl.terminate_process_tree(_FakeProc())
+
+    assert killpg_calls == ([(7777, _signal.SIGTERM)] if group_signalled else [])
+    assert terminated == ([] if group_signalled else [4242])
+
+
+def test_the_local_runtime_install_leads_its_own_group(monkeypatch):
+    """Stopping a llama-cpp-python install signals the install's own tree, never the server's group (#2353)."""
+    import os
+    import sys
+
+    import ouroboros.platform_layer as pl
+    from ouroboros import local_model
+
+    if pl.IS_WINDOWS:
+        pytest.skip("POSIX process groups")
+    probe = "import os; print('leads its own group:', os.getpgid(0) == os.getpid())"
+    monkeypatch.setattr(local_model, "_get_install_command", lambda: [sys.executable, "-c", probe])
+    monkeypatch.setattr(local_model, "_get_install_env", lambda: dict(os.environ))
+    manager = local_model.LocalModelManager()
+    monkeypatch.setattr(manager, "check_runtime", lambda: True)
+
+    manager._run_install()
+
+    assert manager._runtime_status == "install_ok", manager._runtime_install_log
+    assert "leads its own group: True" in manager._runtime_install_log
