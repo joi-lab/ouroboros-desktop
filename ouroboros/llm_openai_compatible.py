@@ -597,8 +597,8 @@ class _OpenAICompatibleLaneMixin:
         usage["cost_final"] = bool(
             usage.get("cost") is not None and not usage.get("cost_estimated")
         )
-        # Preserve any legacy diagnostic disclosure already staged by a compatibility
-        # caller; normal dispatch adaptation is disclosed through usage.request_wire.
+        # Merge the tier note staged at build (DeepSeek/Z.ai projections); normal
+        # dispatch adaptation is disclosed through usage.request_wire.
         _clamp_note = self._pop_effort_clamp_disclosure()
         if _clamp_note:
             usage["reasoning_effort_clamped"] = _clamp_note
