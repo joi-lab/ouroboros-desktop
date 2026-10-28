@@ -225,7 +225,12 @@ def test_snapshot_is_a_distinct_checked_database(ctx, tmp_path, monkeypatch):
 def test_current_store_hold_stays_within_half_the_writers_wait(ctx, tmp_path, monkeypatch):
     # Task writes wait store.STORE_WAIT_SEC on the lock a current-store read holds; a snapshot's own query holds nothing.
     from contextlib import contextmanager
+    from itertools import count
+    from types import SimpleNamespace
 
+    # A clock that ticks on every read, as a fine one does: a coarse one (Windows) may not tick between two reads.
+    clock = count(1000.0, 0.001)
+    monkeypatch.setattr(sql, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     seen, real_source = [], sql._source
 
     @contextmanager
@@ -255,9 +260,8 @@ def test_current_store_hold_stays_within_half_the_writers_wait(ctx, tmp_path, mo
                                    query="SELECT task_id FROM tasks", scratch=str(scratch), max_rows=10, max_bytes=65536))
         assert result["rows"] == [["caller"]]
         assert [name for name, _ in seen] == ["source", store.store_path(ctx.drive_root).name, "snapshot.sqlite"]
-        # Positive and never growing; a coarse clock (Windows) may not tick between two reads.
-        assert 0 < seen[1][1] <= seen[0][1] <= held
-        assert 0 < seen[2][1] <= timeout
+        assert 0 < seen[1][1] < seen[0][1] <= held
+        assert 0 < seen[2][1] < timeout
 
 
 def test_name_tier_uses_the_store_lock(tmp_path, monkeypatch):
