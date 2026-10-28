@@ -3611,7 +3611,7 @@ def test_ui_smoke_dismiss_overlapping_settle_never_freezes_the_card(direct_serve
                     """
                 )
                 assert result["cardCount"] == 1
-                assert result["verdict"] == "Connected."
+                assert result["verdict"] == "Signed in."
                 assert "Could not cancel" not in result["html"]
                 assert (len(creates), result["deletes"], len(gets), len(reconciles)) == (1, 1, 1, 0)
             finally:

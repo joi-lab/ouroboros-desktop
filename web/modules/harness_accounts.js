@@ -62,7 +62,7 @@ import {
 } from './claudexor_status_store.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { harnessIdentityMarkup } from './harness_presentation.js';
-import { createLoginCardController, normalizeProfileName, preserveCardFocus } from './harness_login_cards.js';
+import { SIGN_IN_SCOPE_NOTE, createLoginCardController, normalizeProfileName, preserveCardFocus } from './harness_login_cards.js';
 import { createHarnessMaintenanceController } from './harness_maintenance.js';
 import { formatRelativeAge } from './ui_helpers.js';
 import { escapeHtmlAttr as escapeHtml } from './utils.js';
@@ -87,7 +87,7 @@ export function verificationBadge(profile, { known = true } = {}) {
     const availability = String(status.availability || '');
     const badge = () => {
         if (source === 'vendor' && verification === 'passed') {
-            return { tone: 'ok', label: 'Verified live' };
+            return { tone: 'ok', label: 'Login verified' };
         }
         if (verification === 'passed') {
             // The claim is NARROWER than "signed in" and must stay narrower in
@@ -113,8 +113,8 @@ export function verificationBadge(profile, { known = true } = {}) {
     };
     const value = badge();
     // `known` = the ACCOUNTS facet was really read. Otherwise this row is the
-    // retained snapshot's memory of an account, and painting a green "Verified
-    // live" over a read that never landed is the same lie as the banner's — the
+    // retained snapshot's memory of an account, and painting a green "Login
+    // verified" over a read that never landed is the same lie as the banner's — the
     // panel used to say nothing could be listed while a stale row sat below it
     // dressed as verified. The row survives (it is the only Connect affordance
     // some harnesses have); only its claim is dated, and the green goes with it.
@@ -609,15 +609,12 @@ export function bareRowStatusText(accountsRead, { accountsUnsupported = false } 
 }
 
 export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported = false } = {}) {
-    // The aggregate lozenge in a card header: how many accounts ROTATION can
-    // actually use. That claim may only count accounts that are BOTH signed in
-    // and enabled — a disabled row is the owner's own exclusion, and a header
-    // that counted it would over-promise the pool exactly the way counting a
-    // cold row used to.
+    // Count logins independently of rotation: authentication and catalog
+    // access do not establish a working main-chat transport or configured agent.
     if (!rows.length) return { tone: 'muted', label: bareRowStatusText(accountsRead, { accountsUnsupported }) };
     // …and the SAME provenance rule the rows obey. These rows are the retained
     // snapshot's memory when the accounts facet did not land, so a green
-    // "Connected" over them is the row badge's lie one level up — and the two
+    // "Signed in" over them is the row badge's lie one level up — and the two
     // would contradict each other inside one card, the header claiming fresh
     // while the badge under it says last known.
     const known = accountsRead === READ_OK;
@@ -638,19 +635,19 @@ export function familyStatus(rows, { accountsRead = READ_OK, accountsUnsupported
     // deliberately does not probe disabled rows and reports `not_run`; that
     // unknown verification must not hide the stronger fact that every account
     // has been excluded from rotation.
-    if (rows.every((row) => row.enabled === false)) {
+    const allDisabled = rows.every((row) => row.enabled === false);
+    const live = rows.filter((row) => String(row?.status?.verification || '') === 'passed').length;
+    if (allDisabled && !live) {
         return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · all disabled`);
     }
-    const live = rows.filter((row) => String(row?.status?.verification || '') === 'passed'
-        && row.enabled !== false).length;
     if (!live) {
         const notRun = rows.some((row) => String(row?.status?.verification || '') === 'not_run');
         if (notRun) return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not verified`);
         return verdict('muted', `${rows.length} account${rows.length === 1 ? '' : 's'} · not signed in`);
     }
-    if (live < rows.length) return verdict('ok', `${live} of ${rows.length} connected`);
-    if (live === 1) return verdict('ok', 'Connected');
-    return verdict('ok', `${live} accounts · rotating`);
+    const label = live < rows.length ? `${live} of ${rows.length} signed in`
+        : live === 1 ? 'Signed in' : `${live} accounts signed in`;
+    return verdict(allDisabled ? 'muted' : 'ok', `${label}${allDisabled ? ' · all disabled' : ''}`);
 }
 
 export function nextUpBadge(payload, harness, { accountsRead = READ_OK } = {}) {
@@ -1079,10 +1076,9 @@ export function renderAgentAccountsSection() {
         <div class="form-section" id="harness-accounts-section">
             <h3>Accounts</h3>
             <div class="settings-section-copy">
-                Subscriptions shared by Models, delegated subagents, and reviewers. Unpinned work
-                rotates across a family's enabled, signed-in accounts; a disabled account keeps its
-                login and stays out of rotation. Accounts live in Ouroboros's own agent home; your
-                personal logins are never read or imported.
+                ${SIGN_IN_SCOPE_NOTE} Check the intended route in Models or Agents separately.
+                Unpinned work uses enabled accounts; disabling keeps the login out of rotation.
+                Accounts live in Ouroboros's own agent home; personal logins are never imported.
             </div>
             <div id="harness-accounts-error" class="settings-inline-status" data-tone="error" hidden></div>
             <div id="harness-model-marks-note" class="settings-inline-status" data-tone="muted" hidden></div>
@@ -1101,7 +1097,7 @@ export function accountRowFacts(row, payload,
     // ACCOUNTS read, the window is the QUOTA read, and one lands while the
     // other refuses. The panel used to render both off the retained snapshot
     // regardless, so after a refused read the banner said nothing could be
-    // listed while a stale row sat underneath it showing "Verified live" and a
+    // listed while a stale row sat underneath it showing a verified badge and a
     // red exhausted window. Pure, because that rule is the thing worth pinning.
     //
     // The two-line anatomy is the owner's (D-10): line 1 is the account and its

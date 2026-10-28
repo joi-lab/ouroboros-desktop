@@ -314,16 +314,16 @@ def test_an_empty_family_login_confirms_only_the_engine_resolved_row(direct_serv
                 page.route("**/api/claudexor/login**", _login_transport(state, after))
                 _open_accounts(page, direct_server_with_data["url"], 1110)
                 page.locator('[data-family="claude"] [data-family-add]').click()
-                page.wait_for_function("() => /Connected\\.|Could not confirm the sign-in yet/.test("
+                page.wait_for_function("() => /Signed in\\.|Could not confirm the sign-in yet/.test("
                                        "document.querySelector('[data-family-login=\"claude\"]').textContent)",
                                        timeout=45_000)
                 card = page.locator('[data-family-login="claude"]').inner_text()
                 outcomes[expected] = card
                 assert state["creates"] and state["creates"][0].get("profile_id", "") == ""
                 if expected == "success":
-                    assert "Connected." in card
+                    assert "Signed in." in card
                 else:
-                    assert "Could not confirm the sign-in yet" in card and "Connected." not in card
+                    assert "Could not confirm the sign-in yet" in card and "Signed in." not in card
                 shot = _evidence(f"built__login-{expected}__light__1110x750.png")
                 if shot:
                     page.screenshot(path=str(shot), animations="disabled")
