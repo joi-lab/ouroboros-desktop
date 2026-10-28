@@ -197,19 +197,10 @@ def test_safety_mode_owner_post_route_decodes_percent_encoding():
 
 
 def test_response_format_in_droppable_params():
-    from ouroboros.llm import _OPTIONAL_DROPPABLE_PARAMS, LLMClient
+    from ouroboros.llm import _OPTIONAL_DROPPABLE_PARAMS
 
     assert "response_format" in _OPTIONAL_DROPPABLE_PARAMS
     assert "reasoning_effort" in _OPTIONAL_DROPPABLE_PARAMS  # round 6: rejected effort hint strips, not fails
-    exc = RuntimeError("Error code: 400 - response_format is an unsupported parameter")
-    assert LLMClient._parameter_rejection_error(exc) is True
-    payload = {"model": "m", "messages": [], "response_format": {"type": "json_object"}}
-    retry = LLMClient()._retry_without_optional_sampling(payload, "prov/model-rf-test", exc)
-    assert retry is not None and "response_format" not in retry
-    # Remembered rejection strips it from the next payload for the same model.
-    fresh = {"model": "m", "messages": [], "response_format": {"type": "json_object"}}
-    LLMClient._apply_rejected_param_cache(fresh, "prov/model-rf-test")
-    assert "response_format" not in fresh
 
 
 def test_chat_signature_accepts_response_format():

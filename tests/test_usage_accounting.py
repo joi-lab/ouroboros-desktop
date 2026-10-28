@@ -700,7 +700,6 @@ def test_llm_retry_machine_does_not_classify_budget_rail_as_provider_failure(dat
     def forbidden(*args, **kwargs):
         raise AssertionError("local accounting rail reached provider retry logic")
 
-    monkeypatch.setattr(client, "_retry_without_optional_sampling", forbidden)
     monkeypatch.setattr(client, "_openrouter_signature_retry_kwargs", forbidden)
     monkeypatch.setattr(client, "_reroute_kwargs_for_body_error", forbidden)
     target = {
