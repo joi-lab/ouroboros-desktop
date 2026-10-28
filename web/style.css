@@ -6169,6 +6169,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     overflow-y: auto;
     overscroll-behavior: contain;
 }
+/* Cut (toast.js names it a region), the column takes the pointer itself, as any scrolling box does: a wheel or a finger
+   anywhere over it scrolls it in every engine (Linux WebKit finds a scroller only where it takes pointer events).
+   Uncut, its empty box lets the page through. */
+#toast-stack[tabindex] { pointer-events: auto; }
 /* A notice taller than the column shows keeps its close button on screen, at the nearer edge. */
 #toast-stack .toast-dismiss { position: sticky; top: 0; bottom: 0; }
 /* The focused scroll region uses the same ring as other keyboard controls. */
