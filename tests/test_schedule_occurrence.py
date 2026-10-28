@@ -62,7 +62,9 @@ def _project(q, pid="proj", folder=None):
     return create_project(q.root, pid, name="Room", working_dir=str(folder or ""))
 
 
-def test_one_occurrence_one_receipt_with_the_room_address(q):
+def test_one_occurrence_one_receipt_with_the_room_address(q, monkeypatch):
+    frames = []
+    monkeypatch.setattr("supervisor.worker_chat_lane._broadcast_task_named", frames.append)
     _row(q, intent={"kind": "system_repo"})
     q.queue.check_scheduled_tasks()
     q.queue.check_scheduled_tasks()
@@ -72,6 +74,7 @@ def test_one_occurrence_one_receipt_with_the_room_address(q):
     assert receipt["status"] == "scheduled" and receipt["chat_id"] == 42  # never the hidden chat 0
     # The schedule's name is the run's authored name from admission on: history and the task API read it here.
     assert receipt["title"] == receipt["suggested_name"] == task["title"] == "Follow-up"
+    assert frames == [{"type": "task_named", "task_id": task["id"], "suggested_name": "Follow-up"}]  # the live card is born named
     assert (admission["status"], admission["dispatch"]) == ("accepted", "none")
     assert task["metadata"]["schedule_occurrence"]["token"] == admission["token"]
     row = _rows(q)["s1"]
