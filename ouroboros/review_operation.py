@@ -55,6 +55,10 @@ _OPEN_STATES = frozenset({OPERATION_PREPARING, OPERATION_RETAINED, OPERATION_DIS
 # never-dispatched one, and neither is an unknown outcome.
 COLLECTED, DEFERRED, UNAVAILABLE, NEVER_DISPATCHED = (
     "collected", "deferred", "unavailable", "never_dispatched")
+# ``usage.custody_state`` of a lost seat whose own row names a requested, never-bound start:
+# an attach-only read cannot bind it, but its review's own collection may still replay that
+# exact request under its original key (``review_pause._settle_left_record``).
+START_UNBOUND = "start_unbound"
 _OBSERVE_TIMEOUT_SEC = 10.0
 _CONTROL_RECHECK_SEC = 1.0
 
@@ -872,9 +876,13 @@ def _observe_delegated_review(root: Any, request: Any, slot: Any, row: dict, ope
     if record.get("state") == "failed_definite":
         return _row_actor(slot, operation_id, row, state="not_dispatched",
                           reason="The daemon definitively refused this reviewer's start."), NEVER_DISPATCHED
-    return _row_actor(slot, operation_id, row, state="custody_lost", reason=(
+    actor = _row_actor(slot, operation_id, row, state="custody_lost", reason=(
         "A start was requested but no run was ever bound to it; its outcome stays unknown "
-        "and it is never re-posted.")), UNAVAILABLE
+        "and it is never re-posted."))
+    # Only the seat's own token and the retained exact body let its review's collection replay it.
+    if recorded_invocation_tokens(row) and isinstance(record.get("request"), dict) and record["request"]:
+        actor.usage["custody_state"] = START_UNBOUND
+    return actor, UNAVAILABLE
 
 
 def _attach_only_run(root: Any, request: Any, slot: Any, operation_id: str, run_id: str, invocation: dict,

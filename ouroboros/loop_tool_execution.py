@@ -24,6 +24,7 @@ from ouroboros.config import (
     load_settings,
 )
 from ouroboros.deadline_utils import deadline_remaining_sec
+from ouroboros.late_tool_results import late_watch_fields, record_call_id
 from ouroboros.observability import new_call_id, persist_call
 from ouroboros.tool_call_log import (
     CALL_STARTED, CALL_SETTLED, CALL_WAIT_ENDED, append_call_row, append_failed, claim_settlement,
@@ -42,6 +43,8 @@ from ouroboros.tool_result_delivery import (
 )
 from ouroboros.tool_result_record import TOOL_RESULT_RECORD_KEY, make_tool_result_record
 from ouroboros.tools.registry import ToolRegistry
+from ouroboros.tools.shell_process import COMMAND_TIMEOUT_TOOLS, command_timeout_for_call
+from ouroboros.tools.tool_resolution import _normalize_tool_call_args
 from ouroboros.tools.tool_result import (
     TOOL_CODE_SPECS,
     LegacyTextResultAdapter,
@@ -219,7 +222,9 @@ def _with_correlation(payload: Dict[str, Any], correlation: Dict[str, Any], *, t
     return out
 
 
-_PER_CALL_TIMEOUT_TOOLS = ("run_command", "run_script")
+# The tools whose handler bounds its own child through ``shell_process``'s one per-command
+# resolution; the outer wait follows that resolution (``_get_tool_timeout``).
+_PER_CALL_TIMEOUT_TOOLS = COMMAND_TIMEOUT_TOOLS
 # TYPED process facts (exit_code, POSIX signal name, duration_ms, timed_out,
 # killed_by_host, pre_exec_failure — plus resolved_runtime when the interpreter
 # resolver substituted the executable) reach this loop through the thread-local
@@ -231,9 +236,9 @@ _PER_CALL_TIMEOUT_TOOLS = ("run_command", "run_script")
 # published. Typed facts take PRECEDENCE over the producer-meta copy from the
 # ToolResult; a record with no typed publication carries no process facts at all
 # (D02: prose is never harvested into typed fields).
-# Structural ordering margin: the outer cap sits this far above the requested
-# per-call timeout so the handler's own (cleanly-messaged) subprocess timeout
-# fires first, before the outer thread-kill. Not a wait duration — a race margin.
+# Structural ordering margin: the outer cap sits this far above the handler's
+# resolved child timeout so its own (cleanly-messaged) timeout fires first and an
+# ordinary settlement lands inside the wait. Not a wait duration — a race margin.
 _PER_CALL_TIMEOUT_OUTER_MARGIN_SEC = NESTED_SETTLEMENT_MARGIN_SEC
 
 
@@ -256,12 +261,13 @@ def _get_tool_timeout(
 ) -> int:
     """Return max(settings/env timeout, per-tool minimum).
 
-    For ``run_command``/``run_script`` a per-call ``timeout_sec`` (or its
-    ``timeout`` alias) raises this OUTER tool-execution cap so the handler's own
-    deadline-clamped subprocess timeout fires first — otherwise a legitimately
-    long ``run_command(timeout_sec=900)`` would be cut off at the static 360s
-    entry cap before the inner timeout matters. A +30s margin lets the inner
-    (cleanly-messaged) timeout win over the outer thread-kill.
+    A handler that bounds its own child (``shell_process.COMMAND_TIMEOUT_TOOLS``) waits
+    at least that child's timeout plus the settlement margin, resolved by the handler's
+    own function from the arguments dispatch hands it (its alias folding, on a copy), so
+    the child's cleanly reported timeout fires first; a second rule once ran a 1800 s
+    check under a 1000 s wait (#1376). Near a task deadline the child keeps its 60 s
+    floor, so this wait can outlast that deadline as the registered window already
+    could; what settles after the wait ends is a late result (``late_tool_results``).
     """
     settings_val = 0
     try:
@@ -283,16 +289,12 @@ def _get_tool_timeout(
         from ouroboros.tools.vision import _vision_tool_timeout
 
         base = max(base, _vision_tool_timeout(tools._ctx, tool_args or {}))
-    if tool_name in _PER_CALL_TIMEOUT_TOOLS and isinstance(tool_args, dict):
-        raw = tool_args.get("timeout_sec", tool_args.get("timeout"))
-        try:
-            override = int(raw) if raw is not None else 0
-        except (TypeError, ValueError):
-            override = 0
-        if override > 0:
-            from ouroboros.config import get_per_call_timeout_ceiling_sec
-
-            return min(max(base, override), get_per_call_timeout_ceiling_sec()) + _PER_CALL_TIMEOUT_OUTER_MARGIN_SEC
+    if tool_name in _PER_CALL_TIMEOUT_TOOLS:
+        call_args, entry = dict(tool_args or {}), (getattr(tools, "_entries", None) or {}).get(tool_name)
+        if entry is not None:
+            _normalize_tool_call_args(entry, call_args)
+        inner = command_timeout_for_call(tool_name, call_args, getattr(tools, "_ctx", None))
+        return max(base, inner + _PER_CALL_TIMEOUT_OUTER_MARGIN_SEC)
     return _deadline_clamped_timeout(tools, tool_name, base)
 
 
@@ -605,9 +607,12 @@ def _execute_single_tool(
         tool_call_id, _tool_correlation(tools), getattr(getattr(tools, "_ctx", None), "task_attempt", None))
     # The FROZEN correlation: a body that starts after an executor wait never adopts a later round's ids.
     correlation = {key: invocation[key] for key in ("execution_id", "round_id", "llm_call_id") if key in invocation}
+    # The invocation id and attempt make this call's own manifest (one address per invocation)
+    # bindable to its wait-end record when it settles after a timeout (``late_tool_results``).
     trace_identity = {"tool": fn_name, "tool_call_id": tool_call_id,
                       "parent_call_id": correlation.get("llm_call_id"),
-                      "execution_id": correlation.get("execution_id"), "round_id": correlation.get("round_id")}
+                      "execution_id": correlation.get("execution_id"), "round_id": correlation.get("round_id"),
+                      **{key: invocation[key] for key in ("invocation_id", "task_attempt") if key in invocation}}
     settlement = {"type": CALL_SETTLED, "tool": fn_name, "task_id": task_id, **invocation_fields(invocation),
                   **start_log_field(invocation)}
 
@@ -712,7 +717,7 @@ def _execute_single_tool(
         trace_ref = persist_call(
             pathlib.Path(drive_logs).parent,
             task_id=task_id,
-            call_id=new_call_id(f"tool_{fn_name}"),
+            call_id=record_call_id(f"tool_{fn_name}", str(invocation.get("invocation_id") or "")),
             call_type="tool_call",
             payload={
                 **trace_identity,
@@ -829,10 +834,10 @@ def abandoned_on_timeout(timeout_sec: float, *, bounded: bool = True) -> Iterato
     mechanics the loop uses: the worker inherits the caller's execution
     deadline through a copied context (its inner waits share the bound), the
     caller waits with ``future_result`` (a quota pause does not spend the
-    budget), and the executor is retired WITHOUT joining — a caller that timed
-    out walks away, and the value the worker settles on later is evidence of
-    nothing. ``bounded=False`` leaves the context unscoped for a terminal wait
-    that must not be cut at all.
+    budget), and the executor is retired WITHOUT joining: the caller walks away.
+    The reviewer episode never reads the worker's later value; the loop records
+    it for its next authorized turn (``late_tool_results``). ``bounded=False``
+    leaves the context unscoped for a terminal wait that must not be cut at all.
     """
     executor = ThreadPoolExecutor(max_workers=1)
     try:
@@ -881,11 +886,12 @@ def _make_timeout_result(
     result_meta = _typed_result_metadata(fn_name, result, True, tool_result)
     trace_ref = {}
     corr = dict(correlation or {})
+    frozen = {key: invocation[key] for key in ("invocation_id", "task_attempt") if invocation and key in invocation}
     try:
         trace_ref = persist_call(
             pathlib.Path(drive_logs).parent,
             task_id=task_id,
-            call_id=new_call_id(f"tool_timeout_{fn_name}"),
+            call_id=record_call_id(f"tool_timeout_{fn_name}", str(frozen.get("invocation_id") or "")),
             call_type="tool_timeout",
             payload={
                 "tool": fn_name,
@@ -898,6 +904,7 @@ def _make_timeout_result(
                 "args_redacted_preview": args_for_log,
                 "result": result,
                 "result_meta": result_meta,
+                **frozen,
             },
             manifest={
                 "execution_id": corr.get("execution_id"),
@@ -905,6 +912,7 @@ def _make_timeout_result(
                 "parent_call_id": corr.get("llm_call_id"),
                 "tool_call_id": tool_call_id,
                 "tool": fn_name,
+                **frozen,
                 "status": "timeout",
                 "timeout_sec": timeout_sec,
                 "tool_code": tool_result.code,
@@ -1505,6 +1513,7 @@ def process_tool_results(
                 "host_annotations": [*(typed.host_annotations if isinstance(typed, ToolResult) else ()),
                                      *([exec_result["delivery_note"]] if exec_result.get("delivery_note") else [])]}
                if "producer_source_ref" in exec_result else {}),
+            **late_watch_fields(exec_result, ctx),
         })
 
     # These resident facts and exact bodies were included before allocation. Append
