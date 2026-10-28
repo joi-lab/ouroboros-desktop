@@ -1,6 +1,6 @@
 """A routing act's owner notice reaches Telegram once, through the carrier the host selected.
 
-The real producers (the steer handler, the promote publication boundary, the receipt writer)
+The real producers (the steer handler, the promote publication boundary, both receipt writers)
 publish through the real message bus into the real Telegram outbound handler; only the Bot API
 wire is a recording fake. The ACK is the normal carrier and replies to the owner's own message
 through the exact message map; a refusal's paired System row stays in the web and is skipped
@@ -399,6 +399,40 @@ def test_a_landed_act_says_nothing_but_a_file_it_could_not_attach(phone, monkeyp
                               {"ordinal": 1, "label": "отчёт.pdf", "status": "rejected", "reason": "source_missing"}])
     [sent] = phone.sent()
     assert sent["text"] == "Not attached to the task: отчёт.pdf" and sent["reply_to_message_id"] == 50
+
+
+@pytest.mark.parametrize("act", ["project_unavailable", "file_not_attached", "landed"])
+def test_the_direct_receipt_names_its_ack_the_carrier_from_the_fields_its_row_was_written_with(phone, act):
+    """The server's own receipt writer (a message to a Project that takes no more work, words saved into a
+    work's mailbox) states the same carrier as the supervisor's: a refusal or a file not attached is one line
+    answering the owner's message, a plain landed delivery says nothing, and neither the carrier nor the
+    reply is a field of the durable row."""
+    from ouroboros.chat_references import reference_from_row
+    from ouroboros.project_dialogue import latest_chat_annotations
+    from ouroboros.server_owner_routing import _record_routing_receipt
+
+    row = phone.owner(50)
+    if act == "project_unavailable":
+        receipt = {"action": "project_route", "target": "gone", "status": "project_unavailable",
+                   "reason": "project_unavailable"}
+    else:
+        receipt = {"action": "mailbox_delivery", "target": "t1", "status": "delivered", "attachment_manifest": [
+            {"ordinal": 0, "label": "отчёт.pdf", "status": "rejected" if act == "file_not_attached" else "staged"}]}
+    _record_routing_receipt(phone.bridge, phone.ctx, chat_id=42, client_message_id=row["client_message_id"], **receipt)
+    [ack] = phone.acks()
+    stored = latest_chat_annotations(phone.data)[row["client_message_id"]]
+    assert {"routing_notice_carrier", "reply_to"}.isdisjoint(stored)
+    if act == "landed":
+        assert phone.sent() == [] and {"routing_notice_carrier", "reply_to"}.isdisjoint(ack)
+        return
+    assert (ack["routing_notice_carrier"], ack["reply_to"]) == ("routing_ack", reference_from_row(row))
+    [sent] = phone.sent()
+    if act == "project_unavailable":
+        assert stored["cause"] == ack["cause"] == "Not started: the project is no longer available"
+        assert sent["text"] == f"{ack['target_label']} · {ack['cause']}"
+    else:
+        assert sent["text"] == "Not attached to the task: отчёт.pdf"
+    assert sent["reply_to_message_id"] == 50
 
 
 def _host_promote(row, *, token="tok-pdf"):

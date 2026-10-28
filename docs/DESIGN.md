@@ -953,15 +953,14 @@ this Project" came to be drawn six ways. The rule is therefore about intents.
   activity (the work card's chip does). Its accessible name says in words what
   the glyph and the arrow say in pixels (`Open project <name>`); nothing depends
   on hover.
-- **Two forms, one recipe.** The reference is a capsule: it leads a Project-bound
-  work card's action row at that row's 28px height and meta size, and sits
-  everywhere else: under a mirrored answer or a System lifecycle row (in the
-  shared `createSystemMessageActions` row, token spacing, wrapping, focus-ring
-  clearance), at the end of the owner's routed message's one receipt line
-  ("Passed on to «work» in", "Started as a task in"), and in a Main question
-  copy's voice line beside `Ouroboros`, at that line's 28px height and meta size
-  (`.ui-hit-area` keeps a finger's target; under a finger the line leaves the
-  head's × its column, so neither takes the other's). The whole capsule is the
+- **Two forms, one recipe.** The reference is a capsule: it leads a Project-bound work card's action
+  row at that row's 28px height and meta size, and sits everywhere else: under a mirrored answer or a
+  System lifecycle row (in the shared `createSystemMessageActions` row, token spacing, wrapping,
+  focus-ring clearance), ending an owner message's one receipt line ("Passed on to «work…» in": the
+  owner asked for it compact on 27.10, the name stays stored whole; "Started as a task in"), and in a
+  Main question copy's voice line beside `Ouroboros`, at that line's 28px height and meta size
+  (`.ui-hit-area` keeps a finger's target; under a finger the line leaves the head's × its column, so
+  neither takes the other's). The whole capsule is the
   target, with one fill whose hover and press deepen the whole capsule; no
   border, ring or hairline, and no width that depends on where it sits. Inside the dark
   Ouroboros voice its fill is that voice's capsule step and its ink a lighter Project ink, so the
@@ -2030,16 +2029,17 @@ button's name, not its row. A threshold crossing names its bound and threshold w
 advice; distinct bounds and thresholds get distinct rows, and historical
 producers without a named bound keep their old label.
 
-Delegated executor activity keeps its own attributed voice in the root or child
-timeline. Messages lead; thinking stays folded in its own details, and routine
-technical events collapse into counts with per-event detail under Expand.
-Problems, unread ranges and omitted previews stay visible with a full-source
-reference. Preview limits include serialized size; they never erase the carrier
-or its source. Overlapping reads deduplicate by sequence identity, retaining any
-unseen tail's omission notice; equal words alone are not duplicates. A stream end
-before the observed cursor states unresolved coverage. Live, reconnect and replay
-use the same projection. Telegram reserves room for problems and incompleteness
-beside its disclosed speech preview and keeps the complete task reference.
+A delegated executor keeps its attributed voice in the root or child timeline:
+messages lead, thinking folds into its details, technical events count with
+detail under Expand. Problems, unread ranges and omitted previews stay visible
+with their source. Overlapping reads show each sequence once and keep an unseen
+tail's notice. An engine-keyed utterance shows once where it began: its complete
+text replaces the draft (`Updated`, with its source, if changed), an abandoned
+draft is marked, equal words never merge. The typed final answer is an `Answer`
+disclosure: folded after its actor's words, open alone (`Updated` and `Answer`:
+owner 27.10, A). A stream end before the observed cursor is unresolved coverage.
+Live, reconnect and replay agree; Telegram's speech preview leaves room for
+problems, gaps and the task reference.
 
 `web/modules/chat.js::blockHasWork` governs chrome from work, excluding open
 attention and a bare outcome (owner 16.09: real work is a card, a greeting is
