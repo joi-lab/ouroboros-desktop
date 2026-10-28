@@ -11,6 +11,7 @@ import shlex
 import pytest
 
 from ouroboros import claudexor_daemon as owned
+from ouroboros import claudexor_harness_install as installer
 from tests._governance_docs_shared import architecture_text
 
 
@@ -1667,7 +1668,7 @@ def test_immediate_missing_cli_trigger_requires_exact_job_and_engine(monkeypatch
     from types import SimpleNamespace
 
     from ouroboros import claudexor_runtime as runtime
-    from ouroboros.claudexor_daemon import is_immediate_missing_cli_job as _is_immediate_missing_cli_job
+    from ouroboros.claudexor_harness_install import is_immediate_missing_cli_job as _is_immediate_missing_cli_job
 
     pin = SimpleNamespace(
         version="3.4.0", build_sha="1" * 40, cli_entrypoint="claudexor.bundle.cjs")
@@ -1730,7 +1731,7 @@ def test_login_installs_and_retries_exactly_once(monkeypatch, retry_job):
             return _missing_cli_job() if len(requests) == 1 else retry_job
 
     monkeypatch.setattr(owned, "ensure_owned_gateway", lambda: Gateway())
-    monkeypatch.setattr(owned, "install_missing_harness_cli", installs.append)
+    monkeypatch.setattr(installer, "install_missing_harness_cli", installs.append)
     answer = accounts._login_create({"harness": "cursor"})
 
     assert installs == ["cursor"]
@@ -1741,7 +1742,7 @@ def test_login_installs_and_retries_exactly_once(monkeypatch, retry_job):
 
 
 def test_install_success_receipt_is_strict_and_provenance_is_a_pair():
-    from ouroboros.claudexor_daemon import _valid_install_success
+    from ouroboros.claudexor_harness_install import _valid_install_success
 
     assert _valid_install_success(_install_receipt(), "cursor") is True
     assert _valid_install_success(_install_receipt(
@@ -1817,8 +1818,8 @@ def test_installer_invocation_is_exact_grouped_and_stdout_bounded(monkeypatch):
         seen["lock_held_during_spawn"] = shell._subprocess_lock.locked()
         return Process()
 
-    monkeypatch.setattr(owned.subprocess, "Popen", popen)
-    owned.install_missing_harness_cli("cursor")
+    monkeypatch.setattr(installer.subprocess, "Popen", popen)
+    installer.install_missing_harness_cli("cursor")
     assert seen["argv"] == [
         *command, "harness", "install", "cursor",
         "--target", "local", "--yes", "--json",
@@ -1837,9 +1838,9 @@ def test_installer_invocation_is_exact_grouped_and_stdout_bounded(monkeypatch):
     assert "CLAUDEXOR_CONTROL_PORT" not in env
     assert seen["lock_held_during_spawn"] is True
     output, state = bytearray(), {}
-    owned._drain_installer_stdout(
-        io.BytesIO(b"x" * (owned._HARNESS_INSTALL_STDOUT_LIMIT + 1)), output, state)
-    assert len(output) == owned._HARNESS_INSTALL_STDOUT_LIMIT
+    installer._drain_installer_stdout(
+        io.BytesIO(b"x" * (installer._HARNESS_INSTALL_STDOUT_LIMIT + 1)), output, state)
+    assert len(output) == installer._HARNESS_INSTALL_STDOUT_LIMIT
     assert state == {"overflow": True}
 
 
@@ -1869,13 +1870,13 @@ def test_installer_timeout_kills_the_process_tree(monkeypatch):
             return -9
 
     proc = Process()
-    monkeypatch.setattr(owned.subprocess, "Popen", lambda *_a, **_kw: proc)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *_a, **_kw: proc)
     killed = []
     import ouroboros.tools.shell as shell
 
     monkeypatch.setattr(shell, "_kill_process_group", killed.append)
     with pytest.raises(ClaudexorUnavailable) as excinfo:
-        owned.install_missing_harness_cli("cursor")
+        installer.install_missing_harness_cli("cursor")
     assert excinfo.value.code == "harness_install_timeout"
     assert killed == [proc]
     from ouroboros.config import get_claudexor_harness_install_timeout_sec
@@ -1911,8 +1912,8 @@ def test_installer_child_is_panic_tracked_for_its_whole_run(monkeypatch):
             return 0
 
     proc = Process()
-    monkeypatch.setattr(owned.subprocess, "Popen", lambda *_a, **_kw: proc)
-    owned.install_missing_harness_cli("cursor")
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *_a, **_kw: proc)
+    installer.install_missing_harness_cli("cursor")
     assert observed["tracked_during_wait"] is True, "panic sweep must see the live installer"
     assert proc not in shell._active_subprocesses, "custody ends with the request"
 
