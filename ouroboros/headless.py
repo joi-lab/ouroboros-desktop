@@ -15,7 +15,7 @@ from hashlib import sha256
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Sequence, Tuple  # noqa: F401
 
 from ouroboros.contracts.task_constraint import normalize_task_constraint  # noqa: F401
-from ouroboros.post_task_checkpoint import project_replica_task_result_fields
+from ouroboros.post_task_checkpoint import CANONICAL_CUSTODY_FIELDS, project_replica_task_result_fields
 from ouroboros.workspace_file_outputs import _directory_direct_artifacts
 from ouroboros.task_results import (
     cancellation_blocks_child_result, load_task_result, validate_task_id, write_task_result,
@@ -647,7 +647,8 @@ def _retry_child_task_refs_locked(parent: pathlib.Path, child: pathlib.Path, tas
                 return write_task_result(parent, task_id, source["status"],
                                          _field_projector=project, strict_existing_dict=True,
                                          _terminal_time_source=replica,
-                                         **{key: value for key, value in (replica or {}).items() if key not in {"status", "task_id"}})
+                                         **{key: value for key, value in (replica or {}).items()
+                                            if key not in {"status", "task_id", *CANONICAL_CUSTODY_FIELDS}})
             except _RefPublicationChanged:
                 continue
             except _GenerationClosed:

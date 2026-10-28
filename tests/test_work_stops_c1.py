@@ -182,5 +182,7 @@ def test_c1_warm_author_and_completed_child_custody(tmp_path, monkeypatch, recip
     elif recipient == "live":
         assert result["error"] == "owner_pause_effects_unsettled"
         assert any(b["kind"] == "tool_handoff" and b["task_id"] == "child-run" for b in result["blockers"])
-        assert "has not returned" in result["message"]
+        # The live recipient is worded by what is known, never as a call that «has not returned».
+        assert "verify_and_record call of task child-run is in a live worker" in result["message"]
+        assert "has not returned" not in result["message"]
     assert all(t["id"] != "child-run" for t in workers.PENDING), "Resume never restarts the completed author"

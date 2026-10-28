@@ -487,13 +487,19 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str,
     import queue as _queue
     from ouroboros.budget_pause import _HOLD_POLL_SEC
 
+    from ouroboros import custody_owed
+
     probe = None  # an idle-retirement token, answered only once no local producer is owed
     while True:
         try:
             try:
-                # Only an outstanding probe is rechecked, at the hold cadence: never an idle timer.
-                task = in_q.get(timeout=_HOLD_POLL_SEC) if probe else in_q.get()
+                # Only an outstanding probe or an owed custody write is rechecked, at the hold
+                # cadence: never an idle timer. The last spare worker gets no probe at all.
+                task = in_q.get(timeout=_HOLD_POLL_SEC) if probe or custody_owed.pending() else in_q.get()
             except _queue.Empty:
+                custody_owed.drain()
+                if probe is None:
+                    continue  # nothing to answer: the owed write was this wake's only duty
                 task = probe
             if task is None or task.get("type") == "shutdown":
                 break

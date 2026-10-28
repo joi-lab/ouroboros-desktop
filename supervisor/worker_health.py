@@ -343,11 +343,33 @@ def recover_confirmed_dead_worker(job: dict) -> None:
                 _respawn_after_reap(queue, _pool(), job["worker_id"], expected_worker=w)
 
 
+def owe_worker_exit(worker: Any) -> None:
+    """Every confirmed exit door: the ended member's open claims and receivers retire, task or no task.
+
+    The positive evidence is the joined retained Process (exit code read, not
+    alive). The write is owed in memory and applied off the queue lock
+    (``local_custody_repair.retire_exited_process``), across every task and
+    attempt the process served, so an idle retirement leaves nothing behind.
+    """
+    proc = getattr(worker, "proc", None)
+    pid = int(getattr(proc, "pid", 0) or 0)
+    try:
+        if not pid or proc.exitcode is None or proc.is_alive():
+            return
+    except Exception:
+        return  # an unreadable Process proves nothing
+    from ouroboros.local_custody_repair import retire_exited_process
+
+    retire_exited_process(_pool().DRIVE_ROOT, pid=pid, process_birth=str(getattr(worker, "process_birth", "") or ""),
+                          kernel_birth=str(getattr(worker, "kernel_birth", "") or ""))
+
+
 def retire_confirmed_worker_consumers(worker: Any, meta: dict | None) -> None:
     """Reuse exact current pool ownership at every confirmed kill/join door.
 
     Call under the queue lock before removing the captured RUNNING/worker row.
     """
+    owe_worker_exit(worker)
     if not isinstance(meta, dict) or not isinstance(meta.get("task"), dict):
         return
     task = meta["task"]
@@ -366,6 +388,7 @@ def _retire_dead_model_consumers(job: dict, *, captured_timeout: bool = False) -
     Unreadable/legacy evidence stays held; money and other custody are untouched.
     """
     worker = job["worker"]
+    owe_worker_exit(worker)
     birth = getattr(worker, "process_birth", "")
     if (not isinstance(birth, str) or not birth or worker.proc.exitcode is None
             or worker.proc.is_alive() or not _job_current(job, captured_timeout)):

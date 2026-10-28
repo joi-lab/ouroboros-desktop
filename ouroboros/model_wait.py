@@ -968,9 +968,12 @@ class TaskModelWait:
                 from ouroboros.llm_attempt import _PhysicalSendNotStarted
                 raise _PhysicalSendNotStarted("cancelled")
             self.answer_consumer_bound = True
+            from ouroboros.tool_custody import owner_proof
+
             return {"local_answer_consumer_id": self.answer_consumer_id,
                     "local_answer_task_attempt": self.attempt,
-                    "local_answer_owner_birth": self.answer_owner_birth}
+                    "local_answer_owner_birth": self.answer_owner_birth,
+                    "local_answer_owner_proof": owner_proof()}
 
     def rotate_answer_consumer(self) -> None:
         """A warm return after this receiver abandoned a sent wait (owner Pause).
@@ -989,9 +992,9 @@ class TaskModelWait:
                 retire_model_consumers(self.canonical_root, self.task_id, {old: self.attempt})
             except Exception:
                 import logging
-                logging.getLogger(__name__).warning("Abandoned model consumer retirement could not persist for %s",
+                logging.getLogger(__name__).warning("Abandoned model consumer retirement owed for %s",
                                                     self.task_id, exc_info=True)
-                _retain_retirement_witness(self.canonical_root, self.task_id, {old: self.attempt})
+                _owe_consumer_retirement(self.canonical_root, self.task_id, {old: self.attempt})
 
     def close(self) -> None:
         with self.lock:
@@ -1003,6 +1006,10 @@ class TaskModelWait:
         # owner even when close is called under a different current context.
         forget_tool_scope(SimpleNamespace(drive_root=self.canonical_root, task_id=self.task_id),
                           attempt=self.attempt)
+        from ouroboros import custody_owed
+
+        if custody_owed.pending():
+            custody_owed.drain()  # scope close: one bounded attempt for what this process owes
         if not bound:
             return
         # Positive retirement of THIS consumer, not terminal task status, PID
@@ -1011,26 +1018,21 @@ class TaskModelWait:
             retire_model_consumers(self.canonical_root, self.task_id, {self.answer_consumer_id: self.attempt})
         except Exception:
             import logging
-            logging.getLogger(__name__).warning("Model consumer retirement could not persist for %s", self.task_id,
+            logging.getLogger(__name__).warning("Model consumer retirement owed for %s", self.task_id,
                                                 exc_info=True)
-            # The receiver IS closed on a live host: keep that positive fact for the
-            # addressed repair owner (#1554); never a second census or a PID test.
-            _retain_retirement_witness(self.canonical_root, self.task_id, {self.answer_consumer_id: self.attempt})
+            # The receiver IS closed on a live host: this process owes that positive
+            # fact and writes it later (custody_owed); never a second census or a PID test.
+            _owe_consumer_retirement(self.canonical_root, self.task_id, {self.answer_consumer_id: self.attempt})
 
 
-def _retain_retirement_witness(root: Any, task_id: str, consumers: dict[str, int]) -> None:
-    """A positive receiver closure whose durable retirement failed: retain the exact
-    witness (``local_custody_repair``), so the addressed recovery owner retries the
-    SAME writer instead of inferring death from the platform later."""
-    try:
-        from ouroboros.local_custody_repair import retain_witness
+def _owe_consumer_retirement(root: Any, task_id: str, consumers: dict[str, int]) -> None:
+    """A positive receiver closure whose durable retirement failed: this process owes the
+    SAME write (``custody_owed``) instead of leaving the receiver open for a later inference."""
+    from ouroboros import custody_owed
 
-        retain_witness(root, task_id, reason="receiver_closed_retirement_unwritten",
-                       model_consumers=dict(consumers))
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("Retirement witness for %s could not be retained", task_id,
-                                            exc_info=True)
+    consumers = dict(consumers)
+    custody_owed.owe(("consumers", str(root), str(task_id), tuple(sorted(consumers))),
+                     lambda: retire_model_consumers(root, task_id, consumers), label=f"consumers:{task_id}")
 
 
 def retire_model_consumers(root: Any, task_id: str, consumers: dict[str, int]) -> None:

@@ -200,7 +200,20 @@ const HELD_FACTS = {
     dispatchable_member: (b) => `task ${b.task_id} is queued to run`,
     owned_process: (b) => `a process of task ${b.task_id} is still alive`,
     model_handoff: () => 'a model request has no recorded result',
-    tool_handoff: (b) => `a tool call of task ${b.task_id} has not returned`,
+    // Mirrors work_stop.tool_handoff_words: the server classifies (tool_custody.tool_handoff_reason).
+    tool_handoff: (b) => {
+        const tool = b.tool || 'tool';
+        const effects = (Array.isArray(b.effects) && b.effects.length ? b.effects.join(' and ') : 'outside effect');
+        return ({
+            local_call_live: `the ${tool} call of task ${b.task_id} is in a live worker: still running, `
+                + 'or its finished result is not recorded yet',
+            local_completion_unknown: `it is unknown whether the ${tool} call of task ${b.task_id} finished: `
+                + 'its worker cannot be proven ended',
+            owner_ended_effect_unknown: `the ${tool} call of task ${b.task_id} ended with its worker; `
+                + `the outcome of its ${effects} is unknown`,
+            returned_effect_unconfirmed: `the ${tool} call of task ${b.task_id} returned; its ${effects} is not confirmed`,
+        })[b.reason] || `a ${tool} call of task ${b.task_id} is held`;
+    },
     merge_operation: (b) => `a merge of task ${b.task_id} is not settled`,
     workspace_executor: (b) => `a workspace process of task ${b.task_id} is not settled`,
     delegated_run: (b) => (b.state === 'running' ? `delegated run ${b.run_id} is running`

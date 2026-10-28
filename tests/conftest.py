@@ -769,15 +769,18 @@ def _isolate_restart_generation(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_custody_memo_between_tests():
     """Isolate the process-local custody caches: active custody is keyed only by run ID and
-    the delegated-activity memo by path. Tests reuse both identities: no first-wins binding
-    or shown cursor may leak."""
-    from ouroboros import delegate_activity, delegate_custody
+    the delegated-activity memo by path; owed local custody writes (``custody_owed``) belong
+    to the test that owed them. Tests reuse these identities: no first-wins binding, shown
+    cursor or owed write may leak into another test's quiescence."""
+    from ouroboros import custody_owed, delegate_activity, delegate_custody
 
     delegate_custody._CUSTODY.clear()
     delegate_activity.reset_process_memo()
+    custody_owed._FACTS.clear()
     yield
     delegate_custody._CUSTODY.clear()
     delegate_activity.reset_process_memo()
+    custody_owed._FACTS.clear()
 
 
 @pytest.fixture(autouse=True)

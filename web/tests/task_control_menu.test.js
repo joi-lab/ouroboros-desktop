@@ -356,6 +356,21 @@ test('held-work facts say what is known, and an unknown start is never called ru
     assert.equal(heldWorkFacts(null), '');
 });
 
+test('a held tool call is worded by what is known, never as a call that has not returned', () => {
+    const base = { kind: 'tool_handoff', task_id: '96ac2f7c981b4f54', tool: 'run_command' };
+    assert.equal(heldWorkFacts([{ ...base, reason: 'local_completion_unknown' }]),
+        'it is unknown whether the run_command call of task 96ac2f7c981b4f54 finished: its worker cannot be proven ended');
+    assert.equal(heldWorkFacts([{ ...base, reason: 'local_call_live' }]),
+        'the run_command call of task 96ac2f7c981b4f54 is in a live worker: still running, or its finished result is not recorded yet');
+    assert.equal(heldWorkFacts([{ ...base, tool: 'mcp_gitlab__get_commit', reason: 'owner_ended_effect_unknown',
+        effects: ['MCP request'] }]),
+    'the mcp_gitlab__get_commit call of task 96ac2f7c981b4f54 ended with its worker; the outcome of its MCP request is unknown');
+    assert.equal(heldWorkFacts([{ ...base, reason: 'returned_effect_unconfirmed', effects: [] }]),
+        'the run_command call of task 96ac2f7c981b4f54 returned; its outside effect is not confirmed');
+    assert.equal(heldWorkFacts([{ ...base }]), 'a run_command call of task 96ac2f7c981b4f54 is held');
+    assert.ok(!menuSrc.includes('has not returned'), 'the false sentence is gone');
+});
+
 test('a refused Resume of a held Continue toasts its facts, with wait-or-stop only for running work', async () => {
     const toasts = [];
     const toast = (text, kind) => toasts.push([text, kind]);

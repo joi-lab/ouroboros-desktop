@@ -688,10 +688,15 @@ def _record_worker_processes(slots: Optional[Dict[int, Any]] = None) -> None:
                     scope="session",
                 )
                 if was_alive and w.proc.is_alive():
+                    from ouroboros.process_identity import process_kernel_birth
+
                     fingerprint = record["fingerprint"]
+                    kernel = process_kernel_birth(int(w.proc.pid)) or ""
                     with _queue_lock:
                         w.process_birth = (w.process_birth or fingerprint.get("start_time_boot")
                                            or fingerprint.get("start_time") or "")
+                        # beside the legacy birth: the exit door's kernel evidence (worker_health.owe_worker_exit)
+                        w.kernel_birth = getattr(w, "kernel_birth", "") or (kernel if w.proc.is_alive() else "")
     except Exception:
         log.warning("Failed to ledger worker pids; readiness falls back to the child's birth or pid", exc_info=True)
 
@@ -790,7 +795,9 @@ def retire_worker(wid: int, slot: Any) -> bool:
         if _pool()._WORKER_POOL_DISABLED_REASON or _pool().WORKERS.get(wid) is not slot or slot.proc.is_alive():
             return False
         _pool().WORKERS.pop(wid)
+    from supervisor.worker_health import owe_worker_exit
     from supervisor.worker_process import close_worker_stop_channel
+    owe_worker_exit(slot)  # an idle retirement also ends this process's earlier tasks' claims
     close_worker_stop_channel(slot.proc)
     try:
         slot.in_q.close()
