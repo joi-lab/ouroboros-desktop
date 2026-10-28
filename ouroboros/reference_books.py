@@ -436,10 +436,16 @@ def ruled_text_sizes(root: Path, text_id: str, ref: str = "") -> dict[str, int] 
         rows = [row.partition("\t") for row in (listing or b"").decode("utf-8", "replace").split("\0")]
         sizes = {path: int(meta.split()[3]) for meta, _, path in rows
                  if path and meta.split()[1] == "blob" and ruled_text_of(path) == text_id}
-    else:
+    else:  # a Windows checkout may hold CRLF for these unpinned files: count the committed LF form
         files = [root / where] if text_id == "constitution" else sorted((root / where).glob("*.md"))
-        sizes = {file.relative_to(root).as_posix(): file.stat().st_size for file in files if file.is_file()}
+        sizes = {file.relative_to(root).as_posix(): len(file.read_bytes().replace(b"\r\n", b"\n"))
+                 for file in files if file.is_file()}
     return sizes or None
+
+
+def ruled_text_paths(root: Path) -> list[str]:
+    """The working-tree files of every ruled text, for a caller that measures everything."""
+    return [path for text_id in RULED_TEXTS for path in (ruled_text_sizes(root, text_id) or {})]
 
 
 def book_balances(root: Path, paths: Iterable[str] | None = None) -> list[BookBalance]:

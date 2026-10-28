@@ -455,20 +455,24 @@ def test_push_mode_reaches_the_size_lane_and_only_growth_fails(monkeypatch, caps
             test_a_change_does_not_grow_a_reference_book(capsys)
 
 
-@pytest.mark.parametrize("approved,tip,passes", [(False, 101, False), (True, 101, True), (False, 100, True)])
-def test_bible_and_prompt_growth_fails_unless_the_owner_approved(monkeypatch, capsys, approved, tip, passes):
+@pytest.mark.parametrize("text_id,name", [("constitution", "BIBLE.md"), ("prompts", "Prompts")])
+@pytest.mark.parametrize("mode,tip,passes", [
+    ("block", 101, False), ("", 101, False), ("approved", 101, True), ("warn", 101, True),
+    ("block", 100, True), ("block", 99, True),
+])
+def test_bible_and_prompt_growth_fails_unless_the_owner_approved(monkeypatch, capsys, text_id, name, mode, tip, passes):
     import sys
 
     consumer = sys.modules[__name__]
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
-    monkeypatch.setenv(MODE_ENV, "approved" if approved else "block")
+    monkeypatch.setenv(MODE_ENV, mode)
     monkeypatch.setattr(consumer, "growth_base", lambda repo, ref: "base")
     monkeypatch.setattr(consumer, "ruled_text_bytes",
-                        lambda repo, text_id, ref="": 100 if ref or text_id == "prompts" else tip)
+                        lambda repo, measured, ref="": tip if measured == text_id and not ref else 100)
     if passes:
         test_a_change_does_not_grow_bible_or_the_prompts(capsys)
     else:
-        with pytest.raises(AssertionError, match="BIBLE.md grew by 1 bytes"):
+        with pytest.raises(AssertionError, match=f"{name} grew by 1 bytes"):
             test_a_change_does_not_grow_bible_or_the_prompts(capsys)
 
 

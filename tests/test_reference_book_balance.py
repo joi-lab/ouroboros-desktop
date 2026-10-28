@@ -23,6 +23,7 @@ from ouroboros.reference_books import (
     load_reference_book,
     render_book_balance,
     ruled_text_of,
+    ruled_text_paths,
     ruled_text_sizes,
 )
 
@@ -375,3 +376,10 @@ def test_bible_and_the_prompts_follow_the_book_rule(tmp_path):
     assert "(NEW +4, SAFETY +6, SYSTEM -6)" in grown
     # Other Markdown is not a ruled text.
     assert book_balance_note(tmp_path, ["prompts/notes/extra.md", "notes.md"]) == ""
+    # A Windows checkout's CRLF copy of an unchanged file is not growth.
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "grown")
+    (tmp_path / "BIBLE.md").write_bytes(b"# BIBLE\r\n\r\nP0. P1.\r\n")
+    assert ruled_text_sizes(tmp_path, "constitution") == {"BIBLE.md": 17}
+    assert "BIBLE.md 17 B: +0 B vs HEAD" in book_balance_note(tmp_path, ["BIBLE.md"])
+    assert ruled_text_paths(tmp_path) == ["BIBLE.md", "prompts/NEW.md", "prompts/SAFETY.md", "prompts/SYSTEM.md"]
