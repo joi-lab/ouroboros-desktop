@@ -201,8 +201,10 @@ def test_executable_quit_preserves_owed_capture_for_next_generation(tmp_path, en
             # The ordinary capture enters in the maintenance child: allow its cold start, as recovery does.
             wait_for(lambda: all((gates / name).exists() for name in (
                 "ready.json", "ordinary-entered.json", "review-entered.json")), proc, timeout=45)
-            assert json.loads((gates / "ordinary-entered.json").read_text(encoding="utf-8"))["pid"] != proc.pid
-            assert json.loads((gates / "review-entered.json").read_text(encoding="utf-8"))["pid"] == proc.pid
+            # The server names its own process: on Windows proc.pid can be a venv launcher in front of it.
+            server_pid = json.loads((gates / "ready.json").read_text(encoding="utf-8"))["pid"]
+            assert json.loads((gates / "ordinary-entered.json").read_text(encoding="utf-8"))["pid"] != server_pid
+            assert json.loads((gates / "review-entered.json").read_text(encoding="utf-8"))["pid"] == server_pid
             pending()
             stop_before_release(proc, gates, ingress)
             pending()  # Before any cleanup or capture release: the process really ended.
@@ -225,7 +227,7 @@ def test_executable_quit_preserves_owed_capture_for_next_generation(tmp_path, en
                 assert (evidence / "files" / rc.EVIDENCE_DIRNAME / "result.bin").read_bytes() == EVIDENCE
             assert receipt["source"]["tree"] == sources["review"]["tree"]
             for patch in (cap / "workspace.patch", Path(receipt["evidence_dir"]) / "delta.patch"):
-                content = patch.read_text()
+                content = patch.read_text(encoding="utf-8")
                 assert "check.py" in content and "tracked.txt" not in content
             payload = body.retained_payload(root, ordinary)
             assert payload["primary_output"]["text"] == ANSWER

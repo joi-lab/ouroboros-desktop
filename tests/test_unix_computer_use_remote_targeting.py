@@ -551,13 +551,17 @@ def test_the_guest_shell_reader_encodes_the_exact_title_and_survives_a_pid_less_
     fake = bin_dir / "xdotool"
     fake.write_text("\n".join(["#!/bin/sh", 'case "$1" in', "  getactivewindow) echo 7 ;;",
                                 '  getwindowpid) [ -n "$XPID" ] && echo "$XPID" || exit 1 ;;',
-                                "  getwindowname) printf '%s\\n' \"$XTITLE\" ;;", "esac", ""]), encoding="utf-8")
+                                "  getwindowname) printf '%s\\n' \"$XTITLE\" ;;", "esac", ""]),
+                    encoding="utf-8", newline="\n")
     fake.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "XTITLE": "Draft __ACTIVE__ - Keynote", "XPID": "5151"}
-    out = subprocess.run(["bash", "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
+    # The bash the PATH names: a bare "bash" makes Windows look in System32 first, which starts WSL.
+    bash = shutil.which("bash")
+    env = {**os.environ, "PATH": os.pathsep.join([str(bin_dir), os.environ.get("PATH", "")]),
+           "XTITLE": "Draft __ACTIVE__ - Keynote", "XPID": "5151"}
+    out = subprocess.run([bash, "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
     assert place.parse_x11_front(out) == {"window_id": "0x00000007", "pid": 5151, "title": "Draft __ACTIVE__ - Keynote"}, out
     env["XPID"] = ""
-    out = subprocess.run(["bash", "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
+    out = subprocess.run([bash, "-c", remote_mod._X11_FRONT_SH], capture_output=True, text=True, env=env, timeout=30).stdout
     assert place.parse_x11_front(out) == {"window_id": "0x00000007", "title": "Draft __ACTIVE__ - Keynote"}, out
 
 

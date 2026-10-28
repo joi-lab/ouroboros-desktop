@@ -294,7 +294,7 @@ def test_window_rows_carry_the_key_whole_and_fold_one_utterance(tmp_path):
     (["🛰", "️ ok"], "🛰️ ok", False),
     (["a" * 4000, "😀" * 3000], "a" * 4000 + "😀" * 3000, False),
     (["a" * 4000, "😀" * 3000], "a" * 4000 + "😀" * 2999 + "🙂", True),   # differs only past the preview
-])
+], ids=["split-cluster", "long-same", "long-differs-past-preview"])  # generated ids overflow Windows' env limit
 def test_unicode_and_preview_cuts_never_decide_whether_a_complete_text_differs(tmp_path, draft, complete, updated):
     record = _one(tmp_path, _stream(1, draft, K1, complete=complete))
     part, = record["parts"]

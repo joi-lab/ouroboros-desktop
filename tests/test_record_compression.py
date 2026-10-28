@@ -168,7 +168,8 @@ def test_a_dataless_file_is_kept_by_its_lstat_before_any_read(tmp_path, fake_dar
     path, real = _write(tmp_path / "evicted.log"), os.lstat
 
     class Evicted:
-        st_flags = property(lambda self: real(path).st_flags | 0x40000000)  # <sys/stat.h> SF_DATALESS
+        # <sys/stat.h> SF_DATALESS on the Darwin stat this fakes; a Windows stat has no st_flags at all.
+        st_flags = property(lambda self: getattr(real(path), "st_flags", 0) | 0x40000000)
 
         def __getattr__(self, name):
             return getattr(real(path), name)
@@ -618,8 +619,9 @@ def test_the_maintenance_child_keeps_only_its_cpu_nice_and_the_count_child_its_p
 
     niced, taken = [], []
     monkeypatch.setattr(storage, "utility_io", lambda **kw: taken.append(kw) or (lambda: None))
-    monkeypatch.setattr(os, "nice", lambda increment: niced.append(increment) or 0, raising=False)
-    monkeypatch.setattr(os, "name", "posix")
+    # Only the child's view of a POSIX host: a global os.name would make pathlib build PosixPaths on Windows.
+    posix = SimpleNamespace(name="posix", nice=lambda increment: niced.append(increment) or 0)
+    monkeypatch.setattr(maintenance, "os", posix)
     maintenance._lower_priority()
     assert niced == [10] and taken == [], "no disk policy for the whole child"
     monkeypatch.setattr(storage, "sys", SimpleNamespace(platform="darwin"))

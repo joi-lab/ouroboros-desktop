@@ -58,6 +58,12 @@ def test_vision_query_with_timeout_returns_without_waiting_for_hung_worker(monke
                     pytest.fail(f"the vision child never entered its provider call (exit {self.returncode}): "
                                 f"{err[-2000:]}")
                 time.sleep(0.01)
+            seen["provider_pid"] = int(ready.read_text(encoding="utf-8"))
+            if os.name == "nt":  # a venv's python.exe is a launcher: the interpreter it starts names itself
+                import psutil
+
+                seen["provider"] = psutil.Process(seen["provider_pid"])
+                seen["ancestry"] = {parent.pid for parent in seen["provider"].parents()}
             entered.set()
             try:
                 return super().communicate(input, timeout)
@@ -101,11 +107,22 @@ def test_vision_query_with_timeout_returns_without_waiting_for_hung_worker(monke
         if alive:
             proc.kill()  # whatever failed, the test's own child never outlives it
             proc.wait(10)
+        provider, provider_alive = seen.get("provider"), False
+        if provider is not None:  # the interpreter behind the launcher: the tree kill must have reached it
+            import psutil
+
+            try:
+                provider.wait(10)  # a killed process is gone a moment after the kill returns
+            except psutil.TimeoutExpired:
+                provider_alive = True
+                provider.kill()  # judged below; it never outlives the test either
     assert not fired, f"the real timeout never ended the hung child; the test's watchdog did ({outcome!r})"
     assert isinstance(outcome, TimeoutError) and outcome.__cause__ is seen.get("expired"), outcome
     assert seen["forwarded"] == seen["window"] == pytest.approx(0.01 + 0.05), seen
-    assert int(ready.read_text(encoding="utf-8")) == proc.pid, "readiness came from this tracked child"
+    assert seen["provider_pid"] == proc.pid or proc.pid in seen.get("ancestry", ()), \
+        "readiness came from this tracked child"
     assert not alive and kills == [None], (alive, kills)  # killed while running, never a voluntary exit
+    assert not provider_alive, "the timeout's kill ended the interpreter behind the launcher too"
     if os.name != "nt":
         assert proc.returncode == -signal.SIGKILL, proc.returncode
     else:  # native Windows termination is not qualified by this run
