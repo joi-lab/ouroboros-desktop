@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
 # The engine's attention token this process last fetched a run's rows under, per (task, run):
-# in memory, like the activity memo — a restarted host asks the engine again, harmlessly.
-_SEEN: Dict[Tuple[str, str], str] = {}
+# in memory and bounded like the activity memo (its limit), oldest forgotten first — a
+# restarted host, or one that forgot, asks the engine again, harmlessly.
+_SEEN: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
 _SEEN_LOCK = threading.Lock()
 
 
@@ -36,6 +38,16 @@ class Step:
 def reset_process_seen() -> None:
     with _SEEN_LOCK:
         _SEEN.clear()
+
+
+def _acknowledge(key: Tuple[str, str], token: str) -> None:
+    from ouroboros.delegate_activity import _MEMO_LIMIT
+
+    with _SEEN_LOCK:
+        _SEEN.pop(key, None)
+        _SEEN[key] = token
+        while len(_SEEN) > _MEMO_LIMIT:
+            _SEEN.popitem(last=False)
 
 
 def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optional[int],
@@ -80,8 +92,7 @@ def step(ctx: Any, gateway: Any, run_id: str, *, window: float, since_seq: Optio
         # A run waiting on its person is never a quiet beat: the question's projection (the
         # pending interactions, the paused note, the continuation) comes from fresh detail.
         detail = delegate_progress.bounded_poll(gateway, run_id, read_window())
-        with _SEEN_LOCK:
-            _SEEN[key] = row.token  # acknowledged only once the rows it stands for were fetched
+        _acknowledge(key, row.token)  # acknowledged only once the rows it stands for were fetched
         return Step(detail=detail)
     cursor = max(int(after), int(read.through_seq or 0), int(since_seq or 0))
     payload = {"status": "progress" if read.events else "no_progress", "run_id": str(run_id),

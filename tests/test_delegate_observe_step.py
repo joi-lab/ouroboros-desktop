@@ -158,6 +158,18 @@ def test_a_problem_row_hands_the_beat_back_to_the_detail_read(ctx):
     assert delegate_observe.step(ctx, gateway, "run-s", window=1.0, since_seq=0, read_window=lambda: 30.0) is None
 
 
+def test_the_seen_memo_is_bounded_like_the_activity_memo():
+    delegate_observe.reset_process_seen()
+    limit = delegate_activity._MEMO_LIMIT
+    for index in range(limit + 5):
+        delegate_observe._acknowledge(("t", f"run-{index}"), TOKEN_A)
+    assert len(delegate_observe._SEEN) == limit
+    assert ("t", "run-0") not in delegate_observe._SEEN and ("t", f"run-{limit + 4}") in delegate_observe._SEEN
+    delegate_observe._acknowledge(("t", "run-5"), TOKEN_B)
+    assert next(iter(delegate_observe._SEEN)) == ("t", "run-6"), "a re-acknowledged run is the newest, not evicted next"
+    delegate_observe.reset_process_seen()
+
+
 @pytest.mark.parametrize("routes", [[ROUTES[0]], [ROUTES[1]], []])
 def test_an_engine_missing_either_surface_keeps_the_detail_beat(ctx, routes):
     gateway = Engine()

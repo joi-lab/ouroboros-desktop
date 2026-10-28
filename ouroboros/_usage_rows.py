@@ -530,7 +530,11 @@ def breakdown_view(txn: Any, *, root_task_id: str = "", task_id: str = "", inclu
                    degraded: bool = False) -> Dict[str, Any]:
     """``usage_breakdown``'s shape for the global scope, one root or one task,
     from summary rows only. The global per-task/per-root maps enumerate every
-    owner, so they are rendered only on request (``include_owners``)."""
+    owner, so they are rendered only on request (``include_owners``).
+
+    Precondition ``breakdown_read`` relies on: which rows this view asks ``txn``
+    for depends only on the scope arguments, never on the values of rows already
+    read, so a dry run over ``_Reads`` names exactly the rows a real run needs."""
     if root_task_id and task_id:
         return breakdown_of_rows(txn.attempts("root_task_id=? AND task_id=?", (root_task_id, task_id)), degraded)
     empty = Bucket()

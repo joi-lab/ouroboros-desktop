@@ -42,6 +42,7 @@ def test_the_window_counts_holds_per_kind_and_side_and_drain_resets_it(tmp_path)
         time.sleep(0.07)  # the window's longest hold names the frame that opened it (a Windows tick's margin)
     longest = store_timing.drain()["current"]["write"]
     assert longest["max_sec"] >= 0.05 and longest["max_site"].startswith("tests.test_store_timing:test_the_window")
+    assert len(longest["sites"]) == 1 and longest["sites_omitted"] == 0, "nothing cut, nothing omitted"
 
 
 def test_a_failure_inside_the_hook_never_reaches_the_transaction(tmp_path, monkeypatch):
@@ -162,6 +163,7 @@ def test_the_window_keeps_each_site_and_publishes_the_top_sites_by_summed_hold(t
         reader(tmp_path)
     read = store_timing.drain()["current"]["read"]
     assert read["count"] == 6 and len(read["sites"]) == store_timing.TOP_SITES < 4  # four sites held, three published
+    assert read["sites_omitted"] == 1, "the cut is disclosed in band"
     assert read["sites"][0]["site"].startswith("tests.test_store_timing:_long_read")
     totals = [site["total_sec"] for site in read["sites"]]
     assert totals == sorted(totals, reverse=True) and sum(site["count"] for site in read["sites"]) <= 6

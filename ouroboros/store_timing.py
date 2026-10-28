@@ -10,7 +10,8 @@ name; the dialogue and usage stores share ``store.transaction``) and per ``read`
 time spent holding the lock while waiting for the GIL, a core or a lock), ``max_sec`` and
 ``max_site``, the code site (``module:function:line``) of the window's longest hold, the first frame
 outside the store modules, and ``sites``: the ``TOP_SITES`` sites with the most summed hold, each
-with the same counts. ``drain()`` returns the window as ``{kind: {"read": {...}, "write": {...}}}``
+with the same counts, with ``sites_omitted`` saying how many sites that cut left out of the row.
+``drain()`` returns the window as ``{kind: {"read": {...}, "write": {...}}}``
 (only buckets with a count) and resets it: the per-minute diagnostics row publishes it. Nothing here
 writes to disk, takes a store lock or raises into the caller: a failure inside the hook is swallowed
 and the transaction's outcome stands.
@@ -134,11 +135,12 @@ def _rounded(counts: Dict[str, Any]) -> Dict[str, Any]:
 
 def drain() -> Dict[str, Dict[str, Dict[str, Any]]]:
     """The window since the last drain (seconds rounded to microseconds; per bucket the ``TOP_SITES``
-    sites by summed hold), then an empty window."""
+    sites by summed hold and the count of sites the cut left out), then an empty window."""
     with _LOCK:
         window = {kind: {side: {**_rounded({key: value for key, value in bucket.items() if key != "sites"}),
                                 "sites": [{"site": site, **_rounded(counts)} for site, counts in sorted(
-                                    bucket["sites"].items(), key=lambda item: -item[1]["total_sec"])[:TOP_SITES]]}
+                                    bucket["sites"].items(), key=lambda item: -item[1]["total_sec"])[:TOP_SITES]],
+                                "sites_omitted": max(0, len(bucket["sites"]) - TOP_SITES)}
                          for side, bucket in sides.items()} for kind, sides in _WINDOW.items()}
         _WINDOW.clear()
     return window
