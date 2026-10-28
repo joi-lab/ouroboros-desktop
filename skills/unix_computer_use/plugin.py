@@ -811,7 +811,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         if not bad:
             return ""
         return (f"the stored screenshot transform maps this point to {bad[0][0]},{bad[0][1]}, outside this desktop "
-                "(a screenshot of another display or backend?): take a screenshot of this desktop first, or pass raw=true")
+                "(a screenshot of another display or backend?): take a screenshot of this desktop first, or pass raw=true "
+                "only if these are this desktop's native coordinates")
 
     def _backend_unavailable(self, action: str) -> str:
         return _json({
@@ -1179,11 +1180,11 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             b = _PYAUTOGUI_BASE_ALIASES.get(base, base_raw if len(base_raw) == 1 else base)
             tokens.append(b)
             code = f"pyautogui.press({tokens[0]!r})" if len(tokens) == 1 else "pyautogui.hotkey(" + ", ".join(repr(t) for t in tokens) + ")"
-            return json.loads(self._remote_pyautogui(conn, code, target=app, ctx=ctx))
+            return json.loads(self._remote_pyautogui(conn, code, target=app, ctx=ctx, later=recheck))
         if plat == "macos" and _which("cliclick"):
             non_mac = [t for t in mods if t not in _MAC_MODS]
             if non_mac:
-                return {"ok": False, "error": f"modifier(s) {non_mac} are not available on macOS"}
+                return {"ok": False, "error": f"modifier(s) {non_mac} are not available on macOS", "dispatched": False, "note": "the input was not sent"}
             inner = f"t:{base}" if len(base) == 1 else f"kp:{base}"
             if mods:
                 mac_mods = [_MAC_MODS[t] for t in mods]
@@ -1237,7 +1238,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             lowered = [t.lower() for t in tokens]
             non_mods = [t for t, low in zip(tokens, lowered) if low not in _MAC_MODS]
             if non_mods:
-                return _json({
+                return _json({"dispatched": False, "note": "the input was not sent",
                     "ok": False,
                     "error": (
                         f"cliclick cannot hold non-modifier key(s) {non_mods}; "
@@ -1460,12 +1461,12 @@ def register(api: Any) -> None:
     # previously "Unknown tool"): register them as thin aliases of click.
     api.register_tool("double_click", lambda **kw: impl.click(**{**kw, "double": True}), description="Alias of click with double=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
     api.register_tool("triple_click", lambda **kw: impl.click(**{**kw, "triple": True}), description="Alias of click with triple=true (app= as in click).", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}, "required": ["x"]}, timeout_sec=90)
-    api.register_tool("move", impl.move, description="Move the mouse pointer to screenshot-space coordinates (auto-remapped; raw=true for native input space).", schema={"type": "object", "properties": _xy, "required": ["x"]}, timeout_sec=45)
+    api.register_tool("move", impl.move, description="Move the mouse pointer to screenshot-space coordinates (auto-remapped; raw=true for native input space).", schema={"type": "object", "properties": _xy, "required": ["x"]}, timeout_sec=60)
     # start_y/end_y are recoverable from a pair packed into start_x/end_x, so only
     # the x-side fields stay required (same rationale as click/move above).
     api.register_tool("left_click_drag", impl.left_click_drag, description="Drag with the left button from start to end (screenshot-space, auto-remapped; raw=true for native). " + _targeted, schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}, "raw": {"type": "boolean", "default": False}, **_app}, "required": ["start_x", "end_x"]}, timeout_sec=90)
     api.register_tool("mouse_down", impl.mouse_down, description="Press and hold a mouse button (left only on macOS) at the pointer or at screenshot-space coordinates. " + _targeted, schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}, **_app}}, timeout_sec=90)
-    api.register_tool("mouse_up", impl.mouse_up, description="Release a held mouse button at the pointer, or at screenshot-space coordinates (auto-remapped; raw=true for native input space). Never changes which app is in front.", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}}}, timeout_sec=45)
+    api.register_tool("mouse_up", impl.mouse_up, description="Release a held mouse button at the pointer, or at screenshot-space coordinates (auto-remapped; raw=true for native input space). Never changes which app is in front.", schema={"type": "object", "properties": {**_xy, "button": {"type": "string", "default": "left"}}}, timeout_sec=60)
     api.register_tool("cursor_position", lambda: impl.cursor_position(), description="Report the current pointer position in native input coordinates.", schema={"type": "object", "properties": {}}, timeout_sec=10)
     api.register_tool("type_text", impl.type_text, description="Type text into the focused field of the frontmost app, or of app= (brought forward and verified first). via=paste writes the clipboard and pastes (long or non-ASCII text on a local or SSH Mac; the clipboard is replaced); an OSWorld guest pastes such text through its clipboard by itself.", schema={"type": "object", "properties": {"text": {"type": "string"}, "interval_ms": {"type": "integer", "default": 0}, **_app, "via": {"type": "string", "default": ""}}, "required": ["text"]}, timeout_sec=180)
     api.register_tool("key", impl.key, description="Press keys in the front app or app= (verified; else nothing sent). Result: who was in front, not that the app reacted. Combos with '+', sequences with spaces (cmd+s, ctrl+l, page-down, 'down down return'); a targeted sequence stops when its app leaves the front. Scriptable apps are better driven by their own commands through run_command.", schema={"type": "object", "properties": {"keys": {"type": "string"}, **_app}, "required": ["keys"]}, timeout_sec=90)

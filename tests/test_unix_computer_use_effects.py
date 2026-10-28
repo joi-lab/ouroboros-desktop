@@ -456,3 +456,12 @@ def test_osworld_reads_and_remote_exec_stay_unmarked(tmp_path, monkeypatch):
     assert marked(receipt(tools["click"](x=1, y=2, raw=True)))
     for text in (tools["cursor_position"](), tools["remote_exec"](command="touch /tmp/x")):
         assert receipt(text)["ok"] is True and not marked(receipt(text)), text
+
+
+def test_a_refused_combo_is_a_not_sent_input_on_every_refusal_path(tmp_path, monkeypatch):
+    tools, transport = desktop(tmp_path, monkeypatch, "macos", tools=MAC)
+    for keys in ("bogus+right", "super+x"):
+        out = receipt(tools["key"](keys=keys))
+        assert out["ok"] is False and out["dispatched"] is False and "not sent" in out["note"] and transport.calls == [], (keys, out)
+    held = receipt(tools["hold_key"](keys="a"))
+    assert held["ok"] is False and held["dispatched"] is False and "not sent" in held["note"] and transport.calls == [], held

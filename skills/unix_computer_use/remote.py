@@ -289,13 +289,13 @@ class RemoteBackends:
         return [], f"unsupported pyautogui snippet for ssh_macos/cliclick: {text[:120]}"
 
     def _remote_pyautogui(self, conn: dict[str, Any], code: str, *, note: dict[str, Any] | None = None, timeout: int = 30,
-                          input_effect: bool = True, target: str = "", ctx: dict[str, Any] | None = None) -> str:
-        return self._json_text(self._remote_input(conn, code, note=note, timeout=timeout, input_effect=input_effect,
+                          input_effect: bool = True, target: str = "", ctx: dict[str, Any] | None = None, later: bool = False) -> str:
+        return self._json_text(self._remote_input(conn, code, later=later, note=note, timeout=timeout, input_effect=input_effect,
                                                   target=target, ctx=ctx))
 
     def _remote_input(self, conn: dict[str, Any], code: str, *, note: dict[str, Any] | None = None, timeout: int = 30,
                       input_effect: bool = True, target: str = "", ctx: dict[str, Any] | None = None,
-                      ssh_command: str = "") -> dict[str, Any]:
+                      ssh_command: str = "", later: bool = False) -> dict[str, Any]:
         """One remote input (or read, ``input_effect=False``). With ``target`` the application is resolved and brought
         forward first (``_begin``); with ``ctx`` (a later step of one call) the earlier switch is reused and the guest
         pre-check withholds the input when that application is no longer in front."""
@@ -330,7 +330,7 @@ class RemoteBackends:
                 text = str(result.get("output") or "") if isinstance(result, dict) else ""
                 before, after, stop = parse_markers(text, parse_x11_front)
                 if stop:
-                    return self._stopped(ctx, shared, before, backend, stop)
+                    return self._stopped(ctx, shared, before, backend, stop, later=later)
                 ok, err = _osworld_result_ok(out)
                 if isinstance(result, dict) and input_effect:
                     result = {**result, "output": strip_markers(text)}
@@ -347,7 +347,7 @@ class RemoteBackends:
                 rc, stdout, stderr = self._ssh_run(conn, remote, timeout=timeout)
                 before, after, stop = parse_markers(stdout, _info_or_none)
                 if stop:
-                    return self._stopped(ctx, shared, before, backend, stop)
+                    return self._stopped(ctx, shared, before, backend, stop, later=later)
                 # The wrapper prints `__FRONT_BEFORE__` before the input and `__FRONT_AFTER__` after it. Both received:
                 # the wrapper completed and `rc` is the input's own exit. A reply cut short (a refused connection, a
                 # channel broken after the input may have run) leaves the outcome unknown: never "not sent".
@@ -414,11 +414,11 @@ class RemoteBackends:
         return payload
 
     def _stopped(self, ctx: dict[str, Any], shared: dict[str, Any], front: dict[str, Any] | None, backend: str,
-                 reason: str) -> dict[str, Any]:
+                 reason: str, *, later: bool = False) -> dict[str, Any]:
         """The remote pre-check withheld the input (another window in front, or the front unread): nothing was sent;
-        a switch observed earlier in the same call keeps its own mark."""
+        a switch observed earlier in the same call keeps its own mark. ``later``: a later step of one call."""
         target = ctx.get("target") or {}
-        res = {"reason": reason, "front": front, "error": "the remote front reader printed nothing"}
+        res = {"reason": reason, "front": front, "error": "the remote front reader printed nothing", "before_step": later}
         out: dict[str, Any] = {"ok": False, "backend": backend, "reason": reason, "target": target,
                                "error": self._target_error(str(target.get("requested") or ""), res)}
         if front:

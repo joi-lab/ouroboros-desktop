@@ -452,8 +452,12 @@ class PlaceMixin:
                 payload["observed_effect"] = True  # the clipboard write before it completed
                 payload["clipboard_done"] = True
                 effects.append("the clipboard write")
-            dropped_text = ("characters without a key code were dropped (see error); the rest may have been typed" if untyped
-                            else "the input was dropped (see error)")
+            if untyped and payload.get("method") == "paste":
+                dropped_text = "the paste chord was not typed (see error)"
+            elif untyped:
+                dropped_text = "the characters without a key code were dropped (see error); those with one may have been typed"
+            else:
+                dropped_text = "the input was dropped (see error)"
             payload["note"] = ((" and ".join(effects) + " ran; the input after it: " + dropped_text) if effects
                                else dropped_text + "; this tool observed no UI change")
             return payload

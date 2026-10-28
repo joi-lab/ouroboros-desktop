@@ -122,7 +122,7 @@ Acting in a named application (`app=`):
   before it; a step whose remote call did not answer is `null`, and the note
   says so, never "not sent"). A tool's registered budget covers one
   input's worst case (`type_text` 180 s, the other inputs 90 s, `move` and
-  `mouse_up` 45 s), not a long
+  `mouse_up` 60 s), not a long
   sequence: when the host's budget ends a call, no receipt comes back.
 - `move` and `mouse_up` never change which application is in front: a drag
   must end where it started.
@@ -192,7 +192,9 @@ Input receipts (the same contract on every backend):
   An input that was never dispatched (a refused combo, the clipboard write
   before a paste failed: `reason: clipboard_failed`) says "not sent" in its
   note and carries `dispatched: false`. A `via=paste` receipt says whether the
-  clipboard was replaced, also when the paste chord after it failed; a
+  clipboard was replaced where that stage answered (a lost or cut-short reply
+  says nothing about it: absence means unknown), also when the paste chord
+  after it failed; a
   completed clipboard write is an observed effect of its own and keeps the
   mark (`clipboard_done`), as a switch does (`activation_done`). The fields a
   receipt carries follow what happened: a refusal has `target`, `reason` and
@@ -326,7 +328,10 @@ Backend matrix (honest limitations):
   switch; a remote call that did not answer (`transport_failed`: the paste may
   have run) is final, nothing is retyped, with or without `app=`. With `app=""`
   the action, its exit-code reading and the clipboard/typewrite routing are
-  otherwise unchanged; what changed on
+  otherwise unchanged, and two calls the base sent are refused before any
+  call: a provided negative point for `mouse_down`/`mouse_up` (the base
+  pressed at the pointer) and a point that a stored transform of another
+  display maps outside the guest (the base clicked the scaled point); what changed on
   the benchmark path is the probe around the action (markers are stripped from
   the returned output), `activate_app` in the tool list, `app` in the input
   schemas and `window_list` answering parsed rows from a base64-encoded

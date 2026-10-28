@@ -519,6 +519,10 @@ def test_osworld_a_lost_answer_after_a_paste_is_not_retyped_and_negative_points_
     api.tools["click"].__self__._save_transform({"sx": 1.0, "sy": 1.0, "ox": -1920, "oy": 0, "ts": 1, "platform": "macos"})
     mapped = receipt(api.tools["click"](x=100, y=100))
     assert mapped["ok"] is False and "stored screenshot transform" in mapped["error"] and guest.commands == [], mapped
+    for tool, args in (("move", {"x": 100, "y": 100}), ("left_click_drag", {"start_x": 100, "start_y": 100, "end_x": 200, "end_y": 200}),
+                       ("mouse_down", {"x": 100, "y": 100}), ("mouse_up", {"x": 100, "y": 100})):
+        out = receipt(api.tools[tool](**args))
+        assert out["ok"] is False and "stored screenshot transform" in out["error"] and guest.commands == [], (tool, out)
     # Untargeted: a lost answer after the clipboard program is final here too (the base retyped); a lost read carries no dispatch fact.
     plain = receipt(api.tools["type_text"](text="<b>x</b>"))
     assert plain["ok"] is False and plain["transport_failed"] is True and plain["dispatched"] is None and plain["method"] == "clipboard", plain
@@ -630,6 +634,14 @@ def test_ssh_a_reply_cut_short_is_an_unknown_outcome_never_a_withheld_input(tmp_
     paste = receipt(api.tools["type_text"](text="x", via="paste"))  # the same refusal on a paste: never a clipboard failure
     assert paste["dispatched"] is None and paste["reason"] == "ssh_failed" and "clipboard_replaced" not in paste and paste["method"] == "paste", paste
 
+    def timed_out(command):  # the ssh call itself raised: the paste's method is kept, its clipboard stage makes no claim
+        if "cliclick" in command:
+            raise subprocess.TimeoutExpired(command, 60)
+        return mac_over_ssh(SAFARI)(command)
+    module, api, calls = ssh(tmp_path, monkeypatch, timed_out)
+    lost = receipt(api.tools["type_text"](text="x", via="paste"))
+    assert lost["transport_failed"] is True and lost["dispatched"] is None and lost["method"] == "paste" and "clipboard_replaced" not in lost, lost
+
     def cut_short(command):  # the input stage had started, then the channel broke: the clipboard stage is unknown
         if "cliclick" in command:
             return 255, f"__FRONT_BEFORE__{info_line(SAFARI)}\n", "client_loop: send disconnect: Broken pipe"
@@ -646,3 +658,22 @@ def test_ssh_a_reply_cut_short_is_an_unknown_outcome_never_a_withheld_input(tmp_
     module, api, calls = ssh(tmp_path, monkeypatch, cut_after_write)
     out = receipt(api.tools["type_text"](text="x", via="paste"))
     assert out["dispatched"] is None and out["clipboard_replaced"] is True and out["clipboard_done"] is True and out["observed_effect"] is True, out
+
+
+def test_osworld_an_unread_front_before_a_later_step_says_so(tmp_path, monkeypatch):
+    """The remote pre-check of a later step that cannot read the front withholds it and says which step, never 'the switch was requested'."""
+    presses = {"n": 0}
+
+    def answer(code, index):
+        if "wmctrl -lpxG" in code:
+            return 0, listing(FIREFOX_FRONT)
+        if "wmctrl -i -a" in code:
+            return 0, "__FRONT_AFTER__" + KEYNOTE_FRONT + "\n"
+        presses["n"] += 1
+        if presses["n"] == 2:
+            return 3, "\n__FRONT_BEFORE__\n__FRONT_UNREAD__\n"
+        return 0, f"__FRONT_BEFORE__{KEYNOTE_FRONT}\n__FRONT_AFTER__{KEYNOTE_FRONT}\n"
+    module, api, guest = osworld(tmp_path, monkeypatch, answer)
+    out = receipt(api.tools["key"](keys="right down", app="Keynote"))
+    assert out["ok"] is False and out["steps_done"] == 1 and out["reason"] == "front_unread" and out["dispatched"] is False, out
+    assert "before the next step" in out["error"] and "nothing more was sent" in out["error"] and "switch was requested" not in out["error"], out["error"]
