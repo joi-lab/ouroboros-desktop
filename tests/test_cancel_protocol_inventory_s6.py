@@ -149,7 +149,7 @@ TERMINAL_WRITERS = {
     # Recovery of a dead attempt whose answer the host already holds (owed/delivered/unreadable
     # registry evidence): the attempt is finalized from the outbox's bytes as failed /
     # infra_failed / finalization_incomplete instead of re-running the prompt (both the
-    # timeout reaper's retry admission and dead-worker recovery route through it).
+    # hard-timeout reaper and dead-worker recovery route through it).
     ('ouroboros/working_checkpoint.py::adopt_registered_answer', 'STATUS_FAILED'): 'terminal',
     ('supervisor/cancel_publication.py::_finalize_cancel_intent_on_miss', 'STATUS_CANCELLED'): 'terminal',
     ('supervisor/events_project_routing.py::_persist_promote_rejection', 'STATUS_FAILED'): 'terminal',
@@ -170,9 +170,6 @@ TERMINAL_WRITERS = {
     ('supervisor/task_admission.py::terminalize_invalid_depth_restore', 'STATUS_FAILED'): 'terminal',
     ('supervisor/task_lifecycle.py::_finish_captured_pending', 'STATUS_CANCELLED'): 'terminal',
     ('supervisor/task_lifecycle.py::_finish_captured_running', 'STATUS_CANCELLED'): 'terminal',
-    ('supervisor/task_reaper.py::_enqueue_retry', 'STATUS_FAILED'): 'terminal',
-    ('supervisor/task_reaper.py::_run_retry_admission_transaction', 'STATUS_CANCELLED'): 'terminal',
-    ('supervisor/task_reaper.py::_run_retry_admission_transaction', 'STATUS_FAILED'): 'terminal',
     ('supervisor/task_reaper.py::reap_timed_out_task', 'STATUS_FAILED'): 'terminal',
     ('supervisor/worker_assignment.py::_cancel_unauthorized_evolution', 'STATUS_CANCELLED'): 'terminal',
     ('supervisor/worker_assignment.py::assign_tasks', 'STATUS_CANCELLED'): 'terminal',
@@ -223,8 +220,6 @@ NO_DELIVERABLE_LANES = {
         'restored pending work refused before assignment; terminalization retry retains custody, no answer exists',
     'supervisor/task_admission.py::terminalize_invalid_depth_restore':
         'an invalid-depth restore is refused at admission; no answer exists',
-    'supervisor/task_reaper.py::_run_retry_admission_transaction':
-        'a refused retry admission terminalizes the retry, not an owner answer',
     'supervisor/workers.py::_terminalize_invalid_pending_depth':
         'an invalid-depth pending row is terminalized before it ever ran',
     'ouroboros/tools/control_delegation.py::record_depth_limit_refusal':

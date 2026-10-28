@@ -203,8 +203,7 @@ def test_timeout_reaper_does_not_clone_over_unreadable_cancel_authority(
     assert len(jobs) == 1
     assert jobs[0]["task_id"] == task_id
     assert jobs[0]["terminal_reason"] == "deadline"
-    assert jobs[0]["will_retry"] is False
-    assert jobs[0]["retry_task_id"] == ""
+    assert not {"will_retry", "retry_task_id"} & set(jobs[0])  # a hard bound requests no retry
     assert task_id not in running
 
 def test_snapshot_restore_refuses_a_task_with_active_intent(qenv, monkeypatch):

@@ -1123,12 +1123,13 @@ def test_legacy_heavy_migration_selects_an_exact_api_model(tmp_path, monkeypatch
 def test_legacy_model_global_ceiling_is_not_dispatch_authority(tmp_path, monkeypatch):
     """Scheduling reports requested effort; exact wire disclosure owns adaptation."""
     from ouroboros.agent import capability_delta_prompt_block
-    from ouroboros.llm import LLMClient
+    from tests._shared import write_legacy_capability_rows
 
     monkeypatch.setenv("OUROBOROS_MODEL", "provider::main")
     monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "provider::cheap")
     monkeypatch.setenv("OUROBOROS_EFFORT_TASK", "max")
-    monkeypatch.setitem(LLMClient._EFFORT_CEILING_CACHE, "provider::cheap", "low")
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
+    write_legacy_capability_rows(tmp_path, effort_ceilings={"provider::cheap": "low"})
 
     task, dispatch = _dispatched(
         tmp_path / "ceiling", monkeypatch, model_lane="light", _actor_effort="max",
@@ -1256,21 +1257,20 @@ def test_configured_actor_does_not_inherit_a_stale_heavy_parent(tmp_path, monkey
 
 
 def test_scheduler_effort_stays_pre_wire_until_exact_route_disclosure(tmp_path, monkeypatch):
-    """Legacy floors stay diagnostic; physical request usage reports any adjustment."""
+    """A stored legacy floor never moves scheduled effort; physical request usage reports any adjustment."""
     from ouroboros.agent import capability_delta_prompt_block
-    from ouroboros.llm import LLMClient
+    from tests._shared import write_legacy_capability_rows
 
     monkeypatch.setenv("OUROBOROS_MODEL", "provider::main")
     monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "provider::cheap")
     monkeypatch.setenv("OUROBOROS_EFFORT_TASK", "none")
-    monkeypatch.setitem(LLMClient._EFFORT_FLOOR_CACHE, "provider::cheap", "low")
-    monkeypatch.setitem(LLMClient._EFFORT_FLOOR_LOADED, "provider::cheap", float("inf"))
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
+    write_legacy_capability_rows(tmp_path, effort_floors={"provider::cheap": "low"})
 
     task, dispatch = _dispatched(
         tmp_path / "floor", monkeypatch, model_lane="light", _actor_effort="none",
     )
     delta = task["capability_delta"]
-    assert LLMClient.clamp_effort_for_route("provider::cheap", "none") == "low"
     assert delta["effective_effort"] == "none"
     assert delta["reduced"] is False
     assert capability_delta_prompt_block(dispatch) == ""

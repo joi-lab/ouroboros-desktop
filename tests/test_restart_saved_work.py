@@ -53,6 +53,26 @@ def _stop_and_boot(queue, workers, *, age_sec=0):
     return queue.restore_pending_from_snapshot()
 
 
+def _crash(queue, workers, monkeypatch, task_id):
+    """The worker running ``task_id`` dies before any terminal: the live same-id crash requeue
+    (``worker_health``) runs on the real queue. Doubled: the dead process, cost reconstruction and
+    the slot's respawn."""
+    from supervisor import worker_health
+    from tests.test_worker_crash_retry import _make_worker
+
+    meta = workers.RUNNING[task_id]
+    wid = int(meta["worker_id"])
+    dead = _make_worker(wid=wid, busy_task_id=task_id, exitcode=1)
+    dead.reaping = True
+    workers.WORKERS[wid] = dead
+    monkeypatch.setattr(workers, "QUEUE_MAX_RETRIES", 2)  # the configurable limit, wide enough for two losses
+    monkeypatch.setattr(workers, "reconstruct_task_cost", lambda *_a, **_k: {})
+    worker_health._recover_crashed_task_without_terminal(dict(
+        worker=dead, task_id=task_id, task=meta["task"], meta=meta, worker_id=wid, exitcode=1,
+        attempt=int(meta["attempt"]), drive_root=str(workers.DRIVE_ROOT)), queue)
+    workers.WORKERS.pop(wid, None)
+
+
 def _ack(root, transaction_id):
     from ouroboros import delegate_recovery as dr
 
@@ -192,7 +212,7 @@ def test_saved_successor_keeps_frozen_source_across_another_crash_before_dispatc
     assert wc.load_recovery(ctx, source)["working"]["boundary"] == "pre_effect"
 
 
-@pytest.mark.parametrize("origin", ["restarted", "resumed", "idle_retry"])
+@pytest.mark.parametrize("origin", ["restarted", "resumed", "crash_retry"])
 @pytest.mark.parametrize("door", ["restart", "quit", "crash", "panic"])
 def test_runnable_saved_successor_waiting_for_capacity_follows_the_next_stop(tmp_path, monkeypatch, origin, door):
     """A pending successor still owns saved work; another stop does not buy an attempt."""
@@ -204,14 +224,8 @@ def test_runnable_saved_successor_waiting_for_capacity_follows_the_next_stop(tmp
     queue, state, workers = _install_queue(tmp_path, monkeypatch)
     _pool_events(workers, monkeypatch)
     _working_run(tmp_path, workers, "saved-root")
-    if origin == "idle_retry":
-        from supervisor import task_reaper
-
-        task = workers.RUNNING.pop("saved-root")["task"]
-        accepted, attempt, _reason, _ = task_reaper._enqueue_retry(
-            queue, task, task_id="saved-root", retry_task_id="", attempt=1,
-            terminal_reason="idle_timeout", recon_fields={})
-        assert accepted and attempt == 2
+    if origin == "crash_retry":  # the one automatic retry left: same id, continuing saved work
+        _crash(queue, workers, monkeypatch, "saved-root")
     else:
         if origin == "restarted":
             prepare_restart_returns(tmp_path, workers.RUNNING, workers.PENDING, transaction_id="first-restart")

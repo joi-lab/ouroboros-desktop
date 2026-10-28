@@ -1,10 +1,9 @@
-"""Route capability metadata and the diagnostic model-global effort band.
+"""Route capability metadata and the per-call effort disclosure slot.
 
 A route's capabilities are discovered, not declared: OpenRouter model metadata
 answers what a model accepts, and an exact route's own rejections are adapted by
 request-wire recovery (``request_wire_recovery``), never by model-global learning.
-This module owns the catalogue caches, the read-only diagnostic effort band over
-historical capability-evidence rows, and the per-call effort disclosure slot.
+This module owns the catalogue caches and the per-call effort disclosure slot.
 Claudexor metadata discovery and requested-model admission use the engine's
 negotiated declaration, without inventing a model row or a capability claim.
 """
@@ -17,11 +16,10 @@ import logging
 import pathlib
 import threading
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from ouroboros.claudexor_daemon import read_owned_gateway
 from ouroboros.gateways.claudexor import operation_query_supported
-from ouroboros.provider_models import normalize_model_identity
 
 
 # The moved warnings keep the logger identity they were emitted under.
@@ -39,10 +37,6 @@ _OPTIONAL_SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
 _OPTIONAL_DROPPABLE_PARAMS = _OPTIONAL_SAMPLING_PARAMS + (
     "response_format", "reasoning_effort", "output_config", "thinking",
 )
-
-
-# Historical import surface re-exported by ``ouroboros.llm``; request-wire recovery owns its markers.
-_MANDATORY_VALUE_MARKERS = ("mandatory", "cannot be disabled", "must be enabled")
 
 
 def _catalog_path(drive_root: Any) -> pathlib.Path:
@@ -102,7 +96,7 @@ def normalize_reasoning_effort(value: str, default: str = "medium") -> str:
 
 
 class _CapabilityPolicyMixin:
-    """Capability metadata and the diagnostic effort band."""
+    """Capability metadata and the per-call disclosure slots."""
 
     # Missing capabilities mean "unknown": keep kwargs instead of stripping them.
     _SUPPORTED_PARAMS_CACHE: Dict[str, set] = {}
@@ -275,77 +269,6 @@ class _CapabilityPolicyMixin:
         if allow_fetch and needs_fetch:
             cls._fetch_openrouter_capabilities()
         return int(cls._CONTEXT_LENGTH_CACHE.get(mid, 0) or 0)
-
-    # v6.57.0 — learned reasoning-effort ceilings (Q7). In-process cache is the hot
-    # path; a durable copy in capability_evidence.json (effort_ceilings namespace,
-    # DATA_DIR-scoped) survives restart. Key = normalized model identity. Fail-open.
-    _EFFORT_CEILING_CACHE: Dict[str, str] = {}
-
-    _EFFORT_CEILING_LOADED: Set[str] = set()
-
-    # v6.73.2 — learned reasoning-effort FLOORS: the value-too-low mirror of the
-    # ceilings, for endpoints where reasoning is MANDATORY and "none"/"minimal"
-    # 400s ("Reasoning is mandatory ... cannot be disabled"). Unlike the sticky
-    # ceilings, floors EXPIRE in the durable store (provider policy changes), so
-    # the process cache re-syncs hourly — a long-running process heals the
-    # same way a restart does.
-    _EFFORT_FLOOR_CACHE: Dict[str, str] = {}
-
-    _EFFORT_FLOOR_LOADED: Dict[str, float] = {}
-
-    _EFFORT_FLOOR_RELOAD_SEC = 3600.0
-
-    @classmethod
-    def _effort_floor_for(cls, model_id: str) -> str:
-        key = normalize_model_identity(model_id) or str(model_id or "")
-        if not key:
-            return ""
-        now = time.monotonic()
-        loaded_at = cls._EFFORT_FLOOR_LOADED.get(key)
-        if loaded_at is None or now - loaded_at >= cls._EFFORT_FLOOR_RELOAD_SEC:
-            cls._EFFORT_FLOOR_LOADED[key] = now
-            try:
-                from ouroboros.capability_evidence import get_effort_floor
-                from ouroboros.config import DATA_DIR
-                # Replace (not union): the durable reader applies the 14-day
-                # expiry, so replacing lets an expired floor actually evict.
-                cls._EFFORT_FLOOR_CACHE[key] = get_effort_floor(DATA_DIR, key)
-            except Exception:
-                pass
-        return cls._EFFORT_FLOOR_CACHE.get(key, "")
-
-    @classmethod
-    def _effort_ceiling_for(cls, model_id: str) -> str:
-        key = normalize_model_identity(model_id) or str(model_id or "")
-        if not key:
-            return ""
-        if key in cls._EFFORT_CEILING_CACHE:
-            return cls._EFFORT_CEILING_CACHE[key]
-        if key in cls._EFFORT_CEILING_LOADED:
-            return ""
-        cls._EFFORT_CEILING_LOADED.add(key)
-        try:
-            from ouroboros.capability_evidence import get_effort_ceiling
-            from ouroboros.config import DATA_DIR
-            ceil = get_effort_ceiling(DATA_DIR, key)
-            if ceil:
-                cls._EFFORT_CEILING_CACHE[key] = ceil
-            return ceil
-        except Exception:
-            return ""
-
-    @classmethod
-    def clamp_effort_for_route(cls, model_id: str, effort: str) -> str:
-        """Resolve the legacy diagnostic model-global effort band."""
-        ceiling = cls._effort_ceiling_for(model_id)
-        floor = cls._effort_floor_for(model_id)
-        if not ceiling and not floor:
-            return effort
-        from ouroboros.config import clamp_effort_to, effort_rank
-        applied = clamp_effort_to(effort, ceiling) if ceiling else effort
-        if floor and 0 <= effort_rank(applied) < effort_rank(floor):
-            applied = floor
-        return applied
 
     def _pop_thread_disclosure(self, slot: str) -> Optional[Dict[str, Any]]:
         """Take and clear the disclosure staged in thread-local ``slot`` for THIS

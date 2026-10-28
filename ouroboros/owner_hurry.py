@@ -262,11 +262,11 @@ def archive_current(drive_root: Any, task_id: str, *, reason: str) -> bool:
 
 
 def retry_reset(task_drive: Any, canonical_drive_root: Any, task_id: str, *, reason: str) -> None:
-    """The ONE shared same-id requeue reset (§19.7.2 item 11).
+    """The ONE shared same-id attempt reset (§19.7.2 item 11).
 
-    EVERY same-id requeue producer — the reaper timeout path AND the
-    ``supervisor/workers.py`` crash-requeue — calls this.  Attempt-local
-    mailbox controls are revoked, while durable owner text and its ack ledger
+    Crash and planned-restart requeues (``worker_health.py``, ``workers.py``)
+    and the hard-bound reaper, whose attempt ends without a retry, call this.
+    Attempt-local controls are revoked; durable owner text and its ack ledger
     survive for canonical/replay continuity.  The current ``owner_hurry``
     block is archived into history. Fail-soft; never raises.
     """

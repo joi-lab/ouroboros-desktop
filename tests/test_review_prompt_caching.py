@@ -1,6 +1,6 @@
 """v6.69.0 review-economics tests: cache-friendly review prompts, TTL passthrough,
-reviewer session affinity, durable parameter rejections, pre-routing $0 settlement,
-and review-wave budget admission."""
+reviewer session affinity, pre-routing $0 settlement, and review-wave budget
+admission."""
 
 from __future__ import annotations
 
@@ -1107,27 +1107,6 @@ def test_warm_supported_params_cache_used_when_fetch_skipped(monkeypatch):
         )
     assert kwargs["temperature"] == 0.2
     assert "temperature" not in physical
-
-
-# ---------------------------------------------------------------------------
-# Durable rejected-parameter evidence
-# ---------------------------------------------------------------------------
-
-def test_rejected_params_survive_process_boundary(tmp_path):
-    from ouroboros import capability_evidence as ce
-
-    ce.record_rejected_params(tmp_path, "anthropic/claude-fable-5", {"temperature"})
-    assert ce.get_rejected_params(tmp_path, "anthropic/claude-fable-5") == {"temperature"}
-
-
-def test_rejected_params_expire(tmp_path):
-    from ouroboros import capability_evidence as ce
-
-    ce.record_rejected_params(tmp_path, "m/x", {"temperature"})
-    data = ce._load(tmp_path)
-    data["rejected_params"]["m/x"]["observed_at"] = "2020-01-01T00:00:00+00:00"
-    ce._save(tmp_path, data)
-    assert ce.get_rejected_params(tmp_path, "m/x") == set()
 
 
 # ---------------------------------------------------------------------------

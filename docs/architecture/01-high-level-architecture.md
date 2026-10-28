@@ -63,7 +63,7 @@ supervisor/ — background thread inside server.py (§5)
   restart_retention.py — stop retention and restart/update-abort return authority (§5, §9)
   queue_transitions.py, task_ownership.py — the root admission seal (stored as `acceptance_fences`), Resume, evolution stop, fenced Project deletion; ownership reads precede the queue lock (§5, §6)
   terminal_delivery.py, terminal_cascade.py, terminal_supersession.py — delivery-id dedupe, byte receipts, the bounded pending outbox of terminal answers; a settled cascade's one owner message (§5, §10)
-  task_reaper.py, task_reaper_cancel_handoff.py — the off-loop owner of timeout, crash, idle and unready jobs and its cancel-suppressed retry handoff; unconfirmed death keeps reaping; mints no cancel intents (§5)
+  task_reaper.py — the off-loop owner of timeout, crash, idle and unready jobs; a timeout never retries; unconfirmed death keeps reaping; mints no cancel intents (§5)
   owner_stop.py — graceful stop: finalize first (`finalize_now`), then cancel on the same durable cancel intent; grace bounded by `OWNER_STOP_OUTER_CAP_SEC`
   schedule_time.py, schedule_occurrence.py — cron/timezone parsing; a due occurrence admits at most one root
   schedule_notes.py — a due `kind:"notify"` row becomes a signed `reminder` System row; no model, no retry
