@@ -231,7 +231,9 @@ class _Run:
                 for entry in listing:
                     try:
                         if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
-                            present[entry.name] = entry.stat(follow_symlinks=False).st_mtime
+                            # The folder's own record: a Windows listing serves a folder's times from its parent's
+                            # index, which NTFS refreshes lazily, so a home changed after a pass read unchanged.
+                            present[entry.name] = os.stat(entry.path, follow_symlinks=False).st_mtime
                     except FileNotFoundError:
                         continue
         except FileNotFoundError:
