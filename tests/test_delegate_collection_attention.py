@@ -160,15 +160,30 @@ def test_a_hole_is_remembered_as_unanswered_and_never_raises_out_of_the_pass(tmp
     assert Engine.detail_reads == []
 
 
-def test_a_problem_row_takes_the_addressed_read_that_may_say_absent(tmp_path, runtime):
+@pytest.mark.parametrize("kind", ["not_found", "snapshot_unavailable"])
+def test_a_problem_row_takes_the_addressed_read_that_may_say_absent_then_acknowledges_it(tmp_path, runtime, kind):
     instance, step = runtime
     entry = started(tmp_path)
     Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running"}, "lastSeq": 1,
                                     "pendingInteractions": []}
-    Engine.wakes.append(_wake("problems", [{"status": None, "pending": None, "token": None, "problem": "not_found"}]))
+    Engine.wakes.append(_wake("problems", [{"status": None, "pending": None, "token": None, "problem": kind}]))
     step()
     assert Engine.detail_reads == [entry.run_id], "a problem row is not absence; the addressed read decides"
     assert instance.observation(entry.run_id)["run_state"] == "running"
+    assert instance.seen[entry.run_id] == obs.ACKNOWLEDGED_PROBLEM
+    Engine.wakes.append(_wake("timeout", [{"status": None, "pending": None, "token": None, "problem": kind}]))
+    step()
+    assert Engine.requests[1]["targets"] == [{"runId": entry.run_id, "seen": None}], "acknowledged: the engine holds again"
+    assert Engine.detail_reads == [entry.run_id, entry.run_id], "the addressed read is taken again, not spun"
+
+
+def test_a_problem_row_whose_addressed_read_fails_stays_unacknowledged(tmp_path, runtime):
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.details[entry.run_id] = ClaudexorUnavailable("daemon_busy", "local RPC timed out", status_code=503)
+    Engine.wakes.append(_wake("problems", [{"status": None, "pending": None, "token": None, "problem": "not_found"}]))
+    step()
+    assert Engine.detail_reads == [entry.run_id] and entry.run_id not in instance.seen
 
 
 def test_an_engine_below_the_floor_keeps_todays_beat_of_one_detail_per_run(tmp_path, runtime, monkeypatch):

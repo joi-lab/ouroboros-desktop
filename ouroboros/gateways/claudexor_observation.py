@@ -19,8 +19,12 @@ No probe reads a timeout as "unsupported": a transport hole is reported as one.
 
 Tokens are the engine's; a consumer echoes a row's token as ``seen`` only after it fetched
 what the attention was about (pending rows, terminal detail), so an unfetched question can
-never be acknowledged away. Fallback rows carry a local token (``local:`` prefix) that is
-never sent to an engine.
+never be acknowledged away. A problem row (a run the engine could not place) is answered at
+once, not held on; after the addressed read that decides what the run is, the consumer
+acknowledges the problem (``ACKNOWLEDGED_PROBLEM``, wire ``seen: null``) and the engine holds
+again. Fallback rows carry a local token (``local:`` prefix) that is never sent to an engine.
+Kinds this adapter does not know (a future wake reason or problem kind) are attention, never
+a refusal of the whole answer: unknown is not no.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import hashlib
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -41,6 +46,10 @@ WAIT_MANY_MAX_TARGETS = 1000
 WAIT_MANY_MAX_WAIT_SEC = 50.0
 _ENGINE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _LOCAL_TOKEN = "local:"
+# A consumer's ``seen`` for a problem row it has since read on its own: sent as ``seen: null``,
+# which the repaired engine takes as "this problem is known" (run-wait-many.ts: a problem row
+# wakes the call only while its ``seen`` is not null), so the call holds again.
+ACKNOWLEDGED_PROBLEM = _LOCAL_TOKEN + "problem"
 PROBLEMS = frozenset({"not_found", "snapshot_unavailable", "not_observed"})
 WAKE_REASONS = frozenset({"attention", "problems", "timeout", "aborted"})
 # Catalog answers per exact engine identity (version, build sha): a route cannot appear or
@@ -102,7 +111,7 @@ class AttentionWake:
     rows: List[RunAttention]
     attention: List[int] = field(default_factory=list)
     source: str = "wait_many"  # wait_many | detail
-    waited: bool = False  # the engine held the call for the window; a consumer sleeps nothing
+    waited: bool = False  # the engine held the call (a window, or until attention); a consumer sleeps nothing
     hole: Optional[BaseException] = None  # unobserved: the typed hole nothing was learned through
 
     def needs_attention(self, index: int) -> bool:
@@ -134,7 +143,9 @@ def wait_many_supported(gateway: Any, *, timeout_sec: Optional[float]) -> bool:
     return supported
 
 
-def _forget_support(gateway: Any) -> None:
+def forget_support(gateway: Any) -> None:
+    """The route is unusable on this exact engine (absent, or answering outside its contract):
+    every consumer reads details as before until the engine changes."""
     key = (str(getattr(gateway, "engine_version", "") or ""), str(getattr(gateway, "engine_build_sha", "") or ""))
     with _SUPPORT_LOCK:
         _SUPPORT[key] = False
@@ -168,34 +179,69 @@ def wait_attention(gateway: Any, targets: Sequence[Tuple[str, Optional[str]]], *
     """Observe ``targets`` (``(run_id, seen_token)`` pairs) once.
 
     On a supporting engine the call is held up to ``wait_sec`` (the engine caps it; ``None``
-    leaves the hold to the engine's default) and
-    returns the engine's rows and attention; ``timeout_sec`` bounds the transport beyond
-    that hold. Elsewhere every target's detail is read once under ``timeout_sec`` and the
-    rows are derived from those details (``waited`` is False: the consumer keeps its own
-    beat). A typed hole (transport, busy, stopping) is returned as an ``unobserved`` wake,
-    never raised, so a consumer treats it as the quiet hole it already knows; a received
-    refusal about the READ itself (a schema or auth refusal) propagates.
+    leaves the hold to the engine's default) and returns the engine's rows and attention;
+    ``timeout_sec`` bounds the transport beyond that hold. ``waited`` says the engine held
+    the call (its window ran out, or attention ended it); an answer about an unacknowledged
+    problem row, an abort or a zero wait is no hold, and the consumer sleeps its own beat.
+    More targets than the engine takes in one call go in chunks; the hold is shared by the
+    chunks and nothing holds past a chunk's notice. Elsewhere every target's detail is read
+    once under ``timeout_sec`` and the rows are derived from those details (``waited`` is
+    False: the consumer keeps its own beat). A typed hole (transport, busy, stopping) is
+    returned as an ``unobserved`` wake, never raised, so a consumer treats it as the quiet
+    hole it already knows; a received refusal about the READ itself (a schema or auth
+    refusal) or an answer outside the contract propagates typed.
     """
     from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
     pairs = [(str(run_id), seen) for run_id, seen in targets]
     if not pairs:
         return AttentionWake("timeout", [], waited=False)
-    if wait_many_supported(gateway, timeout_sec=timeout_sec):
-        request = [{"runId": run_id, **({"seen": seen} if isinstance(seen, str) and _ENGINE_TOKEN.match(seen) else {})}
-                   for run_id, seen in pairs]
-        wait_ms = None if wait_sec is None else int(max(0.0, min(float(wait_sec), WAIT_MANY_MAX_WAIT_SEC)) * 1000)
+    if not wait_many_supported(gateway, timeout_sec=timeout_sec):
+        return _detail_wake(gateway, pairs, timeout_sec)
+    wakes: List[AttentionWake] = []
+    budget = wait_sec
+    for start in range(0, len(pairs), WAIT_MANY_MAX_TARGETS):
+        chunk = pairs[start:start + WAIT_MANY_MAX_TARGETS]
+        wait_ms = None if budget is None else int(max(0.0, min(float(budget), WAIT_MANY_MAX_WAIT_SEC)) * 1000)
+        began = time.monotonic()
         try:
-            body = gateway.wait_run_attention(request, wait_ms=wait_ms, timeout_sec=timeout_sec)
+            body = gateway.wait_run_attention([_target(run_id, seen) for run_id, seen in chunk],
+                                              wait_ms=wait_ms, timeout_sec=timeout_sec)
         except ClaudexorUnavailable as exc:
             if int(getattr(exc, "status_code", 0) or 0) == 404:
-                _forget_support(gateway)  # the ROUTE is absent on this engine; no run was named absent
+                forget_support(gateway)  # the ROUTE is absent on this engine; no run was named absent
                 return _detail_wake(gateway, pairs, timeout_sec)
             if is_observation_hole(exc):
                 return _unobserved(pairs, exc, "wait_many")
             raise
-        return _engine_wake(pairs, body)
-    return _detail_wake(gateway, pairs, timeout_sec)
+        wake = _engine_wake(chunk, body, held=wait_ms is None or wait_ms > 0)
+        wakes.append(wake)
+        if wake.attention or wake.reason == "problems":
+            budget = 0.0  # a notice is due now: the rest of the pass reads the present state
+        elif budget is not None:
+            budget = max(0.0, float(budget) - (time.monotonic() - began))
+    return wakes[0] if len(wakes) == 1 else _joined(wakes)
+
+
+def _target(run_id: str, seen: Optional[str]) -> Dict[str, Any]:
+    if seen == ACKNOWLEDGED_PROBLEM:
+        return {"runId": run_id, "seen": None}
+    if isinstance(seen, str) and _ENGINE_TOKEN.match(seen):
+        return {"runId": run_id, "seen": seen}
+    return {"runId": run_id}
+
+
+def _joined(wakes: List[AttentionWake]) -> AttentionWake:
+    """One pass out of its chunks: rows in target order, attention re-indexed."""
+    rows: List[RunAttention] = []
+    attention: List[int] = []
+    for wake in wakes:
+        attention.extend(index + len(rows) for index in wake.attention)
+        rows.extend(wake.rows)
+    reasons = {wake.reason for wake in wakes}
+    reason = ("attention" if attention else "problems" if "problems" in reasons
+              else "aborted" if "aborted" in reasons else "timeout")
+    return AttentionWake(reason, rows, attention=attention, waited=any(wake.waited for wake in wakes))
 
 
 def _unobserved(pairs: List[Tuple[str, Optional[str]]], hole: BaseException, source: str) -> AttentionWake:
@@ -204,7 +250,12 @@ def _unobserved(pairs: List[Tuple[str, Optional[str]]], hole: BaseException, sou
                          source=source, hole=hole)
 
 
-def _engine_wake(pairs: List[Tuple[str, Optional[str]]], body: Dict[str, Any]) -> AttentionWake:
+def _engine_wake(pairs: List[Tuple[str, Optional[str]]], body: Dict[str, Any], *, held: bool) -> AttentionWake:
+    """The engine's answer projected. Structure outside the contract (a batch of the wrong
+    size, indexes outside it, a token the engine could not have minted) is a typed refusal;
+    a kind outside this adapter's vocabulary is not: an unknown problem kind stays a problem
+    row (the addressed read decides what the run is) and an unknown wake reason names every
+    row for one addressed read and promises no hold."""
     from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
     def malformed(what: str) -> ClaudexorUnavailable:
@@ -213,8 +264,8 @@ def _engine_wake(pairs: List[Tuple[str, Optional[str]]], body: Dict[str, Any]) -
     reason = body.get("wakeReason")
     summaries = body.get("summaries")
     attention = body.get("attention")
-    if reason not in WAKE_REASONS or not isinstance(summaries, list) or len(summaries) != len(pairs):
-        raise malformed("an unknown wake reason or a summary batch of the wrong size")
+    if not isinstance(reason, str) or not isinstance(summaries, list) or len(summaries) != len(pairs):
+        raise malformed("no wake reason or a summary batch of the wrong size")
     if not isinstance(attention, list) or any(not isinstance(i, int) or isinstance(i, bool)
                                               or not 0 <= i < len(pairs) for i in attention):
         raise malformed("attention indexes outside the batch")
@@ -229,11 +280,14 @@ def _engine_wake(pairs: List[Tuple[str, Optional[str]]], body: Dict[str, Any]) -
                     or not isinstance(token, str) or not _ENGINE_TOKEN.match(token):
                 raise malformed("a summary without lifecycle, pending flag or token")
             rows.append(RunAttention(run_id=run_id, status=status, pending=pending, token=token))
-        elif problem in PROBLEMS:
-            rows.append(RunAttention(run_id=run_id, problem=str(problem)))
+        elif isinstance(problem, str) and problem:
+            rows.append(RunAttention(run_id=run_id, problem=problem))
         else:
-            raise malformed("an unknown problem kind")
-    return AttentionWake(str(reason), rows, attention=sorted(set(attention)), waited=True)
+            raise malformed("a problem that is not a kind")
+    if reason not in WAKE_REASONS:
+        return AttentionWake(reason, rows, attention=list(range(len(rows))), waited=False)
+    # The engine answers at once about an unacknowledged problem row, and when it is aborting.
+    return AttentionWake(reason, rows, attention=sorted(set(attention)), waited=held and reason in ("attention", "timeout"))
 
 
 def _detail_wake(gateway: Any, pairs: List[Tuple[str, Optional[str]]],

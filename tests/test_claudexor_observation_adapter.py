@@ -102,16 +102,60 @@ def test_engine_rows_and_attention_are_projected_and_only_engine_tokens_are_echo
 
 @pytest.mark.parametrize("body", [
     {"wakeReason": "attention", "attention": [], "summaries": [_summary()]},  # batch of the wrong size
-    {"wakeReason": "later", "attention": [], "summaries": [_summary(), _summary()]},
+    {"wakeReason": None, "attention": [], "summaries": [_summary(), _summary()]},
     {"wakeReason": "attention", "attention": [5], "summaries": [_summary(), _summary()]},
     {"wakeReason": "timeout", "attention": [], "summaries": [_summary(token="short"), _summary()]},
-    {"wakeReason": "problems", "attention": [], "summaries": [_problem("vanished"), _summary()]},
+    {"wakeReason": "problems", "attention": [], "summaries": [_problem(""), _summary()]},
+    {"wakeReason": "problems", "attention": [], "summaries": [_problem(7), _summary()]},
 ])
 def test_a_malformed_engine_answer_is_a_typed_refusal_never_a_fabricated_row(body):
     gateway = FakeGateway(waits=[body])
     with pytest.raises(ClaudexorUnavailable) as caught:
         obs.wait_attention(gateway, [("run-a", None), ("run-b", None)], wait_sec=1.0, timeout_sec=1.0)
     assert caught.value.code == "malformed_response"
+
+
+def test_an_unknown_wake_reason_or_problem_kind_is_attention_never_a_refusal():
+    later = FakeGateway(waits=[{"wakeReason": "later", "attention": [], "summaries": [_summary(), _summary()]}])
+    wake = obs.wait_attention(later, [("run-a", None), ("run-b", None)], wait_sec=1.0, timeout_sec=1.0)
+    assert wake.reason == "later" and wake.attention == [0, 1], "unknown is not no: every row gets one addressed read"
+    assert wake.waited is False, "no hold is assumed of an answer this adapter cannot read"
+    vanished = FakeGateway(waits=[{"wakeReason": "problems", "attention": [], "summaries": [_problem("vanished")]}])
+    wake = obs.wait_attention(vanished, [("run-a", None)], wait_sec=1.0, timeout_sec=1.0)
+    assert wake.rows[0].problem == "vanished" and not wake.rows[0].observed and wake.waited is False
+
+
+def test_a_problem_answer_is_no_hold_and_its_acknowledgement_rides_the_wire_as_null():
+    gateway = FakeGateway(waits=[{"wakeReason": "problems", "attention": [], "summaries": [_problem("snapshot_unavailable")]},
+                                 {"wakeReason": "timeout", "attention": [], "summaries": [_summary()]}])
+    first = obs.wait_attention(gateway, [("run-a", None)], wait_sec=25.0, timeout_sec=1.0)
+    assert first.reason == "problems" and first.waited is False, "the engine answers an unacknowledged problem at once"
+    again = obs.wait_attention(gateway, [("run-a", obs.ACKNOWLEDGED_PROBLEM)], wait_sec=25.0, timeout_sec=1.0)
+    assert gateway.wait_requests[1]["targets"] == [{"runId": "run-a", "seen": None}]
+    assert again.waited is True
+
+
+@pytest.mark.parametrize("wait_sec,reason,waited", [(0.0, "timeout", False), (5.0, "aborted", False),
+                                                     (5.0, "timeout", True), (None, "attention", True)])
+def test_only_a_held_call_counts_as_waited(wait_sec, reason, waited):
+    gateway = FakeGateway(waits=[{"wakeReason": reason, "attention": [0] if reason == "attention" else [],
+                                  "summaries": [_summary(pending=True)]}])
+    wake = obs.wait_attention(gateway, [("run-a", None)], wait_sec=wait_sec, timeout_sec=1.0)
+    assert wake.waited is waited
+
+
+def test_a_pass_over_more_targets_than_the_engine_takes_is_chunked_and_holds_past_no_notice():
+    first = {"wakeReason": "attention", "attention": [3],
+             "summaries": [_summary()] * 3 + [_summary(pending=True, token=OTHER_TOKEN)] + [_summary()] * 996}
+    second = {"wakeReason": "timeout", "attention": [], "summaries": [_problem("not_found"), _summary()]}
+    gateway = FakeGateway(waits=[first, second])
+    targets = [(f"run-{i}", None) for i in range(1002)]
+    wake = obs.wait_attention(gateway, targets, wait_sec=25.0, timeout_sec=1.0)
+    sizes = [len(request["targets"]) for request in gateway.wait_requests]
+    assert sizes == [obs.WAIT_MANY_MAX_TARGETS, 2]
+    assert gateway.wait_requests[0]["wait_ms"] == 25_000 and gateway.wait_requests[1]["wait_ms"] == 0
+    assert len(wake.rows) == 1002 and wake.attention == [3] and wake.reason == "attention" and wake.waited is True
+    assert wake.rows[1000].problem == "not_found" and wake.rows[3].pending is True
 
 
 @pytest.mark.parametrize("failure", [

@@ -642,16 +642,20 @@ class BodyRuntime:
             if row.detail is not None:  # the route vanished under us: this pass read details, as before
                 self._absorb_detail(entry, gateway, row.detail)
                 continue
-            if row.problem == "not_found" or row.error is not None:
+            if row.problem is not None or row.error is not None:
                 # The engine could not place the run in this pass; only the addressed read, with
-                # its store identity, may say the run is absent (``daemon_says_absent``).
+                # its store identity, may say the run is absent (``daemon_says_absent``). Once it
+                # answered, the problem is acknowledged so the next pass holds again instead of
+                # answering the same problem at once.
                 try:
                     self._observe(entry)
                 except Exception:
                     log.debug("Body observation of %s remains owed after a problem row", entry.run_id, exc_info=True)
+                    continue
+                if row.problem is not None:
+                    with self.lock:
+                        self.seen[entry.run_id] = observation.ACKNOWLEDGED_PROBLEM
                 continue
-            if row.problem is not None:
-                continue  # snapshot_unavailable / not_observed: unknown until the next pass
             if not wake.needs_attention(index):
                 self._remember(entry, None, row=row)
                 c.bind_daemon_store(self.root, gateway, entry)

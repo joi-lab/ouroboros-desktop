@@ -1042,9 +1042,11 @@ def _observe_session(gateway: Any, run_id: str, remaining: float, streak: Any) -
 def _await_session_attention(gateway: Any, run_id: str, seen: Optional[str], remaining: float) -> tuple:
     """Hold on the engine's compact wait until the run needs attention or the slot's remaining
     window ends: ``(due, token, held)``. ``due`` says the detail read is now owed (a question,
-    a terminal, or an engine without the wait, where every beat reads the detail as before);
-    ``token`` is the engine's, echoed as ``seen`` only after that read; ``held`` says the engine
-    waited, so the loop sleeps nothing. A hole leaves the run unobserved for this beat."""
+    a terminal, a problem row, or an engine without the wait, where every beat reads the
+    detail as before); ``token`` is echoed as ``seen`` only after that read (the engine's
+    token, or the acknowledgement of a problem row, so the engine holds again instead of
+    answering the same problem at once); ``held`` says the engine waited, so the loop sleeps
+    nothing. A hole leaves the run unobserved for this beat."""
     from ouroboros.gateways import claudexor_observation as observation
     from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
     if not observation.wait_many_supported(gateway, timeout_sec=min(remaining, SHORT_POLL_TIMEOUT_SEC)):
@@ -1060,8 +1062,8 @@ def _await_session_attention(gateway: Any, run_id: str, seen: Optional[str], rem
     if wake.hole is not None or wake.source == "detail":
         return True, None, False  # unobserved this beat, or an engine that read details: the old path decides
     row = wake.rows[0]
-    if row.problem is not None:
-        return True, None, wake.waited  # the engine could not place the run: the addressed read says what it is
+    if row.problem is not None:  # the engine could not place the run: the addressed read says what it is
+        return True, observation.ACKNOWLEDGED_PROBLEM, wake.waited
     return wake.needs_attention(0), row.token, wake.waited
 
 
@@ -1116,7 +1118,9 @@ def _poll_session_terminal(gateway: Any, custody: Any, custody_drive: Any, entry
         if remaining <= 0:
             continue
         due, token, held = _await_session_attention(gateway, run_id, seen, remaining)
-        if not held:
+        if not held or unobserved is not None:
+            # The slot's own beat, unless the engine held the call AND the last addressed read
+            # was answered: an unanswered read leaves the same notice to wake the next call at once.
             time.sleep(min(_SESSION_POLL_SEC, remaining))
         if not due:
             continue  # the engine held the call and nothing needs the detail yet

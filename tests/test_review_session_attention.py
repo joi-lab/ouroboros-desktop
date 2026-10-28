@@ -56,6 +56,34 @@ class _Custody:
         return detail.get("summary") or {}
 
 
+class RuleEngine(Engine):
+    """A 4.8.1 engine double that follows run-wait-many.ts literally: a problem row wakes the
+    call at once unless its ``seen`` is null; a pending or terminal row wakes it unless ``seen``
+    is its token; otherwise the call holds (shortened here), and the run finishes during it."""
+
+    def __init__(self):
+        super().__init__(wakes=[], details=[])
+        self.held, self.finished = 0, False
+
+    def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
+        self.requests.append({"targets": targets, "wait_ms": wait_ms})
+        assert len(self.requests) <= 50, "busy loop: the slot never let the engine hold"
+        target = targets[0]
+        if not self.finished:
+            problem = {"status": None, "pending": None, "token": None, "problem": "snapshot_unavailable"}
+            if target.get("seen", "omitted") is not None:
+                return _wake("problems", [problem])
+            if not wait_ms:
+                return _wake("timeout", [problem])
+            self.held, self.finished = self.held + 1, True  # the hold (instant here) ends when the run finishes
+        row = _summary(status="succeeded", token=TOKEN_B)
+        return _wake("attention", [row], [0]) if target.get("seen") != TOKEN_B else _wake("timeout", [row])
+
+    def get_run(self, run_id, *, timeout_sec=None):
+        self.detail_reads += 1
+        return DONE if self.finished else RUNNING
+
+
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     monkeypatch.setattr(obs, "_SUPPORT", {})
@@ -102,6 +130,29 @@ def test_a_hole_on_the_wait_leaves_the_detail_read_to_decide(tmp_path, monkeypat
     detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
     assert detail is DONE and gateway.detail_reads == 2
     assert slept, "an unheld beat sleeps the session's own interval before reading, as before"
+
+
+def test_a_problem_row_is_read_once_acknowledged_and_the_engine_holds_again(tmp_path, monkeypatch):
+    gateway = RuleEngine()
+    slept = []
+    monkeypatch.setattr(rx.time, "sleep", lambda s: slept.append(s))
+    detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
+    assert detail is DONE
+    assert [r["targets"] for r in gateway.requests] == [[{"runId": "run-r"}], [{"runId": "run-r", "seen": None}]]
+    assert slept == [rx._SESSION_POLL_SEC], "an answer about an unacknowledged problem is no hold: the slot slept its beat"
+    assert gateway.held == 1 and gateway.detail_reads == 3, "initial read, the addressed read, the terminal"
+
+
+def test_an_unanswered_addressed_read_does_not_spin_on_the_same_notice(tmp_path, monkeypatch):
+    unread = ClaudexorUnavailable("daemon_busy", "local RPC timed out", status_code=503)
+    gateway = Engine(
+        wakes=[_wake("attention", [_summary(status="succeeded", token=TOKEN_B)], [0])] * 3,
+        details=[RUNNING, unread, unread, DONE])
+    slept = []
+    monkeypatch.setattr(rx.time, "sleep", lambda s: slept.append(s))
+    detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
+    assert detail is DONE and len(gateway.requests) == 3
+    assert slept == [rx._SESSION_POLL_SEC] * 2, "each unanswered read earned the slot's own beat before the next wait"
 
 
 def test_an_engine_without_the_wait_keeps_the_old_sleep_and_read_beat(tmp_path, monkeypatch):
