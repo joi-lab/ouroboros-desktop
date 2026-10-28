@@ -172,3 +172,17 @@ test('live: the terminal frame of a quiet schedule run names the card and puts i
         assert.match(seen.facts, /<dt>Started by<\/dt><dd>Schedule · <span data-i18n-authored>Daily check<\/span><\/dd>/);
     });
 });
+
+test('replay: a page whose terminal row lies beyond it settles the card from its last progress row\'s terminal truth', async () => {
+    // The history producer stamps the retained result's terminal truth on the window's last progress row.
+    const stamped = { ...checkpoint('p1'), task_terminal_status: 'completed', outcome_phase: 'done', outcome_final: true,
+        outcome_axes: { lifecycle: { status: 'completed' }, execution: { status: 'ok' } }, ...named, wake_summary: SENTENCE };
+    delete stamped.task_phase;
+    await replay({ messages: [stamped], window: { complete: true } }, (feed) => {
+        const seen = view(feed, 'p1');
+        assert.equal(seen.title, 'Daily check');
+        assert.equal(seen.line, SENTENCE);
+        assert.match(seen.facts, /^<div class="chat-live-fact"><dt>In its words<\/dt>/);
+        assert.match(seen.facts, /<dt>Started by<\/dt><dd>Schedule · <span data-i18n-authored>Daily check<\/span><\/dd>/);
+    });
+});
