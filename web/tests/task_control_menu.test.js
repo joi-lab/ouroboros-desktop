@@ -400,32 +400,42 @@ test('an accepted Resume keeps its own words and names the gap its Pause did not
     assert.match(membershipGapWords({ count: 3, rows: [] }, 'continue'), /\(…\)/, 'a count without names still counts');
 });
 
-test('a gap notice keeps all its words in a box beside its close button, a keyboard region once cut', async (t) => {
+test('a gap notice keeps all its words beside its close button; the page stack it cuts is a keyboard region', async (t) => {
     const { announceMembershipGap } = await import('../modules/task_control_menu.js');
     const { showToast } = await import('../modules/toast.js');
     const { installDomDouble } = await import('./dom_double.js');
     const env = installDomDouble();
     t.after(() => env.restore());
     const make = env.doc.createElement;
-    let cut = true;  // the double has no layout: the box's measured height is given (the browser lane measures it)
-    env.doc.createElement = (tag) => Object.assign(make(tag),
-        tag === 'span' ? { scrollHeight: cut ? 900 : 40, clientHeight: 40 } : {});
+    let cut = true;  // the double has no layout: the stack's measured height is given (the browser lane measures it)
+    env.doc.createElement = (tag) => Object.defineProperties(make(tag), {
+        scrollHeight: { get: () => (cut ? 900 : 40) }, clientHeight: { value: 40 } });
     const rows = Array.from({ length: 20 }, (_, n) => ({ task_id: `${String(n).padStart(2, '0')}-${'f'.repeat(30)}`,
         reason: 'body_unreadable' }));
     const words = announceMembershipGap({ rows, count: 23 }, 'resume');
-    const toast = env.doc.body.querySelector('.toast-warn');
+    const stack = env.doc.getElementById('toast-stack');
+    const toast = stack.querySelector('.toast-warn');
     const [box, close] = toast.children;
     assert.equal(box.className, 'toast-words');
     assert.equal(box.textContent, words, 'every name stays in the notice');
     assert.match(words, /\(00-f+, 01-f+, .*, 19-f+, …\); whether they belong here is unknown\.$/);
-    assert.deepEqual([box.tabIndex, box.getAttribute('role'), box.getAttribute('aria-label')],
-        [0, 'region', 'Scrollable notice']);
+    assert.ok(!box.hasAttribute('tabindex'), 'the words never scroll on their own: the stack does');
+    assert.deepEqual([stack.tabIndex, stack.getAttribute('role'), stack.getAttribute('aria-label')],
+        [0, 'region', 'Scrollable notices']);
     assert.equal(close.getAttribute('aria-label'), 'Dismiss notice');
     cut = false;
+    toast.dispose();
+    assert.ok(!stack.hasAttribute('tabindex') && !stack.hasAttribute('role') && !stack.hasAttribute('aria-label'),
+        'once everything fits again the stack is no keyboard stop');
     const short = showToast('One short notice.', 'warn', { ttl: 0, dismissLabel: 'Dismiss notice' }).children[0];
     assert.equal(short.className, 'toast-words');
-    assert.ok(!short.hasAttribute('tabindex') && !short.hasAttribute('role'), 'words that fit are no keyboard stop');
+    assert.ok(!stack.hasAttribute('tabindex'), 'words that fit make no keyboard stop');
     const plain = showToast('Saved.', 'ok', { ttl: 0 });
     assert.equal(plain.textContent, 'Saved.');
     assert.equal(plain.children.length, 0, 'a toast without a close button keeps its words as its own text');
+    cut = true;  // a room's stack keeps its own place: never the page's scrolling region
+    const host = env.doc.createElement('div');
+    env.doc.body.append(host);
+    showToast('A room notice.', 'warn', { ttl: 0, dismissLabel: 'Dismiss notice', host });
+    assert.ok(!host.querySelector('.toast-stack--room').hasAttribute('tabindex'));
 });

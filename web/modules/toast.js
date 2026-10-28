@@ -15,13 +15,27 @@ function getStack(host = null) {
     return stack;
 }
 
+// The page's stack ends above the screen's bottom and scrolls past it (style.css); cut there, it is reached by
+// keyboard too, as a wide table is (docs/DESIGN.md). Measured when a notice comes or goes; room stacks keep their place.
+function markCut(stack) {
+    if (stack.id !== 'toast-stack') return;
+    const cut = stack.scrollHeight > stack.clientHeight;
+    if (cut === stack.hasAttribute('tabindex')) return;
+    if (cut) {
+        stack.tabIndex = 0;
+        stack.setAttribute('role', 'region');
+        stack.setAttribute('aria-label', 'Scrollable notices');
+    } else {
+        ['tabindex', 'role', 'aria-label'].forEach((name) => stack.removeAttribute(name));
+    }
+}
+
 /**
- * One toast; a press anywhere on it dismisses it. `ttl` 0 keeps it until then. `action` ({label, run}) adds one
- * button that dismisses the toast and runs (a recovery notice's way back, host_modules.js). `dismissLabel` adds an
- * accessible close button; hover or focus pauses the auto-dismiss timer. Beside it the words get their own box, which
- * the page's stack ends above the screen's bottom: longer words scroll there, a keyboard region (style.css). An error
- * toast answers the owner's own action and plays Telegram's error haptic (haptics.js); a notice the owner did not
- * cause passes `{ haptic: false }`.
+ * One toast; a press anywhere on it dismisses it, a scroll over it never does. `ttl` 0 keeps it until then. `action`
+ * ({label, run}) adds one button that dismisses the toast and runs (a recovery notice's way back, host_modules.js).
+ * `dismissLabel` adds an accessible close button, the words beside it in their own box; hover or focus pauses the
+ * auto-dismiss timer. An error toast answers the owner's own action and plays Telegram's error haptic (haptics.js); a
+ * notice the owner did not cause passes `{ haptic: false }`.
  * Optional `host` confines the stack above a room's composer. Its owner calls the returned node's `dispose()` on teardown.
  */
 export function showToast(message, tone = 'info', { ttl = 6000, action = null, haptic: felt = true, dismissLabel = '', host = null } = {}) {
@@ -47,6 +61,7 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
         clearTimeout(removalTimer);
         globalThis.window?.removeEventListener?.('pagehide', dispose);
         toast.remove();
+        markCut(stack);
     };
     toast.dispose = dispose;
     const dismiss = () => {
@@ -57,7 +72,7 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
         // shift is measured here, the glide is the stylesheet's (none with reduced motion).
         const stay = [...(stack.children || [])].filter((el) => el !== toast);
         const before = stay.map((el) => el.offsetTop);
-        Object.assign(toast.style, { position: 'absolute', top: `${toast.offsetTop}px`, right: '0', width: `${toast.offsetWidth}px` });
+        Object.assign(toast.style, { position: 'absolute', top: `${toast.offsetTop}px`, left: `${toast.offsetLeft}px`, width: `${toast.offsetWidth}px` });
         toast.classList.add('is-hiding');
         const moved = stay.filter((el, i) => {
             const shift = before[i] - el.offsetTop;
@@ -97,12 +112,7 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
         toast.append(close);
     }
     stack.appendChild(toast);
-    if (words !== toast && words.scrollHeight > words.clientHeight) {
-        // Words cut at the screen's edge are reached by keyboard too, as a wide table is (docs/DESIGN.md).
-        words.tabIndex = 0;
-        words.setAttribute('role', 'region');
-        words.setAttribute('aria-label', 'Scrollable notice');
-    }
+    markCut(stack);
     if (ttl > 0) {
         toast.addEventListener('pointerenter', () => { hovered = true; clear(); });
         toast.addEventListener('pointerleave', () => { hovered = false; arm(); });

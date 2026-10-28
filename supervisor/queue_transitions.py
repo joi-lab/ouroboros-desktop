@@ -456,7 +456,7 @@ def _resume_budget_paused_task(task_id: str, *, selected_by: str = "",
     A lifted root fence releases a held row only after recording its selection.
     ``selected_by`` names the MODEL-issued request (owner Q9); an empty value is
     the owner's own act, which needs no root grant above itself. ``gaps``
-    receives the damaged rows its owner-Pause tree census ties to no tree.
+    receives the damaged rows each door's owner-Pause tree census ties to no tree.
     """
     from ouroboros.control_actor import control_actor, observed_control_stop
     from ouroboros.work_stop import clear_refusal, release_refusal, selection_record
@@ -482,20 +482,20 @@ def _resume_budget_paused_task(task_id: str, *, selected_by: str = "",
         # a model's selection reach it here.
         from supervisor.budget_resume import resume_warm_owner_pause_root
 
-        warm = resume_warm_owner_pause_root(task_id, selected_by=selected_by)
+        warm = resume_warm_owner_pause_root(task_id, selected_by=selected_by, gaps=gaps)
         if warm is not None:
             return warm
     if located is None and not selected_by:
         from supervisor.owner_pause_resume import resume_terminal_tree
 
-        tree = resume_terminal_tree(task_id)
+        tree = resume_terminal_tree(task_id, gaps=gaps)
         if tree is not None:
             return tree
     if located is None and not selected_by:
         # An answered root's Pause: its deferred late review resumes, or nothing is left.
         from supervisor.budget_resume import resume_late_phase
 
-        late = resume_late_phase(task_id)
+        late = resume_late_phase(task_id, gaps=gaps)
         if late is not None:
             return late
     with q._queue_lock:

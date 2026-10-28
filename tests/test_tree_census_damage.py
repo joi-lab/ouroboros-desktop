@@ -353,6 +353,73 @@ def test_an_admitted_unstarted_root_resume_names_the_gap_its_census_saw(tmp_path
     assert owner_pause.read_fence(tmp_path, "queued-root").get("membership_gaps") == gap_before
 
 
+def _warm_root(tmp_path, _monkeypatch, workers):
+    """A live root that parks WARM under the Pause: its worker keeps the stack, nothing is re-queued."""
+    _live_root(tmp_path, workers, "solo")
+    return "solo", lambda: workers.RUNNING["solo"].update(owner_wait={"state": "waiting", "reason": "owner_pause"})
+
+
+def _answered_tree(tmp_path, _monkeypatch, workers):
+    """An answered root whose helpers the Pause holds: one parked warm, one never started."""
+    from ouroboros.task_results import write_task_result
+    from tests.test_owner_pause import _live_tree
+
+    _live_tree(tmp_path, workers)
+    workers.RUNNING.pop("root-1")
+    write_task_result(tmp_path, "root-1", "completed")
+    return "root-1", lambda: workers.RUNNING["child-run"].update(owner_wait={"state": "waiting", "reason": "owner_pause"})
+
+
+def _late_review(tmp_path, monkeypatch, _workers):
+    """An answered root whose prepared review is not sent yet (that fact alone is given): Resume sends it."""
+    from ouroboros import review_operation
+    from ouroboros.task_results import write_task_result
+
+    write_task_result(tmp_path, "solo", "completed")
+    monkeypatch.setattr(review_operation, "task_has_live_review_operation",
+                        lambda _root, task_id, *, sent_only=False, **_k: task_id == "solo" and not sent_only)
+    return "solo", lambda: None
+
+
+# door: (its tree, the field its accepted Resume answers with, the censuses it reads once tied to nothing)
+DOORS = {"warm_root": (_warm_root, "warm", 1), "answered_tree": (_answered_tree, "tree_only", 1),
+         "late_review": (_late_review, "late_phase", 3)}
+
+
+@pytest.mark.parametrize("case", ["clean", "after", "tied"])
+@pytest.mark.parametrize("door", list(DOORS))
+def test_every_resume_door_names_a_row_damaged_after_the_pause_settled(tmp_path, monkeypatch, door, case):
+    """Before the exact door: a warm root, an answered tree and its unsent review each answer with their own census."""
+    from ouroboros import owner_pause
+    from supervisor.owner_pause_control import refresh_owner_pause_tree, request_owner_pause
+
+    queue, state, workers = _install_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(state, "budget_remaining", lambda _st, **_k: 5.0)
+    build, answer, reads = DOORS[door]
+    root, park = build(tmp_path, monkeypatch, workers)
+    assert request_owner_pause(root, request_id=f"press-{door}")["ok"]
+    park()
+    assert refresh_owner_pause_tree(root) == owner_pause.FENCE_PAUSED
+    fence = owner_pause.read_fence(tmp_path, root)
+    if case != "clean":
+        _damage(tmp_path, "stray-2", "array", **({"parent_task_id": root} if case == "tied" else {}))
+    censuses = _counted_censuses(monkeypatch)
+    ack = queue.resume_budget_paused_task(root)
+    if case == "tied":  # a row a link ties to the tree still holds it, named, and the Pause stays closed
+        assert ack["ok"] is False and ack["error"] == "owner_pause_effects_unsettled"
+        assert TIED in ack["blockers"] and "membership_gaps" not in ack
+        assert owner_pause.fence_closed(owner_pause.read_fence(tmp_path, root))
+        return
+    assert censuses == [root] * reads, "the door's own censuses only: none added for the gap"
+    assert ack["ok"] is True and ack[answer], ack
+    if case == "clean":
+        assert "membership_gaps" not in ack and "message" not in ack
+    else:
+        assert ack["membership_gaps"] == {"rows": [AFTER], "count": 1}
+        assert ack["message"] == "Resume accepted." + GAP_WORDS.replace("(stray)", "(stray-2)")
+    assert owner_pause.read_fence(tmp_path, root).get("membership_gaps") == fence.get("membership_gaps")
+
+
 def test_a_resume_joins_its_census_to_the_pause_gap_each_row_once_within_the_bound():
     from ouroboros.pause_notices import GAP_ROWS, gap_fact
 

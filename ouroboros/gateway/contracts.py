@@ -349,8 +349,7 @@ class VideoOutbound(ChatReferenceFields):
     mime: str
     ts: str
     caption: NotRequired[str]
-    # Durable task-artifact URL for the stored media, replayed by chat history
-    # (the live frame carries the bytes inline instead).
+    # Same as PhotoOutbound.download_url above.
     download_url: NotRequired[str]
     # Same dual-address contract as PhotoOutbound.download_url_compat above.
     download_url_compat: NotRequired[str]
@@ -1317,8 +1316,7 @@ class TaskContinueResponse(TypedDict, total=False):
     unconfirmed: bool
     state: Literal["bound", "admitted"]
     action_nonce: str
-    # Unreadable rows nothing ties to the predecessor, not waited for: {"rows": [{"task_id", "reason"}], "count"}.
-    membership_gaps: Dict[str, Any]
+    membership_gaps: Dict[str, Any]  # unreadable rows nothing ties to the predecessor, not waited for
 
 
 class ContinuationOffer(TypedDict, total=False):

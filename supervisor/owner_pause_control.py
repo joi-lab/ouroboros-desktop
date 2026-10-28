@@ -302,7 +302,7 @@ def _wake_members(q: Any, root_task_id: str, fence: Dict[str, Any], members: lis
     return woken
 
 
-def refresh_owner_pause_tree(root_task_id: str) -> str:
+def refresh_owner_pause_tree(root_task_id: str, *, gaps: Optional[List[Dict[str, str]]] = None) -> str:
     """Turn the root's fence ``paused`` once the whole tree is saved and its own work stopped.
 
     Saved means: every member of the tree is parked — cold under its exact
@@ -314,7 +314,9 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
     exception is disclosed instead of waited for: reviewers already launched,
     their delegated runs and their own model sends (``finishing_reviews``). A
     damaged old row no surviving link ties to this tree is named on the fence
-    (``membership_gaps``), never waited for; a tied one holds it.
+    (``membership_gaps``), never waited for; a tied one holds it. A Resume's own
+    read passes ``gaps``: such rows go there, and an already paused fence keeps
+    the ones its Pause recorded.
     Returns the fence state after the check (``""`` when no fence).
     """
     from ouroboros.owner_pause import (
@@ -389,8 +391,10 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
         return str(fence.get("state") or "")
     from supervisor.continuation_admission import conflicting_writers
 
-    gaps: List[Dict[str, str]] = []
-    blockers = conflicting_writers(q, root_task_id, drive_root=root_drive, owner_pause_fence_id=fence_id, gaps=gaps)
+    found: List[Dict[str, str]] = []
+    blockers = conflicting_writers(q, root_task_id, drive_root=root_drive, owner_pause_fence_id=fence_id, gaps=found)
+    if gaps is not None:
+        gaps.extend(found)
     if [b for b in blockers if not review_finishing(b)]:
         return str(fence.get("state") or "")
     reviews = {str(b.get("task_id") or b.get("attempt_id") or "") for b in blockers if review_finishing(b)}
@@ -402,11 +406,12 @@ def refresh_owner_pause_tree(root_task_id: str) -> str:
             log.debug("Live review operations of %s unreadable at the Pause census", task_id, exc_info=True)
     facts = {"parked_members": [str(item.get("id") or "") for item in parked] + warm,
              "warm_members": list(warm), "finishing_reviews": sorted(reviews - {""})}
-    if gaps or fence.get("membership_gaps"):
+    paused = str(fence.get("state") or "") == FENCE_PAUSED
+    if (found or fence.get("membership_gaps")) and not (paused and gaps is not None):
         # Rows no surviving link ties to this tree: named, never a member, never what holds it.
         from ouroboros.pause_notices import gap_fact
-        facts["membership_gaps"] = gap_fact(gaps)
-    if str(fence.get("state") or "") == FENCE_PAUSED:
+        facts["membership_gaps"] = gap_fact(found)
+    if paused:
         if all(fence.get(key) == value for key, value in facts.items()):
             return FENCE_PAUSED
         try:  # the "still finishing" line changes on the same paused fence
