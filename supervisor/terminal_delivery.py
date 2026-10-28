@@ -1277,7 +1277,7 @@ def _persist_cancel_receipt(
     drive_root: Any, task_id: str, *,
     settled_status: str, outcome: str, delivery_id: str,
     preserved_path: str, preview_omitted: int,
-    children: Optional[List[Dict[str, Any]]] = None,
+    children: Optional[List[Dict[str, Any]]] = None, membership_gap: str = "",
     unreconciled_runs: Optional[List[str]] = None,
     reason_code: str = "", files_rescued: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -1287,10 +1287,10 @@ def _persist_cancel_receipt(
     result (``TaskDetailResponse`` is an open shape, so the panel gets it with
     no contract change): full-copy path + size + full sha256 (or an honest
     unreadable/unpreserved marker), exact preview-omitted count, the stop
-    reason when the intent is still readable, and the historical children
-    digest for a cascade root. Never creates the result record (a later full
-    write would clobber a block-only row) and never clobbers previously
-    persisted non-empty facts with an emptier rebuild. Fail-soft.
+    reason when the intent is still readable, and the historical children digest
+    for a cascade root with its ``membership_gap`` when that census was partial. Never
+    creates the result record (a later full write would clobber a block-only row) and
+    never clobbers previously persisted non-empty facts with an emptier rebuild. Fail-soft.
     ``files_rescued`` (TZ-2 C2) is the typed stat-only store count the receipt text speaks.
     """
     tid = str(task_id or "")
@@ -1307,6 +1307,7 @@ def _persist_cancel_receipt(
             ),
             "ts": utc_now_iso(),
             **({"files_rescued": dict(files_rescued)} if files_rescued else {}),
+            **({"membership_gap": str(membership_gap)} if membership_gap else {}),
         }
         if str(reason_code or ""):
             block["reason_code"] = str(reason_code)  # TZ-2 C1: the typed rail beside its sentence
@@ -1402,6 +1403,7 @@ def build_unreviewed_salvage_event(
     salvaged_text: str = "",
     preserved_path: str = "",
     children: Optional[List[Dict[str, Any]]] = None,
+    membership_gap: str = "",
     unreconciled_runs: Optional[List[str]] = None,
     settled_status: str = "",
     delivery_id: str = "",
@@ -1428,7 +1430,7 @@ def build_unreviewed_salvage_event(
     fragment is named the last persisted intermediate model message (never an
     "answer"), and the technical facts (path/sha256/bytes/children digest)
     live in the durable ``cancel_receipt`` block on the task result — the
-    details panel — not in chat.
+    details panel — not in chat. A partial digest census (``membership_gap``) is named there, said here.
     ``reason_code`` (TZ-2 C1): the TYPED rail; with an empty ``outcome`` the owner
     sentence comes from TASK_CAUSE_PHRASES here, and the code rides the receipt, not the prose.
     TZ-2 C2: text and receipt state the files rescued (positive/zero/unknown, stat-only walk, no hashes).
@@ -1451,9 +1453,7 @@ def build_unreviewed_salvage_event(
     body = str(salvaged_text or "").strip()
     preview, omitted = salvage_preview(body)
     outcome_text = str(outcome or "stopped")
-    descendants = (
-        f" {len(children)} descendant task(s) were settled with it." if children else ""
-    )
+    descendants = f" {len(children)} descendant task(s) were settled with it." if children else ""
     # Only a receipt with a preview promises one below (new fallback ids; owed rows keep their bytes).
     if str(settled_status or "").strip().lower() == STATUS_COMPLETED:
         # Completion-wins (owner 4=A): the kept result is the real answer, not a
@@ -1470,6 +1470,8 @@ def build_unreviewed_salvage_event(
     # rides the mutable disclosure (never the content-derived identity), hashes not computed.
     rescued = rescued_files_fact(tid, artifact_store_roots(drive_root, tid, task=task_row))
     disclosure_lines: List[str] = ["", rescued_files_sentence(rescued)]
+    if membership_gap:  # the digest's census could not place every saved record (#1528)
+        disclosure_lines += ["", "Some saved task records could not be read; this summary may be incomplete."]
     if unreconciled_runs:
         # GR3-7: an audit-failure marker means run state is UNKNOWN — a
         # different honest sentence than "these named runs stayed open".
@@ -1510,7 +1512,7 @@ def build_unreviewed_salvage_event(
         pathlib.Path(drive_root), tid,
         settled_status=str(settled_status or ""), outcome=outcome_text,
         delivery_id=did, preserved_path=str(preserved_path or ""),
-        preview_omitted=omitted, children=children,
+        preview_omitted=omitted, children=children, membership_gap=membership_gap,
         unreconciled_runs=unreconciled_runs, reason_code=code, files_rescued=rescued,
     )
     event = {
@@ -1542,6 +1544,7 @@ def deliver_unreviewed_salvage(
     salvaged_text: str = "",
     preserved_path: str = "",
     children: Optional[List[Dict[str, Any]]] = None,
+    membership_gap: str = "",
     unreconciled_runs: Optional[List[str]] = None,
     settled_status: str = "",
     delivery_id: str = "",
@@ -1562,7 +1565,7 @@ def deliver_unreviewed_salvage(
     event = build_unreviewed_salvage_event(
         pathlib.Path(drive_root), task, task_id,
         outcome=outcome, salvaged_text=salvaged_text, preserved_path=preserved_path,
-        children=children, unreconciled_runs=unreconciled_runs,
+        children=children, membership_gap=membership_gap, unreconciled_runs=unreconciled_runs,
         settled_status=settled_status, delivery_id=delivery_id, reason_code=reason_code,
     )
     if event is None:

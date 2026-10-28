@@ -6098,9 +6098,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 }
 
 .toast-stack {
+    --toast-top: calc(76px + env(safe-area-inset-top));
     position: fixed;
     right: 18px;
-    top: calc(76px + env(safe-area-inset-top));
+    top: var(--toast-top);
     z-index: 120;
     display: flex;
     flex-direction: column;
@@ -6150,6 +6151,22 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 /* A notice's one way back (host_modules.js recovery) follows its words on the same line when they fit. */
 .toast .toast-action { display: inline-flex; margin-left: var(--space-2); vertical-align: middle; }
 .toast:has(> .toast-dismiss) { display: flex; align-items: center; gap: var(--space-2); }
+/* The page's stack ends 18 px above the screen's bottom, as it keeps from its right, and the notices it keeps scroll
+   there as one column: every word and close button is reached by wheel, touch or keyboard (toast.js names it a region
+   once cut). A scrolling box clips what it holds, so its padding is the toasts' shadow room (0 18px 42px): left and
+   below them, and the 18 px to the right edge that `right` kept before. Room notices keep their own place. */
+#toast-stack {
+    right: 0;
+    box-sizing: border-box;
+    max-height: calc(var(--vvh) - var(--toast-top) - var(--inset-bottom) - 18px);
+    padding: 0 18px 60px 42px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+/* A notice taller than the column shows keeps its close button on screen, at the nearer edge. */
+#toast-stack .toast-dismiss { position: sticky; top: 0; bottom: 0; }
+/* The focused scroll region uses the same ring as other keyboard controls. */
+#toast-stack:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: -2px; }
 
 @keyframes toast-in {
     from { opacity: 0; transform: translateY(8px); }
