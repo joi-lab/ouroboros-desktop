@@ -2300,7 +2300,9 @@ def test_handle_steer_task_stale_target_notifies_visibly(tmp_path, monkeypatch):
         notices, ("gone", "sub"), ("target_unknown", "subagent_target"),
     ):
         assert cid == room
-        assert kwargs == {"role": "system", "system_type": "steer_not_delivered", "task_id": target}
+        # No bridge handed an ACK over, so this row carries the notice and replies to no owner row.
+        assert kwargs == {"role": "system", "system_type": "steer_not_delivered", "task_id": target,
+                          "progress_meta": {"routing_notice_carrier": "system", "reply_to": {}}}
         assert routing_refusal_cause("steer_task", "needs_manual_target", reason) in text
         assert "I'll" not in text and "Couldn't steer task" not in text
     assert drain_owner_entries(tmp_path, "gone") == []
@@ -2585,7 +2587,8 @@ def test_steer_refusal_keeps_a_distinct_reason_for_every_other_cause(
     text, kwargs = sent[0]
     assert routing_refusal_cause("steer_task", "needs_manual_target", reason) in text
     assert "I'll" not in text and "Couldn't steer task" not in text
-    assert kwargs == {"role": "system", "system_type": "steer_not_delivered", "task_id": "target-1"}
+    assert kwargs == {"role": "system", "system_type": "steer_not_delivered", "task_id": "target-1",
+                      "progress_meta": {"routing_notice_carrier": "system", "reply_to": {}}}
 
 
 def test_steer_reaches_a_queue_resident_direct_turn(tmp_path, monkeypatch):

@@ -410,15 +410,15 @@ def local_producer_observation(ctx: Any, *, timeout_sec: float) -> Dict[str, Any
     stays in the checkpoint, so Resume continues the same panel. While not
     ``quiescent`` the task stays fenced/nonterminal and keeps its native worker.
     """
+    from ouroboros import custody_owed  # a write still owed is named, never certified; quiescence is physical
     review = drain_local_review_attempts(str(ctx.task_id), timeout_sec=timeout_sec)
     tool_futures = drain_local_tool_futures(ctx, timeout_sec=timeout_sec)
     return {
-        "dispatch_fence": "closed",
-        "review_attempts": review,
+        "dispatch_fence": "closed", "review_attempts": review,
         "tool_futures": tool_futures,
         "quiescent": bool(review.get("drained")) and review.get("registry") == "ok"
                      and bool(tool_futures.get("drained")),
-    }
+        "publication_pending": custody_owed.labels() if custody_owed.drain() else []}
 
 
 # --- durable row --------------------------------------------------------------------

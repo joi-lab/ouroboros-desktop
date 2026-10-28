@@ -3,7 +3,6 @@
 BASELINE_SOURCE_SHA = "77d6827b7a72a632899bb6cc64a7e759aabcfaa6"
 
 GIANT_PATHS = (
-    "skills/unix_computer_use/plugin.py",
     "supervisor/workers.py",
     "tests/test_claudexor_owned_daemon.py",
     "tests/test_delivery_forced_finalization.py",
@@ -196,6 +195,7 @@ BAND_PATHS = {
     "skills/telegram/plugin.py": None,
     "skills/telegram/scripts/companion.py": None,
     "skills/telegram/scripts/sidecar.py": None,
+    "skills/unix_computer_use/plugin.py": "Shrank from 1838 lines (giant) when the remote transports (remote.py) and the place readers (place.py, macos_native.py) got their own modules in 0.5.3; registration, the coordinate contract and local input stay one flow.",
     "supervisor/events_budget.py": "Entered the band from 1000 lines (#1716): the owner's held-row selection completes a member's consumed Resume on its own fence only after every refusal it checks, then names the owner-Pause latch that member now passes; both stay at the one place a held row is released, beside the authority snapshot they compare.",
     "supervisor/events_task_done.py": "Entered the band from exactly 1000 lines with the #1154 terminal-projection continuation and the #1087 shared warning fold: the terminal dispatch now hands both halves of a root's owed projection to one settlement owner and reads child warnings from the shared normalized projection instead of a second execution-axis copy. Shrink-only from here.",
     "supervisor/message_bus.py": "Shrank into the band from 1548 lines: the web acceptance moved to message_ingress, and this change's canonical chat writer is the ingress seam over the dialogue store (state/dialog.sqlite), so the bus keeps the transports and the send seam. Shrink-only from here.",
@@ -284,6 +284,7 @@ BAND_PATHS = {
     "web/modules/chat_decision.js": "Exact Main question navigation extends the existing canonical question reader, room binding and late-read ownership rather than creating a second loader.",
     "web/modules/chat_media.js": "Entered the band from 1000 lines with owner chat attachments: mountAttachments builds the attachment block from the existing media atoms and listener/disposer ownership (own/release), and the file dialog closes with its card's owner on release; the block itself lives in chat_attachments.js, no second media or disposal owner.",
     "web/modules/claudexor_status_store.js": "The existing Accounts observation owner also serializes explicit resource reads and retains original reset request identity; keeping one shared writer avoids a second poller or conflicting account cache.",
+    "web/modules/client_contract_types.js": "Entered the band from 997 lines with the optional Resume body (TaskResumeRequest): the browser twin of client_contracts.py keeps one field-identical typedef per published envelope, which test_gateway_client_contract reads from this file.",
     "web/modules/harness_accounts.js": None,
     "web/modules/notifications.js": "One client notifier owns event classification, late preference checks, native/browser fallback and its paired sound/settings lifetime; keeping these paths together makes the mute boundary inspectable without another controller.",
     "web/modules/review_presentation.js": "Shrank INTO the band from 1593 lines when Reviews A moved reviewer rows, Read and Record facts into review_opinions.js; the remaining domain adapters, keyed group store and hydration keep one review-group owner.",

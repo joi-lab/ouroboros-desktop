@@ -955,6 +955,7 @@ def release_snapshot_checkout(snapshot_id: str, *, worktree_root: Optional[Any] 
             _mark_removal_failed(row, data_dir)
             return False
         _forget_checkout(Path(str(row.get("git_dir") or row.get("target_root") or ".")), wt_path)
+        worktree_removal.retired(row, _data_dir(data_dir))
     return True
 
 
@@ -1407,7 +1408,7 @@ def remove_execution_snapshot(
             _forget_checkout(target, wt_path)
             _unpin_snapshot(target, entry)
         _drop_record(wt_path, data_dir)
-    worktree_removal.forget(entry)
+    worktree_removal.retired(entry, _data_dir(data_dir))
     return True
 
 
@@ -1515,7 +1516,7 @@ def _retire_worktree(match: Dict[str, Any], root: Path, data_dir: Any, branch: s
             _mark_removal_failed(match, data_dir)  # the directory survived: record and pin stay
             return False
         _drop_record(wt_path, data_dir)
-    worktree_removal.forget(match)
+    worktree_removal.retired(match, _data_dir(data_dir))
     return True
 
 

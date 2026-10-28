@@ -211,10 +211,15 @@ def _inject_round_checkpoints(
     budget_remaining_usd: Optional[float] = None,
     cost_ceiling: Optional["task_pacing.CostCeiling"] = None,
     active_use_local: bool = False,
+    llm_trace: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Inject this round's time and cost threshold notices AFTER owner messages, so a
     notice joins the LLM-call tail (a normal user turn, never a paid round of its
-    own). Returns whether any was injected."""
+    own), then the locators of timed-out calls that settled since (``late_tool_results``):
+    this already-authorized send carries them, nothing is scheduled for them.
+    Returns whether any was injected."""
+    from ouroboros.late_tool_results import deliver_late_results
+
     time_budget = _maybe_inject_time_budget_milestone(
         messages, tools, event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
         accumulated_usage=accumulated_usage,
@@ -225,7 +230,8 @@ def _inject_round_checkpoints(
         accumulated_usage=accumulated_usage, round_idx=round_idx, active_use_local=active_use_local,
         event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
     )
-    return bool(time_budget or cost_budget)
+    late = deliver_late_results(messages, tools._ctx, llm_trace, drive_logs, _loop()._append_or_merge_user_message)
+    return bool(time_budget or cost_budget or late)
 
 
 def _forced_delegation_note(tools_ctx: Any, llm_trace: Dict[str, Any]) -> str:

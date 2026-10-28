@@ -504,12 +504,15 @@ class LocalChatBridge:
         routing_token: str = "",
         cause: str = "", reasoning_effort: str = "",
         project_name: str = "", target_task_ids=None, target_titles=None,
+        routing_notice_carrier: str = "", reply_to: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Emit a typed routing receipt without creating an assistant bubble.
 
         Web consumes the WS annotation; non-Web skills receive the same additive typed envelope on
         their existing outbound subscription.  ``text`` stays empty and ``suppress_bubble`` is
         explicit, so legacy transports do not invent a human-visible mirror message.
+        ``routing_notice_carrier`` names this ACK the selected carrier of the act's owner notice
+        (never delivery proof); ``reply_to`` is the owner message that notice answers.
         """
         payload = {
             "type": "message_annotation",
@@ -536,6 +539,10 @@ class LocalChatBridge:
             payload["cause"] = str(cause)
         if str(reasoning_effort or ""):  # #1539: the start a New task picked from this card requests
             payload["reasoning_effort"] = str(reasoning_effort)
+        if routing_notice_carrier in {"routing_ack", "system"}:
+            payload["routing_notice_carrier"] = routing_notice_carrier
+        if isinstance(reply_to, dict) and reply_to:
+            payload["reply_to"] = dict(reply_to)
         if options is not None:
             payload["options"] = [dict(row) for row in options if isinstance(row, dict)]
         if attachment_manifest is not None:

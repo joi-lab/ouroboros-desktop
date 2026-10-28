@@ -5,7 +5,7 @@ it: `docs/DESIGN.md` "References and actions". Rows are sorted by text so that t
 the same thing sit together: when your diff adds a row, read its neighbours.
 
 260 controls with fixed text in 241 rows, 176 distinct texts;
-138 more controls build their text at run time and are not listed.
+139 more controls build their text at run time and are not listed.
 
 ## Fixed control text
 
@@ -35,6 +35,7 @@ the same thing sit together: when your diff adds a row, read its neighbours.
 | Add subagent | `btn btn-default` | modules/subagents_settings.js | 1 |
 | Advanced — where subagents check out their work | `(no class)` | modules/subagents_settings.js | 1 |
 | Advanced: sign in from your own terminal | `(no class)` | modules/harness_login_cards.js | 1 |
+| Answer | `(no class)` | modules/delegated_activity.js | 1 |
 | API spending limits Optional with subscriptions | `(no class)` | modules/onboarding_wizard.js | 1 |
 | Apply maximum | `btn btn-default` | modules/model_roles.js | 1 |
 | Apply to draft | `btn btn-primary` | modules/mcp_import_dialog.js | 1 |
@@ -145,7 +146,6 @@ the same thing sit together: when your diff adds a row, read its neighbours.
 | Open in Main ↗ | `consciousness-inline-link ui-hit-area` | modules/consciousness_dashboard.js | 1 |
 | Open in new tab | `(no class)` | modules/chat_media.js | 1 |
 | Open Ouroboros in the current mode | `btn btn-primary` | modules/onboarding_wizard.js | 1 |
-| Open Settings | `btn btn-default btn-sm chat-subagents-settings ui-hit-area` | modules/composer_subagents.js | 1 |
 | Open the conversation ↗ | `consciousness-inline-link ui-hit-area` | modules/consciousness_dashboard.js | 1 |
 | Panic | `chat-header-btn danger ui-chrome-control` | modules/chat_header.js | 1 |
 | Paste | `btn btn-default` | modules/files.js | 1 |

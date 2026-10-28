@@ -308,6 +308,7 @@ def _route_project_chat_to_running_task(
             task_metadata["_attachment_report"] = attachment_report
         if isinstance(task_metadata, dict):
             task_metadata["_routing_target_label"] = target_label
+            task_metadata["_routing_target"] = task_obj or candidate  # the receipt names this work and its room
         # A landed delivery publishes no row: the receipt the caller records
         # from this stash carries the manifest; the task's mailbox carries the block.
         return tid
@@ -394,76 +395,46 @@ def _record_routing_receipt(
     reason: str = "",
     detail: str = "",
     attachment_manifest: Optional[list] = None,
+    task: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Emit a typed bubble-free ack and optionally persist its presentation state."""
-    from ouroboros.project_dialogue import routing_refusal_cause
+    """Emit a typed bubble-free ack and optionally persist its presentation state.
 
-    if target and not str(target_label or "").strip():
-        from ouroboros.project_dialogue import routing_target_label
+    The fields are the supervisor receipts' own (``_routing_receipt_fields``, #968),
+    read once, written then sent; ``task`` is the live work the words reached, as a
+    relay names it. The send does not wait on the row: a landed delivery's authority
+    is the mailbox it already wrote, so a lost annotation still reaches the owner
+    live instead of leaving the message undelivered or Sending.
+    """
+    from ouroboros.project_dialogue import ROUTING_RECEIPT_FIELDS
+    from supervisor.events_project_routing import _routing_receipt_fields
 
-        target_label = routing_target_label(ctx.DRIVE_ROOT, action, target)
-    # Q3=A: this parallel producer reads the SAME host table, so a refusal it
-    # writes carries the owner's sentence instead of leaning on a client label.
-    cause = routing_refusal_cause(action, status, reason, options)
+    fields = _routing_receipt_fields(
+        ctx, {"relay_target": task}, action=action, target=target, target_label=target_label, status=status,
+        reason=reason, options=options, attachment_manifest=attachment_manifest,
+    )
     if persist:
         try:
             from ouroboros.project_dialogue import append_chat_annotation
 
             append_chat_annotation(
-                ctx.DRIVE_ROOT,
-                client_message_id,
-                action=action,
-                target=target,
-                target_label=target_label,
-                status=status,
-                reason=reason,
-                cause=cause,
-                detail=detail,
-                attachment_manifest=attachment_manifest,
+                ctx.DRIVE_ROOT, client_message_id, reason=reason, detail=detail,
+                **{key: value for key, value in fields.items() if key in ROUTING_RECEIPT_FIELDS},
             )
         except Exception:
             log.debug("Routing annotation append failed", exc_info=True)
     try:
         ack = getattr(bridge, "send_routing_ack", None)
         if callable(ack):
-            ack_kwargs = {
-                "client_message_id": client_message_id,
-                "action": action,
-                "target": target,
-                "target_label": target_label,
-                "status": status,
-            }
-            if options is not None:
-                ack_kwargs["options"] = options
-            if attachment_manifest is not None:
-                ack_kwargs["attachment_manifest"] = attachment_manifest
-            if cause:
-                ack_kwargs["cause"] = cause
-            ack(
-                chat_id,
-                **ack_kwargs,
-            )
+            from supervisor.events_project_routing import _routing_notice_ack_fields
+
+            # The same carrier fact the supervisor's receipt writer states (#966).
+            notice = _routing_notice_ack_fields(ctx, {"chat_id": chat_id, "client_message_id": client_message_id}, fields)
+            ack(chat_id, client_message_id=client_message_id, **fields, **notice)
         else:
             broadcast = getattr(bridge, "broadcast", None)
             if callable(broadcast):
-                payload = {
-                    "type": "message_annotation",
-                    "annotation_type": "routing_ack",
-                    "chat_id": int(chat_id or 0),
-                    "client_message_id": str(client_message_id or ""),
-                    "action": action,
-                    "target": target,
-                    "target_label": target_label,
-                    "status": status,
-                    "suppress_bubble": True,
-                }
-                if options is not None:
-                    payload["options"] = options
-                if attachment_manifest is not None:
-                    payload["attachment_manifest"] = attachment_manifest
-                if cause:
-                    payload["cause"] = cause
-                broadcast(payload)
+                broadcast({"type": "message_annotation", "annotation_type": "routing_ack", "chat_id": int(chat_id or 0),
+                           "client_message_id": str(client_message_id or ""), **fields, "suppress_bubble": True})
     except Exception:
         log.debug("Routing receipt broadcast failed", exc_info=True)
 
@@ -630,6 +601,7 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
                     list(task_metadata.get("_attachment_manifest") or [])
                     if isinstance(task_metadata, dict) else None
                 ),
+                task=task_metadata.get("_routing_target") if isinstance(task_metadata, dict) else None,
             )
             return
 

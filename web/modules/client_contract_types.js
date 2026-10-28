@@ -818,6 +818,14 @@
  */
 
 /**
+ * The optional body of `POST /api/tasks/{task_id}/resume`: held calls whose outcome is unknown
+ * (a refusal's `acceptable_unknown`) the owner goes on past, and why. Recorded, never re-run.
+ * @typedef {Object} TaskResumeRequest
+ * @property {string[]=} accept_unknown
+ * @property {string=} reason
+ */
+
+/**
  * `POST /api/tasks/{task_id}/resume` after budget, owner, sleep or technical authority pause.
  * @typedef {Object} TaskResumeResponse
  * @property {boolean} ok
@@ -835,6 +843,8 @@
  * @property {string[]=} held_siblings
  * @property {string[]=} rebound_held_siblings
  * @property {string=} released_hold
+ * @property {{rows: Array<{task_id: string, reason: string}>, count: number}=} membership_gaps
+ * @property {string=} message
  */
 
 /* Living-message cards (`ouroboros.gateway.card_contracts`): the `card` / `card_state` frames, the read API

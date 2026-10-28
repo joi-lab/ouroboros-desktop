@@ -31,7 +31,7 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "skill_state": "state/skills/{id}/{state_file}.json",
           "run": "task_drives/{child}/delegated_runs/{id}.json",
           "verification_receipts": "task_results/artifacts/{id}/verification_receipts.jsonl",
-          "storage": "state/storage_measurement.json",  # the last two finished storage counts (installation-wide)
+          "storage": "state/storage_measurement.json",  # the last two finished counts (installation-wide) + removers
           "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
           "update_letter": "state/update_letter.json",  # the letter with its whole range qualification
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
@@ -341,10 +341,21 @@ def _record(ctx, root, kind, identity, child, state_file, op, where, tail, cap, 
     if op == "jsonl":
         raw, value, partial, consumed = _jsonl(path, where, tail, cap, subject)
         return raw, value, False, partial, consumed, False
-    with path.open("rb") as stream:
-        raw = stream.read(cap + 1)
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(cap + 1)
+    except FileNotFoundError:
+        if kind != "storage":
+            raise
+        raw = b"{}"  # no count yet: the removers below are read all the same
     if len(raw) > cap:  # the bounded read proves only a lower bound
         raise _over_input(subject, None, cap)
+    if kind == "storage":  # the saved counts beside each place's removers, read now (``storage_removers``)
+        from ouroboros.storage_removers import place_removers
+
+        value = {**json.loads(raw), "removers": place_removers(root)}
+        raw = _canonical(value)
+        return raw, value, True, False, len(raw), False
     return raw, json.loads(raw), False, False, len(raw), False
 
 
