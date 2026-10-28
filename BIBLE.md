@@ -634,8 +634,8 @@ from the numbered-release form: review must not trap Ouroboros in broken code
 it cannot undo. Rollback does not itself establish that the destination was
 reviewed or that current data and external effects are reversible. Preserve
 the target's actual evidence and the restoration outcome. Rolling back a change
-to BIBLE.md or the review bounds is recovery, not an amendment; before it,
-record whether the target text was ever reviewed.
+to BIBLE.md or P3's modification bounds is recovery, not an amendment; before
+it, record whether the target text was ever reviewed.
 
 ## Principle 10: Evolution Through Iterations (absorbed)
 
