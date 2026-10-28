@@ -284,6 +284,8 @@ class ChatOutbound(ChatReferenceFields):
     transport: NotRequired[TransportMetadata]
     # Typed message kind; role alone selects authorship (DESIGN: Chat authorship and System rows).
     system_type: NotRequired[str]
+    # Live frame only: a routing refusal's System row names the carrier its receipt selected (routing_ack = the ACK).
+    routing_notice_carrier: NotRequired[Literal["routing_ack", "system"]]
     # Host placement of a task's System row: timeline or Reviews; absent = ordinary. card_row_id is stable.
     card_row: NotRequired[Literal["timeline", "reviews"]]
     card_row_id: NotRequired[str]
@@ -567,6 +569,9 @@ class MessageAnnotationOutbound(TypedDict):
     routing_token: NotRequired[str]
     cause: NotRequired[str]
     reasoning_effort: NotRequired[str]  # #1539: the explicit start a New task picked from this card requests
+    # #966: this ACK is the SELECTED carrier of the act's owner notice (never delivery proof), answering reply_to.
+    routing_notice_carrier: NotRequired[Literal["routing_ack", "system"]]
+    reply_to: NotRequired[Dict[str, Any]]
     ts: NotRequired[str]
 
 

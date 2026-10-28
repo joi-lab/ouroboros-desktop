@@ -216,11 +216,14 @@ def test_cancel_refusal_is_one_system_notice_only_when_no_owner_receipt_can_tell
     }, ctx)
 
     assert drain_owner_entries(tmp_path, "target") == []
-    if labelled or chat_id < 0:
+    if chat_id < 0:
         assert notices == []
     else:
+        # No bridge handed the ACK over, so no owner receipt can tell it, labelled or not: this row is the
+        # notice's carrier, answering no owner row (the host accepted none under "owner-message" here).
         assert notices == [(chat_id, "Review · " + routing_refusal_cause("steer_task", "rejected", "cancel_pending"), {
             "role": "system", "system_type": "steer_not_delivered", "task_id": "target",
+            "progress_meta": {"routing_notice_carrier": "system", "reply_to": {}},
         })]
 
 

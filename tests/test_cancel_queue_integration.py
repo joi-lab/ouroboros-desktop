@@ -426,6 +426,7 @@ def test_steering_is_refused_while_a_cancel_intent_is_active(tmp_path, monkeypat
     assert drain_owner_entries(tmp_path, "steerme") == []
     assert sent == [((1, "Task · Not delivered: that task is being stopped"), {
         "role": "system", "system_type": "steer_not_delivered", "task_id": "steerme",
+        "progress_meta": {"routing_notice_carrier": "system", "reply_to": {}},
     })]
 
 
