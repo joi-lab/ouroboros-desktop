@@ -1,6 +1,7 @@
 """The body observer watches held runs through the compact wait and reads detail on a reason."""
 from __future__ import annotations
 
+import logging
 import threading
 
 import pytest
@@ -38,8 +39,11 @@ class Engine:
     details: dict = {}
     requests: list = []
     detail_reads: list = []
+    catalog: list = []
 
     def operations(self, *, timeout_sec=None):
+        if Engine.catalog and isinstance(Engine.catalog[0], BaseException):
+            raise Engine.catalog.pop(0)
         return list(self.routes)
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
@@ -64,7 +68,7 @@ class Engine:
 def runtime(tmp_path, monkeypatch):
     """The real runtime with its driver parked; ``step`` runs one tick and joins its passes."""
     monkeypatch.setattr(obs, "_SUPPORT", {})
-    Engine.wakes, Engine.details, Engine.requests, Engine.detail_reads = [], {}, [], []
+    Engine.wakes, Engine.details, Engine.requests, Engine.detail_reads, Engine.catalog = [], {}, [], [], []
     release, entered = threading.Event(), threading.Event()
     tick = body.BodyRuntime.tick
 
@@ -212,6 +216,57 @@ def test_support_is_learned_by_the_first_read_then_the_pass_takes_over(tmp_path,
     Engine.wakes.append(_wake("timeout", [_summary()]))
     step()
     assert Engine.detail_reads == [entry.run_id] and len(Engine.requests) == 1
+
+
+def test_a_catalog_hole_is_the_runs_observation_hole_and_is_absorbed_before_it_raises(tmp_path, runtime):
+    instance, step = runtime
+    instance._compact_wait = False
+    entry = started(tmp_path)
+    hole = ClaudexorUnavailable("daemon_unreachable", "read bound expired", observation_timeout=True,
+                                observation_reason="observation_read_timeout")
+    Engine.catalog.append(hole)
+    with pytest.raises(ClaudexorUnavailable):
+        instance._observe(entry)
+    fact = instance.observation(entry.run_id)
+    assert fact["answered"] is False and fact["error_code"] == "daemon_unreachable", "the hole is this read's fact"
+    assert instance._compact_wait is False and Engine.detail_reads == []
+
+
+def test_a_refused_or_malformed_pass_returns_the_observer_to_its_old_beat_once(tmp_path, runtime, caplog):
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running"}, "lastSeq": 1,
+                                    "pendingInteractions": []}
+    Engine.wakes.append({"wakeReason": "attention", "attention": [], "summaries": []})  # a batch of the wrong size
+    caplog.set_level(logging.WARNING, logger=body.__name__)
+    step()
+    assert instance._compact_wait is False and Engine.detail_reads == []
+    assert instance.observation(entry.run_id)["error_code"] == "malformed_response", "nothing swallowed silently"
+    assert sum("compact wait unusable" in record.message for record in caplog.records) == 1
+    step()
+    step()
+    assert Engine.detail_reads == [entry.run_id] * 2 and len(Engine.requests) == 1, "the old beat, not relearned from the cache"
+    assert sum("compact wait unusable" in record.message for record in caplog.records) == 1, "logged once"
+
+
+def test_an_answered_question_is_cleared_by_one_addressed_read_and_other_quiet_rows_stay_read_free(tmp_path, runtime):
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running", "waitingOnUser": True},
+                                    "lastSeq": 2, "pendingInteractions": [_question()]}
+    Engine.wakes.append(_wake("attention", [_summary(pending=True, token=TOKEN_B)], attention=[0]))
+    step()
+    assert current.run(tmp_path, entry.run_id).pending_interaction_ids == ["int-1"]
+    answered = "c" * 43
+    Engine.details[entry.run_id] = {"summary": {"runId": entry.run_id, "state": "running", "waitingOnUser": False},
+                                    "lastSeq": 3, "pendingInteractions": []}
+    Engine.wakes.append(_wake("timeout", [_summary(pending=False, token=answered)]))
+    step()
+    assert Engine.detail_reads == [entry.run_id] * 2, "the answered question earns one addressed read"
+    assert current.run(tmp_path, entry.run_id).pending_interaction_ids == []
+    Engine.wakes.append(_wake("timeout", [_summary(pending=False, token=answered)]))
+    step()
+    assert Engine.detail_reads == [entry.run_id] * 2, "every other quiet row stays read-free"
 
 
 def test_an_engine_that_lost_the_route_returns_the_observer_to_its_old_beat(tmp_path, runtime):

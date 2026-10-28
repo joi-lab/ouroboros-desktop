@@ -26,9 +26,11 @@ class Engine:
 
     def __init__(self, wakes, details):
         self.wakes, self.details = list(wakes), list(details)
-        self.requests, self.detail_reads = [], 0
+        self.requests, self.detail_reads, self.catalog = [], 0, []
 
     def operations(self, *, timeout_sec=None):
+        if self.catalog and isinstance(self.catalog[0], BaseException):
+            raise self.catalog.pop(0)
         return list(self.routes)
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
@@ -153,6 +155,23 @@ def test_an_unanswered_addressed_read_does_not_spin_on_the_same_notice(tmp_path,
     detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
     assert detail is DONE and len(gateway.requests) == 3
     assert slept == [rx._SESSION_POLL_SEC] * 2, "each unanswered read earned the slot's own beat before the next wait"
+
+
+def test_a_catalog_hole_leaves_the_detail_read_to_decide(tmp_path, monkeypatch):
+    gateway = Engine(wakes=[], details=[RUNNING, DONE])
+    gateway.catalog = [ClaudexorUnavailable("daemon_unreachable", "catalog timeout", observation_timeout=True,
+                                            observation_reason="observation_read_timeout")]
+    slept = []
+    monkeypatch.setattr(rx.time, "sleep", lambda s: slept.append(s))
+    detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
+    assert detail is DONE and gateway.requests == [] and slept, "unobserved this beat: the slot's own beat, then the detail"
+
+
+def test_an_engine_that_lost_the_route_hands_its_own_detail_read_to_the_slot(tmp_path, monkeypatch):
+    gateway = Engine(wakes=[ClaudexorUnavailable("not_found", "no such route", status_code=404)], details=[RUNNING, DONE])
+    monkeypatch.setattr(rx.time, "sleep", lambda s: None)
+    detail = rx._poll_session_terminal(gateway, _Custody(), tmp_path, object(), "run-r", 30.0)
+    assert detail is DONE and gateway.detail_reads == 2, "the slot's first read and the fallback's terminal one: never a third"
 
 
 def test_an_engine_without_the_wait_keeps_the_old_sleep_and_read_beat(tmp_path, monkeypatch):

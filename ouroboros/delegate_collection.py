@@ -566,17 +566,20 @@ class BodyRuntime:
     _WATCH, _PRIME = "*watch", "*prime"  # the compact passes, keyed beside the per-run reads
 
     def _observe(self, entry):
-        """One run's full detail: the addressed read a wake, a fallback beat or a problem row earns."""
+        """One run's full detail: the addressed read a wake, a fallback beat or a problem row earns.
+        The catalog question (does this engine serve the compact wait?) is asked inside the same
+        hole boundary, off the lock: its hole is this read's hole, never a raise past the fact."""
         from ouroboros.gateways import claudexor_observation as observation
         from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
         gateway = self._observer_gateway()
-        with self.lock:
-            self._compact_wait = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         try:
+            supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
             detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         except BaseException as exc:
             self._absorb_refusal(entry, gateway, exc)
             raise
+        with self.lock:
+            self._compact_wait = supported
         self._absorb_detail(entry, gateway, detail)
 
     def _absorb_refusal(self, entry, gateway, exc):
@@ -617,24 +620,31 @@ class BodyRuntime:
         An engine without the wait keeps today's beat: one detail read per run per tick.
         """
         from ouroboros.gateways import claudexor_observation as observation
-        from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC
+        from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
         gateway = self._observer_gateway()
-        supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
         with self.lock:
-            self._compact_wait = supported
             targets = [(entry.run_id, self.seen.get(entry.run_id)) for entry in entries]
+        try:
+            supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
+            wake = observation.wait_attention(gateway, targets, wait_sec=None if hold else 0.0,
+                                              timeout_sec=SHORT_POLL_TIMEOUT_SEC) if supported else None
+        except ClaudexorUnavailable as exc:
+            if not observation.is_observation_hole(exc):
+                # A refusal of the pass itself, or an answer outside the contract: this engine's
+                # compact wait is unusable, so every run is read as before (logged once: the
+                # engine identity is remembered, nothing re-asks it).
+                observation.forget_support(gateway)
+                with self.lock:
+                    self._compact_wait = False
+                log.warning("Body compact wait unusable on this engine (%s); each run's detail is read as before", exc)
+            self._unanswered(entries, exc, gateway)
+            return
+        with self.lock:  # the route vanished under us: this pass read details, the next ticks read as before
+            self._compact_wait = supported and wake.source != "detail"
         if not supported:
             return  # the next tick reads each run as before
-        wake = observation.wait_attention(gateway, targets, wait_sec=None if hold else 0.0,
-                                          timeout_sec=SHORT_POLL_TIMEOUT_SEC)
-        if wake.source == "detail":
-            with self.lock:
-                self._compact_wait = False  # the route vanished: this pass read details, the next ticks read as before
         if wake.hole is not None:
-            for entry in entries:
-                self._remember(entry, None, error=wake.hole)
-            if not getattr(wake.hole, "status_code", 0) and not getattr(wake.hole, "observation_answered", False):
-                self._drop_observer_gateway(gateway)
+            self._unanswered(entries, wake.hole, gateway)
             return
         for index, (entry, row) in enumerate(zip(entries, wake.rows)):
             if not self.active:
@@ -657,6 +667,15 @@ class BodyRuntime:
                         self.seen[entry.run_id] = observation.ACKNOWLEDGED_PROBLEM
                 continue
             if not wake.needs_attention(index):
+                if row.pending is False and entry.pending_interaction_ids:
+                    # Answered since this observer last read the run: one addressed read clears
+                    # the question from custody. Every other quiet row stays read-free.
+                    try:
+                        self._observe(entry)
+                    except Exception:
+                        log.debug("Body observation of %s remains owed after its question was answered",
+                                  entry.run_id, exc_info=True)
+                    continue
                 self._remember(entry, None, row=row)
                 c.bind_daemon_store(self.root, gateway, entry)
                 continue
@@ -668,6 +687,14 @@ class BodyRuntime:
             self._absorb_detail(entry, gateway, detail)
             with self.lock:
                 self.seen[entry.run_id] = row.token
+
+    def _unanswered(self, entries, hole, gateway):
+        """Nothing was learned about these runs this pass: the hole is each run's execution fact,
+        and a transport that carried no answer is dropped (the next pass opens a fresh one)."""
+        for entry in entries:
+            self._remember(entry, None, error=hole)
+        if not getattr(hole, "status_code", 0) and not getattr(hole, "observation_answered", False):
+            self._drop_observer_gateway(gateway)
 
     def _remember(self, entry, detail, *, error=None, row=None):
         """Keep this read's execution fact for readers that must not poll the engine themselves
