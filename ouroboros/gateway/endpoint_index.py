@@ -333,8 +333,9 @@ HTTP_SHAPES: dict[str, Shape] = {
     "POST /api/tasks/{task_id}/pause": Shape(f"200,202:TaskPauseResponse {_TASK_ERRORS}", "TaskPauseRequest"),
     "POST /api/tasks/{task_id}/continue": Shape(f"200:TaskContinueResponse {_TASK_ERRORS}", "TaskContinueRequest",
                                                 note="a timeout is not a refusal: retry with the same action_nonce"),
-    "POST /api/tasks/{task_id}/resume": Shape("200:TaskResumeResponse 400,404,409,503:ErrorResponse",
-                                              note="a budget-paused task; not idempotent: a repeat is refused"),
+    "POST /api/tasks/{task_id}/resume": Shape("200:TaskResumeResponse 400,404,409,503:ErrorResponse", "TaskResumeRequest",
+                                              note="a budget-paused task; not idempotent: a repeat is refused; "
+                                                   "a 409 may list acceptable_unknown ids to name in the body"),
     "POST /api/decisions": Shape(
         "200,202:DecisionResponse 400,404:ErrorResponse 409:DecisionResponse|ErrorResponse 501,503:ErrorResponse",
         "DecisionRequest", note="request_id is the idempotency key; the first answer wins (a card press: unless once)"),

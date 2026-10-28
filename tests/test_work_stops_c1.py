@@ -139,7 +139,8 @@ def test_c1_four_bound_model_receivers_are_unknown_until_addressed_resume(tmp_pa
     else:
         assert result["error"] == "owner_pause_effects_unsettled"
         assert len([b for b in result["blockers"] if b["kind"] == "model_handoff"]) == 4
-        assert "a model request has no recorded result" in result["message"]
+        assert "a model answer for task child-run is awaited by a live worker" in result["message"]
+        assert "acceptable_unknown" not in result, "a live receiver is never offered to go on past"
     assert ua.read_usage_records(tmp_path, final_only=False) == before, "repair cannot re-execute or settle unknown cost"
 
 

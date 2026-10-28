@@ -87,8 +87,8 @@ def owner_ended(pid: Any, birth: Any, proof: Any = None) -> bool:
 def owner_live(pid: Any, birth: Any, proof: Any = None) -> bool:
     """Positive evidence the recorded owner STILL runs: its pid carries the same validated birth.
 
-    Used only to word a hold honestly (``tool_custody.tool_handoff_reason``);
-    retirement never reads it. A ``ps`` string, a mixed kind or an unreadable
+    Used to word a hold honestly (``tool_custody.tool_handoff_reason``) and to
+    refuse a decision to go on beside a live call; retirement never reads it. A ``ps`` string, a mixed kind or an unreadable
     birth is not evidence of either life or death.
     """
     from ouroboros.platform_layer import pid_provably_gone, process_start_time
@@ -344,6 +344,99 @@ def reconcile_open_local_custody(root: Any) -> List[Dict[str, Any]]:
         repaired.extend(_repair_holder_claims(root, holder))
     repaired.extend(_repair_absent_receivers(root, None, None))
     return repaired
+
+
+ACCEPTABLE_UNKNOWN = frozenset({"local_completion_unknown", "owner_ended_effect_unknown",
+                                "returned_effect_unconfirmed"})
+
+
+def receiver_reason(attempt: Dict[str, Any]) -> str:
+    """An open model attempt's receiver, as ``tool_custody.tool_handoff_reason`` words a tool call.
+
+    ``no_local_receiver``: no exact consumer and attempt are bound, so nothing local can be retired.
+    """
+    if not (isinstance(attempt.get("local_answer_consumer_id"), str) and attempt["local_answer_consumer_id"]
+            and type(attempt.get("local_answer_task_attempt")) is int):
+        return "no_local_receiver"
+    proof = attempt.get("local_answer_owner_proof") if isinstance(attempt.get("local_answer_owner_proof"), dict) else {}
+    try:
+        live = owner_live(attempt.get("local_answer_owner_pid"), attempt.get("local_answer_owner_birth"),
+                          proof if proof.get("pid") == attempt.get("local_answer_owner_pid") else None)
+    except Exception:
+        live = False  # an unreadable probe proves nothing either way
+    return "local_call_live" if live else "local_completion_unknown"
+
+
+def accept_unknown_custody(root: Any, members: Iterable[str], ids: Iterable[str], *, root_task_id: str,
+                           by: Dict[str, Any]) -> Dict[str, List[Any]]:
+    """The caller's decision to go on past NAMED held calls of one tree whose outcome is unknown.
+
+    Only what the census words as unknown is accepted: a tool call
+    (``tool_custody.tool_handoff_reason``) or a model answer receiver
+    (``receiver_reason``) in a worker that cannot be proven live or ended, or a
+    local call that is over while its outside effect is unconfirmed. A call in a
+    live worker is refused, so no second writer starts beside it. The accepted
+    tool row leaves ``launch_handoffs`` and stays in ``retired_tool_invocations``
+    as observed, with ``effect_outcome="unknown_accepted"``,
+    ``replay_authorized=False`` and the decision ``accepted`` (``by``: who, when,
+    why, and the reason it was unknown); an accepted receiver is retired with the
+    same record. Nothing is re-run and the outside effect is declared neither
+    done nor failed; a late return of an accepted call writes nothing.
+    """
+    from ouroboros.model_wait import retire_model_consumers
+    from ouroboros.task_results import load_task_result, require_writable_task_result_schema, stamp_task_result_schema
+    from ouroboros.task_store import patch_document
+    from ouroboros.tool_custody import tool_handoff_reason
+    from ouroboros import usage_store
+    from ouroboros.utils import utc_now_iso
+
+    wanted, at = {str(value) for value in ids if value}, utc_now_iso()
+    accepted: List[str] = []
+    refused: List[Dict[str, str]] = []
+
+    def judged(op: str, task_id: str, reason: str) -> bool:
+        if reason not in ACCEPTABLE_UNKNOWN:
+            refused.append({"id": op, "task_id": task_id, "reason": reason or "unreadable"})
+        return reason in ACCEPTABLE_UNKNOWN
+    for holder in sorted({str(task_id) for task_id in members if task_id}):
+        try:  # the reasons are probed before the write: no process probe holds the store
+            claims = (load_task_result(pathlib.Path(root), holder, strict=True) or {}).get("launch_handoffs") or {}
+        except Exception:
+            continue  # unreadable authority: nothing is accepted on a guess
+        reasons = {op: tool_handoff_reason(claim)["reason"] for op, claim in claims.items()
+                   if op in wanted and isinstance(claim, dict)}
+        decided = {op: (claims[op].get("state"), why) for op, why in reasons.items() if judged(op, holder, why)}
+        landed: List[str] = []
+
+        def accept(current, decided=decided, landed=landed):
+            require_writable_task_result_schema(current)
+            landed.clear()
+            rows = dict(current.get("launch_handoffs") or {})
+            retired = dict(current.get("retired_tool_invocations") or {})
+            for op, (state, reason) in decided.items():
+                if isinstance(rows.get(op), dict) and rows[op].get("state") == state:  # as judged, or left held
+                    retired[op] = {**rows.pop(op), "retired_at": at, "effect_outcome": "unknown_accepted",
+                                   "replay_authorized": False, "accepted": {**by, "reason": reason}}
+                    landed.append(op)
+            return stamp_task_result_schema({**current, "launch_handoffs": rows,
+                                             "retired_tool_invocations": retired}) if landed else None
+        if decided:
+            patch_document(pathlib.Path(root), holder, accept)
+            accepted.extend(landed)
+    with usage_store.read(pathlib.Path(root)) as txn:  # the tree's open set (root index), never history
+        attempts = [row for row in txn.open_attempts(root_task_id=root_task_id)
+                    if str(row.get("attempt_id") or "") in wanted]
+    for attempt in attempts:
+        consumer, number = attempt.get("local_answer_consumer_id"), attempt.get("local_answer_task_attempt")
+        why = receiver_reason(attempt)
+        if why != "no_local_receiver" and not _unretired(root, {str(attempt.get("task_id") or ""): {consumer: number}}):
+            continue  # already retired: nothing held, nothing to record twice
+        if judged(str(attempt["attempt_id"]), str(attempt.get("task_id") or ""), why):
+            retire_model_consumers(pathlib.Path(root), str(attempt.get("task_id") or ""), {consumer: number},
+                                   record={"accepted": {**by, "reason": why}})
+            accepted.append(str(attempt["attempt_id"]))
+    return {"accepted": accepted, "refused": refused,
+            "unmatched": sorted(wanted - set(accepted) - {row["id"] for row in refused})}
 
 
 def _repair_absent_receivers(root: Any, members: Optional[set], root_task_id: Optional[str]) -> List[Dict[str, Any]]:

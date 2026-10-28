@@ -177,7 +177,9 @@ def test_addressed_resume_repairs_ended_recipients_and_names_live_blockers(tmp_p
     else:
         assert result["error"] == "owner_pause_effects_unsettled"
         assert any(b["kind"] == ("tool_handoff" if kind == "tool" else "model_handoff") for b in result["blockers"])
-        assert "has not returned" in result["message"] if kind == "tool" else "has no recorded result" in result["message"]
+        assert ("call of task child-run is in a live worker" if kind == "tool"
+                else "a model answer for task child-run is awaited by a live worker") in result["message"]
+        assert "acceptable_unknown" not in result, "a live call is never offered to go on past"
     assert ua.read_usage_records(tmp_path, final_only=True) == before_money
 
 

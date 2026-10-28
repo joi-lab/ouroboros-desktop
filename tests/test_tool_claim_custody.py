@@ -8,7 +8,9 @@ Here: the process owes such a write until it lands (``custody_owed``); every
 confirmed exit retires the exact process's claims across tasks and attempts;
 startup and addressed actions retire only on positive evidence (kernel birth of
 one kind, own pid of an earlier image, ESRCH, zombie); a known return never
-regresses; a replica never carries custody.
+regresses; a replica never carries custody. An owner or the mind may go on past
+NAMED held calls whose outcome is unknown: recorded, never re-run, never beside a
+live call (R8).
 """
 from __future__ import annotations
 
@@ -29,17 +31,18 @@ pytestmark = pytest.mark.serial
 INCIDENT_BIRTH = "Tue Oct 27 14:57:17 2026"
 
 
-def _claim(root, holder, op, *, pid, birth=INCIDENT_BIRTH, attempt=1, kernel="", state="claimed", extra=None):
+def _claim(root, holder, op, *, pid, birth=INCIDENT_BIRTH, attempt=1, kernel="", state="claimed", extra=None,
+           tree="root"):
     row = load_task_result(root, holder) or {}
     claims = dict(row.get("launch_handoffs") or {})
-    claim = {"tool": "run_command", "task_id": holder, "root_task_id": "root", "state": state,
+    claim = {"tool": "run_command", "task_id": holder, "root_task_id": tree, "state": state,
              "claimed_at": "2026-10-27T17:23:28+00:00",
              "local_owner": {"pid": pid, "process_birth": birth, "task_attempt": attempt}}
     if kernel:
         claim["owner_proof"] = {"pid": pid, "kernel_birth": kernel, "session": "an-earlier-session"}
     claim.update(extra or {})
     claims[op] = claim
-    write_task_result(root, holder, row.get("status") or "completed", root_task_id="root", launch_handoffs=claims)
+    write_task_result(root, holder, row.get("status") or "completed", root_task_id=tree, launch_handoffs=claims)
 
 
 def _claims(root, holder):
@@ -260,3 +263,131 @@ def test_a_held_call_is_worded_by_what_is_actually_known(monkeypatch):
     assert "has not returned" not in message
     assert "it is unknown whether the run_command call of task 96ac2f7c981b4f54 finished" in message
     assert "the outcome of its MCP request is unknown" in message and "its message to a task is not confirmed" in message
+
+
+# --- going on past a named unknown outcome (R8) -----------------------------------------------------------------
+
+LIVE_KERNEL = "darwin-start:5.000005"
+
+
+def test_a_named_unknown_call_is_accepted_recorded_and_never_replayed(tmp_path, monkeypatch):
+    _platform(monkeypatch, kernel={7: LIVE_KERNEL})
+    _claim(tmp_path, "t1", "op-u", pid=63888)  # its worker can be proven neither live nor ended
+    _claim(tmp_path, "t1", "op-live", pid=7, kernel=LIVE_KERNEL)
+    _claim(tmp_path, "t1", "op-r", pid=5, state="returned", extra={"external_pending": {"tok": "mcp_transport"}})
+    _claim(tmp_path, "t1", "op-other", pid=63888)
+    by = {"actor": "owner", "text": "go on", "at": "2026-10-28T06:00:00+00:00"}
+    outcome = repair.accept_unknown_custody(tmp_path, {"t1"}, ["op-u", "op-live", "op-r", "op-gone"],
+                                            root_task_id="root", by=by)
+    assert sorted(outcome["accepted"]) == ["op-r", "op-u"]
+    assert outcome["refused"] == [{"id": "op-live", "task_id": "t1", "reason": "local_call_live"}], \
+        "never a second writer beside a live call"
+    assert outcome["unmatched"] == ["op-gone"]
+    assert set(_claims(tmp_path, "t1")) == {"op-live", "op-other"}, "only the named rows move"
+    fact = _retired(tmp_path, "t1")["op-u"]
+    assert fact["state"] == "claimed", "kept as observed: a decision is not proof the worker ended"
+    assert fact["effect_outcome"] == "unknown_accepted" and fact["replay_authorized"] is False
+    assert fact["accepted"] == {**by, "reason": "local_completion_unknown"}
+    assert _retired(tmp_path, "t1")["op-r"]["accepted"]["reason"] == "returned_effect_unconfirmed"
+    from ouroboros.task_store import patch_handoff
+    patch_handoff(tmp_path, "t1", "launch_handoffs", "op-u",
+                  tool_custody._returned_claim(tmp_path, "2026-10-28T06:01:00+00:00", frozenset()))
+    assert "op-u" not in _claims(tmp_path, "t1"), "a late return of an accepted call writes nothing"
+
+
+def test_the_addressed_census_applies_a_bound_decision_to_its_own_tree_only(tmp_path, monkeypatch):
+    from ouroboros.control_actor import accepting_unknown, mind_control
+    from supervisor import continuation_admission as admission
+
+    _platform(monkeypatch)
+    for tree in ("A", "B"):
+        _claim(tmp_path, tree, f"op-{tree}", pid=63888, tree=tree)
+    monkeypatch.setattr(admission, "conflicting_writers", lambda *_a, **_k: [])
+    events = []
+    q = SimpleNamespace(DRIVE_ROOT=tmp_path, append_jsonl=lambda _path, row: events.append(row))
+    admission.action_writers(q, "A", drive_root=tmp_path)
+    assert "op-A" in _claims(tmp_path, "A") and not events, "no decision, nothing accepted"
+    with mind_control("mind-task", "the owner asked me to finish"), accepting_unknown(["op-A", "op-B"],
+                                                                                     "the owner asked me to finish"):
+        admission.action_writers(q, "A", drive_root=tmp_path)
+    assert "op-A" not in _claims(tmp_path, "A") and "op-B" in _claims(tmp_path, "B"), "only the addressed tree"
+    [event] = [row for row in events if row["type"] == "local_custody_unknown_accepted"]
+    assert event["accepted"] == ["op-A"] and event["unmatched"] == ["op-B"]
+    assert _retired(tmp_path, "A")["op-A"]["accepted"]["actor"] == "ouroboros"
+    assert _retired(tmp_path, "A")["op-A"]["accepted"]["task_id"] == "mind-task"
+
+
+def test_a_receiver_of_unknown_fate_is_accepted_and_leaves_the_census(tmp_path, monkeypatch):
+    from ouroboros import model_wait, usage_accounting as ua
+    from supervisor.continuation_admission import model_handoffs
+
+    write_task_result(tmp_path, "root", "running", root_task_id="root",
+                      billing_group={"billing_group_id": "root", "billing_group_limit_usd": 20.0,
+                                     "billing_group_limit_source": "initial_task_admission",
+                                     "billing_group_limit_revision": "admission-1"})
+    monkeypatch.setenv("TOTAL_BUDGET", "1000")
+    owner = model_wait.TaskModelWait(task={"id": "root", "_attempt": 2}, drive_root=tmp_path,
+                                     event_queue=None, worker_slot_held=True)
+    with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, task_id="root", root_task_id="root")):
+        with model_wait.operation_wait_scope(owner):
+            def send():
+                raise RuntimeError("response unknown")
+            with pytest.raises(RuntimeError):
+                ua.execute_physical_attempt(ua.AttemptRequest(model="m", provider="test", reservation_usd=.2), send)
+    [held] = model_handoffs(tmp_path, "root")
+    assert held["reason"] == "local_call_live", "this very process still receives it"
+    monkeypatch.setattr(repair, "owner_live", lambda *_a, **_k: False)
+    [held] = model_handoffs(tmp_path, "root")
+    assert held["reason"] == "local_completion_unknown"
+    by = {"actor": "owner", "text": "", "at": "2026-10-28T06:00:00+00:00"}
+    outcome = repair.accept_unknown_custody(tmp_path, {"root"}, [held["attempt_id"]], root_task_id="root", by=by)
+    assert outcome["accepted"] == [held["attempt_id"]]
+    assert model_handoffs(tmp_path, "root") == [], "the receiver is retired; its money stays where it was"
+    retired = load_task_result(tmp_path, "root")["retired_model_consumers"][owner.answer_consumer_id]
+    assert retired["accepted"]["reason"] == "local_completion_unknown" and retired["task_attempt"] == 2
+    assert repair.accept_unknown_custody(tmp_path, {"root"}, [held["attempt_id"]], root_task_id="root",
+                                         by=by)["accepted"] == [], "nothing is recorded twice"
+
+
+def test_only_a_census_of_unknown_outcomes_offers_going_on_and_every_door_carries_the_ids(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from ouroboros.control_actor import accepted_unknown
+    from ouroboros.gateway.tasks import api_task_resume
+    from ouroboros.work_stop import acceptable_unknown, resume_outcome
+    from supervisor import events_mind_controls
+
+    unknown = {"kind": "tool_handoff", "task_id": "t", "operation_id": "op-u", "reason": "local_completion_unknown"}
+    receiver = {"kind": "model_handoff", "task_id": "t", "attempt_id": "at-u", "reason": "local_completion_unknown"}
+    live = {**unknown, "operation_id": "op-l", "reason": "local_call_live"}
+    assert acceptable_unknown([unknown, receiver]) == ["op-u", "at-u"]
+    assert acceptable_unknown([unknown, live]) == [] and acceptable_unknown([]) == []
+    assert acceptable_unknown([unknown, {"kind": "running_member", "task_id": "c"}]) == []
+    refusal = resume_outcome({"ok": False, "error": "owner_pause_effects_unsettled", "blockers": [unknown, receiver]})
+    assert refusal["acceptable_unknown"] == ["op-u", "at-u"]
+    assert "unknown whether the model answer receiver of task t ended" in refusal["message"]
+
+    seen = []
+    monkeypatch.setattr("supervisor.queue.resume_budget_paused_task",
+                        lambda _id: seen.append(accepted_unknown()) or {**refusal, "error": refusal["error"]})
+    with TestClient(Starlette(routes=[Route("/api/tasks/{task_id}/resume", api_task_resume, methods=["POST"])])) as client:
+        plain = client.post("/api/tasks/t/resume")
+        named = client.post("/api/tasks/t/resume", json={"accept_unknown": ["op-u"], "reason": "go on"})
+        wrong = client.post("/api/tasks/t/resume", json={"accept_unknown": "op-u"})
+    assert plain.status_code == named.status_code == 409 and plain.json()["acceptable_unknown"] == ["op-u", "at-u"]
+    assert seen == [{}, {"ids": ["op-u"], "text": "go on"}], "the owner's decision is bound to that one call"
+    assert wrong.status_code == 400
+
+    def observed(*_a, **_k):
+        seen.append(accepted_unknown())
+        return {"ok": True}
+    monkeypatch.setattr("supervisor.queue_transitions.resume_budget_paused_task", observed)
+    monkeypatch.setattr("supervisor.continuation_admission.admit_continuation", observed)
+    monkeypatch.setattr("ouroboros.work_diagnostics.control_actor_reason", lambda *_a, **_k: "")
+    seen.clear()
+    for action in ("resume_task", "continue_task"):
+        events_mind_controls._apply({"task_id": "t", "actor_task_id": "mind", "action_nonce": "n", "action": action,
+                                     "reason": "the owner asked", "accept_unknown": ["op-u"]})
+    assert seen == [{"ids": ["op-u"], "text": "the owner asked"}, {}], "only resume_task carries the decision"

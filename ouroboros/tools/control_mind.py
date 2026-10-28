@@ -14,7 +14,7 @@ def _continue_in_background(ctx, reason: str = "") -> str:
     return json.dumps(arm_detach(ctx, reason), ensure_ascii=False)
 
 
-def _request_control(ctx, action: str, task_id: str, reason: str) -> str:
+def _request_control(ctx, action: str, task_id: str, reason: str, accept_unknown=None) -> str:
     from ouroboros.task_results import validate_task_id
     from ouroboros.tool_call_log import current_tool_call_id
     from ouroboros.tools.control_events import _emit_control_event
@@ -42,7 +42,9 @@ def _request_control(ctx, action: str, task_id: str, reason: str) -> str:
     emitted = _emit_control_event(ctx, {
         "type": "mind_task_control", "action": action, "task_id": target,
         "actor": "mind", "actor_task_id": actor, "action_nonce": nonce,
-        "reason": str(reason or ""), "ts": utc_now_iso()})
+        "reason": str(reason or ""), "ts": utc_now_iso(),
+        **({"accept_unknown": [str(value) for value in accept_unknown if value]}
+           if isinstance(accept_unknown, list) and accept_unknown else {})})
     if emitted == "serialization_failed":
         return json.dumps({"ok": False, "error": "control_event_serialization_failed"})
     return json.dumps({"ok": True, "status": "requested", "task_id": target, "action": action,
@@ -55,8 +57,8 @@ def _pause_task(ctx, task_id: str, reason: str = "") -> str:
     return _request_control(ctx, "pause_task", task_id, reason)
 
 
-def _resume_task(ctx, task_id: str, reason: str = "") -> str:
-    return _request_control(ctx, "resume_task", task_id, reason)
+def _resume_task(ctx, task_id: str, reason: str = "", accept_unknown=None) -> str:
+    return _request_control(ctx, "resume_task", task_id, reason, accept_unknown)
 
 
 def _continue_task(ctx, task_id: str, reason: str = "") -> str:
@@ -68,6 +70,16 @@ def _control_schema(name: str, description: str) -> dict:
             "parameters": {"type": "object", "properties": {
                 "task_id": {"type": "string", "description": "Exact id of host-listed work."},
                 "reason": {"type": "string"}}, "required": ["task_id", "reason"]}}
+
+
+def _accepting_schema(schema: dict) -> dict:
+    schema["parameters"]["properties"]["accept_unknown"] = {
+        "type": "array", "items": {"type": "string"},
+        "description": "Ids a refusal listed in acceptable_unknown: held calls whose outcome is unknown "
+                       "(their worker cannot be proven live or ended, or an outside effect is unconfirmed). "
+                       "Naming them is your decision to go on without their results, recorded on the task with "
+                       "your reason; they are never run again, and a call in a live worker is refused."}
+    return schema
 
 
 def mind_tool_entries() -> list:
@@ -88,10 +100,10 @@ def mind_tool_entries() -> list:
              "why you paused it and whose decision it was. Started reviews may finish while the task pauses. "
              "Self-pause is refused: sleep with await_messages or escalate. The outcome arrives in your task mailbox."),
              _pause_task),
-        ToolEntry("resume_task", _control_schema("resume_task",
+        ToolEntry("resume_task", _accepting_schema(_control_schema("resume_task",
              "Request Resume of listed paused work through the owner's existing grants. "
              "It preserves spent money, clocks and review history; capacity and holds still apply. "
-             "Only the owner can release a Panic hold. The outcome arrives in your task mailbox."), _resume_task),
+             "Only the owner can release a Panic hold. The outcome arrives in your task mailbox.")), _resume_task),
         ToolEntry("continue_task", _control_schema("continue_task",
              "Request one successor episode of listed interrupted work through "
              "the same Continue action as the owner's button. Author-finished work, owner Stop/Panic and "

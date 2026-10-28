@@ -229,8 +229,15 @@ export function taskSourceDownloadUrl(taskId, ref) {
     return `${url}?source=${encodeURIComponent(path)}`;
 }
 
-export async function resumeTask(taskId) {
-    return fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
+/**
+ * Owner Resume. A refusal may list `acceptable_unknown`: held calls whose outcome is unknown; naming
+ * them in `body` goes on without their results (recorded on the task, never run again).
+ * @param {string} taskId
+ * @param {import('./client_contract_types.js').TaskResumeRequest|null} [body]
+ */
+export async function resumeTask(taskId, body = null) {
+    const url = `/api/tasks/${encodeURIComponent(taskId)}/resume`;
+    return body ? jsonPost(url, body) : fetchJson(url, { method: 'POST' });
 }
 
 /**

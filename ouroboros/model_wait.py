@@ -1035,15 +1035,16 @@ def _owe_consumer_retirement(root: Any, task_id: str, consumers: dict[str, int])
                      lambda: retire_model_consumers(root, task_id, consumers), label=f"consumers:{task_id}")
 
 
-def retire_model_consumers(root: Any, task_id: str, consumers: dict[str, int]) -> None:
+def retire_model_consumers(root: Any, task_id: str, consumers: dict[str, int], *, record: dict | None = None) -> None:
     """Positive receiver retirement, from scope exit or exact confirmed-worker death.
 
     This existing result projection releases only local answer-writing custody.
     It changes no usage row, external process or delegated-run obligation.
+    ``record`` adds facts to each row (an owner's or the mind's ``accepted`` decision).
     """
     try:  # one `retired_model_consumers` row per consumer, one transaction, never the body
         put_handoffs(pathlib.Path(root), task_id, "retired_model_consumers",
-                     {consumer: {"task_attempt": attempt, "retired_at": utc_now_iso()}
+                     {consumer: {**(record or {}), "task_attempt": attempt, "retired_at": utc_now_iso()}
                       for consumer, attempt in consumers.items()})
     except LookupError as exc:
         raise ValueError("model consumer retirement requires its task result") from exc

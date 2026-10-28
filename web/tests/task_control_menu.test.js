@@ -385,3 +385,49 @@ test('a refused Resume of a held Continue toasts its facts, with wait-or-stop on
         ['Resume refused: replay_unsafe', 'error'],
     ]);
 });
+
+test('a Resume held only by calls of unknown outcome asks once, then resumes naming them', async () => {
+    const held = { kind: 'tool_handoff', task_id: '96ac2f7c981b4f54', tool: 'run_command',
+        reason: 'local_completion_unknown', operation_id: 'op-1' };
+    const toasts = [];
+    const calls = [];
+    const asked = [];
+    const toast = (text, kind) => toasts.push([text, kind]);
+    const resume = async (id, body) => {
+        calls.push(body ?? null);
+        if (!body) {
+            throw Object.assign(new Error('owner_pause_effects_unsettled'), { status: 409,
+                body: { error: 'owner_pause_effects_unsettled', blockers: [held], acceptable_unknown: ['op-1'] } });
+        }
+        return { ok: true };
+    };
+    await resumeTaskAction('root-u', { resume, toast, confirm: async (dialog) => { asked.push(dialog); return true; } });
+    assert.deepEqual(calls, [null, { accept_unknown: ['op-1'], reason: 'The owner resumed without these results.' }]);
+    assert.equal(asked.length, 1);
+    assert.match(asked[0].body, /^It is unknown whether the run_command call of task 96ac2f7c981b4f54 finished/);
+    assert.match(asked[0].body, /this call is never run again/);
+    assert.deepEqual(toasts, [['Resuming: the task returns to the queue.', 'info']]);
+
+    calls.length = 0;
+    toasts.length = 0;
+    await resumeTaskAction('root-u', { resume, toast, confirm: async () => false });
+    assert.deepEqual(calls, [null], 'declining keeps the task paused');
+    assert.deepEqual(toasts, []);
+
+    const live = { ...held, operation_id: 'op-2', reason: 'local_call_live' };
+    await resumeTaskAction('root-l', {
+        resume: async () => { throw Object.assign(new Error('x'), { status: 409,
+            body: { error: 'owner_pause_effects_unsettled', blockers: [held, live] } }); },
+        toast, confirm: async () => { throw new Error('a live call is never offered'); } });
+    assert.equal(toasts.length, 1);
+    assert.match(toasts[0][0], /^Resume refused: .*is in a live worker/);
+});
+
+test('a held model answer receiver is worded by what is known', () => {
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', task_id: 't-1', reason: 'local_completion_unknown' }]),
+        'it is unknown whether the model answer receiver of task t-1 ended: its worker cannot be proven ended');
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', task_id: 't-1', reason: 'local_call_live' }]),
+        'a model answer for task t-1 is awaited by a live worker');
+    assert.equal(heldWorkFacts([{ kind: 'model_handoff', reason: 'no_local_receiver' }]),
+        'a model request has no recorded result');
+});

@@ -703,6 +703,14 @@ class ScheduleActionRequest(TypedDict):
     relation: NotRequired[str]
 
 
+class TaskResumeRequest(TypedDict, total=False):
+    """The optional body of ``POST /api/tasks/{task_id}/resume``: the held calls whose outcome is
+    unknown (a refusal's ``acceptable_unknown``) the owner goes on past, and why. Recorded, never re-run."""
+
+    accept_unknown: List[str]
+    reason: str
+
+
 class TaskResumeResponse(TypedDict, total=False):
     """``POST /api/tasks/{task_id}/resume`` after budget, owner, sleep or technical authority pause. The other keys say which
     resume path ran (``same_generation``, ``owner_pause_released``, ``never_started``, ``warm``,
@@ -749,5 +757,5 @@ __all__ = [
     "FileBrowserEntry", "FileBrowserListResponse", "FileBrowserReadResponse", "FileMkdirRequest", "FileWriteRequest", "FilePathRequest",
     "FileTransferRequest", "FileChangeResponse",
     "ScheduleTriggerRequest", "ScheduleTaskTemplate", "ScheduleUpsertRequest", "ScheduleActionRequest",
-    "TaskResumeResponse",
+    "TaskResumeRequest", "TaskResumeResponse",
 ]

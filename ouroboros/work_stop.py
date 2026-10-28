@@ -364,6 +364,26 @@ def tool_handoff_words(block: dict) -> str:
                                                                   f"a {tool} call of task {tid} is held")
 
 
+def model_handoff_words(block: dict) -> str:
+    """One held model answer receiver (``local_custody_repair.receiver_reason``); the web mirrors them."""
+    tid = block.get("task_id", "")
+    return {"local_call_live": f"a model answer for task {tid} is awaited by a live worker",
+            "local_completion_unknown": f"it is unknown whether the model answer receiver of task {tid} ended: "
+                                        "its worker cannot be proven ended"}.get(
+                                            str(block.get("reason") or ""), "a model request has no recorded result")
+
+
+def acceptable_unknown(blockers) -> list:
+    """The ids a caller may name to go on past (``control_actor.accepting_unknown``): every
+    blocker is a held call whose outcome is unknown, else none (``[]``)."""
+    from ouroboros.local_custody_repair import ACCEPTABLE_UNKNOWN
+
+    rows = [b for b in blockers or () if isinstance(b, dict)]
+    ids = [str(b.get("operation_id") or b.get("attempt_id") or "") for b in rows
+           if b.get("kind") in {"tool_handoff", "model_handoff"} and b.get("reason") in ACCEPTABLE_UNKNOWN]
+    return ids if rows and len(ids) == len(rows) and all(ids) else []
+
+
 def resume_outcome(outcome: dict) -> dict:
     """Ordinary words beside typed refusals, shared by HTTP and both mind doors."""
     if outcome.get("ok"):
@@ -389,15 +409,15 @@ def resume_outcome(outcome: dict) -> dict:
                          if block.get("state") == "stop_requested" else
                          f"delegated run {run}: its outcome is unknown")
             continue
-        if kind == "tool_handoff":
-            words.append(tool_handoff_words(block))
+        if kind in {"tool_handoff", "model_handoff"}:
+            words.append(tool_handoff_words(block) if kind == "tool_handoff" else model_handoff_words(block))
             continue
-        words.append({"model_handoff": "a model request has no recorded result",
-                      "running_member": f"task {tid} is still running",
+        words.append({"running_member": f"task {tid} is still running",
                       "dispatchable_member": f"task {tid} is queued to run",
                       "owned_process": f"a process of task {tid} is still alive",
                       "merge_operation": f"a merge of task {tid} is not settled",
                       "workspace_executor": f"a workspace process of task {tid} is not settled"}.get(
                           kind, str(kind or "unknown").replace("_", " ")))
-    return {**outcome, "message": "Resume refused: " + (
+    accept = acceptable_unknown(outcome.get("blockers"))
+    return {**outcome, **({"acceptable_unknown": accept} if accept else {}), "message": "Resume refused: " + (
         "; ".join(dict.fromkeys(words)) if words else phrases.get(error, error.replace("_", " ")))}
