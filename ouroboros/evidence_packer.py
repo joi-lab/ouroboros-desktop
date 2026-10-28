@@ -282,10 +282,13 @@ def keep_rows(root: pathlib.Path) -> Dict[str, tuple]:
     from ouroboros.task_status import NONTERMINAL_STATUSES
 
     live = sorted(NONTERMINAL_STATUSES)
+    # Each term on its own index, joined as a union: under the statistics the maintenance child's ANALYZE writes,
+    # SQLite plans the plain disjunction as a scan of every task (tests/test_store_capture_readers.py).
     with store.open_store(root, write=False) as txn:
         return {record["task_id"]: tuple(record[name] for name in _ROW_COLUMNS) for record in txn.conn.execute(
-            f"SELECT task_id, {', '.join(_ROW_COLUMNS)} FROM tasks WHERE status IN ({','.join('?' * len(live))}) "
-            "OR review_collection_pending=1", live)}
+            f"SELECT task_id, {', '.join(_ROW_COLUMNS)} FROM tasks WHERE task_id IN (SELECT task_id FROM tasks "
+            f"WHERE unlikely(status IN ({','.join('?' * len(live))})) UNION SELECT task_id FROM tasks "
+            "WHERE unlikely(review_collection_pending=1))", live)}
 
 
 class PackSweep:

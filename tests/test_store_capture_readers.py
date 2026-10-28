@@ -454,9 +454,10 @@ def test_the_open_usage_set_crosses_once_per_statement(data_root):  # noqa: F811
 def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_path):
     """The held custody runs and the live tasks are a few rows among the whole closed history: once the
     maintenance child's ANALYZE wrote planner statistics, their reads stay on their indexes and cost the same
-    SQLite VM steps over 10 and 300 closed rows of each. An older SQLite (< 3.46) would otherwise walk every row
-    in key order to spare sorting the few (tests/test_cost_contract.py B7 on the PERSIST leg's SQLite 3.45.1)."""
-    from ouroboros import delegate_custody as custody, delegate_custody_current as current, obligations
+    SQLite VM steps over 10 and 300 closed rows of each. Without it SQLite walks every row: before 3.46 to spare
+    sorting the held few in key order (tests/test_cost_contract.py B7 on the PERSIST leg's SQLite 3.45.1), on every
+    version for the live tasks and the packer's keep rows, and from 3.46 for the context's run lines."""
+    from ouroboros import delegate_custody as custody, delegate_custody_current as current, evidence_packer, obligations
     from tests._cost_meter import VM_STEP
     from tests.test_store import publish
 
@@ -482,8 +483,11 @@ def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_p
             held = tagged("held", lambda: current.snapshot(root)["state"])
             live = tagged("live", lambda: obligations.members(root, "nonterminal"))
             health = tagged("health", lambda: current.health_runs(root, "done-1"))  # the context's run lines
+            keep = tagged("keep", lambda: evidence_packer.keep_rows(root))  # each pack pass
         assert sorted(held) == [f"run-live-{n}" for n in range(3)], sorted(held)
         assert {f"live-{n}" for n in range(3)} <= set(live) and not set(live) & {"done-0", "done-1"}, sorted(live)
         assert sorted(health) == ["run-closed-1", *sorted(held)], sorted(health)
-        steps[history] = {tag: meter.snapshot(tag)["counts"].get("vm_steps", 0) for tag in ("held", "live", "health")}
-    assert all(steps[300][tag] - steps[10][tag] <= VM_STEP for tag in ("held", "live", "health")), steps
+        assert sorted(keep) == [f"live-{n}" for n in range(3)], sorted(keep)
+        tags = ("held", "live", "health", "keep")
+        steps[history] = {tag: meter.snapshot(tag)["counts"].get("vm_steps", 0) for tag in tags}
+    assert all(steps[300][tag] - steps[10][tag] <= VM_STEP for tag in tags), steps
