@@ -29,3 +29,6 @@ tests/fixtures/llm_wire/** -text -whitespace
 # LF so a Windows checkout reads the same lines and digests as the committed
 # bytes.
 docs/**/*.md text eol=lf
+
+# The undeclared-focus prompt is compared as bytes with the text the runtime reads back with universal newlines.
+tests/fixtures/focus_undeclared.txt text eol=lf
