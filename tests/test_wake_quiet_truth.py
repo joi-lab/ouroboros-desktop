@@ -33,14 +33,17 @@ def test_terminal_settlement_skips_main_mirror_only_for_a_quiet_wake(tmp_path, m
     assert mirrors == ([1] if sent else [])
 
 
+@pytest.mark.parametrize("origin", ["Daily check", ""])
 @pytest.mark.parametrize("fault", [False, True])
 @pytest.mark.parametrize("sent", [False, True])
 @pytest.mark.parametrize("summary", ["Проверил состояние системы.", ""])
-def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path, monkeypatch, fault, sent, summary):
+def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path, monkeypatch, fault, sent, summary, origin):
     from ouroboros import headless
     from supervisor import events, events_task_done
 
-    stored = seed_wake(tmp_path, owner_message_sent=sent, schedule_name="Daily check", **({"wake_summary": summary} if summary else {}))
+    # A schedule-born run carries its schedule's name; any other run's frame gains no origin key at all.
+    fields = {**({"wake_summary": summary} if summary else {}), **({"schedule_name": origin} if origin else {})}
+    stored = seed_wake(tmp_path, owner_message_sent=sent, **fields)
     ctx = SimpleNamespace(DRIVE_ROOT=tmp_path, RUNNING={})
     captured = []
     monkeypatch.setattr(headless, "terminal_task_files_ready", lambda *a: True)
@@ -53,11 +56,12 @@ def test_both_live_terminal_writers_keep_wake_words_and_delivery_truth(tmp_path,
         events_task_done._handle_task_done(event, ctx)
     assert len(captured) == 1
     assert captured[0]["quiet_effective"] is (not sent)
-    assert captured[0].get("wake_summary", "") == summary and captured[0]["schedule_name"] == "Daily check"
+    assert captured[0].get("wake_summary", "") == summary
+    assert captured[0].get("schedule_name", "absent") == (origin or "absent")
     durable = [json.loads(line) for line in (tmp_path / "logs/events.jsonl").read_text(encoding="utf-8").splitlines()]
     done = next(row for row in durable if row.get("type") == "task_done")
     assert done["quiet_effective"] is (not sent)
-    assert done.get("wake_summary", "") == summary and done["schedule_name"] == "Daily check"
+    assert done.get("wake_summary", "") == summary and done.get("schedule_name", "absent") == (origin or "absent")
 
 
 @pytest.mark.parametrize("destination", ["current", "main"])
