@@ -618,7 +618,11 @@ class BodyRuntime:
         fetched under the token echoed as ``seen``. The detail is read, its facts published,
         and only then the token acknowledged, so a question is never acknowledged unfetched.
         An engine without the wait keeps today's beat: one detail read per run per tick.
+        The hold is the observer's own tick window, not the engine's: closing the client does
+        not wake a receive blocked in a hold on every platform (Linux ``close(2)`` leaves the
+        blocked thread to the socket's own end), so shutdown is bounded by the tick instead.
         """
+        from ouroboros.delegate_supervision import _TICK_SEC
         from ouroboros.gateways import claudexor_observation as observation
         from ouroboros.gateways.claudexor import SHORT_POLL_TIMEOUT_SEC, ClaudexorUnavailable
         gateway = self._observer_gateway()
@@ -626,7 +630,7 @@ class BodyRuntime:
             targets = [(entry.run_id, self.seen.get(entry.run_id)) for entry in entries]
         try:
             supported = observation.wait_many_supported(gateway, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
-            wake = observation.wait_attention(gateway, targets, wait_sec=None if hold else 0.0,
+            wake = observation.wait_attention(gateway, targets, wait_sec=_TICK_SEC if hold else 0.0,
                                               timeout_sec=SHORT_POLL_TIMEOUT_SEC) if supported else None
         except ClaudexorUnavailable as exc:
             if not observation.is_observation_hole(exc):
@@ -799,8 +803,9 @@ class BodyRuntime:
             self.stop.set()
             # Actual jobs remain owned until their physical return; a caller of
             # close(wait=False) neither joins on the control loop nor forgets them.
-            # The observer transport closes first so a compact wait the engine still
-            # holds ends now, as a hole, instead of being joined to its window's end.
+            # The observer transport closes first; a compact pass still held ends at its own
+            # tick-sized window at the latest (``_watch``), so the join below is bounded by
+            # the tick, never by the engine's window.
             self._drop_observer_gateway()
             self.observers.shutdown(wait=True, cancel_futures=True)
             with _RUNTIME_LOCK:

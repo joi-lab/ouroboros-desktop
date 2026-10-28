@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import pytest
 
 from ouroboros import delegate_collection as body
 from ouroboros import delegate_custody_current as current
+from ouroboros.delegate_supervision import _TICK_SEC
 from ouroboros.gateways import claudexor_observation as obs
 from ouroboros.gateways.claudexor import ClaudexorUnavailable
 from tests.test_delegate_body_collection import started, terminal
@@ -40,6 +42,7 @@ class Engine:
     requests: list = []
     detail_reads: list = []
     catalog: list = []
+    hold = False  # honour the requested hold (an engine default stands in for ``None``)
 
     def operations(self, *, timeout_sec=None):
         if Engine.catalog and isinstance(Engine.catalog[0], BaseException):
@@ -48,6 +51,8 @@ class Engine:
 
     def wait_run_attention(self, targets, *, wait_ms, timeout_sec):
         Engine.requests.append({"targets": targets, "wait_ms": wait_ms})
+        if Engine.hold:
+            time.sleep((25_000 if wait_ms is None else wait_ms) / 1000)
         answer = Engine.wakes.pop(0)
         if isinstance(answer, BaseException):
             raise answer
@@ -69,6 +74,7 @@ def runtime(tmp_path, monkeypatch):
     """The real runtime with its driver parked; ``step`` runs one tick and joins its passes."""
     monkeypatch.setattr(obs, "_SUPPORT", {})
     Engine.wakes, Engine.details, Engine.requests, Engine.detail_reads, Engine.catalog = [], {}, [], [], []
+    Engine.hold = False
     release, entered = threading.Event(), threading.Event()
     tick = body.BodyRuntime.tick
 
@@ -108,7 +114,7 @@ def test_a_quiet_run_is_watched_without_a_detail_read(tmp_path, runtime):
     Engine.wakes.append(_wake("timeout", [_summary()]))
     step()
     assert Engine.requests[0]["targets"] == [{"runId": entry.run_id}]
-    assert Engine.requests[0]["wait_ms"] is None, "the hold is the engine's default window"
+    assert Engine.requests[0]["wait_ms"] == _TICK_SEC * 1000, "the hold is the observer's own tick window"
     assert Engine.detail_reads == []
     fact = instance.observation(entry.run_id)
     assert fact["answered"] is True and fact["run_state"] == "running" and fact["waiting_on_user"] is False
@@ -216,6 +222,21 @@ def test_support_is_learned_by_the_first_read_then_the_pass_takes_over(tmp_path,
     Engine.wakes.append(_wake("timeout", [_summary()]))
     step()
     assert Engine.detail_reads == [entry.run_id] and len(Engine.requests) == 1
+
+
+def test_shutdown_during_a_hold_waits_at_most_the_observers_own_tick(tmp_path, runtime):
+    """Closing the client does not wake a receive blocked in the hold on every platform, so the
+    pass itself must end within the tick; the double honours the hold it was asked for."""
+    instance, step = runtime
+    entry = started(tmp_path)
+    Engine.hold = True
+    Engine.wakes.append(_wake("timeout", [_summary()]))
+    began = time.monotonic()
+    pass_ = instance.observers.submit(instance._watch, [entry])
+    time.sleep(0.2)  # the pass is inside its hold
+    instance._drop_observer_gateway()
+    pass_.result(timeout=_TICK_SEC + 2.0)
+    assert time.monotonic() - began < _TICK_SEC + 1.0, "bounded by the observer's tick, not the engine's window"
 
 
 def test_a_catalog_hole_is_the_runs_observation_hole_and_is_absorbed_before_it_raises(tmp_path, runtime):
