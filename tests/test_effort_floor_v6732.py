@@ -5,11 +5,9 @@ Live incident 2026-07-19/20: google/gemini-3.5-flash on OpenRouter answered
 safety supervisor's ``reasoning_effort="none"`` → the safety check failed CLOSED
 and blocked benign tools. These tests pin the exact-route floor recovery through
 the real retry ladder (no model-global learning), the clamp-note discard on a
-terminal or accounting failure, the diagnostic floor/ceiling band and the
-durable store semantics.
+terminal or accounting failure, and that floor/ceiling rows older releases
+stored still load but never move the dispatched effort.
 """
-
-import time
 
 import pytest
 
@@ -37,24 +35,13 @@ def _wire_target():
 
 
 @pytest.fixture
-def _clean_effort_caches():
-    from ouroboros.llm import LLMClient
+def _clean_effort_clamp_note():
+    """A tier note an earlier test on this worker staged and never consumed must not reach these calls."""
+    from ouroboros.llm_capability_policy import _EFFORT_CLAMP_CVAR
 
-    for store in (
-        LLMClient._EFFORT_CEILING_CACHE,
-        LLMClient._EFFORT_FLOOR_CACHE,
-        LLMClient._EFFORT_FLOOR_LOADED,
-    ):
-        store.clear()
-    LLMClient._EFFORT_CEILING_LOADED.clear()
+    _EFFORT_CLAMP_CVAR.set(None)
     yield
-    for store in (
-        LLMClient._EFFORT_CEILING_CACHE,
-        LLMClient._EFFORT_FLOOR_CACHE,
-        LLMClient._EFFORT_FLOOR_LOADED,
-    ):
-        store.clear()
-    LLMClient._EFFORT_CEILING_LOADED.clear()
+    _EFFORT_CLAMP_CVAR.set(None)
 
 
 @pytest.fixture
@@ -67,7 +54,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
 
 
 def test_mandatory_reasoning_400_through_retry_ladder(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
+    _clean_effort_clamp_note, _isolated_data_dir, monkeypatch
 ):
     """End-to-end through the REAL OpenRouter retry seam
     (_create_chat_completion_with_retries with a fake create_fn): first send
@@ -104,13 +91,12 @@ def test_mandatory_reasoning_400_through_retry_ladder(
         skip_cost_fetch=True,
     )
     assert "reasoning_effort_clamped" not in usage
-    assert "google/gemini-3.5-flash" not in LLMClient._EFFORT_FLOOR_CACHE
 
 
 def test_terminal_retry_death_discards_clamp_note(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
+    _clean_effort_clamp_note, _isolated_data_dir, monkeypatch
 ):
-    """A failed exact-route floor retry commits no model-global authority."""
+    """A failed exact-route floor retry leaves no clamp note behind."""
     import pytest as _pytest
 
     import ouroboros.llm_attempt as llm_attempt_mod
@@ -134,11 +120,10 @@ def test_terminal_retry_death_discards_clamp_note(
         client._create_chat_completion_with_retries(create_fn, kwargs, target)
     assert len(sends) == 2  # one floored retry, no loop
     assert client._pop_effort_clamp_disclosure() is None
-    assert "google/gemini-3.5-flash" not in LLMClient._EFFORT_FLOOR_CACHE
 
 
 def test_mandatory_reasoning_body_400_in_http200_recovers(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
+    _clean_effort_clamp_note, _isolated_data_dir, monkeypatch
 ):
     """HTTP-200 body 400 uses the same exact-route floor recovery seam."""
 
@@ -175,7 +160,6 @@ def test_mandatory_reasoning_body_400_in_http200_recovers(
     assert resp is good
     assert len(sends) == 2
     assert sends[1]["extra_body"]["reasoning"]["effort"] == "low"
-    assert "google/gemini-3.5-flash" not in LLMClient._EFFORT_FLOOR_CACHE
     assert client._pop_effort_clamp_disclosure() is None
 
     # Unmatched body-400: returned unchanged, single send, nothing learned.
@@ -188,7 +172,7 @@ def test_mandatory_reasoning_body_400_in_http200_recovers(
 
 
 def test_usage_accounting_abort_discards_clamp_note(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
+    _clean_effort_clamp_note, _isolated_data_dir, monkeypatch
 ):
     """Triad r2 regression (sync + async drivers): an admission failure
     (UsageAccountingError) before dispatch leaves no response to consume a
@@ -238,11 +222,11 @@ def test_usage_accounting_abort_discards_clamp_note(
 
 
 def test_uae_on_floored_resend_discards_clamp_note(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
+    _clean_effort_clamp_note, _isolated_data_dir, monkeypatch
 ):
-    """Triad r4 regression: the CENTRAL _send discard — when the FLOORED
-    body-400 resend (which just recorded a learned_floor note) is aborted by
-    the accounting rail, the note is discarded before the abort propagates."""
+    """Triad r4 regression: the CENTRAL _send discard — when the exact-route
+    FLOORED body-400 resend is aborted by the accounting rail, no clamp note
+    survives the abort."""
 
     class _FakeResp:
         def __init__(self, body):
@@ -283,90 +267,31 @@ def test_uae_on_floored_resend_discards_clamp_note(
     assert client._pop_effort_clamp_disclosure() is None
 
 
-# --- diagnostic clamp: the [floor, ceiling] band -----------------------------
+# --- floor/ceiling rows older releases stored: loadable, never dispatch authority --
 
 
-def test_floor_clamps_up(_clean_effort_caches, _isolated_data_dir):
-    from ouroboros.llm import LLMClient
-
-    LLMClient._EFFORT_FLOOR_CACHE["vendor/mandatory-model"] = "low"
-    LLMClient._EFFORT_FLOOR_LOADED["vendor/mandatory-model"] = time.monotonic()
-    assert LLMClient.clamp_effort_for_route("vendor/mandatory-model", "none") == "low"
-    # In-band values are untouched.
-    assert LLMClient.clamp_effort_for_route("vendor/mandatory-model", "medium") == "medium"
-
-
-def test_floor_ceiling_interaction(_clean_effort_caches, _isolated_data_dir):
-    from ouroboros.llm import LLMClient
-
-    LLMClient._EFFORT_FLOOR_CACHE["vendor/banded"] = "low"
-    LLMClient._EFFORT_FLOOR_LOADED["vendor/banded"] = time.monotonic()
-    LLMClient._EFFORT_CEILING_CACHE["vendor/banded"] = "high"
-    assert LLMClient.clamp_effort_for_route("vendor/banded", "none") == "low"
-    assert LLMClient.clamp_effort_for_route("vendor/banded", "max") == "high"
-    assert LLMClient.clamp_effort_for_route("vendor/banded", "medium") == "medium"
-
-
-def test_floor_cache_hourly_resync_evicts_expired(
-    _clean_effort_caches, _isolated_data_dir, monkeypatch
-):
-    """Long-running processes heal like restarts: the hourly re-sync REPLACES
-    the in-process floor from the durable store, so a 14-day-expired durable
-    floor evicts without a restart."""
+def test_stored_floor_and_ceiling_rows_never_move_the_dispatched_effort(_isolated_data_dir):
     from ouroboros import capability_evidence as ce
     from ouroboros.llm import LLMClient
+    from tests._shared import write_legacy_capability_rows
 
-    ce.record_effort_floor(_isolated_data_dir, "vendor/heals", "low")
-    assert LLMClient._effort_floor_for("vendor/heals") == "low"
-    # Age the durable record past the TTL, then age the process cache past the
-    # reload interval.
-    with ce._STORE_LOCK:
-        data = ce._load(_isolated_data_dir)
-        data["effort_floors"]["vendor/heals"]["observed_at"] = "2020-01-01T00:00:00+00:00"
-        ce._save(_isolated_data_dir, data)
-    LLMClient._EFFORT_FLOOR_LOADED["vendor/heals"] = (
-        time.monotonic() - LLMClient._EFFORT_FLOOR_RELOAD_SEC - 1
-    )
-    assert LLMClient._effort_floor_for("vendor/heals") == ""
-
-
-# --- capability_evidence durable layer (first direct effort-namespace tests) --
-
-
-def test_effort_floor_roundtrip_and_higher_wins(tmp_path):
-    from ouroboros import capability_evidence as ce
-
-    ce.record_effort_floor(tmp_path, "vendor/m", "low")
-    assert ce.get_effort_floor(tmp_path, "vendor/m") == "low"
-    ce.record_effort_floor(tmp_path, "vendor/m", "medium")
-    assert ce.get_effort_floor(tmp_path, "vendor/m") == "medium"
-    # A LOWER floor never silently wins within the window.
-    ce.record_effort_floor(tmp_path, "vendor/m", "low")
-    assert ce.get_effort_floor(tmp_path, "vendor/m") == "medium"
-
-
-def test_effort_floor_expiry_and_fail_open(tmp_path):
-    from ouroboros import capability_evidence as ce
-
-    ce.record_effort_floor(tmp_path, "vendor/exp", "low")
-    with ce._STORE_LOCK:
-        data = ce._load(tmp_path)
-        data["effort_floors"]["vendor/exp"]["observed_at"] = "2020-01-01T00:00:00+00:00"
-        ce._save(tmp_path, data)
-    assert ce.get_effort_floor(tmp_path, "vendor/exp") == ""
-    # Fail-open on absence and on junk input.
-    assert ce.get_effort_floor(tmp_path, "vendor/never-seen") == ""
-    assert ce.get_effort_floor(tmp_path, "") == ""
-    ce.record_effort_floor(tmp_path, "", "low")  # no-op, never raises
-
-
-def test_effort_ceiling_roundtrip_parity(tmp_path):
-    """First direct unit coverage of the (pre-existing) ceiling store."""
-    from ouroboros import capability_evidence as ce
-
-    ce.record_effort_ceiling(tmp_path, "vendor/c", "high")
-    assert ce.get_effort_ceiling(tmp_path, "vendor/c") == "high"
-    assert ce.get_effort_ceiling(tmp_path, "vendor/none") == ""
+    write_legacy_capability_rows(_isolated_data_dir, effort_floors={"vendor/banded": "low"},
+                                 effort_ceilings={"vendor/banded": "high"})
+    assert ce._load(_isolated_data_dir)["effort_floors"]["vendor/banded"]["floor"] == "low"
+    client = LLMClient(api_key="test")
+    target = client._resolve_remote_target("vendor/banded")
+    for requested in ("none", "medium", "xhigh"):  # below the floor, inside, above the ceiling
+        kwargs = client._build_remote_kwargs(
+            target=target,
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort=requested,
+            max_tokens=256,
+            tool_choice="auto",
+            temperature=None,
+            tools=None,
+            skip_capability_fetch=True,
+        )
+        assert kwargs["extra_body"]["reasoning"]["effort"] == requested
 
 
 def test_load_seeds_all_namespaces(tmp_path):

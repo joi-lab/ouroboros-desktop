@@ -1,7 +1,7 @@
 """#1183: an ended attempt's acceptance fence never outlives it, through the real consumers.
 
 A pooled begin is bound to its RUNNING attempt and pid. The handoff that creates a
-proven-ended attempt's successor (crash retry, timeout retry, aborted-update return,
+proven-ended attempt's successor (crash retry, aborted-update return,
 a boot-restored saved successor) drops exactly that attempt's active fence, before
 admission or restore reads it. Live, sealed, foreign, direct/legacy and paused
 fences stay; independent paid review evidence is untouched; no TTL, no purge.
@@ -131,8 +131,9 @@ def test_saved_pause_parking_keeps_its_acceptance_fence(tmp_path, monkeypatch):
     assert queue.ACCEPTANCE_FENCES[job["task_id"]] == row
 
 
-@pytest.mark.parametrize("fence", ["exact", "sealed", "foreign"])
-def test_timeout_reaper_retry_removes_only_the_exact_active_fence(tmp_path, monkeypatch, fence):
+def test_live_silence_keeps_the_exact_active_fence_and_queues_no_reap(tmp_path, monkeypatch):
+    """Quiet live work is attention, not an ended attempt: no successor exists to release the fence for.
+    The crash tests above own the release of an ended attempt's exact fence."""
     from ouroboros.task_results import write_task_result
     from supervisor import queue, task_reaper, workers
 
@@ -140,10 +141,6 @@ def test_timeout_reaper_retry_removes_only_the_exact_active_fence(tmp_path, monk
     monkeypatch.setattr("supervisor.worker_pool_lifecycle.kill_worker_tree", lambda *_a, **_kw: None)
     _open_reserved_fence(job)
     task_id = job["task_id"]
-    if fence == "sealed":
-        queue.ACCEPTANCE_FENCES[task_id]["status"] = "sealed"
-    elif fence == "foreign":
-        queue.ACCEPTANCE_FENCES[task_id]["pooled_owner"]["task_attempt"] += 1
     before = copy.deepcopy(queue.ACCEPTANCE_FENCES[task_id])
     job["worker"].reaping = False
     job["meta"].update(started_at=time.time() - 1000, last_heartbeat_at=time.time() - 1000)
@@ -162,20 +159,5 @@ def test_timeout_reaper_retry_removes_only_the_exact_active_fence(tmp_path, monk
     queue.enforce_task_timeouts()
     assert queue._reap_queue.empty()  # #1376: live silence preserves the fence and custody
     assert queue.ACCEPTANCE_FENCES[task_id] == before
-    # The reaper still owns jobs captured before this policy; test that consumer
-    # independently of the live observation producer that no longer creates them.
-    queue.RUNNING.pop(task_id)
-    job["worker"].reaping = True
-    timeout = {**job, "terminal_reason": "idle_timeout", "will_retry": True,
-               "proc": job["worker"].proc,
-               "task_type": job["task"]["type"],
-               "retry_task_id": task_id, "deadline_reached": False, "ceiling_reached": False,
-               "orchestrator": False, "owner_chat_id": 0}
-    task_reaper.reap_timed_out_task(timeout)
-    if fence == "exact":
-        assert queue.ACCEPTANCE_FENCES == {}
-        assert len(queue.PENDING) == 1 and queue.PENDING[0]["_attempt"] == 2
-        assert ("acceptance_fence_attempt_ended", {}) in persisted
-    else:
-        assert queue.ACCEPTANCE_FENCES[task_id] == before
-        assert not queue.PENDING  # the existing admission fence still refuses the retry
+    assert task_id in queue.RUNNING and not queue.PENDING and not job["worker"].reaping
+    assert not any(reason == "acceptance_fence_attempt_ended" for reason, _fences in persisted)

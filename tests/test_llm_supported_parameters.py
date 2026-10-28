@@ -465,17 +465,15 @@ class TestSupportedParametersFilter:
         assert captured["client"]["default_headers"] == OPENROUTER_APP_HEADERS
 
     def test_historical_model_global_rows_never_mutate_dispatch(self, monkeypatch, tmp_path):
-        from ouroboros import capability_evidence as ce
         from ouroboros.llm import LLMClient
         from ouroboros.provider_models import normalize_model_identity
+        from tests._shared import write_legacy_capability_rows
 
         # Rows an older release learned, under its durable key (the normalized identity).
         key = normalize_model_identity("anthropic/claude-opus-4.8") or "anthropic/claude-opus-4.8"
         monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
-        monkeypatch.setattr(LLMClient, "_EFFORT_CEILING_CACHE", {})
-        monkeypatch.setattr(LLMClient, "_EFFORT_CEILING_LOADED", set())
-        ce.record_rejected_params(tmp_path, key, {"temperature", "extra_body.reasoning"})
-        ce.record_effort_ceiling(tmp_path, key, "low")
+        write_legacy_capability_rows(tmp_path, effort_ceilings={key: "low"},
+                                     rejected_params={key: ["temperature", "extra_body.reasoning"]})
         client = LLMClient(api_key="test")
         target = client._resolve_remote_target("anthropic/claude-opus-4.8")
         kwargs = client._build_remote_kwargs(
@@ -489,10 +487,9 @@ class TestSupportedParametersFilter:
             skip_capability_fetch=True,
         )
 
-        # Legacy model-global rows stay diagnostic and cannot mutate dispatch.
+        # Stored model-global rows are not dispatch authority.
         assert kwargs["temperature"] == 0.2
         assert kwargs["extra_body"]["reasoning"]["effort"] == "medium"
-        assert LLMClient.clamp_effort_for_route("anthropic/claude-opus-4.8", "medium") == "low"  # rows are read
 
     def test_requests_read_the_catalogue_and_never_fetch_it(self, monkeypatch):
         from ouroboros.llm import LLMClient

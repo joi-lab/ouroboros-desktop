@@ -202,7 +202,7 @@ HOST_ROW_CLASSES = {
     "task_error": ("no_mind", 1),
     "task_not_started": ("not_started", 5),  # also the two worker_chat_lane Restart-intake refusals
     "task_pause_notice": ("card_row", 1),
-    "task_reaper_notice": ("card_row", 4),
+    "task_reaper_notice": ("card_row", 2),  # wedged hold and stop; the two idle-retry notices are gone
     "task_scheduled": ("card_row", 1),
     "task_start_unconfirmed": ("not_started", 1),
     "terminal_incident": ("no_mind", 2),

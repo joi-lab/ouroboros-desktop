@@ -382,3 +382,24 @@ def saved_settings(monkeypatch, tmp_path, **values):
     path.write_text(json.dumps(document), encoding="utf-8")
     saved_settings._wrote = str(path)
     return path
+
+
+def write_legacy_capability_rows(root, *, effort_ceilings=None, effort_floors=None, rejected_params=None):
+    """Leave model-global rows in ``root``'s capability-evidence store in the shape releases before
+    exact-route request-wire recovery learned them. The store still loads them; nothing reads them."""
+    from ouroboros import capability_evidence as ce
+    from ouroboros.utils import utc_now_iso
+
+    observed_at = utc_now_iso()
+    with ce._store_transaction(root):
+        data = ce._load(root)
+        for key, ceiling in (effort_ceilings or {}).items():
+            data["effort_ceilings"][key] = {"ceiling": ceiling, "observed_at": observed_at,
+                                            "reason": "provider_rejected", "prev": ""}
+        for key, floor in (effort_floors or {}).items():
+            data["effort_floors"][key] = {"floor": floor, "observed_at": observed_at,
+                                          "reason": "provider_required", "prev": ""}
+        for key, params in (rejected_params or {}).items():
+            data["rejected_params"][key] = {"params": sorted(params), "observed_at": observed_at,
+                                            "reason": "provider_rejected"}
+        assert ce._save(root, data)

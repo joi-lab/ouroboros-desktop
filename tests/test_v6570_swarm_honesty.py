@@ -129,27 +129,21 @@ def test_normalize_reasoning_effort_uses_scale():
     assert normalize_reasoning_effort("bogus") == "medium"
 
 
-# --- 1.8 learned effort ceiling: clamp + DISCLOSURE (adversarial r1) ----------
+# --- 1.8 effort tier notes: clamp DISCLOSURE (adversarial r1) ----------------
 
 @pytest.fixture
-def _clean_effort_ceiling_cache():
-    from ouroboros.llm import LLMClient
+def _clean_effort_clamp_note():
+    """The per-call tier note lives in the test's context: a payload build that staged one
+    without a send (the DeepSeek case of test_provider_key_test) must not reach these calls."""
+    from ouroboros.llm_capability_policy import _EFFORT_CLAMP_CVAR
 
-    LLMClient._EFFORT_CEILING_CACHE.clear()
-    LLMClient._EFFORT_CEILING_LOADED.clear()
-    # v6.73.2: clamp_effort_for_route also consults the floor stores now;
-    # restore them too so clamp tests leave no cross-file state.
-    LLMClient._EFFORT_FLOOR_CACHE.clear()
-    LLMClient._EFFORT_FLOOR_LOADED.clear()
+    _EFFORT_CLAMP_CVAR.set(None)
     yield
-    LLMClient._EFFORT_CEILING_CACHE.clear()
-    LLMClient._EFFORT_CEILING_LOADED.clear()
-    LLMClient._EFFORT_FLOOR_CACHE.clear()
-    LLMClient._EFFORT_FLOOR_LOADED.clear()
+    _EFFORT_CLAMP_CVAR.set(None)
 
 
 def test_anthropic_direct_effort_rejection_degrades_gracefully(
-    _clean_effort_ceiling_cache, monkeypatch
+    _clean_effort_clamp_note, monkeypatch
 ):
     """Scope r7 advisory asked for proof: an older direct-Anthropic endpoint that
     400s the thinking/output_config carriers routes through the SAME
@@ -198,12 +192,13 @@ def test_anthropic_direct_effort_rejection_degrades_gracefully(
 
 
 def test_anthropic_direct_effort_mapping_and_clamp_disclosure(
-    _clean_effort_ceiling_cache, monkeypatch
+    _clean_effort_clamp_note, monkeypatch, tmp_path
 ):
-    """Anthropic maps minimal to low while legacy model-global clamps stay inert."""
+    """Anthropic maps minimal to low; a stored legacy ceiling never clamps the sent effort."""
     import requests as _requests
 
     from ouroboros.llm import LLMClient
+    from tests._shared import write_legacy_capability_rows
 
     monkeypatch.setenv("TOTAL_BUDGET", "0")
 
@@ -232,13 +227,14 @@ def test_anthropic_direct_effort_mapping_and_clamp_disclosure(
     assert captured[-1]["output_config"] == {"effort": "low"}
     assert "reasoning_effort_clamped" not in usage
 
-    LLMClient._EFFORT_CEILING_CACHE["anthropic/claude-test-5"] = "high"
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", tmp_path)
+    write_legacy_capability_rows(tmp_path, effort_ceilings={"anthropic/claude-test-5": "high"})
     _, usage2 = client._chat_anthropic(target, msgs, None, "xhigh", 128, "auto")
     assert captured[-1]["output_config"] == {"effort": "xhigh"}
     assert "reasoning_effort_clamped" not in usage2
 
 
-def test_remote_lane_usage_carries_clamp_disclosure(_clean_effort_ceiling_cache):
+def test_remote_lane_usage_carries_clamp_disclosure(_clean_effort_clamp_note):
     """The OpenRouter/OpenAI-compatible lane's usage normalizer merges the pending
     clamp note recorded at payload build (the r1 fix initially landed the pop in the
     GigaChat normalizer — a lane that never clamps; pinned here on the REAL lane)."""
