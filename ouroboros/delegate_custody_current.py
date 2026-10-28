@@ -557,7 +557,7 @@ def _append_durable(path, event: Dict[str, Any]) -> Optional[Dict[str, int]]:
     if not append_jsonl(path, event, ensure_record_boundary=True, require_lock=True):
         return None
     try:
-        fd = os.open(str(path), os.O_RDWR | os.O_APPEND)
+        fd = os.open(str(path), os.O_RDWR | os.O_APPEND | getattr(os, "O_BINARY", 0))
         try:
             os.fsync(fd)
             written = os.fstat(fd)

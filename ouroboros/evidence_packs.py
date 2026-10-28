@@ -882,7 +882,7 @@ def note_manifest_publication(root: Any, manifest: dict) -> None:
     """Called under the publication lock BEFORE the manifest write. Track new refs only
     while a sweep owns the scratch file; a stale file is reset at the next sweep."""
     try:
-        fd = os.open(packs_dir(root) / PUBLICATIONS_NAME, os.O_WRONLY | os.O_APPEND)
+        fd = os.open(packs_dir(root) / PUBLICATIONS_NAME, os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0))
     except FileNotFoundError:
         return
     with os.fdopen(fd, "ab") as journal:

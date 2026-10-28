@@ -605,7 +605,8 @@ def append_jsonl(
 
         for attempt in range(write_retries):
             try:
-                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+                # Byte-exact: a Windows descriptor is text mode without O_BINARY and would write CRLF.
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
             except Exception:
                 if attempt < write_retries - 1:
                     time.sleep(retry_sleep_base_sec * (2 ** attempt))
@@ -630,8 +631,8 @@ def append_jsonl(
 
         for attempt in range(write_retries):
             try:
-                with path.open("a", encoding="utf-8") as f:
-                    f.write(append_data.decode("utf-8"))
+                with path.open("ab") as f:
+                    f.write(append_data)
                 _written = True
                 return True
             except Exception:
